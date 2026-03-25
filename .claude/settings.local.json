@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PGPASSWORD='p2R3yT+x' psql -h 192.168.1.219 -p 5432 -U postgres -d home_data -c \"\\\\dt\")",
+      "Bash(npx.cmd @modelcontextprotocol/server-homeassistant)",
+      "mcp__postgres-lxc__query"
+    ]
+  }
+}

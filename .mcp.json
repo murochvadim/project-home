@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "postgres-lxc": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+        "root@192.168.1.227",
+        "npx", 
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://postgres:p2R3yT+x@192.168.1.219/home_data"
+      ]
+    },
+    "homeassistant": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "C:\\Users\\muroc\\AppData\\Roaming\\npm\\hass-mcp.cmd"
+      ],
+      "env": {
+        "HASS_URL": "http://192.168.1.110:8123",
+        "HASS_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1NjFmNTlmY2U2NTE0ZTdkOTkxNWQ2YjFiZWE4ZTczMCIsImlhdCI6MTc3NDE4NTgyNywiZXhwIjoyMDg5NTQ1ODI3fQ.B6PMg6R3bu3L1OpV48Q3kk3VtZHHIlN9DbODJaJQ6aE"
+      }
+    }
+  }
+}
