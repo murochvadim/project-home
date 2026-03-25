@@ -94,10 +94,14 @@ app.get('/api/graph', async (req, res) => {
   const interval = rangeMap[range] || '6 hours';
   const bucket   = resMap[resolution] || '15 minutes';
 
+  const bucketSeconds = {
+    '5 minutes': 300, '15 minutes': 900, '1 hour': 3600, '6 hours': 21600, '1 day': 86400
+  }[bucket] || 900;
+
   try {
     const r = await db.query(`
       SELECT
-        time_bucket($1::interval, ts) AS t,
+        to_timestamp(floor(extract(epoch from ts) / $1) * $1) AS t,
         AVG(boiler_temp) AS boiler_temp,
         AVG(panel_temp)  AS panel_temp,
         BOOL_OR(valve_state) AS valve_state
@@ -105,7 +109,7 @@ app.get('/api/graph', async (req, res) => {
       WHERE ts >= NOW() - $2::interval
       GROUP BY t
       ORDER BY t ASC
-    `, [bucket, interval]);
+    `, [bucketSeconds, interval]);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
