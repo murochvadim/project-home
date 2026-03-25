@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Boiler — Graph</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Home Agents</div>
+
+  <div class="section-label">Boiler Agent</div>
+  <a href="index.html">Overview</a>
+  <a href="graph.html" class="active">Graph</a>
+  <a href="data.html">Data</a>
+  <a href="compare.html">Compare</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Temperature Graph</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadGraph()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="graph-controls">
+      <div>
+        <label>Range:</label>
+        <select id="range">
+          <option value="1h">Last 1h</option>
+          <option value="6h" selected>Last 6h</option>
+          <option value="24h">Last 24h</option>
+        </select>
+      </div>
+      <div>
+        <label>Resolution:</label>
+        <select id="resolution">
+          <option value="5m">5 min</option>
+          <option value="15m" selected>15 min</option>
+          <option value="1h">1 hour</option>
+          <option value="6h">6 hours</option>
+          <option value="1d">1 day</option>
+        </select>
+      </div>
+    </div>
+    <canvas id="tempChart" height="100"></canvas>
+  </div>
+</main>
+
+<script src="js/graph.js"></script>
+</body>
+</html>

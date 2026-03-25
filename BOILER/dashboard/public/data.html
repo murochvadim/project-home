@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Boiler — Data</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Home Agents</div>
+
+  <div class="section-label">Boiler Agent</div>
+  <a href="index.html">Overview</a>
+  <a href="graph.html">Graph</a>
+  <a href="data.html" class="active">Data</a>
+  <a href="compare.html">Compare</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Data Tables</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Raw data -->
+  <div class="card">
+    <h2>Raw Data</h2>
+    <div class="table-controls">
+      Show
+      <select id="raw-limit" onchange="loadRaw()">
+        <option value="10" selected>10</option>
+        <option value="20">20</option>
+        <option value="30">30</option>
+      </select>
+      rows
+    </div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Boiler Temp</th>
+            <th>Panel Temp</th>
+            <th>Valve</th>
+          </tr>
+        </thead>
+        <tbody id="raw-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Agent data -->
+  <div class="card">
+    <h2>Agent Runs</h2>
+    <div class="table-controls">
+      Show
+      <select id="agent-limit" onchange="loadAgent()">
+        <option value="10" selected>10</option>
+        <option value="20">20</option>
+        <option value="30">30</option>
+      </select>
+      rows
+    </div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Boiler</th>
+            <th>Panel</th>
+            <th>Valve</th>
+            <th>Boiler Trend</th>
+            <th>Panel Trend</th>
+            <th>Decision</th>
+            <th>Error</th>
+            <th>Next Run</th>
+            <th>Version</th>
+          </tr>
+        </thead>
+        <tbody id="agent-body"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script src="js/data.js"></script>
+</body>
+</html>

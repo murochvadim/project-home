@@ -1,0 +1,17 @@
+[Unit]
+Description=Boiler Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/Agents-agent/project
+ExecStart=/opt/Agents-agent/venv/bin/python3 /opt/Agents-agent/project/BOILER/agent/boiler_agent.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/etc/boiler-agent.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

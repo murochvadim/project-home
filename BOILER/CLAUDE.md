@@ -178,20 +178,26 @@
 
 # Dashboard
 
-## 1. CRM Style
-## 2. Paged
-## 3. Pagination data of DB
+## 1. Multi-Agent Framework
+- Dashboard is designed to support multiple agents
+- Main navigation sidebar lists each agent as a separate section
+- Boiler Agent is the first section; future agents are added as new sections
+- Each agent section is fully independent (own pages, settings, data)
+
+## 2. CRM Style
+## 3. Paged
+## 4. Pagination data of DB
   table raw_data
 - 10,20,30 last rows
 
   table agent_boiler_data
   10,20,30 last rows
 
-## 4. Data Refresh
+## 5. Data Refresh
 - Dashboard auto-refreshes every `run_interval_min` minutes (aligned with agent run cycle)
 - Manual refresh button available for immediate update
 
-## 5. Main page - name Boiler Agent
+## 6. Main page - name Boiler Agent
 - Manual trigger button Start/Stop to enable or disable actions of agent with display current status.
 - Display of last agent report (current boiler_temp, panel_temp, valve_state, last decision)
 - Setting - how often Agent will run in Minutes. 
