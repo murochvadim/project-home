@@ -1,3 +1,16 @@
+function buildVersionLabels(versions) {
+  // Sort oldest first to assign day sequence numbers (1=oldest of the day)
+  const sorted = [...versions].sort((a, b) => new Date(a.first_seen) - new Date(b.first_seen));
+  const dayCount = {};
+  const labelMap = {};
+  sorted.forEach(v => {
+    const d = new Date(v.first_seen).toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
+    dayCount[d] = (dayCount[d] || 0) + 1;
+    labelMap[v.version] = `${v.version.slice(0,7)} — ${d}-${dayCount[d]}`;
+  });
+  return labelMap;
+}
+
 async function loadVersions() {
   try {
     const versions = await fetch('/api/versions').then(r => r.json());
@@ -7,11 +20,10 @@ async function loadVersions() {
     selA.innerHTML = '';
     selB.innerHTML = '';
 
-    versions.forEach((v, i) => {
-      const label = v.version.slice(0, 7) + ' (' +
-        new Date(v.first_seen).toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' }) + ')';
-      const optA = new Option(label, v.version);
-      const optB = new Option(label, v.version);
+    const labels = buildVersionLabels(versions);
+    versions.forEach(v => {
+      const optA = new Option(labels[v.version], v.version);
+      const optB = new Option(labels[v.version], v.version);
       selA.appendChild(optA);
       selB.appendChild(optB);
     });
@@ -43,21 +55,18 @@ async function loadCompare() {
 
   try {
     const versions = await fetch('/api/versions').then(r => r.json());
+    const labels = buildVersionLabels(versions);
     const infoA = versions.find(v => v.version === vA);
     const infoB = versions.find(v => v.version === vB);
     const dateA = infoA ? new Date(infoA.first_seen) : null;
     const dateB = infoB ? new Date(infoB.first_seen) : null;
     const newerA = dateA && dateB && dateA > dateB;
-    const fmtHdr = (hash, date, newer) => {
-      const d = date ? date.toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '';
-      return `${hash.slice(0,7)} — ${d} ${newer ? '🔼 newer' : '🔽 older'}`;
-    };
 
     const data = await fetch(`/api/compare?versionA=${encodeURIComponent(vA)}&versionB=${encodeURIComponent(vB)}`).then(r => r.json());
     const { a, b } = data;
 
-    document.getElementById('head-a').textContent = fmtHdr(vA, dateA, newerA);
-    document.getElementById('head-b').textContent = fmtHdr(vB, dateB, !newerA);
+    document.getElementById('head-a').textContent = (labels[vA] || vA.slice(0,7)) + (newerA ? ' 🔼' : ' 🔽');
+    document.getElementById('head-b').textContent = (labels[vB] || vB.slice(0,7)) + (!newerA ? ' 🔼' : ' 🔽');
 
     const fmt = v => (v !== null && v !== undefined) ? v : '—';
 
