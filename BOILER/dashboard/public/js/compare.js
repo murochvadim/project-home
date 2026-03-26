@@ -42,11 +42,22 @@ async function loadCompare() {
   }
 
   try {
+    const versions = await fetch('/api/versions').then(r => r.json());
+    const infoA = versions.find(v => v.version === vA);
+    const infoB = versions.find(v => v.version === vB);
+    const dateA = infoA ? new Date(infoA.first_seen) : null;
+    const dateB = infoB ? new Date(infoB.first_seen) : null;
+    const newerA = dateA && dateB && dateA > dateB;
+    const fmtHdr = (hash, date, newer) => {
+      const d = date ? date.toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '';
+      return `${hash.slice(0,7)} — ${d} ${newer ? '🔼 newer' : '🔽 older'}`;
+    };
+
     const data = await fetch(`/api/compare?versionA=${encodeURIComponent(vA)}&versionB=${encodeURIComponent(vB)}`).then(r => r.json());
     const { a, b } = data;
 
-    document.getElementById('head-a').textContent = vA.slice(0, 7);
-    document.getElementById('head-b').textContent = vB.slice(0, 7);
+    document.getElementById('head-a').textContent = fmtHdr(vA, dateA, newerA);
+    document.getElementById('head-b').textContent = fmtHdr(vB, dateB, !newerA);
 
     const fmt = v => (v !== null && v !== undefined) ? v : '—';
 
