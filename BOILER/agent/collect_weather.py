@@ -108,7 +108,7 @@ def collect_daily(conn):
 
     # Use HA weather.get_forecasts service via REST API
     r = requests.post(
-        f'{HA_URL}/api/services/weather/get_forecasts',
+        f'{HA_URL}/api/services/weather/get_forecasts?return_response',
         headers=HA_HEADERS,
         json={'entity_id': 'weather.ims_weather', 'type': 'daily'},
         timeout=10,
@@ -116,12 +116,11 @@ def collect_daily(conn):
     r.raise_for_status()
     data = r.json()
 
-    # Response: list of service call results, first item has the forecast
+    # Response: {"service_response": {"weather.ims_weather": {"forecast": [...]}}}
     forecasts = []
-    if isinstance(data, list) and data:
-        forecasts = data[0].get('attributes', {}).get('forecast', [])
-    elif isinstance(data, dict):
-        forecasts = data.get('weather.ims_weather', {}).get('forecast', [])
+    if isinstance(data, dict):
+        svc = data.get('service_response', data)
+        forecasts = svc.get('weather.ims_weather', {}).get('forecast', [])
 
     if not forecasts:
         log.warning('No daily forecast data returned from HA')

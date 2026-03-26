@@ -218,40 +218,11 @@ app.post('/api/deploy', async (req, res) => {
   }
 });
 
-// ─── Weather current (from HA) ────────────────────────────────
-app.get('/api/weather/current', async (req, res) => {
+// ─── Weather latest (most recent row from raw_weather) ────────
+app.get('/api/weather/latest', async (req, res) => {
   try {
-    const r = await fetch(`${HA_URL}/api/states/weather.ims_weather`, {
-      headers: { Authorization: `Bearer ${HA_TOKEN}` },
-      signal: AbortSignal.timeout(4000),
-    }).then(r => r.json());
-    const a = r.attributes || {};
-    res.json({
-      condition:    r.state,
-      temp_ims:     a.temperature,
-      humidity_ims: a.humidity,
-      uv_index_ims: a.uv_index,
-      wind_speed:   a.wind_speed,
-      wind_bearing: a.wind_bearing,
-    });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// ─── Weather current balcony sensors (from HA) ────────────────
-app.get('/api/weather/balcony', async (req, res) => {
-  try {
-    const [temp, uv, illum, hum] = await Promise.all([
-      fetch(`${HA_URL}/api/states/sensor.balcony_motion_temperature`, { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
-      fetch(`${HA_URL}/api/states/sensor.balcony_motion_uv_index`,    { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
-      fetch(`${HA_URL}/api/states/sensor.balcony_motion_illuminance`,  { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
-      fetch(`${HA_URL}/api/states/sensor.balcony_motion_humidity`,     { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
-    ]);
-    res.json({
-      temp_balcony:        parseFloat(temp.state) || null,
-      uv_index_balcony:    parseFloat(uv.state)   || null,
-      illuminance_balcony: parseFloat(illum.state) || null,
-      humidity_balcony:    parseFloat(hum.state)   || null,
-    });
+    const r = await db.query('SELECT * FROM raw_weather ORDER BY ts DESC LIMIT 1');
+    res.json(r.rows[0] || {});
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

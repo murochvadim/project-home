@@ -15,19 +15,16 @@ function fmtDate(d) {
 
 async function loadCurrent() {
   try {
-    const [ims, balcony] = await Promise.all([
-      fetch('/api/weather/current').then(r => r.json()),
-      fetch('/api/weather/balcony').then(r => r.json()),
-    ]);
-    document.getElementById('w-condition').textContent      = fmt(ims.condition);
-    document.getElementById('w-temp-ims').textContent       = fmt(ims.temp_ims, '°C');
-    document.getElementById('w-humidity-ims').textContent   = fmt(ims.humidity_ims, '%');
-    document.getElementById('w-uv-ims').textContent         = fmt(ims.uv_index_ims);
-    document.getElementById('w-wind').textContent           = fmt(ims.wind_speed, 'km/h');
-    document.getElementById('w-temp-balcony').textContent   = fmt(balcony.temp_balcony, '°C');
-    document.getElementById('w-uv-balcony').textContent     = fmt(balcony.uv_index_balcony);
-    document.getElementById('w-illuminance').textContent    = fmt(balcony.illuminance_balcony, 'lx');
-    document.getElementById('w-humidity-balcony').textContent = fmt(balcony.humidity_balcony, '%');
+    const r = await fetch('/api/weather/latest').then(r => r.json());
+    document.getElementById('w-condition').textContent        = fmt(r.condition);
+    document.getElementById('w-temp-ims').textContent         = fmt(r.temp_ims, '°C');
+    document.getElementById('w-humidity-ims').textContent     = fmt(r.humidity_ims, '%');
+    document.getElementById('w-uv-ims').textContent           = fmt(r.uv_index_ims);
+    document.getElementById('w-wind').textContent             = fmt(r.wind_speed, 'km/h');
+    document.getElementById('w-temp-balcony').textContent     = fmt(r.temp_balcony, '°C');
+    document.getElementById('w-uv-balcony').textContent       = fmt(r.uv_index_balcony);
+    document.getElementById('w-illuminance').textContent      = fmt(r.illuminance_balcony, 'lx');
+    document.getElementById('w-humidity-balcony').textContent = fmt(r.humidity_balcony, '%');
   } catch (e) {
     console.error('loadCurrent error:', e);
   }
