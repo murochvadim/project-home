@@ -22,7 +22,7 @@ const HA_TOKEN = process.env.HA_TOKEN || '';
 // LXC 103 SSH config for deploy
 const SSH_HOST = '192.168.1.114';
 const SSH_USER = 'root';
-const SSH_KEY  = process.env.SSH_KEY_PATH || '/root/.ssh/id_rsa';
+const SSH_KEY  = process.env.SSH_KEY_PATH || require('os').homedir() + '/.ssh/id_ed25519';
 
 // ─── Settings ────────────────────────────────────────────────
 app.get('/api/settings', async (req, res) => {
@@ -118,8 +118,9 @@ app.get('/api/graph', async (req, res) => {
 // ─── Next probe time ──────────────────────────────────────────
 app.get('/api/next-probe', async (req, res) => {
   try {
-    const s = await db.query('SELECT probe_interval_min FROM agent_settings LIMIT 1');
-    const probeMin = s.rows[0]?.probe_interval_min ?? 60;
+    const s = await db.query('SELECT probe_interval_min, agent_enabled FROM agent_settings LIMIT 1');
+    const probeMin      = s.rows[0]?.probe_interval_min ?? 60;
+    const agentEnabled  = s.rows[0]?.agent_enabled ?? false;
 
     // Find last ON→OFF valve transition in raw_data
     const r = await db.query(`
@@ -135,13 +136,31 @@ app.get('/api/next-probe', async (req, res) => {
       LIMIT 1
     `);
 
+    // Find last turn_on origin (probe or normal) + its timestamp
+    const o = await db.query(`
+      SELECT ts, why_decision FROM agent_boiler_data
+      WHERE decision = 'turn_on'
+      ORDER BY ts DESC LIMIT 1
+    `);
+    const why = o.rows[0]?.why_decision || '';
+    const lastTurnOnOrigin = why.startsWith('Probe:') ? 'probe' : why ? 'normal' : null;
+    const lastTurnOnTs     = o.rows[0]?.ts || null;
+
+    // Current valve state from raw_data
+    const v = await db.query('SELECT valve_state FROM raw_data ORDER BY ts DESC LIMIT 1');
+    const valveIsOn = v.rows[0]?.valve_state ?? false;
+
     if (!r.rows[0]) {
-      return res.json({ next_probe: null });
+      return res.json({ next_probe: null, last_turn_on_origin: lastTurnOnOrigin,
+                        last_turn_on_ts: lastTurnOnTs, valve_is_on: valveIsOn,
+                        agent_enabled: agentEnabled });
     }
 
     const lastClose = new Date(r.rows[0].ts);
     const nextProbe = new Date(lastClose.getTime() + probeMin * 60 * 1000);
-    res.json({ next_probe: nextProbe.toISOString() });
+    res.json({ next_probe: nextProbe.toISOString(), last_turn_on_origin: lastTurnOnOrigin,
+               last_turn_on_ts: lastTurnOnTs, valve_is_on: valveIsOn,
+               agent_enabled: agentEnabled });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -197,6 +216,73 @@ app.post('/api/deploy', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── Weather current (from HA) ────────────────────────────────
+app.get('/api/weather/current', async (req, res) => {
+  try {
+    const r = await fetch(`${HA_URL}/api/states/weather.ims_weather`, {
+      headers: { Authorization: `Bearer ${HA_TOKEN}` },
+      signal: AbortSignal.timeout(4000),
+    }).then(r => r.json());
+    const a = r.attributes || {};
+    res.json({
+      condition:    r.state,
+      temp_ims:     a.temperature,
+      humidity_ims: a.humidity,
+      uv_index_ims: a.uv_index,
+      wind_speed:   a.wind_speed,
+      wind_bearing: a.wind_bearing,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Weather current balcony sensors (from HA) ────────────────
+app.get('/api/weather/balcony', async (req, res) => {
+  try {
+    const [temp, uv, illum, hum] = await Promise.all([
+      fetch(`${HA_URL}/api/states/sensor.balcony_motion_temperature`, { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
+      fetch(`${HA_URL}/api/states/sensor.balcony_motion_uv_index`,    { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
+      fetch(`${HA_URL}/api/states/sensor.balcony_motion_illuminance`,  { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
+      fetch(`${HA_URL}/api/states/sensor.balcony_motion_humidity`,     { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(4000) }).then(r => r.json()),
+    ]);
+    res.json({
+      temp_balcony:        parseFloat(temp.state) || null,
+      uv_index_balcony:    parseFloat(uv.state)   || null,
+      illuminance_balcony: parseFloat(illum.state) || null,
+      humidity_balcony:    parseFloat(hum.state)   || null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Weather hourly log ───────────────────────────────────────
+app.get('/api/weather/hourly', async (req, res) => {
+  const limit = parseInt(req.query.limit) || 24;
+  try {
+    const r = await db.query('SELECT * FROM raw_weather ORDER BY ts DESC LIMIT $1', [limit]);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Weather daily forecast log ───────────────────────────────
+app.get('/api/weather/daily', async (req, res) => {
+  const limit = parseInt(req.query.limit) || 14;
+  try {
+    const r = await db.query('SELECT * FROM raw_weather_daily ORDER BY ts DESC, forecast_date ASC LIMIT $1', [limit]);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Services status ──────────────────────────────────────────
+app.get('/api/status', async (req, res) => {
+  const result = { db: false, ha: false };
+  await Promise.all([
+    db.query('SELECT 1').then(() => { result.db = true; }).catch(() => {}),
+    fetch(`${HA_URL}/api/`, {
+      signal: AbortSignal.timeout(4000)
+    }).then(() => { result.ha = true; }).catch(() => {}),
+  ]);
+  res.json(result);
 });
 
 // ─── Start ────────────────────────────────────────────────────

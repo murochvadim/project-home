@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>General — Weather</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Home Agents</div>
+
+  <div class="section-label">General</div>
+  <a href="general.html" class="active">Weather</a>
+
+  <div class="section-label">Boiler Agent</div>
+  <a href="index.html">Overview</a>
+  <a href="graph.html">Graph</a>
+  <a href="data.html">Data</a>
+  <a href="compare.html">Compare</a>
+  <a href="logic.html">Logic</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Weather</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Current conditions -->
+  <div class="card">
+    <h2>Current Conditions</h2>
+    <div class="status-grid">
+      <div class="status-item">
+        <label>Condition (IMS)</label>
+        <div class="value small" id="w-condition">—</div>
+      </div>
+      <div class="status-item">
+        <label>Temp IMS</label>
+        <div class="value small" id="w-temp-ims">—</div>
+      </div>
+      <div class="status-item">
+        <label>Humidity IMS</label>
+        <div class="value small" id="w-humidity-ims">—</div>
+      </div>
+      <div class="status-item">
+        <label>UV Index IMS</label>
+        <div class="value small" id="w-uv-ims">—</div>
+      </div>
+      <div class="status-item">
+        <label>Wind Speed</label>
+        <div class="value small" id="w-wind">—</div>
+      </div>
+      <div class="status-item">
+        <label>Temp Balcony</label>
+        <div class="value small" id="w-temp-balcony">—</div>
+      </div>
+      <div class="status-item">
+        <label>UV Balcony</label>
+        <div class="value small" id="w-uv-balcony">—</div>
+      </div>
+      <div class="status-item">
+        <label>Illuminance</label>
+        <div class="value small" id="w-illuminance">—</div>
+      </div>
+      <div class="status-item">
+        <label>Humidity Balcony</label>
+        <div class="value small" id="w-humidity-balcony">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hourly log -->
+  <div class="card">
+    <h2>Hourly Weather Log</h2>
+    <div class="table-controls">
+      <label>Show</label>
+      <select id="hourly-limit" onchange="loadHourly()">
+        <option value="24">24 rows</option>
+        <option value="48">48 rows</option>
+        <option value="72">72 rows</option>
+      </select>
+    </div>
+    <div id="hourly-empty" style="color:#aaa; font-size:0.82rem; padding:8px 0; display:none;">No data yet — collection script not running.</div>
+    <div style="overflow-x:auto;">
+      <table id="hourly-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Condition</th>
+            <th>Temp IMS</th>
+            <th>Humidity IMS</th>
+            <th>UV IMS</th>
+            <th>Wind</th>
+            <th>Temp Balcony</th>
+            <th>UV Balcony</th>
+            <th>Illuminance</th>
+            <th>Humidity Balcony</th>
+          </tr>
+        </thead>
+        <tbody id="hourly-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Daily forecast log -->
+  <div class="card">
+    <h2>Daily Forecast Log</h2>
+    <div class="table-controls">
+      <label>Show</label>
+      <select id="daily-limit" onchange="loadDaily()">
+        <option value="14">14 rows</option>
+        <option value="30">30 rows</option>
+      </select>
+    </div>
+    <div id="daily-empty" style="color:#aaa; font-size:0.82rem; padding:8px 0; display:none;">No data yet — collection script not running.</div>
+    <div style="overflow-x:auto;">
+      <table id="daily-table">
+        <thead>
+          <tr>
+            <th>Logged At</th>
+            <th>Forecast Date</th>
+            <th>Condition</th>
+            <th>Temp High</th>
+            <th>Temp Low</th>
+            <th>Precip %</th>
+          </tr>
+        </thead>
+        <tbody id="daily-body"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script src="js/general.js"></script>
+</body>
+</html>

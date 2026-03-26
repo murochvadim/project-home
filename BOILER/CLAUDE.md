@@ -208,27 +208,33 @@
 - Manual refresh button available for immediate update
 
 ## 6. Main page - name Boiler Agent
-- Manual trigger button Start/Stop to enable or disable actions of agent with display current status.
-- Display of last agent report (current boiler_temp, panel_temp, valve_state, last decision, why_decision)
-- Settings: run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min
+- Start/Stop button — enables or disables the agent; shows current status (ENABLED green / DISABLED)
+- **Agent Control card:**
+  - Agent Status, Last Decision + why_decision (italic below badge), Next Run + live MM:SS countdown
+  - Next Probe Run + live MM:SS countdown (shows `—` when agent disabled or valve ON; `Ready` when timer elapsed)
+  - Probe origin badge below Next Probe Run: `Probe started at HH:MM` (blue) when valve ON from probe; hidden (empty) when not active
+  - When outside operational hours and agent enabled: shows `Outside operational hours (07:00–19:00)` in muted grey below Next Probe Run countdown (font-size 0.82rem, same as value); text persists and is not cleared by the countdown interval
+  - `why-decision` text (below Last Decision badge) and `next-probe-countdown` text both use font-size 0.82rem to match the value fields
+  - Last Error
+  - Connections: PostgreSQL ⬤ and Home Assistant ⬤ (green/red live status)
+- **Last Report card:** boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, report timestamp
+- **Settings:** run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min
+- **Deploy card:** "Deploy to Production" button → git pull on LXC 103 + restart agent service; output shown inline
 
-## Deploy
-- "Deploy to Production" button on the dashboard
-- Triggers a `git pull` on LXC 103 (192.168.1.114) to pull latest code from the repository
-- Restarts the agent service after pull
-- Displays deploy result (success or error output) inline
+## Data Page
+- Table 1: raw_data — last 10/20/30 rows (ts, boiler_temp, panel_temp, valve_state)
+- Table 2: agent_boiler_data — last 10/20/30 rows including why_decision column (truncated to 45 chars, full text on hover tooltip)
 
 ## Version Comparison Page
-- Select Version A vs Version B (by git commit hash or deploy date)
-- Select time range for comparison
-- Side-by-side metrics:
-  - Average and max boiler temperature
-  - Total time boiler stayed above a threshold temperature
-  - Number of valve ON/OFF operations
-  - Average valve ON duration
+- Select Version A vs Version B (by git commit hash)
+- Side-by-side metrics: avg/max boiler_temp, valve ON/OFF count, % time ON
 
-## Graph on Main page
-- Boiler and Panel Temperatures
+## Graph Page
+- Boiler and Panel Temperatures as line chart
 - Valve state as stepped line (ON/OFF) on secondary axis
 - Resolution: selectable — 5min, 15min, 1h, 6h, 1day
 - Time range: last 1h, 6h, 24h
+
+## Logic Page
+- 4 tabs with Mermaid.js flowcharts: Main Flow, Waiting Phase, Turn ON & Probe, Normal Decision
+- Rendered lazily (only when tab becomes visible) using startOnLoad: false

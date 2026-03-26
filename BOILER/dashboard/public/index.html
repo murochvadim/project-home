@@ -10,6 +10,9 @@
 <nav id="sidebar">
   <div class="logo">Home Agents</div>
 
+  <div class="section-label">General</div>
+  <a href="general.html">Weather</a>
+
   <div class="section-label">Boiler Agent</div>
   <a href="index.html" class="active">Overview</a>
   <a href="graph.html">Graph</a>
@@ -41,19 +44,29 @@
       <div class="status-item">
         <label>Last Decision</label>
         <div class="value small" id="last-decision">—</div>
-        <div id="why-decision" style="font-size:0.75rem; color:#777; margin-top:4px; font-style:italic; line-height:1.4;">—</div>
+        <div id="why-decision" style="font-size:0.82rem; color:#777; margin-top:4px; font-style:italic; line-height:1.4;">—</div>
       </div>
       <div class="status-item">
         <label>Next Run</label>
         <div class="value small" id="next-run">—</div>
+        <div id="next-run-countdown" style="font-size:0.78rem; color:#7a9ab8; margin-top:3px; font-variant-numeric:tabular-nums;"></div>
       </div>
       <div class="status-item">
         <label>Next Probe Run</label>
         <div class="value small" id="next-probe">—</div>
+        <div id="next-probe-countdown" style="font-size:0.82rem; color:#7a9ab8; margin-top:3px; font-variant-numeric:tabular-nums;"></div>
+        <div id="turn-on-origin" style="font-size:0.75rem; margin-top:4px;"></div>
       </div>
       <div class="status-item">
         <label>Last Error</label>
         <div class="value small" id="last-error">—</div>
+      </div>
+      <div class="status-item">
+        <label>Connections</label>
+        <div style="display:flex; flex-direction:column; gap:5px; margin-top:4px; font-size:0.78rem;">
+          <span><span id="status-db">⬤</span> PostgreSQL</span>
+          <span><span id="status-ha">⬤</span> Home Assistant</span>
+        </div>
       </div>
     </div>
     <div style="margin-top:16px;">

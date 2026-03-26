@@ -1,21 +1,98 @@
-let autoRefreshTimer = null;
-let runIntervalMin = 5;
+let autoRefreshTimer  = null;
+let runIntervalMin    = 5;
+let countdownTimer      = null;
+let nextRunTarget       = null;
+let nextProbeTarget     = null;
+let probeOutsideHours   = false;
+
+function startCountdown() {
+  clearInterval(countdownTimer);
+  countdownTimer = setInterval(() => {
+    const now = Date.now();
+
+    const runEl = document.getElementById('next-run-countdown');
+    if (!nextRunTarget) { runEl.textContent = ''; }
+    else {
+      const diff = Math.floor((nextRunTarget - now) / 1000);
+      if (diff <= 0) runEl.textContent = 'running…';
+      else { const m = Math.floor(diff/60), s = String(diff%60).padStart(2,'0'); runEl.textContent = `${m}:${s} min`; }
+    }
+
+    const probeEl = document.getElementById('next-probe-countdown');
+    if (probeOutsideHours) { /* leave "Outside hours" text alone */ }
+    else if (!nextProbeTarget) { probeEl.textContent = ''; }
+    else {
+      const diff = Math.floor((nextProbeTarget - now) / 1000);
+      if (diff <= 0) probeEl.textContent = '';
+      else { const m = Math.floor(diff/60), s = String(diff%60).padStart(2,'0'); probeEl.textContent = `${m}:${s} min`; }
+    }
+  }, 1000);
+}
+
+async function loadStatus() {
+  try {
+    const s = await fetch('/api/status').then(r => r.json());
+    document.getElementById('status-db').style.color = s.db ? '#8a9f78' : '#b55e5e';
+    document.getElementById('status-ha').style.color = s.ha ? '#8a9f78' : '#b55e5e';
+  } catch (e) {
+    document.getElementById('status-db').style.color = '#b55e5e';
+    document.getElementById('status-ha').style.color = '#b55e5e';
+  }
+}
 
 async function refreshAll() {
-  await Promise.all([loadReport(), loadSettings(), loadNextProbe()]);
+  await Promise.all([loadReport(), loadSettings(), loadStatus()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
   scheduleAutoRefresh();
 }
 
-async function loadNextProbe() {
+async function loadNextProbe(currentDecision) {
   try {
     const r = await fetch('/api/next-probe').then(r => r.json());
     const el = document.getElementById('next-probe');
-    if (r.next_probe) {
-      el.textContent = new Date(r.next_probe).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
-    } else {
+    const nowIL = new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' });
+    const hourIL = new Date(nowIL).getHours();
+    const inOperationalHours = hourIL >= 7 && hourIL < 19;
+
+    const probeCountdownEl = document.getElementById('next-probe-countdown');
+    if (!r.agent_enabled || r.valve_is_on || !inOperationalHours) {
       el.textContent = '—';
+      nextProbeTarget = null;
+      if (!inOperationalHours && r.agent_enabled) {
+        probeOutsideHours = true;
+        probeCountdownEl.textContent = 'Outside operational hours (07:00–19:00)';
+        probeCountdownEl.style.color = '#aaa';
+      } else {
+        probeOutsideHours = false;
+        probeCountdownEl.textContent = '';
+      }
+    } else if (!r.next_probe) {
+      el.textContent = 'Ready';
+      nextProbeTarget = null;
+      probeCountdownEl.textContent = '';
+    } else {
+      const nextProbeDate = new Date(r.next_probe);
+      if (nextProbeDate <= new Date()) {
+        el.textContent = 'Ready';
+        nextProbeTarget = null;
+        probeCountdownEl.textContent = '';
+      } else {
+        el.textContent = nextProbeDate.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+        nextProbeTarget = nextProbeDate.getTime();
+        probeCountdownEl.style.color = '#7a9ab8';
+      }
+    }
+
+    const originEl = document.getElementById('turn-on-origin');
+    const inWaiting = currentDecision === 'waiting';
+    const probeActive = r.agent_enabled && r.valve_is_on && r.last_turn_on_origin === 'probe' && r.last_turn_on_ts && inWaiting && inOperationalHours;
+    if (probeActive && r.last_turn_on_ts) {
+      const t = new Date(r.last_turn_on_ts).toLocaleTimeString('he-IL',
+        { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit' });
+      originEl.innerHTML = `<span style="background:#97b3cc;color:#fff;padding:1px 7px;border-radius:3px;font-size:0.72rem;">Probe started at ${t}</span>`;
+    } else {
+      originEl.innerHTML = '';
     }
   } catch (e) {
     console.error('loadNextProbe error:', e);
@@ -56,6 +133,7 @@ async function loadReport() {
       const decEl = document.getElementById('last-decision');
       decEl.innerHTML = `<span class="badge badge-${dec}">${dec}</span>`;
       document.getElementById('why-decision').textContent = rep.why_decision || '—';
+      await loadNextProbe(rep.decision);
 
       document.getElementById('last-error').textContent = fmt(rep.error);
 
@@ -67,6 +145,11 @@ async function loadReport() {
         const nts = new Date(rep.next_ts);
         document.getElementById('next-run').textContent =
           nts.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+        nextRunTarget = nts.getTime();
+        startCountdown();
+      } else {
+        nextRunTarget = null;
+        document.getElementById('next-run-countdown').textContent = '';
       }
     } else {
       ['boiler-temp','panel-temp','valve-state','boiler-trend','panel-trend',
@@ -128,7 +211,8 @@ async function saveSettings(e) {
 async function toggleAgent() {
   try {
     await fetch('/api/agent/toggle', { method: 'POST' });
-    await Promise.all([loadReport(), loadNextProbe()]);
+    const decision = await loadReport();
+    await loadNextProbe(decision);
   } catch (e) {
     console.error('toggleAgent error:', e);
   }
@@ -157,3 +241,4 @@ function scheduleAutoRefresh() {
 }
 
 refreshAll();
+startCountdown();
