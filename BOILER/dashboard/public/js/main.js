@@ -13,8 +13,11 @@ async function loadSolarScore() {
     const label = document.getElementById('solar-score-label');
     const score = s.solar_score;
     const color = score >= 8 ? '#7a9f5a' : score >= 5 ? '#b5a040' : '#a07050';
-    const text  = score >= 8 ? 'Excellent' : score >= 6 ? 'Good' : score >= 4 ? 'Fair' : 'Poor';
-    if (el)    { el.textContent = score + ' / 10'; el.style.color = color; }
+    const text  = score >= 8 ? '☀️ Excellent — panels will heat well'
+                : score >= 6 ? '🌤 Good — partial heating expected'
+                : score >= 4 ? '⛅ Fair — limited solar gain'
+                :              '☁️ Poor — minimal heating today';
+    if (el)    { el.textContent = score; el.style.color = color; }
     if (label) { label.textContent = text; label.style.color = color; }
   } catch (e) { console.error('loadSolarScore error:', e); }
 }
