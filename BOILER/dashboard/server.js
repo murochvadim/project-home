@@ -218,6 +218,47 @@ app.post('/api/deploy', async (req, res) => {
   }
 });
 
+// ─── Weather scores ───────────────────────────────────────────
+app.get('/api/weather/scores', async (req, res) => {
+  try {
+    const [w, d] = await Promise.all([
+      db.query('SELECT * FROM raw_weather ORDER BY ts DESC LIMIT 1'),
+      db.query("SELECT * FROM raw_weather_daily WHERE forecast_date = CURRENT_DATE ORDER BY ts DESC LIMIT 1"),
+    ]);
+    const cur  = w.rows[0] || {};
+    const day  = d.rows[0] || {};
+
+    const conditionBase = {
+      sunny: { solar: 8, rain: 1 },
+      partlycloudy: { solar: 5, rain: 2 },
+      cloudy:       { solar: 2, rain: 4 },
+      rainy:        { solar: 1, rain: 7 },
+      pouring:      { solar: 1, rain: 9 },
+      snowy:        { solar: 1, rain: 6 },
+    };
+
+    const cond   = (cur.condition || '').toLowerCase();
+    const base   = conditionBase[cond] || { solar: 3, rain: 3 };
+    const uv     = Math.max(parseFloat(cur.uv_index_ims) || 0, parseFloat(cur.uv_index_balcony) || 0);
+    const precip = parseFloat(day.precipitation_mm) || 0;
+
+    const solarBonus = uv >= 6 ? 2 : uv >= 3 ? 1 : 0;
+    const rainBonus  = precip >= 5 ? 3 : precip >= 2 ? 2 : precip > 0 ? 1 : 0;
+
+    const solar_score = Math.min(10, Math.max(1, base.solar + solarBonus));
+    const rain_score  = Math.min(10, Math.max(1, base.rain  + rainBonus));
+
+    res.json({
+      solar_score,
+      rain_score,
+      condition:      cur.condition || null,
+      uv:             uv,
+      precipitation:  precip,
+      forecast_date:  day.forecast_date || null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Weather latest (most recent row from raw_weather) ────────
 app.get('/api/weather/latest', async (req, res) => {
   try {

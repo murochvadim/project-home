@@ -13,6 +13,44 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
 
+function solarColor(s) {
+  if (s >= 8) return '#7a9f5a';
+  if (s >= 5) return '#b5a040';
+  return '#a07050';
+}
+function rainColor(r) {
+  if (r >= 7) return '#5577aa';
+  if (r >= 4) return '#7799bb';
+  return '#8a9f78';
+}
+function solarLabel(s) {
+  if (s >= 8) return '☀️ Excellent — panels will heat well';
+  if (s >= 6) return '🌤 Good — partial heating expected';
+  if (s >= 4) return '⛅ Fair — limited solar gain';
+  return '☁️ Poor — minimal heating today';
+}
+function rainLabel(r) {
+  if (r >= 8) return '🌧 High — rain likely today';
+  if (r >= 5) return '🌦 Moderate — possible showers';
+  if (r >= 3) return '🌥 Low — unlikely but possible';
+  return '☀️ Very low — dry conditions';
+}
+
+async function loadScores() {
+  try {
+    const s = await fetch('/api/weather/scores').then(r => r.json());
+    if (s.error) return;
+    const solar = s.solar_score;
+    const rain  = s.rain_score;
+    document.getElementById('score-solar').textContent = solar;
+    document.getElementById('score-solar').style.color = solarColor(solar);
+    document.getElementById('score-solar-label').textContent = solarLabel(solar);
+    document.getElementById('score-rain').textContent = rain;
+    document.getElementById('score-rain').style.color = rainColor(rain);
+    document.getElementById('score-rain-label').textContent = rainLabel(rain);
+  } catch (e) { console.error('loadScores error:', e); }
+}
+
 async function loadCurrent() {
   try {
     const r = await fetch('/api/weather/latest').then(r => r.json());
@@ -87,7 +125,7 @@ async function loadDaily() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadCurrent(), loadHourly(), loadDaily()]);
+  await Promise.all([loadScores(), loadCurrent(), loadHourly(), loadDaily()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
