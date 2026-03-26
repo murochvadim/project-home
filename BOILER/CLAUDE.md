@@ -251,7 +251,12 @@
 - Rendered lazily (only when tab becomes visible) using startOnLoad: false
 
 ## General Page (sidebar: General → Weather)
+- **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10), colored badges with labels; updated every 30 min
+  - Scores computed on-the-fly in `/api/weather/scores` from latest `raw_weather` + today's `raw_weather_daily` — not stored in DB
+  - Solar score: based on `condition` + `uv_index` (max of IMS and balcony)
+  - Rain score: based on `condition` + `precipitation_mm` from today's forecast
 - **Current Conditions card**: reads latest row from `raw_weather` (no HA token needed on Windows dashboard)
 - **Hourly Weather Log table**: last 24/48/72 rows from `raw_weather`
 - **Daily Forecast Log table**: last 14/30 rows from `raw_weather_daily` (precipitation in mm)
-- API endpoints: `/api/weather/latest`, `/api/weather/hourly`, `/api/weather/daily`
+- API endpoints: `/api/weather/scores`, `/api/weather/latest`, `/api/weather/hourly`, `/api/weather/daily`
+- `collect_weather.py` cron runs every 30 min on LXC 103 (`*/30 * * * *`)
