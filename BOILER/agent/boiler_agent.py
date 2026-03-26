@@ -205,6 +205,79 @@ def get_time_since_last_close(conn):
     return (datetime.now(pytz.utc) - last_close_ts).total_seconds() / 60.0
 
 
+def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta):
+    """
+    Scan recent raw_data for completed boiler temperature drop events.
+    A drop event = boiler_temp falls >= consumption_temp_delta within consumption_time_delta minutes.
+    Only records events that have already ended (not still dropping).
+    Deduplicates by start_ts via UNIQUE constraint.
+    """
+    cutoff = datetime.now(pytz.utc) - timedelta(minutes=consumption_time_delta)
+
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("""
+            SELECT ts, boiler_temp FROM raw_data
+            WHERE ts >= %s AND boiler_temp IS NOT NULL
+            ORDER BY ts ASC
+        """, (cutoff,))
+        rows = cur.fetchall()
+
+    if len(rows) < 3:
+        return
+
+    events = []
+    i = 0
+    while i < len(rows) - 2:
+        curr_temp = float(rows[i]['boiler_temp'])
+        next_temp = float(rows[i + 1]['boiler_temp'])
+
+        # Look for start of a significant drop (>= 0.5°C per step)
+        if next_temp <= curr_temp - 0.5:
+            start_idx  = i
+            start_temp = curr_temp
+            min_temp   = next_temp
+            min_idx    = i + 1
+
+            j = i + 1
+            while j < len(rows) - 1:
+                nxt = float(rows[j + 1]['boiler_temp'])
+                if nxt <= float(rows[j]['boiler_temp']) - 0.3:
+                    j += 1
+                    if float(rows[j]['boiler_temp']) < min_temp:
+                        min_temp = float(rows[j]['boiler_temp'])
+                        min_idx  = j
+                else:
+                    break
+
+            # Only record if drop completed before last reading (not still falling)
+            if min_idx < len(rows) - 1:
+                drop = round(start_temp - min_temp, 1)
+                if drop >= consumption_temp_delta:
+                    start_ts     = ensure_utc(rows[start_idx]['ts'])
+                    end_ts       = ensure_utc(rows[min_idx]['ts'])
+                    duration_min = max(1, int((end_ts - start_ts).total_seconds() / 60))
+                    events.append((start_ts, end_ts, round(start_temp, 1),
+                                   round(min_temp, 1), drop, duration_min))
+                    log.info(f'Consumption detected: {start_temp}→{min_temp}°C '
+                             f'({drop}°C drop, {duration_min} min) at {start_ts}')
+
+            i = min_idx  # skip past this event regardless
+        else:
+            i += 1
+
+    if not events:
+        return
+
+    with conn.cursor() as cur:
+        for ev in events:
+            cur.execute("""
+                INSERT INTO boiler_consumptions
+                    (start_ts, end_ts, start_temp, end_temp, drop_c, duration_min)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (start_ts) DO NOTHING
+            """, ev)
+
+
 def write_result(conn, boiler_temp, panel_temp, valve_state,
                  boiler_trend, panel_trend, decision, why_decision, error, next_ts, version):
     with conn.cursor() as cur:
@@ -458,6 +531,12 @@ def run_agent():
         # ── Step 6: Write result ──────────────────────────────────────────────
         write_result(conn, boiler_temp, panel_temp, valve_state,
                      boiler_trend, panel_trend, decision, why_decision, error, next_ts, version)
+
+        # ── Step 7: Detect consumption events ────────────────────────────────
+        consumption_temp_delta = float(settings.get('consumption_temp_delta') or 3.0)
+        consumption_time_delta = int(settings.get('consumption_time_delta') or 15)
+        detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta)
+
         conn.commit()
         return run_interval_min
 
