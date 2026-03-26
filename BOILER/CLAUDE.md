@@ -227,6 +227,7 @@
   - When outside operational hours and agent enabled: shows `Outside operational hours (07:00–19:00)` in muted grey below Next Probe Run countdown (font-size 0.82rem, same as value); text persists and is not cleared by the countdown interval
   - `why-decision` text (below Last Decision badge) and `next-probe-countdown` text both use font-size 0.82rem to match the value fields
   - Last Error
+  - Solar Heating Potential: score (1–10) centered, colored (green/amber/brown), label below (e.g. "Poor — minimal heating today"); no icon; fetched from `/api/weather/scores`
   - Connections: PostgreSQL ⬤ and Home Assistant ⬤ (green/red live status)
 - **Last Report card:** boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, report timestamp
 - **Settings:** run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min
@@ -251,10 +252,11 @@
 - Rendered lazily (only when tab becomes visible) using startOnLoad: false
 
 ## General Page (sidebar: General → Weather)
-- **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10), colored badges with labels; updated every 30 min
+- **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10) + Season; updated every 30 min
   - Scores computed on-the-fly in `/api/weather/scores` from latest `raw_weather` + today's `raw_weather_daily` — not stored in DB
-  - Solar score: based on `condition` + `uv_index` (max of IMS and balcony)
+  - Solar score: based on `condition` + `uv_index` (max of IMS and balcony); displayed as large colored number with description label (no icon)
   - Rain score: based on `condition` + `precipitation_mm` from today's forecast
+  - Season: derived from current month (client-side, no API); Spring Mar–May, Summer Jun–Sep, Autumn Oct–Nov, Winter Dec–Feb
 - **Current Conditions card**: reads latest row from `raw_weather` (no HA token needed on Windows dashboard)
 - **Hourly Weather Log table**: last 24/48/72 rows from `raw_weather`
 - **Daily Forecast Log table**: last 14/30 rows from `raw_weather_daily` (precipitation in mm)
