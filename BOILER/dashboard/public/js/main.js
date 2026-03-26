@@ -158,7 +158,11 @@ async function loadReport() {
       document.getElementById('report-ts').textContent =
         ts.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
 
-      if (rep.next_ts) {
+      if (!agentEnabled) {
+        document.getElementById('next-run').textContent = '—';
+        document.getElementById('next-run-countdown').textContent = '';
+        nextRunTarget = null;
+      } else if (rep.next_ts) {
         const nts = new Date(rep.next_ts);
         document.getElementById('next-run').textContent =
           nts.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
