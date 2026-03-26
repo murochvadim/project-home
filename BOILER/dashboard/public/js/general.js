@@ -77,7 +77,7 @@ async function loadDaily() {
         <td>${fmt(r.condition)}</td>
         <td>${fmt(r.temp_high, '°C')}</td>
         <td>${fmt(r.temp_low, '°C')}</td>
-        <td>${fmt(r.precipitation_prob, '%')}</td>
+        <td>${fmt(r.precipitation_mm, 'mm')}</td>
       `;
       tbody.appendChild(tr);
     });

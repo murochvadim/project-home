@@ -131,14 +131,14 @@ def collect_daily(conn):
             fd = entry.get('datetime', '')[:10]   # "2026-03-27T00:00:00+00:00" → "2026-03-27"
             cur.execute("""
                 INSERT INTO raw_weather_daily
-                  (forecast_date, condition, temp_high, temp_low, precipitation_prob)
+                  (forecast_date, condition, temp_high, temp_low, precipitation_mm)
                 VALUES (%s, %s, %s, %s, %s)
             """, (
                 fd,
                 entry.get('condition'),
                 safe_float(entry.get('temperature')),
                 safe_float(entry.get('templow')),
-                safe_int(entry.get('precipitation_probability')),
+                safe_float(entry.get('precipitation')),
             ))
     conn.commit()
     log.info(f'Daily forecast inserted: {len(forecasts)} entries')
