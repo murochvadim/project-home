@@ -222,6 +222,7 @@
 - Start/Stop button — enables or disables the agent; shows current status (ENABLED green / DISABLED)
 - **Agent Control card:**
   - Agent Status, Last Decision + why_decision (italic below badge), Next Run + live MM:SS countdown
+  - Next Run shows `—` and countdown is hidden when agent is disabled
   - Next Probe Run + live MM:SS countdown (shows `—` when agent disabled or valve ON; `Ready` when timer elapsed)
   - Probe origin badge below Next Probe Run: `Probe started at HH:MM` (blue) when valve ON from probe; hidden (empty) when not active
   - When outside operational hours and agent enabled: shows `Outside operational hours (07:00–19:00)` in muted grey below Next Probe Run countdown (font-size 0.82rem, same as value); text persists and is not cleared by the countdown interval
