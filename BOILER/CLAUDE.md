@@ -18,14 +18,25 @@
 - DB Name: `home_data`
 
 ## Tables
-- `raw_data`:
-  - `ts`
-  - `boiler_temp`
-  - `panel_temp`
-  - `valve_state`
+- `raw_data`: ts, boiler_temp, panel_temp, valve_state
+- `agent_boiler_data`: ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision, error, next_ts, version
+- `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min
+- `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected hourly
+- `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
 ## Data Flow
-- In lxc 103 Agents has running script that update raw_data with data from HA every 5 min.
+- **raw_data**: LXC 103 script `/usr/local/bin/ha_to_pg` runs every 5 min via cron, fetches from HA
+- **raw_weather + raw_weather_daily**: LXC 103 script `/opt/Agents-agent/project/BOILER/agent/collect_weather.py` runs every hour via cron
+  - Hourly: fetches `weather.ims_weather` + balcony sensors (`sensor.balcony_motion_*`) from HA → inserts into `raw_weather`
+  - Daily at 06:00: calls `weather.get_forecasts?return_response` → inserts 7-day forecast into `raw_weather_daily`
+  - HA_TOKEN stored in `/etc/environment` on LXC 103; loaded via `export $(grep -v '^#' /etc/environment | xargs)` in cron
+
+## Weather Data Sources (Home Assistant)
+- `weather.ims_weather` — IMS official: condition, temperature, humidity, uv_index, wind_speed, wind_bearing; supports hourly + daily forecasts
+- `sensor.balcony_motion_temperature` — outdoor temp on balcony
+- `sensor.balcony_motion_uv_index` — local UV index
+- `sensor.balcony_motion_illuminance` — light level (solar radiation proxy)
+- `sensor.balcony_motion_humidity` — outdoor humidity
 
 ## Integration
 - Home Assistant: 192.168.1.110:8123
@@ -238,3 +249,9 @@
 ## Logic Page
 - 4 tabs with Mermaid.js flowcharts: Main Flow, Waiting Phase, Turn ON & Probe, Normal Decision
 - Rendered lazily (only when tab becomes visible) using startOnLoad: false
+
+## General Page (sidebar: General → Weather)
+- **Current Conditions card**: reads latest row from `raw_weather` (no HA token needed on Windows dashboard)
+- **Hourly Weather Log table**: last 24/48/72 rows from `raw_weather`
+- **Daily Forecast Log table**: last 14/30 rows from `raw_weather_daily` (precipitation in mm)
+- API endpoints: `/api/weather/latest`, `/api/weather/hourly`, `/api/weather/daily`
