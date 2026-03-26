@@ -2,10 +2,24 @@ let autoRefreshTimer = null;
 let runIntervalMin = 5;
 
 async function refreshAll() {
-  await Promise.all([loadReport(), loadSettings()]);
+  await Promise.all([loadReport(), loadSettings(), loadNextProbe()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
   scheduleAutoRefresh();
+}
+
+async function loadNextProbe() {
+  try {
+    const r = await fetch('/api/next-probe').then(r => r.json());
+    const el = document.getElementById('next-probe');
+    if (r.next_probe) {
+      el.textContent = new Date(r.next_probe).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+    } else {
+      el.textContent = '—';
+    }
+  } catch (e) {
+    console.error('loadNextProbe error:', e);
+  }
 }
 
 async function loadReport() {
@@ -22,7 +36,7 @@ async function loadReport() {
 
     const toggleBtn = document.getElementById('toggle-btn');
     toggleBtn.textContent = agentEnabled ? 'Stop Agent' : 'Start Agent';
-    toggleBtn.className = 'btn ' + (agentEnabled ? 'btn-danger' : 'btn-success');
+    toggleBtn.className = 'btn btn-sm ' + (agentEnabled ? 'btn-danger' : 'btn-success');
 
     if (rep && rep.ts) {
       const fmt = v => v !== undefined && v !== null ? v : '—';
@@ -41,6 +55,7 @@ async function loadReport() {
       const dec = rep.decision || '—';
       const decEl = document.getElementById('last-decision');
       decEl.innerHTML = `<span class="badge badge-${dec}">${dec}</span>`;
+      document.getElementById('why-decision').textContent = rep.why_decision || '—';
 
       document.getElementById('last-error').textContent = fmt(rep.error);
 
@@ -55,7 +70,7 @@ async function loadReport() {
       }
     } else {
       ['boiler-temp','panel-temp','valve-state','boiler-trend','panel-trend',
-       'last-decision','last-error','report-ts','next-run'].forEach(id => {
+       'last-decision','why-decision','last-error','report-ts','next-run'].forEach(id => {
         document.getElementById(id).textContent = '—';
       });
     }
@@ -71,7 +86,8 @@ async function loadSettings() {
     document.getElementById('s-valid-after-on').value  = cfg.panel_temp_valid_after_on ?? '';
     document.getElementById('s-valid-after-off').value = cfg.panel_temp_valid_after_off ?? '';
     document.getElementById('s-trend-runs').value   = cfg.trend_runs ?? '';
-    document.getElementById('s-debounce').value     = cfg.temp_debounce ?? '';
+    document.getElementById('s-debounce').value          = cfg.temp_debounce ?? '';
+    document.getElementById('s-probe-interval').value    = cfg.probe_interval_min ?? '';
     runIntervalMin = cfg.run_interval_min || 5;
   } catch (e) {
     console.error('loadSettings error:', e);
@@ -86,6 +102,7 @@ async function saveSettings(e) {
     panel_temp_valid_after_off: parseInt(document.getElementById('s-valid-after-off').value),
     trend_runs:                 parseInt(document.getElementById('s-trend-runs').value),
     temp_debounce:              parseFloat(document.getElementById('s-debounce').value),
+    probe_interval_min:         parseInt(document.getElementById('s-probe-interval').value),
   };
   try {
     const r = await fetch('/api/settings', {
@@ -110,8 +127,8 @@ async function saveSettings(e) {
 
 async function toggleAgent() {
   try {
-    const r = await fetch('/api/agent/toggle', { method: 'POST' }).then(r => r.json());
-    await loadReport();
+    await fetch('/api/agent/toggle', { method: 'POST' });
+    await Promise.all([loadReport(), loadNextProbe()]);
   } catch (e) {
     console.error('toggleAgent error:', e);
   }

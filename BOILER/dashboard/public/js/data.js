@@ -16,6 +16,12 @@ function fmtDecision(d) {
 function fmtVersion(v) {
   return v ? v.slice(0, 7) : '—';
 }
+function fmtWhy(w) {
+  if (!w) return '<span style="color:#bbb">—</span>';
+  const short = w.length > 45 ? w.slice(0, 45) + '…' : w;
+  const escaped = w.replace(/"/g, '&quot;');
+  return `<span title="${escaped}" style="cursor:default">${short}</span>`;
+}
 
 async function loadRaw() {
   const limit = document.getElementById('raw-limit').value;
@@ -49,6 +55,7 @@ async function loadAgent() {
         <td>${r.boiler_trend || '—'}</td>
         <td>${r.panel_trend || '—'}</td>
         <td>${fmtDecision(r.decision)}</td>
+        <td style="font-size:0.75rem; color:#666; max-width:200px;">${fmtWhy(r.why_decision)}</td>
         <td style="font-size:0.78rem; color:${r.error && r.error.startsWith('ERR') ? '#e74c3c' : r.error && r.error.startsWith('WARN') ? '#e67e22' : '#555'}">${r.error || '—'}</td>
         <td>${fmtTs(r.next_ts)}</td>
         <td style="font-family:monospace">${fmtVersion(r.version)}</td>

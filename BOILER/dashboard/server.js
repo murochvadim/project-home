@@ -33,7 +33,7 @@ app.get('/api/settings', async (req, res) => {
 });
 
 app.post('/api/settings', async (req, res) => {
-  const { run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce } = req.body;
+  const { run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min } = req.body;
   try {
     await db.query(`
       UPDATE agent_settings SET
@@ -41,8 +41,9 @@ app.post('/api/settings', async (req, res) => {
         panel_temp_valid_after_on = $2,
         panel_temp_valid_after_off= $3,
         trend_runs                = $4,
-        temp_debounce             = $5
-    `, [run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce]);
+        temp_debounce             = $5,
+        probe_interval_min        = $6
+    `, [run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -111,6 +112,36 @@ app.get('/api/graph', async (req, res) => {
       ORDER BY t ASC
     `, [bucketSeconds, interval]);
     res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Next probe time ──────────────────────────────────────────
+app.get('/api/next-probe', async (req, res) => {
+  try {
+    const s = await db.query('SELECT probe_interval_min FROM agent_settings LIMIT 1');
+    const probeMin = s.rows[0]?.probe_interval_min ?? 60;
+
+    // Find last ON→OFF valve transition in raw_data
+    const r = await db.query(`
+      SELECT ts FROM (
+        SELECT ts, valve_state,
+               LAG(valve_state) OVER (ORDER BY ts) AS prev_state
+        FROM raw_data
+        ORDER BY ts DESC
+        LIMIT 500
+      ) t
+      WHERE valve_state = false AND prev_state = true
+      ORDER BY ts DESC
+      LIMIT 1
+    `);
+
+    if (!r.rows[0]) {
+      return res.json({ next_probe: null });
+    }
+
+    const lastClose = new Date(r.rows[0].ts);
+    const nextProbe = new Date(lastClose.getTime() + probeMin * 60 * 1000);
+    res.json({ next_probe: nextProbe.toISOString() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Boiler — Agent Logic</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    .tab-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      padding: 7px 16px;
+      border: 1px solid #d0cbc4;
+      border-radius: 5px;
+      background: #f0ebe3;
+      color: #555;
+      cursor: pointer;
+      font-size: 0.83rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover { background: #e8ddd8; }
+    .tab-btn.active { background: #7a9ab8; color: #fff; border-color: #7a9ab8; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .mermaid { overflow: auto; }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+      font-size: 0.78rem;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .legend-dot {
+      width: 12px; height: 12px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Home Agents</div>
+  <div class="section-label">Boiler Agent</div>
+  <a href="index.html">Overview</a>
+  <a href="graph.html">Graph</a>
+  <a href="data.html">Data</a>
+  <a href="compare.html">Compare</a>
+  <a href="logic.html" class="active">Logic</a>
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Agent Decision Logic</h1>
+  </div>
+
+  <div class="card">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="showTab('main')">1 · Main Flow</button>
+      <button class="tab-btn" onclick="showTab('waiting')">2 · Waiting Phase</button>
+      <button class="tab-btn" onclick="showTab('turnon')">3 · Turn ON &amp; Probe</button>
+      <button class="tab-btn" onclick="showTab('normal')">4 · Normal Decision</button>
+    </div>
+
+    <!-- TAB 1: Main Flow -->
+    <div class="tab-panel active" id="tab-main">
+      <div class="mermaid">
+flowchart TD
+  START([▶ Agent Run Start]):::start
+
+  START --> SA{"🔒 Safety Rule A\nValve ON +\nOutside 07:00–19:00?"}:::decision
+
+  SA -->|Yes| SOA["Turn OFF Valve\ndecision = turn_off\nerror = NO ERROR"]:::danger
+  SOA --> EXIT
+
+  SA -->|No| S0{"agent_enabled?"}:::decision
+  S0 -->|false| DIS["decision = disabled"]:::neutral
+  DIS --> EXIT
+
+  S0 -->|true| S1["Read raw_data\nlast trend_runs × run_interval_min min\nCalculate boiler & panel trends"]:::process
+
+  S1 --> S2{"Hard Error?\n(DB, HA, missing data)"}:::decision
+
+  S2 -->|"Yes + Valve ON"| SOB["Safety Rule B\nTurn OFF Valve\ndecision = turn_off\nerror = ERR: ..."]:::danger
+  SOB --> EXIT
+
+  S2 -->|"Yes + Valve OFF"| NAERR["decision = no_action\nerror = ERR: ..."]:::danger
+  NAERR --> EXIT
+
+  S2 -->|No| S3["Get current valve_state"]:::process
+
+  S3 --> ROUTER{" "}:::router
+
+  ROUTER -->|"In Waiting Phase?"| W["➜ See Tab 2\nWaiting Phase"]:::ref
+  ROUTER -->|"Valve ON\n(not waiting)"| N["➜ See Tab 4\nNormal Decision"]:::ref
+  ROUTER -->|"Valve OFF"| T["➜ See Tab 3\nTurn ON & Probe"]:::ref
+
+  W --> EXIT
+  N --> EXIT
+  T --> EXIT
+
+  EXIT([⏹ Write DB · Sleep until next run]):::start
+
+  classDef start    fill:#1e2a3a,color:#fff,stroke:#1e2a3a
+  classDef decision fill:#ebe5db,color:#2e2e2e,stroke:#c4b4a0
+  classDef process  fill:#e8ddd8,color:#2e2e2e,stroke:#d0cbc4
+  classDef danger   fill:#b55e5e,color:#fff,stroke:#954040
+  classDef neutral  fill:#d0cbc4,color:#2e2e2e,stroke:#a8a09a
+  classDef router   fill:#faf8f5,color:#faf8f5,stroke:#faf8f5
+  classDef ref      fill:#97b3cc,color:#fff,stroke:#7a9ab8
+      </div>
+    </div>
+
+    <!-- TAB 2: Waiting Phase -->
+    <div class="tab-panel" id="tab-waiting">
+      <div class="mermaid">
+flowchart TD
+  ENTER(["Valve turned ON"]):::start
+
+  ENTER --> PV{Panel readings valid}:::decision
+  PV -->|"Not yet - sensor stabilising"| WAIT["decision = waiting"]:::neutral
+  PV -->|Valid| LAST{Last waiting run}:::decision
+
+  LAST -->|"No - mid wait"| DOWN{panel trend DOWN}:::decision
+  DOWN -->|Yes| EARLY["decision = turn_off\nEarly abort\npanel is cooling"]:::danger
+  DOWN -->|"No - UP or stable"| WAIT
+
+  LAST -->|"Yes - last run"| LTREND{panel trend}:::decision
+  LTREND -->|UP| KON["decision = keep_on\nHeating confirmed"]:::success
+  LTREND -->|DOWN| KOFF["decision = turn_off\nPanel cooling"]:::danger
+  LTREND -->|"stable or N/A"| KHOLD["decision = hold\nRe-evaluate next run"]:::neutral
+
+  WAIT --> EXIT
+  EARLY --> EXIT
+  KON --> EXIT
+  KOFF --> EXIT
+  KHOLD --> EXIT
+  EXIT(["Write DB"]):::start
+
+  classDef start    fill:#1e2a3a,color:#fff,stroke:#1e2a3a
+  classDef decision fill:#ebe5db,color:#2e2e2e,stroke:#c4b4a0
+  classDef success  fill:#8a9f78,color:#fff,stroke:#6a7f58
+  classDef danger   fill:#b55e5e,color:#fff,stroke:#954040
+  classDef neutral  fill:#d0cbc4,color:#2e2e2e,stroke:#a8a09a
+      </div>
+    </div>
+
+    <!-- TAB 3: Turn ON & Probe -->
+    <div class="tab-panel" id="tab-turnon">
+      <div class="mermaid">
+flowchart TD
+  ENTER(["Valve is OFF"]):::start
+
+  ENTER --> PVVALID{Panel reading VALID}:::decision
+
+  PVVALID -->|Valid| HOURS{Within 07:00 to 19:00}:::decision
+  HOURS -->|No| NA1["decision = no_action\nOutside operational hours"]:::neutral
+  HOURS -->|Yes| TONCHK{"panel temp greater than\nboiler temp plus debounce"}:::decision
+  TONCHK -->|Yes| TON["decision = turn_on\nPanel warm enough\nEnter waiting phase"]:::success
+  TONCHK -->|No| NA2["decision = no_action\nPanel not warm enough"]:::neutral
+
+  PVVALID -->|"Invalid - valve OFF too long"| PHOURS{Within 07:00 to 19:00}:::decision
+  PHOURS -->|No| NA3["decision = no_action\nOutside operational hours"]:::neutral
+  PHOURS -->|Yes| PTIMER{"Probe timer elapsed\ntime since last close\ngreater than probe_interval_min"}:::decision
+  PTIMER -->|Yes| PROBE["PROBE - decision = turn_on\nPanel reading invalid\nOpening valve to evaluate\nsolar heating"]:::probe
+  PTIMER -->|No| NA4["decision = no_action\nProbe timer not elapsed yet"]:::neutral
+
+  NA1 --> EXIT
+  NA2 --> EXIT
+  TON --> EXIT
+  NA3 --> EXIT
+  PROBE --> EXIT
+  NA4 --> EXIT
+  EXIT(["Write DB"]):::start
+
+  classDef start    fill:#1e2a3a,color:#fff,stroke:#1e2a3a
+  classDef decision fill:#ebe5db,color:#2e2e2e,stroke:#c4b4a0
+  classDef success  fill:#8a9f78,color:#fff,stroke:#6a7f58
+  classDef neutral  fill:#d0cbc4,color:#2e2e2e,stroke:#a8a09a
+  classDef probe    fill:#97b3cc,color:#fff,stroke:#7a9ab8
+      </div>
+    </div>
+
+    <!-- TAB 4: Normal Decision -->
+    <div class="tab-panel" id="tab-normal">
+      <div class="mermaid">
+flowchart TD
+  ENTER(["Valve ON - waiting complete"]):::start
+
+  ENTER --> PTAVAIL{Panel trend available}:::decision
+
+  PTAVAIL -->|No| WARN["WARN not valid panel temp\ndecision = no_action\nCannot evaluate trend\nHolding current valve state"]:::warn
+
+  PTAVAIL -->|Yes| DEC{Temp comparison}:::decision
+
+  DEC -->|"panel greater than boiler plus debounce"| KON["decision = keep_on\nPanel is heating boiler"]:::success
+  DEC -->|"panel less than boiler minus debounce"| KOFF["decision = turn_off\nPanel is cooling boiler"]:::danger
+  DEC -->|"within debounce range"| KHOLD["decision = hold\nTemps within dead band\nValve stays ON"]:::neutral
+
+  WARN --> EXIT
+  KON --> EXIT
+  KOFF --> EXIT
+  KHOLD --> EXIT
+  EXIT(["Write DB"]):::start
+
+  classDef start    fill:#1e2a3a,color:#fff,stroke:#1e2a3a
+  classDef decision fill:#ebe5db,color:#2e2e2e,stroke:#c4b4a0
+  classDef success  fill:#8a9f78,color:#fff,stroke:#6a7f58
+  classDef danger   fill:#b55e5e,color:#fff,stroke:#954040
+  classDef neutral  fill:#d0cbc4,color:#2e2e2e,stroke:#a8a09a
+  classDef warn     fill:#fff3cd,color:#856404,stroke:#ffc107
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#8a9f78"></div> keep_on / turn_on</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#b55e5e"></div> turn_off / error</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#97b3cc"></div> probe</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#d0cbc4"></div> hold / waiting / no_action</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#fff3cd;border:1px solid #ffc107"></div> warning</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#1e2a3a"></div> start / end</div>
+    </div>
+  </div>
+</main>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'neutral',
+    flowchart: { curve: 'basis', padding: 24 },
+    themeVariables: { fontFamily: 'Segoe UI, sans-serif', fontSize: '14px' }
+  });
+
+  const rendered = new Set();
+
+  function renderTab(name) {
+    if (rendered.has(name)) return;
+    rendered.add(name);
+    const nodes = document.querySelectorAll('#tab-' + name + ' .mermaid');
+    mermaid.run({ nodes });
+  }
+
+  function showTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    event.target.classList.add('active');
+    renderTab(name);
+  }
+
+  window.addEventListener('load', () => renderTab('main'));
+</script>
+</body>
+</html>
