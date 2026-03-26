@@ -13,6 +13,22 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
 
+function getSeason() {
+  const m = new Date().getMonth() + 1; // 1-12
+  if ([6,7,8,9].includes(m))  return { name: 'Summer', icon: '☀️',  color: '#c8822a', label: 'Jun–Sep — peak solar heating' };
+  if ([3,4,5].includes(m))    return { name: 'Spring', icon: '🌿',  color: '#7a9f5a', label: 'Mar–May — good solar conditions' };
+  if ([10,11].includes(m))    return { name: 'Autumn', icon: '🍂',  color: '#b5763a', label: 'Oct–Nov — decreasing solar gain' };
+  return                               { name: 'Winter', icon: '❄️',  color: '#5577aa', label: 'Dec–Feb — minimal solar heating' };
+}
+
+function renderSeason(iconId, labelId) {
+  const s = getSeason();
+  const iconEl  = document.getElementById(iconId);
+  const labelEl = document.getElementById(labelId);
+  if (iconEl)  { iconEl.textContent = `${s.icon} ${s.name}`; iconEl.style.color = s.color; }
+  if (labelEl) { labelEl.textContent = s.label; }
+}
+
 function solarColor(s) {
   if (s >= 8) return '#7a9f5a';
   if (s >= 5) return '#b5a040';
@@ -125,6 +141,7 @@ async function loadDaily() {
 }
 
 async function refreshAll() {
+  renderSeason('season-badge-w', 'season-label-w');
   await Promise.all([loadScores(), loadCurrent(), loadHourly(), loadDaily()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });

@@ -5,6 +5,19 @@ let nextRunTarget       = null;
 let nextProbeTarget     = null;
 let probeOutsideHours   = false;
 
+function renderSeason() {
+  const m = new Date().getMonth() + 1;
+  const seasons = {
+    summer: { months: [6,7,8,9],  icon: '☀️',  name: 'Summer', color: '#c8822a' },
+    spring: { months: [3,4,5],    icon: '🌿',  name: 'Spring', color: '#7a9f5a' },
+    autumn: { months: [10,11],    icon: '🍂',  name: 'Autumn', color: '#b5763a' },
+    winter: { months: [12,1,2],   icon: '❄️',  name: 'Winter', color: '#5577aa' },
+  };
+  const s = Object.values(seasons).find(s => s.months.includes(m)) || seasons.winter;
+  const el = document.getElementById('season-badge');
+  if (el) { el.textContent = `${s.icon} ${s.name}`; el.style.color = s.color; }
+}
+
 function startCountdown() {
   clearInterval(countdownTimer);
   countdownTimer = setInterval(() => {
@@ -240,5 +253,6 @@ function scheduleAutoRefresh() {
   autoRefreshTimer = setTimeout(refreshAll, runIntervalMin * 60 * 1000);
 }
 
+renderSeason();
 refreshAll();
 startCountdown();
