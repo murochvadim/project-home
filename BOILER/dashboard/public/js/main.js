@@ -5,17 +5,18 @@ let nextRunTarget       = null;
 let nextProbeTarget     = null;
 let probeOutsideHours   = false;
 
-function renderSeason() {
-  const m = new Date().getMonth() + 1;
-  const seasons = {
-    summer: { months: [6,7,8,9],  icon: '☀️',  name: 'Summer', color: '#c8822a' },
-    spring: { months: [3,4,5],    icon: '🌿',  name: 'Spring', color: '#7a9f5a' },
-    autumn: { months: [10,11],    icon: '🍂',  name: 'Autumn', color: '#b5763a' },
-    winter: { months: [12,1,2],   icon: '❄️',  name: 'Winter', color: '#5577aa' },
-  };
-  const s = Object.values(seasons).find(s => s.months.includes(m)) || seasons.winter;
-  const el = document.getElementById('season-badge');
-  if (el) { el.textContent = `${s.icon} ${s.name}`; el.style.color = s.color; }
+async function loadSolarScore() {
+  try {
+    const s = await fetch('/api/weather/scores').then(r => r.json());
+    if (s.error) return;
+    const el    = document.getElementById('solar-score');
+    const label = document.getElementById('solar-score-label');
+    const score = s.solar_score;
+    const color = score >= 8 ? '#7a9f5a' : score >= 5 ? '#b5a040' : '#a07050';
+    const text  = score >= 8 ? 'Excellent' : score >= 6 ? 'Good' : score >= 4 ? 'Fair' : 'Poor';
+    if (el)    { el.textContent = score + ' / 10'; el.style.color = color; }
+    if (label) { label.textContent = text; label.style.color = color; }
+  } catch (e) { console.error('loadSolarScore error:', e); }
 }
 
 function startCountdown() {
@@ -54,7 +55,7 @@ async function loadStatus() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadReport(), loadSettings(), loadStatus()]);
+  await Promise.all([loadReport(), loadSettings(), loadStatus(), loadSolarScore()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
   scheduleAutoRefresh();
@@ -253,6 +254,5 @@ function scheduleAutoRefresh() {
   autoRefreshTimer = setTimeout(refreshAll, runIntervalMin * 60 * 1000);
 }
 
-renderSeason();
 refreshAll();
 startCountdown();
