@@ -6,6 +6,13 @@ const dot = ok => `<span style="color:${ok ? '#7a9f5a' : '#b55e5e'}; font-size:0
 
 // ── System Alerts ────────────────────────────────────────────
 let showResolvedAlerts = false;
+const ALERTS_TBODY_CACHE = '_health_alerts_tbody';
+
+// Restore cached tbody immediately so table height is stable on load
+try {
+  const c = localStorage.getItem(ALERTS_TBODY_CACHE);
+  if (c) document.getElementById('alerts-body').innerHTML = c;
+} catch (e) {}
 
 async function loadAlerts() {
   try {
@@ -69,6 +76,7 @@ async function loadAlerts() {
         <td style="font-size:0.75rem; color:#5a8a5a;">${r.resolved_local ? fmtTs(r.resolved_local) : ''}</td>
       </tr>`;
     }).join('');
+    try { localStorage.setItem(ALERTS_TBODY_CACHE, tbody.innerHTML); } catch (e) {}
   } catch (e) {
     document.getElementById('alerts-body').innerHTML =
       '<tr><td colspan="6" style="color:#b55e5e;">Failed to load</td></tr>';
@@ -305,6 +313,13 @@ function showCleanupResult(msg, isError = false) {
 }
 
 // ── Orchestrator Log ─────────────────────────────────────────
+const ORCH_TBODY_CACHE = '_health_orch_tbody';
+
+try {
+  const c = localStorage.getItem(ORCH_TBODY_CACHE);
+  if (c) document.getElementById('orch-body').innerHTML = c;
+} catch (e) {}
+
 async function loadOrchLog() {
   const limit = document.getElementById('orch-limit').value;
   try {
@@ -339,6 +354,7 @@ async function loadOrchLog() {
       : '';
     document.getElementById('orch-summary').textContent = summary;
     document.getElementById('orch-summary').style.color = lastRun?.message.includes('all OK') ? '#5a8a5a' : '#b8860b';
+    try { localStorage.setItem(ORCH_TBODY_CACHE, tbody.innerHTML); } catch (e) {}
 
   } catch (e) {
     document.getElementById('orch-body').innerHTML =
