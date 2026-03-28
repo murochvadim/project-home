@@ -92,95 +92,94 @@ async function clearResolvedAlerts() {
 }
 
 // ── System Status ────────────────────────────────────────────
+const STATUS_CACHE_KEY = '_health_status_cache';
+
+function renderStatus(r) {
+  document.getElementById('svc-postgres').innerHTML = dot(r.postgres?.ok);
+  document.getElementById('svc-ha').innerHTML       = dot(r.homeassistant?.ok);
+  document.getElementById('svc-lxc').innerHTML      = dot(r.lxc103?.ok);
+  document.getElementById('svc-lxc104').innerHTML   = dot(r.lxc104?.ok);
+
+  const htp = r.ha_to_pg;
+  if (htp) {
+    const color = htp.data_ok ? '#7a9f5a' : '#b55e5e';
+    const label = htp.data_ok ? '⬤ OK' : '⬤ Stale';
+    const ageStr = htp.age_min != null ? `last data: ${Math.round(htp.age_min)}m ago` : '';
+    const cronNote = !htp.cron_ok && htp.data_ok ? `<div style="font-size:0.7rem; color:#b8860b; margin-top:3px;">cron check unavailable (SSH)</div>` : '';
+    document.getElementById('svc-ha-to-pg').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
+      (ageStr ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${ageStr}</div>` : '') +
+      cronNote;
+  }
+
+  const agentOk = r.boiler_agent?.ok;
+  const agentStatus = r.boiler_agent?.status || 'unknown';
+  document.getElementById('svc-agent').innerHTML =
+    `<span style="color:${agentOk ? '#7a9f5a' : '#b55e5e'}; font-size:0.85rem;">⬤ ${agentStatus}</span>`;
+
+  const pm2Raw = r.pm2?.raw || '';
+  document.getElementById('svc-pm2').innerHTML = dot(r.pm2?.ok) +
+    (pm2Raw && pm2Raw !== 'pm2_unavailable'
+      ? `<div style="font-size:0.7rem; color:#888; margin-top:3px; white-space:pre;">${pm2Raw}</div>`
+      : '');
+
+  const orch = r.orchestrator;
+  if (orch) {
+    document.getElementById('svc-orchestrator').innerHTML = dot(orch.ok) +
+      (orch.ok ? '' : `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">timer: ${orch.timer || '?'} / quick: ${orch.quick || '?'}</div>`);
+  }
+
+  const olr = r.orchestrator_last_run;
+  if (olr) {
+    const color = olr.ok ? '#7a9f5a' : '#b55e5e';
+    document.getElementById('svc-orch-last-run').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${olr.ok ? '⬤ OK' : '⬤ Overdue'}</span>` +
+      (olr.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${olr.age_min}m ago</div>` : '');
+  }
+
+  const cw = r.collect_weather;
+  if (cw) {
+    const color    = cw.data_ok ? '#7a9f5a' : '#b55e5e';
+    const cronNote = !cw.cron_ok && cw.data_ok ? `<div style="font-size:0.7rem; color:#b8860b; margin-top:3px;">cron check unavailable (SSH)</div>` : '';
+    document.getElementById('svc-collect-weather').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${cw.data_ok ? '⬤ OK' : '⬤ Stale'}</span>` +
+      (cw.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">last data: ${cw.age_min}m ago</div>` : '') +
+      cronNote;
+  }
+
+  const aa = r.active_alerts;
+  if (aa) {
+    const sevColor = { critical: '#7a2020', error: '#b55e5e', warn: '#b8860b' };
+    const color = aa.ok ? '#7a9f5a' : (sevColor[aa.worst] || '#b55e5e');
+    document.getElementById('svc-active-alerts').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${aa.ok ? '⬤ All clear' : `⬤ ${aa.count} active`}</span>` +
+      (!aa.ok && aa.worst ? `<div style="font-size:0.7rem; color:${color}; margin-top:3px;">worst: ${aa.worst}</div>` : '');
+  }
+
+  const bld = r.boiler_last_decision;
+  if (bld) {
+    const color = bld.ok ? '#7a9f5a' : '#b55e5e';
+    document.getElementById('svc-boiler-last').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${bld.ok ? '⬤ OK' : '⬤ Stale'}</span>` +
+      (bld.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${bld.age_min}m ago — ${bld.decision || '?'}</div>` : '');
+  }
+}
+
 async function loadStatus() {
+  // Show cached state instantly — no blank dash on navigation
+  try {
+    const cached = localStorage.getItem(STATUS_CACHE_KEY);
+    if (cached) renderStatus(JSON.parse(cached));
+  } catch (e) {}
+
   try {
     const r = await fetch('/api/health/status').then(r => r.json());
-
-    document.getElementById('svc-postgres').innerHTML = dot(r.postgres?.ok);
-    document.getElementById('svc-ha').innerHTML       = dot(r.homeassistant?.ok);
-    document.getElementById('svc-lxc').innerHTML      = dot(r.lxc103?.ok);
-    document.getElementById('svc-lxc104').innerHTML   = dot(r.lxc104?.ok);
-
-    const htp = r.ha_to_pg;
-    if (htp) {
-      // Data freshness is primary signal; cron SSH failure is secondary (amber note)
-      const color = htp.data_ok ? '#7a9f5a' : '#b55e5e';
-      const label = htp.data_ok ? '⬤ OK' : '⬤ Stale';
-      const ageStr = htp.age_min != null ? `last data: ${Math.round(htp.age_min)}m ago` : '';
-      const cronNote = !htp.cron_ok && htp.data_ok ? `<div style="font-size:0.7rem; color:#b8860b; margin-top:3px;">cron check unavailable (SSH)</div>` : '';
-      document.getElementById('svc-ha-to-pg').innerHTML =
-        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
-        (ageStr ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${ageStr}</div>` : '') +
-        cronNote;
-    }
-
-    const agentOk = r.boiler_agent?.ok;
-    const agentStatus = r.boiler_agent?.status || 'unknown';
-    document.getElementById('svc-agent').innerHTML =
-      `<span style="color:${agentOk ? '#7a9f5a' : '#b55e5e'}; font-size:0.85rem;">⬤ ${agentStatus}</span>`;
-
-    const pm2Raw = r.pm2?.raw || '';
-    document.getElementById('svc-pm2').innerHTML = dot(r.pm2?.ok) +
-      (pm2Raw && pm2Raw !== 'pm2_unavailable'
-        ? `<div style="font-size:0.7rem; color:#888; margin-top:3px; white-space:pre;">${pm2Raw}</div>`
-        : '');
-
-    // Orchestrator service (LXC 105)
-    const orch = r.orchestrator;
-    if (orch) {
-      document.getElementById('svc-orchestrator').innerHTML = dot(orch.ok) +
-        (orch.ok ? '' : `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">timer: ${orch.timer || '?'} / quick: ${orch.quick || '?'}</div>`);
-    }
-
-    // Orchestrator last run
-    const olr = r.orchestrator_last_run;
-    if (olr) {
-      const color = olr.ok ? '#7a9f5a' : '#b55e5e';
-      const label = olr.ok ? '⬤ OK' : '⬤ Overdue';
-      document.getElementById('svc-orch-last-run').innerHTML =
-        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
-        (olr.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${olr.age_min}m ago</div>` : '');
-    }
-
-    // collect_weather cron + freshness
-    const cw = r.collect_weather;
-    if (cw) {
-      const color    = cw.data_ok ? '#7a9f5a' : '#b55e5e';
-      const label    = cw.data_ok ? '⬤ OK' : '⬤ Stale';
-      const cronNote = !cw.cron_ok && cw.data_ok ? `<div style="font-size:0.7rem; color:#b8860b; margin-top:3px;">cron check unavailable (SSH)</div>` : '';
-      document.getElementById('svc-collect-weather').innerHTML =
-        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
-        (cw.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">last data: ${cw.age_min}m ago</div>` : '') +
-        cronNote;
-    }
-
-    // Active alerts
-    const aa = r.active_alerts;
-    if (aa) {
-      const sevColor = { critical: '#7a2020', error: '#b55e5e', warn: '#b8860b' };
-      const color = aa.ok ? '#7a9f5a' : (sevColor[aa.worst] || '#b55e5e');
-      const label = aa.ok ? '⬤ All clear' : `⬤ ${aa.count} active`;
-      document.getElementById('svc-active-alerts').innerHTML =
-        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
-        (!aa.ok && aa.worst ? `<div style="font-size:0.7rem; color:${color}; margin-top:3px;">worst: ${aa.worst}</div>` : '');
-    }
-
-    // Boiler last decision
-    const bld = r.boiler_last_decision;
-    if (bld) {
-      const color = bld.ok ? '#7a9f5a' : '#b55e5e';
-      const label = bld.ok ? '⬤ OK' : '⬤ Stale';
-      document.getElementById('svc-boiler-last').innerHTML =
-        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
-        (bld.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${bld.age_min}m ago — ${bld.decision || '?'}</div>` : '');
-    }
-
+    renderStatus(r);
+    try { localStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(r)); } catch (e) {}
   } catch (e) {
     ['svc-postgres','svc-ha','svc-lxc','svc-lxc104','svc-agent','svc-ha-to-pg','svc-pm2',
      'svc-orchestrator','svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last'
-    ].forEach(id => {
-      document.getElementById(id).innerHTML = dot(false);
-    });
+    ].forEach(id => { document.getElementById(id).innerHTML = dot(false); });
   }
 }
 
@@ -362,26 +361,10 @@ loadAlerts();
 loadStatus();
 loadOrchLog();
 
-// Auto-refresh status every 60 s — no scroll jump
-setInterval(async () => {
-  if (document.getElementById('tab-database')?.classList.contains('active')) return;
-
-  // Lock heights of containers that change size during update
-  const lockIds = ['alerts-card', 'orch-table'];
-  lockIds.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.minHeight = el.offsetHeight + 'px';
-  });
-
-  const y = window.scrollY;
-  await Promise.all([loadAlerts(), loadStatus(), loadOrchLog()]);
-  window.scrollTo(0, y);
-
-  // Unlock heights after layout settles
-  requestAnimationFrame(() => {
-    lockIds.forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.style.minHeight = '';
-    });
-  });
+// Auto-refresh: only status grid (no table reloads = no scroll jump)
+// Alerts and orch log tables refresh only on manual ↺ click
+setInterval(() => {
+  if (!document.getElementById('tab-database')?.classList.contains('active')) {
+    loadStatus();
+  }
 }, 60000);
