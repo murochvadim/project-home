@@ -510,7 +510,20 @@ def run_agent():
                     # Probe logic — panel reading is invalid (too long since last close)
                     close_str = f'{time_since_close:.0f}' if time_since_close is not None else '?'
 
-                    if time_since_close >= probe_interval_min:
+                    # Probe fire logic — skip if not enough time to complete before end of operations
+                    probe_cost_min  = panel_valid_after_on + (trend_runs + 1) * run_interval_min
+                    op_end          = now.replace(hour=19, minute=0, second=0, microsecond=0)
+                    minutes_to_end  = max(0.0, (op_end - now).total_seconds() / 60.0)
+
+                    if minutes_to_end < probe_cost_min:
+                        decision     = 'no_action'
+                        why_decision = (f'Probe skipped: only {minutes_to_end:.0f} min until end of operations, '
+                                        f'probe needs {probe_cost_min:.0f} min to complete '
+                                        f'(panel_valid_after_on={panel_valid_after_on} + '
+                                        f'(trend_runs={trend_runs}+1) × run_interval={run_interval_min})')
+                        log.info(f'Probe fire logic: {minutes_to_end:.0f} min remaining < {probe_cost_min:.0f} min needed → skip')
+
+                    elif time_since_close >= probe_interval_min:
                         decision     = 'turn_on'
                         why_decision = (f'Probe: panel reading invalid '
                                         f'(valve OFF {close_str} min > {panel_valid_after_off} min), '

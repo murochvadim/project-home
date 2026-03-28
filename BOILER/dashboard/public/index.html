@@ -11,13 +11,13 @@
   <div class="logo">Home Agents</div>
 
   <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
   <a href="general.html">Weather</a>
 
   <div class="section-label">Boiler Agent</div>
   <a href="index.html" class="active">Overview</a>
-  <a href="graph.html">Graph</a>
+  <a href="graph.html">AI + Graph</a>
   <a href="data.html">Data</a>
-  <a href="compare.html">Compare</a>
   <a href="logic.html">Logic</a>
 
   <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
@@ -35,35 +35,35 @@
 
   <!-- Agent control -->
   <div class="card">
-    <h2>Agent Control</h2>
-    <div class="status-grid">
-      <div class="status-item">
+    <h2><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7a9ab8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle; margin-right:7px; margin-bottom:2px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Agent Control</h2>
+    <div class="status-grid status-grid-divided" style="grid-template-columns: 0.7fr 2fr 1.3fr 1.3fr 0.7fr 1fr 1fr;">
+      <div class="status-item" style="text-align:center;">
         <label>Agent Status</label>
-        <div class="value" id="agent-status">—</div>
+        <button class="btn btn-sm btn-primary" id="toggle-btn" onclick="toggleAgent()" style="margin-top:28px; font-size:0.72rem; padding:11px 10px;">Loading…</button>
       </div>
       <div class="status-item">
         <label>Last Decision</label>
         <div class="value small" id="last-decision">—</div>
         <div id="why-decision" style="font-size:0.82rem; color:#777; margin-top:4px; font-style:italic; line-height:1.4;">—</div>
       </div>
-      <div class="status-item">
+      <div class="status-item" style="text-align:center;">
         <label>Next Run</label>
         <div class="value small" id="next-run">—</div>
-        <div id="next-run-countdown" style="font-size:0.78rem; color:#7a9ab8; margin-top:3px; font-variant-numeric:tabular-nums;"></div>
+        <div id="next-run-countdown" style="font-size:1.5rem; color:#085c28; margin-top:16px; font-variant-numeric:tabular-nums; font-weight:600; line-height:1;"></div>
       </div>
-      <div class="status-item">
+      <div class="status-item" style="text-align:center;">
         <label>Next Probe Run</label>
         <div class="value small" id="next-probe">—</div>
-        <div id="next-probe-countdown" style="font-size:0.82rem; color:#7a9ab8; margin-top:3px; font-variant-numeric:tabular-nums;"></div>
-        <div id="turn-on-origin" style="font-size:0.75rem; margin-top:4px;"></div>
+        <div id="next-probe-countdown" style="font-size:0.82rem; color:#7a9ab8; margin-top:2px; font-variant-numeric:tabular-nums; font-weight:600; line-height:1; white-space:nowrap;"></div>
+        <div id="turn-on-origin" style="font-size:0.75rem; margin-top:4px; white-space:nowrap;"></div>
       </div>
       <div class="status-item">
         <label>Last Error</label>
-        <div class="value small" id="last-error">—</div>
+        <div class="value small" id="last-error" style="white-space:nowrap; font-size:0.72rem; margin-top:12px;">—</div>
       </div>
-      <div class="status-item">
+      <div class="status-item" style="text-align:center;">
         <label>Solar Heating Potential</label>
-        <div class="value small" id="solar-score" style="text-align:center;">—</div>
+        <div class="value small" id="solar-score" style="font-size:1.2rem;">—</div>
         <div id="solar-score-label" style="font-size:0.75rem; color:#888; margin-top:3px;"></div>
       </div>
       <div class="status-item">
@@ -72,17 +72,18 @@
           <span><span id="status-db">⬤</span> PostgreSQL</span>
           <span><span id="status-ha">⬤</span> Home Assistant</span>
         </div>
+        <label style="margin-top:10px;">Boiler Timer</label>
+        <div style="margin-top:3px; font-size:0.78rem;">
+          <span><span id="timer-state-dot">⬤</span> <span id="timer-state">—</span></span>
+        </div>
       </div>
-    </div>
-    <div style="margin-top:16px;">
-      <button class="btn btn-sm btn-primary" id="toggle-btn" onclick="toggleAgent()">Loading…</button>
     </div>
   </div>
 
   <!-- Last report -->
   <div class="card">
     <h2>Last Report</h2>
-    <div class="status-grid">
+    <div class="status-grid status-grid-divided" style="grid-template-columns: 0.7fr 2fr 1.3fr 1.3fr 0.7fr 1fr 1fr;">
       <div class="status-item">
         <label>Boiler Temp</label>
         <div class="value" id="boiler-temp">—</div>
@@ -91,21 +92,44 @@
         <label>Panel Temp</label>
         <div class="value" id="panel-temp">—</div>
       </div>
-      <div class="status-item">
+      <div class="status-item" style="text-align:center;">
         <label>Valve State</label>
         <div class="value" id="valve-state">—</div>
       </div>
-      <div class="status-item">
+      <div class="status-item" style="text-align:center;">
         <label>Boiler Trend</label>
         <div class="value small" id="boiler-trend">—</div>
       </div>
-      <div class="status-item">
+      <div class="status-item" style="text-align:center;">
         <label>Panel Trend</label>
         <div class="value small" id="panel-trend">—</div>
       </div>
-      <div class="status-item">
+      <div class="status-item" style="text-align:center;">
         <label>Report Time</label>
         <div class="value small" id="report-ts">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hot Water Usage -->
+  <div class="card">
+    <h2>Hot Water Usage — Today</h2>
+    <div class="status-grid status-grid-divided" style="grid-template-columns: 0.7fr 2fr 1.3fr 1.3fr 0.7fr 1fr 1fr;">
+      <div class="status-item" style="grid-column: 1;">
+        <label>Events</label>
+        <div class="value" id="usage-count">—</div>
+      </div>
+      <div class="status-item" style="grid-column: 3; border-left: 1px solid #d0cbc4; margin-left: -16px; padding-left: 16px; text-align: center;">
+        <label>Largest Drop</label>
+        <div class="value small" id="usage-max-drop">—</div>
+      </div>
+      <div class="status-item" style="grid-column: 4; text-align: center;">
+        <label>Avg Drop</label>
+        <div class="value small" id="usage-avg-drop">—</div>
+      </div>
+      <div class="status-item" style="grid-column: 5; text-align: center;">
+        <label>Last Event</label>
+        <div class="value small" id="usage-last-ts">—</div>
       </div>
     </div>
   </div>
@@ -139,6 +163,14 @@
           <label>Probe Interval (min)</label>
           <input type="number" id="s-probe-interval" min="1">
         </div>
+        <div class="form-group">
+          <label>Consumption Temp Delta (°C)</label>
+          <input type="number" id="s-consumption-temp" min="0.5" step="0.5">
+        </div>
+        <div class="form-group">
+          <label>Consumption Time Delta (min)</label>
+          <input type="number" id="s-consumption-time" min="1">
+        </div>
       </div>
       <div style="margin-top:14px;">
         <button type="submit" class="btn btn-success btn-sm">Save Settings</button>
@@ -150,7 +182,12 @@
   <!-- Deploy -->
   <div class="card">
     <h2>Deploy</h2>
-    <button class="btn btn-danger btn-sm" onclick="deploy()">Deploy to Production</button>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <select id="deploy-agent" style="font-size:0.85rem; border:1px solid #d0cbc4; border-radius:5px; padding:5px 10px; background:#faf8f5; color:#2e2e2e;">
+        <option value="">Loading agents…</option>
+      </select>
+      <button class="btn btn-danger btn-sm" onclick="deploy()">Deploy to Production</button>
+    </div>
     <div id="deploy-output"></div>
   </div>
 </main>

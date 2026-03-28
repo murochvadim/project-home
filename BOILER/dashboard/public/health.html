@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Project Health</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Home Agents</div>
+
+  <div class="section-label">General</div>
+  <a href="health.html" class="active">Project Health</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Boiler Agent</div>
+  <a href="index.html">Overview</a>
+  <a href="graph.html">AI + Graph</a>
+  <a href="data.html">Data</a>
+  <a href="logic.html">Logic</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Project Health</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- System Status -->
+  <div class="card">
+    <h2>System Status</h2>
+    <div class="status-grid status-grid-divided" style="grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr;">
+      <div class="status-item">
+        <label>PostgreSQL</label>
+        <div class="value small" id="svc-postgres">—</div>
+      </div>
+      <div class="status-item">
+        <label>Home Assistant</label>
+        <div class="value small" id="svc-ha">—</div>
+      </div>
+      <div class="status-item">
+        <label>LXC 103 (SSH)</label>
+        <div class="value small" id="svc-lxc">—</div>
+      </div>
+      <div class="status-item">
+        <label>Boiler Agent Service</label>
+        <div class="value small" id="svc-agent">—</div>
+      </div>
+      <div class="status-item">
+        <label>ha_to_pg (raw data)</label>
+        <div class="value small" id="svc-ha-to-pg">—</div>
+      </div>
+      <div class="status-item">
+        <label>PM2 Dashboard</label>
+        <div class="value small" id="svc-pm2">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DB Volumes -->
+  <div class="card">
+    <h2>DB Volumes</h2>
+    <table class="data-table" id="volumes-table">
+      <thead>
+        <tr>
+          <th>Table</th>
+          <th style="text-align:right;">Rows</th>
+          <th style="text-align:right;">Size</th>
+          <th>Oldest Record</th>
+          <th>Newest Record</th>
+        </tr>
+      </thead>
+      <tbody id="volumes-body">
+        <tr><td colspan="5" style="color:#aaa;">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Orchestrator Log -->
+  <div class="card">
+    <h2>Orchestrator Log</h2>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <span style="font-size:0.78rem; color:#888;">Last <select id="orch-limit" onchange="loadOrchLog()" style="font-size:0.78rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:#faf8f5;">
+        <option value="20">20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select> entries</span>
+      <span id="orch-summary" style="font-size:0.78rem; color:#666;"></span>
+    </div>
+    <table class="data-table" id="orch-table">
+      <thead>
+        <tr>
+          <th style="width:140px;">Time</th>
+          <th style="width:60px; text-align:center;">Level</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody id="orch-body">
+        <tr><td colspan="3" style="color:#aaa;">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Retention Policies -->
+  <div class="card">
+    <h2>Retention Policies</h2>
+    <table class="data-table" id="retention-table">
+      <thead>
+        <tr>
+          <th>Table</th>
+          <th>Description</th>
+          <th style="text-align:center;">Keep (days)</th>
+          <th style="text-align:center;">Auto-clean</th>
+          <th style="text-align:center;">Interval (h)</th>
+          <th>Last Cleaned</th>
+          <th style="text-align:center;">Action</th>
+        </tr>
+      </thead>
+      <tbody id="retention-body">
+        <tr><td colspan="7" style="color:#aaa;">Loading…</td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
+      <button class="btn btn-secondary btn-sm" onclick="cleanAll()">🧹 Clean All Now</button>
+      <span id="cleanup-result" style="font-size:0.8rem; color:#666;"></span>
+    </div>
+  </div>
+
+</main>
+
+<script src="js/health.js"></script>
+</body>
+</html>

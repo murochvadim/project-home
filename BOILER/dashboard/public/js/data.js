@@ -66,8 +66,35 @@ async function loadAgent() {
   }
 }
 
+async function loadConsumptions() {
+  const limit = document.getElementById('consumption-limit').value;
+  try {
+    const rows = await fetch(`/api/consumptions?limit=${limit}`).then(r => r.json());
+    const tbody = document.getElementById('consumption-body');
+    const empty = document.getElementById('consumption-empty');
+    if (!rows.length) {
+      tbody.innerHTML = '';
+      empty.style.display = '';
+      return;
+    }
+    empty.style.display = 'none';
+    tbody.innerHTML = rows.map(r => `
+      <tr>
+        <td>${fmtTs(r.start_ts)}</td>
+        <td>${fmtTs(r.end_ts)}</td>
+        <td>${fmtTemp(r.start_temp)}</td>
+        <td>${fmtTemp(r.end_temp)}</td>
+        <td style="color:#e67e22; font-weight:600;">▼ ${parseFloat(r.drop_c).toFixed(1)}</td>
+        <td>${r.duration_min} min</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    console.error('loadConsumptions error:', e);
+  }
+}
+
 async function refreshAll() {
-  await Promise.all([loadRaw(), loadAgent()]);
+  await Promise.all([loadRaw(), loadAgent(), loadConsumptions()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }

@@ -2,6 +2,9 @@ const express = require('express');
 const { Pool } = require('pg');
 const { NodeSSH } = require('node-ssh');
 const path = require('path');
+const { exec } = require('child_process');
+const _anthropic = require('@anthropic-ai/sdk');
+const Anthropic = _anthropic.default || _anthropic;
 
 const app = express();
 app.use(express.json());
@@ -33,17 +36,23 @@ app.get('/api/settings', async (req, res) => {
 });
 
 app.post('/api/settings', async (req, res) => {
-  const { run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min } = req.body;
+  const { run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
+          trend_runs, temp_debounce, probe_interval_min,
+          consumption_temp_delta, consumption_time_delta } = req.body;
   try {
     await db.query(`
       UPDATE agent_settings SET
-        run_interval_min          = $1,
-        panel_temp_valid_after_on = $2,
-        panel_temp_valid_after_off= $3,
-        trend_runs                = $4,
-        temp_debounce             = $5,
-        probe_interval_min        = $6
-    `, [run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min]);
+        run_interval_min           = $1,
+        panel_temp_valid_after_on  = $2,
+        panel_temp_valid_after_off = $3,
+        trend_runs                 = $4,
+        temp_debounce              = $5,
+        probe_interval_min         = $6,
+        consumption_temp_delta     = $7,
+        consumption_time_delta     = $8
+    `, [run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
+        trend_runs, temp_debounce, probe_interval_min,
+        consumption_temp_delta, consumption_time_delta]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -118,9 +127,20 @@ app.get('/api/graph', async (req, res) => {
 // ─── Next probe time ──────────────────────────────────────────
 app.get('/api/next-probe', async (req, res) => {
   try {
-    const s = await db.query('SELECT probe_interval_min, agent_enabled FROM agent_settings LIMIT 1');
-    const probeMin      = s.rows[0]?.probe_interval_min ?? 60;
-    const agentEnabled  = s.rows[0]?.agent_enabled ?? false;
+    const s = await db.query('SELECT probe_interval_min, agent_enabled, panel_temp_valid_after_on, trend_runs, run_interval_min FROM agent_settings LIMIT 1');
+    const probeMin           = s.rows[0]?.probe_interval_min ?? 60;
+    const agentEnabled       = s.rows[0]?.agent_enabled ?? false;
+    const panelValidAfterOn  = s.rows[0]?.panel_temp_valid_after_on ?? 4;
+    const trendRuns          = s.rows[0]?.trend_runs ?? 3;
+    const runIntervalMin     = s.rows[0]?.run_interval_min ?? 5;
+    const probeCostMin       = panelValidAfterOn + (trendRuns + 1) * runIntervalMin;
+
+    // Compute minutes to 19:00 Jerusalem time
+    const nowJStr   = new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' });
+    const nowJ      = new Date(nowJStr);
+    const endJ      = new Date(nowJStr);
+    endJ.setHours(19, 0, 0, 0);
+    const minutesToEnd = Math.max(0, (endJ - nowJ) / 60000);
 
     // Find last ON→OFF valve transition in raw_data
     const r = await db.query(`
@@ -151,65 +171,62 @@ app.get('/api/next-probe', async (req, res) => {
     const valveIsOn = v.rows[0]?.valve_state ?? false;
 
     if (!r.rows[0]) {
+      const probeFeasible = minutesToEnd >= probeCostMin;
       return res.json({ next_probe: null, last_turn_on_origin: lastTurnOnOrigin,
                         last_turn_on_ts: lastTurnOnTs, valve_is_on: valveIsOn,
-                        agent_enabled: agentEnabled });
+                        agent_enabled: agentEnabled,
+                        probe_feasible: probeFeasible, probe_cost_min: probeCostMin,
+                        minutes_to_end: Math.round(minutesToEnd) });
     }
 
-    const lastClose = new Date(r.rows[0].ts);
-    const nextProbe = new Date(lastClose.getTime() + probeMin * 60 * 1000);
+    const lastClose          = new Date(r.rows[0].ts);
+    const nextProbe          = new Date(lastClose.getTime() + probeMin * 60 * 1000);
+    const minutesUntilFire   = Math.max(0, (nextProbe - new Date()) / 60000);
+    const minutesToEndAtFire = Math.max(0, minutesToEnd - minutesUntilFire);
+    const probeFeasible      = minutesToEndAtFire >= probeCostMin;
     res.json({ next_probe: nextProbe.toISOString(), last_turn_on_origin: lastTurnOnOrigin,
                last_turn_on_ts: lastTurnOnTs, valve_is_on: valveIsOn,
-               agent_enabled: agentEnabled });
+               agent_enabled: agentEnabled,
+               probe_feasible: probeFeasible, probe_cost_min: probeCostMin,
+               minutes_to_end: Math.round(minutesToEnd) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── Versions list ────────────────────────────────────────────
-app.get('/api/versions', async (req, res) => {
+
+// ─── Agents list ─────────────────────────────────────────────
+app.get('/api/agents', async (req, res) => {
   try {
-    const r = await db.query(`
-      SELECT DISTINCT version, MIN(ts) AS first_seen
-      FROM agent_boiler_data
-      WHERE version IS NOT NULL
-      GROUP BY version
-      ORDER BY first_seen DESC
-    `);
+    const r = await db.query('SELECT name, description, lxc_ip, service_name, deploy_path, git_branch, enabled FROM agents ORDER BY name');
     res.json(r.rows);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// ─── Version comparison ───────────────────────────────────────
-app.get('/api/compare', async (req, res) => {
-  const { versionA, versionB } = req.query;
-  try {
-    const metrics = async (version) => {
-      const r = await db.query(`
-        SELECT
-          ROUND(AVG(boiler_temp)::numeric, 1)  AS avg_boiler_temp,
-          ROUND(MAX(boiler_temp)::numeric, 1)  AS max_boiler_temp,
-          COUNT(*) FILTER (WHERE decision = 'turn_on')  AS valve_on_count,
-          COUNT(*) FILTER (WHERE decision = 'turn_off') AS valve_off_count,
-          ROUND(AVG(CASE WHEN decision = 'keep_on' OR decision = 'hold'
-            THEN 1 ELSE 0 END)::numeric * 100, 1) AS pct_time_on
-        FROM agent_boiler_data
-        WHERE version = $1
-      `, [version]);
-      return { version, ...r.rows[0] };
-    };
-    const [a, b] = await Promise.all([metrics(versionA), metrics(versionB)]);
-    res.json({ a, b });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── Deploy ───────────────────────────────────────────────────
 app.post('/api/deploy', async (req, res) => {
+  const { agent: agentName } = req.body;
+  if (!agentName) return res.status(400).json({ error: 'agent name required' });
+
+  let agentRow;
+  try {
+    const r = await db.query('SELECT * FROM agents WHERE name = $1', [agentName]);
+    if (!r.rows.length) return res.status(404).json({ error: `Agent '${agentName}' not found` });
+    agentRow = r.rows[0];
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+
+  const { lxc_ip, service_name, deploy_path, git_branch } = agentRow;
+  if (!lxc_ip || !deploy_path) return res.status(400).json({ error: `Agent '${agentName}' has no deploy_path or lxc_ip configured` });
+
   const ssh = new NodeSSH();
   try {
-    await ssh.connect({ host: SSH_HOST, username: SSH_USER, privateKeyPath: SSH_KEY });
-    const pull = await ssh.execCommand('git -C /opt/Agents-agent/project pull origin main');
-    const restart = await ssh.execCommand('systemctl restart boiler-agent 2>&1 || echo "service not found"');
+    await ssh.connect({ host: lxc_ip, username: SSH_USER, privateKeyPath: SSH_KEY });
+    const branch = git_branch || 'main';
+    const pull = await ssh.execCommand(`git -C ${deploy_path} pull origin ${branch}`);
+    const restart = service_name
+      ? await ssh.execCommand(`systemctl restart ${service_name} 2>&1 || echo "service not found"`)
+      : { stdout: '(no service configured)' };
     ssh.dispose();
     res.json({
+      agent:   agentName,
       pull:    pull.stdout    || pull.stderr,
       restart: restart.stdout || restart.stderr,
     });
@@ -291,14 +308,472 @@ app.get('/api/status', async (req, res) => {
   await Promise.all([
     db.query('SELECT 1').then(() => { result.db = true; }).catch(() => {}),
     fetch(`${HA_URL}/api/`, {
+      headers: HA_TOKEN ? { Authorization: `Bearer ${HA_TOKEN}` } : {},
       signal: AbortSignal.timeout(4000)
-    }).then(() => { result.ha = true; }).catch(() => {}),
+    }).then(r => { if (r.ok) result.ha = true; }).catch(() => {}),
   ]);
   res.json(result);
 });
 
+// ─── Boiler timer ─────────────────────────────────────────────
+app.get('/api/timer', async (req, res) => {
+  try {
+    const r = await fetch(`${HA_URL}/api/states/timer.boiler_temp_update_timer`, {
+      headers: { Authorization: `Bearer ${HA_TOKEN}` },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return res.status(502).json({ error: 'HA error' });
+    const data = await r.json();
+    res.json({ state: data.state, remaining: data.attributes.remaining, duration: data.attributes.duration, finishes_at: data.attributes.finishes_at });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Consumptions ─────────────────────────────────────────────
+app.get('/api/consumptions', async (req, res) => {
+  const limit = parseInt(req.query.limit) || 20;
+  const from  = req.query.from || null;
+  try {
+    const r = from
+      ? await db.query(`
+          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at
+          FROM boiler_consumptions
+          WHERE start_ts >= $1
+          ORDER BY start_ts ASC
+        `, [from])
+      : await db.query(`
+          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at
+          FROM boiler_consumptions
+          ORDER BY start_ts DESC
+          LIMIT $1
+        `, [limit]);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/consumptions/today', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT
+        COUNT(*)                          AS count,
+        MAX(drop_c)                       AS max_drop,
+        ROUND(AVG(drop_c)::numeric, 1)    AS avg_drop,
+        MAX(start_ts)                     AS last_ts
+      FROM boiler_consumptions
+      WHERE start_ts >= (NOW() AT TIME ZONE 'Asia/Jerusalem')::date
+    `);
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── AI Investigation ─────────────────────────────────────────
+app.post('/api/ai-investigate', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set in ecosystem.config.js' });
+  }
+  const { from_hour, to_hour, include_weather, include_outlook, include_agent_data } = req.body;
+  const fh = parseInt(from_hour) || 7;
+  const th = parseInt(to_hour)   || 14;
+
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const [settingsR, agentR, weatherR, dailyR, latestRawR, coolingR, lastCloseR] = await Promise.all([
+      db.query('SELECT * FROM agent_settings LIMIT 1'),
+      include_agent_data
+        ? db.query(`SELECT ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision
+                    FROM agent_boiler_data ORDER BY ts DESC LIMIT 100`)
+        : Promise.resolve({ rows: [] }),
+      include_outlook
+        ? db.query(`SELECT ts, condition, temp_ims, uv_index_ims, uv_index_balcony, illuminance_balcony
+                    FROM raw_weather ORDER BY ts DESC LIMIT 24`)
+        : Promise.resolve({ rows: [] }),
+      include_weather
+        ? db.query(`SELECT * FROM raw_weather_daily WHERE forecast_date >= CURRENT_DATE ORDER BY forecast_date ASC LIMIT 7`)
+        : Promise.resolve({ rows: [] }),
+      db.query(`SELECT ts, boiler_temp, valve_state FROM raw_data ORDER BY ts DESC LIMIT 1`),
+      db.query(`
+        SELECT
+          ROUND(
+            ((f.boiler_temp - l.boiler_temp) /
+            NULLIF(EXTRACT(EPOCH FROM (l.ts - f.ts)) / 3600, 0))::numeric
+          , 2) AS drop_per_hour
+        FROM
+          (SELECT boiler_temp, ts FROM raw_data
+           WHERE valve_state = false AND ts >= NOW() - INTERVAL '14 hours'
+           ORDER BY ts ASC LIMIT 1) f,
+          (SELECT boiler_temp, ts FROM raw_data
+           WHERE valve_state = false
+           ORDER BY ts DESC LIMIT 1) l
+      `),
+      db.query(`
+        SELECT ts FROM (
+          SELECT ts, valve_state, LAG(valve_state) OVER (ORDER BY ts) AS prev
+          FROM raw_data ORDER BY ts DESC LIMIT 500
+        ) t WHERE valve_state = false AND prev = true
+        ORDER BY ts DESC LIMIT 1
+      `),
+    ]);
+
+    const settings   = settingsR.rows[0] || {};
+    const tz  = 'Asia/Jerusalem';
+    const fmt = ts => new Date(ts).toLocaleString('he-IL', { timeZone: tz });
+
+    // Current state
+    const latestRaw      = latestRawR.rows[0] || {};
+    const currentBoiler  = latestRaw.boiler_temp != null ? parseFloat(latestRaw.boiler_temp) : null;
+    const nowIL          = new Date().toLocaleString('en-US', { timeZone: tz });
+    const nowDate        = new Date(nowIL);
+    const nowHour        = nowDate.getHours();
+    const nowMin         = nowDate.getMinutes();
+    const hoursUntilWindow = ((fh - nowHour - nowMin / 60) + 24) % 24;
+
+    const rawCoolingRate = coolingR.rows[0]?.drop_per_hour != null
+      ? parseFloat(coolingR.rows[0].drop_per_hour)
+      : null;
+    // drop_per_hour = (first_temp - last_temp) / hours — positive means cooling
+    // If <= 0 (boiler was heating or stable), fall back to 0.5°C/h minimum assumption
+    const coolingRate = (rawCoolingRate != null && rawCoolingRate > 0.05)
+      ? rawCoolingRate
+      : 0.5;
+    const estimatedStartTemp = currentBoiler != null
+      ? Math.max(15, Math.round((currentBoiler - coolingRate * hoursUntilWindow) * 10) / 10)
+      : null;
+
+    // Panel validity at window start
+    const panelValidAfterOff = parseInt(settings.panel_temp_valid_after_off) || 10;
+    const lastCloseTs        = lastCloseR.rows[0]?.ts ? new Date(lastCloseR.rows[0].ts) : null;
+    const minutesSinceClose  = lastCloseTs
+      ? (Date.now() - lastCloseTs.getTime()) / 60000 + hoursUntilWindow * 60
+      : 9999;
+    const panelValidAtStart  = minutesSinceClose <= panelValidAfterOff;
+
+    const startTempLine = estimatedStartTemp != null
+      ? `BOILER TEMP AT ${fh}:00 (pre-calculated): ${estimatedStartTemp}°C`
+      : `BOILER TEMP AT ${fh}:00: unknown`;
+    const panelLine = panelValidAtStart
+      ? `PANEL READING AT ${fh}:00: VALID (valve closed recently, within validity window)`
+      : `PANEL READING AT ${fh}:00: INVALID — valve has been off for ~${Math.round(minutesSinceClose)} min, panel_temp_valid_after_off=${panelValidAfterOff} min. THE FIRST AGENT ACTION WILL BE A PROBE (open valve to check solar). Panel temp at ${fh}:00 is unknown — use outdoor/ambient temperature as estimate.`;
+
+    const systemPrompt = `You are a solar boiler optimization AI. Analyze real operational data and suggest parameter tuning for a specific time window.
+
+SYSTEM:
+- Home solar boiler heated by solar panel water via a valve (ON/OFF)
+- Agent controls valve based on temperature comparisons. Operational hours: 07:00-19:00 (Asia/Jerusalem)
+- All temperatures in Celsius. Boiler loses heat passively when valve is off (overnight, cloudy).
+
+VALVE LOGIC:
+- Normal turn ON: panel_temp > boiler_temp + temp_debounce (only when panel reading is VALID)
+- Probe: when panel reading is INVALID (too long after last valve close), open valve briefly to check
+- Panel reading is VALID only within panel_temp_valid_after_off minutes after valve closes
+- After that window expires, reading is INVALID until next probe/turn-on
+
+THE 6 TUNABLE PARAMETERS:
+1. run_interval_min — agent run frequency (min)
+2. panel_temp_valid_after_on — min after valve ON before panel sensor stabilizes
+3. panel_temp_valid_after_off — min after valve OFF that panel reading stays valid
+4. trend_runs — runs used for trend calculation
+5. temp_debounce — min °C gap required to act. LOW boiler temp → use LOWER debounce (boiler needs every degree)
+6. probe_interval_min — min between probe attempts. LOW boiler temp → use SHORTER interval (probe more often)
+
+RESPONSE FORMAT — return ONLY valid JSON, no text outside:
+{
+  "summary": "3 sentences: (1) current boiler temp and expected temp at window start after overnight cooling, (2) panel status at window start and first expected agent action, (3) solar potential and key recommendation",
+  "settings": [
+    { "param": "<name>", "current": <number>, "suggested": <number>, "reason": "<cite exact temps and why>" }
+  ],
+  "prediction": [
+    { "time": "HH:MM", "boiler_temp": <number>, "panel_temp": <number>, "valve": <true|false> }
+  ]
+}
+- prediction: one entry every 30 min from ${fh}:00 to ${th}:00
+- For boiler_temp: show realistic evolution — starts cold, rises only when valve is ON and panel is warmer
+- ${panelValidAtStart ? `Panel reading is VALID at window start` : `Panel reading is INVALID at window start (valve off too long). First entry: valve=false, panel_temp=outdoor ambient. First valve=true happens only after a probe opens`}
+- settings: empty array if all params are already optimal`;
+
+    const nowStr = `${nowHour}:${String(nowMin).padStart(2,'0')}`;
+    let userContent = `=== WINDOW START CONDITIONS (pre-calculated, use these exactly) ===\n`;
+    userContent += `Current time: ${nowStr} (Asia/Jerusalem)\n`;
+    userContent += `Current boiler temp: ${currentBoiler != null ? currentBoiler + '°C' : 'unknown'}\n`;
+    userContent += `Investigation window: ${fh}:00 – ${th}:00\n`;
+    userContent += `Hours until window start: ${hoursUntilWindow.toFixed(1)}h\n`;
+    userContent += `Cooling rate (measured, valve off): ${coolingRate}°C/hour\n`;
+    userContent += `${startTempLine}\n`;
+    userContent += `${panelLine}\n`;
+    userContent += `\n=== CURRENT SETTINGS ===\n${JSON.stringify(settings, null, 2)}\n`;
+
+    if (agentR.rows.length > 0) {
+      userContent += `\nRECENT AGENT HISTORY (${agentR.rows.length} runs, newest first):\n`;
+      userContent += agentR.rows.map(r =>
+        `${fmt(r.ts)} | boiler:${r.boiler_temp}°C panel:${r.panel_temp}°C valve:${r.valve_state} bTrend:${r.boiler_trend} pTrend:${r.panel_trend} → ${r.decision} | ${r.why_decision}`
+      ).join('\n');
+    }
+    if (weatherR.rows.length > 0) {
+      userContent += `\n\nTODAY'S WEATHER (last 24h, newest first):\n`;
+      userContent += weatherR.rows.map(r =>
+        `${fmt(r.ts)} | ${r.condition} temp:${r.temp_ims}°C uv_ims:${r.uv_index_ims} uv_balcony:${r.uv_index_balcony} illuminance:${r.illuminance_balcony}`
+      ).join('\n');
+    }
+    if (dailyR.rows.length > 0) {
+      userContent += `\n\nWEATHER FORECAST:\n`;
+      userContent += dailyR.rows.map(r =>
+        `${r.forecast_date}: ${r.condition} high:${r.temp_high}°C low:${r.temp_low}°C rain:${r.precipitation_mm}mm`
+      ).join('\n');
+    }
+
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userContent }],
+    });
+
+    const text = message.content[0].text.trim();
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) result = JSON.parse(match[0]);
+      else throw new Error('AI returned non-JSON response');
+    }
+
+    // ── Force-correct prediction starting conditions ──────────
+    if (result.prediction && result.prediction.length > 0) {
+      // 1. Shift all boiler temps so the first entry matches our calculated start temp
+      if (estimatedStartTemp != null) {
+        const aiStartBoiler = parseFloat(result.prediction[0].boiler_temp);
+        const delta = estimatedStartTemp - aiStartBoiler;
+        if (Math.abs(delta) > 0.1) {
+          result.prediction = result.prediction.map(p => ({
+            ...p,
+            boiler_temp: Math.round((parseFloat(p.boiler_temp) + delta) * 10) / 10,
+          }));
+        }
+      }
+      // 2. If panel was invalid at window start, fix first entry
+      if (!panelValidAtStart) {
+        const ambientTemp = weatherR.rows[0]?.temp_ims != null
+          ? parseFloat(weatherR.rows[0].temp_ims)
+          : 15;
+        result.prediction[0].valve      = false;
+        result.prediction[0].panel_temp = ambientTemp;
+      }
+    }
+
+    res.json({ ok: true, ran_at: new Date().toISOString(), from_hour: fh, to_hour: th, ...result,
+      _debug: { system_prompt: systemPrompt, user_content: userContent } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Project Health — System Status ──────────────────────────
+app.get('/api/health/status', async (req, res) => {
+  const results = {};
+
+  // PostgreSQL
+  try {
+    await db.query('SELECT 1');
+    results.postgres = { ok: true };
+  } catch (e) {
+    results.postgres = { ok: false, error: e.message };
+  }
+
+  // Home Assistant
+  try {
+    const r = await fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${HA_TOKEN}` } });
+    results.homeassistant = { ok: r.ok };
+  } catch (e) {
+    results.homeassistant = { ok: false, error: e.message };
+  }
+
+  // LXC 103 SSH + agent service status
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: SSH_HOST, username: SSH_USER, privateKeyPath: SSH_KEY });
+    const svc   = await ssh.execCommand('systemctl is-active boiler-agent');
+    const cron  = await ssh.execCommand('crontab -l 2>/dev/null | grep -c ha_to_pg');
+    ssh.dispose();
+    results.lxc103       = { ok: true };
+    results.boiler_agent = { ok: svc.stdout.trim() === 'active', status: svc.stdout.trim() };
+    results.ha_to_pg     = { cron_ok: parseInt(cron.stdout.trim()) > 0 };
+  } catch (e) {
+    ssh.dispose();
+    results.lxc103       = { ok: false, error: e.message };
+    results.boiler_agent = { ok: false, status: 'unknown' };
+    results.ha_to_pg     = { cron_ok: false };
+  }
+
+  // ha_to_pg data freshness — check last raw_data row
+  try {
+    const r = await db.query('SELECT MAX(ts) AS last_ts FROM raw_data');
+    const lastTs = r.rows[0]?.last_ts;
+    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
+    results.ha_to_pg = {
+      ...results.ha_to_pg,
+      last_ts: lastTs,
+      age_min: ageMin !== null ? Math.round(ageMin) : null,
+      data_ok: ageMin !== null && ageMin <= 10
+    };
+  } catch (e) {
+    results.ha_to_pg = { ...results.ha_to_pg, data_ok: false, error: e.message };
+  }
+
+  // PM2 — local (dashboard runs on this machine)
+  results.pm2 = await new Promise(resolve => {
+    exec('pm2.cmd jlist', (err, stdout) => {
+      if (err) { resolve({ ok: false, error: err.message }); return; }
+      try {
+        const procs = JSON.parse(stdout);
+        const list  = procs.map(p => `${p.name}: ${p.pm2_env?.status}`).join(', ');
+        const allOk = procs.every(p => p.pm2_env?.status === 'online');
+        resolve({ ok: allOk, raw: list });
+      } catch (e) { resolve({ ok: false, error: e.message }); }
+    });
+  });
+
+  res.json(results);
+});
+
+// ─── Project Health — DB Volumes ─────────────────────────────
+app.get('/api/health/db-volumes', async (req, res) => {
+  try {
+    const tables = ['raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily', 'boiler_consumptions'];
+    const tsCol  = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts' };
+
+    const sizes = await db.query(`
+      SELECT relname AS table_name,
+             n_live_tup AS row_count,
+             pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
+             pg_total_relation_size(relid) AS size_bytes
+      FROM pg_stat_user_tables
+      WHERE relname = ANY($1)
+    `, [tables]);
+
+    const ranges = await Promise.all(tables.map(t =>
+      db.query(`SELECT MIN(${tsCol[t]}) AS oldest, MAX(${tsCol[t]}) AS newest FROM ${t}`)
+        .then(r => ({ table_name: t, oldest: r.rows[0]?.oldest, newest: r.rows[0]?.newest }))
+        .catch(() => ({ table_name: t, oldest: null, newest: null }))
+    ));
+
+    const rangeMap = Object.fromEntries(ranges.map(r => [r.table_name, r]));
+    const result = tables.map(t => {
+      const s = sizes.rows.find(r => r.table_name === t) || { row_count: 0, total_size: '—', size_bytes: 0 };
+      return { table_name: t, row_count: parseInt(s.row_count) || 0,
+               total_size: s.total_size, size_bytes: parseInt(s.size_bytes) || 0,
+               oldest: rangeMap[t]?.oldest || null, newest: rangeMap[t]?.newest || null };
+    });
+
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Project Health — Retention Policies ─────────────────────
+app.get('/api/health/retention', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM retention_policies ORDER BY table_name');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/health/retention', async (req, res) => {
+  const { table_name, keep_days, auto_clean, clean_interval_hours } = req.body;
+  try {
+    await db.query(`
+      UPDATE retention_policies
+      SET keep_days = $1, auto_clean = $2, clean_interval_hours = $3
+      WHERE table_name = $4
+    `, [keep_days ?? null, !!auto_clean, clean_interval_hours ?? 24, table_name]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Project Health — Run Cleanup ────────────────────────────
+app.post('/api/health/cleanup', async (req, res) => {
+  const { table_name } = req.body; // null = all tables
+  const tsCol = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts' };
+  try {
+    const policies = await db.query(
+      table_name
+        ? 'SELECT * FROM retention_policies WHERE table_name = $1 AND keep_days IS NOT NULL'
+        : 'SELECT * FROM retention_policies WHERE keep_days IS NOT NULL',
+      table_name ? [table_name] : []
+    );
+
+    const results = [];
+    for (const p of policies.rows) {
+      const col = tsCol[p.table_name];
+      if (!col) continue;
+      const r = await db.query(
+        `DELETE FROM ${p.table_name} WHERE ${col} < NOW() - INTERVAL '${parseInt(p.keep_days)} days'`
+      );
+      await db.query(`UPDATE retention_policies SET last_cleaned_at = NOW() WHERE table_name = $1`, [p.table_name]);
+      results.push({ table_name: p.table_name, deleted: r.rowCount });
+    }
+    res.json({ ok: true, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Orchestrator Log ────────────────────────────────────────
+app.get('/api/health/orch-log', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  try {
+    const r = await db.query(
+      `SELECT id, ts AT TIME ZONE 'Asia/Jerusalem' AS ts_local, severity, message
+       FROM orchestrator_log ORDER BY ts DESC LIMIT $1`,
+      [limit]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Start ────────────────────────────────────────────────────
+async function ensureSchema() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS boiler_consumptions (
+      id           SERIAL PRIMARY KEY,
+      start_ts     TIMESTAMPTZ NOT NULL,
+      end_ts       TIMESTAMPTZ NOT NULL,
+      start_temp   NUMERIC(5,1) NOT NULL,
+      end_temp     NUMERIC(5,1) NOT NULL,
+      drop_c       NUMERIC(5,1) NOT NULL,
+      duration_min INTEGER NOT NULL,
+      detected_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (start_ts)
+    )
+  `);
+  await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_temp_delta NUMERIC(4,1) DEFAULT 3.0`);
+  await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_time_delta INTEGER DEFAULT 15`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS retention_policies (
+      table_name           VARCHAR(100) PRIMARY KEY,
+      keep_days            INTEGER,
+      auto_clean           BOOLEAN NOT NULL DEFAULT false,
+      clean_interval_hours INTEGER NOT NULL DEFAULT 24,
+      last_cleaned_at      TIMESTAMPTZ,
+      description          TEXT
+    )
+  `);
+  // Seed default policies if table is empty
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES
+      ('raw_data',           90,   true,  24, 'Raw sensor readings every 5 min'),
+      ('agent_boiler_data',  365,  true,  24, 'Agent decision log'),
+      ('raw_weather',        60,   true,  24, 'Hourly weather readings'),
+      ('raw_weather_daily',  60,   true,  24, 'Daily weather forecasts'),
+      ('boiler_consumptions', NULL, false, 24, 'Hot water consumption events — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+}
+
 const PORT = 3000;
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Boiler Dashboard running at http://localhost:${PORT}`);
+ensureSchema().then(() => {
+  app.listen(PORT, '127.0.0.1', () => {
+    console.log(`Boiler Dashboard running at http://localhost:${PORT}`);
+  });
+}).catch(e => {
+  console.error('Schema init failed:', e.message);
+  process.exit(1);
 });

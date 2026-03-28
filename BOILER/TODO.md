@@ -2,24 +2,6 @@
 
 ## General
 
-- [ ] Weather data collection: extend the collection script on LXC 103 to also
-      fetch weather from HA (condition, temperature, cloud_cover, season) and
-      store alongside raw_data. Options:
-        A) Add columns to raw_data (simpler, same time-series)
-        B) Separate raw_weather table (cleaner separation)
-      Recommended: separate table — weather updates less frequently than sensor
-      data and will be used independently by the Policy Agent.
-      New table suggestion: raw_weather (ts, condition, temp_outside, cloud_cover, season)
-      Season value from HA gives the Policy Agent critical context:
-        - Summer: panel can reach 80°C+, aggressive settings valid
-        - Winter: panel barely hits 45°C on good days, conservative settings needed
-        - Policy Agent uses season to set different baselines when evaluating
-          probe success rate, debounce, and probe_interval_min recommendations
-        - 3/10 probes succeeded = bad in summer, acceptable in winter
-      Dashboard: show current condition + cloud cover on main page (useful context
-      for understanding why solar heating is low on a given day)
-      Policy Agent use: correlate probe success rate with cloud cover, adjust
-      probe_interval_min automatically on cloudy days
 
 ## Agent
 
@@ -85,6 +67,17 @@ new policy_updates table and shown on the dashboard.
   The Policy Agent adds the AI learning layer on top — it tunes the rules
   rather than replacing them.
 
+### Probe Analysis (part of Policy Agent)
+- Cross-reference probe events in `agent_boiler_data` with `boiler_consumptions`
+  to exclude consumption-caused temp drops from probe outcome classification
+- For each probe: measure true boiler temp delta (raw_data) after excluding
+  consumption windows → classify as `beneficial` / `neutral` / `harmful`
+- Correlate with weather at time of probe (UV, condition from `raw_weather`)
+- Output recommendation: adjust `probe_interval_min` up or down
+- Optionally write recommendation to a `probe_analysis` table + update `agent_settings`
+- Why AI only: consumption events and probe effects overlap in time —
+  rule-based logic cannot reliably separate them
+
 ## Step 3 — Multi-Agent Framework
 After Step 2, extract the proven patterns from the boiler agent + policy agent
 into a reusable framework. Every future agent (lights, presence, irrigation)
@@ -99,3 +92,6 @@ Each new agent only needs: decision logic + settings schema + DB tables.
 - Why build framework last: by step 3 we have two real working agents.
   Every framework design decision is based on proven patterns, not
   assumptions. No over-engineering.
+
+
+ 

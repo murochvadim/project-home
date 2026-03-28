@@ -1,0 +1,13 @@
+[Unit]
+Description=Main Agent Orchestrator
+After=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/main-agent.env
+ExecStart=/opt/main-agent/venv/bin/python3 /opt/main-agent/orchestrator.py
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

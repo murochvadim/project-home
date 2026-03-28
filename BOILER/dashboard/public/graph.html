@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Boiler — Graph</title>
+  <title>Boiler — AI + Graph</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
@@ -12,13 +12,13 @@
   <div class="logo">Home Agents</div>
 
   <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
   <a href="general.html">Weather</a>
 
   <div class="section-label">Boiler Agent</div>
   <a href="index.html">Overview</a>
-  <a href="graph.html" class="active">Graph</a>
+  <a href="graph.html" class="active">AI + Graph</a>
   <a href="data.html">Data</a>
-  <a href="compare.html">Compare</a>
   <a href="logic.html">Logic</a>
 
   <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
@@ -27,7 +27,7 @@
 
 <main id="content">
   <div class="page-header">
-    <h1>Temperature Graph</h1>
+    <h1>AI + Graph</h1>
     <div class="refresh-bar">
       <span id="last-refresh">—</span>
       <button class="btn btn-secondary btn-sm" onclick="loadGraph()">↺ Refresh</button>
@@ -56,6 +56,76 @@
       </div>
     </div>
     <canvas id="tempChart" height="100"></canvas>
+  </div>
+
+  <!-- AI Investigation -->
+  <div class="card">
+    <h2>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7d9966" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle; margin-right:7px; margin-bottom:2px;">
+        <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/>
+        <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/>
+      </svg>AI Investigation
+    </h2>
+
+    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <label style="font-size:0.82rem; color:#666;">Hours:</label>
+        <input type="time" id="ai-from" value="07:00" class="ai-time-input">
+        <span style="color:#aaa;">&#8594;</span>
+        <input type="time" id="ai-to" value="14:00" class="ai-time-input">
+      </div>
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+        <span style="font-size:0.78rem; color:#aaa;">Include:</span>
+        <label class="ai-check-label"><input type="checkbox" id="ai-weather" checked> Weather Forecast</label>
+        <label class="ai-check-label"><input type="checkbox" id="ai-outlook" checked> Today's Outlook</label>
+        <label class="ai-check-label"><input type="checkbox" id="ai-agent" checked> Agent History</label>
+      </div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <button class="btn btn-primary btn-sm" id="ai-btn" onclick="runInvestigation()">
+        <span id="ai-btn-icon">&#129504;</span>&thinsp;<span id="ai-btn-label">Investigate</span>
+      </button>
+      <button class="btn btn-success btn-sm" id="ai-prompt-btn" onclick="togglePrompt()" style="display:none;">View Prompt</button>
+      <span id="ai-error" style="font-size:0.82rem; color:#c0392b; display:none;"></span>
+    </div>
+
+    <div id="ai-prompt-details" style="display:none; margin-top:12px;">
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div>
+          <div style="font-size:0.72rem; color:#bbb; margin-bottom:3px; text-transform:uppercase; letter-spacing:0.05em;">System</div>
+          <pre id="ai-prompt-system" style="background:#e8e2da; border-radius:4px; padding:10px 12px; font-size:0.72rem; color:#555; white-space:pre-wrap; overflow-x:auto; margin:0;"></pre>
+        </div>
+        <div>
+          <div style="font-size:0.72rem; color:#bbb; margin-bottom:3px; text-transform:uppercase; letter-spacing:0.05em;">User</div>
+          <pre id="ai-prompt-user" style="background:#e8e2da; border-radius:4px; padding:10px 12px; font-size:0.72rem; color:#555; white-space:pre-wrap; overflow-x:auto; margin:0;"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div id="ai-results" style="display:none; margin-top:20px; border-top:1px solid #d0cbc4; padding-top:16px;">
+      <div id="ai-last-run" style="font-size:0.75rem; color:#aaa; margin-bottom:12px;"></div>
+
+      <div id="ai-summary" class="ai-summary-box"></div>
+
+      <div style="font-size:0.78rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin:16px 0 8px;">Suggested Settings</div>
+      <table id="ai-settings-table" style="margin-bottom:6px;">
+        <thead><tr><th>Parameter</th><th>Current</th><th>Suggested</th><th>Reason</th></tr></thead>
+        <tbody id="ai-settings-body"></tbody>
+      </table>
+      <div id="ai-no-changes" style="display:none; color:#aaa; font-size:0.82rem; margin-bottom:16px;">&#10003; No changes recommended — current parameters appear optimal for this window.</div>
+      <div id="ai-apply-wrap" style="display:none; margin-bottom:16px;">
+        <button class="btn btn-success btn-sm" onclick="applySuggestedSettings()">&#10003; Apply Suggested Parameters</button>
+        <span id="ai-apply-msg" style="margin-left:10px; font-size:0.82rem; display:none;"></span>
+      </div>
+
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:20px; margin-bottom:4px;">
+        <div style="font-size:0.78rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em;">AI Investigation</div>
+        <button class="btn btn-secondary btn-sm" onclick="clearInvestigation()">&#10005; Clear</button>
+      </div>
+      <div style="font-size:0.72rem; color:#aaa; font-style:italic; margin-bottom:8px;">Estimate only — dashed lines indicate AI prediction</div>
+      <canvas id="aiChart" height="80"></canvas>
+    </div>
   </div>
 </main>
 

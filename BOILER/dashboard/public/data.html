@@ -11,13 +11,13 @@
   <div class="logo">Home Agents</div>
 
   <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
   <a href="general.html">Weather</a>
 
   <div class="section-label">Boiler Agent</div>
   <a href="index.html">Overview</a>
-  <a href="graph.html">Graph</a>
+  <a href="graph.html">AI + Graph</a>
   <a href="data.html" class="active">Data</a>
-  <a href="compare.html">Compare</a>
   <a href="logic.html">Logic</a>
 
   <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
@@ -91,6 +91,35 @@
         </thead>
         <tbody id="agent-body"></tbody>
       </table>
+    </div>
+  </div>
+  <!-- Consumption events -->
+  <div class="card">
+    <h2>Hot Water Consumption Events</h2>
+    <div class="table-controls">
+      Show
+      <select id="consumption-limit" onchange="loadConsumptions()">
+        <option value="10" selected>10</option>
+        <option value="20">20</option>
+        <option value="50">50</option>
+      </select>
+      rows
+    </div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Start</th>
+            <th>End</th>
+            <th>Temp Before</th>
+            <th>Temp After</th>
+            <th>Drop (°C)</th>
+            <th>Duration (min)</th>
+          </tr>
+        </thead>
+        <tbody id="consumption-body"></tbody>
+      </table>
+      <div id="consumption-empty" style="display:none; padding:12px; color:#666; font-size:0.85rem;">No consumption events recorded yet.</div>
     </div>
   </div>
 </main>

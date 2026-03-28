@@ -4,6 +4,8 @@ let countdownTimer      = null;
 let nextRunTarget       = null;
 let nextProbeTarget     = null;
 let probeOutsideHours   = false;
+let postRunRefreshPending = false;
+let lastDecision        = null;
 
 async function loadSolarScore() {
   try {
@@ -31,8 +33,16 @@ function startCountdown() {
     if (!nextRunTarget) { runEl.textContent = ''; }
     else {
       const diff = Math.floor((nextRunTarget - now) / 1000);
-      if (diff <= 0) runEl.textContent = 'running…';
-      else { const m = Math.floor(diff/60), s = String(diff%60).padStart(2,'0'); runEl.textContent = `${m}:${s} min`; }
+      if (diff <= 0) {
+        runEl.textContent = 'run';
+        if (!postRunRefreshPending) {
+          postRunRefreshPending = true;
+          setTimeout(() => { postRunRefreshPending = false; refreshAll(); }, 15000);
+        }
+      } else {
+        const m = Math.floor(diff/60), s = String(diff%60).padStart(2,'0');
+        runEl.textContent = `${m}:${s}`;
+      }
     }
 
     const probeEl = document.getElementById('next-probe-countdown');
@@ -41,7 +51,7 @@ function startCountdown() {
     else {
       const diff = Math.floor((nextProbeTarget - now) / 1000);
       if (diff <= 0) probeEl.textContent = '';
-      else { const m = Math.floor(diff/60), s = String(diff%60).padStart(2,'0'); probeEl.textContent = `${m}:${s} min`; }
+      else { const m = Math.floor(diff/60), s = String(diff%60).padStart(2,'0'); probeEl.textContent = `${m}:${s}`; }
     }
   }, 1000);
 }
@@ -57,8 +67,31 @@ async function loadStatus() {
   }
 }
 
+async function loadUsageToday() {
+  try {
+    const r = await fetch('/api/consumptions/today').then(r => r.json());
+    const fmt = v => v !== null && v !== undefined ? v : '—';
+    document.getElementById('usage-count').textContent    = fmt(r.count);
+    document.getElementById('usage-max-drop').textContent = r.max_drop ? parseFloat(r.max_drop).toFixed(1) + ' °C' : '—';
+    document.getElementById('usage-avg-drop').textContent = r.avg_drop ? parseFloat(r.avg_drop).toFixed(1) + ' °C' : '—';
+    document.getElementById('usage-last-ts').textContent  = r.last_ts
+      ? new Date(r.last_ts).toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '—';
+  } catch (e) { console.error('loadUsageToday error:', e); }
+}
+
+async function loadTimer() {
+  try {
+    const t = await fetch('/api/timer').then(r => r.json());
+    const dot   = document.getElementById('timer-state-dot');
+    const state = document.getElementById('timer-state');
+    const colors = { active: '#2ecc71', idle: '#e74c3c', paused: '#e67e22' };
+    dot.style.color   = colors[t.state] || '#e74c3c';
+    state.textContent = t.state || '—';
+  } catch (e) { console.error('loadTimer error:', e); }
+}
+
 async function refreshAll() {
-  await Promise.all([loadReport(), loadSettings(), loadStatus(), loadSolarScore()]);
+  await Promise.all([loadReport(), loadSettings(), loadStatus(), loadSolarScore(), loadUsageToday(), loadTimer()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
   scheduleAutoRefresh();
@@ -73,31 +106,34 @@ async function loadNextProbe(currentDecision) {
     const inOperationalHours = hourIL >= 7 && hourIL < 19;
 
     const probeCountdownEl = document.getElementById('next-probe-countdown');
-    if (!r.agent_enabled || r.valve_is_on || !inOperationalHours) {
-      el.textContent = '—';
-      nextProbeTarget = null;
-      if (!inOperationalHours && r.agent_enabled) {
-        probeOutsideHours = true;
-        probeCountdownEl.textContent = 'Outside operational hours (07:00–19:00)';
-        probeCountdownEl.style.color = '#aaa';
-      } else {
-        probeOutsideHours = false;
-        probeCountdownEl.textContent = '';
-      }
-    } else if (!r.next_probe) {
-      el.textContent = 'Ready';
-      nextProbeTarget = null;
+
+    const setProbe = (explanation, explanationColor, showCountdown) => {
+      el.textContent               = explanation;
+      el.style.color               = explanationColor || '';
       probeCountdownEl.textContent = '';
+      if (showCountdown) nextProbeTarget = showCountdown;
+      else nextProbeTarget = null;
+    };
+
+    if (!r.agent_enabled || r.valve_is_on || !inOperationalHours) {
+      probeOutsideHours = !inOperationalHours && r.agent_enabled;
+      setProbe('—', '#888', null);
+    } else if (!r.next_probe) {
+      if (r.probe_feasible === false)
+        setProbe(`Too late — ${r.minutes_to_end}m left`, '#a08040', null);
+      else
+        setProbe('Ready', '#2ecc71', null);
     } else {
       const nextProbeDate = new Date(r.next_probe);
       if (nextProbeDate <= new Date()) {
-        el.textContent = 'Ready';
-        nextProbeTarget = null;
-        probeCountdownEl.textContent = '';
+        if (r.probe_feasible === false)
+          setProbe(`Too late — ${r.minutes_to_end}m left`, '#a08040', null);
+        else
+          setProbe('Ready', '#2ecc71', null);
+      } else if (r.probe_feasible === false) {
+        setProbe(`Too late — ${r.minutes_to_end}m left`, '#a08040', null);
       } else {
-        el.textContent = nextProbeDate.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
-        nextProbeTarget = nextProbeDate.getTime();
-        probeCountdownEl.style.color = '#7a9ab8';
+        setProbe(nextProbeDate.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }), '', nextProbeDate.getTime());
       }
     }
 
@@ -107,7 +143,7 @@ async function loadNextProbe(currentDecision) {
     if (probeActive && r.last_turn_on_ts) {
       const t = new Date(r.last_turn_on_ts).toLocaleTimeString('he-IL',
         { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit' });
-      originEl.innerHTML = `<span style="background:#97b3cc;color:#fff;padding:1px 7px;border-radius:3px;font-size:0.72rem;">Probe started at ${t}</span>`;
+      originEl.innerHTML = `<span style="font-size:0.72rem;color:#2e2e2e;">Probe started at ${t}</span>`;
     } else {
       originEl.innerHTML = '';
     }
@@ -124,13 +160,9 @@ async function loadReport() {
     ]);
 
     const agentEnabled = cfg.agent_enabled;
-    const statusEl = document.getElementById('agent-status');
-    statusEl.textContent = agentEnabled ? 'ENABLED' : 'DISABLED';
-    statusEl.className = 'value ' + (agentEnabled ? 'on' : 'off');
-
     const toggleBtn = document.getElementById('toggle-btn');
-    toggleBtn.textContent = agentEnabled ? 'Stop Agent' : 'Start Agent';
-    toggleBtn.className = 'btn btn-sm ' + (agentEnabled ? 'btn-danger' : 'btn-success');
+    toggleBtn.textContent = agentEnabled ? 'ENABLED' : 'DISABLED';
+    toggleBtn.className = 'btn btn-sm ' + (agentEnabled ? 'btn-success' : 'btn-danger');
 
     if (rep && rep.ts) {
       const fmt = v => v !== undefined && v !== null ? v : '—';
@@ -147,10 +179,11 @@ async function loadReport() {
       document.getElementById('panel-trend').textContent  = fmt(rep.panel_trend);
 
       const dec = rep.decision || '—';
+      lastDecision = rep.decision || null;
       const decEl = document.getElementById('last-decision');
       decEl.innerHTML = `<span class="badge badge-${dec}">${dec}</span>`;
       document.getElementById('why-decision').textContent = rep.why_decision || '—';
-      await loadNextProbe(rep.decision);
+      await loadNextProbe(lastDecision);
 
       document.getElementById('last-error').textContent = fmt(rep.error);
 
@@ -186,12 +219,14 @@ async function loadReport() {
 async function loadSettings() {
   try {
     const cfg = await fetch('/api/settings').then(r => r.json());
-    document.getElementById('s-run-interval').value  = cfg.run_interval_min ?? '';
-    document.getElementById('s-valid-after-on').value  = cfg.panel_temp_valid_after_on ?? '';
-    document.getElementById('s-valid-after-off').value = cfg.panel_temp_valid_after_off ?? '';
-    document.getElementById('s-trend-runs').value   = cfg.trend_runs ?? '';
+    document.getElementById('s-run-interval').value      = cfg.run_interval_min ?? '';
+    document.getElementById('s-valid-after-on').value    = cfg.panel_temp_valid_after_on ?? '';
+    document.getElementById('s-valid-after-off').value   = cfg.panel_temp_valid_after_off ?? '';
+    document.getElementById('s-trend-runs').value        = cfg.trend_runs ?? '';
     document.getElementById('s-debounce').value          = cfg.temp_debounce ?? '';
     document.getElementById('s-probe-interval').value    = cfg.probe_interval_min ?? '';
+    document.getElementById('s-consumption-temp').value  = cfg.consumption_temp_delta ?? '';
+    document.getElementById('s-consumption-time').value  = cfg.consumption_time_delta ?? '';
     runIntervalMin = cfg.run_interval_min || 5;
   } catch (e) {
     console.error('loadSettings error:', e);
@@ -207,6 +242,8 @@ async function saveSettings(e) {
     trend_runs:                 parseInt(document.getElementById('s-trend-runs').value),
     temp_debounce:              parseFloat(document.getElementById('s-debounce').value),
     probe_interval_min:         parseInt(document.getElementById('s-probe-interval').value),
+    consumption_temp_delta:     parseFloat(document.getElementById('s-consumption-temp').value),
+    consumption_time_delta:     parseInt(document.getElementById('s-consumption-time').value),
   };
   try {
     const r = await fetch('/api/settings', {
@@ -219,6 +256,7 @@ async function saveSettings(e) {
       msg.textContent = 'Saved ✓';
       runIntervalMin = body.run_interval_min;
       scheduleAutoRefresh();
+      await loadNextProbe(lastDecision);
       setTimeout(() => msg.textContent = '', 3000);
     } else {
       msg.style.color = '#e74c3c';
@@ -239,16 +277,36 @@ async function toggleAgent() {
   }
 }
 
+async function loadDeployAgents() {
+  try {
+    const agents = await fetch('/api/agents').then(r => r.json());
+    const sel = document.getElementById('deploy-agent');
+    sel.innerHTML = agents
+      .filter(a => a.deploy_path)
+      .map(a => `<option value="${a.name}">${a.name}${a.description ? ' — ' + a.description.split('—')[0].trim() : ''}</option>`)
+      .join('');
+    if (!sel.options.length) sel.innerHTML = '<option value="">No agents configured</option>';
+  } catch (e) {
+    document.getElementById('deploy-agent').innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
 async function deploy() {
+  const agentName = document.getElementById('deploy-agent').value;
+  if (!agentName) return;
   const out = document.getElementById('deploy-output');
   out.style.display = 'block';
-  out.textContent = 'Deploying…';
+  out.textContent = `Deploying ${agentName}…`;
   try {
-    const r = await fetch('/api/deploy', { method: 'POST' }).then(r => r.json());
+    const r = await fetch('/api/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: agentName })
+    }).then(r => r.json());
     if (r.error) {
       out.textContent = 'ERROR: ' + r.error;
     } else {
-      out.textContent = '--- git pull ---\n' + (r.pull || '(no output)') +
+      out.textContent = `--- git pull [${agentName}] ---\n` + (r.pull || '(no output)') +
                         '\n\n--- restart ---\n' + (r.restart || '(no output)');
     }
   } catch (e) {
@@ -263,3 +321,4 @@ function scheduleAutoRefresh() {
 
 refreshAll();
 startCountdown();
+loadDeployAgents();
