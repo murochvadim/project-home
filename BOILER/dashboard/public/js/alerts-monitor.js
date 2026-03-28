@@ -23,16 +23,31 @@
 
   async function checkAlerts() {
     try {
-      const data = await fetch('/api/health/alerts').then(r => r.json());
-      const count  = data.rows?.filter(r => !r.resolved_local).length ?? 0;
-      const worst  = count > 0 ? data.rows.find(r => !r.resolved_local)?.severity : null;
+      const r = await fetch('/api/health/status').then(r => r.json());
+
+      // Count every failed check across the full status response
+      const checks = [
+        r.postgres?.ok,
+        r.homeassistant?.ok,
+        r.lxc103?.ok,
+        r.lxc104?.ok,
+        r.boiler_agent?.ok,
+        r.pm2?.ok,
+        r.orchestrator?.ok,
+        r.ha_to_pg?.data_ok,
+        r.collect_weather?.data_ok,
+        r.orchestrator_last_run?.ok,
+        r.boiler_last_decision?.ok,
+        r.active_alerts?.ok,
+      ];
+      const count = checks.filter(v => v === false).length;
 
       const el = document.getElementById('alert-indicator');
       if (!el) return;
 
       if (count > 0) {
-        el.textContent = count === 1 ? '⚠ 1 alert' : `⚠ ${count} alerts`;
-        el.title       = `${count} active alert${count > 1 ? 's' : ''} — worst: ${worst}\nClick to go to Project Health`;
+        el.textContent = count === 1 ? '⚠ 1 issue' : `⚠ ${count} issues`;
+        el.title       = `${count} problem${count > 1 ? 's' : ''} detected\nClick to go to Project Health`;
         el.classList.add('has-alerts');
       } else {
         el.textContent = '✓ OK';
@@ -40,7 +55,7 @@
         el.classList.remove('has-alerts');
       }
 
-      // Sound only fires when count rises (new alert appeared)
+      // Sound only fires when count rises (new problem appeared)
       if (prevCount !== null && count > prevCount) {
         beep();
       }
