@@ -22,11 +22,12 @@
 - `agent_boiler_data`: ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision, error, next_ts, version
 - `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta
 - `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at — hot water consumption events detected by agent each run; deduplicated by start_ts
+- `sync_signals`: id, ts, source — written by ha_to_pg after each raw_data insert; boiler agent polls every 30s and wakes immediately on new row
 - `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected hourly
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
 ## Data Flow
-- **raw_data**: LXC 103 script `/usr/local/bin/ha_to_pg` runs every 5 min via cron, fetches from HA
+- **raw_data**: LXC 103 script `/usr/local/bin/ha_to_pg` runs every 5 min via cron, fetches from HA; after each insert it also writes a row to `sync_signals` (same transaction) to wake the boiler agent early
 - **raw_weather + raw_weather_daily**: LXC 103 script `/opt/Agents-agent/project/BOILER/agent/collect_weather.py` runs every 30 min via cron (`*/30 * * * *`)
   - Hourly: fetches `weather.ims_weather` + balcony sensors (`sensor.balcony_motion_*`) from HA → inserts into `raw_weather`
   - Daily at 06:00: calls `weather.get_forecasts?return_response` → inserts 7-day forecast into `raw_weather_daily`
@@ -84,7 +85,9 @@
 
 # Agent Operational Inputs
 
-## 1. Agent will run every XX min according of what set in Boiler Agent settings in UI.
+## 1. Agent will run every XX min according to what is set in Boiler Agent settings in UI.
+- Between runs the agent polls `sync_signals` every 30 seconds and wakes immediately when ha_to_pg writes a new row (ensuring each decision uses the freshest possible data).
+- Maximum sleep is still `run_interval_min` — `sync_signals` only shortens the wait, never extends it.
 
 ## 2. Every Run of Agent will ended with decision to on/off the valve or no action.
 
@@ -338,7 +341,8 @@
 - Script: `/opt/main-agent/project/main-agent/orchestrator.py` (runs from git repo)
 - Git repo cloned at `/opt/main-agent/project` (same GitHub repo as all agents)
 - Env file: `/etc/main-agent.env` (contains `DB_PASS`)
-- Systemd: `main-agent.service` (oneshot) + `main-agent.timer` (runs every 1h, 2min after boot)
+- Systemd: `main-agent.service` (oneshot) + `main-agent.timer` (full run every 1h, 2min after boot)
+- Quick check: `main-agent-quick.service` + `main-agent-quick.timer` (runs `orchestrator.py --quick` every 5 min: schedule + data freshness only, no SSH or retention)
 - SSH key: `/root/.ssh/id_ed25519` — authorised on LXC 103 for service checks
 
 ## Agent Framework Contract
