@@ -349,9 +349,4 @@ function clearInvestigation() {
   if (aiChart) { aiChart.destroy(); aiChart = null; }
 }
 
-// Restore stored investigation on page load
-(function () {
-  const stored = localStorage.getItem(AI_STORAGE_KEY);
-  if (!stored) return;
-  try { renderInvestigation(JSON.parse(stored), true); } catch {}
-})();
+// Stored investigation is restored lazily when the AI tab is first opened (see graph.html showGraphTab)
