@@ -594,6 +594,7 @@ app.get('/api/health/status', async (req, res) => {
     pgResult,
     haResult,
     lxc103Result,
+    lxc104Result,
     lxc105Result,
     pm2Result,
     rawDataResult,
@@ -616,6 +617,9 @@ app.get('/api/health/status', async (req, res) => {
       cron1: 'crontab -l 2>/dev/null | grep -c ha_to_pg',
       cron2: 'crontab -l 2>/dev/null | grep -c collect_weather',
     }),
+
+    // LXC 104 — MCP PostgreSQL bridge (reachability only)
+    sshCheck('192.168.1.227', { check: 'echo ok' }),
 
     // LXC 105 — orchestrator timers
     sshCheck('192.168.1.187', {
@@ -687,6 +691,7 @@ app.get('/api/health/status', async (req, res) => {
     results.orchestrator = { ok: false, error: lxc105Result.error };
   }
 
+  results.lxc104 = { ok: lxc104Result.ok };
   results.pm2 = pm2Result;
 
   // ha_to_pg data freshness

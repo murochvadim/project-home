@@ -99,6 +99,7 @@ async function loadStatus() {
     document.getElementById('svc-postgres').innerHTML = dot(r.postgres?.ok);
     document.getElementById('svc-ha').innerHTML       = dot(r.homeassistant?.ok);
     document.getElementById('svc-lxc').innerHTML      = dot(r.lxc103?.ok);
+    document.getElementById('svc-lxc104').innerHTML   = dot(r.lxc104?.ok);
 
     const htp = r.ha_to_pg;
     if (htp) {
@@ -175,7 +176,7 @@ async function loadStatus() {
     }
 
   } catch (e) {
-    ['svc-postgres','svc-ha','svc-lxc','svc-agent','svc-ha-to-pg','svc-pm2',
+    ['svc-postgres','svc-ha','svc-lxc','svc-lxc104','svc-agent','svc-ha-to-pg','svc-pm2',
      'svc-orchestrator','svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last'
     ].forEach(id => {
       document.getElementById(id).innerHTML = dot(false);
