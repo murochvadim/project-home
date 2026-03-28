@@ -323,7 +323,7 @@
 - **DB Volumes card**: table row counts, disk size, oldest/newest record for all tables; fetched from `/api/health/db-volumes` using `pg_stat_user_tables`
 - **Retention Policies card**: editable table per DB table — keep_days (blank = forever), auto_clean toggle, clean_interval_hours, last_cleaned timestamp; Save per row, Clean per row, "Clean All Now" global button
   - Policies stored in `retention_policies` DB table (not config file — so orchestrator reads/writes them programmatically)
-  - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever, orchestrator_log=30d
+  - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever, orchestrator_log=30d, system_alerts=90d, sync_signals=7d
 - **API endpoints:**
   - `GET /api/health/status` — checks PostgreSQL, HA, SSH to LXC 103, boiler-agent service, ha_to_pg cron, PM2
   - `GET /api/health/orch-log?limit=N` — last N orchestrator log entries
@@ -363,7 +363,7 @@ Adding a new agent = `INSERT INTO agents` → orchestrator + dashboard + deploy 
 ## Orchestrator Responsibilities (per run)
 1. **Schedule check** — is each agent's `next_ts` overdue (> 5 min grace)?
 2. **Error check** — any `ERR:` prefixed rows in last 10 rows of agent data table?
-3. **Service check** — SSH to agent's LXC; for persistent services: `systemctl is-active <service>`; for oneshot (`service_oneshot=true`): `systemctl is-active <service>.timer`
+3. **Service check + auto-restart** — SSH to agent's LXC; checks `systemctl is-active <service>` (persistent) or `<service>.timer` (oneshot); if down → attempts `systemctl restart` / `systemctl start .timer` and re-checks; raises `service_down` only if still failing after restart attempt; logs all outcomes to `orchestrator_log`
 4. **Data freshness check** — `raw_data` age > 10 min → `data_stale` alert for `boiler` agent
 5. **Retention cleanup** — delete old rows for tables where `auto_clean=true`, `keep_days` set, and `clean_interval_hours` elapsed since `last_cleaned_at`
 6. **Write/resolve alerts** to `system_alerts`; log all activity to `orchestrator_log`
