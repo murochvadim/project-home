@@ -567,158 +567,121 @@ RESPONSE FORMAT — return ONLY valid JSON, no text outside:
   }
 });
 
-// ─── Project Health — System Status ──────────────────────────
-app.get('/api/health/status', async (req, res) => {
-  const SSH_TIMEOUT = 5000; // 5 seconds per SSH connect attempt
+// ─── Project Health — background status cache ─────────────────
+const SSH_TIMEOUT = 5000;
+let statusCache = null; // updated every 60s in background
 
-  // Helper: SSH connect with hard timeout (covers TCP + handshake)
-  async function sshCheck(host, commands) {
-    const ssh = new NodeSSH();
-    const attempt = async () => {
-      await ssh.connect({ host, username: SSH_USER, privateKeyPath: SSH_KEY, readyTimeout: SSH_TIMEOUT });
-      const out = {};
-      for (const [key, cmd] of Object.entries(commands)) {
-        out[key] = (await ssh.execCommand(cmd)).stdout.trim();
-      }
-      ssh.dispose();
-      return { ok: true, ...out };
-    };
-    const deadline = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('timeout')), SSH_TIMEOUT)
-    );
-    try {
-      return await Promise.race([attempt(), deadline]);
-    } catch (e) {
-      try { ssh.dispose(); } catch {}
-      return { ok: false, error: e.message };
+async function sshCheck(host, commands) {
+  const ssh = new NodeSSH();
+  const attempt = async () => {
+    await ssh.connect({ host, username: SSH_USER, privateKeyPath: SSH_KEY, readyTimeout: SSH_TIMEOUT });
+    const out = {};
+    for (const [key, cmd] of Object.entries(commands)) {
+      out[key] = (await ssh.execCommand(cmd)).stdout.trim();
     }
+    ssh.dispose();
+    return { ok: true, ...out };
+  };
+  const deadline = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('timeout')), SSH_TIMEOUT)
+  );
+  try {
+    return await Promise.race([attempt(), deadline]);
+  } catch (e) {
+    try { ssh.dispose(); } catch {}
+    return { ok: false, error: e.message };
   }
+}
 
-  // Run all checks in parallel
+async function runHealthChecks() {
   const [
-    pgResult,
-    haResult,
-    lxc103Result,
-    lxc104Result,
-    lxc105Result,
-    pm2Result,
-    rawDataResult,
-    rawWeatherResult,
-    orchLogResult,
-    alertsResult,
-    boilerDecisionResult,
+    pgResult, haResult, lxc103Result, lxc104Result, lxc105Result, pm2Result,
+    rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult,
   ] = await Promise.all([
-
-    // PostgreSQL
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
-
-    // Home Assistant
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(5000) })
       .then(r => ({ ok: r.ok })).catch(e => ({ ok: false, error: e.message })),
-
-    // LXC 103 — boiler-agent service + both cron checks in one session
     sshCheck('192.168.1.114', {
-      svc:   'systemctl is-active boiler-agent',
+      svc: 'systemctl is-active boiler-agent',
       cron1: 'crontab -l 2>/dev/null | grep -c ha_to_pg',
       cron2: 'crontab -l 2>/dev/null | grep -c collect_weather',
     }),
-
-    // LXC 104 — MCP PostgreSQL bridge (reachability only)
     sshCheck('192.168.1.227', { check: 'echo ok' }),
-
-    // LXC 105 — orchestrator timers
     sshCheck('192.168.1.187', {
       timer: 'systemctl is-active main-agent.timer',
       quick: 'systemctl is-active main-agent-quick.timer',
     }),
-
-    // PM2 local
     new Promise(resolve => {
       exec('pm2.cmd jlist', (err, stdout) => {
         if (err) { resolve({ ok: false, error: err.message }); return; }
         try {
           const procs = JSON.parse(stdout);
-          const list  = procs.map(p => `${p.name}: ${p.pm2_env?.status}`).join(', ');
-          resolve({ ok: procs.every(p => p.pm2_env?.status === 'online'), raw: list });
+          resolve({ ok: procs.every(p => p.pm2_env?.status === 'online'), raw: procs.map(p => `${p.name}: ${p.pm2_env?.status}`).join(', ') });
         } catch (e) { resolve({ ok: false, error: e.message }); }
       });
     }),
-
-    // raw_data freshness
-    db.query('SELECT MAX(ts) AS last_ts FROM raw_data')
-      .then(r => r.rows[0]?.last_ts).catch(() => null),
-
-    // raw_weather freshness
-    db.query('SELECT MAX(ts) AS last_ts FROM raw_weather')
-      .then(r => r.rows[0]?.last_ts).catch(() => null),
-
-    // orchestrator_log last run
-    db.query('SELECT ts FROM orchestrator_log ORDER BY ts DESC LIMIT 1')
-      .then(r => r.rows[0]?.ts || null).catch(() => null),
-
-    // active alerts
+    db.query('SELECT MAX(ts) AS last_ts FROM raw_data').then(r => r.rows[0]?.last_ts).catch(() => null),
+    db.query('SELECT MAX(ts) AS last_ts FROM raw_weather').then(r => r.rows[0]?.last_ts).catch(() => null),
+    db.query('SELECT ts FROM orchestrator_log ORDER BY ts DESC LIMIT 1').then(r => r.rows[0]?.ts || null).catch(() => null),
     db.query('SELECT COUNT(*) AS n, MAX(severity) AS worst FROM system_alerts WHERE resolved_at IS NULL')
-      .then(r => ({ n: parseInt(r.rows[0]?.n) || 0, worst: r.rows[0]?.worst || null }))
-      .catch(() => ({ n: null, worst: null })),
-
-    // boiler last decision + run_interval
+      .then(r => ({ n: parseInt(r.rows[0]?.n) || 0, worst: r.rows[0]?.worst || null })).catch(() => ({ n: null, worst: null })),
     Promise.all([
       db.query('SELECT ts, decision FROM agent_boiler_data ORDER BY ts DESC LIMIT 1').catch(() => ({ rows: [] })),
       db.query('SELECT run_interval_min FROM agent_settings LIMIT 1').catch(() => ({ rows: [] })),
     ]).then(([bd, si]) => ({ lastTs: bd.rows[0]?.ts || null, decision: bd.rows[0]?.decision || null, runInterval: si.rows[0]?.run_interval_min || 5 })),
   ]);
 
-  // Assemble results
-  const results = {};
+  const r = {};
+  r.postgres      = pgResult;
+  r.homeassistant = haResult;
+  r.lxc104        = { ok: lxc104Result.ok };
+  r.pm2           = pm2Result;
 
-  results.postgres      = pgResult;
-  results.homeassistant = haResult;
-
-  // LXC 103
   if (lxc103Result.ok) {
-    results.lxc103       = { ok: true };
-    results.boiler_agent = { ok: lxc103Result.svc === 'active', status: lxc103Result.svc };
-    results.ha_to_pg     = { cron_ok: parseInt(lxc103Result.cron1) > 0 };
-    results.collect_weather = { cron_ok: parseInt(lxc103Result.cron2) > 0 };
+    r.lxc103          = { ok: true };
+    r.boiler_agent    = { ok: lxc103Result.svc === 'active', status: lxc103Result.svc };
+    r.ha_to_pg        = { cron_ok: parseInt(lxc103Result.cron1) > 0 };
+    r.collect_weather = { cron_ok: parseInt(lxc103Result.cron2) > 0 };
   } else {
-    results.lxc103          = { ok: false, error: lxc103Result.error };
-    results.boiler_agent    = { ok: false, status: 'unknown' };
-    results.ha_to_pg        = { cron_ok: false };
-    results.collect_weather = { cron_ok: false };
+    r.lxc103          = { ok: false, error: lxc103Result.error };
+    r.boiler_agent    = { ok: false, status: 'unknown' };
+    r.ha_to_pg        = { cron_ok: false };
+    r.collect_weather = { cron_ok: false };
   }
 
-  // LXC 105
   if (lxc105Result.ok) {
-    const timerOk = lxc105Result.timer === 'active';
-    const quickOk = lxc105Result.quick === 'active';
-    results.orchestrator = { ok: timerOk && quickOk, timer: lxc105Result.timer, quick: lxc105Result.quick };
+    r.orchestrator = { ok: lxc105Result.timer === 'active' && lxc105Result.quick === 'active', timer: lxc105Result.timer, quick: lxc105Result.quick };
   } else {
-    results.orchestrator = { ok: false, error: lxc105Result.error };
+    r.orchestrator = { ok: false, error: lxc105Result.error };
   }
 
-  results.lxc104 = { ok: lxc104Result.ok };
-  results.pm2 = pm2Result;
-
-  // ha_to_pg data freshness
   const htpAge = rawDataResult ? (Date.now() - new Date(rawDataResult).getTime()) / 60000 : null;
-  results.ha_to_pg = { ...results.ha_to_pg, last_ts: rawDataResult, age_min: htpAge !== null ? Math.round(htpAge) : null, data_ok: htpAge !== null && htpAge <= 15 };
+  r.ha_to_pg = { ...r.ha_to_pg, last_ts: rawDataResult, age_min: htpAge !== null ? Math.round(htpAge) : null, data_ok: htpAge !== null && htpAge <= 15 };
 
-  // collect_weather data freshness
   const cwAge = rawWeatherResult ? (Date.now() - new Date(rawWeatherResult).getTime()) / 60000 : null;
-  results.collect_weather = { ...results.collect_weather, last_ts: rawWeatherResult, age_min: cwAge !== null ? Math.round(cwAge) : null, data_ok: cwAge !== null && cwAge <= 35 };
+  r.collect_weather = { ...r.collect_weather, last_ts: rawWeatherResult, age_min: cwAge !== null ? Math.round(cwAge) : null, data_ok: cwAge !== null && cwAge <= 35 };
 
-  // orchestrator last run
   const orchAge = orchLogResult ? (Date.now() - new Date(orchLogResult).getTime()) / 60000 : null;
-  results.orchestrator_last_run = { last_ts: orchLogResult, age_min: orchAge !== null ? Math.round(orchAge) : null, ok: orchAge !== null && orchAge <= 70 };
+  r.orchestrator_last_run = { last_ts: orchLogResult, age_min: orchAge !== null ? Math.round(orchAge) : null, ok: orchAge !== null && orchAge <= 70 };
 
-  // active alerts
-  results.active_alerts = { count: alertsResult.n, worst: alertsResult.worst, ok: alertsResult.n === 0 };
+  r.active_alerts = { count: alertsResult.n, worst: alertsResult.worst, ok: alertsResult.n === 0 };
 
-  // boiler last decision
   const bdAge = boilerDecisionResult.lastTs ? (Date.now() - new Date(boilerDecisionResult.lastTs).getTime()) / 60000 : null;
-  results.boiler_last_decision = { last_ts: boilerDecisionResult.lastTs, age_min: bdAge !== null ? Math.round(bdAge) : null, decision: boilerDecisionResult.decision, ok: bdAge !== null && bdAge <= boilerDecisionResult.runInterval * 3 };
+  r.boiler_last_decision = { last_ts: boilerDecisionResult.lastTs, age_min: bdAge !== null ? Math.round(bdAge) : null, decision: boilerDecisionResult.decision, ok: bdAge !== null && bdAge <= boilerDecisionResult.runInterval * 3 };
 
-  res.json(results);
+  r.cached_at = new Date().toISOString();
+  statusCache = r;
+}
+
+// Run immediately on startup, then every 60 s
+runHealthChecks().catch(() => {});
+setInterval(() => runHealthChecks().catch(() => {}), 60000);
+
+// ─── Project Health — System Status ──────────────────────────
+app.get('/api/health/status', (req, res) => {
+  if (statusCache) return res.json(statusCache);
+  // Cache not ready yet (first run still in progress) — wait for it
+  runHealthChecks().then(() => res.json(statusCache)).catch(e => res.status(500).json({ error: e.message }));
 });
 
 // ─── Project Health — DB Volumes ─────────────────────────────
