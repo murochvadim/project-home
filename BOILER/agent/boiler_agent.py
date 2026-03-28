@@ -620,14 +620,48 @@ def run_agent():
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
+def get_last_sync_id():
+    """Return the latest id in sync_signals, or 0 on any error."""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        with conn.cursor() as cur:
+            cur.execute('SELECT COALESCE(MAX(id), 0) FROM sync_signals')
+            result = cur.fetchone()[0]
+        conn.close()
+        return int(result)
+    except Exception:
+        return 0
+
+
+def wait_for_next_run(interval_min: int) -> None:
+    """
+    Sleep until either:
+    - a new sync_signal row appears (id > last seen) → wake immediately, or
+    - interval_min minutes have elapsed → fallback wake.
+    Polls every 30 s.
+    """
+    deadline = time.monotonic() + interval_min * 60
+    last_id  = get_last_sync_id()
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(30, remaining))
+        new_id = get_last_sync_id()
+        if new_id > last_id:
+            log.info('sync_signal detected — waking up early')
+            return
+
+
 def main():
     log.info('Boiler Agent starting up')
     while True:
         interval = run_agent()
         if not interval:
             interval = 5
-        log.info(f'Sleeping {interval} minutes until next run')
-        time.sleep(interval * 60)
+        log.info(f'Sleeping up to {interval} minutes (polling sync_signals every 30s)')
+        wait_for_next_run(interval)
 
 
 if __name__ == '__main__':

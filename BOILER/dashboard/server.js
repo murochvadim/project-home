@@ -792,7 +792,8 @@ async function ensureSchema() {
       ('raw_weather_daily',  60,   true,  24, 'Daily weather forecasts'),
       ('boiler_consumptions', NULL, false, 24, 'Hot water consumption events — keep forever'),
       ('orchestrator_log',   30,   true,  24, 'Main agent run logs and alerts'),
-      ('system_alerts',      90,   true,  24, 'Cross-agent system alerts from orchestrator')
+      ('system_alerts',      90,   true,  24, 'Cross-agent system alerts from orchestrator'),
+      ('sync_signals',        7,   true,  24, 'ha_to_pg data-ready signals for boiler agent wake-up')
     ON CONFLICT (table_name) DO NOTHING
   `);
 
@@ -810,6 +811,15 @@ async function ensureSchema() {
   `);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_alerts_active ON system_alerts (resolved_at) WHERE resolved_at IS NULL`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_alerts_agent  ON system_alerts (affected_agent, resolved_at)`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS sync_signals (
+      id      BIGSERIAL PRIMARY KEY,
+      ts      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      source  VARCHAR(50) NOT NULL DEFAULT 'ha_to_pg'
+    )
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_sync_signals_ts ON sync_signals (ts DESC)`);
 }
 
 const PORT = 3000;

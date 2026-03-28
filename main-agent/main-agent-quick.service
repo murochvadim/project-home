@@ -1,11 +1,11 @@
 [Unit]
-Description=Main Agent Orchestrator
+Description=Main Agent Orchestrator — quick data freshness check
 After=network.target
 
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/main-agent.env
-ExecStart=/opt/main-agent/venv/bin/python3 /opt/main-agent/project/main-agent/orchestrator.py
+ExecStart=/opt/main-agent/venv/bin/python3 /opt/main-agent/project/main-agent/orchestrator.py --quick
 StandardOutput=journal
 StandardError=journal
 

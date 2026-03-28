@@ -1,0 +1,11 @@
+[Unit]
+Description=Main Agent Orchestrator — quick check every 5 min
+Requires=main-agent-quick.service
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

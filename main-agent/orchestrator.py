@@ -229,8 +229,9 @@ def run_retention(cur):
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-def main():
-    log.info('Orchestrator run started')
+def main(quick=False):
+    mode = 'quick-check' if quick else 'full'
+    log.info(f'Orchestrator run started ({mode})')
     try:
         db  = get_db()
         db.autocommit = False
@@ -242,29 +243,35 @@ def main():
     try:
         cur.execute("SELECT * FROM agents WHERE enabled = true ORDER BY name")
         agents = cur.fetchall()
-        write_log(cur, 'info', f'Checking {len(agents)} agent(s): {", ".join(a["name"] for a in agents)}')
 
-        for agent in agents:
-            check_schedule(cur, agent)
-            check_errors(cur, agent)
-            check_service(cur, agent)
-
-        check_data_freshness(cur)
-
-        cleaned = run_retention(cur)
-        if cleaned:
-            detail = ', '.join(f'{t}: {d} rows' for t, d in cleaned)
-            write_log(cur, 'info', f'Retention cleanup: {detail}')
+        if quick:
+            # Lightweight: schedule + data freshness only (no SSH, no errors, no retention)
+            for agent in agents:
+                check_schedule(cur, agent)
+            check_data_freshness(cur)
         else:
-            write_log(cur, 'info', 'Retention cleanup: nothing due')
+            write_log(cur, 'info', f'Checking {len(agents)} agent(s): {", ".join(a["name"] for a in agents)}')
+            for agent in agents:
+                check_schedule(cur, agent)
+                check_errors(cur, agent)
+                check_service(cur, agent)
 
-        # Count active alerts for summary
-        cur.execute("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL")
-        active = cur.fetchone()['n']
-        if active:
-            write_log(cur, 'warn', f'Run complete — {active} active alert(s)')
-        else:
-            write_log(cur, 'info', 'Run complete — all OK')
+            check_data_freshness(cur)
+
+            cleaned = run_retention(cur)
+            if cleaned:
+                detail = ', '.join(f'{t}: {d} rows' for t, d in cleaned)
+                write_log(cur, 'info', f'Retention cleanup: {detail}')
+            else:
+                write_log(cur, 'info', 'Retention cleanup: nothing due')
+
+            # Count active alerts for summary
+            cur.execute("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL")
+            active = cur.fetchone()['n']
+            if active:
+                write_log(cur, 'warn', f'Run complete — {active} active alert(s)')
+            else:
+                write_log(cur, 'info', 'Run complete — all OK')
 
         db.commit()
         log.info('Done')
@@ -287,4 +294,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    quick_mode = '--quick' in sys.argv
+    main(quick=quick_mode)
