@@ -361,3 +361,12 @@ async function refreshAll() {
 loadAlerts();
 loadStatus();
 loadOrchLog();
+
+// Auto-refresh status every 60 s (same cadence as sidebar indicator)
+setInterval(() => {
+  if (!document.getElementById('tab-database')?.classList.contains('active')) {
+    loadAlerts();
+    loadStatus();
+    loadOrchLog();
+  }
+}, 60000);
