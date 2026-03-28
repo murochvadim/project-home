@@ -22,15 +22,15 @@ body {
 }
 
 #sidebar .logo {
-  padding: 20px 18px;
+  padding: 16px 18px;
   font-size: 1.1rem;
   font-weight: 700;
   color: #fff;
   border-bottom: 1px solid #2e3f54;
   letter-spacing: 0.5px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 8px;
 }
 
 #alert-indicator {
@@ -44,6 +44,7 @@ body {
   cursor: default;
   white-space: nowrap;
   text-decoration: none;
+  align-self: flex-start;
 }
 
 #alert-indicator.has-alerts {
