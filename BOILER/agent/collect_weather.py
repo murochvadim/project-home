@@ -1,8 +1,8 @@
 #!/opt/Agents-agent/venv/bin/python3
 """
-Weather Collection Script — runs every hour via cron.
+Weather Collection Script — runs every 30 min via cron (*/30 * * * *).
 Collects IMS weather + balcony sensors from HA and stores in:
-  raw_weather       — current conditions (hourly)
+  raw_weather       — current conditions (every 30 min)
   raw_weather_daily — daily forecast entries (once per day at 06:00)
 """
 
@@ -105,6 +105,14 @@ def collect_daily(conn):
         return
 
     log.info('Collecting daily forecast...')
+
+    # Deduplicate: skip if we already inserted today's forecast
+    today = now_il.date().isoformat()
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM raw_weather_daily WHERE forecast_date = %s LIMIT 1", (today,))
+        if cur.fetchone():
+            log.info(f'Daily forecast for {today} already in DB — skipping duplicate insert')
+            return
 
     # Use HA weather.get_forecasts service via REST API
     r = requests.post(

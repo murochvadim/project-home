@@ -23,7 +23,7 @@
 - `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta
 - `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at — hot water consumption events detected by agent each run; deduplicated by start_ts
 - `sync_signals`: id, ts, source — written by ha_to_pg after each raw_data insert; boiler agent polls every 30s and wakes immediately on new row
-- `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected hourly
+- `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 30 min
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
 ## Data Flow
@@ -146,7 +146,7 @@
 
 ### Waiting Phase — checked first, before any other decision:
 - After valve turns ON (decision was "turn_on"), wait `trend_runs` agent runs before making a final decision
-- **Detecting waiting phase:** look at the last `trend_runs` rows in `agent_boiler_data`; if `turn_on` appears within those rows AND every row more recent than it has decision = `waiting`, the waiting phase is active. If any resolved decision (`keep_on`, `turn_off`, `hold`, `no_action`) appears between the most recent row and the `turn_on`, the waiting phase has already resolved — do not re-enter it.
+- **Detecting waiting phase:** scan the last `trend_runs * 2 + 5` rows in `agent_boiler_data` (enlarged window so that increasing `trend_runs` mid-phase doesn't hide the `turn_on` row); if `turn_on` appears within those rows AND every row more recent than it has decision = `waiting`, the waiting phase is active. If any resolved decision (`keep_on`, `turn_off`, `hold`, `no_action`) appears between the most recent row and the `turn_on`, the waiting phase has already resolved — do not re-enter it. If `turn_on` is found further back than `trend_runs` rows (settings changed mid-phase), treat current run as the final waiting run.
 - **During each waiting run**, once panel readings become valid (panel_temp_valid_after_on minutes have elapsed since valve ON):
   - If panel_trend = **DOWN** → **early turn_off** (panel is cooling, probe failed or sun gone); write decision = "turn_off", why_decision = "Probe aborted: panel trend DOWN during waiting phase — panel is cooling"
   - Otherwise (UP or stable or readings not yet valid) → write decision = "waiting", why_decision = reason; continue to next run
@@ -311,14 +311,24 @@
 
 ## Local Server Setup
 - Dashboard server: `BOILER/dashboard/server.js`, port **3000**, binds to `127.0.0.1`
-- Start manually: `HA_TOKEN=<token> node server.js` from `BOILER/dashboard/`
-- PM2 config: `ecosystem.config.js` (includes HA_TOKEN); run with `pm2 start ecosystem.config.js`
+- Secrets stored in `BOILER/dashboard/.env` (gitignored): `HA_TOKEN`, `ANTHROPIC_API_KEY`, `DB_PASS`
+- `ecosystem.config.js` loads `.env` automatically at startup — run with `pm2 start ecosystem.config.js`
 - Dependencies: `express`, `pg`, `node-ssh`, `@anthropic-ai/sdk` (in `node_modules`)
-- PM2 env vars required: `HA_TOKEN`, `ANTHROPIC_API_KEY`
+- PM2 env vars required: `HA_TOKEN`, `ANTHROPIC_API_KEY` — sourced from `.env` (never hardcode in ecosystem.config.js)
 
 ## Project Health Page (sidebar: General → Project Health)
-- **System Status card**: live status of all services — PostgreSQL (LXC 102), Home Assistant, LXC 103 SSH, Boiler Agent systemd service, ha_to_pg cron, PM2; fetched from `/api/health/status`
-  - `ha_to_pg`: checks cron registration on LXC 103 + DB data freshness (age of last `raw_data` row ≤ 10 min = OK); returns `{cron_ok, last_ts, age_min, data_ok}`
+- **System Status card**: live status of all services; fetched from `/api/health/status`; displayed in a 4-column grid:
+  - `postgres` — can query DB
+  - `homeassistant` — HA API responds
+  - `lxc103` — SSH reachable
+  - `pm2` — all processes online
+  - `boiler_agent` — `systemctl is-active boiler-agent` on LXC 103
+  - `boiler_last_decision` — age of last `agent_boiler_data` row ≤ `run_interval_min × 3`; shows age + decision
+  - `ha_to_pg` — cron registered on LXC 103 + `raw_data` age ≤ 15 min; shows age
+  - `collect_weather` — cron registered on LXC 103 + `raw_weather` age ≤ 35 min; shows age
+  - `orchestrator` — `main-agent.timer` + `main-agent-quick.timer` active on LXC 105 (SSH)
+  - `orchestrator_last_run` — age of last `orchestrator_log` row ≤ 70 min; shows age
+  - `active_alerts` — count of unresolved `system_alerts`; shows worst severity
 - **Orchestrator Log card**: last N entries from `orchestrator_log` table; severity colour-coded (info/warn/error); shows last run time + status summary; `GET /api/health/orch-log?limit=N`
 - **DB Volumes card**: table row counts, disk size, oldest/newest record for all tables; fetched from `/api/health/db-volumes` using `pg_stat_user_tables`
 - **Retention Policies card**: editable table per DB table — keep_days (blank = forever), auto_clean toggle, clean_interval_hours, last_cleaned timestamp; Save per row, Clean per row, "Clean All Now" global button
@@ -364,7 +374,7 @@ Adding a new agent = `INSERT INTO agents` → orchestrator + dashboard + deploy 
 1. **Schedule check** — is each agent's `next_ts` overdue (> 5 min grace)?
 2. **Error check** — any `ERR:` prefixed rows in last 10 rows of agent data table?
 3. **Service check + auto-restart** — SSH to agent's LXC; checks `systemctl is-active <service>` (persistent) or `<service>.timer` (oneshot); if down → attempts `systemctl restart` / `systemctl start .timer` and re-checks; raises `service_down` only if still failing after restart attempt; logs all outcomes to `orchestrator_log`
-4. **Data freshness check** — `raw_data` age > 10 min → `data_stale` alert for `boiler` agent
+4. **Data freshness check** — `raw_data` age > 15 min → `data_stale` alert for `boiler` agent (threshold raised from 10 to 15 min to allow 2 full ha_to_pg cycles of margin)
 5. **Retention cleanup** — delete old rows for tables where `auto_clean=true`, `keep_days` set, and `clean_interval_hours` elapsed since `last_cleaned_at`
 6. **Write/resolve alerts** to `system_alerts`; log all activity to `orchestrator_log`
 
@@ -376,9 +386,11 @@ Adding a new agent = `INSERT INTO agents` → orchestrator + dashboard + deploy 
 | `agent_hard_errors` | ERR: in last 10 rows | that agent |
 | `service_down` | systemctl not active | that agent |
 | `service_ssh_failed` | SSH connection failed | that agent |
-| `data_stale` | raw_data > 10 min old | boiler |
+| `data_stale` | raw_data > 15 min old | boiler |
+| `agent_schedule_check_failed` | DB error during schedule check | that agent |
 
 Alerts are **raised once** (no duplicates) and **auto-resolved** when the condition clears on next orchestrator run.
+Note: `agent_schedule_check_failed` uses a SAVEPOINT internally so a DB error does not abort the outer transaction.
 
 ## Agent Alert Behaviour (boiler agent — Step 0b)
 At start of each run, before any logic:

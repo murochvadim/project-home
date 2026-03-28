@@ -62,7 +62,10 @@
   <!-- System Status -->
   <div class="card">
     <h2>System Status</h2>
-    <div class="status-grid status-grid-divided" style="grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr;">
+
+    <!-- Infrastructure -->
+    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; margin-top:2px;">Infrastructure</div>
+    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
       <div class="status-item">
         <label>PostgreSQL</label>
         <div class="value small" id="svc-postgres">—</div>
@@ -76,18 +79,54 @@
         <div class="value small" id="svc-lxc">—</div>
       </div>
       <div class="status-item">
-        <label>Boiler Agent Service</label>
+        <label>Active Alerts</label>
+        <div class="value small" id="svc-active-alerts">—</div>
+      </div>
+    </div>
+
+    <!-- Services -->
+    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Services</div>
+    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
+      <div class="status-item">
+        <label>Boiler Agent</label>
         <div class="value small" id="svc-agent">—</div>
       </div>
+      <div class="status-item">
+        <label>Boiler Last Decision</label>
+        <div class="value small" id="svc-boiler-last">—</div>
+      </div>
+      <div class="status-item">
+        <label>Orchestrator (LXC 105)</label>
+        <div class="value small" id="svc-orchestrator">—</div>
+      </div>
+      <div class="status-item">
+        <label>Orchestrator Last Run</label>
+        <div class="value small" id="svc-orch-last-run">—</div>
+      </div>
+    </div>
+
+    <!-- Scripts -->
+    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Scripts (cron)</div>
+    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
       <div class="status-item">
         <label>ha_to_pg (raw data)</label>
         <div class="value small" id="svc-ha-to-pg">—</div>
       </div>
       <div class="status-item">
+        <label>collect_weather</label>
+        <div class="value small" id="svc-collect-weather">—</div>
+      </div>
+    </div>
+
+    <!-- Server -->
+    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Server</div>
+    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr);">
+      <div class="status-item">
         <label>PM2 Dashboard</label>
         <div class="value small" id="svc-pm2">—</div>
       </div>
     </div>
+
   </div>
 
   <!-- DB Volumes -->

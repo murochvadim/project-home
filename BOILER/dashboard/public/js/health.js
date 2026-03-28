@@ -122,8 +122,61 @@ async function loadStatus() {
       (pm2Raw && pm2Raw !== 'pm2_unavailable'
         ? `<div style="font-size:0.7rem; color:#888; margin-top:3px; white-space:pre;">${pm2Raw}</div>`
         : '');
+
+    // Orchestrator service (LXC 105)
+    const orch = r.orchestrator;
+    if (orch) {
+      document.getElementById('svc-orchestrator').innerHTML = dot(orch.ok) +
+        (orch.ok ? '' : `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">timer: ${orch.timer || '?'} / quick: ${orch.quick || '?'}</div>`);
+    }
+
+    // Orchestrator last run
+    const olr = r.orchestrator_last_run;
+    if (olr) {
+      const color = olr.ok ? '#7a9f5a' : '#b55e5e';
+      const label = olr.ok ? '⬤ OK' : '⬤ Overdue';
+      document.getElementById('svc-orch-last-run').innerHTML =
+        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
+        (olr.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${olr.age_min}m ago</div>` : '');
+    }
+
+    // collect_weather cron + freshness
+    const cw = r.collect_weather;
+    if (cw) {
+      const cwOk    = cw.cron_ok && cw.data_ok;
+      const cwAmber = cw.cron_ok && !cw.data_ok;
+      const color   = cwOk ? '#7a9f5a' : cwAmber ? '#b8860b' : '#b55e5e';
+      const label   = cwOk ? '⬤ OK' : cwAmber ? '⬤ Stale' : '⬤ Error';
+      document.getElementById('svc-collect-weather').innerHTML =
+        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
+        (cw.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">last data: ${cw.age_min}m ago</div>` : '');
+    }
+
+    // Active alerts
+    const aa = r.active_alerts;
+    if (aa) {
+      const sevColor = { critical: '#7a2020', error: '#b55e5e', warn: '#b8860b' };
+      const color = aa.ok ? '#7a9f5a' : (sevColor[aa.worst] || '#b55e5e');
+      const label = aa.ok ? '⬤ All clear' : `⬤ ${aa.count} active`;
+      document.getElementById('svc-active-alerts').innerHTML =
+        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
+        (!aa.ok && aa.worst ? `<div style="font-size:0.7rem; color:${color}; margin-top:3px;">worst: ${aa.worst}</div>` : '');
+    }
+
+    // Boiler last decision
+    const bld = r.boiler_last_decision;
+    if (bld) {
+      const color = bld.ok ? '#7a9f5a' : '#b55e5e';
+      const label = bld.ok ? '⬤ OK' : '⬤ Stale';
+      document.getElementById('svc-boiler-last').innerHTML =
+        `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
+        (bld.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${bld.age_min}m ago — ${bld.decision || '?'}</div>` : '');
+    }
+
   } catch (e) {
-    ['svc-postgres','svc-ha','svc-lxc','svc-agent','svc-ha-to-pg','svc-pm2'].forEach(id => {
+    ['svc-postgres','svc-ha','svc-lxc','svc-agent','svc-ha-to-pg','svc-pm2',
+     'svc-orchestrator','svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last'
+    ].forEach(id => {
       document.getElementById(id).innerHTML = dot(false);
     });
   }

@@ -133,12 +133,13 @@ app.get('/api/next-probe', async (req, res) => {
     const runIntervalMin     = s.rows[0]?.run_interval_min ?? 5;
     const probeCostMin       = panelValidAfterOn + (trendRuns + 1) * runIntervalMin;
 
-    // Compute minutes to 19:00 Jerusalem time
-    const nowJStr   = new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' });
-    const nowJ      = new Date(nowJStr);
-    const endJ      = new Date(nowJStr);
-    endJ.setHours(19, 0, 0, 0);
-    const minutesToEnd = Math.max(0, (endJ - nowJ) / 60000);
+    // Compute minutes to 19:00 Jerusalem time.
+    // Use Intl.DateTimeFormat to extract Jerusalem hour/minute directly — avoids
+    // the re-parsing bug where new Date(localeString) uses the local machine TZ.
+    const now = new Date();
+    const jFmt = field => parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jerusalem', [field]: 'numeric', hour12: false }).format(now), 10);
+    const jMinutesNow  = jFmt('hour') * 60 + jFmt('minute');
+    const minutesToEnd = Math.max(0, 19 * 60 - jMinutesNow);
 
     // Find last ON→OFF valve transition in raw_data
     const r = await db.query(`
@@ -612,7 +613,7 @@ app.get('/api/health/status', async (req, res) => {
       ...results.ha_to_pg,
       last_ts: lastTs,
       age_min: ageMin !== null ? Math.round(ageMin) : null,
-      data_ok: ageMin !== null && ageMin <= 10
+      data_ok: ageMin !== null && ageMin <= 15
     };
   } catch (e) {
     results.ha_to_pg = { ...results.ha_to_pg, data_ok: false, error: e.message };
@@ -630,6 +631,86 @@ app.get('/api/health/status', async (req, res) => {
       } catch (e) { resolve({ ok: false, error: e.message }); }
     });
   });
+
+  // Orchestrator service (LXC 105)
+  const sshOrch = new NodeSSH();
+  try {
+    await sshOrch.connect({ host: '192.168.1.187', username: SSH_USER, privateKeyPath: SSH_KEY });
+    const timer = await sshOrch.execCommand('systemctl is-active main-agent.timer');
+    const quick = await sshOrch.execCommand('systemctl is-active main-agent-quick.timer');
+    sshOrch.dispose();
+    const timerOk = timer.stdout.trim() === 'active';
+    const quickOk = quick.stdout.trim() === 'active';
+    results.orchestrator = { ok: timerOk && quickOk, timer: timer.stdout.trim(), quick: quick.stdout.trim() };
+  } catch (e) {
+    sshOrch.dispose();
+    results.orchestrator = { ok: false, error: e.message };
+  }
+
+  // collect_weather.py cron + weather data freshness
+  try {
+    const ssh2 = new NodeSSH();
+    await ssh2.connect({ host: '192.168.1.114', username: SSH_USER, privateKeyPath: SSH_KEY });
+    const wcron = await ssh2.execCommand('crontab -l 2>/dev/null | grep -c collect_weather');
+    ssh2.dispose();
+    results.collect_weather = { cron_ok: parseInt(wcron.stdout.trim()) > 0 };
+  } catch (e) {
+    results.collect_weather = { cron_ok: false, error: e.message };
+  }
+
+  // Weather data freshness from DB
+  try {
+    const wr = await db.query('SELECT MAX(ts) AS last_ts FROM raw_weather');
+    const lastTs = wr.rows[0]?.last_ts;
+    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
+    results.collect_weather = {
+      ...results.collect_weather,
+      last_ts: lastTs,
+      age_min: ageMin !== null ? Math.round(ageMin) : null,
+      data_ok: ageMin !== null && ageMin <= 35,
+    };
+  } catch (e) {
+    results.collect_weather = { ...results.collect_weather, data_ok: false };
+  }
+
+  // Last orchestrator run time from orchestrator_log
+  try {
+    const ol = await db.query(`SELECT ts FROM orchestrator_log ORDER BY ts DESC LIMIT 1`);
+    const lastTs = ol.rows[0]?.ts || null;
+    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
+    results.orchestrator_last_run = {
+      last_ts: lastTs,
+      age_min: ageMin !== null ? Math.round(ageMin) : null,
+      ok: ageMin !== null && ageMin <= 70,  // full run every 60 min + 10 min grace
+    };
+  } catch (e) {
+    results.orchestrator_last_run = { ok: false, error: e.message };
+  }
+
+  // Active alerts count
+  try {
+    const ac = await db.query(`SELECT COUNT(*) AS n, MAX(severity) AS worst FROM system_alerts WHERE resolved_at IS NULL`);
+    const n = parseInt(ac.rows[0]?.n) || 0;
+    results.active_alerts = { count: n, worst: ac.rows[0]?.worst || null, ok: n === 0 };
+  } catch (e) {
+    results.active_alerts = { count: null, ok: false };
+  }
+
+  // Boiler agent last decision time
+  try {
+    const bd = await db.query(`SELECT ts, decision FROM agent_boiler_data ORDER BY ts DESC LIMIT 1`);
+    const lastTs = bd.rows[0]?.ts || null;
+    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
+    const runInterval = (await db.query('SELECT run_interval_min FROM agent_settings LIMIT 1')).rows[0]?.run_interval_min || 5;
+    results.boiler_last_decision = {
+      last_ts: lastTs,
+      age_min: ageMin !== null ? Math.round(ageMin) : null,
+      decision: bd.rows[0]?.decision || null,
+      ok: ageMin !== null && ageMin <= runInterval * 3,
+    };
+  } catch (e) {
+    results.boiler_last_decision = { ok: false, error: e.message };
+  }
 
   res.json(results);
 });

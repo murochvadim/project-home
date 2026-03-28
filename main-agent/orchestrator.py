@@ -28,7 +28,7 @@ DB_PASS     = os.environ.get('DB_PASS', '')
 
 OVERDUE_GRACE_MIN    = 5
 ERROR_LOOKBACK_ROWS  = 10
-DATA_STALE_MIN       = 10   # ha_to_pg: raw_data older than this = stale
+DATA_STALE_MIN       = 15   # ha_to_pg: raw_data older than this = stale (ha_to_pg runs every 5 min, 15 min gives 2 full cycles of margin)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,25 +97,34 @@ def check_schedule(cur, agent):
     table = agent['data_table']
     if not table:
         return
+    # Use a savepoint so a DB error (e.g. table missing) doesn't abort the
+    # outer transaction and make the subsequent raise_alert call also fail.
+    cur.execute("SAVEPOINT check_schedule")
     try:
         cur.execute(f"SELECT next_ts FROM {table} ORDER BY ts DESC LIMIT 1")
         row = cur.fetchone()
-        if not row or not row['next_ts']:
-            raise_alert(cur, 'agent_no_data', agent['name'], 'warn',
-                        f"No rows found in {table} — agent may never have run")
-            return
-        next_ts = row['next_ts']
-        if next_ts.tzinfo is None:
-            next_ts = next_ts.replace(tzinfo=timezone.utc)
-        overdue = (datetime.now(timezone.utc) - next_ts).total_seconds() / 60.0
-        if overdue > OVERDUE_GRACE_MIN:
-            raise_alert(cur, 'agent_overdue', agent['name'], 'error',
-                        f"Agent overdue by {overdue:.0f} min (next_ts was {next_ts.strftime('%H:%M')})")
-        else:
-            resolve_alert(cur, 'agent_overdue', agent['name'])
-            resolve_alert(cur, 'agent_no_data', agent['name'])
+        cur.execute("RELEASE SAVEPOINT check_schedule")
     except Exception as e:
+        cur.execute("ROLLBACK TO SAVEPOINT check_schedule")
+        cur.execute("RELEASE SAVEPOINT check_schedule")
         raise_alert(cur, 'agent_schedule_check_failed', agent['name'], 'error', str(e))
+        return
+
+    if not row or not row['next_ts']:
+        raise_alert(cur, 'agent_no_data', agent['name'], 'warn',
+                    f"No rows found in {table} — agent may never have run")
+        return
+    next_ts = row['next_ts']
+    if next_ts.tzinfo is None:
+        next_ts = next_ts.replace(tzinfo=timezone.utc)
+    overdue = (datetime.now(timezone.utc) - next_ts).total_seconds() / 60.0
+    if overdue > OVERDUE_GRACE_MIN:
+        raise_alert(cur, 'agent_overdue', agent['name'], 'error',
+                    f"Agent overdue by {overdue:.0f} min (next_ts was {next_ts.strftime('%H:%M')})")
+    else:
+        resolve_alert(cur, 'agent_overdue', agent['name'])
+        resolve_alert(cur, 'agent_no_data', agent['name'])
+        resolve_alert(cur, 'agent_schedule_check_failed', agent['name'])  # clear previous check failures
 
 
 def check_errors(cur, agent):

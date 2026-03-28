@@ -21,10 +21,12 @@ async function loadGraph() {
     const panelTemps  = rows.map(r => r.panel_temp  !== null ? parseFloat(r.panel_temp)  : null);
     const valveOn     = rows.map(r => r.valve_state ? 1 : 0);
 
-    // Map each consumption start_ts to the nearest row index
-    const rowTimes   = rows.map(r => new Date(r.t).getTime());
-    const spikeData  = new Array(rows.length).fill(null);
-    const spikeRadii = new Array(rows.length).fill(0);
+    // Map each consumption start_ts to the nearest row index.
+    // Also build spikeConsumption (index → object) for unambiguous tooltip lookup.
+    const rowTimes       = rows.map(r => new Date(r.t).getTime());
+    const spikeData      = new Array(rows.length).fill(null);
+    const spikeRadii     = new Array(rows.length).fill(0);
+    const spikeConsumption = {};  // dataIndex → consumption object
 
     consumptions.forEach(c => {
       const cTs = new Date(c.start_ts).getTime();
@@ -33,8 +35,9 @@ async function loadGraph() {
         const diff = Math.abs(t - cTs);
         if (diff < minDiff) { minDiff = diff; nearest = i; }
       });
-      spikeData[nearest]  = parseFloat(c.start_temp);
-      spikeRadii[nearest] = 9;
+      spikeData[nearest]        = parseFloat(c.start_temp);
+      spikeRadii[nearest]       = 9;
+      spikeConsumption[nearest] = c;
     });
 
     if (chart) chart.destroy();
@@ -119,7 +122,7 @@ async function loadGraph() {
             callbacks: {
               label: ctx => {
                 if (ctx.dataset.label === 'Consumption' && ctx.raw !== null) {
-                  const c = consumptions[consumptions.findIndex((c, i) => spikeData.indexOf(parseFloat(c.start_temp)) === ctx.dataIndex)];
+                  const c = spikeConsumption[ctx.dataIndex];
                   return c
                     ? `Consumption: ▼${parseFloat(c.drop_c).toFixed(1)}°C (${c.duration_min} min)`
                     : `Consumption: ${ctx.raw}°C`;

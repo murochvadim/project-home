@@ -50,12 +50,53 @@
     ...
 
 
-
 ## Step 1 — Perfect Boiler Agent (current)
 Fine-tune the boiler agent until it runs reliably and makes correct decisions
 across all real-world scenarios: probe logic, waiting phase, normal decisions,
 safety rules. Tune settings (debounce, probe_interval_min, trend_runs) based
 on observed data. The boiler agent becomes the reference implementation.
+
+### ✅ Code fixes completed (2026-03-28)
+
+#### Critical
+- [x] `ha_to_pg_updated.py` — hardcoded HA token + DB password moved to env vars
+- [x] `ecosystem.config.js` — hardcoded HA token + Anthropic API key moved to `.env` file
+- [x] Anthropic API key revoked and replaced with new key in `.env`
+
+#### High — logic breaks
+- [x] `orchestrator.py` — `check_schedule` now uses SAVEPOINT so a DB error doesn't abort the outer transaction and silently roll back the entire orchestrator run
+- [x] `orchestrator.py` — `agent_schedule_check_failed` alert now resolved when schedule check succeeds (previously it latched permanently and blocked the boiler agent)
+
+#### Medium — correctness
+- [x] `orchestrator.py` — `DATA_STALE_MIN` raised 10 → 15 min (zero latency margin with ha_to_pg running every 5 min)
+- [x] `boiler_agent.py` — warn-level `system_alerts` are no longer silently ignored; warning is now included in the `error` field and run continues
+- [x] `boiler_agent.py` — waiting phase detection: search window enlarged to `trend_runs * 2 + 5` rows so increasing `trend_runs` mid-phase doesn't hide the `turn_on` row
+- [x] `server.js` — probe countdown `minutesToEnd` now uses `Intl.DateTimeFormat` to read Jerusalem time directly — no longer wrong for non-Jerusalem machine timezones
+
+#### Low — edge cases & hygiene
+- [x] `boiler_agent.py` — `op_end` (19:00) now uses `TIMEZONE.localize()` instead of `now.replace(hour=19)` — DST-safe on Israel's two transition days per year
+- [x] `collect_weather.py` — `collect_daily` now checks for existing `forecast_date` before inserting — no duplicate rows on re-run or double cron fire
+- [x] `collect_weather.py` — docstring corrected: "runs every hour" → "runs every 30 min via cron"
+- [x] `graph.js` — consumption tooltip now uses a `spikeConsumption` index map instead of `indexOf(start_temp)` — unambiguous when two events share the same temperature
+
+### ⏳ Still to do — operational (requires being on home network)
+
+- [ ] Deploy all code fixes to LXC 103 (git pull + restart boiler-agent service)
+- [ ] Verify orchestrator run after fixes (check orchestrator_log + system_alerts)
+- [ ] Observe 2–3 days of `agent_boiler_data` — validate probe, waiting phase, normal decisions
+- [ ] Tune settings if needed: `probe_interval_min`, `temp_debounce`, `trend_runs`
+- [ ] Confirm `agent_schedule_check_failed` alert auto-resolves cleanly on next orchestrator run
+- [ ] HA token rotation (token was committed to git — create new HA long-lived token, update `.env`)
+
+### ⏳ Still to do — remaining low-priority code issues
+
+- [ ] `ha_to_pg_updated.py` — uses `dbname` key; all other files use `database` (cosmetic inconsistency, both valid in psycopg2)
+- [ ] `boiler_agent.py` — valve transition that happened just before the trend window opens is not captured (minor edge case, affects trend filtering only)
+- [ ] `boiler_agent.py` — `ts` column uses DB `NOW()`, `next_ts` uses agent clock — clock skew between LXC and DB host could skew overdue detection
+- [ ] `server.js` — `pm2.cmd` is Windows-only; will fail silently if dashboard is ever deployed to Linux
+- [ ] `system_alerts` DDL is duplicated in `create_alerts.sql` and `server.js` — schema drift risk if columns are added
+
+---
 
 ## Step 2 — Policy Agent
 Add a Claude-powered Policy Agent that runs once daily (e.g. at 20:00).
@@ -92,6 +133,3 @@ Each new agent only needs: decision logic + settings schema + DB tables.
 - Why build framework last: by step 3 we have two real working agents.
   Every framework design decision is based on proven patterns, not
   assumptions. No over-engineering.
-
-
- 

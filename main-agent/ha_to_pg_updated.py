@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import os
 import requests, psycopg2, pytz
 from datetime import datetime
-HA_URL = 'http://192.168.1.110:8123/api/states/'
-HA_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkY2JjN2JkNWQ1MTc0NDFhYmJlN2UyNTBlNzE1MzVkZiIsImlhdCI6MTc3MzkzNzQ4OCwiZXhwIjoyMDg5Mjk3NDg4fQ.kTMwELeMkLUl4yk4VJ9yD8dq-G-FBYhHUEP352sLczc'
-PG_CONF = {'host':'192.168.1.219', 'port':5432, 'dbname':'home_data', 'user':'postgres', 'password':'p2R3yT+x'}
+HA_URL   = 'http://192.168.1.110:8123/api/states/'
+HA_TOKEN = os.environ.get('HA_TOKEN', '')
+PG_CONF  = {'host': '192.168.1.219', 'port': 5432, 'dbname': 'home_data',
+            'user': 'postgres', 'password': os.environ.get('DB_PASS', '')}
 
 SENSORS = {
     'boiler_temp': 'sensor.analog_temperature_from_digital',

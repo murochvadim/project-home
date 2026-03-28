@@ -156,26 +156,31 @@ def get_waiting_run_number(conn, trend_runs):
     Returns (run_number, trend_runs) if waiting phase is active, else None.
     run_number is 1-indexed: 1 = first run after turn_on, trend_runs = last run.
 
-    Detection: scan the last trend_runs rows DESC.
+    Detection: scan the last trend_runs*2+5 rows DESC (enlarged window so increasing trend_runs mid-phase doesn't hide the turn_on row).
     - Rows from most recent must all be 'waiting' until we hit 'turn_on'
     - Any other decision (keep_on, turn_off, hold, no_action) before reaching
       'turn_on' means the waiting phase has already resolved — return None.
     """
+    # Search with a generous buffer so that increasing trend_runs mid-phase
+    # doesn't hide the turn_on row beyond the query window.
+    search_limit = trend_runs * 2 + 5
     with conn.cursor() as cur:
         cur.execute(
             'SELECT decision FROM agent_boiler_data ORDER BY ts DESC LIMIT %s',
-            (trend_runs,)
+            (search_limit,)
         )
         rows = [r[0] for r in cur.fetchall()]
 
     for i, decision in enumerate(rows):
         if decision == 'turn_on':
-            return (i + 1, trend_runs)
+            # Cap run_number at trend_runs: if we've waited longer than the
+            # current trend_runs (settings changed), treat as the final run.
+            return (min(i + 1, trend_runs), trend_runs)
         if decision != 'waiting':
             # Resolved decision before turn_on — waiting phase is done
             return None
 
-    return None  # turn_on not found within trend_runs rows
+    return None  # turn_on not found within search window
 
 
 def get_time_since_last_close(conn):
@@ -381,6 +386,12 @@ def run_agent():
             conn.commit()
             return run_interval_min
 
+        # warn-level alert: continue run but carry the message into error field
+        alert_warn_msg = None
+        if active_alert and active_alert['severity'] == 'warn':
+            alert_warn_msg = f"WARN: System alert [{active_alert['alert_type']}]: {active_alert['message']}"
+            log.warning(f'Warn-level system alert (continuing run): {alert_warn_msg}')
+
         # ── Step 1: Read trend data ───────────────────────────────────────────
         window_min = trend_runs * run_interval_min
         cutoff     = datetime.now(pytz.utc) - timedelta(minutes=window_min)
@@ -403,7 +414,7 @@ def run_agent():
             trend_rows, panel_valid_after_on, panel_valid_after_off
         )
 
-        error = 'NO ERROR'
+        error = alert_warn_msg or 'NO ERROR'
         if len(valid_panel) >= 2:
             panel_trend           = get_trend(valid_panel)
             panel_trend_available = True
@@ -534,8 +545,9 @@ def run_agent():
 
                     # Probe fire logic — skip if not enough time to complete before end of operations
                     probe_cost_min  = panel_valid_after_on + (trend_runs + 1) * run_interval_min
-                    op_end          = now.replace(hour=19, minute=0, second=0, microsecond=0)
-                    minutes_to_end  = max(0.0, (op_end - now).total_seconds() / 60.0)
+                    # Use TIMEZONE.localize on a naive datetime to correctly handle DST transitions
+                    op_end         = TIMEZONE.localize(now.replace(tzinfo=None).replace(hour=19, minute=0, second=0, microsecond=0))
+                    minutes_to_end = max(0.0, (op_end - now).total_seconds() / 60.0)
 
                     if minutes_to_end < probe_cost_min:
                         decision     = 'no_action'
