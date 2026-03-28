@@ -79,6 +79,10 @@ on observed data. The boiler agent becomes the reference implementation.
 - [x] `collect_weather.py` — docstring corrected: "runs every hour" → "runs every 30 min via cron"
 - [x] `graph.js` — consumption tooltip now uses a `spikeConsumption` index map instead of `indexOf(start_temp)` — unambiguous when two events share the same temperature
 
+- [x] Health dashboard — System Status card expanded with 6 new checks (orchestrator, collect_weather, active alerts, boiler last decision, orchestrator last run) grouped by Infrastructure / Services / Scripts / Server
+- [x] Windows SSH key authorized on LXC 105 — dashboard can now check orchestrator service status
+- [x] All fixes deployed to LXC 103 + LXC 105 via git pull (2026-03-28)
+
 ### ⏳ Still to do — operational (requires being on home network)
 
 - [ ] Deploy all code fixes to LXC 103 (git pull + restart boiler-agent service)
@@ -94,7 +98,7 @@ on observed data. The boiler agent becomes the reference implementation.
 - [ ] `boiler_agent.py` — valve transition that happened just before the trend window opens is not captured (minor edge case, affects trend filtering only)
 - [ ] `boiler_agent.py` — `ts` column uses DB `NOW()`, `next_ts` uses agent clock — clock skew between LXC and DB host could skew overdue detection
 - [ ] `server.js` — `pm2.cmd` is Windows-only; will fail silently if dashboard is ever deployed to Linux
-- [ ] `system_alerts` DDL is duplicated in `create_alerts.sql` and `server.js` — schema drift risk if columns are added
+- [x] `system_alerts` DDL was duplicated in `create_alerts.sql` and `server.js` — `create_alerts.sql` deleted, `server.js` is now the single source of truth
 
 ---
 

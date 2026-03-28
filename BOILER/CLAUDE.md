@@ -335,7 +335,7 @@
   - Policies stored in `retention_policies` DB table (not config file — so orchestrator reads/writes them programmatically)
   - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever, orchestrator_log=30d, system_alerts=90d, sync_signals=7d
 - **API endpoints:**
-  - `GET /api/health/status` — checks PostgreSQL, HA, SSH to LXC 103, boiler-agent service, ha_to_pg cron, PM2
+  - `GET /api/health/status` — checks PostgreSQL, HA, SSH to LXC 103 + LXC 105, boiler-agent service, orchestrator timers, ha_to_pg cron + freshness, collect_weather cron + freshness, PM2, active alerts count, boiler last decision age
   - `GET /api/health/orch-log?limit=N` — last N orchestrator log entries
   - `GET /api/health/db-volumes` — row counts + sizes + date ranges per table
   - `GET /api/health/retention` — all retention policies
@@ -403,6 +403,7 @@ At start of each run, before any logic:
 - `orchestrator_log`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source VARCHAR(50), severity VARCHAR(10), message TEXT` — retention 30 days, auto-clean
 - `system_alerts`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source, severity, affected_agent, alert_type, message, resolved_at` — retention 90 days, auto-clean
 - All in `home_data` DB on LXC 102
+- **Schema source of truth:** `server.js` `ensureSchema()` — `create_alerts.sql` was removed (was a duplicate)
 
 ## Project Health Page — System Alerts card
 - Top card on Health page — shows all alerts (active first, resolved below with 50% opacity)
