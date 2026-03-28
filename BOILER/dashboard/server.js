@@ -713,6 +713,22 @@ app.post('/api/health/cleanup', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── System Alerts ───────────────────────────────────────────
+app.get('/api/health/alerts', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT id,
+             ts AT TIME ZONE 'Asia/Jerusalem' AS ts_local,
+             severity, affected_agent, alert_type, message,
+             resolved_at AT TIME ZONE 'Asia/Jerusalem' AS resolved_local
+      FROM system_alerts
+      ORDER BY resolved_at NULLS FIRST, ts DESC
+      LIMIT 50
+    `);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Orchestrator Log ────────────────────────────────────────
 app.get('/api/health/orch-log', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
@@ -763,9 +779,25 @@ async function ensureSchema() {
       ('raw_weather',        60,   true,  24, 'Hourly weather readings'),
       ('raw_weather_daily',  60,   true,  24, 'Daily weather forecasts'),
       ('boiler_consumptions', NULL, false, 24, 'Hot water consumption events — keep forever'),
-      ('orchestrator_log',   30,   true,  24, 'Main agent run logs and alerts')
+      ('orchestrator_log',   30,   true,  24, 'Main agent run logs and alerts'),
+      ('system_alerts',      90,   true,  24, 'Cross-agent system alerts from orchestrator')
     ON CONFLICT (table_name) DO NOTHING
   `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS system_alerts (
+      id              BIGSERIAL PRIMARY KEY,
+      ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      source          VARCHAR(50)  NOT NULL DEFAULT 'orchestrator',
+      severity        VARCHAR(10)  NOT NULL DEFAULT 'warn',
+      affected_agent  VARCHAR(50),
+      alert_type      VARCHAR(50)  NOT NULL,
+      message         TEXT         NOT NULL,
+      resolved_at     TIMESTAMPTZ
+    )
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_alerts_active ON system_alerts (resolved_at) WHERE resolved_at IS NULL`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_alerts_agent  ON system_alerts (affected_agent, resolved_at)`);
 }
 
 const PORT = 3000;

@@ -359,14 +359,39 @@ Adding a new agent = `INSERT INTO agents` → orchestrator + dashboard + deploy 
 ## Orchestrator Responsibilities (per run)
 1. **Schedule check** — is each agent's `next_ts` overdue (> 5 min grace)?
 2. **Error check** — any `ERR:` prefixed rows in last 10 rows of agent data table?
-3. **Service check** — SSH to agent's LXC, run `systemctl is-active <service>`
-4. **Retention cleanup** — delete old rows for tables where `auto_clean=true`, `keep_days` set, and `clean_interval_hours` has elapsed since `last_cleaned_at`
-5. **Write all results** to `orchestrator_log` with severity `info/warn/error`
+3. **Service check** — SSH to agent's LXC; for persistent services: `systemctl is-active <service>`; for oneshot (`service_oneshot=true`): `systemctl is-active <service>.timer`
+4. **Data freshness check** — `raw_data` age > 10 min → `data_stale` alert for `boiler` agent
+5. **Retention cleanup** — delete old rows for tables where `auto_clean=true`, `keep_days` set, and `clean_interval_hours` elapsed since `last_cleaned_at`
+6. **Write/resolve alerts** to `system_alerts`; log all activity to `orchestrator_log`
+
+## Alert Types
+| alert_type | trigger | affected_agent |
+|-----------|---------|---------------|
+| `agent_overdue` | next_ts > 5 min past | that agent |
+| `agent_no_data` | data table empty | that agent |
+| `agent_hard_errors` | ERR: in last 10 rows | that agent |
+| `service_down` | systemctl not active | that agent |
+| `service_ssh_failed` | SSH connection failed | that agent |
+| `data_stale` | raw_data > 10 min old | boiler |
+
+Alerts are **raised once** (no duplicates) and **auto-resolved** when the condition clears on next orchestrator run.
+
+## Agent Alert Behaviour (boiler agent — Step 0b)
+At start of each run, before any logic:
+- Query `system_alerts` for unresolved alerts where `affected_agent = 'boiler' OR affected_agent IS NULL`
+- If `severity = error/critical` → write `decision = no_action`, `error = WARN: System alert: <type>: <message>`, exit safely
+- If `severity = warn` → continue run, include in error field as warning
 
 ## DB Tables
 - `agents`: full agent registry (see contract above)
 - `orchestrator_log`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source VARCHAR(50), severity VARCHAR(10), message TEXT` — retention 30 days, auto-clean
-- Both `agents` and `orchestrator_log` are in the `home_data` DB on LXC 102
+- `system_alerts`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source, severity, affected_agent, alert_type, message, resolved_at` — retention 90 days, auto-clean
+- All in `home_data` DB on LXC 102
+
+## Project Health Page — System Alerts card
+- Top card on Health page — shows all alerts (active first, resolved below with 50% opacity)
+- Badge: `N active` (red/amber) or `all clear` (green)
+- `GET /api/health/alerts` — returns last 50 alerts ordered active-first
 
 ## General Page (sidebar: General → Weather)
 - **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10) + Season; updated every 30 min

@@ -4,6 +4,61 @@ const fmtTs = ts => ts
 
 const dot = ok => `<span style="color:${ok ? '#7a9f5a' : '#b55e5e'}; font-size:0.85rem;">${ok ? '⬤ OK' : '⬤ Error'}</span>`;
 
+// ── System Alerts ────────────────────────────────────────────
+async function loadAlerts() {
+  try {
+    const rows = await fetch('/api/health/alerts').then(r => r.json());
+    const tbody = document.getElementById('alerts-body');
+    const badge = document.getElementById('alerts-badge');
+
+    const active = rows.filter(r => !r.resolved_local);
+    const resolved = rows.filter(r => r.resolved_local);
+
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#aaa;">No alerts</td></tr>';
+      badge.style.display = 'none';
+      return;
+    }
+
+    const sevColor = { critical: '#7a2020', error: '#b55e5e', warn: '#b8860b', info: '#5a8a5a' };
+    const sevBg    = { critical: '#fff0f0', error: '#fff5f5', warn: '#fffbf0', info: 'transparent' };
+
+    const fmtTs = ts => ts ? new Date(ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '—';
+
+    tbody.innerHTML = rows.map(r => {
+      const color  = sevColor[r.severity] || '#555';
+      const bg     = r.resolved_local ? 'transparent' : (sevBg[r.severity] || 'transparent');
+      const opac   = r.resolved_local ? 'opacity:0.5;' : '';
+      return `<tr style="background:${bg}; ${opac}">
+        <td style="font-size:0.75rem; color:#888; white-space:nowrap;">${fmtTs(r.ts_local)}</td>
+        <td style="text-align:center;">
+          <span style="color:${color}; font-size:0.75rem; font-weight:600;">${r.severity.toUpperCase()}</span>
+        </td>
+        <td style="font-size:0.78rem;">${r.affected_agent || '<span style="color:#aaa;">all</span>'}</td>
+        <td style="font-size:0.75rem; color:#888;">${r.alert_type}</td>
+        <td style="font-size:0.8rem; color:${color};">${r.message}</td>
+        <td style="font-size:0.75rem; color:#5a8a5a;">${r.resolved_local ? fmtTs(r.resolved_local) : ''}</td>
+      </tr>`;
+    }).join('');
+
+    if (active.length) {
+      badge.textContent = `${active.length} active`;
+      badge.style.display = 'inline';
+      badge.style.background = active.some(a => a.severity === 'critical') ? '#7a2020'
+        : active.some(a => a.severity === 'error') ? '#b55e5e' : '#b8860b';
+      badge.style.color = '#fff';
+    } else {
+      badge.textContent = 'all clear';
+      badge.style.display = 'inline';
+      badge.style.background = '#e8f0e8';
+      badge.style.color = '#5a8a5a';
+    }
+  } catch (e) {
+    document.getElementById('alerts-body').innerHTML =
+      '<tr><td colspan="6" style="color:#b55e5e;">Failed to load</td></tr>';
+  }
+}
+
 // ── System Status ────────────────────────────────────────────
 async function loadStatus() {
   try {
@@ -202,7 +257,7 @@ async function loadOrchLog() {
 
 async function refreshAll() {
   document.getElementById('last-refresh').textContent = 'Loading…';
-  await Promise.all([loadStatus(), loadVolumes(), loadRetention(), loadOrchLog()]);
+  await Promise.all([loadAlerts(), loadStatus(), loadVolumes(), loadRetention(), loadOrchLog()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }

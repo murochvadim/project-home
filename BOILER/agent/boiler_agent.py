@@ -359,6 +359,28 @@ def run_agent():
             conn.commit()
             return run_interval_min
 
+        # ── Step 0b: Check system alerts from orchestrator ────────────────────
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT severity, alert_type, message
+                FROM system_alerts
+                WHERE resolved_at IS NULL
+                  AND (affected_agent = 'boiler' OR affected_agent IS NULL)
+                ORDER BY severity DESC, ts DESC
+                LIMIT 1
+            """)
+            active_alert = cur.fetchone()
+
+        if active_alert and active_alert['severity'] in ('error', 'critical'):
+            alert_msg = f"System alert [{active_alert['alert_type']}]: {active_alert['message']}"
+            log.warning(f'Blocking run due to system alert: {alert_msg}')
+            write_result(conn, boiler_temp, panel_temp, valve_state,
+                         None, None, 'no_action',
+                         f'Blocked by orchestrator: {active_alert["alert_type"]}',
+                         f'WARN: {alert_msg}', next_ts, version)
+            conn.commit()
+            return run_interval_min
+
         # ── Step 1: Read trend data ───────────────────────────────────────────
         window_min = trend_runs * run_interval_min
         cutoff     = datetime.now(pytz.utc) - timedelta(minutes=window_min)
