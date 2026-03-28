@@ -102,14 +102,15 @@ async function loadStatus() {
 
     const htp = r.ha_to_pg;
     if (htp) {
-      const htpOk    = htp.cron_ok && htp.data_ok;
-      const htpAmber = htp.cron_ok && !htp.data_ok;
-      const ageStr   = htp.age_min != null ? `last data: ${Math.round(htp.age_min)}m ago` : '';
-      const color    = htpOk ? '#7a9f5a' : htpAmber ? '#b8860b' : '#b55e5e';
-      const label    = htpOk ? '⬤ OK' : htpAmber ? '⬤ Stale' : '⬤ Error';
+      // Data freshness is primary signal; cron SSH failure is secondary (amber note)
+      const color = htp.data_ok ? '#7a9f5a' : '#b55e5e';
+      const label = htp.data_ok ? '⬤ OK' : '⬤ Stale';
+      const ageStr = htp.age_min != null ? `last data: ${Math.round(htp.age_min)}m ago` : '';
+      const cronNote = !htp.cron_ok && htp.data_ok ? `<div style="font-size:0.7rem; color:#b8860b; margin-top:3px;">cron check unavailable (SSH)</div>` : '';
       document.getElementById('svc-ha-to-pg').innerHTML =
         `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
-        (ageStr ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${ageStr}</div>` : '');
+        (ageStr ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${ageStr}</div>` : '') +
+        cronNote;
     }
 
     const agentOk = r.boiler_agent?.ok;
@@ -143,13 +144,13 @@ async function loadStatus() {
     // collect_weather cron + freshness
     const cw = r.collect_weather;
     if (cw) {
-      const cwOk    = cw.cron_ok && cw.data_ok;
-      const cwAmber = cw.cron_ok && !cw.data_ok;
-      const color   = cwOk ? '#7a9f5a' : cwAmber ? '#b8860b' : '#b55e5e';
-      const label   = cwOk ? '⬤ OK' : cwAmber ? '⬤ Stale' : '⬤ Error';
+      const color    = cw.data_ok ? '#7a9f5a' : '#b55e5e';
+      const label    = cw.data_ok ? '⬤ OK' : '⬤ Stale';
+      const cronNote = !cw.cron_ok && cw.data_ok ? `<div style="font-size:0.7rem; color:#b8860b; margin-top:3px;">cron check unavailable (SSH)</div>` : '';
       document.getElementById('svc-collect-weather').innerHTML =
         `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
-        (cw.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">last data: ${cw.age_min}m ago</div>` : '');
+        (cw.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">last data: ${cw.age_min}m ago</div>` : '') +
+        cronNote;
     }
 
     // Active alerts
