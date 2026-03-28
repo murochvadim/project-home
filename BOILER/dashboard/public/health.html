@@ -35,7 +35,13 @@
 
   <!-- Active Alerts -->
   <div class="card" id="alerts-card">
-    <h2>System Alerts <span id="alerts-badge" style="font-size:0.75rem; font-weight:500; padding:2px 8px; border-radius:10px; margin-left:6px; display:none;"></span></h2>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">System Alerts <span id="alerts-badge" style="font-size:0.75rem; font-weight:500; padding:2px 8px; border-radius:10px; margin-left:6px; display:none;"></span></h2>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button id="alerts-history-btn" class="btn btn-secondary btn-sm" style="font-size:0.72rem; display:none;" onclick="toggleResolvedAlerts()"></button>
+        <button id="alerts-clear-btn" class="btn btn-secondary btn-sm" style="font-size:0.72rem; display:none;" onclick="clearResolvedAlerts()">Clear resolved</button>
+      </div>
+    </div>
     <table class="data-table" id="alerts-table">
       <thead>
         <tr>

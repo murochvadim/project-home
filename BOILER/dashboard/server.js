@@ -715,6 +715,7 @@ app.post('/api/health/cleanup', async (req, res) => {
 
 // ─── System Alerts ───────────────────────────────────────────
 app.get('/api/health/alerts', async (req, res) => {
+  const includeResolved = req.query.include_resolved === 'true';
   try {
     const r = await db.query(`
       SELECT id,
@@ -722,10 +723,21 @@ app.get('/api/health/alerts', async (req, res) => {
              severity, affected_agent, alert_type, message,
              resolved_at AT TIME ZONE 'Asia/Jerusalem' AS resolved_local
       FROM system_alerts
+      ${includeResolved ? '' : 'WHERE resolved_at IS NULL'}
       ORDER BY resolved_at NULLS FIRST, ts DESC
       LIMIT 50
     `);
-    res.json(r.rows);
+    const resolvedCount = includeResolved
+      ? r.rows.filter(x => x.resolved_local).length
+      : (await db.query('SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NOT NULL')).rows[0].n;
+    res.json({ rows: r.rows, resolved_count: parseInt(resolvedCount) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/health/alerts/resolved', async (req, res) => {
+  try {
+    const r = await db.query('DELETE FROM system_alerts WHERE resolved_at IS NOT NULL');
+    res.json({ deleted: r.rowCount });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -735,7 +747,7 @@ app.get('/api/health/orch-log', async (req, res) => {
   try {
     const r = await db.query(
       `SELECT id, ts AT TIME ZONE 'Asia/Jerusalem' AS ts_local, severity, message
-       FROM orchestrator_log ORDER BY ts DESC LIMIT $1`,
+       FROM orchestrator_log ORDER BY ts DESC, id DESC LIMIT $1`,
       [limit]
     );
     res.json(r.rows);
