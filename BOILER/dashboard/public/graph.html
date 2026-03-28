@@ -26,7 +26,7 @@
 <body>
 
 <nav id="sidebar">
-  <div class="logo">Home Agents</div>
+  <div class="logo">Home Agents<a href="health.html" id="alert-indicator"></a></div>
 
   <div class="section-label">General</div>
   <a href="health.html">Project Health</a>
@@ -184,6 +184,7 @@ function handleRefresh() {
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
 </script>
+<script src="js/alerts-monitor.js"></script>
 <script src="js/graph.js"></script>
 </body>
 </html>

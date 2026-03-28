@@ -28,6 +28,28 @@ body {
   color: #fff;
   border-bottom: 1px solid #2e3f54;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#alert-indicator {
+  display: none;
+  font-size: 0.7rem;
+  background: #e74c3c;
+  color: #fff;
+  border-radius: 10px;
+  padding: 2px 7px;
+  font-weight: 600;
+  letter-spacing: 0;
+  animation: alert-blink 1s ease-in-out infinite;
+  cursor: default;
+  white-space: nowrap;
+}
+
+@keyframes alert-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.15; }
 }
 
 #sidebar .section-label {
