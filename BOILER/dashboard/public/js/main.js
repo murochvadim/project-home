@@ -270,8 +270,7 @@ async function saveSettings(e) {
 async function toggleAgent() {
   try {
     await fetch('/api/agent/toggle', { method: 'POST' });
-    const decision = await loadReport();
-    await loadNextProbe(decision);
+    await loadReport();
   } catch (e) {
     console.error('toggleAgent error:', e);
   }

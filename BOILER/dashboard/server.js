@@ -22,8 +22,6 @@ const db = new Pool({
 const HA_URL = 'http://192.168.1.110:8123';
 const HA_TOKEN = process.env.HA_TOKEN || '';
 
-// LXC 103 SSH config for deploy
-const SSH_HOST = '192.168.1.114';
 const SSH_USER = 'root';
 const SSH_KEY  = process.env.SSH_KEY_PATH || require('os').homedir() + '/.ssh/id_ed25519';
 
@@ -221,8 +219,9 @@ app.post('/api/deploy', async (req, res) => {
     await ssh.connect({ host: lxc_ip, username: SSH_USER, privateKeyPath: SSH_KEY });
     const branch = git_branch || 'main';
     const pull = await ssh.execCommand(`git -C ${deploy_path} pull origin ${branch}`);
+    const restartCmd = agentRow.service_oneshot ? 'start' : 'restart';
     const restart = service_name
-      ? await ssh.execCommand(`systemctl restart ${service_name} 2>&1 || echo "service not found"`)
+      ? await ssh.execCommand(`systemctl ${restartCmd} ${service_name} 2>&1 || echo "service not found"`)
       : { stdout: '(no service configured)' };
     ssh.dispose();
     res.json({
@@ -590,7 +589,7 @@ app.get('/api/health/status', async (req, res) => {
   // LXC 103 SSH + agent service status
   const ssh = new NodeSSH();
   try {
-    await ssh.connect({ host: SSH_HOST, username: SSH_USER, privateKeyPath: SSH_KEY });
+    await ssh.connect({ host: '192.168.1.114', username: SSH_USER, privateKeyPath: SSH_KEY });
     const svc   = await ssh.execCommand('systemctl is-active boiler-agent');
     const cron  = await ssh.execCommand('crontab -l 2>/dev/null | grep -c ha_to_pg');
     ssh.dispose();
@@ -638,8 +637,8 @@ app.get('/api/health/status', async (req, res) => {
 // ─── Project Health — DB Volumes ─────────────────────────────
 app.get('/api/health/db-volumes', async (req, res) => {
   try {
-    const tables = ['raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily', 'boiler_consumptions'];
-    const tsCol  = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts' };
+    const tables = ['raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily', 'boiler_consumptions', 'orchestrator_log'];
+    const tsCol  = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts', orchestrator_log: 'ts' };
 
     const sizes = await db.query(`
       SELECT relname AS table_name,
@@ -691,7 +690,7 @@ app.post('/api/health/retention', async (req, res) => {
 // ─── Project Health — Run Cleanup ────────────────────────────
 app.post('/api/health/cleanup', async (req, res) => {
   const { table_name } = req.body; // null = all tables
-  const tsCol = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts' };
+  const tsCol = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts', orchestrator_log: 'ts' };
   try {
     const policies = await db.query(
       table_name
@@ -763,7 +762,8 @@ async function ensureSchema() {
       ('agent_boiler_data',  365,  true,  24, 'Agent decision log'),
       ('raw_weather',        60,   true,  24, 'Hourly weather readings'),
       ('raw_weather_daily',  60,   true,  24, 'Daily weather forecasts'),
-      ('boiler_consumptions', NULL, false, 24, 'Hot water consumption events — keep forever')
+      ('boiler_consumptions', NULL, false, 24, 'Hot water consumption events — keep forever'),
+      ('orchestrator_log',   30,   true,  24, 'Main agent run logs and alerts')
     ON CONFLICT (table_name) DO NOTHING
   `);
 }

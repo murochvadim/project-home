@@ -320,7 +320,7 @@
 - **DB Volumes card**: table row counts, disk size, oldest/newest record for all tables; fetched from `/api/health/db-volumes` using `pg_stat_user_tables`
 - **Retention Policies card**: editable table per DB table — keep_days (blank = forever), auto_clean toggle, clean_interval_hours, last_cleaned timestamp; Save per row, Clean per row, "Clean All Now" global button
   - Policies stored in `retention_policies` DB table (not config file — so orchestrator reads/writes them programmatically)
-  - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever
+  - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever, orchestrator_log=30d
 - **API endpoints:**
   - `GET /api/health/status` — checks PostgreSQL, HA, SSH to LXC 103, boiler-agent service, ha_to_pg cron, PM2
   - `GET /api/health/orch-log?limit=N` — last N orchestrator log entries
@@ -335,20 +335,26 @@
 ## Infrastructure
 - **LXC 105** — Proxmox LXC, IP `192.168.1.187`, name `MainAgent`
 - Debian 12, Python 3.11, venv at `/opt/main-agent/venv`
-- Script: `/opt/main-agent/orchestrator.py`
+- Script: `/opt/main-agent/project/main-agent/orchestrator.py` (runs from git repo)
+- Git repo cloned at `/opt/main-agent/project` (same GitHub repo as all agents)
 - Env file: `/etc/main-agent.env` (contains `DB_PASS`)
 - Systemd: `main-agent.service` (oneshot) + `main-agent.timer` (runs every 1h, 2min after boot)
 - SSH key: `/root/.ssh/id_ed25519` — authorised on LXC 103 for service checks
 
 ## Agent Framework Contract
 Every agent registered in the `agents` table must follow this standard:
-- **`agents` table:** `name PK, description, lxc_id, lxc_ip, service_name, data_table, settings_table, enabled, added_at`
+- **`agents` table full schema:** `name PK, description, lxc_id, lxc_ip, service_name, data_table, settings_table, deploy_path, git_branch, service_oneshot BOOL, enabled, added_at`
 - **Data table** must have: `ts TIMESTAMPTZ, decision TEXT, error TEXT, next_ts TIMESTAMPTZ`
 - **Settings table** must have: `agent_enabled BOOL, run_interval_min INT`
 - **Retention policies** registered in `retention_policies` table on first agent run
 - **Systemd service** on its LXC — orchestrator checks it via SSH
 
-Adding a new agent = INSERT into `agents` table → orchestrator + dashboard pick it up automatically, no code changes.
+Adding a new agent = `INSERT INTO agents` → orchestrator + dashboard + deploy dropdown pick it up automatically, no code changes.
+
+## Deploy
+- Dashboard Deploy card has agent selector dropdown — populated from `agents` table via `GET /api/agents`
+- `POST /api/deploy {agent}` — looks up `lxc_ip`, `service_name`, `deploy_path`, `git_branch`, `service_oneshot` from agents table; SSHes to agent's LXC; runs `git pull`; then `systemctl restart` (persistent) or `systemctl start` (oneshot)
+- `SSH_USER=root`, `SSH_KEY` from env or `~/.ssh/id_ed25519` — shared constant in server.js
 
 ## Orchestrator Responsibilities (per run)
 1. **Schedule check** — is each agent's `next_ts` overdue (> 5 min grace)?
@@ -357,9 +363,10 @@ Adding a new agent = INSERT into `agents` table → orchestrator + dashboard pic
 4. **Retention cleanup** — delete old rows for tables where `auto_clean=true`, `keep_days` set, and `clean_interval_hours` has elapsed since `last_cleaned_at`
 5. **Write all results** to `orchestrator_log` with severity `info/warn/error`
 
-## DB Tables (new)
-- `agents`: agent registry (see contract above)
-- `orchestrator_log`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source VARCHAR(50), severity VARCHAR(10), message TEXT`
+## DB Tables
+- `agents`: full agent registry (see contract above)
+- `orchestrator_log`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source VARCHAR(50), severity VARCHAR(10), message TEXT` — retention 30 days, auto-clean
+- Both `agents` and `orchestrator_log` are in the `home_data` DB on LXC 102
 
 ## General Page (sidebar: General → Weather)
 - **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10) + Season; updated every 30 min
