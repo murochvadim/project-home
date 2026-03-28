@@ -571,11 +571,10 @@ RESPONSE FORMAT — return ONLY valid JSON, no text outside:
 app.get('/api/health/status', async (req, res) => {
   const SSH_TIMEOUT = 5000; // 5 seconds per SSH connect attempt
 
-  // Helper: SSH connect with timeout
+  // Helper: SSH connect with hard timeout (covers TCP + handshake)
   async function sshCheck(host, commands) {
-    // commands: { key: 'shell command', ... } — all run in one session
     const ssh = new NodeSSH();
-    try {
+    const attempt = async () => {
       await ssh.connect({ host, username: SSH_USER, privateKeyPath: SSH_KEY, readyTimeout: SSH_TIMEOUT });
       const out = {};
       for (const [key, cmd] of Object.entries(commands)) {
@@ -583,6 +582,12 @@ app.get('/api/health/status', async (req, res) => {
       }
       ssh.dispose();
       return { ok: true, ...out };
+    };
+    const deadline = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timeout')), SSH_TIMEOUT)
+    );
+    try {
+      return await Promise.race([attempt(), deadline]);
     } catch (e) {
       try { ssh.dispose(); } catch {}
       return { ok: false, error: e.message };

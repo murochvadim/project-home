@@ -1,6 +1,27 @@
 // ── Sidebar alert indicator — runs on every page ──────────────
 (function () {
   let prevCount = null;
+  const STORE_KEY = '_alert_indicator';
+
+  function applyState(count) {
+    const el = document.getElementById('alert-indicator');
+    if (!el) return;
+    if (count > 0) {
+      el.textContent = count === 1 ? '⚠ 1 issue' : `⚠ ${count} issues`;
+      el.title       = `${count} problem${count > 1 ? 's' : ''} detected\nClick to go to Project Health`;
+      el.classList.add('has-alerts');
+    } else {
+      el.textContent = '✓ OK';
+      el.title       = 'All systems OK';
+      el.classList.remove('has-alerts');
+    }
+  }
+
+  // Restore last known state instantly (no flash on navigation)
+  try {
+    const saved = localStorage.getItem(STORE_KEY);
+    if (saved !== null) applyState(parseInt(saved, 10));
+  } catch (e) {}
 
   function beep() {
     try {
@@ -45,20 +66,11 @@
       const el = document.getElementById('alert-indicator');
       if (!el) return;
 
-      if (count > 0) {
-        el.textContent = count === 1 ? '⚠ 1 issue' : `⚠ ${count} issues`;
-        el.title       = `${count} problem${count > 1 ? 's' : ''} detected\nClick to go to Project Health`;
-        el.classList.add('has-alerts');
-      } else {
-        el.textContent = '✓ OK';
-        el.title       = 'All systems OK';
-        el.classList.remove('has-alerts');
-      }
+      applyState(count);
+      try { localStorage.setItem(STORE_KEY, count); } catch (e) {}
 
       // Sound only fires when count rises (new problem appeared)
-      if (prevCount !== null && count > prevCount) {
-        beep();
-      }
+      if (prevCount !== null && count > prevCount) beep();
       prevCount = count;
     } catch (e) {}
   }
