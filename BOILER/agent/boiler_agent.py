@@ -134,7 +134,8 @@ def get_valid_panel_temps(trend_rows, panel_valid_after_on, panel_valid_after_of
 
         if last_trans_ts is None:
             # No transition in window — assume valid (conservative)
-            valid.append(float(row['panel_temp']))
+            if row['panel_temp'] is not None:
+                valid.append(float(row['panel_temp']))
             continue
 
         elapsed_min = (row_ts - last_trans_ts).total_seconds() / 60.0
@@ -144,7 +145,7 @@ def get_valid_panel_temps(trend_rows, panel_valid_after_on, panel_valid_after_of
         else:                  # Transition to OFF
             is_valid = elapsed_min <= panel_valid_after_off
 
-        if is_valid:
+        if is_valid and row['panel_temp'] is not None:
             valid.append(float(row['panel_temp']))
 
     return valid
@@ -231,6 +232,11 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
         return
 
     events = []
+    # Filter out rows with NULL boiler_temp before consumption scan
+    rows = [r for r in rows if r['boiler_temp'] is not None]
+    if len(rows) < 3:
+        return
+
     i = 0
     while i < len(rows) - 2:
         curr_temp = float(rows[i]['boiler_temp'])
@@ -322,6 +328,8 @@ def run_agent():
             raise RuntimeError('raw_data table is empty')
 
         valve_state = bool(latest['valve_state'])
+        if latest['boiler_temp'] is None or latest['panel_temp'] is None:
+            raise RuntimeError(f"Latest raw_data row has NULL temperature (boiler={latest['boiler_temp']}, panel={latest['panel_temp']}) — sensor read failed")
         boiler_temp = float(latest['boiler_temp'])
         panel_temp  = float(latest['panel_temp'])
 
@@ -406,7 +414,7 @@ def run_agent():
             trend_rows = cur.fetchall()
 
         # 1B: Boiler trend — all readings (sensor unaffected by valve transitions)
-        boiler_temps = [float(r['boiler_temp']) for r in trend_rows]
+        boiler_temps = [float(r['boiler_temp']) for r in trend_rows if r['boiler_temp'] is not None]
         boiler_trend = get_trend(boiler_temps)
 
         # 1C: Panel trend — validity-filtered readings only
