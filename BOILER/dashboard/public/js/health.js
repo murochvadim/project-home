@@ -362,11 +362,26 @@ loadAlerts();
 loadStatus();
 loadOrchLog();
 
-// Auto-refresh status every 60 s — preserve scroll position to avoid page jump
+// Auto-refresh status every 60 s — no scroll jump
 setInterval(async () => {
-  if (!document.getElementById('tab-database')?.classList.contains('active')) {
-    const y = window.scrollY;
-    await Promise.all([loadAlerts(), loadStatus(), loadOrchLog()]);
-    window.scrollTo(0, y);
-  }
+  if (document.getElementById('tab-database')?.classList.contains('active')) return;
+
+  // Lock heights of containers that change size during update
+  const lockIds = ['alerts-card', 'orch-table'];
+  lockIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.minHeight = el.offsetHeight + 'px';
+  });
+
+  const y = window.scrollY;
+  await Promise.all([loadAlerts(), loadStatus(), loadOrchLog()]);
+  window.scrollTo(0, y);
+
+  // Unlock heights after layout settles
+  requestAnimationFrame(() => {
+    lockIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.minHeight = '';
+    });
+  });
 }, 60000);
