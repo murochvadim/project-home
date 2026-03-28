@@ -158,8 +158,27 @@ def check_service(cur, agent):
             label = service
         ssh.close()
         if not ok:
-            raise_alert(cur, 'service_down', agent['name'], 'critical',
-                        f"{label} on {lxc_ip} is '{status}' (expected active)")
+            # Attempt auto-restart before raising alert
+            restart_cmd = (f'systemctl start {service}.timer' if is_oneshot
+                           else f'systemctl restart {service}')
+            write_log(cur, 'warn', f'Auto-restart: {label} is down on {lxc_ip} — running: {restart_cmd}')
+            ssh2 = paramiko.SSHClient()
+            ssh2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh2.connect(lxc_ip, username='root', key_filename='/root/.ssh/id_ed25519', timeout=10)
+            ssh2.exec_command(restart_cmd)[1].channel.recv_exit_status()  # wait for completion
+            # Re-check status after restart
+            check_unit = f'{service}.timer' if is_oneshot else service
+            _, stdout2, _ = ssh2.exec_command(f'systemctl is-active {check_unit}')
+            new_status = stdout2.read().decode().strip()
+            ssh2.close()
+            if new_status == 'active':
+                write_log(cur, 'info', f'Auto-restart succeeded: {label} is now active on {lxc_ip}')
+                resolve_alert(cur, 'service_down',       agent['name'])
+                resolve_alert(cur, 'service_ssh_failed', agent['name'])
+            else:
+                write_log(cur, 'error', f'Auto-restart failed: {label} still {new_status!r} on {lxc_ip}')
+                raise_alert(cur, 'service_down', agent['name'], 'critical',
+                            f"{label} on {lxc_ip} is '{new_status}' after auto-restart attempt")
         else:
             resolve_alert(cur, 'service_down',       agent['name'])
             resolve_alert(cur, 'service_ssh_failed', agent['name'])
