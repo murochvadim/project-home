@@ -637,8 +637,8 @@ app.get('/api/health/status', async (req, res) => {
 // ─── Project Health — DB Volumes ─────────────────────────────
 app.get('/api/health/db-volumes', async (req, res) => {
   try {
-    const tables = ['raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily', 'boiler_consumptions', 'orchestrator_log'];
-    const tsCol  = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts', orchestrator_log: 'ts' };
+    const tables = ['raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily', 'boiler_consumptions', 'orchestrator_log', 'sync_signals'];
+    const tsCol  = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts', orchestrator_log: 'ts', sync_signals: 'ts' };
 
     const sizes = await db.query(`
       SELECT relname AS table_name,
@@ -690,7 +690,7 @@ app.post('/api/health/retention', async (req, res) => {
 // ─── Project Health — Run Cleanup ────────────────────────────
 app.post('/api/health/cleanup', async (req, res) => {
   const { table_name } = req.body; // null = all tables
-  const tsCol = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts', orchestrator_log: 'ts' };
+  const tsCol = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts', orchestrator_log: 'ts', sync_signals: 'ts' };
   try {
     const policies = await db.query(
       table_name
