@@ -569,148 +569,144 @@ RESPONSE FORMAT — return ONLY valid JSON, no text outside:
 
 // ─── Project Health — System Status ──────────────────────────
 app.get('/api/health/status', async (req, res) => {
+  const SSH_TIMEOUT = 5000; // 5 seconds per SSH connect attempt
+
+  // Helper: SSH connect with timeout
+  async function sshCheck(host, commands) {
+    // commands: { key: 'shell command', ... } — all run in one session
+    const ssh = new NodeSSH();
+    try {
+      await ssh.connect({ host, username: SSH_USER, privateKeyPath: SSH_KEY, readyTimeout: SSH_TIMEOUT });
+      const out = {};
+      for (const [key, cmd] of Object.entries(commands)) {
+        out[key] = (await ssh.execCommand(cmd)).stdout.trim();
+      }
+      ssh.dispose();
+      return { ok: true, ...out };
+    } catch (e) {
+      try { ssh.dispose(); } catch {}
+      return { ok: false, error: e.message };
+    }
+  }
+
+  // Run all checks in parallel
+  const [
+    pgResult,
+    haResult,
+    lxc103Result,
+    lxc105Result,
+    pm2Result,
+    rawDataResult,
+    rawWeatherResult,
+    orchLogResult,
+    alertsResult,
+    boilerDecisionResult,
+  ] = await Promise.all([
+
+    // PostgreSQL
+    db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
+
+    // Home Assistant
+    fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(5000) })
+      .then(r => ({ ok: r.ok })).catch(e => ({ ok: false, error: e.message })),
+
+    // LXC 103 — boiler-agent service + both cron checks in one session
+    sshCheck('192.168.1.114', {
+      svc:   'systemctl is-active boiler-agent',
+      cron1: 'crontab -l 2>/dev/null | grep -c ha_to_pg',
+      cron2: 'crontab -l 2>/dev/null | grep -c collect_weather',
+    }),
+
+    // LXC 105 — orchestrator timers
+    sshCheck('192.168.1.187', {
+      timer: 'systemctl is-active main-agent.timer',
+      quick: 'systemctl is-active main-agent-quick.timer',
+    }),
+
+    // PM2 local
+    new Promise(resolve => {
+      exec('pm2.cmd jlist', (err, stdout) => {
+        if (err) { resolve({ ok: false, error: err.message }); return; }
+        try {
+          const procs = JSON.parse(stdout);
+          const list  = procs.map(p => `${p.name}: ${p.pm2_env?.status}`).join(', ');
+          resolve({ ok: procs.every(p => p.pm2_env?.status === 'online'), raw: list });
+        } catch (e) { resolve({ ok: false, error: e.message }); }
+      });
+    }),
+
+    // raw_data freshness
+    db.query('SELECT MAX(ts) AS last_ts FROM raw_data')
+      .then(r => r.rows[0]?.last_ts).catch(() => null),
+
+    // raw_weather freshness
+    db.query('SELECT MAX(ts) AS last_ts FROM raw_weather')
+      .then(r => r.rows[0]?.last_ts).catch(() => null),
+
+    // orchestrator_log last run
+    db.query('SELECT ts FROM orchestrator_log ORDER BY ts DESC LIMIT 1')
+      .then(r => r.rows[0]?.ts || null).catch(() => null),
+
+    // active alerts
+    db.query('SELECT COUNT(*) AS n, MAX(severity) AS worst FROM system_alerts WHERE resolved_at IS NULL')
+      .then(r => ({ n: parseInt(r.rows[0]?.n) || 0, worst: r.rows[0]?.worst || null }))
+      .catch(() => ({ n: null, worst: null })),
+
+    // boiler last decision + run_interval
+    Promise.all([
+      db.query('SELECT ts, decision FROM agent_boiler_data ORDER BY ts DESC LIMIT 1').catch(() => ({ rows: [] })),
+      db.query('SELECT run_interval_min FROM agent_settings LIMIT 1').catch(() => ({ rows: [] })),
+    ]).then(([bd, si]) => ({ lastTs: bd.rows[0]?.ts || null, decision: bd.rows[0]?.decision || null, runInterval: si.rows[0]?.run_interval_min || 5 })),
+  ]);
+
+  // Assemble results
   const results = {};
 
-  // PostgreSQL
-  try {
-    await db.query('SELECT 1');
-    results.postgres = { ok: true };
-  } catch (e) {
-    results.postgres = { ok: false, error: e.message };
-  }
+  results.postgres      = pgResult;
+  results.homeassistant = haResult;
 
-  // Home Assistant
-  try {
-    const r = await fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${HA_TOKEN}` } });
-    results.homeassistant = { ok: r.ok };
-  } catch (e) {
-    results.homeassistant = { ok: false, error: e.message };
-  }
-
-  // LXC 103 SSH + agent service status
-  const ssh = new NodeSSH();
-  try {
-    await ssh.connect({ host: '192.168.1.114', username: SSH_USER, privateKeyPath: SSH_KEY });
-    const svc   = await ssh.execCommand('systemctl is-active boiler-agent');
-    const cron  = await ssh.execCommand('crontab -l 2>/dev/null | grep -c ha_to_pg');
-    ssh.dispose();
+  // LXC 103
+  if (lxc103Result.ok) {
     results.lxc103       = { ok: true };
-    results.boiler_agent = { ok: svc.stdout.trim() === 'active', status: svc.stdout.trim() };
-    results.ha_to_pg     = { cron_ok: parseInt(cron.stdout.trim()) > 0 };
-  } catch (e) {
-    ssh.dispose();
-    results.lxc103       = { ok: false, error: e.message };
-    results.boiler_agent = { ok: false, status: 'unknown' };
-    results.ha_to_pg     = { cron_ok: false };
+    results.boiler_agent = { ok: lxc103Result.svc === 'active', status: lxc103Result.svc };
+    results.ha_to_pg     = { cron_ok: parseInt(lxc103Result.cron1) > 0 };
+    results.collect_weather = { cron_ok: parseInt(lxc103Result.cron2) > 0 };
+  } else {
+    results.lxc103          = { ok: false, error: lxc103Result.error };
+    results.boiler_agent    = { ok: false, status: 'unknown' };
+    results.ha_to_pg        = { cron_ok: false };
+    results.collect_weather = { cron_ok: false };
   }
 
-  // ha_to_pg data freshness — check last raw_data row
-  try {
-    const r = await db.query('SELECT MAX(ts) AS last_ts FROM raw_data');
-    const lastTs = r.rows[0]?.last_ts;
-    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
-    results.ha_to_pg = {
-      ...results.ha_to_pg,
-      last_ts: lastTs,
-      age_min: ageMin !== null ? Math.round(ageMin) : null,
-      data_ok: ageMin !== null && ageMin <= 15
-    };
-  } catch (e) {
-    results.ha_to_pg = { ...results.ha_to_pg, data_ok: false, error: e.message };
+  // LXC 105
+  if (lxc105Result.ok) {
+    const timerOk = lxc105Result.timer === 'active';
+    const quickOk = lxc105Result.quick === 'active';
+    results.orchestrator = { ok: timerOk && quickOk, timer: lxc105Result.timer, quick: lxc105Result.quick };
+  } else {
+    results.orchestrator = { ok: false, error: lxc105Result.error };
   }
 
-  // PM2 — local (dashboard runs on this machine)
-  results.pm2 = await new Promise(resolve => {
-    exec('pm2.cmd jlist', (err, stdout) => {
-      if (err) { resolve({ ok: false, error: err.message }); return; }
-      try {
-        const procs = JSON.parse(stdout);
-        const list  = procs.map(p => `${p.name}: ${p.pm2_env?.status}`).join(', ');
-        const allOk = procs.every(p => p.pm2_env?.status === 'online');
-        resolve({ ok: allOk, raw: list });
-      } catch (e) { resolve({ ok: false, error: e.message }); }
-    });
-  });
+  results.pm2 = pm2Result;
 
-  // Orchestrator service (LXC 105)
-  const sshOrch = new NodeSSH();
-  try {
-    await sshOrch.connect({ host: '192.168.1.187', username: SSH_USER, privateKeyPath: SSH_KEY });
-    const timer = await sshOrch.execCommand('systemctl is-active main-agent.timer');
-    const quick = await sshOrch.execCommand('systemctl is-active main-agent-quick.timer');
-    sshOrch.dispose();
-    const timerOk = timer.stdout.trim() === 'active';
-    const quickOk = quick.stdout.trim() === 'active';
-    results.orchestrator = { ok: timerOk && quickOk, timer: timer.stdout.trim(), quick: quick.stdout.trim() };
-  } catch (e) {
-    sshOrch.dispose();
-    results.orchestrator = { ok: false, error: e.message };
-  }
+  // ha_to_pg data freshness
+  const htpAge = rawDataResult ? (Date.now() - new Date(rawDataResult).getTime()) / 60000 : null;
+  results.ha_to_pg = { ...results.ha_to_pg, last_ts: rawDataResult, age_min: htpAge !== null ? Math.round(htpAge) : null, data_ok: htpAge !== null && htpAge <= 15 };
 
-  // collect_weather.py cron + weather data freshness
-  try {
-    const ssh2 = new NodeSSH();
-    await ssh2.connect({ host: '192.168.1.114', username: SSH_USER, privateKeyPath: SSH_KEY });
-    const wcron = await ssh2.execCommand('crontab -l 2>/dev/null | grep -c collect_weather');
-    ssh2.dispose();
-    results.collect_weather = { cron_ok: parseInt(wcron.stdout.trim()) > 0 };
-  } catch (e) {
-    results.collect_weather = { cron_ok: false, error: e.message };
-  }
+  // collect_weather data freshness
+  const cwAge = rawWeatherResult ? (Date.now() - new Date(rawWeatherResult).getTime()) / 60000 : null;
+  results.collect_weather = { ...results.collect_weather, last_ts: rawWeatherResult, age_min: cwAge !== null ? Math.round(cwAge) : null, data_ok: cwAge !== null && cwAge <= 35 };
 
-  // Weather data freshness from DB
-  try {
-    const wr = await db.query('SELECT MAX(ts) AS last_ts FROM raw_weather');
-    const lastTs = wr.rows[0]?.last_ts;
-    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
-    results.collect_weather = {
-      ...results.collect_weather,
-      last_ts: lastTs,
-      age_min: ageMin !== null ? Math.round(ageMin) : null,
-      data_ok: ageMin !== null && ageMin <= 35,
-    };
-  } catch (e) {
-    results.collect_weather = { ...results.collect_weather, data_ok: false };
-  }
+  // orchestrator last run
+  const orchAge = orchLogResult ? (Date.now() - new Date(orchLogResult).getTime()) / 60000 : null;
+  results.orchestrator_last_run = { last_ts: orchLogResult, age_min: orchAge !== null ? Math.round(orchAge) : null, ok: orchAge !== null && orchAge <= 70 };
 
-  // Last orchestrator run time from orchestrator_log
-  try {
-    const ol = await db.query(`SELECT ts FROM orchestrator_log ORDER BY ts DESC LIMIT 1`);
-    const lastTs = ol.rows[0]?.ts || null;
-    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
-    results.orchestrator_last_run = {
-      last_ts: lastTs,
-      age_min: ageMin !== null ? Math.round(ageMin) : null,
-      ok: ageMin !== null && ageMin <= 70,  // full run every 60 min + 10 min grace
-    };
-  } catch (e) {
-    results.orchestrator_last_run = { ok: false, error: e.message };
-  }
+  // active alerts
+  results.active_alerts = { count: alertsResult.n, worst: alertsResult.worst, ok: alertsResult.n === 0 };
 
-  // Active alerts count
-  try {
-    const ac = await db.query(`SELECT COUNT(*) AS n, MAX(severity) AS worst FROM system_alerts WHERE resolved_at IS NULL`);
-    const n = parseInt(ac.rows[0]?.n) || 0;
-    results.active_alerts = { count: n, worst: ac.rows[0]?.worst || null, ok: n === 0 };
-  } catch (e) {
-    results.active_alerts = { count: null, ok: false };
-  }
-
-  // Boiler agent last decision time
-  try {
-    const bd = await db.query(`SELECT ts, decision FROM agent_boiler_data ORDER BY ts DESC LIMIT 1`);
-    const lastTs = bd.rows[0]?.ts || null;
-    const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
-    const runInterval = (await db.query('SELECT run_interval_min FROM agent_settings LIMIT 1')).rows[0]?.run_interval_min || 5;
-    results.boiler_last_decision = {
-      last_ts: lastTs,
-      age_min: ageMin !== null ? Math.round(ageMin) : null,
-      decision: bd.rows[0]?.decision || null,
-      ok: ageMin !== null && ageMin <= runInterval * 3,
-    };
-  } catch (e) {
-    results.boiler_last_decision = { ok: false, error: e.message };
-  }
+  // boiler last decision
+  const bdAge = boilerDecisionResult.lastTs ? (Date.now() - new Date(boilerDecisionResult.lastTs).getTime()) / 60000 : null;
+  results.boiler_last_decision = { last_ts: boilerDecisionResult.lastTs, age_min: bdAge !== null ? Math.round(bdAge) : null, decision: boilerDecisionResult.decision, ok: bdAge !== null && bdAge <= boilerDecisionResult.runInterval * 3 };
 
   res.json(results);
 });
