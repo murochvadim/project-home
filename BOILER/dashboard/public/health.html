@@ -4,6 +4,23 @@
   <meta charset="UTF-8">
   <title>Project Health</title>
   <link rel="stylesheet" href="css/style.css">
+  <style>
+    .tab-btn {
+      padding: 7px 20px;
+      border: 1px solid #d0cbc4;
+      border-radius: 4px;
+      background: #f0ebe6;
+      color: #555;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover  { background: #e8ddd8; }
+    .tab-btn.active { background: #7a9ab8; color: #fff; border-color: #7a9ab8; }
+    .tab-panel      { display: none; }
+    .tab-panel.active { display: block; }
+    .tab-bar        { display: flex; gap: 8px; margin-bottom: 20px; }
+  </style>
 </head>
 <body>
 
@@ -33,173 +50,206 @@
     </div>
   </div>
 
-  <!-- Active Alerts -->
-  <div class="card" id="alerts-card">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-      <h2 style="margin:0;">System Alerts <span id="alerts-badge" style="font-size:0.75rem; font-weight:500; padding:2px 8px; border-radius:10px; margin-left:6px; display:none;"></span></h2>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <button id="alerts-history-btn" class="btn btn-secondary btn-sm" style="font-size:0.72rem; display:none;" onclick="toggleResolvedAlerts()"></button>
-        <button id="alerts-clear-btn" class="btn btn-secondary btn-sm" style="font-size:0.72rem; display:none;" onclick="clearResolvedAlerts()">Clear resolved</button>
-      </div>
-    </div>
-    <table class="data-table" id="alerts-table">
-      <thead>
-        <tr>
-          <th style="width:140px;">Time</th>
-          <th style="width:70px; text-align:center;">Level</th>
-          <th style="width:100px;">Agent</th>
-          <th style="width:130px;">Type</th>
-          <th>Message</th>
-          <th style="width:140px;">Resolved</th>
-        </tr>
-      </thead>
-      <tbody id="alerts-body">
-        <tr><td colspan="6" style="color:#aaa;">Loading…</td></tr>
-      </tbody>
-    </table>
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showHealthTab('system', this)">System</button>
+    <button class="tab-btn"        onclick="showHealthTab('database', this)">Database</button>
   </div>
 
-  <!-- System Status -->
-  <div class="card">
-    <h2>System Status</h2>
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: System                                               -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel active" id="tab-system">
 
-    <!-- Infrastructure -->
-    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; margin-top:2px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Infrastructure</div>
-    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
-      <div class="status-item">
-        <label>PostgreSQL</label>
-        <div class="value small" id="svc-postgres">—</div>
+    <!-- Active Alerts -->
+    <div class="card" id="alerts-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">System Alerts <span id="alerts-badge" style="font-size:0.75rem; font-weight:500; padding:2px 8px; border-radius:10px; margin-left:6px; display:none;"></span></h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="alerts-history-btn" class="btn btn-secondary btn-sm" style="font-size:0.72rem; display:none;" onclick="toggleResolvedAlerts()"></button>
+          <button id="alerts-clear-btn"   class="btn btn-secondary btn-sm" style="font-size:0.72rem; display:none;" onclick="clearResolvedAlerts()">Clear resolved</button>
+        </div>
       </div>
-      <div class="status-item">
-        <label>Home Assistant</label>
-        <div class="value small" id="svc-ha">—</div>
+      <table class="data-table" id="alerts-table">
+        <thead>
+          <tr>
+            <th style="width:140px;">Time</th>
+            <th style="width:70px; text-align:center;">Level</th>
+            <th style="width:100px;">Agent</th>
+            <th style="width:130px;">Type</th>
+            <th>Message</th>
+            <th style="width:140px;">Resolved</th>
+          </tr>
+        </thead>
+        <tbody id="alerts-body">
+          <tr><td colspan="6" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- System Status -->
+    <div class="card">
+      <h2>System Status</h2>
+
+      <!-- Infrastructure -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; margin-top:2px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Infrastructure</div>
+      <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
+        <div class="status-item">
+          <label>PostgreSQL</label>
+          <div class="value small" id="svc-postgres">—</div>
+        </div>
+        <div class="status-item">
+          <label>Home Assistant</label>
+          <div class="value small" id="svc-ha">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 103 (SSH)</label>
+          <div class="value small" id="svc-lxc">—</div>
+        </div>
+        <div class="status-item">
+          <label>Active Alerts</label>
+          <div class="value small" id="svc-active-alerts">—</div>
+        </div>
       </div>
-      <div class="status-item">
-        <label>LXC 103 (SSH)</label>
-        <div class="value small" id="svc-lxc">—</div>
+
+      <!-- Services -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Services</div>
+      <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
+        <div class="status-item">
+          <label>Boiler Agent</label>
+          <div class="value small" id="svc-agent">—</div>
+        </div>
+        <div class="status-item">
+          <label>Boiler Last Decision</label>
+          <div class="value small" id="svc-boiler-last">—</div>
+        </div>
+        <div class="status-item">
+          <label>Orchestrator (LXC 105)</label>
+          <div class="value small" id="svc-orchestrator">—</div>
+        </div>
+        <div class="status-item">
+          <label>Orchestrator Last Run</label>
+          <div class="value small" id="svc-orch-last-run">—</div>
+        </div>
       </div>
-      <div class="status-item">
-        <label>Active Alerts</label>
-        <div class="value small" id="svc-active-alerts">—</div>
+
+      <!-- Scripts -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Scripts (cron)</div>
+      <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
+        <div class="status-item">
+          <label>ha_to_pg (raw data)</label>
+          <div class="value small" id="svc-ha-to-pg">—</div>
+        </div>
+        <div class="status-item">
+          <label>collect_weather</label>
+          <div class="value small" id="svc-collect-weather">—</div>
+        </div>
+      </div>
+
+      <!-- Server -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Server</div>
+      <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr);">
+        <div class="status-item">
+          <label>PM2 Dashboard</label>
+          <div class="value small" id="svc-pm2">—</div>
+        </div>
       </div>
     </div>
 
-    <!-- Services -->
-    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Services</div>
-    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
-      <div class="status-item">
-        <label>Boiler Agent</label>
-        <div class="value small" id="svc-agent">—</div>
+    <!-- Orchestrator Log -->
+    <div class="card">
+      <h2>Orchestrator Log</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <span style="font-size:0.78rem; color:#888;">Last <select id="orch-limit" onchange="loadOrchLog()" style="font-size:0.78rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:#faf8f5;">
+          <option value="20">20</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select> entries</span>
+        <span id="orch-summary" style="font-size:0.78rem; color:#666;"></span>
       </div>
-      <div class="status-item">
-        <label>Boiler Last Decision</label>
-        <div class="value small" id="svc-boiler-last">—</div>
-      </div>
-      <div class="status-item">
-        <label>Orchestrator (LXC 105)</label>
-        <div class="value small" id="svc-orchestrator">—</div>
-      </div>
-      <div class="status-item">
-        <label>Orchestrator Last Run</label>
-        <div class="value small" id="svc-orch-last-run">—</div>
+      <table class="data-table" id="orch-table">
+        <thead>
+          <tr>
+            <th style="width:140px;">Time</th>
+            <th style="width:60px; text-align:center;">Level</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="orch-body">
+          <tr><td colspan="3" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /tab-system -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Database                                             -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-database">
+
+    <!-- DB Volumes -->
+    <div class="card">
+      <h2>DB Volumes</h2>
+      <table class="data-table" id="volumes-table">
+        <thead>
+          <tr>
+            <th>Table</th>
+            <th style="text-align:right;">Rows</th>
+            <th style="text-align:right;">Size</th>
+            <th>Oldest Record</th>
+            <th>Newest Record</th>
+          </tr>
+        </thead>
+        <tbody id="volumes-body">
+          <tr><td colspan="5" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Retention Policies -->
+    <div class="card">
+      <h2>Retention Policies</h2>
+      <table class="data-table" id="retention-table">
+        <thead>
+          <tr>
+            <th>Table</th>
+            <th>Description</th>
+            <th style="text-align:center;">Keep (days)</th>
+            <th style="text-align:center;">Auto-clean</th>
+            <th style="text-align:center;">Interval (h)</th>
+            <th>Last Cleaned</th>
+            <th style="text-align:center;">Action</th>
+          </tr>
+        </thead>
+        <tbody id="retention-body">
+          <tr><td colspan="7" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
+        <button class="btn btn-secondary btn-sm" onclick="cleanAll()">🧹 Clean All Now</button>
+        <span id="cleanup-result" style="font-size:0.8rem; color:#666;"></span>
       </div>
     </div>
 
-    <!-- Scripts -->
-    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Scripts (cron)</div>
-    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
-      <div class="status-item">
-        <label>ha_to_pg (raw data)</label>
-        <div class="value small" id="svc-ha-to-pg">—</div>
-      </div>
-      <div class="status-item">
-        <label>collect_weather</label>
-        <div class="value small" id="svc-collect-weather">—</div>
-      </div>
-    </div>
-
-    <!-- Server -->
-    <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Server</div>
-    <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr);">
-      <div class="status-item">
-        <label>PM2 Dashboard</label>
-        <div class="value small" id="svc-pm2">—</div>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- DB Volumes -->
-  <div class="card">
-    <h2>DB Volumes</h2>
-    <table class="data-table" id="volumes-table">
-      <thead>
-        <tr>
-          <th>Table</th>
-          <th style="text-align:right;">Rows</th>
-          <th style="text-align:right;">Size</th>
-          <th>Oldest Record</th>
-          <th>Newest Record</th>
-        </tr>
-      </thead>
-      <tbody id="volumes-body">
-        <tr><td colspan="5" style="color:#aaa;">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Orchestrator Log -->
-  <div class="card">
-    <h2>Orchestrator Log</h2>
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-      <span style="font-size:0.78rem; color:#888;">Last <select id="orch-limit" onchange="loadOrchLog()" style="font-size:0.78rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:#faf8f5;">
-        <option value="20">20</option>
-        <option value="50">50</option>
-        <option value="100">100</option>
-      </select> entries</span>
-      <span id="orch-summary" style="font-size:0.78rem; color:#666;"></span>
-    </div>
-    <table class="data-table" id="orch-table">
-      <thead>
-        <tr>
-          <th style="width:140px;">Time</th>
-          <th style="width:60px; text-align:center;">Level</th>
-          <th>Message</th>
-        </tr>
-      </thead>
-      <tbody id="orch-body">
-        <tr><td colspan="3" style="color:#aaa;">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Retention Policies -->
-  <div class="card">
-    <h2>Retention Policies</h2>
-    <table class="data-table" id="retention-table">
-      <thead>
-        <tr>
-          <th>Table</th>
-          <th>Description</th>
-          <th style="text-align:center;">Keep (days)</th>
-          <th style="text-align:center;">Auto-clean</th>
-          <th style="text-align:center;">Interval (h)</th>
-          <th>Last Cleaned</th>
-          <th style="text-align:center;">Action</th>
-        </tr>
-      </thead>
-      <tbody id="retention-body">
-        <tr><td colspan="7" style="color:#aaa;">Loading…</td></tr>
-      </tbody>
-    </table>
-    <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
-      <button class="btn btn-secondary btn-sm" onclick="cleanAll()">🧹 Clean All Now</button>
-      <span id="cleanup-result" style="font-size:0.8rem; color:#666;"></span>
-    </div>
-  </div>
+  </div><!-- /tab-database -->
 
 </main>
 
+<script>
+function showHealthTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  // Load database tab data lazily on first visit
+  if (name === 'database' && !window._dbTabLoaded) {
+    window._dbTabLoaded = true;
+    loadVolumes();
+    loadRetention();
+  }
+}
+</script>
 <script src="js/health.js"></script>
 </body>
 </html>

@@ -347,9 +347,15 @@ async function loadOrchLog() {
 
 async function refreshAll() {
   document.getElementById('last-refresh').textContent = 'Loading…';
-  await Promise.all([loadAlerts(), loadStatus(), loadVolumes(), loadRetention(), loadOrchLog()]);
+  const dbTabActive = document.getElementById('tab-database')?.classList.contains('active');
+  const tasks = [loadAlerts(), loadStatus(), loadOrchLog()];
+  if (dbTabActive) { tasks.push(loadVolumes(), loadRetention()); }
+  await Promise.all(tasks);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
 
-refreshAll();
+// Initial load — System tab only
+loadAlerts();
+loadStatus();
+loadOrchLog();
