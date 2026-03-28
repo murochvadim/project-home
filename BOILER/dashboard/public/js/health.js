@@ -362,11 +362,11 @@ loadAlerts();
 loadStatus();
 loadOrchLog();
 
-// Auto-refresh status every 60 s (same cadence as sidebar indicator)
-setInterval(() => {
+// Auto-refresh status every 60 s — preserve scroll position to avoid page jump
+setInterval(async () => {
   if (!document.getElementById('tab-database')?.classList.contains('active')) {
-    loadAlerts();
-    loadStatus();
-    loadOrchLog();
+    const y = window.scrollY;
+    await Promise.all([loadAlerts(), loadStatus(), loadOrchLog()]);
+    window.scrollTo(0, y);
   }
 }, 60000);
