@@ -31,11 +31,13 @@
       if (!el) return;
 
       if (count > 0) {
-        el.style.display = 'inline-block';
-        el.textContent   = count === 1 ? '⚠ 1 alert' : `⚠ ${count} alerts`;
-        el.title         = `${count} active alert${count > 1 ? 's' : ''} — worst: ${worst}\nClick to go to Project Health`;
+        el.textContent = count === 1 ? '⚠ 1 alert' : `⚠ ${count} alerts`;
+        el.title       = `${count} active alert${count > 1 ? 's' : ''} — worst: ${worst}\nClick to go to Project Health`;
+        el.classList.add('has-alerts');
       } else {
-        el.style.display = 'none';
+        el.textContent = '✓ OK';
+        el.title       = 'All systems OK';
+        el.classList.remove('has-alerts');
       }
 
       // Sound only fires when count rises (new alert appeared)

@@ -34,17 +34,21 @@ body {
 }
 
 #alert-indicator {
-  display: none;
   font-size: 0.7rem;
-  background: #e74c3c;
+  background: #3a7d44;
   color: #fff;
   border-radius: 10px;
   padding: 2px 7px;
   font-weight: 600;
   letter-spacing: 0;
-  animation: alert-blink 1s ease-in-out infinite;
   cursor: default;
   white-space: nowrap;
+  text-decoration: none;
+}
+
+#alert-indicator.has-alerts {
+  background: #e74c3c;
+  animation: alert-blink 1s ease-in-out infinite;
 }
 
 @keyframes alert-blink {
