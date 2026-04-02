@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Document Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #2a2520;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+    }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      background: #1e2a3a;
+      height: 48px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      z-index: 10;
+    }
+
+    #doc-title {
+      color: #e8e0d8;
+      font-size: 13px;
+      font-weight: 600;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tb-btn {
+      background: #2e4a6a;
+      color: #cdd8e8;
+      border: 1px solid #3a5a7a;
+      padding: 5px 13px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .tb-btn:hover { background: #3a6a9a; }
+    .tb-btn.danger { background: #4a2020; border-color: #7a3030; color: #e8c0c0; }
+    .tb-btn.danger:hover { background: #6a2a2a; }
+
+    #zoom-label {
+      color: #8899aa;
+      font-size: 12px;
+      min-width: 42px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .sep { width: 1px; height: 20px; background: #2e4a6a; margin: 0 4px; }
+
+    /* ── Canvas ── */
+    #canvas {
+      height: calc(100vh - 48px);
+      overflow: auto;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 32px 40px;
+      cursor: grab;
+    }
+    #canvas.grabbing { cursor: grabbing; }
+    #canvas.error-state { align-items: center; }
+
+    #svg-wrap {
+      transform-origin: top center;
+      transition: transform 0.12s ease;
+      user-select: none;
+    }
+
+    #svg-wrap svg {
+      display: block;
+      border-radius: 8px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+
+    /* ── Loading / error ── */
+    #msg {
+      display: none;
+      color: #c0ccd8;
+      font-size: 14px;
+      text-align: center;
+      background: #1e2a3a;
+      padding: 16px 24px;
+      border-radius: 8px;
+    }
+    #msg.visible { display: block; }
+    #msg.err { color: #f09090; background: #3a1a1a; }
+
+    /* ── Zoom hint ── */
+    #hint {
+      position: fixed;
+      bottom: 14px;
+      right: 20px;
+      font-size: 11px;
+      color: #556;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span id="doc-title">Loading…</span>
+  <div class="sep"></div>
+  <button class="tb-btn" onclick="zoomBy(-0.15)">− Out</button>
+  <span id="zoom-label">100%</span>
+  <button class="tb-btn" onclick="zoomBy(+0.15)">+ In</button>
+  <button class="tb-btn" onclick="fitToWindow()">Fit</button>
+  <button class="tb-btn" onclick="setScale(1)">100%</button>
+  <div class="sep"></div>
+  <button class="tb-btn" onclick="window.close()">✕ Close</button>
+</div>
+
+<div id="canvas">
+  <div id="svg-wrap">
+    <p id="msg"></p>
+  </div>
+</div>
+
+<div id="hint">Scroll to zoom · Drag to pan</div>
+
+<script>
+  const params   = new URLSearchParams(location.search);
+  const docPath  = params.get('path')  || '';
+  const docTitle = params.get('title') || docPath.split(/[\\/]/).pop() || 'Document';
+
+  document.title = docTitle;
+  document.getElementById('doc-title').textContent = docTitle;
+
+  let scale = 1;
+
+  // ── Fetch & inject SVG ──────────────────────────────────────
+  async function load() {
+    showMsg('Loading…', false);
+    try {
+      const res = await fetch('/api/documents/file?path=' + encodeURIComponent(docPath));
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' — check that the file path is correct');
+      const text = await res.text();
+      const wrap = document.getElementById('svg-wrap');
+      // Strip XML declaration (<?xml...?>) — causes innerHTML parse issues in some browsers
+      wrap.innerHTML = text.replace(/<\?xml[^?]*\?>\s*/i, '');
+      // Stamp explicit pixel dimensions from viewBox so SVG is visible
+      const svg = wrap.querySelector('svg');
+      if (svg) {
+        const vb = svg.viewBox.baseVal;
+        if (vb && vb.width > 0) {
+          svg.setAttribute('width',  vb.width);
+          svg.setAttribute('height', vb.height);
+        }
+      }
+      hideMsg();
+      fitToWindow();
+    } catch (e) {
+      showMsg('Could not load: ' + e.message, true);
+      document.getElementById('canvas').classList.add('error-state');
+    }
+  }
+
+  function showMsg(txt, isErr) {
+    const el = document.getElementById('msg');
+    el.textContent = txt;
+    el.className = 'visible' + (isErr ? ' err' : '');
+  }
+  function hideMsg() {
+    document.getElementById('msg').className = '';
+  }
+
+  // ── Zoom ────────────────────────────────────────────────────
+  function setScale(s) {
+    scale = Math.max(0.15, Math.min(6, s));
+    document.getElementById('svg-wrap').style.transform = `scale(${scale})`;
+    document.getElementById('zoom-label').textContent = Math.round(scale * 100) + '%';
+  }
+
+  function zoomBy(delta) { setScale(scale + delta); }
+
+  function fitToWindow() {
+    const svg = document.querySelector('#svg-wrap svg');
+    if (!svg) return;
+    const canvas = document.getElementById('canvas');
+    const availW = canvas.clientWidth  - 80;
+    const availH = canvas.clientHeight - 64;
+    const vb = svg.viewBox.baseVal;
+    const svgW = vb.width  || svg.naturalWidth  || 800;
+    const svgH = vb.height || svg.naturalHeight || 600;
+    setScale(Math.min(availW / svgW, availH / svgH, 1));
+    canvas.scrollTop = 0;
+    canvas.scrollLeft = 0;
+  }
+
+  // ── Mouse-wheel zoom ────────────────────────────────────────
+  document.getElementById('canvas').addEventListener('wheel', e => {
+    e.preventDefault();
+    zoomBy(e.deltaY < 0 ? 0.1 : -0.1);
+  }, { passive: false });
+
+  // ── Drag to pan ─────────────────────────────────────────────
+  const canvas = document.getElementById('canvas');
+  let dragging = false, startX, startY, scrollLeft, scrollTop;
+
+  canvas.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    dragging = true;
+    canvas.classList.add('grabbing');
+    startX = e.pageX - canvas.offsetLeft;
+    startY = e.pageY - canvas.offsetTop;
+    scrollLeft = canvas.scrollLeft;
+    scrollTop  = canvas.scrollTop;
+  });
+  canvas.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    e.preventDefault();
+    const dx = e.pageX - canvas.offsetLeft - startX;
+    const dy = e.pageY - canvas.offsetTop  - startY;
+    canvas.scrollLeft = scrollLeft - dx;
+    canvas.scrollTop  = scrollTop  - dy;
+  });
+  ['mouseup','mouseleave'].forEach(ev =>
+    canvas.addEventListener(ev, () => { dragging = false; canvas.classList.remove('grabbing'); })
+  );
+
+  load();
+</script>
+</body>
+</html>

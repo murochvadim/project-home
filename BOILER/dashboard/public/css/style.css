@@ -1,7 +1,11 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 body {
-  font-family: 'Segoe UI', sans-serif;
+  font-family: "Segoe UI", sans-serif;
   background: #faf8f5;
   color: #2e2e2e;
   display: flex;
@@ -17,7 +21,9 @@ body {
   flex-direction: column;
   padding: 0;
   position: fixed;
-  top: 0; left: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  bottom: 0;
   z-index: 100;
 }
 
@@ -53,8 +59,13 @@ body {
 }
 
 @keyframes alert-blink {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.15; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
 }
 
 #sidebar .section-label {
@@ -75,8 +86,15 @@ body {
   transition: all 0.15s;
 }
 
-#sidebar a:hover { background: #263547; color: #fff; }
-#sidebar a.active { background: #263547; border-left-color: #97b3cc; color: #fff; }
+#sidebar a:hover {
+  background: #263547;
+  color: #fff;
+}
+#sidebar a.active {
+  background: #263547;
+  border-left-color: #97b3cc;
+  color: #fff;
+}
 
 /* ── Main content ── */
 #content {
@@ -104,7 +122,7 @@ body {
   background: #f0ebe3;
   border-radius: 8px;
   padding: 20px 24px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   margin-bottom: 20px;
   border: 1px solid #d0cbc4;
 }
@@ -138,9 +156,17 @@ body {
   color: #2e2e2e;
 }
 
-.status-item .value.on  { color: #085c28; font-size: 0.85rem; }
-.status-item .value.off { color: #e74c3c; }
-.status-item .value.small { font-size: 0.82rem; font-weight: 500; }
+.status-item .value.on {
+  color: #085c28;
+  font-size: 0.85rem;
+}
+.status-item .value.off {
+  color: #e74c3c;
+}
+.status-item .value.small {
+  font-size: 0.82rem;
+  font-weight: 500;
+}
 
 .status-grid-divided .status-item {
   border-right: 1px solid #d0cbc4;
@@ -161,12 +187,61 @@ body {
   font-weight: 500;
   transition: opacity 0.15s;
 }
-.btn:hover { opacity: 0.85; }
-.btn-primary   { background: #7a9ab8; color: #fff; }
-.btn-success   { background: #8a9f78; color: #fff; }
-.btn-danger    { background: #7a9ab8; color: #fff; }
-.btn-secondary { background: #a0948a; color: #fff; }
-.btn-sm { padding: 5px 12px; font-size: 0.8rem; }
+.btn:hover {
+  opacity: 0.85;
+}
+.btn-primary {
+  background: #7a9ab8;
+  color: #fff;
+}
+.btn-success {
+  background: #8a9f78;
+  color: #fff;
+}
+.btn-danger {
+  background: #c0392b;
+  color: #fff;
+}
+.btn-secondary {
+  background: #a0948a;
+  color: #fff;
+}
+.btn-sm {
+  padding: 5px 12px;
+  font-size: 0.8rem;
+}
+
+/* ── Tabs (shared across all pages with tabs) ── */
+.tab-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.tab-btn {
+  padding: 7px 20px;
+  border: 1px solid #d0cbc4;
+  border-radius: 4px;
+  background: #f0ebe6;
+  color: #555;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tab-btn:hover {
+  background: #e8ddd8;
+}
+.tab-btn.active {
+  background: #7a9ab8;
+  color: #fff;
+  border-color: #7a9ab8;
+}
+.tab-panel {
+  display: none;
+}
+.tab-panel.active {
+  display: block;
+}
 
 /* ── Settings form ── */
 .settings-grid {
@@ -205,6 +280,35 @@ table {
   font-size: 0.83rem;
 }
 
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+
+/* ── Height reservations — prevent layout shifts on data load ── */
+/* These elements start empty and expand when JS populates them.   */
+/* Reserve their full height so the layout never changes.          */
+#next-run-countdown,
+#next-probe-countdown {
+  min-height: 1.5rem; /* matches font-size:1.5rem on these elements */
+}
+#turn-on-origin,
+#solar-score-label,
+#orch-summary {
+  min-height: 1.1rem;
+}
+
+/* ── Disable CSS scroll anchoring in content area ─────────── */
+/* scroll-stabilizer.js (ResizeObserver) is the sole mechanism.  */
+/* If CSS anchoring is also active it fires first, then the JS   */
+/* fires again — double compensation = visible jump.             */
+/* #sidebar is position:fixed so it won't anchor either.        */
+#content,
+#content * {
+  overflow-anchor: none;
+}
+
 th {
   background: #e8ddd8;
   text-align: left;
@@ -220,7 +324,9 @@ td {
   color: #333;
 }
 
-tr:hover td { background: #ebe5db; }
+tr:hover td {
+  background: #ebe5db;
+}
 
 /* ── Pagination row selector ── */
 .table-controls {
@@ -261,13 +367,34 @@ tr:hover td { background: #ebe5db; }
   font-size: 0.75rem;
   font-weight: 600;
 }
-.badge-turn_on  { background: #d4edda; color: #155724; }
-.badge-turn_off { background: #f8d7da; color: #721c24; }
-.badge-keep_on  { background: #cce5ff; color: #004085; }
-.badge-hold     { background: #fff3cd; color: #856404; }
-.badge-waiting  { background: #e2e3e5; color: #383d41; }
-.badge-no_action{ background: #ebe5db; color: #666; }
-.badge-disabled { background: #f8d7da; color: #721c24; }
+.badge-turn_on {
+  background: #d4edda;
+  color: #155724;
+}
+.badge-turn_off {
+  background: #f8d7da;
+  color: #721c24;
+}
+.badge-keep_on {
+  background: #cce5ff;
+  color: #004085;
+}
+.badge-hold {
+  background: #fff3cd;
+  color: #856404;
+}
+.badge-waiting {
+  background: #e2e3e5;
+  color: #383d41;
+}
+.badge-no_action {
+  background: #ebe5db;
+  color: #666;
+}
+.badge-disabled {
+  background: #f8d7da;
+  color: #721c24;
+}
 
 /* ── Refresh bar ── */
 .refresh-bar {
@@ -287,7 +414,11 @@ tr:hover td { background: #ebe5db; }
   margin-bottom: 16px;
 }
 
-.graph-controls label { font-size: 0.82rem; color: #666; margin-right: 4px; }
+.graph-controls label {
+  font-size: 0.82rem;
+  color: #666;
+  margin-right: 4px;
+}
 
 .graph-controls select {
   padding: 5px 10px;
@@ -306,7 +437,10 @@ tr:hover td { background: #ebe5db; }
   padding: 4px 8px;
   font-size: 0.82rem;
 }
-.ai-time-input:focus { outline: none; border-color: #97b3cc; }
+.ai-time-input:focus {
+  outline: none;
+  border-color: #97b3cc;
+}
 
 .ai-check-label {
   font-size: 0.82rem;
@@ -329,12 +463,16 @@ tr:hover td { background: #ebe5db; }
   margin-bottom: 16px;
 }
 
-@keyframes ai-spin { to { transform: rotate(360deg); } }
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .ai-spinner {
   display: inline-block;
   width: 13px;
   height: 13px;
-  border: 2px solid rgba(255,255,255,0.25);
+  border: 2px solid rgba(255, 255, 255, 0.25);
   border-top-color: #fff;
   border-radius: 50%;
   animation: ai-spin 0.75s linear infinite;

@@ -1,0 +1,2348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Voice — Smart Home</title>
+    <link rel="stylesheet" href="css/style.css" />
+    <style>
+      .voice-recorder {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .record-btn {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        border: none;
+        background: #7a9ab8;
+        color: #fff;
+        font-size: 1.6rem;
+        cursor: pointer;
+        transition: background 0.15s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .record-btn:hover {
+        background: #5c7d9b;
+      }
+      .record-btn.active {
+        background: #c0392b;
+        animation: pulse 1s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.4);
+        }
+        50% {
+          box-shadow: 0 0 0 10px rgba(192, 57, 43, 0);
+        }
+      }
+      .record-status {
+        font-size: 0.88rem;
+        color: #888;
+      }
+      .record-status.active {
+        color: #c0392b;
+        font-weight: 600;
+      }
+
+      .upload-zone {
+        border: 2px dashed #d0cbc4;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        color: #aaa;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: border-color 0.15s;
+      }
+      .upload-zone:hover,
+      .upload-zone.drag-over {
+        border-color: #7a9ab8;
+        color: #7a9ab8;
+      }
+
+      .step-box {
+        background: #f8f6f4;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-top: 12px;
+        min-height: 52px;
+      }
+      .step-label {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #aaa;
+        margin-bottom: 6px;
+      }
+      .step-text {
+        font-size: 1rem;
+        color: #333;
+        line-height: 1.5;
+      }
+      .step-text.empty {
+        color: #ccc;
+        font-style: italic;
+      }
+
+      .intent-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .intent-item label {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #aaa;
+        display: block;
+        margin-bottom: 3px;
+      }
+      .intent-item .val {
+        font-size: 0.95rem;
+        color: #333;
+        font-weight: 600;
+      }
+      .intent-item .val.empty {
+        color: #ccc;
+        font-weight: normal;
+        font-style: italic;
+      }
+
+      .confidence-high {
+        color: #27ae60;
+      }
+      .confidence-medium {
+        color: #e67e22;
+      }
+      .confidence-low {
+        color: #c0392b;
+      }
+
+      .badge-intent {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        background: #e8f0f8;
+        color: #2c6ea5;
+      }
+
+      .raw-json {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        border-radius: 6px;
+        padding: 14px;
+        font-family: "Courier New", monospace;
+        font-size: 0.82rem;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-top: 8px;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid #ccc;
+        border-top-color: #7a9ab8;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .audio-preview {
+        margin-top: 10px;
+      }
+      audio {
+        width: 100%;
+        border-radius: 4px;
+      }
+      #file-input {
+        display: none;
+      }
+
+      .setting-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid #f0ebe6;
+        cursor: pointer;
+      }
+      .setting-row:last-child {
+        border-bottom: none;
+      }
+      .setting-row input[type="radio"] {
+        width: 16px;
+        height: 16px;
+        accent-color: #7a9ab8;
+        flex-shrink: 0;
+      }
+      .setting-row .setting-title {
+        font-weight: 600;
+        font-size: 0.92rem;
+      }
+      .setting-row .setting-desc {
+        font-size: 0.78rem;
+        color: #aaa;
+        margin-top: 2px;
+      }
+      .setting-badge {
+        margin-left: auto;
+        font-size: 0.72rem;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .badge-active {
+        background: #e8f5e9;
+        color: #27ae60;
+      }
+      .badge-soon {
+        background: #f5f0eb;
+        color: #bbb;
+      }
+
+      .vol-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .vol-label {
+        font-size: 0.75rem;
+        color: #bbb;
+        width: 46px;
+        flex-shrink: 0;
+      }
+      .vol-slider {
+        flex: 1;
+        accent-color: #7a9ab8;
+        height: 4px;
+        cursor: pointer;
+      }
+      .vol-pct {
+        font-size: 0.78rem;
+        color: #888;
+        width: 34px;
+        text-align: right;
+        flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <nav id="sidebar">
+      <div class="logo">
+        Smart Home
+        <a href="health.html" id="alert-indicator"></a>
+      </div>
+
+      <div class="section-label">General</div>
+      <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="media.html">Project Media</a>
+      <a href="general.html">Weather</a>
+
+      <div class="section-label">Network</div>
+
+  <div class="section-label">Agents</div>
+      <a href="index.html">Boiler Agent</a>
+
+      <div class="section-label">Network</div>
+
+  <div class="section-label">Voice</div>
+      <a href="voice.html" class="active">Voice</a>
+    </nav>
+
+    <main id="content">
+      <div class="page-header">
+        <h1>Voice</h1>
+        <div class="refresh-bar">
+          <span id="status-msg" style="font-size: 0.82rem; color: #888"></span>
+        </div>
+      </div>
+
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="showTab('test', this)">Voice Test</button>
+        <button class="tab-btn" onclick="showTab('voice-settings', this)">Voice Settings</button>
+        <button class="tab-btn" onclick="showTab('device-settings', this)">Device & Response</button>
+        <button class="tab-btn" onclick="showTab('phrases', this)">Phrases</button>
+        <button class="tab-btn" onclick="showTab('tokens', this)">Tokens</button>
+      </div>
+
+      <!-- ══════════════════════════════════ TAB: Voice Test ══ -->
+      <div id="tab-test" class="tab-panel active">
+        <div class="card">
+          <h2>Audio Input</h2>
+
+          <div class="voice-recorder">
+            <button class="record-btn" id="record-btn" onclick="toggleRecord()">🎤</button>
+            <div>
+              <div class="record-status" id="record-status">Click to start recording</div>
+              <div style="font-size: 0.78rem; color: #bbb; margin-top: 3px">or upload a WAV/MP3 file below</div>
+            </div>
+          </div>
+
+          <div class="audio-preview" id="audio-preview" style="display: none">
+            <audio id="audio-player" controls></audio>
+          </div>
+
+          <div style="margin-top: 16px">
+            <div
+              class="upload-zone"
+              id="upload-zone"
+              onclick="document.getElementById('file-input').click()"
+              ondragover="
+                event.preventDefault();
+                this.classList.add('drag-over');
+              "
+              ondragleave="this.classList.remove('drag-over')"
+              ondrop="handleDrop(event)">
+              📁 Click or drag a WAV / MP3 file here
+            </div>
+            <input type="file" id="file-input" accept="audio/*" onchange="handleFileSelect(event)" />
+          </div>
+
+          <div style="margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+            <button class="btn btn-primary" id="transcribe-btn" onclick="runTranscribe()" disabled>
+              🔊 Transcribe
+            </button>
+            <button class="btn btn-secondary" onclick="clearAll()">✕ Clear</button>
+            <span id="transcribe-spinner" style="display: none">
+              <span class="spinner"></span>
+              Sending to Whisper…
+            </span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Step 1 — Whisper Transcript</h2>
+          <div class="step-box">
+            <div class="step-label">Recognized text</div>
+            <div class="step-text empty" id="transcript-text">Waiting for audio…</div>
+          </div>
+          <div style="margin-top: 12px; display: flex; gap: 10px; align-items: center">
+            <button class="btn btn-primary" id="intent-btn" onclick="runIntent()" disabled>🧠 Extract Intent</button>
+            <span id="intent-spinner" style="display: none">
+              <span class="spinner"></span>
+              Asking Claude…
+            </span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Step 2 — Claude Intent</h2>
+          <div class="intent-grid">
+            <div class="intent-item">
+              <label>Intent</label>
+              <div class="val empty" id="intent-name">—</div>
+            </div>
+            <div class="intent-item">
+              <label>Confidence</label>
+              <div class="val empty" id="intent-confidence">—</div>
+            </div>
+            <div class="intent-item">
+              <label>Language</label>
+              <div class="val empty" id="intent-lang">—</div>
+            </div>
+            <div class="intent-item">
+              <label>Params</label>
+              <div class="val empty" id="intent-params">—</div>
+            </div>
+          </div>
+          <div style="margin-top: 14px">
+            <div class="step-label">Raw JSON</div>
+            <div class="raw-json" id="intent-raw">{ }</div>
+          </div>
+          <div style="margin-top: 12px; display: flex; gap: 10px; align-items: center">
+            <button class="btn btn-success" id="execute-btn" onclick="runRequest()" disabled>▶ Execute</button>
+            <span id="execute-spinner" style="display: none">
+              <span class="spinner"></span>
+              Executing…
+            </span>
+          </div>
+        </div>
+
+        <div class="card" id="step3-card" style="display: none">
+          <h2>Step 3 — Result</h2>
+          <div class="step-box">
+            <div class="step-label">Response</div>
+            <div class="step-text" id="request-result">—</div>
+          </div>
+        </div>
+      </div>
+      <!-- /tab-test -->
+
+      <!-- ══════════════════════════════════ TAB: Voice Settings ══ -->
+      <div id="tab-voice-settings" class="tab-panel">
+        <!-- Pipeline Mode -->
+        <div class="card">
+          <h2>Pipeline Mode</h2>
+          <div style="font-size: 0.78rem; color: #aaa; margin-bottom: 8px">
+            Manual: click each step. Auto: record stops → Whisper → Claude → Execute automatically.
+          </div>
+          <label class="setting-row">
+            <input
+              type="radio"
+              name="pipeline-mode"
+              value="manual"
+              id="mode-manual"
+              onchange="saveVoiceSettings()"
+              checked />
+            <div>
+              <div class="setting-title">Manual</div>
+              <div class="setting-desc">Click Transcribe, Extract Intent, and Execute separately</div>
+            </div>
+          </label>
+          <label class="setting-row">
+            <input type="radio" name="pipeline-mode" value="auto" id="mode-auto" onchange="applyMode()" />
+            <div>
+              <div class="setting-title">Auto</div>
+              <div class="setting-desc">Record → stop → full pipeline runs automatically</div>
+            </div>
+          </label>
+        </div>
+
+        <!-- Input Device -->
+        <div class="card">
+          <h2>Input Device</h2>
+          <label class="setting-row">
+            <input
+              type="radio"
+              name="input-device"
+              value="browser-mic"
+              id="input-browser"
+              onchange="saveVoiceSettings()"
+              checked />
+            <div>
+              <div class="setting-title">Browser Microphone</div>
+              <div class="setting-desc">Built-in or USB mic via browser</div>
+            </div>
+            <span class="setting-badge badge-active">Active</span>
+          </label>
+          <label class="setting-row" style="cursor: not-allowed; opacity: 0.45">
+            <input type="radio" name="input-device" value="xmos" id="input-xmos" disabled />
+            <div>
+              <div class="setting-title">XMOS XVF3800 Satellite</div>
+              <div class="setting-desc">Far-field mic array + RPi Zero 2W per room — streams via Wyoming</div>
+            </div>
+            <span class="setting-badge badge-soon">Coming soon</span>
+          </label>
+        </div>
+
+        <!-- TTS Settings -->
+        <div class="card">
+          <h2>Text-to-Speech</h2>
+          <div style="font-size: 0.78rem; color: #aaa; margin-bottom: 12px">
+            Browser TTS (Web Speech API) — active for Laptop Speaker output.
+          </div>
+          <label class="setting-row" style="margin-bottom: 14px">
+            <input
+              type="checkbox"
+              id="tts-enabled"
+              onchange="saveVoiceSettings()"
+              checked
+              style="width: 16px; height: 16px; cursor: pointer" />
+            <div>
+              <div class="setting-title">Enable TTS</div>
+              <div class="setting-desc">Speak the response after Execute</div>
+            </div>
+          </label>
+          <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-end">
+            <div class="form-group" style="min-width: 160px">
+              <label>Speed</label>
+              <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px">
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.0"
+                  step="0.1"
+                  value="1.0"
+                  id="tts-rate"
+                  class="vol-slider"
+                  style="flex: 1"
+                  oninput="
+                    document.getElementById('tts-rate-val').textContent = parseFloat(this.value).toFixed(1) + 'x'
+                  "
+                  onchange="saveVoiceSettings()" />
+                <span class="vol-pct" id="tts-rate-val">1.0x</span>
+              </div>
+            </div>
+            <div class="form-group" style="min-width: 200px">
+              <label>Voice</label>
+              <select
+                id="tts-voice"
+                onchange="saveVoiceSettings()"
+                style="
+                  margin-top: 4px;
+                  padding: 6px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.82rem;
+                  background: #faf8f5;
+                  width: 100%;
+                ">
+                <option value="">Default</option>
+              </select>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="testTTS()" style="margin-bottom: 1px">▶ Test</button>
+          </div>
+        </div>
+
+        <!-- Output Device -->
+        <div class="card">
+          <h2>Output Device</h2>
+          <div style="font-size: 0.78rem; color: #aaa; margin-bottom: 8px">Where voice responses will be spoken.</div>
+          <div class="setting-row">
+            <input
+              type="radio"
+              name="output-device"
+              value="browser-speaker"
+              id="output-browser"
+              onchange="saveDeviceSettings()"
+              checked />
+            <div style="flex: 1">
+              <div
+                class="setting-title"
+                style="cursor: pointer"
+                onclick="document.getElementById('output-browser').click()">
+                Laptop Speaker
+              </div>
+              <div class="setting-desc">Browser audio output — plays directly in this window</div>
+              <div class="vol-row">
+                <span class="vol-label">Volume</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value="80"
+                  id="vol-browser"
+                  class="vol-slider"
+                  oninput="updateVol('browser')"
+                  onchange="saveDeviceSettings()" />
+                <span class="vol-pct" id="vol-browser-pct">80%</span>
+              </div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <input
+              type="radio"
+              name="output-device"
+              value="soundbar"
+              id="output-soundbar"
+              onchange="saveDeviceSettings()" />
+            <div style="flex: 1">
+              <div
+                class="setting-title"
+                style="cursor: pointer"
+                onclick="document.getElementById('output-soundbar').click()">
+                Samsung Soundbar
+              </div>
+              <div class="setting-desc">
+                Living room — HA:
+                <code>media_player.samsung_soundbar</code>
+              </div>
+              <div class="vol-row">
+                <span class="vol-label">Volume</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value="40"
+                  id="vol-soundbar"
+                  class="vol-slider"
+                  oninput="updateVol('soundbar')"
+                  onchange="saveDeviceSettings()" />
+                <span class="vol-pct" id="vol-soundbar-pct">40%</span>
+              </div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <input
+              type="radio"
+              name="output-device"
+              value="alexa-guy-room"
+              id="output-alexa-guy"
+              onchange="saveDeviceSettings()" />
+            <div style="flex: 1">
+              <div
+                class="setting-title"
+                style="cursor: pointer"
+                onclick="document.getElementById('output-alexa-guy').click()">
+                Alexa — Guy Room
+              </div>
+              <div class="setting-desc">
+                HA:
+                <code>media_player.alexa_guy_room</code>
+              </div>
+              <div class="vol-row">
+                <span class="vol-label">Volume</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value="70"
+                  id="vol-alexa-guy"
+                  class="vol-slider"
+                  oninput="updateVol('alexa-guy')"
+                  onchange="saveDeviceSettings()" />
+                <span class="vol-pct" id="vol-alexa-guy-pct">70%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- /tab-voice-settings -->
+
+      <!-- ══════════════════════════════════ TAB: Device & Response Settings ══ -->
+      <div id="tab-device-settings" class="tab-panel">
+        <!-- Device selector -->
+        <div class="card">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px">
+            <h2 style="margin-bottom: 0">Devices</h2>
+            <button class="btn btn-success btn-sm" onclick="showDeviceTypeSelector()">+ Add Device</button>
+          </div>
+          <div id="device-list" style="display: flex; flex-direction: column; gap: 8px">
+            <div style="color: #aaa; font-size: 0.82rem">Loading…</div>
+          </div>
+          <!-- Type selector (shown on Add Device click) -->
+          <div
+            id="device-type-selector"
+            style="display: none; margin-top: 14px; border-top: 1px solid #e8e2dc; padding-top: 14px">
+            <div style="font-size: 0.78rem; color: #666; font-weight: 600; margin-bottom: 10px">
+              Select device type:
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px">
+              <button class="btn btn-secondary btn-sm" onclick="showDeviceForm(null, 'boiler')">🔥 Boiler</button>
+              <button class="btn btn-secondary btn-sm" onclick="showDeviceForm(null, 'switch')">🔌 Switch</button>
+              <button class="btn btn-secondary btn-sm" onclick="showDeviceForm(null, 'switch_group')">
+                🔌🔌 Switch Group
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="hideDeviceTypeSelector()">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Device edit form (hidden until add/edit clicked) -->
+        <div class="card" id="device-form-card" style="display: none">
+          <h2 id="device-form-title">New Device</h2>
+
+          <div
+            style="
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+              gap: 14px;
+              margin-bottom: 16px;
+            ">
+            <div class="form-group">
+              <label>Device Name</label>
+              <input type="text" id="df-name" placeholder='e.g. "Living Room Light"' style="width: 100%" />
+            </div>
+            <div class="form-group">
+              <label>Type</label>
+              <select
+                id="df-type"
+                onchange="updateDeviceFormType(this.value)"
+                style="
+                  width: 100%;
+                  padding: 7px 10px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.88rem;
+                  background: #faf8f5;
+                ">
+                <option value="boiler">🔥 Boiler</option>
+                <option value="switch" selected>🔌 Switch</option>
+                <option value="switch_group">🔌🔌 Switch Group</option>
+              </select>
+            </div>
+            <div class="form-group" id="df-entity-row">
+              <label>HA Entity</label>
+              <select
+                id="df-entity-select"
+                style="
+                  width: 100%;
+                  padding: 7px 10px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.88rem;
+                  background: #faf8f5;
+                ">
+                <option value="">Loading HA switches…</option>
+              </select>
+              <input type="hidden" id="df-entity" />
+            </div>
+            <input type="hidden" id="df-intent" />
+          </div>
+
+          <!-- Intent checkboxes (type-specific) -->
+          <div id="df-intent-section" style="margin-bottom: 16px">
+            <div style="font-size: 0.78rem; color: #666; font-weight: 600; margin-bottom: 8px">
+              Voice commands this device handles
+            </div>
+            <div id="df-intent-checks" style="display: flex; flex-wrap: wrap; gap: 8px"></div>
+          </div>
+
+          <!-- Boiler temperature settings (shown only for type=boiler) -->
+          <div
+            id="df-boiler-settings-section"
+            style="display: none; margin-bottom: 16px; border: 1px solid #e0dbd3; border-radius: 6px; padding: 12px">
+            <div style="font-size: 0.78rem; font-weight: 600; color: #666; margin-bottom: 10px">
+              Boiler Temperature Settings
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px">
+              <div class="form-group">
+                <label>
+                  Low temp °C
+                  <span style="font-size: 0.7rem; color: #aaa">(cold)</span>
+                </label>
+                <input type="number" id="df-boiler-low-temp" step="0.5" style="width: 100%" />
+              </div>
+              <div class="form-group">
+                <label>Shower ready °C</label>
+                <input type="number" id="df-boiler-shower-temp" step="0.5" style="width: 100%" />
+              </div>
+              <div class="form-group">
+                <label>Bath ready °C</label>
+                <input type="number" id="df-boiler-bath-temp" step="0.5" style="width: 100%" />
+              </div>
+              <div class="form-group">
+                <label>Heat rate °C/h</label>
+                <input type="number" id="df-boiler-heat-rate" step="0.5" style="width: 100%" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Switch Group entity picker -->
+          <div
+            id="df-group-entities-section"
+            style="display: none; margin-bottom: 16px; border: 1px solid #e0dbd3; border-radius: 6px; padding: 12px">
+            <div style="font-size: 0.78rem; font-weight: 600; color: #666; margin-bottom: 10px">Entities in Group</div>
+            <div id="df-group-save-note" style="font-size: 0.8rem; color: #aaa; padding: 6px 0; display: none">
+              💾 Save the device first, then add entities here.
+            </div>
+            <div id="df-group-entities-list" style="margin-bottom: 10px"></div>
+            <div id="df-group-picker-row" style="display: flex; gap: 8px; align-items: center">
+              <select
+                id="df-group-entity-picker"
+                style="
+                  flex: 1;
+                  padding: 6px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.82rem;
+                  background: #faf8f5;
+                ">
+                <option value="">Loading HA switches…</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="addGroupEntity()">+ Add</button>
+            </div>
+          </div>
+
+          <!-- Response Style -->
+          <div style="margin-bottom: 16px">
+            <div style="font-size: 0.78rem; color: #666; font-weight: 600; margin-bottom: 8px">Response Style</div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px">
+              <label
+                class="df-style-label"
+                id="df-style-label-short"
+                onclick="selectDeviceStyle('short')"
+                style="
+                  cursor: pointer;
+                  border: 2px solid #d0cbc4;
+                  border-radius: 8px;
+                  padding: 10px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 4px;
+                ">
+                <div style="display: flex; align-items: center; gap: 7px">
+                  <input
+                    type="radio"
+                    name="df-style"
+                    value="short"
+                    id="df-style-short"
+                    style="accent-color: #7a9ab8"
+                    checked />
+                  <span
+                    style="
+                      background: #7a9ab8;
+                      color: #fff;
+                      font-size: 0.72rem;
+                      font-weight: 700;
+                      padding: 1px 8px;
+                      border-radius: 8px;
+                    ">
+                    SHORT
+                  </span>
+                </div>
+                <div style="font-size: 0.72rem; color: #777">Act + one-line answer</div>
+              </label>
+              <label
+                class="df-style-label"
+                id="df-style-label-full"
+                onclick="selectDeviceStyle('full')"
+                style="
+                  cursor: pointer;
+                  border: 2px solid #d0cbc4;
+                  border-radius: 8px;
+                  padding: 10px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 4px;
+                ">
+                <div style="display: flex; align-items: center; gap: 7px">
+                  <input type="radio" name="df-style" value="full" id="df-style-full" style="accent-color: #8a9f78" />
+                  <span
+                    style="
+                      background: #8a9f78;
+                      color: #fff;
+                      font-size: 0.72rem;
+                      font-weight: 700;
+                      padding: 1px 8px;
+                      border-radius: 8px;
+                    ">
+                    FULL
+                  </span>
+                </div>
+                <div style="font-size: 0.72rem; color: #777">Act + full details</div>
+              </label>
+              <label
+                class="df-style-label"
+                id="df-style-label-short_confirm"
+                onclick="selectDeviceStyle('short_confirm')"
+                style="
+                  cursor: pointer;
+                  border: 2px solid #d0cbc4;
+                  border-radius: 8px;
+                  padding: 10px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 4px;
+                ">
+                <div style="display: flex; align-items: center; gap: 7px">
+                  <input
+                    type="radio"
+                    name="df-style"
+                    value="short_confirm"
+                    id="df-style-short-confirm"
+                    style="accent-color: #c0874a" />
+                  <span
+                    style="
+                      background: #c0874a;
+                      color: #fff;
+                      font-size: 0.72rem;
+                      font-weight: 700;
+                      padding: 1px 8px;
+                      border-radius: 8px;
+                    ">
+                    SHORT+CONFIRM
+                  </span>
+                </div>
+                <div style="font-size: 0.72rem; color: #777">Ask yes/no → act + short</div>
+              </label>
+              <label
+                class="df-style-label"
+                id="df-style-label-full_confirm"
+                onclick="selectDeviceStyle('full_confirm')"
+                style="
+                  cursor: pointer;
+                  border: 2px solid #d0cbc4;
+                  border-radius: 8px;
+                  padding: 10px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 4px;
+                ">
+                <div style="display: flex; align-items: center; gap: 7px">
+                  <input
+                    type="radio"
+                    name="df-style"
+                    value="full_confirm"
+                    id="df-style-full-confirm"
+                    style="accent-color: #7a5aa0" />
+                  <span
+                    style="
+                      background: #7a5aa0;
+                      color: #fff;
+                      font-size: 0.72rem;
+                      font-weight: 700;
+                      padding: 1px 8px;
+                      border-radius: 8px;
+                    ">
+                    FULL+CONFIRM
+                  </span>
+                </div>
+                <div style="font-size: 0.72rem; color: #777">Ask yes/no → act + full</div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Confirm / response texts -->
+          <div
+            style="
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+              gap: 14px;
+              margin-bottom: 16px;
+            "
+            id="df-confirm-row">
+            <div class="form-group">
+              <label>
+                Confirm question
+                <span style="font-size: 0.72rem; color: #aaa">(before acting)</span>
+              </label>
+              <input
+                type="text"
+                id="df-confirm-text"
+                placeholder='"Want me to do it?" / "להדליק?"'
+                style="width: 100%" />
+            </div>
+            <div class="form-group">
+              <label>
+                "No" response
+                <span style="font-size: 0.72rem; color: #aaa">(when user says no)</span>
+              </label>
+              <input type="text" id="df-no-text" placeholder='"OK, cancelled." / "בסדר."' style="width: 100%" />
+            </div>
+          </div>
+
+          <div style="border-top: 1px solid #e0dbd3; padding-top: 14px; margin-bottom: 16px">
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer">
+              <input type="checkbox" id="df-custom-enabled" style="width: 15px; height: 15px" />
+              <span style="font-size: 0.82rem; font-weight: 600">Custom response text</span>
+              <span style="font-size: 0.75rem; color: #aaa">— replaces generated answer</span>
+            </label>
+            <input type="text" id="df-custom-text" placeholder='"Done!" / "בוצע!" / "Готово!"' style="width: 100%" />
+          </div>
+
+          <!-- Voice Language for this device -->
+          <div style="border-top: 1px solid #e0dbd3; padding-top: 14px; margin-bottom: 16px">
+            <div class="form-group">
+              <label>
+                Voice Language
+                <span style="font-size: 0.72rem; color: #aaa">— which language this device listens for</span>
+              </label>
+              <select
+                id="df-language"
+                style="
+                  width: 200px;
+                  padding: 6px 10px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.85rem;
+                  background: #faf8f5;
+                ">
+                <option value="">All languages</option>
+                <option value="he">🇮🇱 Hebrew</option>
+                <option value="ru">🇷🇺 Russian</option>
+                <option value="en">🇬🇧 English</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; align-items: center">
+            <button class="btn btn-success" onclick="saveDevice()">💾 Save</button>
+            <button class="btn btn-secondary" onclick="cancelDeviceForm()">Cancel</button>
+            <button
+              class="btn btn-danger"
+              id="df-delete-btn"
+              onclick="deleteDevice()"
+              style="display: none; margin-left: auto">
+              🗑 Delete
+            </button>
+            <span id="df-save-status" style="font-size: 0.8rem; color: #888"></span>
+          </div>
+        </div>
+      </div>
+      <!-- /tab-device-settings -->
+
+      <!-- ══════════════════════════════════ TAB: Phrases ══ -->
+      <div id="tab-phrases" class="tab-panel">
+        <div class="card">
+          <h2>Recognition Phrases</h2>
+          <p style="font-size: 0.82rem; color: #888; margin-bottom: 16px">
+            Phrases matched in Stage 2 (after keyword regex, before Claude). Checked in order — lower order number wins;
+            equal-order phrases matched by length (longer first).
+          </p>
+
+          <!-- Filter bar -->
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px">
+            <select
+              id="ph-filter-type"
+              onchange="renderPhrases()"
+              style="
+                padding: 6px 10px;
+                border: 1px solid #d0cbc4;
+                border-radius: 4px;
+                font-size: 0.85rem;
+                background: #faf8f5;
+              ">
+              <option value="">All types</option>
+              <option value="boiler">🔥 Boiler</option>
+              <option value="switch">🔌 Switch</option>
+              <option value="switch_group">🔌🔌 Switch Group</option>
+            </select>
+            <select
+              id="ph-filter-lang"
+              onchange="renderPhrases()"
+              style="
+                padding: 6px 10px;
+                border: 1px solid #d0cbc4;
+                border-radius: 4px;
+                font-size: 0.85rem;
+                background: #faf8f5;
+              ">
+              <option value="">All languages</option>
+              <option value="he">🇮🇱 Hebrew</option>
+              <option value="ru">🇷🇺 Russian</option>
+              <option value="en">🇬🇧 English</option>
+            </select>
+            <span id="ph-count" style="font-size: 0.8rem; color: #aaa; margin-left: auto"></span>
+          </div>
+
+          <!-- Add row -->
+          <div
+            style="
+              display: flex;
+              gap: 8px;
+              flex-wrap: wrap;
+              align-items: flex-end;
+              padding: 12px;
+              background: #f8f6f4;
+              border-radius: 6px;
+              margin-bottom: 16px;
+            ">
+            <div class="form-group" style="margin: 0">
+              <label style="font-size: 0.75rem; color: #888">Device type</label>
+              <select
+                id="ph-add-type"
+                onchange="updatePhAddIntents()"
+                style="
+                  padding: 6px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.85rem;
+                  background: #fff;
+                ">
+                <option value="boiler">🔥 Boiler</option>
+                <option value="switch">🔌 Switch</option>
+                <option value="switch_group">🔌🔌 Switch Group</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin: 0">
+              <label style="font-size: 0.75rem; color: #888">Intent</label>
+              <select
+                id="ph-add-intent"
+                style="
+                  padding: 6px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.85rem;
+                  background: #fff;
+                "></select>
+            </div>
+            <div class="form-group" style="margin: 0">
+              <label style="font-size: 0.75rem; color: #888">Language</label>
+              <select
+                id="ph-add-lang"
+                style="
+                  padding: 6px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.85rem;
+                  background: #fff;
+                ">
+                <option value="he">🇮🇱 Hebrew</option>
+                <option value="ru">🇷🇺 Russian</option>
+                <option value="en">🇬🇧 English</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin: 0; flex: 2; min-width: 160px">
+              <label style="font-size: 0.75rem; color: #888">Phrase</label>
+              <input
+                type="text"
+                id="ph-add-text"
+                placeholder="e.g. включи бойлер"
+                direction="auto"
+                style="
+                  width: 100%;
+                  padding: 6px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.85rem;
+                  background: #fff;
+                "
+                onkeydown="if (event.key === 'Enter') addPhrase();" />
+            </div>
+            <div class="form-group" style="margin: 0; width: 70px">
+              <label style="font-size: 0.75rem; color: #888">Order #</label>
+              <input
+                type="number"
+                id="ph-add-order"
+                value="0"
+                min="0"
+                max="999"
+                style="
+                  width: 100%;
+                  padding: 6px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.85rem;
+                  background: #fff;
+                " />
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="addPhrase()" style="align-self: flex-end">+ Add</button>
+            <span id="ph-add-status" style="font-size: 0.8rem; color: #27ae60; align-self: flex-end"></span>
+          </div>
+
+          <!-- Phrases table -->
+          <div style="overflow-x: auto">
+            <table class="data-table" id="ph-table">
+              <thead>
+                <tr>
+                  <th style="width: 60px; text-align: center">Order</th>
+                  <th style="width: 90px">Type</th>
+                  <th>Intent</th>
+                  <th style="width: 80px">Lang</th>
+                  <th>Phrase</th>
+                  <th style="width: 70px; text-align: center">Active</th>
+                  <th style="width: 40px"></th>
+                </tr>
+              </thead>
+              <tbody id="ph-tbody"></tbody>
+            </table>
+            <div
+              id="ph-empty"
+              style="display: none; padding: 16px; color: #aaa; font-size: 0.85rem; text-align: center">
+              No phrases found.
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- /tab-phrases -->
+
+      <!-- ══════════════════════════════════ TAB: Tokens ══ -->
+      <div id="tab-tokens" class="tab-panel">
+        <!-- Pricing reference -->
+        <div class="card">
+          <h2>Pricing Reference</h2>
+          <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem">
+            <thead>
+              <tr
+                style="
+                  text-align: left;
+                  border-bottom: 2px solid #e8e0d8;
+                  color: #aaa;
+                  font-size: 0.72rem;
+                  text-transform: uppercase;
+                ">
+                <th style="padding: 6px 8px">Model</th>
+                <th style="padding: 6px 8px; text-align: right">Input / 1M tokens</th>
+                <th style="padding: 6px 8px; text-align: right">Output / 1M tokens</th>
+                <th style="padding: 6px 8px; text-align: right">Est. cost / call</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom: 1px solid #f0ebe6">
+                <td style="padding: 6px 8px; font-weight: 600">
+                  claude-haiku-4-5
+                  <span
+                    style="
+                      font-size: 0.72rem;
+                      background: #e8f0f8;
+                      color: #2c6ea5;
+                      padding: 1px 6px;
+                      border-radius: 8px;
+                      margin-left: 4px;
+                    ">
+                    active
+                  </span>
+                </td>
+                <td style="padding: 6px 8px; text-align: right">$0.80</td>
+                <td style="padding: 6px 8px; text-align: right">$4.00</td>
+                <td style="padding: 6px 8px; text-align: right; color: #27ae60">~$0.00005</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f0ebe6; opacity: 0.5">
+                <td style="padding: 6px 8px">claude-sonnet-4-6</td>
+                <td style="padding: 6px 8px; text-align: right">$3.00</td>
+                <td style="padding: 6px 8px; text-align: right">$15.00</td>
+                <td style="padding: 6px 8px; text-align: right">~$0.00030</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>API Usage & Cost</h2>
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 14px;
+              flex-wrap: wrap;
+              gap: 8px;
+            ">
+            <div style="font-size: 0.78rem; color: #aaa">
+              Model:
+              <strong>claude-haiku-4-5</strong>
+              — $0.80/1M input · $4.00/1M output
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center">
+              <span style="font-size: 0.82rem; color: #555">
+                Total:
+                <strong id="token-total-cost">$0.000000</strong>
+              </span>
+              <select
+                id="token-log-limit"
+                onchange="renderTokenLog()"
+                style="
+                  padding: 4px 8px;
+                  border: 1px solid #d0cbc4;
+                  border-radius: 4px;
+                  font-size: 0.82rem;
+                  background: #faf8f5;
+                ">
+                <option value="10" selected>Last 10</option>
+                <option value="20">Last 20</option>
+                <option value="50">Last 50</option>
+                <option value="100">Last 100</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="overflow-x: auto">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem">
+              <thead>
+                <tr
+                  style="
+                    text-align: left;
+                    border-bottom: 2px solid #e8e0d8;
+                    color: #aaa;
+                    font-size: 0.72rem;
+                    text-transform: uppercase;
+                  ">
+                  <th style="padding: 6px 8px">Time</th>
+                  <th style="padding: 6px 8px">Text</th>
+                  <th style="padding: 6px 8px">Intent</th>
+                  <th style="padding: 6px 8px; text-align: right">In</th>
+                  <th style="padding: 6px 8px; text-align: right">Out</th>
+                  <th style="padding: 6px 8px; text-align: right">Cost</th>
+                </tr>
+              </thead>
+              <tbody id="token-log-body">
+                <tr><td colspan="6" style="padding: 16px 8px; color: #ccc; font-style: italic">No calls yet</td></tr>
+              </tbody>
+              <tfoot id="token-log-foot" style="display: none">
+                <tr style="border-top: 2px solid #e8e0d8; font-weight: 600">
+                  <td colspan="3" style="padding: 6px 8px; color: #777">All-time total</td>
+                  <td style="padding: 6px 8px; text-align: right" id="foot-in">0</td>
+                  <td style="padding: 6px 8px; text-align: right" id="foot-out">0</td>
+                  <td style="padding: 6px 8px; text-align: right" id="foot-cost">$0.000000</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+      <!-- /tab-tokens -->
+    </main>
+
+    <script>
+      let mediaRecorder = null;
+      let audioChunks = [];
+      let audioBlob = null;
+      let transcriptText = "";
+      let autoMode = false;
+
+      // ── Tab switching ─────────────────────────────────────────────
+      function showTab(name, btn) {
+        document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+        document.getElementById("tab-" + name).classList.add("active");
+        btn.classList.add("active");
+        if (name === "phrases") {
+          updatePhAddIntents();
+          loadPhrases();
+        }
+      }
+
+      // ── Settings persistence ──────────────────────────────────────
+      function updateVol(id) {
+        const val = document.getElementById("vol-" + id).value;
+        document.getElementById("vol-" + id + "-pct").textContent = val + "%";
+      }
+
+      // Voice settings — localStorage (per-browser)
+      function saveVoiceSettings() {
+        const mode = document.querySelector('input[name="pipeline-mode"]:checked')?.value || "manual";
+        const input = document.querySelector('input[name="input-device"]:checked')?.value || "browser-mic";
+        const tts = {
+          enabled: document.getElementById("tts-enabled").checked,
+          rate: parseFloat(document.getElementById("tts-rate").value),
+          voice: document.getElementById("tts-voice").value
+        };
+        autoMode = mode === "auto";
+        localStorage.setItem("voice_settings", JSON.stringify({ mode, input, tts }));
+      }
+
+      function applyMode() {
+        saveVoiceSettings();
+      }
+
+      function loadVoiceSettings() {
+        try {
+          const s = JSON.parse(localStorage.getItem("voice_settings") || "{}");
+          if (s.mode) {
+            const el = document.querySelector(`input[name="pipeline-mode"][value="${s.mode}"]`);
+            if (el) {
+              el.checked = true;
+              autoMode = s.mode === "auto";
+            }
+          }
+          if (s.input) {
+            const el = document.querySelector(`input[name="input-device"][value="${s.input}"]`);
+            if (el && !el.disabled) el.checked = true;
+          }
+          if (s.tts) {
+            if (s.tts.enabled !== undefined) document.getElementById("tts-enabled").checked = s.tts.enabled;
+            if (s.tts.rate !== undefined) {
+              document.getElementById("tts-rate").value = s.tts.rate;
+              document.getElementById("tts-rate-val").textContent = parseFloat(s.tts.rate).toFixed(1) + "x";
+            }
+            if (s.tts.voice !== undefined) document.getElementById("tts-voice").value = s.tts.voice;
+          }
+        } catch (_) {}
+      }
+
+      // ── Device registry ───────────────────────────────────────────
+      const STYLE_COLORS = { short: "#7a9ab8", full: "#8a9f78", short_confirm: "#c0874a", full_confirm: "#7a5aa0" };
+      const STYLE_LABELS = {
+        short: "SHORT",
+        full: "FULL",
+        short_confirm: "SHORT+CONFIRM",
+        full_confirm: "FULL+CONFIRM"
+      };
+      const TYPE_ICONS = {
+        boiler: "🔥",
+        switch: "🔌",
+        switch_group: "🔌🔌",
+        light: "💡",
+        heater: "♨️",
+        ac: "❄️",
+        media: "🎵",
+        custom: "⚙️"
+      };
+      let voiceDevices = [];
+      let editingDeviceId = null;
+
+      function styleBadge(style) {
+        const c = STYLE_COLORS[style] || "#aaa";
+        return `<span style="background:${c};color:#fff;font-size:0.7rem;font-weight:700;padding:1px 7px;border-radius:8px;">${STYLE_LABELS[style] || style}</span>`;
+      }
+
+      async function loadDeviceList() {
+        try {
+          const r = await fetch("/api/voice/devices");
+          voiceDevices = await r.json();
+          renderDeviceList();
+        } catch (_) {
+          document.getElementById("device-list").innerHTML =
+            '<div style="color:#e74c3c;font-size:0.82rem;">Failed to load devices</div>';
+        }
+      }
+
+      function renderDeviceList() {
+        const el = document.getElementById("device-list");
+        if (!voiceDevices.length) {
+          el.innerHTML = '<div style="color:#aaa;font-size:0.82rem;">No devices yet — click + Add Device</div>';
+          return;
+        }
+        el.innerHTML = voiceDevices
+          .map(
+            (d) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${d.enabled ? "#f7f4f0" : "#f0ebe3"};border:1px solid #d0cbc4;border-radius:6px;opacity:${d.enabled ? 1 : 0.55};">
+        <span style="font-size:1.1rem;">${TYPE_ICONS[d.device_type] || "⚙️"}</span>
+        <div style="flex:1;">
+          <div style="font-size:0.88rem;font-weight:600;color:#2e2e2e;">${d.name}</div>
+          <div style="font-size:0.75rem;color:#888;margin-top:2px;">${d.ha_entity || "—"} &nbsp;·&nbsp; ${d.intent || "—"}</div>
+        </div>
+        ${styleBadge(d.response_style)}
+        <button class="btn btn-secondary btn-sm" onclick="showDeviceForm(${d.id})">Edit</button>
+      </div>
+    `
+          )
+          .join("");
+      }
+
+      function selectDeviceStyle(val) {
+        const radio = document.getElementById("df-style-" + val.replace(/_/g, "-"));
+        if (radio) radio.checked = true;
+        Object.keys(STYLE_COLORS).forEach((s) => {
+          const lbl = document.getElementById("df-style-label-" + s);
+          if (lbl) lbl.style.borderColor = s === val ? STYLE_COLORS[s] : "#d0cbc4";
+        });
+        document.getElementById("df-confirm-row").style.display = val.includes("confirm") ? "" : "none";
+      }
+
+      // ── device form type-specific UI ──────────────────────────
+      const INTENT_OPTS = {
+        boiler: [
+          ["boiler_on", "Turn On"],
+          ["boiler_off", "Turn Off"],
+          ["boiler_status", "Status"],
+          ["shower_prepare", "Shower Prepare"],
+          ["bath_prepare", "Bath Prepare"]
+        ],
+        switch: [
+          ["switch_on", "Turn On"],
+          ["switch_off", "Turn Off"]
+        ],
+        switch_group: [
+          ["switch_on", "Turn On"],
+          ["switch_off", "Turn Off"]
+        ]
+      };
+
+      function updateDeviceFormType(type) {
+        const entityRow = document.getElementById("df-entity-row");
+        const groupSec = document.getElementById("df-group-entities-section");
+        const boilerSec = document.getElementById("df-boiler-settings-section");
+        const isGroup = type === "switch_group";
+        const isBoiler = type === "boiler";
+        entityRow.style.display = isGroup ? "none" : "";
+        groupSec.style.display = isGroup ? "" : "none";
+        boilerSec.style.display = isBoiler ? "" : "none";
+        renderIntentChecks(type, document.getElementById("df-intent").value);
+        if (isGroup) refreshGroupEntitySection();
+        else loadHASwitchesForSingle();
+        if (isBoiler) loadBoilerTempSettings();
+      }
+
+      function refreshGroupEntitySection() {
+        const hasId = !!editingDeviceId;
+        document.getElementById("df-group-save-note").style.display = hasId ? "none" : "";
+        document.getElementById("df-group-picker-row").style.display = hasId ? "" : "none";
+        document.getElementById("df-group-entities-list").style.display = hasId ? "" : "none";
+        if (hasId) loadGroupEntities(editingDeviceId);
+        else renderGroupEntities([]);
+      }
+
+      function renderIntentChecks(type, currentVal) {
+        const container = document.getElementById("df-intent-checks");
+        const opts = INTENT_OPTS[type] || INTENT_OPTS["switch"];
+        const selected = new Set(
+          (currentVal || "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        );
+        container.innerHTML = opts
+          .map(
+            ([val, label]) => `
+      <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;cursor:pointer;background:#f0ebe6;border:1px solid #d0cbc4;border-radius:4px;padding:4px 10px;">
+        <input type="checkbox" name="df-intent-chk" value="${val}" ${selected.has(val) || selected.size === 0 ? "checked" : ""} style="accent-color:#7a9ab8;">
+        ${label}
+      </label>`
+          )
+          .join("");
+      }
+
+      function getCheckedIntents() {
+        return Array.from(document.querySelectorAll('input[name="df-intent-chk"]:checked'))
+          .map((c) => c.value)
+          .join(",");
+      }
+
+      // ── boiler temp settings ──────────────────────────────────
+      async function loadBoilerTempSettings() {
+        try {
+          const r = await fetch("/api/voice/device-settings");
+          const s = await r.json();
+          if (!s || s.error) return;
+          document.getElementById("df-boiler-low-temp").value = s.boiler_low_temp ?? 40;
+          document.getElementById("df-boiler-shower-temp").value = s.boiler_shower_temp ?? 45;
+          document.getElementById("df-boiler-bath-temp").value = s.boiler_bath_temp ?? 50;
+          document.getElementById("df-boiler-heat-rate").value = s.boiler_heat_rate ?? 15;
+        } catch (_) {}
+      }
+
+      async function saveBoilerTempSettings() {
+        const body = {
+          boiler_low_temp: parseFloat(document.getElementById("df-boiler-low-temp").value) || null,
+          boiler_shower_temp: parseFloat(document.getElementById("df-boiler-shower-temp").value) || null,
+          boiler_bath_temp: parseFloat(document.getElementById("df-boiler-bath-temp").value) || null,
+          boiler_heat_rate: parseFloat(document.getElementById("df-boiler-heat-rate").value) || null
+        };
+        await fetch("/api/voice/device-settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+      }
+
+      // ── switch entity picker (single switch) ──────────────────
+      let _haSwitches = [];
+
+      async function loadHASwitchesForSingle() {
+        const sel = document.getElementById("df-entity-select");
+        if (!_haSwitches.length) {
+          sel.innerHTML = '<option value="">Loading…</option>';
+          try {
+            const r = await fetch("/api/ha/switches");
+            _haSwitches = await r.json();
+          } catch (_) {
+            _haSwitches = [];
+          }
+        }
+        const currentVal = document.getElementById("df-entity").value;
+        sel.innerHTML =
+          '<option value="">— select entity —</option>' +
+          _haSwitches
+            .map(
+              (s) =>
+                `<option value="${s.entity_id}" ${s.entity_id === currentVal ? "selected" : ""}>${s.friendly_name} (${s.entity_id})</option>`
+            )
+            .join("");
+        sel.onchange = () => {
+          document.getElementById("df-entity").value = sel.value;
+        };
+        if (currentVal) sel.value = currentVal;
+      }
+
+      // ── switch group entity management ──────────────────────────
+      let _groupEntities = [];
+
+      async function loadGroupEntities(deviceId) {
+        try {
+          const r = await fetch(`/api/voice/device-entities/${deviceId}`);
+          _groupEntities = await r.json();
+        } catch (_) {
+          _groupEntities = [];
+        }
+        renderGroupEntities(_groupEntities);
+        await loadHASwitches();
+      }
+
+      async function loadHASwitches() {
+        if (!_haSwitches.length) {
+          try {
+            const r = await fetch("/api/ha/switches");
+            _haSwitches = await r.json();
+          } catch (_) {
+            _haSwitches = [];
+          }
+        }
+        renderGroupEntityPicker();
+      }
+
+      function renderGroupEntities(entities) {
+        const el = document.getElementById("df-group-entities-list");
+        if (!entities.length) {
+          el.innerHTML = '<div style="font-size:0.8rem;color:#aaa;margin-bottom:6px;">No entities added yet.</div>';
+          return;
+        }
+        el.innerHTML = entities
+          .map(
+            (e) => `
+      <div style="display:flex;align-items:center;gap:8px;font-size:0.82rem;margin-bottom:4px;">
+        <span style="flex:1;font-family:monospace;color:#555;">${e.ha_entity}</span>
+        <button data-eid="${e.id}" onclick="removeGroupEntity(this)" style="background:none;border:1px solid #d0cbc4;border-radius:4px;cursor:pointer;padding:1px 7px;color:#c0392b;font-size:0.82rem;">✕</button>
+      </div>`
+          )
+          .join("");
+      }
+
+      function renderGroupEntityPicker() {
+        const sel = document.getElementById("df-group-entity-picker");
+        const used = new Set(_groupEntities.map((e) => e.ha_entity));
+        const available = _haSwitches.filter((s) => !used.has(s.entity_id));
+        sel.innerHTML = available.length
+          ? available.map((s) => `<option value="${s.entity_id}">${s.friendly_name} (${s.entity_id})</option>`).join("")
+          : '<option value="">All switches already added</option>';
+      }
+
+      async function addGroupEntity() {
+        const sel = document.getElementById("df-group-entity-picker");
+        const ha_entity = sel.value;
+        if (!ha_entity || !editingDeviceId) return;
+        try {
+          await fetch("/api/voice/device-entities", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device_id: editingDeviceId, ha_entity })
+          });
+          await loadGroupEntities(editingDeviceId);
+        } catch (e) {
+          alert("Error: " + e.message);
+        }
+      }
+
+      async function removeGroupEntity(btn) {
+        const eid = btn.dataset.eid;
+        try {
+          await fetch(`/api/voice/device-entities/${eid}`, { method: "DELETE" });
+          _groupEntities = _groupEntities.filter((e) => String(e.id) !== String(eid));
+          renderGroupEntities(_groupEntities);
+          renderGroupEntityPicker();
+        } catch (e) {
+          alert("Error: " + e.message);
+        }
+      }
+
+      function showDeviceTypeSelector() {
+        document.getElementById("device-type-selector").style.display = "";
+      }
+      function hideDeviceTypeSelector() {
+        document.getElementById("device-type-selector").style.display = "none";
+      }
+
+      function showDeviceForm(id, preType) {
+        hideDeviceTypeSelector();
+        editingDeviceId = id;
+        _groupEntities = [];
+        _haSwitches = [];
+        const d = id ? voiceDevices.find((x) => x.id === id) : null;
+        document.getElementById("device-form-title").textContent = d ? `Edit — ${d.name}` : "New Device";
+        document.getElementById("df-name").value = d?.name || "";
+        const dtype = d?.device_type || preType || "switch";
+        document.getElementById("df-type").value = dtype;
+        document.getElementById("df-type").disabled = true;
+        document.getElementById("df-entity").value = d?.ha_entity || "";
+        document.getElementById("df-intent").value = d?.intent || "";
+        document.getElementById("df-confirm-text").value = d?.custom_confirm_text || "";
+        document.getElementById("df-no-text").value = d?.custom_no_text || "";
+        document.getElementById("df-custom-enabled").checked = d?.custom_text_enabled || false;
+        document.getElementById("df-custom-text").value = d?.custom_response_text || "";
+        document.getElementById("df-delete-btn").style.display = d ? "" : "none";
+        document.getElementById("df-save-status").textContent = "";
+        document.getElementById("df-language").value = (d?.language || "").trim();
+        selectDeviceStyle(d?.response_style || "short");
+        updateDeviceFormType(dtype);
+        const card = document.getElementById("device-form-card");
+        card.style.display = "";
+        card.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
+      function cancelDeviceForm() {
+        document.getElementById("device-form-card").style.display = "none";
+        document.getElementById("df-type").disabled = false;
+        editingDeviceId = null;
+      }
+
+      async function saveDevice() {
+        const name = document.getElementById("df-name").value.trim();
+        if (!name) {
+          document.getElementById("df-save-status").textContent = "Name is required";
+          return;
+        }
+        const dtype = document.getElementById("df-type").value;
+        if (dtype === "switch_group" && editingDeviceId && !_groupEntities.length) {
+          document.getElementById("df-save-status").textContent = "Add at least one entity to the group";
+          return;
+        }
+        const body = {
+          name,
+          device_type: document.getElementById("df-type").value,
+          ha_entity: document.getElementById("df-entity").value.trim() || null,
+          intent: getCheckedIntents() || null,
+          response_style: document.querySelector('input[name="df-style"]:checked')?.value || "short",
+          custom_text_enabled: document.getElementById("df-custom-enabled").checked,
+          custom_response_text: document.getElementById("df-custom-text").value.trim() || null,
+          custom_confirm_text: document.getElementById("df-confirm-text").value.trim() || null,
+          custom_no_text: document.getElementById("df-no-text").value.trim() || null,
+          language: document.getElementById("df-language").value || ""
+        };
+        try {
+          const url = editingDeviceId ? `/api/voice/devices/${editingDeviceId}` : "/api/voice/devices";
+          const method = editingDeviceId ? "PUT" : "POST";
+          const r = await fetch(url, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          const data = await r.json();
+          if (data.error) throw new Error(data.error);
+          if (body.device_type === "boiler") await saveBoilerTempSettings();
+          if (!editingDeviceId && data.id) {
+            editingDeviceId = data.id;
+            document.getElementById("df-delete-btn").style.display = "";
+            if (body.device_type === "switch_group") refreshGroupEntitySection();
+          }
+          document.getElementById("df-save-status").textContent = "✓ Saved";
+          await loadDeviceList();
+        } catch (e) {
+          document.getElementById("df-save-status").textContent = "Error: " + e.message;
+        }
+      }
+
+      async function deleteDevice() {
+        if (!editingDeviceId) return;
+        if (!confirm("Delete this device?")) return;
+        try {
+          await fetch(`/api/voice/devices/${editingDeviceId}`, { method: "DELETE" });
+          cancelDeviceForm();
+          await loadDeviceList();
+        } catch (e) {
+          document.getElementById("df-save-status").textContent = "Error: " + e.message;
+        }
+      }
+
+      // Output device (global) — saved to voice_device_settings
+      async function saveDeviceSettings() {
+        const output = document.querySelector('input[name="output-device"]:checked')?.value || "browser-speaker";
+        const body = {
+          output_device: output,
+          vol_browser: parseInt(document.getElementById("vol-browser").value),
+          vol_soundbar: parseInt(document.getElementById("vol-soundbar").value),
+          vol_alexa_guy: parseInt(document.getElementById("vol-alexa-guy").value)
+        };
+        try {
+          await fetch("/api/voice/device-settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+        } catch (_) {}
+      }
+
+      async function loadDeviceSettings() {
+        try {
+          const r = await fetch("/api/voice/device-settings");
+          const s = await r.json();
+          if (!s || s.error) return;
+          if (s.output_device) {
+            const el = document.querySelector(`input[name="output-device"][value="${s.output_device}"]`);
+            if (el) el.checked = true;
+          }
+          if (s.vol_browser !== undefined) {
+            document.getElementById("vol-browser").value = s.vol_browser;
+            document.getElementById("vol-browser-pct").textContent = s.vol_browser + "%";
+          }
+          if (s.vol_soundbar !== undefined) {
+            document.getElementById("vol-soundbar").value = s.vol_soundbar;
+            document.getElementById("vol-soundbar-pct").textContent = s.vol_soundbar + "%";
+          }
+          if (s.vol_alexa_guy !== undefined) {
+            document.getElementById("vol-alexa-guy").value = s.vol_alexa_guy;
+            document.getElementById("vol-alexa-guy-pct").textContent = s.vol_alexa_guy + "%";
+          }
+        } catch (_) {}
+      }
+
+      function populateTTSVoices() {
+        const voices = window.speechSynthesis.getVoices();
+        const sel = document.getElementById("tts-voice");
+        const saved = sel.value;
+        sel.innerHTML = '<option value="">Default</option>';
+        voices.forEach((v) => {
+          const opt = document.createElement("option");
+          opt.value = v.name;
+          opt.textContent = `${v.name} (${v.lang})`;
+          sel.appendChild(opt);
+        });
+        if (saved) sel.value = saved;
+      }
+
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.onvoiceschanged = populateTTSVoices;
+        populateTTSVoices();
+      }
+
+      function testTTS() {
+        speakText("Hello, this is a test of the voice assistant.");
+      }
+
+      function speakText(msg) {
+        if (!("speechSynthesis" in window)) return;
+        if (!document.getElementById("tts-enabled").checked) return;
+        const output = document.querySelector('input[name="output-device"]:checked')?.value || "browser-speaker";
+        if (output !== "browser-speaker") return;
+        const rate = parseFloat(document.getElementById("tts-rate").value) || 1.0;
+        const voice = document.getElementById("tts-voice").value;
+        const vol = (parseInt(document.getElementById("vol-browser").value) || 80) / 100;
+        const utt = new SpeechSynthesisUtterance(msg);
+        utt.lang = "en-US";
+        utt.volume = vol;
+        utt.rate = rate;
+        if (voice) {
+          const v = window.speechSynthesis.getVoices().find((v) => v.name === voice);
+          if (v) utt.voice = v;
+        }
+        window.speechSynthesis.cancel();
+        window._lastUtterance = utt;
+        window.speechSynthesis.speak(utt);
+      }
+
+      loadVoiceSettings();
+      loadDeviceSettings();
+      loadDeviceList();
+
+      // ── Alert indicator ───────────────────────────────────────────
+      fetch("/api/health/alerts")
+        .then((r) => r.json())
+        .then((data) => {
+          const active = (data || []).filter((a) => !a.resolved_at);
+          const el = document.getElementById("alert-indicator");
+          if (!el || active.length === 0) return;
+          const worst = active.some((a) => a.severity === "critical" || a.severity === "error") ? "error" : "warn";
+          el.textContent = " ⬤";
+          el.style.color = worst === "error" ? "#e74c3c" : "#e67e22";
+          el.title = `${active.length} active alert(s)`;
+        })
+        .catch(() => {});
+
+      // ── Recording ─────────────────────────────────────────────────
+      async function toggleRecord() {
+        if (mediaRecorder && mediaRecorder.state === "recording") {
+          mediaRecorder.stop();
+          return;
+        }
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioChunks = [];
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+          mediaRecorder.onstop = () => {
+            stream.getTracks().forEach((t) => t.stop());
+            audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+            showAudioPreview(audioBlob);
+            setRecordStatus(false);
+            document.getElementById("transcribe-btn").disabled = false;
+            if (autoMode) runTranscribe();
+          };
+          mediaRecorder.start();
+          setRecordStatus(true);
+        } catch (e) {
+          setStatus("Microphone error: " + e.message);
+        }
+      }
+
+      function setRecordStatus(active) {
+        const btn = document.getElementById("record-btn");
+        const lbl = document.getElementById("record-status");
+        if (active) {
+          btn.classList.add("active");
+          btn.textContent = "⏹";
+          lbl.textContent = "Recording… click to stop";
+          lbl.classList.add("active");
+        } else {
+          btn.classList.remove("active");
+          btn.textContent = "🎤";
+          lbl.textContent = "Recording ready — click Transcribe";
+          lbl.classList.remove("active");
+        }
+      }
+
+      function showAudioPreview(blob) {
+        const url = URL.createObjectURL(blob);
+        document.getElementById("audio-player").src = url;
+        document.getElementById("audio-preview").style.display = "";
+      }
+
+      // ── File upload ───────────────────────────────────────────────
+      function handleFileSelect(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        audioBlob = file;
+        showAudioPreview(file);
+        document.getElementById("record-status").textContent = `File: ${file.name}`;
+        document.getElementById("transcribe-btn").disabled = false;
+        document.getElementById("upload-zone").textContent = "✓ " + file.name;
+      }
+
+      function handleDrop(e) {
+        e.preventDefault();
+        document.getElementById("upload-zone").classList.remove("drag-over");
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        audioBlob = file;
+        showAudioPreview(file);
+        document.getElementById("record-status").textContent = `File: ${file.name}`;
+        document.getElementById("transcribe-btn").disabled = false;
+        document.getElementById("upload-zone").textContent = "✓ " + file.name;
+      }
+
+      // ── Transcribe ────────────────────────────────────────────────
+      async function runTranscribe() {
+        if (!audioBlob) return;
+        setStatus("");
+        document.getElementById("transcribe-spinner").style.display = "";
+        document.getElementById("transcribe-btn").disabled = true;
+        try {
+          const form = new FormData();
+          form.append("audio", audioBlob, audioBlob.name || "recording.webm");
+          const r = await fetch("/api/voice/transcribe", { method: "POST", body: form });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || "Transcription failed");
+          transcriptText = data.text || "";
+          const el = document.getElementById("transcript-text");
+          if (transcriptText) {
+            el.textContent = transcriptText;
+            el.classList.remove("empty");
+            document.getElementById("intent-btn").disabled = false;
+            if (autoMode) runIntent();
+          } else {
+            el.textContent = "(no speech detected)";
+            el.classList.add("empty");
+          }
+        } catch (e) {
+          setStatus("Error: " + e.message);
+        } finally {
+          document.getElementById("transcribe-spinner").style.display = "none";
+          document.getElementById("transcribe-btn").disabled = false;
+        }
+      }
+
+      // ── Intent ────────────────────────────────────────────────────
+      async function runIntent() {
+        if (!transcriptText) return;
+        // If waiting for confirm answer — check yes/no instead of full pipeline
+        if (pendingConfirm) {
+          checkConfirmAnswer(transcriptText);
+          return;
+        }
+        setStatus("");
+        document.getElementById("intent-spinner").style.display = "";
+        document.getElementById("intent-btn").disabled = true;
+        try {
+          const r = await fetch("/api/voice/intent", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: transcriptText })
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || "Intent extraction failed");
+
+          if (data._usage) logToken(transcriptText, data.intent, data._usage);
+          const displayData = Object.fromEntries(Object.entries(data).filter(([k]) => k !== "_usage"));
+          document.getElementById("intent-raw").textContent = JSON.stringify(displayData, null, 2);
+
+          const nameEl = document.getElementById("intent-name");
+          nameEl.innerHTML = `<span class="badge-intent">${data.intent || "—"}</span>`;
+          nameEl.classList.remove("empty");
+
+          const conf = data.confidence || "—";
+          const confEl = document.getElementById("intent-confidence");
+          confEl.textContent = conf;
+          confEl.className = "val confidence-" + conf;
+
+          const langEl = document.getElementById("intent-lang");
+          langEl.textContent = data.original_language || "—";
+          langEl.classList.remove("empty");
+
+          const params = data.params || {};
+          const paramsEl = document.getElementById("intent-params");
+          paramsEl.textContent = Object.keys(params).length ? JSON.stringify(params) : "none";
+          paramsEl.classList.remove("empty");
+
+          lastIntent = data.intent || null;
+          lastParams = params;
+          document.getElementById("execute-btn").disabled = !lastIntent;
+          if (autoMode) runRequest();
+        } catch (e) {
+          setStatus("Error: " + e.message);
+        } finally {
+          document.getElementById("intent-spinner").style.display = "none";
+          document.getElementById("intent-btn").disabled = false;
+        }
+      }
+
+      // ── Execute intent ────────────────────────────────────────────
+      let lastIntent = null;
+      let lastParams = {};
+      let pendingConfirm = false; // waiting for yes/no after confirm prompt
+
+      function getDeviceConfig() {
+        if (!lastIntent) return null;
+        return (
+          voiceDevices.find(
+            (d) =>
+              d.enabled &&
+              d.intent &&
+              d.intent
+                .split(",")
+                .map((s) => s.trim())
+                .includes(lastIntent)
+          ) || null
+        );
+      }
+      function getResponseStyle() {
+        return getDeviceConfig()?.response_style || "short";
+      }
+      function getCustomResponse() {
+        const d = getDeviceConfig();
+        if (!d || !d.custom_text_enabled) return null;
+        return d.custom_response_text || null;
+      }
+      function getConfirmQuestion() {
+        return getDeviceConfig()?.custom_confirm_text || "Want me to do that?";
+      }
+      function getNoResponse() {
+        return getDeviceConfig()?.custom_no_text || "Cancelled.";
+      }
+      function buildResponse(data, style) {
+        if (style === "full" || style === "full_confirm") return data.message || data.error || JSON.stringify(data);
+        // short: strip detail after first sentence
+        const msg = data.message || data.error || JSON.stringify(data);
+        return msg.split(/[.!?]/)[0].trim() || msg;
+      }
+
+      async function runRequest() {
+        if (!lastIntent) return;
+        const style = getResponseStyle();
+        const isConfirm = style.includes("confirm");
+
+        // If confirm style and not yet confirmed — ask the question
+        if (isConfirm && !pendingConfirm) {
+          pendingConfirm = true;
+          const q = getConfirmQuestion();
+          showResult(q, false);
+          speakText(q);
+          setStatus("Waiting for yes/no…");
+          if (autoMode) {
+            // start mic only after TTS finishes
+            if ("speechSynthesis" in window && document.getElementById("tts-enabled").checked) {
+              const utt = window._lastUtterance;
+              if (utt) {
+                utt.onend = () => setTimeout(() => toggleRecord(), 500);
+              } else {
+                setTimeout(() => toggleRecord(), 1500);
+              }
+            } else {
+              setTimeout(() => toggleRecord(), 500);
+            }
+          }
+          return;
+        }
+
+        const wasConfirmed = pendingConfirm; // true = user just said yes
+        pendingConfirm = false;
+        setStatus("");
+        document.getElementById("execute-spinner").style.display = "";
+        document.getElementById("execute-btn").disabled = true;
+        try {
+          const r = await fetch("/api/request", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ intent: lastIntent, params: lastParams, confirmed: wasConfirmed })
+          });
+          const data = await r.json();
+          const custom = getCustomResponse();
+          const msg = custom || buildResponse(data, style);
+          showResult(msg, data.ok === false);
+          if (msg) speakText(msg);
+        } catch (e) {
+          setStatus("Error: " + e.message);
+        } finally {
+          document.getElementById("execute-spinner").style.display = "none";
+          document.getElementById("execute-btn").disabled = false;
+        }
+      }
+
+      function showResult(msg, isError) {
+        const el = document.getElementById("request-result");
+        el.textContent = msg;
+        el.className = "step-text" + (isError ? " empty" : "");
+        document.getElementById("step3-card").style.display = "";
+      }
+
+      // Yes/no detection — called from runIntent when pendingConfirm is set
+      const YES_WORDS = ["yes", "yeah", "yep", "sure", "ok", "okay", "כן", "да", "ага", "конечно", "בטח"];
+      const NO_WORDS = ["no", "nope", "cancel", "stop", "לא", "нет", "не надо"];
+      function checkConfirmAnswer(text) {
+        if (!pendingConfirm) return false;
+        const t = text.toLowerCase().trim();
+        if (YES_WORDS.some((w) => t.includes(w))) {
+          setStatus("");
+          runRequest(); // pendingConfirm is still true → will be cleared inside and execute
+          return true;
+        }
+        {
+          // anything that isn't yes → cancel
+          const noMsg = getNoResponse();
+          pendingConfirm = false;
+          lastIntent = null;
+          showResult(noMsg, false);
+          speakText(noMsg);
+          document.getElementById("execute-btn").disabled = true;
+          return true;
+        }
+        return false;
+      }
+
+      // ── Token logging ─────────────────────────────────────────────
+      const PRICE_IN = 0.8 / 1_000_000;
+      const PRICE_OUT = 4.0 / 1_000_000;
+
+      async function logToken(text, intent, usage) {
+        const cost = usage.input_tokens * PRICE_IN + usage.output_tokens * PRICE_OUT;
+        try {
+          await fetch("/api/voice/token-log", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              input_text: text,
+              intent,
+              input_tokens: usage.input_tokens,
+              output_tokens: usage.output_tokens,
+              cost_usd: cost,
+              model: usage.model
+            })
+          });
+        } catch (_) {}
+        renderTokenLog();
+      }
+
+      async function renderTokenLog() {
+        const tbody = document.getElementById("token-log-body");
+        const tfoot = document.getElementById("token-log-foot");
+        const limit = document.getElementById("token-log-limit")?.value || 50;
+        try {
+          const r = await fetch(`/api/voice/token-log?limit=${limit}`);
+          const data = await r.json();
+          const rows = data.rows || [];
+          const totals = data.totals || {};
+          if (!rows.length) {
+            tbody.innerHTML =
+              '<tr><td colspan="6" style="padding:16px 8px; color:#ccc; font-style:italic;">No calls yet</td></tr>';
+            tfoot.style.display = "none";
+            document.getElementById("token-total-cost").textContent = "$0.000000";
+            return;
+          }
+          tbody.innerHTML = rows
+            .map((r) => {
+              const t = new Date(r.ts);
+              const time = t.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+              const text = (r.input_text || "").slice(0, 60);
+              return `<tr style="border-bottom:1px solid #f0ebe6;">
+          <td style="padding:6px 8px; white-space:nowrap; color:#aaa;">${time}</td>
+          <td style="padding:6px 8px; color:#555; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.input_text || ""}">${text}</td>
+          <td style="padding:6px 8px;"><span class="badge-intent" style="font-size:0.72rem;">${r.intent || "—"}</span></td>
+          <td style="padding:6px 8px; text-align:right; color:#777;">${r.input_tokens}</td>
+          <td style="padding:6px 8px; text-align:right; color:#777;">${r.output_tokens}</td>
+          <td style="padding:6px 8px; text-align:right; color:#27ae60; font-weight:600;">$${parseFloat(r.cost_usd).toFixed(6)}</td>
+        </tr>`;
+            })
+            .join("");
+          document.getElementById("foot-in").textContent = totals.total_in || 0;
+          document.getElementById("foot-out").textContent = totals.total_out || 0;
+          document.getElementById("foot-cost").textContent = "$" + parseFloat(totals.total_cost || 0).toFixed(6);
+          document.getElementById("token-total-cost").textContent = "$" + parseFloat(totals.total_cost || 0).toFixed(6);
+          tfoot.style.display = "";
+        } catch (_) {}
+      }
+
+      renderTokenLog();
+
+      // ── Helpers ───────────────────────────────────────────────────
+      function setStatus(msg) {
+        document.getElementById("status-msg").textContent = msg;
+      }
+
+      function clearAll() {
+        audioBlob = null;
+        transcriptText = "";
+        mediaRecorder = null;
+        audioChunks = [];
+
+        document.getElementById("audio-preview").style.display = "none";
+        document.getElementById("audio-player").src = "";
+        document.getElementById("record-status").textContent = "Click to start recording";
+        document.getElementById("record-status").classList.remove("active");
+        document.getElementById("record-btn").classList.remove("active");
+        document.getElementById("record-btn").textContent = "🎤";
+        document.getElementById("upload-zone").textContent = "📁 Click or drag a WAV / MP3 file here";
+        document.getElementById("file-input").value = "";
+        document.getElementById("transcribe-btn").disabled = true;
+        document.getElementById("intent-btn").disabled = true;
+
+        const el = document.getElementById("transcript-text");
+        el.textContent = "Waiting for audio…";
+        el.classList.add("empty");
+
+        document.getElementById("intent-name").innerHTML = "—";
+        document.getElementById("intent-name").className = "val empty";
+        document.getElementById("intent-confidence").textContent = "—";
+        document.getElementById("intent-confidence").className = "val empty";
+        document.getElementById("intent-lang").textContent = "—";
+        document.getElementById("intent-lang").className = "val empty";
+        document.getElementById("intent-params").textContent = "—";
+        document.getElementById("intent-params").className = "val empty";
+        document.getElementById("intent-raw").textContent = "{ }";
+        document.getElementById("execute-btn").disabled = true;
+        document.getElementById("step3-card").style.display = "none";
+        document.getElementById("request-result").textContent = "—";
+        lastIntent = null;
+        lastParams = {};
+        pendingConfirm = false;
+        setStatus("");
+      }
+
+      // ── PHRASES TAB constants ────────────────────────────────────
+      const LANG_FLAGS = { he: "🇮🇱", ru: "🇷🇺", en: "🇬🇧" };
+
+      // ── PHRASES TAB ────────────────────────────────────────────────
+      const PH_INTENT_OPTS = {
+        boiler: ["boiler_on", "boiler_off", "boiler_status", "shower_prepare", "bath_prepare"],
+        switch: ["switch_on", "switch_off"],
+        switch_group: ["switch_on", "switch_off"]
+      };
+      const TYPE_LABELS = { boiler: "🔥 Boiler", switch: "🔌 Switch", switch_group: "🔌🔌 Switch Group" };
+      let _allPhrases = [];
+
+      function updatePhAddIntents() {
+        const type = document.getElementById("ph-add-type").value;
+        const sel = document.getElementById("ph-add-intent");
+        sel.innerHTML = (PH_INTENT_OPTS[type] || PH_INTENT_OPTS["switch"])
+          .map((i) => `<option value="${i}">${i}</option>`)
+          .join("");
+      }
+
+      async function loadPhrases() {
+        const tbody = document.getElementById("ph-tbody");
+        tbody.innerHTML =
+          '<tr><td colspan="7" style="padding:12px 8px;color:#aaa;font-size:0.82rem;">Loading…</td></tr>';
+        try {
+          const r = await fetch("/api/voice/phrases");
+          _allPhrases = await r.json();
+          renderPhrases();
+        } catch (e) {
+          tbody.innerHTML = `<tr><td colspan="7" style="padding:12px 8px;color:#c0392b;font-size:0.82rem;">Error: ${e.message}</td></tr>`;
+        }
+      }
+
+      function renderPhrases() {
+        const tbody = document.getElementById("ph-tbody");
+        const empty = document.getElementById("ph-empty");
+        const filterType = document.getElementById("ph-filter-type").value;
+        const filterLang = document.getElementById("ph-filter-lang").value;
+        const rows = _allPhrases.filter(
+          (p) => (!filterType || p.device_type === filterType) && (!filterLang || p.language.trim() === filterLang)
+        );
+        document.getElementById("ph-count").textContent = rows.length + " phrase" + (rows.length !== 1 ? "s" : "");
+        if (!rows.length) {
+          tbody.innerHTML = "";
+          empty.style.display = "";
+          return;
+        }
+        empty.style.display = "none";
+        tbody.innerHTML = rows
+          .map(
+            (p, idx) => `
+      <tr style="border-bottom:1px solid #f0ebe6; ${p.enabled ? "" : "opacity:0.5;"}">
+        <td style="padding:5px 8px; text-align:center;">
+          <input type="number" value="${p.sort_order || 0}" min="0" max="999"
+            style="width:46px;padding:2px 4px;text-align:center;border:1px solid #d0cbc4;border-radius:3px;font-size:0.82rem;"
+            onchange="savePhraseOrder(${p.id},this.value)"
+            onkeydown="if(event.key==='Enter')this.blur()">
+        </td>
+        <td style="padding:5px 8px; font-size:0.8rem; color:#888;">${TYPE_LABELS[p.device_type] || p.device_type}</td>
+        <td style="padding:5px 8px; font-size:0.82rem;">${p.intent}</td>
+        <td style="padding:5px 8px; text-align:center;">${LANG_FLAGS[p.language] || p.language}</td>
+        <td style="padding:5px 8px; direction:auto;">${p.phrase}</td>
+        <td style="padding:5px 8px; text-align:center;">
+          <input type="checkbox" ${p.enabled ? "checked" : ""} onchange="togglePhrase(${p.id},this.checked)" style="cursor:pointer;">
+        </td>
+        <td style="padding:5px 8px; text-align:center;">
+          <button onclick="deletePhrase(${p.id})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.95rem;padding:0 4px;">✕</button>
+        </td>
+      </tr>`
+          )
+          .join("");
+      }
+
+      async function savePhraseOrder(id, val) {
+        const sort_order = parseInt(val) || 0;
+        await fetch("/api/voice/phrases/" + id, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sort_order })
+        });
+        const p = _allPhrases.find((x) => x.id === id);
+        if (p) p.sort_order = sort_order;
+      }
+
+      async function togglePhrase(id, enabled) {
+        await fetch("/api/voice/phrases/" + id, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled })
+        });
+        const p = _allPhrases.find((x) => x.id === id);
+        if (p) {
+          p.enabled = enabled;
+          renderPhrases();
+        }
+      }
+
+      async function addPhrase() {
+        const phrase = document.getElementById("ph-add-text").value.trim();
+        const intent = document.getElementById("ph-add-intent").value;
+        const language = document.getElementById("ph-add-lang").value;
+        const device_type = document.getElementById("ph-add-type").value;
+        const sort_order = parseInt(document.getElementById("ph-add-order").value) || 0;
+        const st = document.getElementById("ph-add-status");
+        if (!phrase) {
+          st.textContent = "Enter a phrase";
+          st.style.color = "#c0392b";
+          setTimeout(() => {
+            st.textContent = "";
+          }, 2000);
+          return;
+        }
+        try {
+          const r = await fetch("/api/voice/phrases", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phrase, intent, language, device_type, sort_order })
+          });
+          if (!r.ok) {
+            const e = await r.json();
+            st.textContent = e.error || "Error";
+            st.style.color = "#c0392b";
+            setTimeout(() => {
+              st.textContent = "";
+            }, 3000);
+            return;
+          }
+          document.getElementById("ph-add-text").value = "";
+          st.textContent = "✓ Added";
+          st.style.color = "#27ae60";
+          setTimeout(() => {
+            st.textContent = "";
+          }, 2000);
+          loadPhrases();
+        } catch (e) {
+          st.textContent = e.message;
+          st.style.color = "#c0392b";
+        }
+      }
+
+      async function deletePhrase(id) {
+        if (!confirm("Delete this phrase?")) return;
+        await fetch("/api/voice/phrases/" + id, { method: "DELETE" });
+        loadPhrases();
+      }
+    </script>
+  </body>
+</html>

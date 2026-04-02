@@ -1,3 +1,12 @@
+const RAW_CACHE         = '_data_raw_tbody';
+const AGENT_CACHE       = '_data_agent_tbody';
+const CONSUMPTION_CACHE = '_data_consumption_tbody';
+
+// Restore cached tbodys instantly — prevents height jump on page load
+try { const c = localStorage.getItem(RAW_CACHE);         if (c) document.getElementById('raw-body').innerHTML         = c; } catch(e) {}
+try { const c = localStorage.getItem(AGENT_CACHE);       if (c) document.getElementById('agent-body').innerHTML       = c; } catch(e) {}
+try { const c = localStorage.getItem(CONSUMPTION_CACHE); if (c) document.getElementById('consumption-body').innerHTML = c; } catch(e) {}
+
 function fmtTs(ts) {
   if (!ts) return '—';
   return new Date(ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
@@ -23,12 +32,16 @@ function fmtWhy(w) {
   return `<span title="${escaped}" style="cursor:default">${short}</span>`;
 }
 
+function setHTML(el, html) {
+  el.innerHTML = html;
+}
+
 async function loadRaw() {
   const limit = document.getElementById('raw-limit').value;
   try {
     const rows = await fetch(`/api/raw-data?limit=${limit}`).then(r => r.json());
     const tbody = document.getElementById('raw-body');
-    tbody.innerHTML = rows.map(r => `
+    const html = rows.map(r => `
       <tr>
         <td>${fmtTs(r.ts)}</td>
         <td>${fmtTemp(r.boiler_temp)}</td>
@@ -36,6 +49,8 @@ async function loadRaw() {
         <td>${fmtValve(r.valve_state)}</td>
       </tr>
     `).join('');
+    setHTML(tbody, html);
+    try { localStorage.setItem(RAW_CACHE, html); } catch(e) {}
   } catch (e) {
     console.error('loadRaw error:', e);
   }
@@ -46,7 +61,7 @@ async function loadAgent() {
   try {
     const rows = await fetch(`/api/agent-data?limit=${limit}`).then(r => r.json());
     const tbody = document.getElementById('agent-body');
-    tbody.innerHTML = rows.map(r => `
+    const html = rows.map(r => `
       <tr>
         <td>${fmtTs(r.ts)}</td>
         <td>${fmtTemp(r.boiler_temp)}</td>
@@ -61,6 +76,8 @@ async function loadAgent() {
         <td style="font-family:monospace">${fmtVersion(r.version)}</td>
       </tr>
     `).join('');
+    setHTML(tbody, html);
+    try { localStorage.setItem(AGENT_CACHE, html); } catch(e) {}
   } catch (e) {
     console.error('loadAgent error:', e);
   }
@@ -73,12 +90,13 @@ async function loadConsumptions() {
     const tbody = document.getElementById('consumption-body');
     const empty = document.getElementById('consumption-empty');
     if (!rows.length) {
-      tbody.innerHTML = '';
+      setHTML(tbody, '');
       empty.style.display = '';
+      try { localStorage.removeItem(CONSUMPTION_CACHE); } catch(e) {}
       return;
     }
     empty.style.display = 'none';
-    tbody.innerHTML = rows.map(r => `
+    const html = rows.map(r => `
       <tr>
         <td>${fmtTs(r.start_ts)}</td>
         <td>${fmtTs(r.end_ts)}</td>
@@ -88,15 +106,17 @@ async function loadConsumptions() {
         <td>${r.duration_min} min</td>
       </tr>
     `).join('');
+    setHTML(tbody, html);
+    try { localStorage.setItem(CONSUMPTION_CACHE, html); } catch(e) {}
   } catch (e) {
     console.error('loadConsumptions error:', e);
   }
 }
 
-async function refreshAll() {
+async function refreshDataAll() {
   await Promise.all([loadRaw(), loadAgent(), loadConsumptions()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
 
-refreshAll();
+refreshDataAll();

@@ -3,12 +3,23 @@ const { Pool } = require('pg');
 const { NodeSSH } = require('node-ssh');
 const path = require('path');
 const { exec } = require('child_process');
+const net = require('net');
 const _anthropic = require('@anthropic-ai/sdk');
 const Anthropic = _anthropic.default || _anthropic;
+const multer = require('multer');
+const fs = require('fs');
+
+
+const os = require('os');
+const voiceUploadDir = path.join(os.tmpdir(), 'voice-uploads');
+if (!fs.existsSync(voiceUploadDir)) fs.mkdirSync(voiceUploadDir, { recursive: true });
+const upload = multer({ dest: voiceUploadDir });
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 // PostgreSQL connection to LXC 102
 const db = new Pool({
@@ -93,8 +104,10 @@ app.get('/api/agent-data', async (req, res) => {
 
 // ─── Graph data ───────────────────────────────────────────────
 app.get('/api/graph', async (req, res) => {
-  const range = req.query.range || '6h';
+  const range      = req.query.range || '6h';
   const resolution = req.query.resolution || '15m';
+  const fromTs     = req.query.from || null;
+  const toTs       = req.query.to   || null;
 
   const rangeMap = { '1h': '1 hour', '6h': '6 hours', '24h': '24 hours' };
   const resMap   = { '5m': '5 minutes', '15m': '15 minutes', '1h': '1 hour', '6h': '6 hours', '1d': '1 day' };
@@ -107,17 +120,29 @@ app.get('/api/graph', async (req, res) => {
   }[bucket] || 900;
 
   try {
-    const r = await db.query(`
-      SELECT
-        to_timestamp(floor(extract(epoch from ts) / $1) * $1) AS t,
-        AVG(boiler_temp) AS boiler_temp,
-        AVG(panel_temp)  AS panel_temp,
-        BOOL_OR(valve_state) AS valve_state
-      FROM raw_data
-      WHERE ts >= NOW() - $2::interval
-      GROUP BY t
-      ORDER BY t ASC
-    `, [bucketSeconds, interval]);
+    const r = (fromTs && toTs)
+      ? await db.query(`
+          SELECT
+            to_timestamp(floor(extract(epoch from ts) / $1) * $1) AS t,
+            AVG(boiler_temp) AS boiler_temp,
+            AVG(panel_temp)  AS panel_temp,
+            BOOL_OR(valve_state) AS valve_state
+          FROM raw_data
+          WHERE ts >= $2 AND ts < $3
+          GROUP BY t
+          ORDER BY t ASC
+        `, [bucketSeconds, fromTs, toTs])
+      : await db.query(`
+          SELECT
+            to_timestamp(floor(extract(epoch from ts) / $1) * $1) AS t,
+            AVG(boiler_temp) AS boiler_temp,
+            AVG(panel_temp)  AS panel_temp,
+            BOOL_OR(valve_state) AS valve_state
+          FROM raw_data
+          WHERE ts >= NOW() - $2::interval
+          GROUP BY t
+          ORDER BY t ASC
+        `, [bucketSeconds, interval]);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -238,21 +263,83 @@ app.post('/api/deploy', async (req, res) => {
 // ─── Weather scores ───────────────────────────────────────────
 app.get('/api/weather/scores', async (req, res) => {
   try {
-    const [w, d] = await Promise.all([
-      db.query('SELECT * FROM raw_weather ORDER BY ts DESC LIMIT 1'),
-      db.query("SELECT * FROM raw_weather_daily WHERE forecast_date = CURRENT_DATE ORDER BY ts DESC LIMIT 1"),
-    ]);
-    const cur  = w.rows[0] || {};
-    const day  = d.rows[0] || {};
-
     const conditionBase = {
-      sunny: { solar: 8, rain: 1 },
+      sunny:        { solar: 8, rain: 1 },
       partlycloudy: { solar: 5, rain: 2 },
       cloudy:       { solar: 2, rain: 4 },
       rainy:        { solar: 1, rain: 7 },
       pouring:      { solar: 1, rain: 9 },
       snowy:        { solar: 1, rain: 6 },
     };
+
+    // Fetch sun state from HA to decide day vs night mode
+    let isNight = false;
+    let nextRising  = null;
+    let nextSetting = null;
+    try {
+      const sunRes = await fetch(`${HA_URL}/api/states/sun.sun`, {
+        headers: { Authorization: `Bearer ${HA_TOKEN}` },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (sunRes.ok) {
+        const sun   = await sunRes.json();
+        isNight     = sun.state === 'below_horizon';
+        nextRising  = sun.attributes?.next_rising  || null;
+        nextSetting = sun.attributes?.next_setting || null;
+      }
+    } catch (_) { /* fall through to daytime logic */ }
+
+    const fmtSunTime = iso => iso
+      ? new Date(iso).toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit' })
+      : null;
+
+    if (isNight) {
+      // Night mode: score based on tomorrow's forecast
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowDate = tomorrow.toISOString().slice(0, 10);
+      const d = await db.query(
+        "SELECT * FROM raw_weather_daily WHERE forecast_date = $1 ORDER BY ts DESC LIMIT 1",
+        [tomorrowDate]
+      );
+      const day    = d.rows[0] || {};
+      const cond   = (day.condition || '').toLowerCase();
+      const base   = conditionBase[cond] || { solar: 3, rain: 3 };
+      const precip = parseFloat(day.precipitation_mm) || 0;
+      const rainBonus  = precip >= 5 ? 3 : precip >= 2 ? 2 : precip > 0 ? 1 : 0;
+      const solar_score = Math.min(10, Math.max(1, base.solar));
+      const rain_score  = Math.min(10, Math.max(1, base.rain + rainBonus));
+
+      // Format next sunrise in Jerusalem time
+      let sunriseLabel = null;
+      if (nextRising) {
+        sunriseLabel = new Date(nextRising).toLocaleTimeString('he-IL', {
+          timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit',
+        });
+      }
+
+      return res.json({
+        solar_score,
+        rain_score,
+        condition:        day.condition || null,
+        uv:               0,
+        precipitation:    precip,
+        forecast_date:    day.forecast_date || null,
+        is_forecast:      true,
+        next_sunrise:     fmtSunTime(nextRising),
+        next_sunset:      fmtSunTime(nextSetting),
+        next_rising_iso:  nextRising,
+        next_setting_iso: nextSetting,
+      });
+    }
+
+    // Daytime: live score
+    const [w, d] = await Promise.all([
+      db.query('SELECT * FROM raw_weather ORDER BY ts DESC LIMIT 1'),
+      db.query("SELECT * FROM raw_weather_daily WHERE forecast_date = CURRENT_DATE ORDER BY ts DESC LIMIT 1"),
+    ]);
+    const cur  = w.rows[0] || {};
+    const day  = d.rows[0] || {};
 
     const cond   = (cur.condition || '').toLowerCase();
     const base   = conditionBase[cond] || { solar: 3, rain: 3 };
@@ -268,10 +355,15 @@ app.get('/api/weather/scores', async (req, res) => {
     res.json({
       solar_score,
       rain_score,
-      condition:      cur.condition || null,
-      uv:             uv,
-      precipitation:  precip,
-      forecast_date:  day.forecast_date || null,
+      condition:        cur.condition || null,
+      uv:               uv,
+      precipitation:    precip,
+      forecast_date:    day.forecast_date || null,
+      is_forecast:      false,
+      next_sunrise:     fmtSunTime(nextRising),
+      next_sunset:      fmtSunTime(nextSetting),
+      next_rising_iso:  nextRising,
+      next_setting_iso: nextSetting,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -332,8 +424,16 @@ app.get('/api/timer', async (req, res) => {
 app.get('/api/consumptions', async (req, res) => {
   const limit = parseInt(req.query.limit) || 20;
   const from  = req.query.from || null;
+  const to    = req.query.to   || null;
   try {
-    const r = from
+    const r = (from && to)
+      ? await db.query(`
+          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at
+          FROM boiler_consumptions
+          WHERE start_ts >= $1 AND start_ts < $2
+          ORDER BY start_ts ASC
+        `, [from, to])
+      : from
       ? await db.query(`
           SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at
           FROM boiler_consumptions
@@ -571,6 +671,16 @@ RESPONSE FORMAT — return ONLY valid JSON, no text outside:
 const SSH_TIMEOUT = 5000;
 let statusCache = null; // updated every 60s in background
 
+function tcpCheck(host, port) {
+  return new Promise(resolve => {
+    const socket = new net.Socket();
+    socket.setTimeout(3000);
+    socket.connect(port, host, () => { socket.destroy(); resolve({ ok: true }); });
+    socket.on('error', () => { socket.destroy(); resolve({ ok: false }); });
+    socket.on('timeout', () => { socket.destroy(); resolve({ ok: false, error: 'timeout' }); });
+  });
+}
+
 async function sshCheck(host, commands) {
   const ssh = new NodeSSH();
   const attempt = async () => {
@@ -595,24 +705,15 @@ async function sshCheck(host, commands) {
 
 async function runHealthChecks() {
   const [
-    pgResult, haResult, lxc103Result, lxc104Result, lxc105Result, pm2Result,
-    rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult,
+    pgResult, haResult, pm2Result,
+    rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts,
+    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(5000) })
       .then(r => ({ ok: r.ok })).catch(e => ({ ok: false, error: e.message })),
-    sshCheck('192.168.1.114', {
-      svc: 'systemctl is-active boiler-agent',
-      cron1: 'crontab -l 2>/dev/null | grep -c ha_to_pg',
-      cron2: 'crontab -l 2>/dev/null | grep -c collect_weather',
-    }),
-    sshCheck('192.168.1.227', { check: 'echo ok' }),
-    sshCheck('192.168.1.187', {
-      timer: 'systemctl is-active main-agent.timer',
-      quick: 'systemctl is-active main-agent-quick.timer',
-    }),
     new Promise(resolve => {
-      exec('pm2.cmd jlist', (err, stdout) => {
+      exec('pm2.cmd jlist', { windowsHide: true }, (err, stdout) => {
         if (err) { resolve({ ok: false, error: err.message }); return; }
         try {
           const procs = JSON.parse(stdout);
@@ -629,45 +730,44 @@ async function runHealthChecks() {
       db.query('SELECT ts, decision FROM agent_boiler_data ORDER BY ts DESC LIMIT 1').catch(() => ({ rows: [] })),
       db.query('SELECT run_interval_min FROM agent_settings LIMIT 1').catch(() => ({ rows: [] })),
     ]).then(([bd, si]) => ({ lastTs: bd.rows[0]?.ts || null, decision: bd.rows[0]?.decision || null, runInterval: si.rows[0]?.run_interval_min || 5 })),
+    db.query(`SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND affected_agent = 'boiler' AND alert_type IN ('service_down','service_ssh_failed')`)
+      .then(r => ({ ok: parseInt(r.rows[0]?.n) === 0 })).catch(() => ({ ok: null })),
+    tcpCheck('192.168.1.110', 8123),  // VM 101 — Home Assistant
+    tcpCheck('192.168.1.138', 22),    // LXC 100
+    tcpCheck('192.168.1.219', 22),    // LXC 102 — Database
+    tcpCheck('192.168.1.114', 22),    // LXC 103 — Agents
+    tcpCheck('192.168.1.227', 22),    // LXC 104 — Commands
+    tcpCheck('192.168.1.187', 22),    // LXC 105 — MainAgent
+    tcpCheck('192.168.1.188', 22),    // LXC 106 — Voice
   ]);
 
   const r = {};
+  // Infrastructure
   r.postgres      = pgResult;
   r.homeassistant = haResult;
-  r.lxc104        = { ok: lxc104Result.ok };
-  r.pm2           = pm2Result;
-
-  if (lxc103Result.ok) {
-    r.lxc103          = { ok: true };
-    r.boiler_agent    = { ok: lxc103Result.svc === 'active', status: lxc103Result.svc };
-    r.ha_to_pg        = { cron_ok: parseInt(lxc103Result.cron1) > 0 };
-    r.collect_weather = { cron_ok: parseInt(lxc103Result.cron2) > 0 };
-  } else {
-    r.lxc103          = { ok: false, error: lxc103Result.error };
-    r.boiler_agent    = { ok: false, status: 'unknown' };
-    r.ha_to_pg        = { cron_ok: false };
-    r.collect_weather = { cron_ok: false };
-  }
-
-  if (lxc105Result.ok) {
-    r.orchestrator = { ok: lxc105Result.timer === 'active' && lxc105Result.quick === 'active', timer: lxc105Result.timer, quick: lxc105Result.quick };
-  } else {
-    r.orchestrator = { ok: false, error: lxc105Result.error };
-  }
-
+  // VM + LXC (TCP checks)
+  r.vm101  = { ok: vm101Result.ok };
+  r.lxc100 = { ok: lxc100Result.ok };
+  r.lxc102 = { ok: lxc102Result.ok };
+  r.lxc103 = { ok: lxc103Result.ok };
+  r.lxc104 = { ok: lxc104Result.ok };
+  r.lxc105 = { ok: lxc105Result.ok };
+  r.lxc106 = { ok: lxc106Result.ok };
+  // Server
+  r.pm2 = pm2Result;
+  // Services — boiler_agent status from orchestrator's system_alerts
+  r.boiler_agent = { ok: boilerServiceAlerts.ok };
+  // Scripts — data freshness from DB
   const htpAge = rawDataResult ? (Date.now() - new Date(rawDataResult).getTime()) / 60000 : null;
-  r.ha_to_pg = { ...r.ha_to_pg, last_ts: rawDataResult, age_min: htpAge !== null ? Math.round(htpAge) : null, data_ok: htpAge !== null && htpAge <= 15 };
-
+  r.ha_to_pg = { last_ts: rawDataResult, age_min: htpAge !== null ? Math.round(htpAge) : null, data_ok: htpAge !== null && htpAge <= 15 };
   const cwAge = rawWeatherResult ? (Date.now() - new Date(rawWeatherResult).getTime()) / 60000 : null;
-  r.collect_weather = { ...r.collect_weather, last_ts: rawWeatherResult, age_min: cwAge !== null ? Math.round(cwAge) : null, data_ok: cwAge !== null && cwAge <= 35 };
-
+  r.collect_weather = { last_ts: rawWeatherResult, age_min: cwAge !== null ? Math.round(cwAge) : null, data_ok: cwAge !== null && cwAge <= 65 };
+  // Data — freshness + orchestrator verdict
   const orchAge = orchLogResult ? (Date.now() - new Date(orchLogResult).getTime()) / 60000 : null;
   r.orchestrator_last_run = { last_ts: orchLogResult, age_min: orchAge !== null ? Math.round(orchAge) : null, ok: orchAge !== null && orchAge <= 70 };
-
-  r.active_alerts = { count: alertsResult.n, worst: alertsResult.worst, ok: alertsResult.n === 0 };
-
   const bdAge = boilerDecisionResult.lastTs ? (Date.now() - new Date(boilerDecisionResult.lastTs).getTime()) / 60000 : null;
   r.boiler_last_decision = { last_ts: boilerDecisionResult.lastTs, age_min: bdAge !== null ? Math.round(bdAge) : null, decision: boilerDecisionResult.decision, ok: bdAge !== null && bdAge <= boilerDecisionResult.runInterval * 3 };
+  r.active_alerts = { count: alertsResult.n, worst: alertsResult.worst, ok: alertsResult.n === 0 };
 
   r.cached_at = new Date().toISOString();
   statusCache = r;
@@ -687,22 +787,37 @@ app.get('/api/health/status', (req, res) => {
 // ─── Project Health — DB Volumes ─────────────────────────────
 app.get('/api/health/db-volumes', async (req, res) => {
   try {
-    const tables = ['raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily', 'boiler_consumptions', 'orchestrator_log', 'sync_signals'];
-    const tsCol  = { raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts', boiler_consumptions: 'start_ts', orchestrator_log: 'ts', sync_signals: 'ts' };
+    const tables = [
+      'raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily',
+      'boiler_consumptions', 'orchestrator_log', 'sync_signals', 'system_alerts',
+      'voice_token_log', 'manual_requests', 'voice_devices', 'voice_device_settings',
+      'voice_intent_phrases', 'voice_device_entities', 'agents', 'agent_settings'
+    ];
+    const tsCol = {
+      raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
+      boiler_consumptions: 'start_ts', orchestrator_log: 'ts', sync_signals: 'ts',
+      system_alerts: 'ts', voice_token_log: 'ts', manual_requests: 'ts',
+      voice_devices: 'created_at', voice_device_settings: 'updated_at',
+      voice_intent_phrases: 'created_at', voice_device_entities: null,
+      agents: 'added_at', agent_settings: null
+    };
 
     const sizes = await db.query(`
       SELECT relname AS table_name,
              n_live_tup AS row_count,
              pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
-             pg_total_relation_size(relid) AS size_bytes
+             pg_total_relation_size(relid) AS size_bytes,
+             GREATEST(last_vacuum, last_autovacuum) AS last_vacuumed
       FROM pg_stat_user_tables
       WHERE relname = ANY($1)
     `, [tables]);
 
     const ranges = await Promise.all(tables.map(t =>
-      db.query(`SELECT MIN(${tsCol[t]}) AS oldest, MAX(${tsCol[t]}) AS newest FROM ${t}`)
-        .then(r => ({ table_name: t, oldest: r.rows[0]?.oldest, newest: r.rows[0]?.newest }))
-        .catch(() => ({ table_name: t, oldest: null, newest: null }))
+      tsCol[t]
+        ? db.query(`SELECT MIN(${tsCol[t]}) AS oldest, MAX(${tsCol[t]}) AS newest FROM ${t}`)
+            .then(r => ({ table_name: t, oldest: r.rows[0]?.oldest, newest: r.rows[0]?.newest }))
+            .catch(() => ({ table_name: t, oldest: null, newest: null }))
+        : Promise.resolve({ table_name: t, oldest: null, newest: null })
     ));
 
     const rangeMap = Object.fromEntries(ranges.map(r => [r.table_name, r]));
@@ -710,7 +825,8 @@ app.get('/api/health/db-volumes', async (req, res) => {
       const s = sizes.rows.find(r => r.table_name === t) || { row_count: 0, total_size: '—', size_bytes: 0 };
       return { table_name: t, row_count: parseInt(s.row_count) || 0,
                total_size: s.total_size, size_bytes: parseInt(s.size_bytes) || 0,
-               oldest: rangeMap[t]?.oldest || null, newest: rangeMap[t]?.newest || null };
+               oldest: rangeMap[t]?.oldest || null, newest: rangeMap[t]?.newest || null,
+               last_vacuumed: s.last_vacuumed || null };
     });
 
     res.json(result);
@@ -761,6 +877,135 @@ app.post('/api/health/cleanup', async (req, res) => {
     }
     res.json({ ok: true, results });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Documents ───────────────────────────────────────────────
+const DOCS_BASE = path.join('C:', 'Users', 'muroc', 'project_home', 'docs');
+
+app.get('/api/documents', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM documents ORDER BY theme, sort_order, created_at');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/documents', async (req, res) => {
+  const { title, url, theme, sort_order } = req.body;
+  if (!title || !url || !theme) return res.status(400).json({ error: 'title, url and theme are required' });
+  try {
+    const r = await db.query(
+      'INSERT INTO documents (title, url, theme, sort_order) VALUES ($1, $2, $3, $4) RETURNING *',
+      [title.trim(), url.trim(), theme, parseInt(sort_order) || 0]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/documents/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM documents WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/documents/file', (req, res) => {
+  const rel = req.query.path;
+  if (!rel) return res.status(400).json({ error: 'path required' });
+  const abs = path.resolve(DOCS_BASE, rel.replace(/^\//, ''));
+  if (!abs.startsWith(DOCS_BASE)) return res.status(403).json({ error: 'forbidden' });
+  res.sendFile(abs);
+});
+
+// ─── Network: latest scan summary ────────────────────────────
+app.get('/api/network/summary', async (req, res) => {
+  try {
+    const [scan, ever] = await Promise.all([
+      db.query('SELECT * FROM net_scans ORDER BY ts DESC LIMIT 1'),
+      db.query('SELECT COUNT(*) AS n FROM net_devices'),
+    ]);
+    const s = scan.rows[0] || {};
+    res.json({
+      total_online:    s.total_online    ?? 0,
+      total_offline:   s.total_offline   ?? 0,
+      total_ever_seen: s.total_ever_seen ?? parseInt(ever.rows[0].n),
+      last_scan:       s.ts              ?? null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Network: device list ─────────────────────────────────────
+app.get('/api/network/devices', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM net_devices ORDER BY last_online DESC NULLS LAST, mac ASC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Network: update device name ─────────────────────────────
+app.post('/api/network/devices/:mac/name', async (req, res) => {
+  const { mac } = req.params;
+  const { name } = req.body;
+  try {
+    await db.query('UPDATE net_devices SET name = $1 WHERE mac = $2', [name || null, mac]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Network: port list ───────────────────────────────────────
+app.get('/api/network/ports', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM net_ports ORDER BY port_index ASC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Network: update port name ───────────────────────────────
+app.post('/api/network/ports/:idx/name', async (req, res) => {
+  const idx  = parseInt(req.params.idx);
+  const { name } = req.body;
+  try {
+    await db.query('UPDATE net_ports SET port_name = $1 WHERE port_index = $2', [name || null, idx]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Network: scan history for graph ─────────────────────────
+app.get('/api/network/history', async (req, res) => {
+  const limit = parseInt(req.query.limit) || 288; // 24h at 5min
+  try {
+    const r = await db.query(
+      'SELECT ts, total_online, total_offline, total_ever_seen FROM net_scans ORDER BY ts DESC LIMIT $1',
+      [limit]
+    );
+    res.json(r.rows.reverse());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Network: timer status ────────────────────────────────────
+app.get('/api/network/timers', async (req, res) => {
+  const { NodeSSH } = require('node-ssh');
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    const r = await ssh.execCommand(
+      'systemctl status net-arp-scan.timer net-snmp-scan.timer --no-pager 2>&1'
+    );
+    ssh.dispose();
+    // Parse "Trigger: Wed 2026-04-01 10:45:08 UTC; 4min 31s left"
+    const timers = { arp: { next: null }, snmp: { next: null } };
+    let current = null;
+    for (const line of r.stdout.split('\n')) {
+      // Detect block header — must check snmp before arp (snmp contains 'arp' substring)
+      if (line.includes('net-snmp-scan.timer')) current = 'snmp';
+      else if (line.includes('net-arp-scan.timer'))  current = 'arp';
+      const m = line.match(/Trigger:\s+(.+UTC)/);
+      if (m && current) {
+        const ms = new Date(m[1]).getTime();
+        if (!isNaN(ms)) timers[current].next = ms;
+      }
+    }
+    res.json(timers);
+  } catch (e) { try { ssh.dispose(); } catch {} res.status(500).json({ error: e.message }); }
 });
 
 // ─── System Alerts ───────────────────────────────────────────
@@ -843,7 +1088,8 @@ async function ensureSchema() {
       ('boiler_consumptions', NULL, false, 24, 'Hot water consumption events — keep forever'),
       ('orchestrator_log',   30,   true,  24, 'Main agent run logs and alerts'),
       ('system_alerts',      90,   true,  24, 'Cross-agent system alerts from orchestrator'),
-      ('sync_signals',        7,   true,  24, 'ha_to_pg data-ready signals for boiler agent wake-up')
+      ('sync_signals',        7,   true,  24, 'ha_to_pg data-ready signals for boiler agent wake-up'),
+      ('voice_token_log',    365,  true,  24, 'Voice pipeline Claude API token usage and cost')
     ON CONFLICT (table_name) DO NOTHING
   `);
 
@@ -863,6 +1109,19 @@ async function ensureSchema() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_alerts_agent  ON system_alerts (affected_agent, resolved_at)`);
 
   await db.query(`
+    CREATE TABLE IF NOT EXISTS voice_token_log (
+      id             BIGSERIAL PRIMARY KEY,
+      ts             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      input_text     TEXT,
+      intent         VARCHAR(100),
+      input_tokens   INTEGER NOT NULL,
+      output_tokens  INTEGER NOT NULL,
+      cost_usd       NUMERIC(12,8) NOT NULL,
+      model          VARCHAR(100)
+    )
+  `);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS sync_signals (
       id      BIGSERIAL PRIMARY KEY,
       ts      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -870,7 +1129,733 @@ async function ensureSchema() {
     )
   `);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_sync_signals_ts ON sync_signals (ts DESC)`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS manual_requests (
+      id          BIGSERIAL PRIMARY KEY,
+      ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      intent      VARCHAR(100) NOT NULL,
+      status      VARCHAR(50)  NOT NULL DEFAULT 'pending',
+      target_temp NUMERIC(5,1),
+      start_temp  NUMERIC(5,1),
+      ready_at    TIMESTAMPTZ,
+      message     TEXT
+    )
+  `);
+
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES ('manual_requests', 90, true, 24, 'Voice-initiated manual requests (shower, bath, etc.)')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS voice_device_settings (
+      id               INT PRIMARY KEY DEFAULT 1,
+      output_device    VARCHAR(50)  NOT NULL DEFAULT 'browser-speaker',
+      vol_browser      INT          NOT NULL DEFAULT 80,
+      vol_soundbar     INT          NOT NULL DEFAULT 40,
+      vol_alexa_guy    INT          NOT NULL DEFAULT 70,
+      boiler_low_temp  NUMERIC(5,1) NOT NULL DEFAULT 40,
+      boiler_shower_temp NUMERIC(5,1) NOT NULL DEFAULT 45,
+      boiler_bath_temp   NUMERIC(5,1) NOT NULL DEFAULT 50,
+      boiler_heat_rate   NUMERIC(5,1) NOT NULL DEFAULT 15,
+      updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      CONSTRAINT single_row CHECK (id = 1)
+    )
+  `);
+  await db.query(`
+    INSERT INTO voice_device_settings (id) VALUES (1)
+    ON CONFLICT (id) DO NOTHING
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS voice_devices (
+      id                   SERIAL PRIMARY KEY,
+      name                 VARCHAR(100) NOT NULL,
+      device_type          VARCHAR(50)  NOT NULL DEFAULT 'switch',
+      ha_entity            VARCHAR(200),
+      intent               VARCHAR(100),
+      response_style       VARCHAR(20)  NOT NULL DEFAULT 'short',
+      custom_text_enabled  BOOLEAN      NOT NULL DEFAULT false,
+      custom_response_text TEXT,
+      custom_confirm_text  TEXT,
+      custom_no_text       TEXT,
+      enabled              BOOLEAN      NOT NULL DEFAULT true,
+      sort_order           INTEGER      NOT NULL DEFAULT 0,
+      created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    INSERT INTO voice_devices (name, device_type, ha_entity, intent, response_style, custom_text_enabled, sort_order)
+    SELECT 'Electric Boiler', 'boiler', 'switch.boiler_switch_switch_1', 'shower_prepare,bath_prepare,boiler_on,boiler_off', 'full_confirm', false, 0
+    WHERE NOT EXISTS (SELECT 1 FROM voice_devices WHERE name = 'Electric Boiler')
+  `);
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES ('voice_devices', NULL, false, 24, 'Voice device registry — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES ('voice_device_settings', NULL, false, 24, 'Voice output device and electric boiler settings — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS voice_intent_phrases (
+      id          SERIAL PRIMARY KEY,
+      intent      TEXT      NOT NULL,
+      phrase      TEXT      NOT NULL UNIQUE,
+      language    CHAR(2)   NOT NULL DEFAULT 'he',
+      device_type VARCHAR(50) NOT NULL DEFAULT 'boiler',
+      sort_order  INTEGER   NOT NULL DEFAULT 0,
+      enabled     BOOLEAN   NOT NULL DEFAULT true,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await db.query(`ALTER TABLE voice_intent_phrases ADD COLUMN IF NOT EXISTS device_type VARCHAR(50) NOT NULL DEFAULT 'boiler'`);
+  await db.query(`ALTER TABLE voice_intent_phrases ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`);
+  await db.query(`UPDATE voice_intent_phrases SET device_type = 'boiler' WHERE device_type IS NULL OR device_type = ''`);
+  await db.query(`ALTER TABLE voice_devices ADD COLUMN IF NOT EXISTS language CHAR(2) NOT NULL DEFAULT ''`);
+  await db.query(`
+    INSERT INTO voice_intent_phrases (intent, phrase, language) VALUES
+      ('boiler_on',      'הדלק את הדוד',           'he'),
+      ('boiler_on',      'תדליק את הדוד',          'he'),
+      ('boiler_on',      'הפעל את הדוד',           'he'),
+      ('boiler_on',      'הפעל דוד',               'he'),
+      ('boiler_on',      'switch on boiler',        'en'),
+      ('boiler_on',      'turn on boiler',          'en'),
+      ('boiler_on',      'start boiler',            'en'),
+      ('boiler_on',      'включи бойлер',           'ru'),
+      ('boiler_on',      'запусти бойлер',          'ru'),
+      ('boiler_off',     'כבה את הדוד',            'he'),
+      ('boiler_off',     'תכבה את הדוד',           'he'),
+      ('boiler_off',     'סגור את הדוד',            'he'),
+      ('boiler_off',     'switch off boiler',       'en'),
+      ('boiler_off',     'turn off boiler',         'en'),
+      ('boiler_off',     'stop boiler',             'en'),
+      ('boiler_off',     'выключи бойлер',          'ru'),
+      ('boiler_off',     'отключи бойлер',          'ru'),
+      ('boiler_status',  'מה הטמפרטורה',           'he'),
+      ('boiler_status',  'כמה חם הדוד',            'he'),
+      ('boiler_status',  'boiler status',           'en'),
+      ('boiler_status',  'как вода',                'ru'),
+      ('shower_prepare', 'תכין מקלחת',             'he'),
+      ('shower_prepare', 'אפשר להתקלח',            'he'),
+      ('shower_prepare', 'is the shower ready',     'en'),
+      ('bath_prepare',   'תכין אמבטיה',            'he'),
+      ('bath_prepare',   'אפשר להכין אמבטיה',      'he'),
+      ('bath_prepare',   'готовь ванну',            'ru')
+    ON CONFLICT (phrase) DO NOTHING
+  `);
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES ('voice_intent_phrases', NULL, false, 24, 'Voice intent phrase library — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS voice_device_entities (
+      id          SERIAL PRIMARY KEY,
+      device_id   INTEGER NOT NULL REFERENCES voice_devices(id) ON DELETE CASCADE,
+      ha_entity   VARCHAR(200) NOT NULL,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (device_id, ha_entity)
+    )
+  `);
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES ('voice_device_entities', NULL, false, 24, 'Voice switch group entity list — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES
+      ('agents',         NULL, false, 24, 'Agent registry — keep forever'),
+      ('agent_settings', NULL, false, 24, 'Boiler agent settings — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id         SERIAL PRIMARY KEY,
+      title      VARCHAR(200) NOT NULL,
+      url        TEXT         NOT NULL,
+      theme      VARCHAR(50)  NOT NULL DEFAULT 'General',
+      sort_order INTEGER      NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES ('documents', NULL, false, 24, 'Project documentation links — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
 }
+
+// ─── HA service call helper ───────────────────────────────────
+async function callHA(domain, service, data) {
+  const r = await fetch(`${HA_URL}/api/services/${domain}/${service}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${HA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    signal: AbortSignal.timeout(5000)
+  });
+  if (!r.ok) throw new Error(`HA ${domain}.${service} failed: ${r.status}`);
+  return r.json();
+}
+
+// ─── Voice: Execute intent ─────────────────────────────────────
+const SHOWER_TEMP = 45;
+const BATH_TEMP   = 50;
+
+app.post('/api/request', async (req, res) => {
+  const { intent, params = {} } = req.body;
+  if (!intent) return res.status(400).json({ error: 'No intent' });
+
+  try {
+    // ── boiler_status ──────────────────────────────────────────
+    if (intent === 'boiler_status') {
+      const r = await db.query('SELECT boiler_temp, panel_temp, valve_state FROM raw_data ORDER BY ts DESC LIMIT 1');
+      if (!r.rows.length) return res.json({ ok: false, message: 'No boiler data available' });
+      const { boiler_temp, panel_temp, valve_state } = r.rows[0];
+      return res.json({
+        ok: true,
+        message: `Boiler is ${boiler_temp}°C, panel is ${panel_temp}°C, valve is ${valve_state ? 'open' : 'closed'}`,
+        data: { boiler_temp, panel_temp, valve_state }
+      });
+    }
+
+    // ── boiler_on / boiler_off ─────────────────────────────────
+    if (intent === 'boiler_on' || intent === 'boiler_off') {
+      const service = intent === 'boiler_on' ? 'turn_on' : 'turn_off';
+      await callHA('switch', service, { entity_id: 'switch.boiler_switch_switch_1' });
+      const r = await db.query('SELECT boiler_temp FROM raw_data ORDER BY ts DESC LIMIT 1');
+      const boiler_temp = r.rows.length ? r.rows[0].boiler_temp : null;
+      const action = intent === 'boiler_on' ? 'on' : 'off';
+      const tempNote = boiler_temp !== null ? ` Current temperature: ${boiler_temp}°C.` : '';
+      return res.json({ ok: true, message: `Electric boiler turned ${action}.${tempNote}`, data: { action, boiler_temp } });
+    }
+
+    // ── shower_prepare / bath_prepare ──────────────────────────
+    if (intent === 'shower_prepare' || intent === 'bath_prepare') {
+      const ds = await db.query('SELECT * FROM voice_device_settings WHERE id = 1');
+      const cfg = ds.rows[0] || {};
+      const threshold = intent === 'bath_prepare'
+        ? parseFloat(cfg.boiler_bath_temp   || BATH_TEMP)
+        : parseFloat(cfg.boiler_shower_temp || SHOWER_TEMP);
+      const heatRate  = parseFloat(cfg.boiler_heat_rate || 15);
+      const label = intent === 'bath_prepare' ? 'Bath' : 'Shower';
+      const r = await db.query('SELECT boiler_temp FROM raw_data ORDER BY ts DESC LIMIT 1');
+      if (!r.rows.length) return res.json({ ok: false, message: 'No boiler data available' });
+      const { boiler_temp } = r.rows[0];
+      const current = parseFloat(boiler_temp);
+      const ready = current >= threshold;
+
+      // Confirmed by user (second call after yes) — turn on electric boiler if not ready
+      if (req.body.confirmed) {
+        if (ready) {
+          return res.json({ ok: true, message: `${label} is ready! Boiler is ${boiler_temp}°C`, data: { boiler_temp: current, threshold, ready: true } });
+        }
+        await callHA('switch', 'turn_on', { entity_id: 'switch.boiler_switch_switch_1' });
+        const waitMin = Math.ceil((threshold - current) / heatRate * 60);
+        const message = `Electric boiler is on. Estimated ~${waitMin} min to reach ${threshold}°C`;
+        await db.query(
+          `INSERT INTO manual_requests (intent, status, target_temp, start_temp, message, ready_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [intent, 'heating', threshold, boiler_temp, message, null]
+        );
+        return res.json({ ok: true, message, data: { boiler_temp: current, threshold, ready: false, heating: true } });
+      }
+
+      // First call — report status
+      let message;
+      if (ready) {
+        message = `${label} is ready! Boiler is ${boiler_temp}°C`;
+      } else {
+        const waitMin = Math.ceil((threshold - current) / heatRate * 60);
+        message = `Boiler is ${boiler_temp}°C, need ${threshold}°C. Estimated wait: ~${waitMin} min`;
+      }
+      await db.query(
+        `INSERT INTO manual_requests (intent, status, target_temp, start_temp, message, ready_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [intent, ready ? 'ready' : 'pending', threshold, boiler_temp, message, ready ? new Date() : null]
+      );
+      return res.json({ ok: true, message, data: { boiler_temp: current, threshold, ready } });
+    }
+
+    // ── light_on / light_off ───────────────────────────────────
+    if (intent === 'light_on' || intent === 'light_off') {
+      const room = params.room;
+      if (!room) return res.json({ ok: false, message: 'Which room? Please say the room name.' });
+      const entity = `light.${room.toLowerCase().replace(/\s+/g, '_')}`;
+      const service = intent === 'light_on' ? 'turn_on' : 'turn_off';
+      await callHA('light', service, { entity_id: entity });
+      return res.json({
+        ok: true,
+        message: `Light ${intent === 'light_on' ? 'on' : 'off'} in ${room}`,
+        data: { entity }
+      });
+    }
+
+    // ── switch_on / switch_off ────────────────────────────────
+    if (intent === 'switch_on' || intent === 'switch_off') {
+      const service = intent === 'switch_on' ? 'turn_on' : 'turn_off';
+      const devR = await db.query(
+        `SELECT * FROM voice_devices WHERE enabled = true AND intent LIKE '%' || $1 || '%' ORDER BY sort_order, id LIMIT 1`,
+        [intent]
+      );
+      if (!devR.rows.length) return res.json({ ok: false, message: 'No switch device configured for this command.' });
+      const dev = devR.rows[0];
+      if (dev.device_type === 'switch_group') {
+        const entR = await db.query('SELECT ha_entity FROM voice_device_entities WHERE device_id = $1 ORDER BY sort_order, id', [dev.id]);
+        if (!entR.rows.length) return res.json({ ok: false, message: `No entities configured for ${dev.name}` });
+        const failed = [];
+        for (const { ha_entity } of entR.rows) {
+          try { await callHA('switch', service, { entity_id: ha_entity }); }
+          catch (_) { failed.push(ha_entity); }
+        }
+        const action = intent === 'switch_on' ? 'on' : 'off';
+        const ok = failed.length === 0;
+        const msg = ok
+          ? `${dev.name} turned ${action} (${entR.rows.length} switches)`
+          : `${dev.name} partially ${action} — ${failed.length} failed: ${failed.join(', ')}`;
+        return res.json({ ok, message: msg, data: { entities: entR.rows.map(r => r.ha_entity), failed } });
+      } else {
+        if (!dev.ha_entity) return res.json({ ok: false, message: `No HA entity configured for ${dev.name}` });
+        await callHA('switch', service, { entity_id: dev.ha_entity });
+        const action = intent === 'switch_on' ? 'on' : 'off';
+        return res.json({ ok: true, message: `${dev.name} turned ${action}.`, data: { entity: dev.ha_entity } });
+      }
+    }
+
+    // ── general_query / fallback ───────────────────────────────
+    return res.json({ ok: false, message: `Sorry, I didn't understand that command. Try: "turn on boiler", "shower status", "boiler temperature".`, intent });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ─── Voice: Transcribe audio via Whisper (LXC 106 HTTP helper) ──
+app.post('/api/voice/transcribe', upload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
+  try {
+    const mime = req.file.mimetype || 'audio/webm';
+    const audioBuffer = fs.readFileSync(req.file.path);
+    const response = await fetch(`http://192.168.1.188:10301/transcribe`, {
+      method: 'POST',
+      body: audioBuffer,
+      headers: { 'Content-Type': mime, 'Content-Length': audioBuffer.length },
+      signal: AbortSignal.timeout(30000)
+    });
+    if (!response.ok) throw new Error(`Whisper HTTP error: ${response.status}`);
+    const data = await response.json();
+    fs.unlinkSync(req.file.path);
+    res.json({ text: data.text });
+  } catch (e) {
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Voice: phrase cache ───────────────────────────────────────────────
+let _phrasesCache = null;
+let _phrasesCacheTs = 0;
+async function loadPhrasesCache() {
+  if (_phrasesCache && Date.now() - _phrasesCacheTs < 60000) return _phrasesCache;
+  const r = await db.query('SELECT intent, phrase FROM voice_intent_phrases WHERE enabled = true ORDER BY sort_order, length(phrase) DESC');
+  _phrasesCache = r.rows;
+  _phrasesCacheTs = Date.now();
+  return _phrasesCache;
+}
+function clearPhrasesCache() { _phrasesCache = null; }
+
+// ─── Voice: keyword pre-filter (runs before Claude) ──────
+function stripNiqqud(text) {
+  return text.replace(/[ְ-ׇװ-״]/g, '');
+}
+
+function keywordIntent(rawText) {
+  const t = stripNiqqud(rawText).toLowerCase();
+  const hasBoiler = /boiler|דוד|בויל|бойлер|котёл|котел/.test(t);
+  const hasOn  = /on|turn|switch|start|הדל|תדל|הפעל|הפעיל|включи|запусти/.test(t);
+  const hasOff = /off|stop|shut|כבה|תכבה|לכבות|כבי|סגור|עצור|выключи|отключи|останови/.test(t);
+  if (hasBoiler && hasOn && !hasOff) return 'boiler_on';
+  if (hasBoiler && hasOff)           return 'boiler_off';
+  return null;
+}
+
+async function phraseIntent(rawText) {
+  try {
+    const phrases = await loadPhrasesCache();
+    const t = stripNiqqud(rawText).toLowerCase();
+    for (const { intent, phrase } of phrases) {
+      if (t.includes(stripNiqqud(phrase).toLowerCase())) return intent;
+    }
+  } catch (_) {}
+  return null;
+}
+
+// ─── Voice: Extract intent via Claude ────────────────────
+app.post('/api/voice/intent', async (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: 'No text provided' });
+
+  // Fast path 1 — hardcoded regex
+  const kw = keywordIntent(text);
+  if (kw) return res.json({ intent: kw, params: {}, confidence: 'high', original_language: 'auto', _source: 'keyword' });
+
+  // Fast path 2 — DB phrase match
+  const ph = await phraseIntent(text);
+  if (ph) return res.json({ intent: ph, params: {}, confidence: 'high', original_language: 'auto', _source: 'phrase' });
+
+  try {
+    const phrases = await loadPhrasesCache();
+    const byIntent = {};
+    for (const { intent, phrase } of phrases) {
+      (byIntent[intent] = byIntent[intent] || []).push('"' + phrase + '"');
+    }
+    const examplesBlock = Object.entries(byIntent)
+      .map(([k, v]) => '- ' + k + ': ' + v.slice(0, 4).join(', '))
+      .join('\n');
+
+    const systemPrompt = `You are a smart home voice controller. The user speaks Hebrew, Russian, or English.\nExtract the user's intent and return ONLY a JSON object — no explanation, no markdown.\n\nKnown phrase examples per intent:\n${examplesBlock}\n\nAvailable intents:\n- boiler_on, boiler_off, boiler_status\n- shower_prepare, bath_prepare\n- light_on (params: room), light_off (params: room)\n- climate_set (params: temp, room)\n- media_play (params: what, where), media_pause, media_volume (params: level, device)\n- general_query: only if truly unclear\n\nReturn format: {"intent":"...","params":{},"confidence":"high|medium|low","original_language":"he|ru|en"}`;
+
+    const result = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 256,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: text }]
+    });
+    const raw = result.content[0].text.trim();
+    const json = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    res.json({ ...json, _usage: { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens, model: 'claude-haiku-4-5-20251001' } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Voice: HA switch list ────────────────────────────────────────────────
+app.get('/api/ha/switches', async (_req, res) => {
+  try {
+    const r = await fetch(`${HA_URL}/api/states`, {
+      headers: { Authorization: `Bearer ${HA_TOKEN}` },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!r.ok) throw new Error(`HA states error: ${r.status}`);
+    const states = await r.json();
+    const switches = states
+      .filter(s => s.entity_id.startsWith('switch.'))
+      .map(s => ({ entity_id: s.entity_id, state: s.state, friendly_name: s.attributes?.friendly_name || s.entity_id }))
+      .sort((a, b) => a.entity_id.localeCompare(b.entity_id));
+    res.json(switches);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Voice: Intent phrases CRUD ───────────────────────────────────────────
+app.get('/api/voice/phrases', async (req, res) => {
+  try {
+    const conditions = ['1=1'];
+    const vals = [];
+    if (req.query.device_type) { vals.push(req.query.device_type); conditions.push(`device_type = $${vals.length}`); }
+    if (req.query.language)    { vals.push(req.query.language);    conditions.push(`trim(language) = $${vals.length}`); }
+    const where = conditions.join(' AND ');
+    const r = await db.query(`SELECT * FROM voice_intent_phrases WHERE ${where} ORDER BY sort_order, length(phrase) DESC, id`, vals);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/voice/phrases', async (req, res) => {
+  const { intent, phrase, language, device_type, sort_order } = req.body;
+  if (!intent || !phrase) return res.status(400).json({ error: 'intent and phrase required' });
+  try {
+    const r = await db.query(
+      'INSERT INTO voice_intent_phrases (intent, phrase, language, device_type, sort_order) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [intent, phrase.trim(), language || 'he', device_type || 'boiler', sort_order || 0]
+    );
+    clearPhrasesCache();
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/voice/phrases/:id', async (req, res) => {
+  const { enabled, sort_order } = req.body;
+  try {
+    const sets = [];
+    const vals = [];
+    if (enabled    !== undefined) { vals.push(enabled);     sets.push(`enabled = $${vals.length}`); }
+    if (sort_order !== undefined) { vals.push(sort_order);  sets.push(`sort_order = $${vals.length}`); }
+    if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
+    vals.push(req.params.id);
+    const r = await db.query(
+      `UPDATE voice_intent_phrases SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`,
+      vals
+    );
+    clearPhrasesCache();
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/voice/phrases/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM voice_intent_phrases WHERE id = $1', [req.params.id]);
+    clearPhrasesCache();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Voice: Device settings ───────────────────────────────────
+app.get('/api/voice/device-settings', async (_req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM voice_device_settings WHERE id = 1');
+    res.json(r.rows[0] || {});
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/voice/device-settings', async (req, res) => {
+  const { output_device, vol_browser, vol_soundbar, vol_alexa_guy,
+          boiler_low_temp, boiler_shower_temp, boiler_bath_temp, boiler_heat_rate,
+          response_style, custom_text_enabled, custom_response_text, custom_confirm_text } = req.body;
+  try {
+    await db.query(`
+      UPDATE voice_device_settings SET
+        output_device        = COALESCE($1, output_device),
+        vol_browser          = COALESCE($2, vol_browser),
+        vol_soundbar         = COALESCE($3, vol_soundbar),
+        vol_alexa_guy        = COALESCE($4, vol_alexa_guy),
+        boiler_low_temp      = COALESCE($5, boiler_low_temp),
+        boiler_shower_temp   = COALESCE($6, boiler_shower_temp),
+        boiler_bath_temp     = COALESCE($7, boiler_bath_temp),
+        boiler_heat_rate     = COALESCE($8, boiler_heat_rate),
+        response_style       = COALESCE($9, response_style),
+        custom_text_enabled  = COALESCE($10, custom_text_enabled),
+        custom_response_text = COALESCE($11, custom_response_text),
+        custom_confirm_text  = COALESCE($12, custom_confirm_text),
+        updated_at           = NOW()
+      WHERE id = 1
+    `, [output_device, vol_browser, vol_soundbar, vol_alexa_guy,
+        boiler_low_temp, boiler_shower_temp, boiler_bath_temp, boiler_heat_rate,
+        response_style, custom_text_enabled ?? null, custom_response_text ?? null, custom_confirm_text ?? null]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Voice: Device registry ───────────────────────────────────
+app.get('/api/voice/devices', async (_req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM voice_devices ORDER BY sort_order, id');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/voice/devices', async (req, res) => {
+  const { name, device_type, ha_entity, intent, response_style,
+          custom_text_enabled, custom_response_text, custom_confirm_text, custom_no_text, sort_order, language } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  try {
+    const r = await db.query(
+      `INSERT INTO voice_devices (name, device_type, ha_entity, intent, response_style,
+         custom_text_enabled, custom_response_text, custom_confirm_text, custom_no_text, sort_order, language)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [name, device_type || 'switch', ha_entity || null, intent || null,
+       response_style || 'short', custom_text_enabled || false,
+       custom_response_text || null, custom_confirm_text || null, custom_no_text || null, sort_order || 0,
+       language || '']
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/voice/devices/:id', async (req, res) => {
+  const { name, device_type, ha_entity, intent, response_style,
+          custom_text_enabled, custom_response_text, custom_confirm_text, custom_no_text, enabled, sort_order, language } = req.body;
+  try {
+    const r = await db.query(
+      `UPDATE voice_devices SET
+        name                 = COALESCE($1, name),
+        device_type          = COALESCE($2, device_type),
+        ha_entity            = COALESCE($3, ha_entity),
+        intent               = COALESCE($4, intent),
+        response_style       = COALESCE($5, response_style),
+        custom_text_enabled  = COALESCE($6, custom_text_enabled),
+        custom_response_text = COALESCE($7, custom_response_text),
+        custom_confirm_text  = COALESCE($8, custom_confirm_text),
+        custom_no_text       = COALESCE($9, custom_no_text),
+        enabled              = COALESCE($10, enabled),
+        sort_order           = COALESCE($11, sort_order),
+        language             = COALESCE($12, language)
+       WHERE id = $13 RETURNING *`,
+      [name, device_type, ha_entity, intent, response_style,
+       custom_text_enabled ?? null, custom_response_text ?? null,
+       custom_confirm_text ?? null, custom_no_text ?? null,
+       enabled ?? null, sort_order ?? null, language ?? null, req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/voice/devices/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM voice_devices WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Voice: Device entity list (for switch groups) ────────────────────────
+app.get('/api/voice/device-entities/:deviceId', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM voice_device_entities WHERE device_id = $1 ORDER BY sort_order, id', [req.params.deviceId]);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/voice/device-entities', async (req, res) => {
+  const { device_id, ha_entity } = req.body;
+  if (!device_id || !ha_entity) return res.status(400).json({ error: 'device_id and ha_entity required' });
+  try {
+    const r = await db.query(
+      'INSERT INTO voice_device_entities (device_id, ha_entity) VALUES ($1, $2) RETURNING *',
+      [device_id, ha_entity]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/voice/device-entities/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM voice_device_entities WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Voice: Save token usage to DB ───────────────────────────
+app.post('/api/voice/token-log', async (req, res) => {
+  const { input_text, intent, input_tokens, output_tokens, cost_usd, model } = req.body;
+  try {
+    await db.query(
+      `INSERT INTO voice_token_log (input_text, intent, input_tokens, output_tokens, cost_usd, model)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [input_text?.slice(0,500), intent, input_tokens, output_tokens, cost_usd, model]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/voice/token-log', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+  try {
+    const r = await db.query(
+      `SELECT id, ts, input_text, intent, input_tokens, output_tokens, cost_usd, model
+       FROM voice_token_log ORDER BY ts DESC LIMIT $1`, [limit]
+    );
+    const totals = await db.query(
+      `SELECT COALESCE(SUM(input_tokens),0) AS total_in,
+              COALESCE(SUM(output_tokens),0) AS total_out,
+              COALESCE(SUM(cost_usd),0) AS total_cost
+       FROM voice_token_log`
+    );
+    res.json({ rows: r.rows, totals: totals.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Media Control ────────────────────────────────────────────
+// TV state  → power from LXC 100 (reliable ping/WebSocket), volume/source from SmartThings
+// TV cmds   → LXC 100 samsungtvws WebSocket service (192.168.1.138:8765)
+// SB        → SmartThings API for both state and commands
+const ST_TOKEN  = process.env.ST_TOKEN || '';
+const ST_URL    = 'https://api.smartthings.com/v1';
+const ST_TV_ID  = 'af0bbfed-6ee9-46a7-d773-8daa1af7dcfb';
+const ST_SB_ID  = 'b3b66213-0f44-be4e-ccdb-b4cb2c7ba80a';
+const TV_AGENT  = 'http://192.168.1.138:8765';
+
+async function stGet(path) {
+  const r = await fetch(`${ST_URL}${path}`, { headers: { Authorization: `Bearer ${ST_TOKEN}` } });
+  if (!r.ok) throw new Error(`ST GET ${path} failed: ${r.status}`);
+  return r.json();
+}
+
+async function stCmd(deviceId, capability, command, args = []) {
+  const r = await fetch(`${ST_URL}/devices/${deviceId}/commands`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${ST_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commands: [{ component: 'main', capability, command, arguments: args }] }),
+  });
+  if (!r.ok) throw new Error(`ST command ${command} failed: ${r.status}`);
+  return r.json();
+}
+
+function parseStState(d, isSoundbar) {
+  const m = d.components?.main || {};
+  const inputCap = isSoundbar ? 'samsungvd.audioInputSource' : 'mediaInputSource';
+  return {
+    power:           m.switch?.switch?.value || 'off',
+    volume:          m.audioVolume?.volume?.value ?? null,
+    muted:           m.audioMute?.mute?.value === 'muted',
+    input:           m[inputCap]?.inputSource?.value || null,
+    supportedInputs: m[inputCap]?.supportedInputSources?.value || [],
+  };
+}
+
+async function tvAgentGet(path) {
+  const r = await fetch(`${TV_AGENT}${path}`);
+  if (!r.ok) throw new Error(`TV agent GET ${path} failed: ${r.status}`);
+  return r.json();
+}
+
+async function tvAgentCmd(command, value) {
+  const body = { command };
+  if (value !== undefined) body.value = value;
+  const r = await fetch(`${TV_AGENT}/command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`TV agent command ${command} failed: ${r.status}`);
+  return r.json();
+}
+
+app.get('/api/media/state', async (_req, res) => {
+  try {
+    const [tvAgent, tvST, sbRaw] = await Promise.all([
+      tvAgentGet('/state'),
+      stGet(`/devices/${ST_TV_ID}/status`),
+      stGet(`/devices/${ST_SB_ID}/status`),
+    ]);
+    // Power from LXC 100 (reliable direct ping/REST), volume/mute from SmartThings
+    const tvSTParsed = parseStState(tvST, false);
+    const tv = {
+      power:  tvAgent.power,
+      volume: tvSTParsed.volume,
+      muted:  tvSTParsed.muted,
+    };
+    res.json({ tv, soundbar: parseStState(sbRaw, true) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/media/command', async (req, res) => {
+  try {
+    const { entity, command, value } = req.body;
+    if (entity !== 'tv' && entity !== 'soundbar') return res.status(400).json({ error: 'Unknown entity' });
+
+    if (entity === 'tv') {
+      await tvAgentCmd(command, value);
+    } else {
+      switch (command) {
+        case 'turn_on':    await stCmd(ST_SB_ID, 'switch', 'on'); break;
+        case 'turn_off':   await stCmd(ST_SB_ID, 'switch', 'off'); break;
+        case 'mute':       await stCmd(ST_SB_ID, 'audioMute', value ? 'mute' : 'unmute'); break;
+        case 'volume_set': await stCmd(ST_SB_ID, 'audioVolume', 'setVolume', [Math.round(value)]); break;
+        case 'volume_up':  await stCmd(ST_SB_ID, 'audioVolume', 'volumeUp'); break;
+        case 'volume_down':await stCmd(ST_SB_ID, 'audioVolume', 'volumeDown'); break;
+        case 'source':     await stCmd(ST_SB_ID, 'samsungvd.audioInputSource', 'setInputSource', [value]); break;
+        default: return res.status(400).json({ error: 'Unknown command' });
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 const PORT = 3000;
 ensureSchema().then(() => {

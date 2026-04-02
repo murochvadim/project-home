@@ -28,7 +28,7 @@
 
 ## Data Flow
 - **raw_data**: LXC 103 script `/usr/local/bin/ha_to_pg` runs every 5 min via cron, fetches from HA; after each insert it also writes a row to `sync_signals` (same transaction) to wake the boiler agent early
-- **raw_weather + raw_weather_daily**: LXC 103 script `/opt/Agents-agent/project/BOILER/agent/collect_weather.py` runs every 30 min via cron (`*/30 * * * *`)
+- **raw_weather + raw_weather_daily**: LXC 103 script `/opt/Agents-agent/project/BOILER/agent/collect_weather.py` runs every 60 min via cron (`0 * * * *`)
   - Hourly: fetches `weather.ims_weather` + balcony sensors (`sensor.balcony_motion_*`) from HA → inserts into `raw_weather`
   - Daily at 06:00: calls `weather.get_forecasts?return_response` → inserts 7-day forecast into `raw_weather_daily`
   - HA_TOKEN stored in `/etc/environment` on LXC 103; loaded via `export $(grep -v '^#' /etc/environment | xargs)` in cron

@@ -1,0 +1,90 @@
+================================================================================
+  PROJECT HOOKS DOCUMENTATION
+  Location: .claude/settings.json + .claude/hooks/
+================================================================================
+
+--------------------------------------------------------------------------------
+1. PRE-TOOL-USE HOOK — LXC Timer/Cron Guard
+--------------------------------------------------------------------------------
+Trigger  : Before any Bash command is executed
+Script   : .claude/hooks/pre-lxc-check.sh
+
+Rule:
+  If a Bash command involves timer/cron scheduling (systemctl, .timer, crontab,
+  cron., systemd-run, OnCalendar, OnBootSec, at) AND targets an LXC via SSH or
+  pct exec — a warning is printed if the target is NOT LXC 104.
+
+  LXC 104 (192.168.1.227) is the designated COMMANDS / TIMERS server.
+  All scheduled tasks, cron jobs, and systemd timers must go there.
+
+Output:
+  [hook] WARNING: TIMER/CRON TASK detected targeting an LXC —
+  LXC 104 is the designated COMMANDS/TIMERS server.
+  Confirm target is LXC 104 before proceeding.
+
+Behavior : Warns but does NOT block the command (exits 0).
+
+
+--------------------------------------------------------------------------------
+2. POST-TOOL-USE HOOK — Auto Formatter + DB Schema Guard
+--------------------------------------------------------------------------------
+Trigger  : After any Edit or Write tool call
+
+Rule A — Prettier formatter:
+  If the edited file has extension .html or .css — runs:
+    npx prettier --write "<file>"
+  Output: [hook] formatted <file>
+
+Rule B — New DB table detector:
+  If the edited file has extension .js, .sql, or .py — scans the git diff
+  for new "CREATE TABLE IF NOT EXISTS" statements.
+  If any new table is found, prints a reminder:
+    [hook] NEW DB table(s) added: <table_names>
+    — add to:
+      1) retention_policies in ensureSchema()
+      2) Project Health DB Volumes tab
+
+  This ensures new tables are never forgotten in the retention and
+  monitoring systems.
+
+Behavior : Informational only — does NOT block the edit.
+
+
+--------------------------------------------------------------------------------
+3. POST-TOOL-USE HOOK — /tmp Auto Cleanup
+--------------------------------------------------------------------------------
+Trigger  : After any Bash command that referenced /tmp/
+Script   : .claude/hooks/post-tmp-cleanup.sh
+
+Rule:
+  If a Bash command wrote or copied files to /tmp/ — auto-delete leftover
+  working files to prevent accumulation of temp files.
+
+  Local cleanup  : deletes /tmp/*.sql, /tmp/*.py, /tmp/*.txt, /tmp/*.sh
+  Remote cleanup : if scp was used, SSHes to the remote host and deletes
+                   the copied file(s) automatically.
+
+Output:
+  [hook] /tmp cleanup: local: name_devices.sql | remote: root@192.168.1.219:/tmp/name_devices.sql
+
+Behavior : Silent if nothing to clean. Informational only — does NOT block.
+
+
+--------------------------------------------------------------------------------
+SUMMARY TABLE
+--------------------------------------------------------------------------------
+Hook             | When              | Watches              | Action
+-----------------+-------------------+----------------------+--------------------
+pre-lxc-check   | Before Bash       | timer/cron cmds      | Warn if not LXC 104
+post-tmp-cleanup | After Bash        | cmds using /tmp/     | Delete temp files
+post-format      | After Edit/Write  | .html, .css          | Run prettier
+post-db-guard    | After Edit/Write  | .js, .sql, .py       | Warn on new DB table
+
+
+--------------------------------------------------------------------------------
+FILES
+--------------------------------------------------------------------------------
+.claude/settings.json               — hook registration (PreToolUse / PostToolUse)
+.claude/hooks/pre-lxc-check.sh     — LXC guard script
+.claude/hooks/post-tmp-cleanup.sh  — /tmp cleanup script
+================================================================================

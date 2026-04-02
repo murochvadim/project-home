@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 580" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="900" height="580" fill="#f5f2ee"/>
+  <defs>
+    <marker id="a"  markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#888"/></marker>
+    <marker id="ag" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#5a8a58"/></marker>
+    <marker id="ad" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#b55e5e"/></marker>
+  </defs>
+
+  <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#3a3028">Boiler Agent — 4 · Normal Decision</text>
+  <text x="450" y="48" text-anchor="middle" font-size="10" fill="#888">Valve ON, waiting phase complete. Decides keep / off / hold each run.</text>
+
+  <!-- ENTER -->
+  <rect x="230" y="64" width="440" height="36" rx="18" fill="#1e2a3a"/>
+  <text x="450" y="87" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Valve ON — Waiting Phase complete</text>
+  <line x1="450" y1="100" x2="450" y2="124" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Panel trend available? -->
+  <rect x="190" y="124" width="520" height="66" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="450" y="147" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Panel trend available?</text>
+  <text x="450" y="167" text-anchor="middle" font-size="10" fill="#555">≥ 2 valid panel readings in last</text>
+  <text x="450" y="182" text-anchor="middle" font-size="10" fill="#555">trend_runs × run_interval_min window</text>
+
+  <!-- No → WARN (right) -->
+  <line x1="710" y1="157" x2="756" y2="157" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="733" y="149" text-anchor="middle" font-size="9" fill="#555">No</text>
+  <rect x="756" y="124" width="124" height="66" rx="6" fill="#fff3cd" stroke="#ffc107" stroke-width="1.5"/>
+  <text x="818" y="147" text-anchor="middle" font-size="11" font-weight="600" fill="#856404">WARN</text>
+  <text x="818" y="165" text-anchor="middle" font-size="10" fill="#856404">decision =</text>
+  <text x="818" y="182" text-anchor="middle" font-size="10" fill="#856404">no_action</text>
+
+  <!-- ↓ Yes -->
+  <line x1="450" y1="190" x2="450" y2="224" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="460" y="212" font-size="9" fill="#555">Yes</text>
+
+  <!-- Temperature comparison -->
+  <rect x="170" y="224" width="560" height="72" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="450" y="248" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Temperature comparison</text>
+  <text x="450" y="268" text-anchor="middle" font-size="10" fill="#555">Compare panel_temp vs boiler_temp</text>
+  <text x="450" y="286" text-anchor="middle" font-size="10" fill="#888">using temp_debounce (δ) dead band</text>
+
+  <!-- panel > boiler + δ → keep_on (left) -->
+  <line x1="170" y1="260" x2="116" y2="260" stroke="#5a8a58" stroke-width="1.5" marker-end="url(#ag)"/>
+  <text x="141" y="248" text-anchor="middle" font-size="9" fill="#5a8a58">panel &gt;</text>
+  <text x="141" y="260" text-anchor="middle" font-size="9" fill="#5a8a58">boiler + δ</text>
+  <rect x="10" y="224" width="106" height="72" rx="6" fill="#8a9f78" stroke="#6a7f58" stroke-width="1.5"/>
+  <text x="63" y="255" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">keep_on</text>
+  <text x="63" y="274" text-anchor="middle" font-size="10" fill="#dff0d8">heating</text>
+
+  <!-- panel < boiler − δ → turn_off (right) -->
+  <line x1="730" y1="260" x2="784" y2="260" stroke="#b55e5e" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="757" y="248" text-anchor="middle" font-size="9" fill="#b55e5e">panel &lt;</text>
+  <text x="757" y="260" text-anchor="middle" font-size="9" fill="#b55e5e">boiler − δ</text>
+  <rect x="784" y="224" width="106" height="72" rx="6" fill="#b55e5e" stroke="#954040" stroke-width="1.5"/>
+  <text x="837" y="255" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">turn_off</text>
+  <text x="837" y="274" text-anchor="middle" font-size="10" fill="#fdd">cooling</text>
+
+  <!-- |panel − boiler| ≤ δ → hold (down) -->
+  <line x1="450" y1="296" x2="450" y2="338" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="462" y="317" font-size="9" fill="#555">|panel − boiler| ≤ δ</text>
+  <rect x="286" y="338" width="328" height="66" rx="6" fill="#d0cbc4" stroke="#a8a09a" stroke-width="1.5"/>
+  <text x="450" y="362" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">decision = hold</text>
+  <text x="450" y="382" text-anchor="middle" font-size="10" fill="#555">Within dead band — valve stays ON</text>
+  <text x="450" y="397" text-anchor="middle" font-size="9" fill="#888">re-evaluate next run</text>
+
+  <!-- Convergence lines -->
+  <line x1="63"  y1="296" x2="63"  y2="476" stroke="#888" stroke-width="1.5"/>
+  <line x1="450" y1="404" x2="450" y2="476" stroke="#888" stroke-width="1.5"/>
+  <line x1="818" y1="190" x2="818" y2="476" stroke="#888" stroke-width="1.5"/>
+  <line x1="837" y1="296" x2="837" y2="476" stroke="#888" stroke-width="1.5"/>
+  <line x1="63"  y1="476" x2="837" y2="476" stroke="#888" stroke-width="1.5"/>
+  <line x1="450" y1="476" x2="450" y2="492" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- EXIT -->
+  <rect x="210" y="492" width="480" height="36" rx="18" fill="#1e2a3a"/>
+  <text x="450" y="515" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">⏹ Execute HA action if needed · Write DB · Sleep</text>
+
+  <!-- Note -->
+  <rect x="20" y="542" width="860" height="28" rx="6" fill="#fff8e8" stroke="#c0a060" stroke-width="1.5"/>
+  <text x="450" y="561" text-anchor="middle" font-size="10" fill="#7a5a20">δ = temp_debounce (default 2 °C) — symmetric dead band preventing valve toggling when temperatures are close</text>
+</svg>

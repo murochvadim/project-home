@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 830" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1220" height="830" fill="#f5f2ee"/>
+  <defs>
+    <marker id="a"  markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#888"/></marker>
+    <marker id="ad" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#b55e5e"/></marker>
+    <marker id="ag" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#5a8a58"/></marker>
+  </defs>
+
+  <text x="610" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#3a3028">Boiler Agent — 2 · Waiting Phase</text>
+  <text x="610" y="48" text-anchor="middle" font-size="10" fill="#888">Entered after every turn_on. Waits trend_runs agent cycles before making a final decision.</text>
+
+  <!-- ══ ENTER ══ -->
+  <rect x="380" y="62" width="460" height="36" rx="18" fill="#1e2a3a"/>
+  <text x="610" y="85" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Valve just turned ON — Waiting Phase</text>
+  <line x1="610" y1="98" x2="610" y2="116" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- ══ ① Panel readings valid? ══
+       Main box: x=290–820   Right col: x=900–1140   Gap 80 px   -->
+  <rect x="290" y="116" width="530" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="555" y="140" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Panel readings valid?</text>
+  <text x="555" y="160" text-anchor="middle" font-size="10" fill="#555">panel_temp_valid_after_on minutes elapsed since valve ON?</text>
+
+  <!-- Not yet ─────────────────────────────────────→ WAITING-A -->
+  <line x1="820" y1="145" x2="900" y2="145" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="860" y="136" text-anchor="middle" font-size="9" fill="#555">Not yet</text>
+  <rect x="900" y="116" width="240" height="58" rx="6" fill="#d0cbc4" stroke="#a8a09a" stroke-width="1.5"/>
+  <text x="1020" y="139" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">decision = waiting</text>
+  <text x="1020" y="159" text-anchor="middle" font-size="10" fill="#555">sensor still stabilising</text>
+
+  <!-- ↓ Valid -->
+  <line x1="610" y1="174" x2="610" y2="214" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="620" y="199" font-size="9" fill="#555">Valid</text>
+
+  <!-- ══ ② Is this the last waiting run? ══ -->
+  <rect x="290" y="214" width="530" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="555" y="238" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Is this the last waiting run?</text>
+  <text x="555" y="258" text-anchor="middle" font-size="10" fill="#555">run count since turn_on ≥ trend_runs?</text>
+
+  <!-- No ──────────────────────────────────────────→ Panel trend DOWN? -->
+  <line x1="820" y1="243" x2="900" y2="243" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="860" y="234" text-anchor="middle" font-size="9" fill="#555">No</text>
+  <rect x="900" y="214" width="240" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="1020" y="238" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Panel trend DOWN?</text>
+  <text x="1020" y="258" text-anchor="middle" font-size="10" fill="#555">mid-wait early abort check</text>
+
+  <!--  Panel trend DOWN? → Yes ↓ turn_off early -->
+  <line x1="1020" y1="272" x2="1020" y2="322" stroke="#b55e5e" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="1031" y="302" font-size="9" fill="#b55e5e">Yes</text>
+  <rect x="900" y="322" width="240" height="52" rx="6" fill="#b55e5e" stroke="#954040" stroke-width="1.5"/>
+  <text x="1020" y="346" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">decision = turn_off</text>
+  <text x="1020" y="363" text-anchor="middle" font-size="10" fill="#fdd">Early abort — panel cooling</text>
+
+  <!--  Panel trend DOWN? → No: route LEFT through x=860 channel, DOWN to WAITING-B
+        x=860 is 40 px clear of main right (820) and right col left (900)             -->
+  <line x1="900"  y1="243" x2="860" y2="243" stroke="#888" stroke-width="1.5"/>
+  <line x1="860"  y1="243" x2="860" y2="444" stroke="#888" stroke-width="1.5"/>
+  <line x1="860"  y1="444" x2="900" y2="444" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="870"   y="234" font-size="9" fill="#555">No</text>
+
+  <!-- WAITING-B (panel stable mid-wait) -->
+  <rect x="900" y="418" width="240" height="52" rx="6" fill="#d0cbc4" stroke="#a8a09a" stroke-width="1.5"/>
+  <text x="1020" y="441" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">decision = waiting</text>
+  <text x="1020" y="458" text-anchor="middle" font-size="10" fill="#555">panel stable — re-evaluate next run</text>
+
+  <!-- ↓ Yes (last run) — long clear arrow at x=610, right col at x=900+ -->
+  <line x1="610" y1="272" x2="610" y2="520" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="621" y="386" font-size="9" fill="#555">Yes — last run</text>
+
+  <!-- ══ ③ Panel trend on last run? ══ -->
+  <rect x="290" y="520" width="530" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="555" y="544" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Panel trend on last run?</text>
+  <text x="555" y="564" text-anchor="middle" font-size="10" fill="#555">UP · DOWN · stable or unavailable</text>
+
+  <!-- UP → keep_on (left) -->
+  <line x1="290" y1="549" x2="220" y2="549" stroke="#5a8a58" stroke-width="1.5" marker-end="url(#ag)"/>
+  <text x="253" y="540" text-anchor="middle" font-size="9" fill="#5a8a58">UP</text>
+  <rect x="20" y="520" width="200" height="58" rx="6" fill="#8a9f78" stroke="#6a7f58" stroke-width="1.5"/>
+  <text x="120" y="544" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">decision = keep_on</text>
+  <text x="120" y="564" text-anchor="middle" font-size="10" fill="#dff0d8">Heating confirmed</text>
+
+  <!-- DOWN → turn_off -->
+  <line x1="555" y1="578" x2="555" y2="620" stroke="#b55e5e" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="566" y="603" font-size="9" fill="#b55e5e">DOWN</text>
+  <rect x="365" y="620" width="380" height="52" rx="6" fill="#b55e5e" stroke="#954040" stroke-width="1.5"/>
+  <text x="555" y="643" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">decision = turn_off</text>
+  <text x="555" y="660" text-anchor="middle" font-size="10" fill="#fdd">Panel cooling — close valve</text>
+
+  <!-- stable/N/A → hold (right) — 80 px gap, label fits -->
+  <line x1="820" y1="549" x2="900" y2="549" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="860" y="540" text-anchor="middle" font-size="9" fill="#555">stable / N·A</text>
+  <rect x="900" y="520" width="240" height="58" rx="6" fill="#d0cbc4" stroke="#a8a09a" stroke-width="1.5"/>
+  <text x="1020" y="544" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">decision = hold</text>
+  <text x="1020" y="564" text-anchor="middle" font-size="10" fill="#555">Re-evaluate next run</text>
+
+  <!-- ══ Convergence ══
+       Left  x=120  : keep_on bottom (120,578) → y=730
+       Center x=555 : turn_off bottom (555,672) → y=730
+       Right track x=1180 : connectors from all right-col boxes → vertical → y=730  -->
+  <line x1="120" y1="578" x2="120" y2="730" stroke="#888" stroke-width="1.5"/>
+  <line x1="555" y1="672" x2="555" y2="730" stroke="#888" stroke-width="1.5"/>
+
+  <!-- Right track: one vertical at x=1180, horizonal connectors from each box right edge (1140) -->
+  <line x1="1180" y1="145" x2="1180" y2="730" stroke="#888" stroke-width="1.5"/>
+  <line x1="1140" y1="145" x2="1180" y2="145" stroke="#888" stroke-width="1.5"/>
+  <line x1="1140" y1="348" x2="1180" y2="348" stroke="#888" stroke-width="1.5"/>
+  <line x1="1140" y1="444" x2="1180" y2="444" stroke="#888" stroke-width="1.5"/>
+  <line x1="1140" y1="549" x2="1180" y2="549" stroke="#888" stroke-width="1.5"/>
+
+  <!-- Gather at y=730 -->
+  <line x1="120" y1="730" x2="1180" y2="730" stroke="#888" stroke-width="1.5"/>
+  <line x1="555" y1="730" x2="555"  y2="746" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- EXIT -->
+  <rect x="325" y="746" width="460" height="36" rx="18" fill="#1e2a3a"/>
+  <text x="555" y="769" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">⏹ Write DB · Continue to next section</text>
+
+  <!-- Note -->
+  <rect x="20" y="796" width="1180" height="26" rx="6" fill="#fff8e8" stroke="#c0a060" stroke-width="1.5"/>
+  <text x="610" y="813" text-anchor="middle" font-size="10" fill="#7a5a20">panel_temp_valid_after_on — minutes after valve ON before sensor is reliable · trend_runs — number of agent runs in the full waiting phase</text>
+</svg>

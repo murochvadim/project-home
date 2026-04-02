@@ -3,7 +3,9 @@
     "allow": [
       "Bash(PGPASSWORD='p2R3yT+x' psql -h 192.168.1.219 -p 5432 -U postgres -d home_data -c \"\\\\dt\")",
       "Bash(npx.cmd @modelcontextprotocol/server-homeassistant)",
-      "mcp__postgres-lxc__query"
+      "mcp__postgres-lxc__query",
+      "Bash(scp /c/Users/muroc/project_home/BOILER/dashboard/public/js/arp_scan.py root@192.168.1.227:/opt/network-agent/arp_scan.py)",
+      "Bash(ssh root@192.168.1.227 \"chmod +x /opt/network-agent/arp_scan.py && echo ok\")"
     ]
   }
 }

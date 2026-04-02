@@ -4,23 +4,7 @@
   <meta charset="UTF-8">
   <title>Boiler Dashboard</title>
   <link rel="stylesheet" href="css/style.css">
-  <style>
-    .tab-btn {
-      padding: 7px 20px;
-      border: 1px solid #d0cbc4;
-      border-radius: 4px;
-      background: #f0ebe6;
-      color: #555;
-      font-size: 0.85rem;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .tab-btn:hover  { background: #e8ddd8; }
-    .tab-btn.active { background: #7a9ab8; color: #fff; border-color: #7a9ab8; }
-    .tab-panel      { display: none; }
-    .tab-panel.active { display: block; }
-    .tab-bar        { display: flex; gap: 8px; margin-bottom: 20px; }
-  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -29,13 +13,17 @@
 
   <div class="section-label">General</div>
   <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="media.html">Project Media</a>
   <a href="general.html">Weather</a>
 
-  <div class="section-label">Boiler Agent</div>
-  <a href="index.html" class="active">Overview</a>
-  <a href="graph.html">AI + Graph</a>
-  <a href="data.html">Data</a>
-  <a href="logic.html">Logic</a>
+
+  <div class="section-label">Agents</div>
+  <a href="index.html" class="active">Boiler Agent</a>
+
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
 
   <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
   <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
@@ -46,13 +34,16 @@
     <h1>Boiler Agent</h1>
     <div class="refresh-bar">
       <span id="last-refresh">—</span>
-      <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+      <button class="btn btn-secondary btn-sm" id="refresh-btn" onclick="handlePageRefresh()">↺ Refresh</button>
     </div>
   </div>
 
   <!-- Tab bar -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showMainTab('overview', this)">Boiler Agent</button>
+    <button class="tab-btn"        onclick="showMainTab('graph', this)">Graph</button>
+    <button class="tab-btn"        onclick="showMainTab('ai', this)">AI</button>
+    <button class="tab-btn"        onclick="showMainTab('data', this)">Data</button>
     <button class="tab-btn"        onclick="showMainTab('settings', this)">Settings</button>
   </div>
 
@@ -165,6 +156,243 @@
   </div><!-- /tab-overview -->
 
   <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Graph                                                -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-graph">
+
+    <!-- Graph 1: current -->
+    <div class="card">
+      <div class="graph-controls">
+        <div>
+          <label>Range:</label>
+          <select id="range">
+            <option value="1h">Last 1h</option>
+            <option value="6h" selected>Last 6h</option>
+            <option value="24h">Last 24h</option>
+          </select>
+        </div>
+        <div>
+          <label>Resolution:</label>
+          <select id="resolution">
+            <option value="5m">5 min</option>
+            <option value="15m" selected>15 min</option>
+            <option value="1h">1 hour</option>
+            <option value="6h">6 hours</option>
+            <option value="1d">1 day</option>
+          </select>
+        </div>
+        <div style="margin-left:auto;">
+          <button id="sync-btn" class="btn btn-success btn-sm" onclick="toggleSync()">&#x21c4; Sync ON</button>
+        </div>
+      </div>
+      <canvas id="tempChart" height="100"></canvas>
+    </div>
+
+    <!-- Graph 2: yesterday −24h -->
+    <div class="card">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:10px;">
+        <h2 style="margin:0;">Yesterday (−24h)</h2>
+        <span id="graph2-date" style="font-size:0.78rem; color:#aaa;"></span>
+      </div>
+      <!-- Independent controls — hidden when Sync is ON -->
+      <div id="graph2-controls" class="graph-controls" style="display:none;">
+        <div>
+          <label>Range:</label>
+          <select id="range2">
+            <option value="1h">Last 1h</option>
+            <option value="6h" selected>Last 6h</option>
+            <option value="24h">Last 24h</option>
+          </select>
+        </div>
+        <div>
+          <label>Resolution:</label>
+          <select id="resolution2">
+            <option value="5m">5 min</option>
+            <option value="15m" selected>15 min</option>
+            <option value="1h">1 hour</option>
+            <option value="6h">6 hours</option>
+            <option value="1d">1 day</option>
+          </select>
+        </div>
+      </div>
+      <canvas id="tempChart2" height="100"></canvas>
+    </div>
+
+  </div><!-- /tab-graph -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: AI Investigation                                     -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-ai">
+    <div class="card">
+      <h2>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7d9966" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle; margin-right:7px; margin-bottom:2px;">
+          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/>
+          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/>
+        </svg>AI Investigation
+      </h2>
+
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label style="font-size:0.82rem; color:#666;">Hours:</label>
+          <input type="time" id="ai-from" value="07:00" class="ai-time-input">
+          <span style="color:#aaa;">&#8594;</span>
+          <input type="time" id="ai-to" value="14:00" class="ai-time-input">
+        </div>
+        <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+          <span style="font-size:0.78rem; color:#aaa;">Include:</span>
+          <label class="ai-check-label"><input type="checkbox" id="ai-weather" checked> Weather Forecast</label>
+          <label class="ai-check-label"><input type="checkbox" id="ai-outlook" checked> Today's Outlook</label>
+          <label class="ai-check-label"><input type="checkbox" id="ai-agent" checked> Agent History</label>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" id="ai-btn" onclick="runInvestigation()">
+          <span id="ai-btn-icon">&#129504;</span>&thinsp;<span id="ai-btn-label">Investigate</span>
+        </button>
+        <button class="btn btn-success btn-sm" id="ai-prompt-btn" onclick="togglePrompt()" style="display:none;">View Prompt</button>
+        <span id="ai-error" style="font-size:0.82rem; color:#c0392b; display:none;"></span>
+      </div>
+
+      <div id="ai-prompt-details" style="display:none; margin-top:12px;">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div>
+            <div style="font-size:0.72rem; color:#bbb; margin-bottom:3px; text-transform:uppercase; letter-spacing:0.05em;">System</div>
+            <pre id="ai-prompt-system" style="background:#e8e2da; border-radius:4px; padding:10px 12px; font-size:0.72rem; color:#555; white-space:pre-wrap; overflow-x:auto; margin:0;"></pre>
+          </div>
+          <div>
+            <div style="font-size:0.72rem; color:#bbb; margin-bottom:3px; text-transform:uppercase; letter-spacing:0.05em;">User</div>
+            <pre id="ai-prompt-user" style="background:#e8e2da; border-radius:4px; padding:10px 12px; font-size:0.72rem; color:#555; white-space:pre-wrap; overflow-x:auto; margin:0;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div id="ai-results" style="display:none; margin-top:20px; border-top:1px solid #d0cbc4; padding-top:16px;">
+        <div id="ai-last-run" style="font-size:0.75rem; color:#aaa; margin-bottom:12px;"></div>
+
+        <div id="ai-summary" class="ai-summary-box"></div>
+
+        <div style="font-size:0.78rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin:16px 0 8px;">Suggested Settings</div>
+        <table id="ai-settings-table" style="margin-bottom:6px;">
+          <thead><tr><th>Parameter</th><th>Current</th><th>Suggested</th><th>Reason</th></tr></thead>
+          <tbody id="ai-settings-body"></tbody>
+        </table>
+        <div id="ai-no-changes" style="display:none; color:#aaa; font-size:0.82rem; margin-bottom:16px;">&#10003; No changes recommended — current parameters appear optimal for this window.</div>
+        <div id="ai-apply-wrap" style="display:none; margin-bottom:16px;">
+          <button class="btn btn-success btn-sm" onclick="applySuggestedSettings()">&#10003; Apply Suggested Parameters</button>
+          <span id="ai-apply-msg" style="margin-left:10px; font-size:0.82rem; display:none;"></span>
+        </div>
+
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:20px; margin-bottom:4px;">
+          <div style="font-size:0.78rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em;">AI Investigation</div>
+          <button class="btn btn-secondary btn-sm" onclick="clearInvestigation()">&#10005; Clear</button>
+        </div>
+        <div style="font-size:0.72rem; color:#aaa; font-style:italic; margin-bottom:8px;">Estimate only — dashed lines indicate AI prediction</div>
+        <canvas id="aiChart" height="80"></canvas>
+      </div>
+    </div>
+  </div><!-- /tab-ai -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Data                                                 -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-data">
+
+    <!-- Raw data -->
+    <div class="card">
+      <h2>Raw Data</h2>
+      <div class="table-controls">
+        Show
+        <select id="raw-limit" onchange="loadRaw()">
+          <option value="10" selected>10</option>
+          <option value="20">20</option>
+          <option value="30">30</option>
+        </select>
+        rows
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Boiler Temp</th>
+              <th>Panel Temp</th>
+              <th>Valve</th>
+            </tr>
+          </thead>
+          <tbody id="raw-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Agent data -->
+    <div class="card">
+      <h2>Agent Runs</h2>
+      <div class="table-controls">
+        Show
+        <select id="agent-limit" onchange="loadAgent()">
+          <option value="10" selected>10</option>
+          <option value="20">20</option>
+          <option value="30">30</option>
+        </select>
+        rows
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Boiler</th>
+              <th>Panel</th>
+              <th>Valve</th>
+              <th>Boiler Trend</th>
+              <th>Panel Trend</th>
+              <th>Decision</th>
+              <th>Why</th>
+              <th>Error</th>
+              <th>Next Run</th>
+              <th>Version</th>
+            </tr>
+          </thead>
+          <tbody id="agent-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Consumption events -->
+    <div class="card">
+      <h2>Hot Water Consumption Events</h2>
+      <div class="table-controls">
+        Show
+        <select id="consumption-limit" onchange="loadConsumptions()">
+          <option value="10" selected>10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+        rows
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Start</th>
+              <th>End</th>
+              <th>Temp Before</th>
+              <th>Temp After</th>
+              <th>Drop (°C)</th>
+              <th>Duration (min)</th>
+            </tr>
+          </thead>
+          <tbody id="consumption-body"></tbody>
+        </table>
+        <div id="consumption-empty" style="display:none; padding:12px; color:#666; font-size:0.85rem;">No consumption events recorded yet.</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-data -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
   <!-- TAB: Settings                                             -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-settings">
@@ -214,18 +442,6 @@
       </form>
     </div>
 
-    <!-- Deploy -->
-    <div class="card">
-      <h2>Deploy</h2>
-      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <select id="deploy-agent" style="font-size:0.85rem; border:1px solid #d0cbc4; border-radius:5px; padding:5px 10px; background:#faf8f5; color:#2e2e2e;">
-          <option value="">Loading agents…</option>
-        </select>
-        <button class="btn btn-danger btn-sm" onclick="deploy()">Deploy to Production</button>
-      </div>
-      <div id="deploy-output"></div>
-    </div>
-
   </div><!-- /tab-settings -->
 
 </main>
@@ -236,9 +452,25 @@ function showMainTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+  if (name === 'ai' && !window._aiTabLoaded) {
+    window._aiTabLoaded = true;
+    const stored = localStorage.getItem('boiler_ai_investigation');
+    if (stored) { try { renderInvestigation(JSON.parse(stored), true); } catch(e) {} }
+  }
+}
+
+function handlePageRefresh() {
+  const activeId = document.querySelector('.tab-panel.active')?.id;
+  if (activeId === 'tab-ai') return;
+  if (activeId === 'tab-graph') { loadGraph(); return; }
+  if (activeId === 'tab-data') { refreshDataAll(); return; }
+  refreshAll();
 }
 </script>
 <script src="js/alerts-monitor.js"></script>
+<script src="js/scroll-stabilizer.js"></script>
 <script src="js/main.js"></script>
+<script src="js/graph.js"></script>
+<script src="js/data.js"></script>
 </body>
 </html>

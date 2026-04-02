@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"http://localhost:3000/api/voice/phrases?language=en\")",
+      "Bash(curl -s \"http://localhost:3000/api/voice/phrases?language=he\")",
+      "Bash(node -e \"let d=''''''''; process.stdin.on\\(''''data'''',c=>d+=c\\); process.stdin.on\\(''''end'''',\\(\\)=>{ const r=JSON.parse\\(d\\); console.log\\(r.length,''''rows''''\\); r.slice\\(0,3\\).forEach\\(p=>console.log\\(p.language, p.phrase\\)\\); }\\)\")",
+      "Bash(curl -sI \"http://localhost:3000/voice.html\")",
+      "Bash(chmod +x /c/Users/muroc/project_home/.claude/hooks/pre-lxc-check.sh)",
+      "Bash(ssh -o ConnectTimeout=3 root@192.168.1.219 \"hostname\")",
+      "Bash(ssh -o ConnectTimeout=3 root@192.168.1.188 \"hostname\")"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /c/Users/muroc/project_home/.claude/hooks/pre-lxc-check.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /c/Users/muroc/project_home/.claude/hooks/post-tmp-cleanup.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'f=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$f\" == *.html || \"$f\" == *.css ]]; then npx prettier --write \"$f\" 2>/dev/null && echo \"[hook] formatted $f\"; fi; if [[ \"$f\" == *.js || \"$f\" == *.sql || \"$f\" == *.py ]]; then new_tables=$(cd /c/Users/muroc/project_home && git diff HEAD -- \"$f\" 2>/dev/null | grep \"^+.*CREATE TABLE IF NOT EXISTS\" | grep -o \"CREATE TABLE IF NOT EXISTS [a-z_]*\" | sed \"s/CREATE TABLE IF NOT EXISTS //\" | tr \"\\n\" \" \"); if [[ -n \"$new_tables\" ]]; then echo \"[hook] ⚠ NEW DB table(s) added: ${new_tables}— add to: 1) retention_policies in ensureSchema(), 2) Project Health DB Volumes tab\"; fi; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 820" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1060" height="820" fill="#f5f2ee"/>
+  <defs>
+    <marker id="a"  markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#888"/></marker>
+    <marker id="ad" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#b55e5e"/></marker>
+  </defs>
+
+  <text x="530" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#3a3028">Boiler Agent — 1 · Main Flow</text>
+  <text x="530" y="48" text-anchor="middle" font-size="10" fill="#888">Entry point for every agent run — runs on LXC 103 every run_interval_min minutes</text>
+
+  <!-- ENTER -->
+  <rect x="310" y="62" width="440" height="36" rx="18" fill="#1e2a3a"/>
+  <text x="530" y="85" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">▶ Agent Run Start</text>
+  <line x1="530" y1="98" x2="530" y2="116" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- ① Safety Rule A
+       Main: x=300-720   Left exit: x=20-244   Right exit: x=780-1040
+       Arrow gaps: 300-244=56 px left,  780-720=60 px right               -->
+  <rect x="300" y="116" width="420" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="510" y="140" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Safety Rule A</text>
+  <text x="510" y="160" text-anchor="middle" font-size="10" fill="#555">Valve is ON  and  current time is outside 07:00 – 19:00?</text>
+
+  <line x1="720" y1="145" x2="780" y2="145" stroke="#b55e5e" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="750" y="136" text-anchor="middle" font-size="9" fill="#b55e5e">Yes</text>
+  <rect x="780" y="116" width="260" height="58" rx="6" fill="#b55e5e" stroke="#954040" stroke-width="1.5"/>
+  <text x="910" y="140" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">Turn OFF Valve → EXIT</text>
+  <text x="910" y="160" text-anchor="middle" font-size="10" fill="#fdd">decision = turn_off</text>
+
+  <line x1="510" y1="174" x2="510" y2="204" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="520" y="194" font-size="9" fill="#555">No</text>
+
+  <!-- ② agent_enabled? -->
+  <rect x="300" y="204" width="420" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="510" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  agent_enabled = true?</text>
+  <text x="510" y="248" text-anchor="middle" font-size="10" fill="#555">from agent_settings table</text>
+
+  <line x1="720" y1="233" x2="780" y2="233" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="750" y="224" text-anchor="middle" font-size="9" fill="#555">false</text>
+  <rect x="780" y="204" width="260" height="58" rx="6" fill="#d0cbc4" stroke="#a8a09a" stroke-width="1.5"/>
+  <text x="910" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">decision = disabled</text>
+  <text x="910" y="248" text-anchor="middle" font-size="10" fill="#555">→ EXIT · wait next run</text>
+
+  <line x1="510" y1="262" x2="510" y2="292" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="520" y="282" font-size="9" fill="#555">true</text>
+
+  <!-- ③ Check system_alerts -->
+  <rect x="280" y="292" width="460" height="58" rx="6" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="510" y="316" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">Check system_alerts</text>
+  <text x="510" y="336" text-anchor="middle" font-size="10" fill="#555">error/critical → no_action + exit · warn → continue with warning</text>
+  <line x1="510" y1="350" x2="510" y2="380" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- ④ Read raw_data -->
+  <rect x="270" y="380" width="480" height="58" rx="6" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="510" y="404" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">Read raw_data</text>
+  <text x="510" y="424" text-anchor="middle" font-size="10" fill="#555">Last trend_runs × run_interval_min min · Calculate boiler &amp; panel trends</text>
+  <line x1="510" y1="438" x2="510" y2="468" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- ⑤ Hard Error? -->
+  <rect x="300" y="468" width="420" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="510" y="492" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Hard Error?</text>
+  <text x="510" y="512" text-anchor="middle" font-size="10" fill="#555">DB failure · HA unreachable · missing sensor data</text>
+
+  <!-- Yes+ON → left -->
+  <line x1="300" y1="497" x2="244" y2="497" stroke="#b55e5e" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="272" y="488" text-anchor="middle" font-size="9" fill="#b55e5e">Yes + ON</text>
+  <rect x="20" y="468" width="224" height="58" rx="6" fill="#b55e5e" stroke="#954040" stroke-width="1.5"/>
+  <text x="132" y="492" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">Safety Rule B → EXIT</text>
+  <text x="132" y="512" text-anchor="middle" font-size="10" fill="#fdd">Turn OFF · error = ERR:…</text>
+
+  <!-- Yes+OFF → right -->
+  <line x1="720" y1="497" x2="780" y2="497" stroke="#b55e5e" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="750" y="488" text-anchor="middle" font-size="9" fill="#b55e5e">Yes + OFF</text>
+  <rect x="780" y="468" width="260" height="58" rx="6" fill="#b55e5e" stroke="#954040" stroke-width="1.5"/>
+  <text x="910" y="492" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">decision = no_action</text>
+  <text x="910" y="512" text-anchor="middle" font-size="10" fill="#fdd">error = ERR:… → EXIT</text>
+
+  <line x1="510" y1="526" x2="510" y2="556" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="520" y="546" font-size="9" fill="#555">No</text>
+
+  <!-- ⑥ Get valve_state -->
+  <rect x="310" y="556" width="400" height="58" rx="6" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="510" y="580" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">Get current valve_state</text>
+  <text x="510" y="600" text-anchor="middle" font-size="10" fill="#555">read latest row from raw_data</text>
+  <line x1="510" y1="614" x2="510" y2="644" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- ⑦ Route by state -->
+  <rect x="260" y="644" width="500" height="58" rx="6" fill="#ebe5db" stroke="#c4b4a0" stroke-width="1.5"/>
+  <text x="510" y="668" text-anchor="middle" font-size="11" font-weight="600" fill="#2e2e2e">◆  Route by valve state</text>
+  <text x="510" y="688" text-anchor="middle" font-size="10" fill="#555">In Waiting Phase?  ·  Valve ON (waiting done)?  ·  Valve OFF?</text>
+
+  <!-- Left → Waiting Phase -->
+  <line x1="260" y1="673" x2="200" y2="673" stroke="#888" stroke-width="1.5"/>
+  <line x1="200" y1="673" x2="200" y2="722" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="228" y="664" text-anchor="middle" font-size="9" fill="#555">Waiting</text>
+
+  <!-- Center ↓ Normal Decision -->
+  <line x1="510" y1="702" x2="510" y2="722" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="521" y="716" font-size="9" fill="#555">ON</text>
+
+  <!-- Right → Turn ON & Probe -->
+  <line x1="760" y1="673" x2="820" y2="673" stroke="#888" stroke-width="1.5"/>
+  <line x1="820" y1="673" x2="820" y2="722" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="792" y="664" text-anchor="middle" font-size="9" fill="#555">OFF</text>
+
+  <!-- Reference boxes -->
+  <rect x="60"  y="722" width="280" height="52" rx="6" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="200" y="743" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">➜ Waiting Phase</text>
+  <text x="200" y="761" text-anchor="middle" font-size="10" fill="#dce9f5">SVG 2 — valve just turned ON</text>
+
+  <rect x="370" y="722" width="280" height="52" rx="6" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="510" y="743" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">➜ Normal Decision</text>
+  <text x="510" y="761" text-anchor="middle" font-size="10" fill="#dce9f5">SVG 4 — valve ON, waiting done</text>
+
+  <rect x="680" y="722" width="280" height="52" rx="6" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="820" y="743" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">➜ Turn ON &amp; Probe</text>
+  <text x="820" y="761" text-anchor="middle" font-size="10" fill="#dce9f5">SVG 3 — valve is OFF</text>
+
+  <!-- Legend -->
+  <rect x="20" y="790" width="340" height="24" rx="4" fill="#fff8" stroke="#e0dbd4" stroke-width="1"/>
+  <text x="30" y="807" font-size="9" fill="#444">◆ decision point  ·  branches marked → EXIT terminate immediately</text>
+</svg>

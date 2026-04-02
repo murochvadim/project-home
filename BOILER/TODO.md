@@ -1,6 +1,70 @@
 # Boiler Project — TODO
 
-## General
+## Do Steps
+# Step_0. Media System
+> Status: thinking — confirm approach before starting
+
+- [ ] Step_0.1 — Plex: install on QNAP, get IP + token
+- [ ] Step_0.2 — Dashboard Media page: browse library thumbnails, click to cast to TV
+- [ ] Step_0.3 — SmartThings: TV + Soundbar power, volume, input switch from dashboard
+- [ ] Step_0.4 — Voice commands: play movie, switch audio to soundbar, turn off TV
+- [ ] Step_0.5 — LXC 100: decide final role once media approach confirmed
+
+
+## hook
+
+# Step_1.
+ 
+# Step_2.
+ 
+
+# Step_3. 
+
+
+# Step_4.
+ 
+
+# Step_5.
+ 
+
+# Step_6.
+
+
+# Step_7.
+
+
+ # Step_8.
+  Selector output of sound not working 
+
+# Step_9.
+
+
+## Not to do more now   
+
+8. Use the Fuzzy Matching method in request hendler of voice 
+
+9. 2 models on same LXC - For Hebrew: ivrit-ai/whisper-large-v3-turbo-ct2 and for Russian: Systran/faster-whisper-large-v3-turbo or Ash8181/whisper-large-v3-russian-ct2 . wake word can decide which lang is to use 
+
+10. 
+## 10.----------------------------------------------------
+
+
+## 11.-----------------------------------------------------
+# BACKUP.
+Purpose: Overall BackUp solution and BackUp presentation in Project envirement.
+Create new Page Project Backups under Project Network.
+Use Proxmox VE API.
+Use LXC 104 for created scripts. 
+Backup storage QNAP ,name MUROCHNAS, folder DataVol1/ PBS_Data/ , Achived by NFS.   
+# A.
+Proxmox datacenter BackUp instruments used for all VMs or LXCs. I want to show all of them with last run,retention. 
+# B.
+I want BackUp instrument used Proxmox VE API for BackUp the rest files/folders/image in Project envirment.  
+like Project folder ,like Laptop Image Backup
+# C.
+ 
+
+
 
 
 ## Agent

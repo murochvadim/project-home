@@ -5,21 +5,9 @@
   <title>Project Health</title>
   <link rel="stylesheet" href="css/style.css">
   <style>
-    .tab-btn {
-      padding: 7px 20px;
-      border: 1px solid #d0cbc4;
-      border-radius: 4px;
-      background: #f0ebe6;
-      color: #555;
-      font-size: 0.85rem;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .tab-btn:hover  { background: #e8ddd8; }
-    .tab-btn.active { background: #7a9ab8; color: #fff; border-color: #7a9ab8; }
-    .tab-panel      { display: none; }
-    .tab-panel.active { display: block; }
-    .tab-bar        { display: flex; gap: 8px; margin-bottom: 20px; }
+    /* Reserve height for status values that gain sub-divs during auto-refresh.
+       Worst case: main dot + age sub-div + cron note sub-div ≈ 52px */
+    .value.small    { min-height: 52px; }
   </style>
 </head>
 <body>
@@ -29,13 +17,17 @@
 
   <div class="section-label">General</div>
   <a href="health.html" class="active">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="media.html">Project Media</a>
   <a href="general.html">Weather</a>
 
-  <div class="section-label">Boiler Agent</div>
-  <a href="index.html">Overview</a>
-  <a href="graph.html">AI + Graph</a>
-  <a href="data.html">Data</a>
-  <a href="logic.html">Logic</a>
+
+  <div class="section-label">Agents</div>
+  <a href="index.html">Boiler Agent</a>
+
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
 
   <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
   <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
@@ -53,7 +45,10 @@
   <!-- Tab bar -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showHealthTab('system', this)">System</button>
-    <button class="tab-btn"        onclick="showHealthTab('database', this)">Database</button>
+    <button class="tab-btn" onclick="showHealthTab('orch-log', this)">Orchestrator Log</button>
+    <button class="tab-btn" onclick="showHealthTab('database', this)">Database</button>
+    <button class="tab-btn" onclick="showHealthTab('documents', this)">Documents</button>
+    <button class="tab-btn" onclick="showHealthTab('settings', this)">Settings</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -102,9 +97,27 @@
           <label>Home Assistant</label>
           <div class="value small" id="svc-ha">—</div>
         </div>
+      </div>
+
+      <!-- Services (Agents) -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Services</div>
+      <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
         <div class="status-item">
-          <label>LXC 103 (SSH)</label>
-          <div class="value small" id="svc-lxc">—</div>
+          <label>Boiler Agent</label>
+          <div class="value small" id="svc-agent">—</div>
+        </div>
+      </div>
+
+      <!-- Data -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Data</div>
+      <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
+        <div class="status-item">
+          <label>Boiler Last Decision</label>
+          <div class="value small" id="svc-boiler-last">—</div>
+        </div>
+        <div class="status-item">
+          <label>Orchestrator Last Run</label>
+          <div class="value small" id="svc-orch-last-run">—</div>
         </div>
         <div class="status-item">
           <label>Active Alerts</label>
@@ -112,28 +125,7 @@
         </div>
       </div>
 
-      <!-- Services -->
-      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Services</div>
-      <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
-        <div class="status-item">
-          <label>Boiler Agent</label>
-          <div class="value small" id="svc-agent">—</div>
-        </div>
-        <div class="status-item">
-          <label>Boiler Last Decision</label>
-          <div class="value small" id="svc-boiler-last">—</div>
-        </div>
-        <div class="status-item">
-          <label>Orchestrator (LXC 105)</label>
-          <div class="value small" id="svc-orchestrator">—</div>
-        </div>
-        <div class="status-item">
-          <label>Orchestrator Last Run</label>
-          <div class="value small" id="svc-orch-last-run">—</div>
-        </div>
-      </div>
-
-      <!-- Scripts -->
+      <!-- Scripts (cron) -->
       <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Scripts (cron)</div>
       <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
         <div class="status-item">
@@ -146,12 +138,36 @@
         </div>
       </div>
 
-      <!-- Network -->
-      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Network</div>
+      <!-- VM + LXC -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">VM + LXC</div>
       <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
         <div class="status-item">
-          <label>LXC 104 — MCP Bridge</label>
+          <label>VM 101 — HA</label>
+          <div class="value small" id="svc-vm101">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 100</label>
+          <div class="value small" id="svc-lxc100">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 102 — Database</label>
+          <div class="value small" id="svc-lxc102">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 103 — Agents</label>
+          <div class="value small" id="svc-lxc103">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 104 — Commands</label>
           <div class="value small" id="svc-lxc104">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 105 — MainAgent</label>
+          <div class="value small" id="svc-lxc105">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 106 — Voice</label>
+          <div class="value small" id="svc-lxc106">—</div>
         </div>
       </div>
 
@@ -164,6 +180,13 @@
         </div>
       </div>
     </div>
+
+  </div><!-- /tab-system -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Orchestrator Log                                      -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-orch-log">
 
     <!-- Orchestrator Log -->
     <div class="card">
@@ -190,7 +213,7 @@
       </table>
     </div>
 
-  </div><!-- /tab-system -->
+  </div><!-- /tab-orch-log -->
 
   <!-- ══════════════════════════════════════════════════════════ -->
   <!-- TAB: Database                                             -->
@@ -208,10 +231,11 @@
             <th style="text-align:right;">Size</th>
             <th>Oldest Record</th>
             <th>Newest Record</th>
+            <th>Last Vacuum</th>
           </tr>
         </thead>
         <tbody id="volumes-body">
-          <tr><td colspan="5" style="color:#aaa;">Loading…</td></tr>
+          <tr><td colspan="6" style="color:#aaa;">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -237,11 +261,38 @@
       </table>
       <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
         <button class="btn btn-secondary btn-sm" onclick="cleanAll()">🧹 Clean All Now</button>
+        <span style="font-size:0.78rem; color:#9b2335;">Deletes old rows from every table according to retention limit.</span>
         <span id="cleanup-result" style="font-size:0.8rem; color:#666;"></span>
       </div>
     </div>
 
   </div><!-- /tab-database -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Settings                                             -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Documents                                            -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-documents">
+    <div id="docs-container"></div>
+  </div><!-- /tab-documents -->
+
+  <div class="tab-panel" id="tab-settings">
+
+    <!-- Deploy -->
+    <div class="card">
+      <h2>Deploy</h2>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <select id="deploy-agent" style="font-size:0.85rem; border:1px solid #d0cbc4; border-radius:5px; padding:5px 10px; background:#faf8f5; color:#2e2e2e;">
+          <option value="">Loading agents…</option>
+        </select>
+        <button class="btn btn-danger btn-sm" onclick="deploy()">Deploy to Production</button>
+      </div>
+      <div id="deploy-output"></div>
+    </div>
+
+  </div><!-- /tab-settings -->
 
 </main>
 
@@ -257,9 +308,61 @@ function showHealthTab(name, btn) {
     loadVolumes();
     loadRetention();
   }
+  // Load orch-log tab lazily on first visit
+  if (name === 'orch-log' && !window._orchLogTabLoaded) {
+    window._orchLogTabLoaded = true;
+    loadOrchLog();
+  }
+  // Load documents tab lazily on first visit
+  if (name === 'documents' && !window._docsTabLoaded) {
+    window._docsTabLoaded = true;
+    loadDocuments();
+  }
+  // Load settings tab data lazily on first visit
+  if (name === 'settings' && !window._settingsTabLoaded) {
+    window._settingsTabLoaded = true;
+    loadDeployAgents();
+  }
+}
+
+async function loadDeployAgents() {
+  try {
+    const agents = await fetch('/api/agents').then(r => r.json());
+    const sel = document.getElementById('deploy-agent');
+    sel.innerHTML = agents
+      .filter(a => a.deploy_path)
+      .map(a => `<option value="${a.name}">${a.name}${a.description ? ' — ' + a.description.split('—')[0].trim() : ''}</option>`)
+      .join('');
+    if (!sel.options.length) sel.innerHTML = '<option value="">No agents configured</option>';
+  } catch (e) {
+    document.getElementById('deploy-agent').innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function deploy() {
+  const agentName = document.getElementById('deploy-agent').value;
+  if (!agentName) return;
+  const out = document.getElementById('deploy-output');
+  out.style.display = 'block';
+  out.textContent = `Deploying ${agentName}…`;
+  try {
+    const r = await fetch('/api/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: agentName })
+    }).then(r => r.json());
+    if (r.error) {
+      out.textContent = 'ERROR: ' + r.error;
+    } else {
+      out.textContent = `--- git pull [${agentName}] ---\n` + (r.pull || '(no output)') + '\n\n--- restart ---\n' + (r.restart || '(no output)');
+    }
+  } catch (e) {
+    out.textContent = 'ERROR: ' + e.message;
+  }
 }
 </script>
 <script src="js/alerts-monitor.js"></script>
+<script src="js/scroll-stabilizer.js"></script>
 <script src="js/health.js"></script>
 </body>
 </html>

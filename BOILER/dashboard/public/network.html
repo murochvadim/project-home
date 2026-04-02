@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Project Network</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<a href="health.html" id="alert-indicator"></a></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="media.html">Project Media</a>
+  <a href="general.html">Weather</a>
+
+
+  <div class="section-label">Agents</div>
+  <a href="index.html">Boiler Agent</a>
+
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Project Network</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('status', this)">Status</button>
+    <button class="tab-btn"        onclick="showTab('graph',  this)">Graph</button>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Status                                               -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel active" id="tab-status">
+
+    <!-- Gauges -->
+    <div class="card">
+      <h2>Network Overview</h2>
+      <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
+        <div style="text-align:center;">
+          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Total Online</div>
+          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
+            <div id="gauge-online" style="font-size:2.5rem; font-weight:700; color:#2ecc71; line-height:1;">—</div>
+          </div>
+          <div style="font-size:0.72rem; color:#888; margin-top:4px;">devices</div>
+        </div>
+        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
+        <div style="text-align:center;">
+          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Total Offline</div>
+          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
+            <div id="gauge-offline" style="font-size:2.5rem; font-weight:700; color:#e74c3c; line-height:1;">—</div>
+          </div>
+          <div style="font-size:0.72rem; color:#888; margin-top:4px;">devices</div>
+        </div>
+        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
+        <div style="text-align:center;">
+          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Ever Seen</div>
+          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
+            <div id="gauge-ever" style="font-size:2.5rem; font-weight:700; color:#7a9ab8; line-height:1;">—</div>
+          </div>
+          <div style="font-size:0.72rem; color:#888; margin-top:4px;">MAC addresses</div>
+        </div>
+        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
+        <div style="text-align:center;">
+          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Last ARP Scan</div>
+          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
+            <div id="gauge-last-scan" style="font-size:1rem; font-weight:600; color:#555; line-height:1;">—</div>
+          </div>
+          <div id="gauge-scan-age" style="font-size:0.72rem; color:#888; margin-top:4px;"></div>
+        </div>
+        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
+        <div style="text-align:center;">
+          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">ARP Timer</div>
+          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
+            <div id="timer-arp" style="font-size:1.4rem; font-weight:700; color:#085c28; font-variant-numeric:tabular-nums; line-height:1;">—:——</div>
+          </div>
+          <div style="font-size:0.72rem; color:#888; margin-top:4px;">next run</div>
+        </div>
+        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
+        <div style="text-align:center;">
+          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">SNMP Timer</div>
+          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
+            <div id="timer-snmp" style="font-size:1.4rem; font-weight:700; color:#7a9ab8; font-variant-numeric:tabular-nums; line-height:1;">—:——</div>
+          </div>
+          <div style="font-size:0.72rem; color:#888; margin-top:4px;">next run</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Devices table -->
+    <div class="card">
+      <h2>Devices</h2>
+      <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+        <input id="device-search" type="text" placeholder="Search IP, MAC, name, vendor…"
+               style="padding:5px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem; width:240px;"
+               oninput="filterDevices()">
+        <label style="font-size:0.82rem; color:#666;">
+          <input type="checkbox" id="show-offline" onchange="filterDevices()"> Show offline only
+        </label>
+        <span id="device-count" style="font-size:0.78rem; color:#aaa; margin-left:auto;"></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table" id="devices-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>IP</th>
+              <th>MAC</th>
+              <th>Vendor</th>
+              <th>Name</th>
+              <th>Last Online</th>
+              <th>First Seen</th>
+            </tr>
+          </thead>
+          <tbody id="devices-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Ports table -->
+    <div class="card">
+      <h2>Aruba 1960 — Switch Ports</h2>
+      <div style="display:flex; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+        <label style="font-size:0.82rem; color:#666;">
+          <input type="checkbox" id="show-up-only" onchange="filterPorts()"> Show UP only
+        </label>
+        <span id="port-count" style="font-size:0.78rem; color:#aaa; margin-left:auto;"></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table" id="ports-table">
+          <thead>
+            <tr>
+              <th>Port</th>
+              <th>Status</th>
+              <th>Name</th>
+              <th>Last Changed</th>
+            </tr>
+          </thead>
+          <tbody id="ports-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-status -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Graph                                                -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-graph">
+    <div class="card">
+      <div style="display:flex; gap:16px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+        <label style="font-size:0.82rem; color:#666;">History:</label>
+        <select id="graph-limit" onchange="loadNetGraph()" style="font-size:0.82rem;">
+          <option value="72">Last 6h</option>
+          <option value="144">Last 12h</option>
+          <option value="288" selected>Last 24h</option>
+          <option value="576">Last 48h</option>
+        </select>
+      </div>
+      <canvas id="netChart" height="100"></canvas>
+    </div>
+  </div><!-- /tab-graph -->
+
+</main>
+
+<script src="js/alerts-monitor.js"></script>
+<script src="js/scroll-stabilizer.js"></script>
+<script src="js/network.js"></script>
+</body>
+</html>

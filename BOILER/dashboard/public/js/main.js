@@ -13,12 +13,19 @@ async function loadSolarScore() {
     if (s.error) return;
     const el    = document.getElementById('solar-score');
     const label = document.getElementById('solar-score-label');
-    const score = s.solar_score;
-    const color = score >= 8 ? '#7a9f5a' : score >= 5 ? '#b5a040' : '#a07050';
-    const text  = score >= 8 ? 'Excellent — panels will heat well'
-                : score >= 6 ? 'Good — partial heating expected'
-                : score >= 4 ? 'Fair — limited solar gain'
-                :              'Poor — minimal heating today';
+    const score   = s.solar_score;
+    const color   = score >= 8 ? '#7a9f5a' : score >= 5 ? '#b5a040' : '#a07050';
+    const quality = score >= 8 ? 'Excellent' : score >= 6 ? 'Good' : score >= 4 ? 'Fair' : 'Poor';
+    let text;
+    if (s.is_forecast) {
+      const at = s.next_sunrise ? ` at ${s.next_sunrise}` : '';
+      text = `Tomorrow${at} — ${quality} (forecast)`;
+    } else {
+      text = score >= 8 ? 'Excellent — panels will heat well'
+           : score >= 6 ? 'Good — partial heating expected'
+           : score >= 4 ? 'Fair — limited solar gain'
+           :              'Poor — minimal heating today';
+    }
     if (el)    { el.textContent = score; el.style.color = color; }
     if (label) { label.textContent = text; label.style.color = color; }
   } catch (e) { console.error('loadSolarScore error:', e); }
@@ -276,43 +283,6 @@ async function toggleAgent() {
   }
 }
 
-async function loadDeployAgents() {
-  try {
-    const agents = await fetch('/api/agents').then(r => r.json());
-    const sel = document.getElementById('deploy-agent');
-    sel.innerHTML = agents
-      .filter(a => a.deploy_path)
-      .map(a => `<option value="${a.name}">${a.name}${a.description ? ' — ' + a.description.split('—')[0].trim() : ''}</option>`)
-      .join('');
-    if (!sel.options.length) sel.innerHTML = '<option value="">No agents configured</option>';
-  } catch (e) {
-    document.getElementById('deploy-agent').innerHTML = '<option value="">Failed to load</option>';
-  }
-}
-
-async function deploy() {
-  const agentName = document.getElementById('deploy-agent').value;
-  if (!agentName) return;
-  const out = document.getElementById('deploy-output');
-  out.style.display = 'block';
-  out.textContent = `Deploying ${agentName}…`;
-  try {
-    const r = await fetch('/api/deploy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent: agentName })
-    }).then(r => r.json());
-    if (r.error) {
-      out.textContent = 'ERROR: ' + r.error;
-    } else {
-      out.textContent = `--- git pull [${agentName}] ---\n` + (r.pull || '(no output)') +
-                        '\n\n--- restart ---\n' + (r.restart || '(no output)');
-    }
-  } catch (e) {
-    out.textContent = 'ERROR: ' + e.message;
-  }
-}
-
 function scheduleAutoRefresh() {
   clearTimeout(autoRefreshTimer);
   autoRefreshTimer = setTimeout(refreshAll, runIntervalMin * 60 * 1000);
@@ -320,4 +290,3 @@ function scheduleAutoRefresh() {
 
 refreshAll();
 startCountdown();
-loadDeployAgents();

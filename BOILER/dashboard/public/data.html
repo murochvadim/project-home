@@ -12,13 +12,17 @@
 
   <div class="section-label">General</div>
   <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="media.html">Project Media</a>
   <a href="general.html">Weather</a>
 
-  <div class="section-label">Boiler Agent</div>
-  <a href="index.html">Overview</a>
-  <a href="graph.html">AI + Graph</a>
-  <a href="data.html" class="active">Data</a>
-  <a href="logic.html">Logic</a>
+
+  <div class="section-label">Agents</div>
+  <a href="index.html">Boiler Agent</a>
+
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
 
   <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
   <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
@@ -29,7 +33,7 @@
     <h1>Data Tables</h1>
     <div class="refresh-bar">
       <span id="last-refresh">—</span>
-      <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+      <button class="btn btn-secondary btn-sm" onclick="refreshDataAll()">↺ Refresh</button>
     </div>
   </div>
 
@@ -46,7 +50,7 @@
       rows
     </div>
     <div style="overflow-x:auto;">
-      <table>
+      <table class="data-table">
         <thead>
           <tr>
             <th>Timestamp</th>
@@ -73,7 +77,7 @@
       rows
     </div>
     <div style="overflow-x:auto;">
-      <table>
+      <table class="data-table">
         <thead>
           <tr>
             <th>Timestamp</th>
@@ -106,7 +110,7 @@
       rows
     </div>
     <div style="overflow-x:auto;">
-      <table>
+      <table class="data-table">
         <thead>
           <tr>
             <th>Start</th>
@@ -125,6 +129,7 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
+<script src="js/scroll-stabilizer.js"></script>
 <script src="js/data.js"></script>
 </body>
 </html>

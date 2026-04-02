@@ -5,23 +5,6 @@
   <title>Boiler — AI + Graph</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <style>
-    .tab-btn {
-      padding: 7px 20px;
-      border: 1px solid #d0cbc4;
-      border-radius: 4px;
-      background: #f0ebe6;
-      color: #555;
-      font-size: 0.85rem;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .tab-btn:hover  { background: #e8ddd8; }
-    .tab-btn.active { background: #7a9ab8; color: #fff; border-color: #7a9ab8; }
-    .tab-panel      { display: none; }
-    .tab-panel.active { display: block; }
-    .tab-bar        { display: flex; gap: 8px; margin-bottom: 20px; }
-  </style>
 </head>
 <body>
 
@@ -30,13 +13,17 @@
 
   <div class="section-label">General</div>
   <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="media.html">Project Media</a>
   <a href="general.html">Weather</a>
 
-  <div class="section-label">Boiler Agent</div>
-  <a href="index.html">Overview</a>
-  <a href="graph.html" class="active">AI + Graph</a>
-  <a href="data.html">Data</a>
-  <a href="logic.html">Logic</a>
+
+  <div class="section-label">Agents</div>
+  <a href="index.html">Boiler Agent</a>
+
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
 
   <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
   <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
@@ -185,6 +172,7 @@ function handleRefresh() {
 }
 </script>
 <script src="js/alerts-monitor.js"></script>
+<script src="js/scroll-stabilizer.js"></script>
 <script src="js/graph.js"></script>
 </body>
 </html>

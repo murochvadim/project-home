@@ -48,17 +48,26 @@
 
       // Count every failed check across the full status response
       const checks = [
+        // Infrastructure (dashboard direct checks)
         r.postgres?.ok,
         r.homeassistant?.ok,
+        // VM + LXC (dashboard TCP checks)
+        r.vm101?.ok,
+        r.lxc100?.ok,
+        r.lxc102?.ok,
         r.lxc103?.ok,
         r.lxc104?.ok,
-        r.boiler_agent?.ok,
+        r.lxc105?.ok,
+        r.lxc106?.ok,
+        // Server
         r.pm2?.ok,
-        r.orchestrator?.ok,
+        // Scripts (data freshness — DB queries)
         r.ha_to_pg?.data_ok,
         r.collect_weather?.data_ok,
+        // Data freshness
         r.orchestrator_last_run?.ok,
         r.boiler_last_decision?.ok,
+        // Orchestrator verdict (covers agent services + errors)
         r.active_alerts?.ok,
       ];
       const count = checks.filter(v => v === false).length;

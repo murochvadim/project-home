@@ -1,5 +1,132 @@
-let chart = null;
+let chart  = null;
+let chart2 = null;
+let syncEnabled = true;
 
+const DAY_MS = 86400000;
+
+// ── Shared chart builder ───────────────────────────────────────
+function buildChartData(rows, consumptions) {
+  const labels      = rows.map(r => new Date(r.t).toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' }));
+  const boilerTemps = rows.map(r => r.boiler_temp !== null ? parseFloat(r.boiler_temp) : null);
+  const panelTemps  = rows.map(r => r.panel_temp  !== null ? parseFloat(r.panel_temp)  : null);
+  const valveOn     = rows.map(r => r.valve_state ? 1 : 0);
+
+  const rowTimes         = rows.map(r => new Date(r.t).getTime());
+  const spikeData        = new Array(rows.length).fill(null);
+  const spikeRadii       = new Array(rows.length).fill(0);
+  const spikeConsumption = {};
+
+  consumptions.forEach(c => {
+    const cTs = new Date(c.start_ts).getTime();
+    let nearest = 0, minDiff = Infinity;
+    rowTimes.forEach((t, i) => {
+      const diff = Math.abs(t - cTs);
+      if (diff < minDiff) { minDiff = diff; nearest = i; }
+    });
+    spikeData[nearest]        = parseFloat(c.start_temp);
+    spikeRadii[nearest]       = 9;
+    spikeConsumption[nearest] = c;
+  });
+
+  return { labels, boilerTemps, panelTemps, valveOn, spikeData, spikeRadii, spikeConsumption };
+}
+
+function createTempChart(canvasId, { labels, boilerTemps, panelTemps, valveOn, spikeData, spikeRadii, spikeConsumption }) {
+  return new Chart(document.getElementById(canvasId), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Boiler Temp (°C)',
+          data: boilerTemps,
+          borderColor: '#4a9eff',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          pointRadius: 2,
+          yAxisID: 'yTemp',
+        },
+        {
+          label: 'Panel Temp (°C)',
+          data: panelTemps,
+          borderColor: '#e67e22',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          pointRadius: 2,
+          yAxisID: 'yTemp',
+        },
+        {
+          label: 'Valve (ON=1 / OFF=0)',
+          data: valveOn,
+          borderColor: '#2ecc71',
+          backgroundColor: 'rgba(46,204,113,0.15)',
+          fill: true,
+          stepped: true,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          yAxisID: 'yValve',
+        },
+        {
+          label: 'Consumption',
+          data: spikeData,
+          showLine: false,
+          pointStyle: 'triangle',
+          pointRotation: 180,
+          pointRadius: spikeRadii,
+          pointHoverRadius: 11,
+          backgroundColor: '#e74c3c',
+          borderColor: '#e74c3c',
+          yAxisID: 'yTemp',
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          ticks: { maxTicksLimit: 12, font: { size: 11 } },
+        },
+        yTemp: {
+          type: 'linear',
+          position: 'left',
+          title: { display: true, text: 'Temperature (°C)', font: { size: 11 } },
+          ticks: { font: { size: 11 }, callback: v => v.toFixed(1) },
+        },
+        yValve: {
+          type: 'linear',
+          position: 'right',
+          min: 0,
+          max: 1.5,
+          ticks: {
+            font: { size: 11 },
+            stepSize: 1,
+            callback: v => v === 1 ? 'ON' : v === 0 ? 'OFF' : '',
+          },
+          grid: { drawOnChartArea: false },
+        },
+      },
+      plugins: {
+        legend: { labels: { font: { size: 12 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.label === 'Consumption' && ctx.raw !== null) {
+                const c = spikeConsumption[ctx.dataIndex];
+                return c
+                  ? `Consumption: ▼${parseFloat(c.drop_c).toFixed(1)}°C (${c.duration_min} min)`
+                  : `Consumption: ${ctx.raw}°C`;
+              }
+              return `${ctx.dataset.label}: ${typeof ctx.raw === 'number' ? ctx.raw.toFixed(1) : ctx.raw}`;
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+// ── Graph 1 (current) ──────────────────────────────────────────
 async function loadGraph() {
   const range      = document.getElementById('range').value;
   const resolution = document.getElementById('resolution').value;
@@ -16,131 +143,73 @@ async function loadGraph() {
       fetch(`/api/consumptions?from=${encodeURIComponent(fromIso)}`).then(r => r.json()),
     ]);
 
-    const labels      = rows.map(r => new Date(r.t).toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' }));
-    const boilerTemps = rows.map(r => r.boiler_temp !== null ? parseFloat(r.boiler_temp) : null);
-    const panelTemps  = rows.map(r => r.panel_temp  !== null ? parseFloat(r.panel_temp)  : null);
-    const valveOn     = rows.map(r => r.valve_state ? 1 : 0);
-
-    // Map each consumption start_ts to the nearest row index.
-    // Also build spikeConsumption (index → object) for unambiguous tooltip lookup.
-    const rowTimes       = rows.map(r => new Date(r.t).getTime());
-    const spikeData      = new Array(rows.length).fill(null);
-    const spikeRadii     = new Array(rows.length).fill(0);
-    const spikeConsumption = {};  // dataIndex → consumption object
-
-    consumptions.forEach(c => {
-      const cTs = new Date(c.start_ts).getTime();
-      let nearest = 0, minDiff = Infinity;
-      rowTimes.forEach((t, i) => {
-        const diff = Math.abs(t - cTs);
-        if (diff < minDiff) { minDiff = diff; nearest = i; }
-      });
-      spikeData[nearest]        = parseFloat(c.start_temp);
-      spikeRadii[nearest]       = 9;
-      spikeConsumption[nearest] = c;
-    });
-
     if (chart) chart.destroy();
-
-    chart = new Chart(document.getElementById('tempChart'), {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Boiler Temp (°C)',
-            data: boilerTemps,
-            borderColor: '#4a9eff',
-            backgroundColor: 'transparent',
-            tension: 0.3,
-            pointRadius: 2,
-            yAxisID: 'yTemp',
-          },
-          {
-            label: 'Panel Temp (°C)',
-            data: panelTemps,
-            borderColor: '#e67e22',
-            backgroundColor: 'transparent',
-            tension: 0.3,
-            pointRadius: 2,
-            yAxisID: 'yTemp',
-          },
-          {
-            label: 'Valve (ON=1 / OFF=0)',
-            data: valveOn,
-            borderColor: '#2ecc71',
-            backgroundColor: 'rgba(46,204,113,0.15)',
-            fill: true,
-            stepped: true,
-            pointRadius: 0,
-            borderWidth: 1.5,
-            yAxisID: 'yValve',
-          },
-          {
-            label: 'Consumption',
-            data: spikeData,
-            showLine: false,
-            pointStyle: 'triangle',
-            pointRotation: 180,
-            pointRadius: spikeRadii,
-            pointHoverRadius: 11,
-            backgroundColor: '#e74c3c',
-            borderColor: '#e74c3c',
-            yAxisID: 'yTemp',
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        interaction: { mode: 'index', intersect: false },
-        scales: {
-          x: {
-            ticks: { maxTicksLimit: 12, font: { size: 11 } },
-          },
-          yTemp: {
-            type: 'linear',
-            position: 'left',
-            title: { display: true, text: 'Temperature (°C)', font: { size: 11 } },
-            ticks: { font: { size: 11 }, callback: v => v.toFixed(1) },
-          },
-          yValve: {
-            type: 'linear',
-            position: 'right',
-            min: 0,
-            max: 1.5,
-            ticks: {
-              font: { size: 11 },
-              stepSize: 1,
-              callback: v => v === 1 ? 'ON' : v === 0 ? 'OFF' : '',
-            },
-            grid: { drawOnChartArea: false },
-          },
-        },
-        plugins: {
-          legend: { labels: { font: { size: 12 } } },
-          tooltip: {
-            callbacks: {
-              label: ctx => {
-                if (ctx.dataset.label === 'Consumption' && ctx.raw !== null) {
-                  const c = spikeConsumption[ctx.dataIndex];
-                  return c
-                    ? `Consumption: ▼${parseFloat(c.drop_c).toFixed(1)}°C (${c.duration_min} min)`
-                    : `Consumption: ${ctx.raw}°C`;
-                }
-                return `${ctx.dataset.label}: ${typeof ctx.raw === 'number' ? ctx.raw.toFixed(1) : ctx.raw}`;
-              },
-            },
-          },
-        },
-      },
-    });
+    chart = createTempChart('tempChart', buildChartData(rows, consumptions));
   } catch (e) {
     console.error('loadGraph error:', e);
+  }
+
+  if (syncEnabled) loadGraph2();
+}
+
+// ── Graph 2 (yesterday −24h) ───────────────────────────────────
+async function loadGraph2() {
+  const range      = syncEnabled
+    ? document.getElementById('range').value
+    : document.getElementById('range2').value;
+  const resolution = syncEnabled
+    ? document.getElementById('resolution').value
+    : document.getElementById('resolution2').value;
+
+  try {
+    const rangeMs = { '1h': 3600000, '6h': 21600000, '24h': 86400000 }[range] || 21600000;
+    const toMs    = Date.now() - DAY_MS;
+    const fromMs  = toMs - rangeMs;
+    const fromIso = new Date(fromMs).toISOString();
+    const toIso   = new Date(toMs).toISOString();
+
+    const dateLabel = document.getElementById('graph2-date');
+    if (dateLabel) {
+      const fmt = d => new Date(d).toLocaleString('he-IL', {
+        timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      });
+      dateLabel.textContent = fmt(fromMs) + ' → ' + fmt(toMs);
+    }
+
+    const [rows, consumptions] = await Promise.all([
+      fetch(`/api/graph?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&resolution=${resolution}`).then(r => r.json()),
+      fetch(`/api/consumptions?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`).then(r => r.json()),
+    ]);
+
+    if (chart2) chart2.destroy();
+    chart2 = createTempChart('tempChart2', buildChartData(rows, consumptions));
+  } catch (e) {
+    console.error('loadGraph2 error:', e);
+  }
+}
+
+// ── Sync toggle ────────────────────────────────────────────────
+function toggleSync() {
+  syncEnabled = !syncEnabled;
+  const btn   = document.getElementById('sync-btn');
+  const ctrl2 = document.getElementById('graph2-controls');
+  if (syncEnabled) {
+    btn.textContent = '\u21c4 Sync ON';
+    btn.classList.replace('btn-secondary', 'btn-success');
+    ctrl2.style.display = 'none';
+    loadGraph2();
+  } else {
+    btn.textContent = '\u21c4 Sync OFF';
+    btn.classList.replace('btn-success', 'btn-secondary');
+    ctrl2.style.display = '';
   }
 }
 
 document.getElementById('range').addEventListener('change', loadGraph);
 document.getElementById('resolution').addEventListener('change', loadGraph);
+document.getElementById('range2').addEventListener('change', () => { if (!syncEnabled) loadGraph2(); });
+document.getElementById('resolution2').addEventListener('change', () => { if (!syncEnabled) loadGraph2(); });
 
 loadGraph();
 
