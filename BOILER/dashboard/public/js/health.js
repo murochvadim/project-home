@@ -192,19 +192,56 @@ async function loadStatus() {
 }
 
 // ── DB Volumes ───────────────────────────────────────────────
+async function loadMiniDlna() {
+  const tbody = document.getElementById('volumes-body');
+  // remove previous minidlna row if exists
+  document.getElementById('minidlna-row')?.remove();
+  try {
+    const d = await fetch('/api/health/minidlna').then(r => r.json());
+    if (d.error) throw new Error(d.error);
+    const orphanColor = d.orphans > 0 ? '#c0392b' : '#2ecc71';
+    const updated = d.last_updated
+      ? new Date(d.last_updated).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })
+      : '— never';
+    const tr = document.createElement('tr');
+    tr.id = 'minidlna-row';
+    tr.style.background = '#f5f0e8';
+    tr.innerHTML = `
+      <td><code>minidlna · files.db</code> <span style="font-size:0.7rem;color:#888;margin-left:4px;">SQLite · LXC 100</span></td>
+      <td style="text-align:right;">${d.indexed.toLocaleString()}</td>
+      <td style="text-align:right;">${d.size_pretty}</td>
+      <td style="font-size:0.78rem;color:#666;">—</td>
+      <td style="font-size:0.78rem;color:#666;">—</td>
+      <td style="text-align:right;font-size:0.82rem;color:${orphanColor};">${d.orphans}</td>
+      <td style="text-align:right;color:#aaa;">—</td>
+      <td style="font-size:0.78rem;color:#888;">${updated}</td>
+    `;
+    tbody.appendChild(tr);
+  } catch (e) {
+    const tr = document.createElement('tr');
+    tr.id = 'minidlna-row';
+    tr.innerHTML = `<td colspan="8" style="color:#c0392b;font-size:0.82rem;">MiniDLNA: ${e.message}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
 async function loadVolumes() {
   try {
     const rows = await fetch('/api/health/db-volumes').then(r => r.json());
     const tbody = document.getElementById('volumes-body');
-    setHTML(tbody, rows.map(r => `
-      <tr>
+    setHTML(tbody, rows.map(r => {
+      const fragColor = r.frag_pct >= 20 ? '#c0392b' : r.frag_pct >= 5 ? '#e67e22' : '#2ecc71';
+      return `<tr>
         <td><code>${r.table_name}</code></td>
         <td style="text-align:right;">${r.row_count.toLocaleString()}</td>
         <td style="text-align:right;">${r.total_size}</td>
         <td style="font-size:0.78rem; color:#666;">${fmtTs(r.oldest)}</td>
         <td style="font-size:0.78rem; color:#666;">${fmtTs(r.newest)}</td>
+        <td style="text-align:right; font-size:0.82rem;">${r.dead_tup.toLocaleString()}</td>
+        <td style="text-align:right; font-weight:600; color:${fragColor};">${r.frag_pct}%</td>
         <td style="font-size:0.78rem; color:${r.last_vacuumed ? '#888' : '#c0392b'};">${r.last_vacuumed ? fmtTs(r.last_vacuumed) : '— never'}</td>
-      </tr>`).join(''));
+      </tr>`;
+    }).join(''));
   } catch (e) {
     document.getElementById('volumes-body').innerHTML =
       '<tr><td colspan="6" style="color:#b55e5e;">Failed to load</td></tr>';
@@ -365,14 +402,80 @@ async function loadOrchLog() {
 
 async function refreshAll() {
   document.getElementById('last-refresh').textContent = 'Loading…';
-  const dbTabActive = document.getElementById('tab-database')?.classList.contains('active');
-  const orchLogActive = document.getElementById('tab-orch-log')?.classList.contains('active');
+  const dbTabActive      = document.getElementById('tab-database')?.classList.contains('active');
+  const orchLogActive    = document.getElementById('tab-orch-log')?.classList.contains('active');
+  const backupsTabActive = document.getElementById('tab-backups')?.classList.contains('active');
   const tasks = [loadAlerts(), loadStatus()];
-  if (orchLogActive) { tasks.push(loadOrchLog()); }
-  if (dbTabActive) { tasks.push(loadVolumes(), loadRetention()); }
+  if (orchLogActive)    { tasks.push(loadOrchLog()); }
+  if (dbTabActive)      { tasks.push(loadVolumes(), loadMiniDlna(), loadRetention()); }
+  if (backupsTabActive) { tasks.push(loadBackups()); }
   await Promise.all(tasks);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
+}
+
+// ── Proxmox Backups ──────────────────────────────────────────
+async function loadBackups() {
+  const jobsTbody   = document.getElementById('backup-jobs-body');
+  const tasksTbody  = document.getElementById('backup-tasks-body');
+  try {
+    const data = await fetch('/api/backups/proxmox').then(r => r.json());
+    if (data.error) throw new Error(data.error);
+
+    // Jobs table
+    if (!data.jobs?.length) {
+      jobsTbody.innerHTML = '<tr><td colspan="9" style="color:#aaa; text-align:center; padding:16px;">No backup jobs configured</td></tr>';
+    } else {
+      jobsTbody.innerHTML = data.jobs.map(j => {
+        const enabled = j.enabled
+          ? '<span style="color:#7a9f5a; font-size:0.8rem; font-weight:600;">⬤ Yes</span>'
+          : '<span style="color:#aaa; font-size:0.8rem;">⬤ Off</span>';
+        const lastRunTs = j.lastRun?.starttime
+          ? new Date(j.lastRun.starttime * 1000).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })
+          : '—';
+        const statusRaw = j.lastRun?.status || '';
+        const statusOk  = statusRaw === 'OK';
+        const statusColor = !j.lastRun ? '#aaa' : (statusOk ? '#7a9f5a' : '#b55e5e');
+        const statusText  = !j.lastRun ? '—' : (statusOk ? '✓ OK' : '✗ ' + statusRaw.slice(0, 30));
+        return `<tr>
+          <td style="font-size:0.78rem; color:#888; font-family:monospace;">${j.id}</td>
+          <td style="text-align:center;">${enabled}</td>
+          <td style="font-size:0.82rem;">${j.schedule}</td>
+          <td style="font-size:0.82rem;">${j.storage}</td>
+          <td style="font-size:0.78rem;">${j.vmid}</td>
+          <td style="font-size:0.78rem; color:#666;">${j.mode}</td>
+          <td style="font-size:0.78rem; color:#666;">${j.retention}</td>
+          <td style="font-size:0.75rem; color:#888; white-space:nowrap;">${lastRunTs}</td>
+          <td style="text-align:center; font-size:0.8rem; font-weight:600; color:${statusColor};">${statusText}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // Tasks table
+    if (!data.tasks?.length) {
+      tasksTbody.innerHTML = '<tr><td colspan="5" style="color:#aaa; text-align:center; padding:16px;">No recent tasks</td></tr>';
+    } else {
+      tasksTbody.innerHTML = data.tasks.map(t => {
+        const start   = new Date(t.starttime * 1000).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+        const dur     = (t.endtime && t.endtime > t.starttime)
+          ? Math.round((t.endtime - t.starttime) / 60) + 'm'
+          : 'running…';
+        const statusOk    = t.status === 'OK';
+        const statusColor = t.status ? (statusOk ? '#7a9f5a' : '#b55e5e') : '#888';
+        const statusText  = t.status || 'running';
+        return `<tr>
+          <td style="font-size:0.75rem; color:#888; white-space:nowrap;">${start}</td>
+          <td style="font-size:0.78rem;">${t.node || '—'}</td>
+          <td style="text-align:center; font-size:0.82rem; font-weight:600;">${t.id || '—'}</td>
+          <td style="text-align:center; font-size:0.78rem; color:#666;">${dur}</td>
+          <td style="text-align:center; font-size:0.8rem; font-weight:600; color:${statusColor};">${statusText}</td>
+        </tr>`;
+      }).join('');
+    }
+  } catch (e) {
+    jobsTbody.innerHTML  = `<tr><td colspan="9" style="color:#b55e5e;">Failed: ${e.message}</td></tr>`;
+    tasksTbody.innerHTML = `<tr><td colspan="5" style="color:#b55e5e;">Failed: ${e.message}</td></tr>`;
+  }
 }
 
 // ── Documents ────────────────────────────────────────────────

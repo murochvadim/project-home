@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="960" viewBox="0 0 1400 960" font-family="'Segoe UI',Arial,sans-serif">
+  <defs>
+    <marker id="a" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#888"/>
+    </marker>
+    <marker id="ab" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#7a9ab8"/>
+    </marker>
+    <marker id="ag" markerWidth="7" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#6a7f58"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1400" height="960" fill="#f5f2ee"/>
+
+  <!-- Column dividers -->
+  <line x1="467" y1="10" x2="467" y2="950" stroke="#d0cbc4" stroke-width="1" stroke-dasharray="5,4"/>
+  <line x1="933" y1="10" x2="933" y2="950" stroke="#d0cbc4" stroke-width="1" stroke-dasharray="5,4"/>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- COLUMN HEADERS                                         -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <rect x="64" y="14" width="340" height="38" rx="8" fill="#1e2a3a"/>
+  <text x="234" y="39" text-anchor="middle" fill="white" font-size="15" font-weight="bold">INGEST</text>
+
+  <rect x="530" y="14" width="340" height="38" rx="8" fill="#1e2a3a"/>
+  <text x="700" y="39" text-anchor="middle" fill="white" font-size="15" font-weight="bold">EDIT</text>
+
+  <rect x="996" y="14" width="340" height="38" rx="8" fill="#1e2a3a"/>
+  <text x="1166" y="39" text-anchor="middle" fill="white" font-size="15" font-weight="bold">SEARCH &amp; PLAY</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- INGEST COLUMN  (center x=234)                         -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <!-- START pill -->
+  <rect x="114" y="72" width="240" height="34" rx="17" fill="#1e2a3a"/>
+  <text x="234" y="94" text-anchor="middle" fill="white" font-size="13" font-weight="bold">▶ Upload File</text>
+  <line x1="234" y1="106" x2="234" y2="126" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: SSH copy -->
+  <rect x="64" y="126" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="234" y="149" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">SSH → Copy to QNAP</text>
+  <text x="234" y="169" text-anchor="middle" font-size="11" fill="#666">/mnt/media/category/file</text>
+  <line x1="234" y1="184" x2="234" y2="204" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Haiku call -->
+  <rect x="64" y="204" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="234" y="227" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Claude Haiku Call</text>
+  <text x="234" y="247" text-anchor="middle" font-size="11" fill="#666">parse filename + folder path</text>
+  <line x1="234" y1="262" x2="234" y2="282" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Extract metadata -->
+  <rect x="64" y="282" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="234" y="305" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Extract Metadata (English)</text>
+  <text x="234" y="325" text-anchor="middle" font-size="11" fill="#666">person · event · year · location · search_text</text>
+  <line x1="234" y1="340" x2="234" y2="360" stroke="#7a9ab8" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Box: INSERT media_library (DB blue) -->
+  <rect x="64" y="360" width="340" height="58" rx="4" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="234" y="383" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a2a3a">INSERT media_library</text>
+  <text x="234" y="403" text-anchor="middle" font-size="11" fill="#1a2a3a">PostgreSQL LXC 102 · GIN search_text built</text>
+  <line x1="234" y1="418" x2="234" y2="438" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: MiniDLNA indexes -->
+  <rect x="64" y="438" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="234" y="461" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">MiniDLNA Indexes File</text>
+  <text x="234" y="481" text-anchor="middle" font-size="11" fill="#666">inotify auto-scan · LXC 100</text>
+  <line x1="234" y1="496" x2="234" y2="516" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: sqlite3 duration/res -->
+  <rect x="64" y="516" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="234" y="539" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">sqlite3 → Duration + Resolution</text>
+  <text x="234" y="559" text-anchor="middle" font-size="11" fill="#666">MiniDLNA files.db · retry loop</text>
+  <line x1="234" y1="574" x2="234" y2="594" stroke="#7a9ab8" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Box: UPDATE media_library (DB blue) -->
+  <rect x="64" y="594" width="340" height="58" rx="4" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="234" y="617" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a2a3a">UPDATE media_library</text>
+  <text x="234" y="637" text-anchor="middle" font-size="11" fill="#1a2a3a">duration_sec · resolution</text>
+  <line x1="234" y1="652" x2="234" y2="672" stroke="#6a7f58" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <!-- END pill (green) -->
+  <rect x="114" y="672" width="240" height="34" rx="17" fill="#8a9f78" stroke="#6a7f58" stroke-width="1.5"/>
+  <text x="234" y="694" text-anchor="middle" fill="white" font-size="13" font-weight="bold">✓ Indexed &amp; Searchable</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- EDIT COLUMN  (center x=700)                           -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <!-- START pill -->
+  <rect x="580" y="72" width="240" height="34" rx="17" fill="#1e2a3a"/>
+  <text x="700" y="94" text-anchor="middle" fill="white" font-size="13" font-weight="bold">▶ Browse Library</text>
+  <line x1="700" y1="106" x2="700" y2="126" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Library table -->
+  <rect x="530" y="126" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="700" y="149" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Media Library Table</text>
+  <text x="700" y="169" text-anchor="middle" font-size="11" fill="#666">media.html — all records, sortable/filterable</text>
+  <line x1="700" y1="184" x2="700" y2="204" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Click row -->
+  <rect x="530" y="204" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="700" y="227" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Click Row → Edit Modal</text>
+  <text x="700" y="247" text-anchor="middle" font-size="11" fill="#666">pre-filled with current values</text>
+  <line x1="700" y1="262" x2="700" y2="282" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Edit fields -->
+  <rect x="530" y="282" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="700" y="305" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Edit Fields</text>
+  <text x="700" y="325" text-anchor="middle" font-size="11" fill="#666">person · event · year · location · search_text</text>
+  <line x1="700" y1="340" x2="700" y2="360" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: PATCH endpoint -->
+  <rect x="530" y="360" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="700" y="383" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">PATCH /api/media/library/:path</text>
+  <text x="700" y="403" text-anchor="middle" font-size="11" fill="#666">dashboard → server.js</text>
+  <line x1="700" y1="418" x2="700" y2="438" stroke="#7a9ab8" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Box: UPDATE PostgreSQL (DB blue) -->
+  <rect x="530" y="438" width="340" height="58" rx="4" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="700" y="461" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a2a3a">UPDATE media_library</text>
+  <text x="700" y="481" text-anchor="middle" font-size="11" fill="#1a2a3a">PostgreSQL LXC 102</text>
+  <line x1="700" y1="496" x2="700" y2="516" stroke="#6a7f58" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <!-- END pill (green) -->
+  <rect x="580" y="516" width="240" height="34" rx="17" fill="#8a9f78" stroke="#6a7f58" stroke-width="1.5"/>
+  <text x="700" y="538" text-anchor="middle" fill="white" font-size="13" font-weight="bold">✓ Record Updated</text>
+
+  <!-- Legend (below EDIT column) -->
+  <rect x="554" y="590" width="292" height="106" rx="6" fill="white" stroke="#d0cbc4" stroke-width="1.2" opacity="0.95"/>
+  <text x="700" y="612" text-anchor="middle" font-size="12" font-weight="bold" fill="#333">Legend</text>
+  <rect x="574" y="622" width="16" height="12" rx="2" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1"/>
+  <text x="598" y="633" font-size="11" fill="#555">Process step</text>
+  <rect x="574" y="642" width="16" height="12" rx="2" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1"/>
+  <text x="598" y="653" font-size="11" fill="#555">Database operation (PostgreSQL)</text>
+  <rect x="574" y="662" width="16" height="12" rx="2" fill="#8a9f78" stroke="#6a7f58" stroke-width="1"/>
+  <text x="598" y="673" font-size="11" fill="#555">Success / TV playback action</text>
+  <rect x="574" y="682" width="16" height="4" rx="1" fill="#1e2a3a"/>
+  <text x="598" y="690" font-size="11" fill="#555">Start / End pill</text>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- SEARCH &amp; PLAY COLUMN  (center x=1166)             -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <!-- START pill -->
+  <rect x="1046" y="72" width="240" height="34" rx="17" fill="#1e2a3a"/>
+  <text x="1166" y="94" text-anchor="middle" fill="white" font-size="13" font-weight="bold">▶ Search Trigger</text>
+  <line x1="1166" y1="106" x2="1166" y2="126" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Voice / Dashboard -->
+  <rect x="996" y="126" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="1166" y="149" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Voice "find rotem" / Dashboard</text>
+  <text x="1166" y="169" text-anchor="middle" font-size="11" fill="#666">voice.html · media.html search box</text>
+  <line x1="1166" y1="184" x2="1166" y2="204" stroke="#7a9ab8" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Box: GIN search (DB blue) -->
+  <rect x="996" y="204" width="340" height="58" rx="4" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="1166" y="227" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a2a3a">GET /api/media/search</text>
+  <text x="1166" y="247" text-anchor="middle" font-size="11" fill="#1a2a3a">PostgreSQL GIN tsvector('english')</text>
+  <line x1="1166" y1="262" x2="1166" y2="282" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Session 1..N -->
+  <rect x="996" y="282" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="1166" y="305" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Session 1..N Stored</text>
+  <text x="1166" y="325" text-anchor="middle" font-size="11" fill="#666">server-side Map · 10 min expiry</text>
+  <line x1="1166" y1="340" x2="1166" y2="360" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: ImageMagick PNG -->
+  <rect x="996" y="360" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="1166" y="383" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">ImageMagick → PNG</text>
+  <text x="1166" y="403" text-anchor="middle" font-size="11" fill="#666">numbered results image · LXC 100</text>
+  <line x1="1166" y1="418" x2="1166" y2="438" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: TV displays image -->
+  <rect x="996" y="438" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="1166" y="461" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">DLNA → TV Displays Results</text>
+  <text x="1166" y="481" text-anchor="middle" font-size="11" fill="#666">Samsung 85" QLED · SetAVTransportURI</text>
+  <line x1="1166" y1="496" x2="1166" y2="516" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: Select item -->
+  <rect x="996" y="516" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="1166" y="539" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">Select Item</text>
+  <text x="1166" y="559" text-anchor="middle" font-size="11" fill="#666">voice "play 2" · click ▶ TV on dashboard</text>
+  <line x1="1166" y1="574" x2="1166" y2="594" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: MiniDLNA ID lookup -->
+  <rect x="996" y="594" width="340" height="58" rx="4" fill="#e8ddd8" stroke="#d0cbc4" stroke-width="1.5"/>
+  <text x="1166" y="617" text-anchor="middle" font-size="13" font-weight="bold" fill="#2c2c2c">SSH LXC 100 → MiniDLNA ID</text>
+  <text x="1166" y="637" text-anchor="middle" font-size="11" fill="#666">sqlite3 files.db · path → DLNA object ID</text>
+  <line x1="1166" y1="652" x2="1166" y2="672" stroke="#888" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Box: SOAP Play (green) -->
+  <rect x="996" y="672" width="340" height="58" rx="4" fill="#8a9f78" stroke="#6a7f58" stroke-width="1.5"/>
+  <text x="1166" y="695" text-anchor="middle" font-size="13" font-weight="bold" fill="white">SOAP SetAVTransportURI + Play</text>
+  <text x="1166" y="715" text-anchor="middle" font-size="11" fill="white">Samsung TV plays video</text>
+  <line x1="1166" y1="730" x2="1166" y2="750" stroke="#7a9ab8" stroke-width="1.5" marker-end="url(#ab)"/>
+
+  <!-- Box: UPDATE play_count (DB blue) -->
+  <rect x="996" y="750" width="340" height="58" rx="4" fill="#97b3cc" stroke="#7a9ab8" stroke-width="1.5"/>
+  <text x="1166" y="773" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a2a3a">UPDATE media_library</text>
+  <text x="1166" y="793" text-anchor="middle" font-size="11" fill="#1a2a3a">play_count++ · last_played = NOW()</text>
+  <line x1="1166" y1="808" x2="1166" y2="828" stroke="#6a7f58" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <!-- END pill (green) -->
+  <rect x="1046" y="828" width="240" height="34" rx="17" fill="#8a9f78" stroke="#6a7f58" stroke-width="1.5"/>
+  <text x="1166" y="850" text-anchor="middle" fill="white" font-size="13" font-weight="bold">✓ Playing on TV</text>
+
+</svg>

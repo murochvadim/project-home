@@ -47,12 +47,12 @@
 
 10. 
 ## 10.----------------------------------------------------
-
+ 2 values det_score and cosine similarity  
 
 ## 11.-----------------------------------------------------
 # BACKUP.
 Purpose: Overall BackUp solution and BackUp presentation in Project envirement.
-Create new Page Project Backups under Project Network.
+Create new Tab Backups   Project Health.
 Use Proxmox VE API.
 Use LXC 104 for created scripts. 
 Backup storage QNAP ,name MUROCHNAS, folder DataVol1/ PBS_Data/ , Achived by NFS.   
@@ -74,6 +74,7 @@ like Project folder ,like Laptop Image Backup
 
 
 ## Bugs
+- [ ] TV volume display not updating after volume_up/down — HA `media_player.samsung_85_qled` volume_level attribute doesn't push state back after volume commands
 
 ---
 

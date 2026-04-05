@@ -2,8 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Project Media</title>
+  <title>Media Agent</title>
   <link rel="stylesheet" href="css/style.css">
+  <style>
+    @keyframes mf-spin { to { transform: rotate(360deg); } }
+    .mf-spinner {
+      width: 15px; height: 15px; border: 2px solid #a8d5ff; border-top-color: #2980b9;
+      border-radius: 50%; animation: mf-spin 0.7s linear infinite; flex-shrink: 0;
+    }
+  </style>
 </head>
 <body>
 
@@ -13,11 +20,11 @@
   <div class="section-label">General</div>
   <a href="health.html">Project Health</a>
   <a href="network.html">Project Network</a>
-  <a href="media.html" class="active">Project Media</a>
   <a href="general.html">Weather</a>
 
   <div class="section-label">Agents</div>
   <a href="index.html">Boiler Agent</a>
+  <a href="media.html" class="active">Media Agent</a>
 
   <div class="section-label">Voice</div>
   <a href="voice.html">Voice</a>
@@ -28,7 +35,7 @@
 
 <main id="content">
   <div class="page-header">
-    <h1>Project Media</h1>
+    <h1>Media Agent</h1>
     <div class="refresh-bar">
       <span id="last-refresh">—</span>
       <button class="btn btn-secondary btn-sm" onclick="refreshState()">↺ Refresh</button>
@@ -38,140 +45,471 @@
   <!-- Tab bar -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('control', this)">Control</button>
+    <button class="tab-btn" onclick="showTab('analyzer', this); loadAnalyzer()">Analyzer Agent</button>
+    <button class="tab-btn" onclick="showTab('ingest', this); loadIngest()">Ingest Agent</button>
+    <button class="tab-btn" onclick="showTab('player', this); loadPlayer()">Player Agent</button>
+    <button class="tab-btn" onclick="showTab('settings', this); loadMediaSettings()">Settings</button>
   </div>
 
   <!-- TAB: Control -->
   <div class="tab-panel active" id="tab-control">
 
-    <!-- TV -->
-    <div class="card">
-      <h2>Samsung 85" QLED</h2>
-      <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
+    <!-- Row 1: TV 85" + Soundbar -->
+    <div style="display:flex; gap:16px; flex-wrap:wrap;">
 
-        <!-- Status -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Status</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
-            <div id="tv-status" style="font-size:2rem;">—</div>
+      <div class="card" style="flex:1; min-width:320px;">
+        <h2>Samsung 85" QLED</h2>
+        <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Status</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;"><div id="tv-status" style="font-size:2rem;">—</div></div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Power</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-success btn-sm" onclick="cmd('tv','turn_on')">ON</button>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv','turn_off')">OFF</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Volume</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv','volume_down')">▼</button>
+              <span id="tv-volume" style="font-size:1.1rem; font-weight:600; min-width:36px; text-align:center;">—</span>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv','volume_up')">▲</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Mute</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <button id="tv-mute-btn" class="btn btn-secondary btn-sm" onclick="toggleMute('tv')">🔇</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Source</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <select id="tv-source-select" onchange="cmd('tv','source',this.value)" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;"><option>—</option></select>
+            </div>
           </div>
         </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Power -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Power</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center; gap:8px;">
-            <button class="btn btn-success btn-sm" onclick="cmd('tv','turn_on')">ON</button>
-            <button class="btn btn-secondary btn-sm" onclick="cmd('tv','turn_off')">OFF</button>
-          </div>
-        </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Volume -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Volume</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center; gap:8px;">
-            <button class="btn btn-secondary btn-sm" onclick="cmd('tv','volume_down')">▼</button>
-            <span id="tv-volume" style="font-size:1.1rem; font-weight:600; min-width:36px; text-align:center;">—</span>
-            <button class="btn btn-secondary btn-sm" onclick="cmd('tv','volume_up')">▲</button>
-          </div>
-        </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Mute -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Mute</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
-            <button id="tv-mute-btn" class="btn btn-secondary btn-sm" onclick="toggleMute('tv')">🔇</button>
-          </div>
-        </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Source -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Source</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
-            <button class="btn btn-secondary btn-sm" onclick="cmd('tv','key','KEY_SOURCE')">⎘ Source</button>
-          </div>
-        </div>
-
       </div>
-    </div>
 
-    <!-- Soundbar -->
-    <div class="card">
-      <h2>Samsung Soundbar HW-Q990C</h2>
-      <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
-
-        <!-- Status -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Status</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
-            <div id="sb-status" style="font-size:2rem;">—</div>
+      <div class="card" style="flex:1; min-width:320px;">
+        <h2>Samsung Soundbar HW-Q990C</h2>
+        <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Status</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;"><div id="sb-status" style="font-size:2rem;">—</div></div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Power</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-success btn-sm" onclick="cmd('soundbar','turn_on')">ON</button>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('soundbar','turn_off')">OFF</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Volume</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-secondary btn-sm" onclick="cmd('soundbar','volume_down')">▼</button>
+              <span id="sb-volume" style="font-size:1.1rem; font-weight:600; min-width:36px; text-align:center;">—</span>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('soundbar','volume_up')">▲</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Mute</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <button id="sb-mute-btn" class="btn btn-secondary btn-sm" onclick="toggleMute('soundbar')">🔇</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Source</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <select id="sb-source-select" onchange="cmd('soundbar','source',this.value)" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;"><option>—</option></select>
+            </div>
           </div>
         </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Power -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Power</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center; gap:8px;">
-            <button class="btn btn-success btn-sm" onclick="cmd('soundbar','turn_on')">ON</button>
-            <button class="btn btn-secondary btn-sm" onclick="cmd('soundbar','turn_off')">OFF</button>
-          </div>
-        </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Volume -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Volume</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center; gap:8px;">
-            <button class="btn btn-secondary btn-sm" onclick="cmd('soundbar','volume_down')">▼</button>
-            <span id="sb-volume" style="font-size:1.1rem; font-weight:600; min-width:36px; text-align:center;">—</span>
-            <button class="btn btn-secondary btn-sm" onclick="cmd('soundbar','volume_up')">▲</button>
-          </div>
-        </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Mute -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Mute</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
-            <button id="sb-mute-btn" class="btn btn-secondary btn-sm" onclick="toggleMute('soundbar')">🔇</button>
-          </div>
-        </div>
-
-        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
-
-        <!-- Source -->
-        <div style="text-align:center;">
-          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Source</div>
-          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
-            <select id="sb-source-select" onchange="cmd('soundbar','source',this.value)" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;">
-              <option>—</option>
-            </select>
-          </div>
-        </div>
-
       </div>
-    </div>
+
+    </div><!-- /row1 -->
+
+    <!-- Row 2: Guy Room + Bedroom -->
+    <div style="display:flex; gap:16px; flex-wrap:wrap;">
+
+      <div class="card" style="flex:1; min-width:320px;">
+        <h2>TV-60 Guy Room</h2>
+        <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Status</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;"><div id="tvg-status" style="font-size:2rem;">—</div></div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Power</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-success btn-sm" onclick="cmd('tv_guy','turn_on')">ON</button>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv_guy','turn_off')">OFF</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Volume</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv_guy','volume_down')">▼</button>
+              <span id="tvg-volume" style="font-size:1.1rem; font-weight:600; min-width:36px; text-align:center;">—</span>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv_guy','volume_up')">▲</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Mute</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <button id="tvg-mute-btn" class="btn btn-secondary btn-sm" onclick="toggleMute('tv_guy')">🔇</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Source</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <select id="tvg-source-select" onchange="cmd('tv_guy','source',this.value)" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;"><option>—</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="flex:1; min-width:320px;">
+        <h2>TV-49 Bedroom</h2>
+        <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Status</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;"><div id="tvb-status" style="font-size:2rem;">—</div></div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Power</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-success btn-sm" onclick="cmd('tv_bed','turn_on')">ON</button>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv_bed','turn_off')">OFF</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Volume</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv_bed','volume_down')">▼</button>
+              <span id="tvb-volume" style="font-size:1.1rem; font-weight:600; min-width:36px; text-align:center;">—</span>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv_bed','volume_up')">▲</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Mute</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <button id="tvb-mute-btn" class="btn btn-secondary btn-sm" onclick="toggleMute('tv_bed')">🔇</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Source</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <select id="tvb-source-select" onchange="cmd('tv_bed','source',this.value)" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;"><option>—</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /row2 -->
 
     <!-- Feedback -->
-    <div id="cmd-feedback" style="display:none; margin-top:4px; padding:8px 14px; border-radius:4px; font-size:0.82rem;"></div>
+    <div id="cmd-feedback" style="margin-top:4px; padding:8px 14px; border-radius:4px; font-size:0.82rem; opacity:0; transition:opacity 0.3s;">&nbsp;</div>
 
   </div><!-- /tab-control -->
+
+  <!-- TAB: Analyzer Agent -->
+  <div class="tab-panel" id="tab-analyzer">
+
+    <!-- Two status cards side by side -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+
+      <!-- Auto Run Status card -->
+      <div class="card" style="padding:4px 8px; display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; justify-content:space-between; min-height:28px; margin-bottom:3px;">
+          <h2 style="margin:0; font-size:1rem;">Auto Run Status</h2>
+          <button class="btn btn-secondary btn-sm" onclick="loadAnalyzer(true)">↺</button>
+        </div>
+        <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.6px;color:#aaa;margin-bottom:3px;">Overall</div>
+        <div id="az-status-grid" style="display:flex; gap:0; flex-wrap:wrap; align-items:stretch;">
+          <div style="color:#aaa; font-size:0.85rem;">Loading…</div>
+        </div>
+        <div style="margin-top:auto; padding-top:6px;">
+          <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.6px;color:#aaa;margin-bottom:3px;">Current Run</div>
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:2px;">
+            <div style="flex:1; background:#e8e4de; border-radius:4px; height:7px; overflow:hidden;">
+              <div id="az-run-bar" style="height:100%; background:#2980b9; width:0%; transition:width 0.4s;"></div>
+            </div>
+            <span id="az-run-pct" style="font-size:0.75rem; color:#555; min-width:30px; text-align:right;">0%</span>
+          </div>
+          <div id="az-run-label" style="font-size:0.7rem; color:#aaa;">No active run</div>
+        </div>
+      </div>
+
+      <!-- Manual Run Status card -->
+      <div class="card" style="padding:4px 8px; display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; justify-content:space-between; min-height:28px; margin-bottom:3px;">
+          <h2 style="margin:0; font-size:1rem;">Manual Run Status</h2>
+          <div style="display:flex; gap:4px; align-items:center;">
+            <span id="az-rerun-msg" style="font-size:0.72rem; color:#888;"></span>
+            <button class="btn btn-secondary btn-sm" onclick="rerunAnalyzer(this)">↺ Re-run</button>
+            <button class="btn btn-secondary btn-sm" onclick="runClustering(this)">↺ Run</button>
+          </div>
+        </div>
+        <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.6px;color:#aaa;margin-bottom:3px;">Faces</div>
+        <div id="az-faces-row" style="display:flex; gap:0; flex-wrap:wrap; align-items:stretch;">
+          <div style="color:#aaa; font-size:0.85rem;">Loading…</div>
+        </div>
+        <div style="margin-top:auto; padding-top:6px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:3px;">
+            <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.6px;color:#aaa;">Current Batch</div>
+            <div id="az-last-run" style="font-size:0.7rem; color:#aaa;"></div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:2px;">
+            <div style="flex:1; background:#e8e4de; border-radius:4px; height:7px; overflow:hidden;">
+              <div id="az-manual-bar" style="height:100%; background:#8e44ad; width:0%; transition:width 0.4s;"></div>
+            </div>
+            <span id="az-manual-pct" style="font-size:0.75rem; color:#555; min-width:30px; text-align:right;">0%</span>
+          </div>
+          <div id="az-manual-label" style="font-size:0.7rem; color:#aaa;">No active batch</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Unknown Faces card -->
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Unknown Faces <span id="az-cluster-count" style="font-size:0.82rem; font-weight:400; color:#888;"></span></h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadFaceClusters(true)">↺ Refresh</button>
+      </div>
+      <div id="az-clusters" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:16px;">
+        <div style="color:#aaa; font-size:0.85rem; padding:8px;">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Unmatched Faces card -->
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Unmatched Faces <span id="az-unmatched-count" style="font-size:0.82rem; font-weight:400; color:#888;"></span></h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadUnmatchedFaces()">↺ Refresh</button>
+      </div>
+      <p style="font-size:0.82rem; color:#888; margin:0 0 12px;">Faces detected only once — assign manually to a person or skip.</p>
+      <div id="az-unmatched" style="display:flex; flex-wrap:wrap; gap:10px;">
+        <div style="color:#aaa; font-size:0.85rem; padding:8px;">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Known People card -->
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Known People <span id="az-people-count" style="font-size:0.82rem; font-weight:400; color:#888;"></span></h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadFacePeople()">↺</button>
+      </div>
+      <div id="az-people" style="display:flex; flex-direction:column; gap:8px;">
+        <div style="color:#aaa; font-size:0.85rem; padding:8px;">Loading…</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-analyzer -->
+
+  <!-- TAB: Ingest Agent -->
+  <div class="tab-panel" id="tab-ingest">
+    <div class="card">
+      <h2>Upload to QNAP</h2>
+
+      <div id="drop-zone" style="border:2px dashed #d0cbc4; border-radius:8px; padding:32px; text-align:center; color:#888; margin-bottom:16px; transition:background 0.2s; cursor:pointer;"
+           ondragover="event.preventDefault(); this.style.background='#f0ede8';"
+           ondragleave="this.style.background='';"
+           ondrop="handleDrop(event)">
+        Drag &amp; drop files or folders here
+        <div style="margin-top:12px; display:flex; gap:10px; justify-content:center;">
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
+            Files <input type="file" id="upload-files" multiple style="display:none" onchange="handleFileInput(this.files)">
+          </label>
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
+            Folder <input type="file" id="upload-folder" webkitdirectory style="display:none" onchange="handleFileInput(this.files)">
+          </label>
+        </div>
+      </div>
+
+      <!-- Upload progress -->
+      <div id="upload-progress" style="display:none;">
+        <div style="display:flex; justify-content:space-between; font-size:0.82rem; color:#555; margin-bottom:4px;">
+          <span id="upload-status">Uploading…</span>
+          <span id="upload-count"></span>
+        </div>
+        <div style="background:#e8e4de; border-radius:4px; height:8px; overflow:hidden;">
+          <div id="upload-bar" style="height:100%; background:#2980b9; width:0%; transition:width 0.2s;"></div>
+        </div>
+        <div id="upload-errors" style="margin-top:8px; font-size:0.78rem; color:#c0392b;"></div>
+      </div>
+    </div>
+  </div><!-- /tab-ingest -->
+
+  <!-- TAB: Player Agent -->
+  <div class="tab-panel" id="tab-player">
+
+    <!-- Media feedback bar -->
+    <div id="media-feedback" style="display:flex; align-items:center; gap:10px; padding:9px 14px; border-radius:6px; font-size:0.84rem; opacity:0; transform:translateY(-4px); transition:opacity 0.25s, transform 0.25s; pointer-events:none; margin-bottom:6px;">
+      <span id="mf-icon" style="font-size:1.1rem; flex-shrink:0;"></span>
+      <span id="mf-text" style="flex:1;"></span>
+    </div>
+
+    <!-- Playback progress bar (hidden until playing) -->
+    <div id="playback-bar" style="display:none; margin-bottom:10px; background:#faf8f5; border:1px solid #ece8e2; border-radius:6px; padding:10px 14px;">
+      <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#555; margin-bottom:6px;">
+        <span id="pb-title" style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%;"></span>
+        <span id="pb-time" style="white-space:nowrap; color:#888;"></span>
+      </div>
+      <div style="background:#e0dbd4; border-radius:4px; height:6px; overflow:hidden; margin-bottom:8px;">
+        <div id="pb-fill" style="background:#2980b9; height:100%; width:0%; transition:width 0.5s;"></div>
+      </div>
+      <div style="display:flex; gap:6px; justify-content:center; align-items:center;">
+        <button onclick="seekRel(-30)" style="padding:4px 12px; background:#6c757d; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:0.82rem;">⏪ 30s</button>
+        <button id="pb-pause-btn" onclick="togglePause()" style="padding:4px 16px; background:#2980b9; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:0.82rem;">⏸ Pause</button>
+        <button onclick="seekRel(+30)" style="padding:4px 12px; background:#6c757d; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:0.82rem;">30s ⏩</button>
+        <div style="width:1px; height:20px; background:#ddd; margin:0 4px;"></div>
+        <button id="tv-stop-btn" onclick="stopTv()" style="padding:4px 12px; background:#2980b9; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:0.82rem;">⏹ Stop</button>
+      </div>
+    </div>
+
+    <!-- Browser card -->
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">QNAP Media</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadMediaBrowser()">↺ Refresh</button>
+      </div>
+      <div id="media-breadcrumb" style="font-size:0.82rem; color:#555; margin-bottom:12px; display:flex; align-items:center; flex-wrap:wrap; gap:4px;"></div>
+      <div id="media-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px;">
+        <div style="color:#aaa; font-size:0.85rem; padding:20px;">Click to browse…</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-player -->
+
+  <!-- Edit Metadata Modal -->
+  <div id="edit-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:24px; width:420px; max-width:calc(100vw - 32px); box-shadow:0 8px 32px rgba(0,0,0,0.18); position:relative;">
+      <div style="font-size:1rem; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="edit-modal-title"></div>
+      <div style="font-size:0.75rem; color:#aaa; margin-bottom:18px;" id="edit-modal-status"></div>
+
+      <div style="display:grid; grid-template-columns:100px 1fr; gap:10px 12px; align-items:center;">
+        <label style="font-size:0.82rem; color:#555; text-align:right;">Event</label>
+        <input id="edit-event"    type="text" placeholder="wedding / birthday / vacation…" style="padding:6px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+        <label style="font-size:0.82rem; color:#555; text-align:right;">Year</label>
+        <input id="edit-year"     type="number" placeholder="2024" min="1900" max="2099" style="padding:6px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+        <label style="font-size:0.82rem; color:#555; text-align:right;">Location</label>
+        <input id="edit-location" type="text" placeholder="city / place" style="padding:6px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+        <label style="font-size:0.82rem; color:#555; text-align:right;">People</label>
+        <input id="edit-person"   type="text" placeholder="name1, name2…" style="padding:6px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+      </div>
+
+      <div id="edit-modal-msg" style="font-size:0.8rem; min-height:1.4em; margin-top:12px;"></div>
+
+      <div style="display:flex; gap:8px; margin-top:16px; justify-content:flex-end;">
+        <button class="btn btn-secondary btn-sm" onclick="closeEditModal()">Cancel</button>
+        <button class="btn btn-secondary btn-sm" style="color:#c0392b; border-color:#e0b0ad;" onclick="deleteLibraryItem()">Delete</button>
+        <button class="btn btn-success btn-sm" onclick="saveMetadata()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: Settings -->
+  <div class="tab-panel" id="tab-settings">
+
+    <!-- Auto Mode Settings -->
+    <div class="card">
+      <h2>Auto Mode</h2>
+      <p style="font-size:0.82rem;color:#888;margin:0 0 14px;">Runs continuously on new files as they are ingested.</p>
+      <form id="ms-auto-form" onsubmit="saveMediaSettings(event,'auto')">
+        <div class="settings-grid">
+          <div class="form-group">
+            <label>Auto Mode</label>
+            <select id="ms-auto_enabled" style="width:100%;padding:7px 10px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.88rem;background:#faf8f5;color:#2e2e2e;">
+              <option value="1">Enabled</option>
+              <option value="0">Disabled</option>
+            </select>
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">Turn automatic processing on or off.</div>
+          </div>
+          <div class="form-group">
+            <label>Frame Sample Interval (Sec)</label>
+            <input type="number" id="ms-auto_frame_interval" min="5" max="300" step="5">
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">How many seconds to skip between face scans in a video.</div>
+          </div>
+          <div class="form-group">
+            <label>Face Score Min (%)</label>
+            <input type="number" id="ms-auto_face_score_min" min="10" max="95" step="5">
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">Minimum certainty required before a detected face is saved.</div>
+          </div>
+          <div class="form-group">
+            <label>Cluster Every N Files</label>
+            <input type="number" id="ms-auto_cluster_every" min="1" max="100" step="1">
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">How often to re-group faces into clusters after processing.</div>
+          </div>
+        </div>
+        <div style="margin-top:14px;">
+          <button type="submit" class="btn btn-success btn-sm">Save Auto Settings</button>
+          <span id="ms-auto-msg" style="margin-left:10px;font-size:0.82rem;color:#2ecc71;"></span>
+        </div>
+      </form>
+    </div>
+
+    <!-- Manual Mode Settings -->
+    <div class="card">
+      <h2>Manual Mode</h2>
+      <p style="font-size:0.82rem;color:#888;margin:0 0 14px;">Applied when you trigger processing manually from the Analyzer tab.</p>
+      <form id="ms-manual-form" onsubmit="saveMediaSettings(event,'manual')">
+        <div class="settings-grid">
+          <div class="form-group">
+            <label>Batch Size</label>
+            <input type="number" id="ms-manual_batch_size" min="0" max="100" step="1">
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">How many files to analyze in one go. 0 = no limit.</div>
+          </div>
+          <div class="form-group">
+            <label>Frame Sample Interval (Sec)</label>
+            <input type="number" id="ms-manual_frame_interval" min="5" max="300" step="5">
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">How many seconds to skip between face scans in a video.</div>
+          </div>
+          <div class="form-group">
+            <label>Face Score Min (%)</label>
+            <input type="number" id="ms-manual_face_score_min" min="10" max="95" step="5">
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">Minimum certainty required before a detected face is saved.</div>
+          </div>
+          <div class="form-group">
+            <label>Cluster Eps (%)</label>
+            <input type="number" id="ms-manual_cluster_eps" min="30" max="90" step="5">
+            <div style="font-size:0.72rem;color:#aaa;margin-top:3px;">How similar two faces must look to be grouped as the same person.</div>
+          </div>
+        </div>
+        <div style="margin-top:14px;">
+          <button type="submit" class="btn btn-success btn-sm">Save Manual Settings</button>
+          <span id="ms-manual-msg" style="margin-left:10px;font-size:0.82rem;color:#2ecc71;"></span>
+        </div>
+      </form>
+    </div>
+
+  </div><!-- /tab-settings -->
 
 </main>
 
 <script src="js/alerts-monitor.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js"></script>
+<script src="js/media.js?v=27"></script>
 </body>
 </html>

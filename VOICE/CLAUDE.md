@@ -82,8 +82,9 @@ For devices with `response_style = short_confirm` or `full_confirm`:
 | `voice_device_settings` | Global output device + boiler temp settings |
 | `voice_intent_phrases` | DB phrase library for stage-2 intent matching |
 | `voice_token_log` | Claude API token usage + cost per call |
+| `manual_requests` | Voice-initiated manual requests (shower_prepare, bath_prepare etc.) — 90-day auto-clean |
 
-All tables have retention policies registered (keep forever except token_log = 365d auto-clean).
+All tables have retention policies registered in `retention_policies` (keep forever except token_log = 365d, manual_requests = 90d auto-clean).
 
 ### voice_devices
 ```sql
@@ -243,6 +244,32 @@ Seeded with 27 phrases (Hebrew, Russian, English) for boiler_on/off intents.
 |--------|--------|
 | Browser Microphone | Active — MediaRecorder API, records webm |
 | XMOS XVF3800 Satellite | Planned — far-field mic + RPi Zero 2W per room, Wyoming protocol |
+
+---
+
+## Deploy
+
+`whisper-http.py` lives only on LXC 106 (`/opt/whisper-http.py`) — **no local copy in this repo**. Edit directly on the server:
+
+```bash
+ssh root@192.168.1.188
+nano /opt/whisper-http.py
+systemctl restart whisper-http && systemctl is-active whisper-http
+```
+
+Model files at `/opt/whisper-models` — do not overwrite.
+Venv at `/opt/whisper-env` — only update if dependencies change.
+
+---
+
+## Orchestrator Integration
+
+`whisper-http.service` on LXC 106 is **not registered** in the `agents` table — the orchestrator does not monitor it.
+
+- No decision loop, no `data_table`, no run schedule — it is an infrastructure service
+- Not in the git repo deploy flow — script is managed directly on LXC 106
+- If the service goes down, the dashboard returns an immediate transcription error (visible to user)
+- Future: if voice gets a git-based deploy flow, register it in `agents` for service liveness monitoring
 
 ---
 

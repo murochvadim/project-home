@@ -18,12 +18,11 @@
   <div class="section-label">General</div>
   <a href="health.html" class="active">Project Health</a>
   <a href="network.html">Project Network</a>
-  <a href="media.html">Project Media</a>
   <a href="general.html">Weather</a>
-
 
   <div class="section-label">Agents</div>
   <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agent</a>
 
 
   <div class="section-label">Voice</div>
@@ -48,6 +47,7 @@
     <button class="tab-btn" onclick="showHealthTab('orch-log', this)">Orchestrator Log</button>
     <button class="tab-btn" onclick="showHealthTab('database', this)">Database</button>
     <button class="tab-btn" onclick="showHealthTab('documents', this)">Documents</button>
+    <button class="tab-btn" onclick="showHealthTab('backups', this)">Backups</button>
     <button class="tab-btn" onclick="showHealthTab('settings', this)">Settings</button>
   </div>
 
@@ -142,12 +142,12 @@
       <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">VM + LXC</div>
       <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
         <div class="status-item">
-          <label>VM 101 — HA</label>
-          <div class="value small" id="svc-vm101">—</div>
+          <label>LXC 100 — Media</label>
+          <div class="value small" id="svc-lxc100">—</div>
         </div>
         <div class="status-item">
-          <label>LXC 100</label>
-          <div class="value small" id="svc-lxc100">—</div>
+          <label>LXC 101 — HA</label>
+          <div class="value small" id="svc-vm101">—</div>
         </div>
         <div class="status-item">
           <label>LXC 102 — Database</label>
@@ -231,11 +231,13 @@
             <th style="text-align:right;">Size</th>
             <th>Oldest Record</th>
             <th>Newest Record</th>
+            <th style="text-align:right;">Dead Tuples</th>
+            <th style="text-align:right;">Frag %</th>
             <th>Last Vacuum</th>
           </tr>
         </thead>
         <tbody id="volumes-body">
-          <tr><td colspan="6" style="color:#aaa;">Loading…</td></tr>
+          <tr><td colspan="8" style="color:#aaa;">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -278,6 +280,58 @@
     <div id="docs-container"></div>
   </div><!-- /tab-documents -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Backups                                              -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-backups">
+
+    <!-- Scheduled Jobs -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">Proxmox Backup Jobs</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadBackups()">↺ Refresh</button>
+      </div>
+      <table class="data-table" id="backup-jobs-table">
+        <thead>
+          <tr>
+            <th>Job ID</th>
+            <th style="text-align:center;">Enabled</th>
+            <th>Schedule</th>
+            <th>Storage</th>
+            <th>VMs / LXCs</th>
+            <th>Mode</th>
+            <th>Retention</th>
+            <th>Last Run</th>
+            <th style="text-align:center;">Status</th>
+          </tr>
+        </thead>
+        <tbody id="backup-jobs-body">
+          <tr><td colspan="9" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Recent Tasks -->
+    <div class="card">
+      <h2>Recent Backup Tasks</h2>
+      <table class="data-table" id="backup-tasks-table">
+        <thead>
+          <tr>
+            <th>Start Time</th>
+            <th>Node</th>
+            <th style="text-align:center;">VMID</th>
+            <th style="text-align:center;">Duration</th>
+            <th style="text-align:center;">Status</th>
+          </tr>
+        </thead>
+        <tbody id="backup-tasks-body">
+          <tr><td colspan="5" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /tab-backups -->
+
   <div class="tab-panel" id="tab-settings">
 
     <!-- Deploy -->
@@ -307,6 +361,7 @@ function showHealthTab(name, btn) {
     window._dbTabLoaded = true;
     loadVolumes();
     loadRetention();
+    loadMiniDlna();
   }
   // Load orch-log tab lazily on first visit
   if (name === 'orch-log' && !window._orchLogTabLoaded) {
@@ -317,6 +372,11 @@ function showHealthTab(name, btn) {
   if (name === 'documents' && !window._docsTabLoaded) {
     window._docsTabLoaded = true;
     loadDocuments();
+  }
+  // Load backups tab lazily on first visit
+  if (name === 'backups' && !window._backupsTabLoaded) {
+    window._backupsTabLoaded = true;
+    loadBackups();
   }
   // Load settings tab data lazily on first visit
   if (name === 'settings' && !window._settingsTabLoaded) {

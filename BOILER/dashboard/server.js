@@ -4,6 +4,8 @@ const { NodeSSH } = require('node-ssh');
 const path = require('path');
 const { exec } = require('child_process');
 const net = require('net');
+const https = require('https');
+const http  = require('http');
 const _anthropic = require('@anthropic-ai/sdk');
 const Anthropic = _anthropic.default || _anthropic;
 const multer = require('multer');
@@ -33,8 +35,37 @@ const db = new Pool({
 const HA_URL = 'http://192.168.1.110:8123';
 const HA_TOKEN = process.env.HA_TOKEN || '';
 
-const SSH_USER = 'root';
-const SSH_KEY  = process.env.SSH_KEY_PATH || require('os').homedir() + '/.ssh/id_ed25519';
+const SSH_USER    = 'root';
+const SSH_KEY     = process.env.SSH_KEY_PATH || require('os').homedir() + '/.ssh/id_ed25519';
+const MEDIA_LXC_IP   = '192.168.1.138';
+const PLAYER_API_URL = `http://${MEDIA_LXC_IP}:8766`; // player service
+const INGEST_API_URL = `http://${MEDIA_LXC_IP}:8767`; // ingest service
+
+// ─── Proxmox VE ───────────────────────────────────────────────
+const PVE_HOST  = '192.168.1.101';
+const PVE_PORT  = 8006;
+const PVE_TOKEN = process.env.PROXMOX_TOKEN || '';
+
+function pveGet(path) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      { hostname: PVE_HOST, port: PVE_PORT, path, method: 'GET',
+        headers: { Authorization: `PVEAPIToken=${PVE_TOKEN}` },
+        rejectUnauthorized: false },
+      res => {
+        let raw = '';
+        res.on('data', c => raw += c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(raw)); }
+          catch (e) { reject(new Error('PVE parse error: ' + raw.slice(0, 120))); }
+        });
+      }
+    );
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('PVE timeout')); });
+    req.on('error', reject);
+    req.end();
+  });
+}
 
 // ─── Settings ────────────────────────────────────────────────
 app.get('/api/settings', async (req, res) => {
@@ -791,7 +822,8 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily',
       'boiler_consumptions', 'orchestrator_log', 'sync_signals', 'system_alerts',
       'voice_token_log', 'manual_requests', 'voice_devices', 'voice_device_settings',
-      'voice_intent_phrases', 'voice_device_entities', 'agents', 'agent_settings'
+      'voice_intent_phrases', 'voice_device_entities', 'agents', 'agent_settings',
+      'media_library', 'face_registry'
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -799,12 +831,17 @@ app.get('/api/health/db-volumes', async (req, res) => {
       system_alerts: 'ts', voice_token_log: 'ts', manual_requests: 'ts',
       voice_devices: 'created_at', voice_device_settings: 'updated_at',
       voice_intent_phrases: 'created_at', voice_device_entities: null,
-      agents: 'added_at', agent_settings: null
+      agents: 'added_at', agent_settings: null,
+      media_library: 'added_at', face_registry: 'added_at'
     };
 
     const sizes = await db.query(`
       SELECT relname AS table_name,
              n_live_tup AS row_count,
+             n_dead_tup AS dead_tup,
+             CASE WHEN (n_live_tup + n_dead_tup) > 0
+               THEN ROUND(n_dead_tup::numeric / (n_live_tup + n_dead_tup) * 100, 1)
+               ELSE 0 END AS frag_pct,
              pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
              pg_total_relation_size(relid) AS size_bytes,
              GREATEST(last_vacuum, last_autovacuum) AS last_vacuumed
@@ -822,14 +859,45 @@ app.get('/api/health/db-volumes', async (req, res) => {
 
     const rangeMap = Object.fromEntries(ranges.map(r => [r.table_name, r]));
     const result = tables.map(t => {
-      const s = sizes.rows.find(r => r.table_name === t) || { row_count: 0, total_size: '—', size_bytes: 0 };
+      const s = sizes.rows.find(r => r.table_name === t) || { row_count: 0, dead_tup: 0, frag_pct: 0, total_size: '—', size_bytes: 0 };
       return { table_name: t, row_count: parseInt(s.row_count) || 0,
+               dead_tup: parseInt(s.dead_tup) || 0, frag_pct: parseFloat(s.frag_pct) || 0,
                total_size: s.total_size, size_bytes: parseInt(s.size_bytes) || 0,
                oldest: rangeMap[t]?.oldest || null, newest: rangeMap[t]?.newest || null,
                last_vacuumed: s.last_vacuumed || null };
     });
 
     res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Project Health — MiniDLNA DB ────────────────────────────
+app.get('/api/health/minidlna', async (req, res) => {
+  try {
+    const ssh = new NodeSSH();
+    await ssh.connect({ host: MEDIA_LXC_IP, username: SSH_USER, privateKeyPath: SSH_KEY });
+    const [countR, sizeR, orphanR, lastR] = await Promise.all([
+      ssh.execCommand(`sqlite3 /var/cache/minidlna/files.db "SELECT COUNT(*) FROM details WHERE path IS NOT NULL AND path != '' AND path != '/mnt/media';"`),
+      ssh.execCommand(`stat -c%s /var/cache/minidlna/files.db`),
+      ssh.execCommand(`sqlite3 /var/cache/minidlna/files.db "SELECT COUNT(*) FROM details WHERE path IS NOT NULL AND path != '' AND path != '/mnt/media';" && find /mnt/media -type f | wc -l`),
+      ssh.execCommand(`stat -c%Y /var/cache/minidlna/files.db`),
+    ]);
+    ssh.dispose();
+
+    const indexed   = parseInt(countR.stdout?.trim()) || 0;
+    const sizeBytes = parseInt(sizeR.stdout?.trim())  || 0;
+    const lines     = orphanR.stdout?.trim().split('\n');
+    const onDisk    = parseInt(lines?.[1]) || 0;
+    const lastMod   = parseInt(lastR.stdout?.trim()) || 0;
+
+    res.json({
+      indexed,
+      on_disk: onDisk,
+      orphans: Math.max(0, indexed - onDisk),
+      size_bytes: sizeBytes,
+      size_pretty: sizeBytes < 1048576 ? Math.round(sizeBytes/1024) + ' KB' : (sizeBytes/1048576).toFixed(1) + ' MB',
+      last_updated: lastMod ? new Date(lastMod * 1000).toISOString() : null,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1292,6 +1360,47 @@ async function ensureSchema() {
     VALUES ('documents', NULL, false, 24, 'Project documentation links — keep forever')
     ON CONFLICT (table_name) DO NOTHING
   `);
+
+  // ─── Media Library ────────────────────────────────────────────
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS media_library (
+      path            TEXT PRIMARY KEY,
+      title           TEXT NOT NULL,
+      type            TEXT,
+      category        TEXT,
+      person          TEXT[] DEFAULT '{}',
+      event           TEXT,
+      year            INT,
+      location        TEXT,
+      duration_sec    INT,
+      size_bytes      BIGINT,
+      resolution      TEXT,
+      file_hash       TEXT UNIQUE,
+      search_text     TEXT,
+      added_at        TIMESTAMPTZ DEFAULT NOW(),
+      last_played     TIMESTAMPTZ,
+      play_count      INT DEFAULT 0
+    )
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_media_search ON media_library USING GIN (to_tsvector('english', coalesce(search_text,'')))`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS face_registry (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      embedding   FLOAT8[] NOT NULL,
+      image_path  TEXT,
+      added_at    TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES
+      ('media_library', NULL, false, 24, 'Media file metadata — keep forever'),
+      ('face_registry',  NULL, false, 24, 'Face recognition embeddings — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
 }
 
 // ─── HA service call helper ───────────────────────────────────
@@ -1430,6 +1539,36 @@ app.post('/api/request', async (req, res) => {
       }
     }
 
+    // ── media_search ───────────────────────────────────────────
+    if (intent === 'media_search') {
+      const q = params.query || '';
+      if (!q) return res.json({ ok: false, message: 'What do you want to find?' });
+      const r = await fetch(`${PLAYER_API_URL}/api/media/search?q=${encodeURIComponent(q)}`);
+      const d = await r.json();
+      if (!r.ok) return res.json({ ok: false, message: d.error || 'Search failed.' });
+      const results = d.results || [];
+      _mediaSearchSession = { results, timestamp: Date.now() };
+      const msg = results.length
+        ? `Found ${results.length} result${results.length > 1 ? 's' : ''} for ${q}. Say play 1, play 2, and so on.`
+        : `No results found for ${q}.`;
+      return res.json({ ok: true, message: msg, data: { count: results.length, results } });
+    }
+
+    // ── media_play_number ──────────────────────────────────────
+    if (intent === 'media_play_number') {
+      const num = parseInt(params.number);
+      if (!num) return res.json({ ok: false, message: 'Which number?' });
+      const sessionAge = Date.now() - _mediaSearchSession.timestamp;
+      if (sessionAge > 600000) return res.json({ ok: false, message: 'Search session expired. Search again first.' });
+      const item = _mediaSearchSession.results.find(r => r.number === num);
+      if (!item) return res.json({ ok: false, message: `No item number ${num} in results.` });
+      fetch(`${PLAYER_API_URL}/api/media/play-number`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: num })
+      }).catch(() => {});
+      return res.json({ ok: true, message: `Playing ${item.title}.`, data: { title: item.title, number: num } });
+    }
+
     // ── general_query / fallback ───────────────────────────────
     return res.json({ ok: false, message: `Sorry, I didn't understand that command. Try: "turn on boiler", "shower status", "boiler temperature".`, intent });
   } catch (e) {
@@ -1462,6 +1601,7 @@ app.post('/api/voice/transcribe', upload.single('audio'), async (req, res) => {
 // ─── Voice: phrase cache ───────────────────────────────────────────────
 let _phrasesCache = null;
 let _phrasesCacheTs = 0;
+let _mediaSearchSession = { results: [], timestamp: 0 };
 async function loadPhrasesCache() {
   if (_phrasesCache && Date.now() - _phrasesCacheTs < 60000) return _phrasesCache;
   const r = await db.query('SELECT intent, phrase FROM voice_intent_phrases WHERE enabled = true ORDER BY sort_order, length(phrase) DESC');
@@ -1477,12 +1617,24 @@ function stripNiqqud(text) {
 }
 
 function keywordIntent(rawText) {
-  const t = stripNiqqud(rawText).toLowerCase();
+  const t = stripNiqqud(rawText).toLowerCase().trim();
   const hasBoiler = /boiler|דוד|בויל|бойлер|котёл|котел/.test(t);
   const hasOn  = /on|turn|switch|start|הדל|תדל|הפעל|הפעיל|включи|запусти/.test(t);
   const hasOff = /off|stop|shut|כבה|תכבה|לכבות|כבי|סגור|עצור|выключи|отключи|останови/.test(t);
   if (hasBoiler && hasOn && !hasOff) return 'boiler_on';
   if (hasBoiler && hasOff)           return 'boiler_off';
+
+  // Media search: "find X", "search X", "show X"
+  const mediaSearch = t.match(/^(?:find|search|show|look for)s+(.+)$/);
+  if (mediaSearch) return { intent: 'media_search', params: { query: mediaSearch[1].trim() } };
+
+  // Media play by number: "play 1", "play number 2", just a digit 1-15
+  const playNum = t.match(/^(?:plays+(?:numbers+)?|watchs+)(d+)$/) || t.match(/^(d+)$/);
+  if (playNum) {
+    const n = parseInt(playNum[1]);
+    if (n >= 1 && n <= 15) return { intent: 'media_play_number', params: { number: n } };
+  }
+
   return null;
 }
 
@@ -1520,7 +1672,9 @@ app.post('/api/voice/intent', async (req, res) => {
       .map(([k, v]) => '- ' + k + ': ' + v.slice(0, 4).join(', '))
       .join('\n');
 
-    const systemPrompt = `You are a smart home voice controller. The user speaks Hebrew, Russian, or English.\nExtract the user's intent and return ONLY a JSON object — no explanation, no markdown.\n\nKnown phrase examples per intent:\n${examplesBlock}\n\nAvailable intents:\n- boiler_on, boiler_off, boiler_status\n- shower_prepare, bath_prepare\n- light_on (params: room), light_off (params: room)\n- climate_set (params: temp, room)\n- media_play (params: what, where), media_pause, media_volume (params: level, device)\n- general_query: only if truly unclear\n\nReturn format: {"intent":"...","params":{},"confidence":"high|medium|low","original_language":"he|ru|en"}`;
+    const systemPrompt = `You are a smart home voice controller. The user speaks Hebrew, Russian, or English.\nExtract the user's intent and return ONLY a JSON object — no explanation, no markdown.\n\nKnown phrase examples per intent:\n${examplesBlock}\n\nAvailable intents:\n- boiler_on, boiler_off, boiler_status\n- shower_prepare, bath_prepare\n- light_on (params: room), light_off (params: room)\n- climate_set (params: temp, room)\n- media_play (params: what, where), media_pause, media_volume (params: level, device)\n- media_search (params: query): say find/search/show + name
+- media_play_number (params: number): say play 1-15 or just a number
+- general_query: only if truly unclear\n\nReturn format: {"intent":"...","params":{},"confidence":"high|medium|low","original_language":"he|ru|en"}`;
 
     const result = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -1760,102 +1914,57 @@ app.get('/api/voice/token-log', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── Media Control ────────────────────────────────────────────
-// TV state  → power from LXC 100 (reliable ping/WebSocket), volume/source from SmartThings
-// TV cmds   → LXC 100 samsungtvws WebSocket service (192.168.1.138:8765)
-// SB        → SmartThings API for both state and commands
-const ST_TOKEN  = process.env.ST_TOKEN || '';
-const ST_URL    = 'https://api.smartthings.com/v1';
-const ST_TV_ID  = 'af0bbfed-6ee9-46a7-d773-8daa1af7dcfb';
-const ST_SB_ID  = 'b3b66213-0f44-be4e-ccdb-b4cb2c7ba80a';
-const TV_AGENT  = 'http://192.168.1.138:8765';
+// ─── Media: all endpoints → LXC 100 media-service http://192.168.1.138:8766 ──
 
-async function stGet(path) {
-  const r = await fetch(`${ST_URL}${path}`, { headers: { Authorization: `Bearer ${ST_TOKEN}` } });
-  if (!r.ok) throw new Error(`ST GET ${path} failed: ${r.status}`);
-  return r.json();
-}
-
-async function stCmd(deviceId, capability, command, args = []) {
-  const r = await fetch(`${ST_URL}/devices/${deviceId}/commands`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${ST_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ commands: [{ component: 'main', capability, command, arguments: args }] }),
-  });
-  if (!r.ok) throw new Error(`ST command ${command} failed: ${r.status}`);
-  return r.json();
-}
-
-function parseStState(d, isSoundbar) {
-  const m = d.components?.main || {};
-  const inputCap = isSoundbar ? 'samsungvd.audioInputSource' : 'mediaInputSource';
-  return {
-    power:           m.switch?.switch?.value || 'off',
-    volume:          m.audioVolume?.volume?.value ?? null,
-    muted:           m.audioMute?.mute?.value === 'muted',
-    input:           m[inputCap]?.inputSource?.value || null,
-    supportedInputs: m[inputCap]?.supportedInputSources?.value || [],
-  };
-}
-
-async function tvAgentGet(path) {
-  const r = await fetch(`${TV_AGENT}${path}`);
-  if (!r.ok) throw new Error(`TV agent GET ${path} failed: ${r.status}`);
-  return r.json();
-}
-
-async function tvAgentCmd(command, value) {
-  const body = { command };
-  if (value !== undefined) body.value = value;
-  const r = await fetch(`${TV_AGENT}/command`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(`TV agent command ${command} failed: ${r.status}`);
-  return r.json();
-}
-
-app.get('/api/media/state', async (_req, res) => {
+// ─── Proxmox Backups ──────────────────────────────────────────
+app.get('/api/backups/proxmox', async (_req, res) => {
   try {
-    const [tvAgent, tvST, sbRaw] = await Promise.all([
-      tvAgentGet('/state'),
-      stGet(`/devices/${ST_TV_ID}/status`),
-      stGet(`/devices/${ST_SB_ID}/status`),
+    const [jobsResp, nodesResp] = await Promise.all([
+      pveGet('/api2/json/cluster/backup'),
+      pveGet('/api2/json/nodes'),
     ]);
-    // Power from LXC 100 (reliable direct ping/REST), volume/mute from SmartThings
-    const tvSTParsed = parseStState(tvST, false);
-    const tv = {
-      power:  tvAgent.power,
-      volume: tvSTParsed.volume,
-      muted:  tvSTParsed.muted,
-    };
-    res.json({ tv, soundbar: parseStState(sbRaw, true) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const jobs  = jobsResp.data  || [];
+    const nodes = (nodesResp.data || []).map(n => n.node);
+
+    // Recent vzdump tasks from all nodes
+    const taskArrays = await Promise.all(
+      nodes.map(node =>
+        pveGet(`/api2/json/nodes/${node}/tasks?typefilter=vzdump&limit=100`)
+          .then(r => (r.data || []).map(t => ({ ...t, node })))
+          .catch(() => [])
+      )
+    );
+    const allTasks = taskArrays.flat().sort((a, b) => b.starttime - a.starttime);
+
+    // Match last run per job
+    const jobsOut = jobs.map(job => {
+      const vmids = job.vmid ? String(job.vmid).split(',').map(v => v.trim()) : [];
+      const isAll = !job.vmid || job.vmid === 'all';
+      const relevant = allTasks.filter(t => isAll || vmids.includes(String(t.id)));
+      const last = relevant[0] || null;
+      return {
+        id:        job.id,
+        enabled:   job.enabled !== 0,
+        schedule:  job.schedule  || '—',
+        storage:   job.storage   || '—',
+        vmid:      job.vmid      || 'all',
+        mode:      job.mode      || '—',
+        compress:  job.compress  || 'none',
+        retention: job['prune-backups'] || (job.maxfiles ? `keep-last=${job.maxfiles}` : '—'),
+        comment:   job.comment   || '',
+        lastRun:   last ? { starttime: last.starttime, endtime: last.endtime, status: last.status, node: last.node } : null,
+      };
+    });
+
+    res.json({ jobs: jobsOut, tasks: allTasks.slice(0, 30), nodes });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.post('/api/media/command', async (req, res) => {
-  try {
-    const { entity, command, value } = req.body;
-    if (entity !== 'tv' && entity !== 'soundbar') return res.status(400).json({ error: 'Unknown entity' });
+// All media/library/browse/play endpoints → LXC 100 media-service http://192.168.1.138:8766
 
-    if (entity === 'tv') {
-      await tvAgentCmd(command, value);
-    } else {
-      switch (command) {
-        case 'turn_on':    await stCmd(ST_SB_ID, 'switch', 'on'); break;
-        case 'turn_off':   await stCmd(ST_SB_ID, 'switch', 'off'); break;
-        case 'mute':       await stCmd(ST_SB_ID, 'audioMute', value ? 'mute' : 'unmute'); break;
-        case 'volume_set': await stCmd(ST_SB_ID, 'audioVolume', 'setVolume', [Math.round(value)]); break;
-        case 'volume_up':  await stCmd(ST_SB_ID, 'audioVolume', 'volumeUp'); break;
-        case 'volume_down':await stCmd(ST_SB_ID, 'audioVolume', 'volumeDown'); break;
-        case 'source':     await stCmd(ST_SB_ID, 'samsungvd.audioInputSource', 'setInputSource', [value]); break;
-        default: return res.status(400).json({ error: 'Unknown command' });
-      }
-    }
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+
 
 const PORT = 3000;
 ensureSchema().then(() => {

@@ -1,0 +1,329 @@
+# Media Agent — LXC 100
+
+## Overview
+The Media Agent runs on **LXC 100** (192.168.1.138). It handles:
+- Media library ingestion and scanning (video, image, audio)
+- Face detection, embedding, clustering, and recognition via InsightFace
+- TV/soundbar playback via DLNA + Samsung UPnP
+- Media browsing, search, upload, and metadata editing
+- Dashboard UI: `BOILER/dashboard/public/media.html` + `js/media.js`
+
+---
+
+## LXC 100 Services
+
+| Service | Script | Port | Role |
+|---------|--------|------|------|
+| `player.service` | `/opt/media-agent/player_service.py` | 8766 | Browse, search, playback, faces API, library read |
+| `ingest.service` | `/opt/media-agent/ingest_service.py` | 8767 | Scan, upload, library CRUD, delete |
+| `analyzer.service` | `/opt/media-agent/analyzer.py` | — | Face detection + embedding + clustering (background loop) |
+| `tv_control.py` | `/opt/media-agent/tv_control.py` | 8765 | Samsung/HA TV control, proxied by player |
+| `minidlna` | system service | 8200 | DLNA media server for TV playback |
+
+## Local Scripts (source of truth → deployed to LXC 100)
+
+| Local file | LXC 100 path |
+|-----------|-------------|
+| `scripts/player_service.py` | `/opt/media-agent/player_service.py` |
+| `scripts/ingest_service.py` | `/opt/media-agent/ingest_service.py` |
+| `scripts/embed_crop.py` | `/opt/media-agent/embed_crop.py` |
+| `scripts/auto_scan.sh` | `/opt/media-agent/auto_scan.sh` |
+
+`analyzer.py` is **patched directly on LXC 100** — no local copy is source of truth. After any patch: `systemctl restart analyzer` required (it's a persistent process).
+
+## Supporting Scripts on LXC 100 (not in local repo)
+
+| Script | Role |
+|--------|------|
+| `/opt/media-agent/scan_library.py` | Called by ingest_service to walk MEDIA_MOUNT, hash files, return new-file list |
+| `/opt/media-agent/gen_results.py` | Generates search result image (JPEG) for TV display via DLNA |
+| `/opt/media-agent/face_register.py` | Extracts 512-dim ArcFace embedding from a photo; server.js spawns it and inserts result into `face_registry` |
+| `/opt/media-agent/face_recognize.py` | Matches faces in image/video against `face_registry`; cosine similarity ≥ 0.5; 1 frame/120s for video |
+| `/opt/media-agent/venv/` | Python venv: InsightFace, psycopg2, flask, numpy, cv2, flask-cors |
+
+## Deploy Commands
+```bash
+scp scripts/player_service.py root@192.168.1.138:/opt/media-agent/player_service.py
+scp scripts/ingest_service.py root@192.168.1.138:/opt/media-agent/ingest_service.py
+scp scripts/embed_crop.py root@192.168.1.138:/opt/media-agent/embed_crop.py
+scp scripts/auto_scan.sh root@192.168.1.138:/opt/media-agent/auto_scan.sh
+ssh root@192.168.1.138 "systemctl restart player && systemctl is-active player"
+ssh root@192.168.1.138 "systemctl restart ingest && systemctl is-active ingest"
+# After patching analyzer.py on LXC 100:
+ssh root@192.168.1.138 "systemctl restart analyzer && systemctl is-active analyzer"
+```
+
+---
+
+## Database (LXC 102 — PostgreSQL `home_data`)
+
+### Tables
+
+| Table | Schema summary |
+|-------|---------------|
+| `media_library` | `path PK, title, type (video/image/audio), person TEXT[], event, year, location, search_text, status, file_hash, duration_sec, size_bytes, added_at, last_played` |
+| `face_crops` | `id, file_path, frame_sec, bbox_x1/y1/x2/y2, crop_path, embedding FLOAT8[], det_score FLOAT, person_name, cluster_id` |
+| `person_embeddings` | `name PK, embedding FLOAT8[], det_score FLOAT, added_at` |
+| `analyzer_settings` | `key TEXT PK, value TEXT` — controls auto/manual mode behavior |
+| `analyzer_log` | `ts, decision, error, next_ts` — analyzer run log; `cluster_requested` sentinel triggers clustering |
+| `face_registry` | `id, name, embedding FLOAT8[], image_path, added_at` — simple face registry for the register-photo → recognize-in-file pipeline (separate from the analyzer pipeline). Keep forever. |
+
+### Critical DB Rules
+- `face_crops.embedding` must be `array_length(embedding,1) = 512` — empty `ARRAY[]::FLOAT8[]` embeddings (from manual crops before analyzer processes them) are **excluded from clustering**
+- `det_score` = InsightFace detection confidence 0.0–1.0; **NULL for manual crops** (they bypass InsightFace)
+- `person_embeddings` holds **one reference embedding per person** — the highest `det_score` crop embedding. This survives re-run so auto-matching works after re-detect.
+- `media_library.person[]` = `'{not_recognized}'` when video has faces but none recognized; `'{}'` for audio; named person array otherwise
+- `media_library.status`: `pending` → `processing` → `ready`/`searchable`/`error`
+
+---
+
+## Face Recognition Architecture
+
+```
+File ingested → media_library (status=pending)
+              ↓
+analyzer.service loops: picks pending files
+              ↓
+InsightFace detects faces → face_crops row (embedding 512-dim, det_score)
+              ↓
+DBSCAN clustering → cluster_id assigned to crops
+              ↓
+Auto-match: cosine similarity vs person_embeddings → person_name assigned
+If match: updates person_embeddings if new det_score is higher
+              ↓
+Dashboard: user labels clusters → person_embeddings updated
+           user assigns unmatched faces → person_embeddings updated
+           user draws manual crop → face_crops row (empty embedding) → analyzer embeds on next pass
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **det_score** | InsightFace face detection quality per crop (0.0–1.0). Green ≥0.85, amber 0.70–0.84, red <0.70. NULL for manual crops. |
+| **Similarity** | Cosine similarity across all of a person's crop embeddings vs their centroid. Measures consistency of crops. Computed live — not stored. |
+| **Clustering** | DBSCAN on `array_length(embedding,1)=512` crops only. Groups unknown faces across files. |
+| **Auto-match** | After clustering: each cluster compared to `person_embeddings`. If cosine similarity ≥ threshold → auto-assigns person_name. |
+| **Re-run** | Deletes ALL face_crops (images + DB). Resets all media_library rows to `pending`. `person_embeddings` preserved. Ghost entries cleaned (see cascade rules). |
+| **Manual crop** | User draws box on video frame in lightbox → `face_crops` inserted with `ARRAY[]::FLOAT8[]` embedding. Analyzer computes real embedding on next pass. |
+
+---
+
+## analyzer.py — Patches Applied on LXC 100
+
+| Patch | Reason |
+|-------|--------|
+| Store `det_score = float(getattr(face, 'det_score', 0.0))` on INSERT to face_crops | Track face detection quality per crop |
+| After auto-match: `UPDATE person_embeddings SET embedding=..., det_score=... WHERE det_score < new_score` | Ensure best-quality embedding survives re-run |
+| Clustering SELECT: `array_length(embedding,1)=512` instead of `embedding IS NOT NULL` | Skip empty embeddings → fixes "inhomogeneous shape" numpy crash |
+
+---
+
+## Cascade Deletion Rules
+
+### When a video is permanently deleted (`library_delete()` in ingest_service.py)
+1. Query `face_crops` — collect distinct `person_name` values for this file
+2. Delete crop image files from disk (`/mnt/media/.faces/*.jpg`)
+3. `DELETE FROM face_crops WHERE file_path=...`
+4. `DELETE FROM media_library WHERE path=...`
+5. For each affected person: if no remaining crops anywhere → `DELETE FROM person_embeddings WHERE name=...`
+
+### When re-run finds missing files (`analyzer_rerun()` in player_service.py)
+1. Delete ALL face crop images from disk
+2. `DELETE FROM face_crops` (all rows)
+3. `DELETE FROM media_library WHERE path = ANY(missing_paths)`
+4. `DELETE FROM person_embeddings WHERE name NOT IN (SELECT DISTINCT unnest(person) FROM media_library WHERE person IS NOT NULL AND person != '{not_recognized}')`
+5. `UPDATE media_library SET status='pending'` for all remaining files
+
+---
+
+## TV Playback
+
+### Devices controlled
+| Device | Entity | Protocol |
+|--------|--------|---------|
+| Samsung 85" QLED | `tv` | Samsung UPnP SOAP + HA |
+| Samsung Soundbar HW-Q990C | `soundbar` | HA |
+| TV-60 Guy Room | `tv_guy` | HA |
+| TV-49 Bedroom | `tv_bed` | HA |
+
+### Playback flow
+- **Video/image**: `minidlna_id()` looks up file in MiniDLNA SQLite DB → Samsung UPnP `SetAVTransportURI` + `Play` SOAP call via `curl`
+- **Audio**: streamed via `/api/media/stream/<path>` HTTP range-request endpoint directly from LXC 100
+- **Search results image**: `gen_results.py` generates JPEG → sent to TV via DLNA as image
+- MiniDLNA SIGHUP: `os.kill(int(pid_file), signal.SIGHUP)` — no shell subprocess
+- Samsung TV: IP `192.168.1.129`, port 9197, path `/upnp/control/AVTransport1`
+- TV control proxied through `tv_control.py` on port 8765 (LXC 100 local)
+
+---
+
+## API Endpoints (player_service.py — port 8766)
+
+| Endpoint | Method | Role |
+|----------|--------|------|
+| `/health` | GET | DB + service status |
+| `/api/media/state` | GET | TV/soundbar state (proxied to tv_control) |
+| `/api/media/command` | POST | TV/soundbar command |
+| `/api/media/search` | GET | Full-text search + person name search |
+| `/api/media/library` | GET | Paginated library list (filter by type, unrecognized) |
+| `/api/media/library/<path>` | GET | Single file record |
+| `/api/media/browse` | GET | Directory browser |
+| `/api/media/stream/<path>` | GET | Range-request audio streaming |
+| `/api/media/thumb` | GET | Image thumbnail (LRU cache, 200 items) |
+| `/api/media/play` | POST | Play file on TV (by relPath) |
+| `/api/media/play-number` | POST | Play file by search result number |
+| `/api/media/show-results` | POST | Show search results image on TV |
+| `/api/media/position` | GET | Current TV playback position |
+| `/api/media/pause` | POST | Pause TV |
+| `/api/media/resume` | POST | Resume TV |
+| `/api/media/seek` | POST | Seek to position (seconds) |
+| `/api/media/stop` | POST | Stop TV |
+| `/api/faces/clusters` | GET | Unlabeled face clusters with similarity score |
+| `/api/faces/label` | POST | Label a cluster with a person name |
+| `/api/faces/people` | GET | Known people with crop, similarity, det_score |
+| `/api/faces/people/<name>/crops` | GET | All crop images for a person with similarity per crop |
+| `/api/faces/people/<name>` | DELETE | Forget a person (clears labels, removes person_embeddings) |
+| `/api/faces/rename` | POST | Rename a person |
+| `/api/faces/crop/<filename>` | GET | Serve crop JPEG image |
+| `/api/faces/crop/<id>` | DELETE | Delete a single crop |
+| `/api/faces/frame/<id>` | GET | Extract full video frame at face's timestamp |
+| `/api/faces/video-frame` | GET | Extract frame from any video at any second |
+| `/api/faces/manual-crop` | POST | Save a manual crop drawn by user |
+| `/api/faces/unmatched` | GET | Unmatched face crops (no cluster, no name) with det_score |
+| `/api/faces/skip` | POST | Mark an unmatched face as `_skipped` |
+| `/api/faces/assign` | POST | Assign an unmatched face to a person |
+| `/api/analyzer/settings` | GET/POST | Read/write analyzer_settings |
+| `/api/analyzer/status` | GET | media_library status counts + face counts |
+| `/api/analyzer/rerun` | POST | Full re-run: delete crops, reset to pending, clean ghosts |
+| `/api/analyzer/trigger-clustering` | POST | Write sentinel to analyzer_log to force clustering on next loop |
+
+## API Endpoints (ingest_service.py — port 8767)
+
+| Endpoint | Method | Role |
+|----------|--------|------|
+| `/health` | GET | DB + scan status |
+| `/api/media/scan` | POST | Scan MEDIA_MOUNT, queue new files, start ingest worker |
+| `/api/media/scan/progress` | GET | Current scan progress |
+| `/api/media/upload` | POST | Upload file to MEDIA_MOUNT (multipart, max 20GB) |
+| `/api/media/library` | PATCH | Edit metadata (person, event, year, location, search_text) |
+| `/api/media/library` | DELETE | Delete file + cascade cleanup |
+
+---
+
+## Dashboard (media.html + js/media.js)
+
+### API base URLs
+- Player: `http://192.168.1.138:8766` (MEDIA_API)
+- Ingest: `http://192.168.1.138:8767` (INGEST_API)
+
+### Tabs
+
+#### Control tab
+- Samsung 85" QLED: power, volume, mute, source select
+- Samsung Soundbar HW-Q990C: power, volume, mute, source select
+- TV-60 Guy Room: power, volume, mute, source select
+- TV-49 Bedroom: power, volume, mute, source select
+- All commands via `POST /api/media/command`
+
+#### Analyzer Agent tab
+- **Auto Run Status** card: pending/processing/ready/error counts, progress bar, last run
+- **Manual Run Status** card: face counts (unassigned/unlabeled/named), Re-run button, Run Clustering button
+- **Unknown Faces** (clusters): grid of cluster cards — face image, face count, file count, Similarity %, name input, "Same as…" dropdown, Save/Skip buttons
+- **Unmatched Faces**: cards with crop image, filename, timestamp, colored Det badge, assign input, existing-person dropdown, Skip button, 🎬 frame lightbox button
+- **Known People**: rows with avatar, name + Similarity % + Det % inline, face count, files count, ✏️ rename, Forget, 🖼 Faces toggle panel with individual crops
+- Analyzer status polled every 3 seconds; face sections only reload when counts change
+
+#### Ingest Agent tab
+- Upload drop zone: drag/drop files or folder, progress bar with per-file errors
+- Calls `POST /api/media/upload` per file with `relativePath` and `targetPath`
+
+#### Player Agent tab
+- Media feedback bar (animated, shows play status)
+- Playback bar: title, time, progress, ⏪30s / ⏸Pause / 30s⏩ / ⏹Stop, seek ±30s
+- QNAP Media browser: grid of files/folders, breadcrumb navigation, play on click
+- Edit metadata modal: event, year, location, people fields, Save + Delete buttons
+
+#### Settings tab
+- **Auto Mode**: auto_enabled, auto_frame_interval (sec), auto_face_score_min (%), auto_cluster_every (N files)
+- **Manual Mode**: manual_batch_size, manual_frame_interval, manual_face_score_min, manual_cluster_eps
+
+### Face lightbox (manual crop tool)
+- Opens on 🎬 button from unmatched faces or known people crops
+- Loads video frame via `GET /api/faces/video-frame?path=...&sec=...`
+- Navigation: ±1s, ±5s seek buttons; zoom: 50%/75%/100%/150%/200%/300%/400%
+- Draw rectangle on canvas (orange dashed box) → `POST /api/faces/manual-crop`
+- Pre-fills name from context (unmatched: empty; known people: person's name)
+
+### Re-run modal
+- Amber warning: "Known People are preserved — faces will be re-detected and auto-matched"
+- Calls `POST /api/analyzer/rerun`
+
+### Visual indicators
+| Item | Green | Amber | Red |
+|------|-------|-------|-----|
+| Det badge (unmatched) | ≥85% | 70–84% | <70% |
+| Det text (known people) | ≥85% | 70–84% | <70% |
+| Similarity (known people) | ≥80% | 60–79% | <60% or "No similarity" |
+| Cluster similarity | ≥80% | 60–79% | <60% |
+
+---
+
+## Media Mount
+- All media files: `/mnt/media/` on LXC 100
+- Face crop images: `/mnt/media/.faces/<uuid>.jpg`
+- Excluded dirs: `.faces`, `tmp`
+- Supported: video (`.mp4 .mkv .avi .mov .ts .wmv .m4v .flv`), image (`.jpg .jpeg .png .gif .bmp .webp`), audio (`.mp3 .wav .flac .ogg .aac .m4a .wma`)
+
+---
+
+## Security Fixes Applied
+
+| Severity | Issue | Fix | Location |
+|----------|-------|-----|----------|
+| Critical | Path traversal in `faces_video_frame()` — no MEDIA_MOUNT validation | Added `os.path.realpath(file_path).startswith(os.path.realpath(MEDIA_MOUNT))` check | player_service.py |
+| High | Shell subprocess `sh -c kill -HUP $(cat PID_FILE)` in `minidlna_id()` | Replaced with `os.kill(int(pid_file.read()), signal.SIGHUP)` | player_service.py |
+| Medium | Silent `except: pass` on crop unlink, SIGHUP, last_played update | Added `log.warning()` / `log.debug()` | player_service.py |
+
+`safe_path()` helper validates all other path inputs against MEDIA_MOUNT using `os.path.realpath().startswith()`.
+
+---
+
+## Orchestrator Integration (LXC 105)
+
+All three media services are registered in the `agents` table and monitored by the orchestrator (main-agent on LXC 105):
+
+| Agent name | Service | data_table | settings_table | deploy_path |
+|-----------|---------|-----------|---------------|------------|
+| `analyzer` | `analyzer.service` | `analyzer_log` | none | `/opt/media-agent` |
+| `player` | `player.service` | none | none | `/opt/media-agent` |
+| `ingest` | `ingest.service` | none | none | `/opt/media-agent` |
+
+### What the orchestrator checks (every run)
+- **Service health**: SSHes to LXC 100, runs `systemctl is-active analyzer/player/ingest`; if down → attempts `systemctl restart`; raises `service_down` alert if still failing
+- **analyzer_log freshness**: `analyzer` has a `data_table` — orchestrator checks `next_ts` is not overdue (>5 min grace); raises `agent_overdue` alert if stale
+- **Error check**: scans last 10 rows of `analyzer_log` for `ERR:` prefix; raises `agent_hard_errors` alert
+
+### What the orchestrator does NOT check for media
+- `player` and `ingest` have no `data_table` — no schedule or error-row check, only service liveness
+- No `settings_table` for any media agent — orchestrator cannot adjust media settings
+
+### Deploy via dashboard
+- Dashboard Settings tab → Deploy card → dropdown populated from `agents` table
+- `POST /api/deploy {agent: "player"|"ingest"|"analyzer"}` → SSH to LXC 100 → `git pull` in `/opt/media-agent` → `systemctl restart <service>`
+- All three agents share the same `deploy_path` (`/opt/media-agent`) and `git_branch` (`main`)
+
+### Alerts that media services can generate
+| Alert type | Trigger | Affected agent |
+|-----------|---------|---------------|
+| `service_down` | `systemctl is-active` fails after restart attempt | analyzer / player / ingest |
+| `service_ssh_failed` | SSH to LXC 100 fails | analyzer / player / ingest |
+| `agent_overdue` | `analyzer_log.next_ts` > 5 min overdue | analyzer |
+| `agent_hard_errors` | `ERR:` prefix in last 10 `analyzer_log` rows | analyzer |
+
+---
+
+## DB Consistency Rules
+- Every `face_crops` row must reference a file that exists in `media_library`
+- Every `person_embeddings` row must have at least one `face_crops` row with matching `person_name`
+- No embedding in `face_crops` should be `array_length(embedding,1) != 512` (empty manual crops are transient — analyzer fills them)
+- `media_library.person[]` must be kept in sync when face labels are added/removed

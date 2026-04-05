@@ -23,7 +23,7 @@
 - `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta
 - `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at — hot water consumption events detected by agent each run; deduplicated by start_ts
 - `sync_signals`: id, ts, source — written by ha_to_pg after each raw_data insert; boiler agent polls every 30s and wakes immediately on new row
-- `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 30 min
+- `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 60 min
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
 ## Data Flow
@@ -325,7 +325,7 @@
   - `boiler_agent` — `systemctl is-active boiler-agent` on LXC 103
   - `boiler_last_decision` — age of last `agent_boiler_data` row ≤ `run_interval_min × 3`; shows age + decision
   - `ha_to_pg` — cron registered on LXC 103 + `raw_data` age ≤ 15 min; shows age
-  - `collect_weather` — cron registered on LXC 103 + `raw_weather` age ≤ 35 min; shows age
+  - `collect_weather` — cron registered on LXC 103 + `raw_weather` age ≤ 65 min; shows age
   - `orchestrator` — `main-agent.timer` + `main-agent-quick.timer` active on LXC 105 (SSH)
   - `orchestrator_last_run` — age of last `orchestrator_log` row ≤ 70 min; shows age
   - `active_alerts` — count of unresolved `system_alerts`; shows worst severity
@@ -344,53 +344,7 @@
 - **retention_policies table schema:** `table_name PK, keep_days INT nullable, auto_clean BOOL, clean_interval_hours INT, last_cleaned_at TIMESTAMPTZ, description TEXT`
 
 # Main Agent (Orchestrator)
-
-## Infrastructure
-- **LXC 105** — Proxmox LXC, IP `192.168.1.187`, name `MainAgent`
-- Debian 12, Python 3.11, venv at `/opt/main-agent/venv`
-- Script: `/opt/main-agent/project/main-agent/orchestrator.py` (runs from git repo)
-- Git repo cloned at `/opt/main-agent/project` (same GitHub repo as all agents)
-- Env file: `/etc/main-agent.env` (contains `DB_PASS`)
-- Systemd: `main-agent.service` (oneshot) + `main-agent.timer` (full run every 1h, 2min after boot)
-- Quick check: `main-agent-quick.service` + `main-agent-quick.timer` (runs `orchestrator.py --quick` every 5 min: schedule + data freshness only, no SSH or retention)
-- SSH key: `/root/.ssh/id_ed25519` — authorised on LXC 103 for service checks
-
-## Agent Framework Contract
-Every agent registered in the `agents` table must follow this standard:
-- **`agents` table full schema:** `name PK, description, lxc_id, lxc_ip, service_name, data_table, settings_table, deploy_path, git_branch, service_oneshot BOOL, enabled, added_at`
-- **Data table** must have: `ts TIMESTAMPTZ, decision TEXT, error TEXT, next_ts TIMESTAMPTZ`
-- **Settings table** must have: `agent_enabled BOOL, run_interval_min INT`
-- **Retention policies** registered in `retention_policies` table on first agent run
-- **Systemd service** on its LXC — orchestrator checks it via SSH
-
-Adding a new agent = `INSERT INTO agents` → orchestrator + dashboard + deploy dropdown pick it up automatically, no code changes.
-
-## Deploy
-- Dashboard Deploy card has agent selector dropdown — populated from `agents` table via `GET /api/agents`
-- `POST /api/deploy {agent}` — looks up `lxc_ip`, `service_name`, `deploy_path`, `git_branch`, `service_oneshot` from agents table; SSHes to agent's LXC; runs `git pull`; then `systemctl restart` (persistent) or `systemctl start` (oneshot)
-- `SSH_USER=root`, `SSH_KEY` from env or `~/.ssh/id_ed25519` — shared constant in server.js
-
-## Orchestrator Responsibilities (per run)
-1. **Schedule check** — is each agent's `next_ts` overdue (> 5 min grace)?
-2. **Error check** — any `ERR:` prefixed rows in last 10 rows of agent data table?
-3. **Service check + auto-restart** — SSH to agent's LXC; checks `systemctl is-active <service>` (persistent) or `<service>.timer` (oneshot); if down → attempts `systemctl restart` / `systemctl start .timer` and re-checks; raises `service_down` only if still failing after restart attempt; logs all outcomes to `orchestrator_log`
-4. **Data freshness check** — `raw_data` age > 15 min → `data_stale` alert for `boiler` agent (threshold raised from 10 to 15 min to allow 2 full ha_to_pg cycles of margin)
-5. **Retention cleanup** — delete old rows for tables where `auto_clean=true`, `keep_days` set, and `clean_interval_hours` elapsed since `last_cleaned_at`
-6. **Write/resolve alerts** to `system_alerts`; log all activity to `orchestrator_log`
-
-## Alert Types
-| alert_type | trigger | affected_agent |
-|-----------|---------|---------------|
-| `agent_overdue` | next_ts > 5 min past | that agent |
-| `agent_no_data` | data table empty | that agent |
-| `agent_hard_errors` | ERR: in last 10 rows | that agent |
-| `service_down` | systemctl not active | that agent |
-| `service_ssh_failed` | SSH connection failed | that agent |
-| `data_stale` | raw_data > 15 min old | boiler |
-| `agent_schedule_check_failed` | DB error during schedule check | that agent |
-
-Alerts are **raised once** (no duplicates) and **auto-resolved** when the condition clears on next orchestrator run.
-Note: `agent_schedule_check_failed` uses a SAVEPOINT internally so a DB error does not abort the outer transaction.
+> Full orchestrator documentation: see `ORCHESTRATOR/CLAUDE.md`
 
 ## Agent Alert Behaviour (boiler agent — Step 0b)
 At start of each run, before any logic:
@@ -398,17 +352,11 @@ At start of each run, before any logic:
 - If `severity = error/critical` → write `decision = no_action`, `error = WARN: System alert: <type>: <message>`, exit safely
 - If `severity = warn` → continue run, include in error field as warning
 
-## DB Tables
-- `agents`: full agent registry (see contract above)
-- `orchestrator_log`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source VARCHAR(50), severity VARCHAR(10), message TEXT` — retention 30 days, auto-clean
-- `system_alerts`: `id BIGSERIAL PK, ts TIMESTAMPTZ, source, severity, affected_agent, alert_type, message, resolved_at` — retention 90 days, auto-clean
-- All in `home_data` DB on LXC 102
-- **Schema source of truth:** `server.js` `ensureSchema()` — `create_alerts.sql` was removed (was a duplicate)
-
 ## Project Health Page — System Alerts card
 - Top card on Health page — shows all alerts (active first, resolved below with 50% opacity)
 - Badge: `N active` (red/amber) or `all clear` (green)
 - `GET /api/health/alerts` — returns last 50 alerts ordered active-first
+- **Schema source of truth:** `server.js` `ensureSchema()` — `create_alerts.sql` was removed (was a duplicate)
 
 ## General Page (sidebar: General → Weather)
 - **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10) + Season; updated every 30 min
@@ -420,4 +368,4 @@ At start of each run, before any logic:
 - **Hourly Weather Log table**: last 24/48/72 rows from `raw_weather`
 - **Daily Forecast Log table**: last 14/30 rows from `raw_weather_daily` (precipitation in mm)
 - API endpoints: `/api/weather/scores`, `/api/weather/latest`, `/api/weather/hourly`, `/api/weather/daily`
-- `collect_weather.py` cron runs every 30 min on LXC 103 (`*/30 * * * *`)
+- `collect_weather.py` cron runs every 60 min on LXC 103 (`0 * * * *`)

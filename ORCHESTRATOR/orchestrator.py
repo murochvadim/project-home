@@ -12,6 +12,7 @@ Logs all activity to orchestrator_log.
 """
 
 import os
+import re
 import sys
 import logging
 import psycopg2
@@ -29,6 +30,11 @@ DB_PASS     = os.environ.get('DB_PASS', '')
 OVERDUE_GRACE_MIN    = 5
 ERROR_LOOKBACK_ROWS  = 10
 DATA_STALE_MIN       = 15   # ha_to_pg: raw_data older than this = stale (ha_to_pg runs every 5 min, 15 min gives 2 full cycles of margin)
+WEATHER_STALE_MIN    = 65   # collect_weather: raw_weather older than this = stale (runs every 60 min, 65 min gives margin)
+
+# Table/column names allowed in dynamic SQL — prevents injection if DB is compromised
+_ALLOWED_TABLES  = re.compile(r'^[a-z_][a-z0-9_]*$')
+_ALLOWED_COLUMNS = re.compile(r'^[a-z_][a-z0-9_]*$')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,6 +103,9 @@ def check_schedule(cur, agent):
     table = agent['data_table']
     if not table:
         return
+    if not _ALLOWED_TABLES.match(table):
+        write_log(cur, 'warn', f"check_schedule: invalid table name '{table}' for agent {agent['name']} — skipping")
+        return
     # Use a savepoint so a DB error (e.g. table missing) doesn't abort the
     # outer transaction and make the subsequent raise_alert call also fail.
     cur.execute("SAVEPOINT check_schedule")
@@ -131,6 +140,9 @@ def check_errors(cur, agent):
     table = agent['data_table']
     if not table:
         return
+    if not _ALLOWED_TABLES.match(table):
+        write_log(cur, 'warn', f"check_errors: invalid table name '{table}' for agent {agent['name']} — skipping")
+        return
     try:
         cur.execute(f"SELECT error FROM {table} ORDER BY ts DESC LIMIT %s", (ERROR_LOOKBACK_ROWS,))
         rows = cur.fetchall()
@@ -150,22 +162,28 @@ def check_service(cur, agent):
     is_oneshot = agent.get('service_oneshot', False)
     if not lxc_ip or not service:
         return
+    # Validate service name before using in shell commands
+    if not re.match(r'^[a-zA-Z0-9_.-]+$', service):
+        write_log(cur, 'warn', f"check_service: invalid service name '{service}' — skipping")
+        return
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(lxc_ip, username='root', key_filename='/root/.ssh/id_ed25519', timeout=10)
-        if is_oneshot:
-            # For oneshot services check the timer (the persistent part)
-            _, stdout, _ = ssh.exec_command(f'systemctl is-active {service}.timer')
-            status = stdout.read().decode().strip()
-            ok = (status == 'active')
-            label = f'{service}.timer'
-        else:
-            _, stdout, _ = ssh.exec_command(f'systemctl is-active {service}')
-            status = stdout.read().decode().strip()
-            ok = (status == 'active')
-            label = service
-        ssh.close()
+        try:
+            if is_oneshot:
+                _, stdout, _ = ssh.exec_command(f'systemctl is-active {service}.timer')
+                status = stdout.read().decode().strip()
+                ok = (status == 'active')
+                label = f'{service}.timer'
+            else:
+                _, stdout, _ = ssh.exec_command(f'systemctl is-active {service}')
+                status = stdout.read().decode().strip()
+                ok = (status == 'active')
+                label = service
+        finally:
+            ssh.close()
+
         if not ok:
             # Attempt auto-restart before raising alert
             restart_cmd = (f'systemctl start {service}.timer' if is_oneshot
@@ -174,12 +192,13 @@ def check_service(cur, agent):
             ssh2 = paramiko.SSHClient()
             ssh2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh2.connect(lxc_ip, username='root', key_filename='/root/.ssh/id_ed25519', timeout=10)
-            ssh2.exec_command(restart_cmd)[1].channel.recv_exit_status()  # wait for completion
-            # Re-check status after restart
-            check_unit = f'{service}.timer' if is_oneshot else service
-            _, stdout2, _ = ssh2.exec_command(f'systemctl is-active {check_unit}')
-            new_status = stdout2.read().decode().strip()
-            ssh2.close()
+            try:
+                ssh2.exec_command(restart_cmd)[1].channel.recv_exit_status()  # wait for completion
+                check_unit = f'{service}.timer' if is_oneshot else service
+                _, stdout2, _ = ssh2.exec_command(f'systemctl is-active {check_unit}')
+                new_status = stdout2.read().decode().strip()
+            finally:
+                ssh2.close()
             if new_status == 'active':
                 write_log(cur, 'info', f'Auto-restart succeeded: {label} is now active on {lxc_ip}')
                 resolve_alert(cur, 'service_down',       agent['name'])
@@ -194,6 +213,28 @@ def check_service(cur, agent):
     except Exception as e:
         raise_alert(cur, 'service_ssh_failed', agent['name'], 'error',
                     f"SSH service check failed for {lxc_ip}: {e}")
+
+
+def check_weather_freshness(cur):
+    """Check collect_weather: is raw_weather recent enough?"""
+    try:
+        cur.execute("SELECT MAX(ts) AS last_ts FROM raw_weather")
+        row = cur.fetchone()
+        last_ts = row['last_ts'] if row else None
+        if not last_ts:
+            raise_alert(cur, 'weather_stale', 'collect_weather', 'warn',
+                        'raw_weather table is empty — collect_weather may never have run')
+            return
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        age_min = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60.0
+        if age_min > WEATHER_STALE_MIN:
+            raise_alert(cur, 'weather_stale', 'collect_weather', 'warn',
+                        f"raw_weather is {age_min:.0f} min old — collect_weather may be failing (threshold: {WEATHER_STALE_MIN} min)")
+        else:
+            resolve_alert(cur, 'weather_stale', 'collect_weather')
+    except Exception as e:
+        raise_alert(cur, 'weather_stale', 'collect_weather', 'warn', f"Weather freshness check failed: {e}")
 
 
 def check_data_freshness(cur):
@@ -246,6 +287,9 @@ def run_retention(cur):
         if not col_row:
             continue
 
+        if not _ALLOWED_TABLES.match(p['table_name']) or not _ALLOWED_COLUMNS.match(col_row['column_name']):
+            log.warning(f"run_retention: invalid table/column name '{p['table_name']}'/'{col_row['column_name']}' — skipping")
+            continue
         cutoff = now - timedelta(days=p['keep_days'])
         cur.execute(f"DELETE FROM {p['table_name']} WHERE {col_row['column_name']} < %s", (cutoff,))
         deleted = cur.rowcount
@@ -256,10 +300,37 @@ def run_retention(cur):
     return results
 
 
+# ── Weekly VACUUM ANALYZE ─────────────────────────────────────────────────────
+def run_vacuum_if_due(db, cur):
+    """Run VACUUM ANALYZE weekly. VACUUM cannot run inside a transaction."""
+    cur.execute("""
+        SELECT ts FROM orchestrator_log
+        WHERE message LIKE 'VACUUM ANALYZE%'
+        ORDER BY ts DESC LIMIT 1
+    """)
+    row = cur.fetchone()
+    now = datetime.now(timezone.utc)
+    if row:
+        last_ts = row['ts']
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        if (now - last_ts).total_seconds() < 7 * 24 * 3600:
+            return False
+    db.commit()
+    db.autocommit = True
+    try:
+        with db.cursor() as vc:
+            vc.execute('VACUUM ANALYZE')
+    finally:
+        db.autocommit = False
+    return True
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main(quick=False):
     mode = 'quick-check' if quick else 'full'
     log.info(f'Orchestrator run started ({mode})')
+    cur = None
     try:
         db  = get_db()
         db.autocommit = False
@@ -277,6 +348,7 @@ def main(quick=False):
             for agent in agents:
                 check_schedule(cur, agent)
             check_data_freshness(cur)
+            check_weather_freshness(cur)
         else:
             write_log(cur, 'info', f'Checking {len(agents)} agent(s): {", ".join(a["name"] for a in agents)}')
             for agent in agents:
@@ -285,6 +357,7 @@ def main(quick=False):
                 check_service(cur, agent)
 
             check_data_freshness(cur)
+            check_weather_freshness(cur)
 
             cleaned = run_retention(cur)
             if cleaned:
@@ -292,6 +365,10 @@ def main(quick=False):
                 write_log(cur, 'info', f'Retention cleanup: {detail}')
             else:
                 write_log(cur, 'info', 'Retention cleanup: nothing due')
+
+            # Weekly VACUUM ANALYZE
+            if run_vacuum_if_due(db, cur):
+                write_log(cur, 'info', 'VACUUM ANALYZE completed — all tables cleaned')
 
             # Count active alerts for summary
             cur.execute("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL")
@@ -307,17 +384,19 @@ def main(quick=False):
     except Exception as e:
         db.rollback()
         log.error(f'Orchestrator run failed: {e}')
-        try:
-            cur.execute(
-                "INSERT INTO orchestrator_log (severity, message) VALUES ('error', %s)",
-                (f'Orchestrator run failed: {e}',)
-            )
-            db.commit()
-        except Exception:
-            pass
+        if cur:
+            try:
+                cur.execute(
+                    "INSERT INTO orchestrator_log (severity, message) VALUES ('error', %s)",
+                    (f'Orchestrator run failed: {e}',)
+                )
+                db.commit()
+            except Exception:
+                pass
         sys.exit(1)
     finally:
-        cur.close()
+        if cur:
+            cur.close()
         db.close()
 
 
