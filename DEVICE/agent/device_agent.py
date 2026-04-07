@@ -58,7 +58,7 @@ class DeviceAgent:
         self._db_lock = threading.Lock()
         self._stop = threading.Event()
         self._device_best_source = {}   # device_id → best source seen
-        self._device_last_event = {}    # device_id → (timestamp, dps_json)
+        self._device_last_event = {}    # (device_id, source) → dps_json
         self._connect_db()
 
     def _connect_db(self):
@@ -120,9 +120,12 @@ class DeviceAgent:
             dps_json = json.dumps(dps, sort_keys=True)
             now = time.time()
 
-            # Dedup: if same device got same DPS within 2 seconds, skip the event insert
-            last = self._device_last_event.get(device_id)
-            is_dup = last and (now - last[0]) < 2 and last[1] == dps_json
+            # Dedup per device+source: skip event if DPS unchanged since last write from same source
+            # Cross-source dedup: skip if same DPS within 2 seconds (e.g. tcp_push + ha_api)
+            dedup_key = (device_id, source)
+            last_same_src = self._device_last_event.get(dedup_key)
+            last_any = self._device_last_event.get(device_id)
+            is_dup = (last_same_src == dps_json) or (last_any and (now - last_any[0]) < 2 and last_any[1] == dps_json)
 
             cur.execute("""
                 UPDATE devices
@@ -136,6 +139,7 @@ class DeviceAgent:
                     INSERT INTO device_events (device_id, ts, dps, source)
                     VALUES (%s, NOW(), %s, %s)
                 """, (device_id, dps_json, source))
+                self._device_last_event[dedup_key] = dps_json
                 self._device_last_event[device_id] = (now, dps_json)
 
     def on_state_change(self, device_id: str, dps: dict, source: str):

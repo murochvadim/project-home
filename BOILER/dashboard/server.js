@@ -2271,13 +2271,17 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
     });
     // Find the matching switchable entity for the requested channel
     const { channel } = req.body;
-    const suffix = channel ? `_${channel}` : '_1';
-    const switchable = entities.find(e => e.entity_id.startsWith('switch.') && e.entity_id.endsWith(suffix))
-      || entities.find(e => e.entity_id.startsWith('light.') && e.entity_id.endsWith(suffix))
-      || entities.find(e => e.entity_id.startsWith('cover.') && e.entity_id.endsWith(suffix))
-      || entities.find(e => e.entity_id.startsWith('switch.'))
-      || entities.find(e => e.entity_id.startsWith('light.'))
-      || entities.find(e => e.entity_id.startsWith('cover.'));
+    const suffix = channel ? `_${channel}` : null;
+    // Prefer entities ending with _switch, _switch_1, or the channel suffix
+    const switchable = (suffix && entities.find(e => e.entity_id.startsWith('switch.') && e.entity_id.endsWith(suffix)))
+      || (suffix && entities.find(e => e.entity_id.startsWith('light.') && e.entity_id.endsWith(suffix)))
+      || (suffix && entities.find(e => e.entity_id.startsWith('cover.') && e.entity_id.endsWith(suffix)))
+      || entities.find(e => e.entity_id.startsWith('switch.') && e.entity_id.endsWith('_switch'))
+      || entities.find(e => e.entity_id.startsWith('switch.') && e.entity_id.endsWith('_switch_1'))
+      || entities.find(e => e.entity_id.startsWith('light.') && e.entity_id.endsWith('_light'))
+      || entities.find(e => e.entity_id.startsWith('cover.') && e.entity_id.endsWith('_curtain'))
+      || entities.find(e => e.entity_id.startsWith('switch.') && !/child_lock|countdown|indicator/.test(e.entity_id))
+      || entities.find(e => e.entity_id.startsWith('switch.'));
     if (!switchable) return res.status(404).json({ error: 'No switchable HA entity found for this device' });
     const domain = switchable.entity_id.split('.')[0];
     const service = state ? 'turn_on' : 'turn_off';
