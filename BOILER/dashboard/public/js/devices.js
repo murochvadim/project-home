@@ -228,6 +228,11 @@ function updateStats() {
   document.getElementById('stat-gateway-val').textContent = gateway;
   document.getElementById('stat-cloud-val').textContent   = cloud;
   document.getElementById('stat-stale').textContent       = stale;
+
+  // Blocked count — fetch from API
+  fetch('/api/devices/blocklist').then(r => r.json()).then(rows => {
+    document.getElementById('stat-blocked').textContent = rows.length;
+  }).catch(() => {});
 }
 
 function populateRoomFilter() {
@@ -1110,21 +1115,19 @@ function renderHistoryChart(events, minutes, dev) {
   const dpsCfg = (dev && dev.dps_config) || {};
   const chanCfg = (dev && dev.channel_config) || {};
   const dpsLabelsChart = (dev && dev.dps_labels) || {};
-  const hasAnyConfig = Object.keys(dpsCfg).length > 0 || Object.keys(chanCfg).length > 0 || Object.keys(dpsLabelsChart).length > 0;
-  let allowedKeys = null; // null = allow all
+  let allowedKeys = null;
 
-  if (hasAnyConfig) {
-    allowedKeys = new Set();
-    allowedKeys.add('1');
-    for (const [k, cfg] of Object.entries(chanCfg)) {
-      if (cfg.enabled !== false) allowedKeys.add(k);
-    }
-    for (const [k, cfg] of Object.entries(dpsCfg)) {
-      if (cfg.enabled !== false) allowedKeys.add(k);
-    }
-    for (const k of Object.keys(dpsLabelsChart)) {
-      allowedKeys.add(k);
-    }
+  // Always use whitelist — default to DPS "1" when no config
+  allowedKeys = new Set();
+  allowedKeys.add('1');
+  for (const [k, cfg] of Object.entries(chanCfg)) {
+    if (cfg.enabled !== false) allowedKeys.add(k);
+  }
+  for (const [k, cfg] of Object.entries(dpsCfg)) {
+    if (cfg.enabled !== false) allowedKeys.add(k);
+  }
+  for (const k of Object.keys(dpsLabelsChart)) {
+    allowedKeys.add(k);
   }
 
   // ── State lines: one line per allowed DPS key ──
