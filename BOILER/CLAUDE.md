@@ -20,7 +20,7 @@
 ## Tables
 - `raw_data`: ts, boiler_temp, panel_temp, valve_state
 - `agent_boiler_data`: ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision, error, next_ts, version
-- `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta
+- `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, probe_max_boiler_temp, probe_max_delta, consumption_temp_delta, consumption_time_delta
 - `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at — hot water consumption events detected by agent each run; deduplicated by start_ts
 - `sync_signals`: id, ts, source — written by ha_to_pg after each raw_data insert; boiler agent polls every 30s and wakes immediately on new row
 - `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 60 min
@@ -114,7 +114,9 @@
   - `panel_temp_valid_after_off` (default: 10) — minutes after valve turns OFF during which panel_temp readings remain valid; invalid after this window (water decouples from actual panel conditions)
   - `trend_runs`                 (default: 3)  — number of recent readings used to calculate boiler and panel temperature trends; also the number of runs to wait after valve ON before making a final decision
   - `temp_debounce`              (default: 2)  — minimum temperature difference (°C) between panel and boiler required to act; prevents valve toggling when temperatures are nearly equal
-  - `probe_interval_min`         (default: 60) — when panel readings are invalid and valve is OFF during operational hours, how many minutes to wait between probe attempts; prevents continuous probing on cloudy days
+  - `probe_interval_min`         (default: 90) — when panel readings are invalid and valve is OFF during operational hours, how many minutes to wait between probe attempts; prevents continuous probing on cloudy days
+  - `probe_max_boiler_temp`      (default: 50) — probe is skipped if boiler temp ≥ this value; at high boiler temp the cold water entry loss from opening the valve outweighs any potential solar gain
+  - `probe_max_delta`            (default: 20) — probe is skipped if (boiler_temp − panel_temp) > this value; large delta means pipe water is very cold relative to boiler, so opening the valve causes significant heat loss; probe retries next run when delta shrinks
   - `consumption_temp_delta`     (default: 3.0) — minimum boiler temperature drop (°C) to qualify as a hot water consumption event
   - `consumption_time_delta`     (default: 15) — time window (minutes) over which the drop is scanned; agent looks back this many minutes in raw_data each run
 
@@ -167,12 +169,17 @@
 - Within operational hours
 - Valve is currently OFF
 - Panel reading is invalid (valve has been OFF longer than `panel_temp_valid_after_off` minutes)
-- **Probe Fire Logic (time gate) — checked first:** compute `probe_cost_min = panel_valid_after_on + (trend_runs + 1) × run_interval_min` (minimum minutes needed to complete the probe waiting phase and act on result). If `minutes until 19:00 < probe_cost_min` → skip probe: write decision = "no_action", why_decision = "Probe skipped: only Xm until end of operations, probe needs Ym to complete"
-- Time since last valve close ≥ `probe_interval_min` minutes — determined by finding the most recent row in `raw_data` where `valve_state` changed from ON to OFF; if no such transition exists (e.g. valve was never ON), panel reading is treated as **valid** → falls through to Normal Turn ON check instead
-- **Probe timer resets on every valve close** — whether by normal decision, early waiting-phase abort, or Safety Rule; meaning after each turn_off the agent waits `probe_interval_min` before probing again
-- → Open valve to probe; write decision = "turn_on", why_decision = "Probe: panel reading invalid, opening valve to evaluate solar heating"
-- → Enter Waiting Phase (same waiting phase as Normal Turn ON)
-- If probe_interval_min has not elapsed yet → write decision = "no_action", why_decision = "Probe: waiting for probe_interval_min to elapse before next probe attempt"
+- **Probe Fire Logic — checks in order:**
+  1. `minutes until 19:00 < probe_cost_min` → skip: "Probe skipped: only Xm until end of operations, probe needs Ym to complete"
+  2. `boiler_temp >= probe_max_boiler_temp` → skip: "Probe skipped: boiler X°C >= probe_max_boiler_temp Y°C — boiler warm enough, cold water entry loss not worth it"
+  3. `(boiler_temp − panel_temp) > probe_max_delta` → skip: "Probe skipped: delta X°C > probe_max_delta Y°C — panel too cold relative to boiler"
+  4. `time_since_close >= probe_interval_min` → fire: "Probe: panel reading invalid, opening valve to evaluate solar heating"
+  5. else → "Probe: panel reading invalid, probe timer not elapsed (X/Y min)"
+- `probe_cost_min = panel_valid_after_on + (trend_runs + 1) × run_interval_min` — minimum minutes needed to complete probe + waiting phase
+- Time since last valve close determined by finding the most recent row in `raw_data` where `valve_state` changed ON→OFF; if no such transition exists, panel reading is treated as **valid** → falls through to Normal Turn ON check
+- **Probe timer resets on every valve close** — whether by normal decision, early waiting-phase abort, or Safety Rule
+- Guards 2 and 3 do NOT reset the probe timer — probe retries next run automatically when boiler cools or delta shrinks
+- → Enter Waiting Phase (same as Normal Turn ON)
 
 ### If panel_temp trend is unavailable (no valid readings) and valve is ON (outside waiting phase):
 - Write error = "WARN: not valid panel_temp", decision = "no_action", why_decision = "Panel trend unavailable — cannot evaluate, holding current valve state"
@@ -254,7 +261,7 @@
   - Items placed at specific columns to align dividers with Last Report: Events=col1, Largest Drop=col3, Avg Drop=col4, Last Event=col5
   - Largest Drop has `border-left` + `margin-left:-16px` so its left divider aligns exactly with Valve State's left divider in Last Report
   - Largest Drop, Avg Drop, Last Event are `text-align:center`
-- **Settings:** run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta
+- **Settings:** run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta; **Probe Temperature Constraints** section: probe_max_boiler_temp, probe_max_delta
 - **Deploy card:** "Deploy to Production" button → git pull on LXC 103 + restart agent service; output shown inline
 - When countdown reaches 0 → shows "running…" → auto-refreshes after 15s to pick up new next_ts
 
@@ -312,35 +319,41 @@
 ## Local Server Setup
 - Dashboard server: `BOILER/dashboard/server.js`, port **3000**, binds to `127.0.0.1`
 - Secrets stored in `BOILER/dashboard/.env` (gitignored): `HA_TOKEN`, `ANTHROPIC_API_KEY`, `DB_PASS`
-- `ecosystem.config.js` loads `.env` automatically at startup — run with `pm2 start ecosystem.config.js`
+- `ecosystem.config.js` loads `.env` automatically at startup — always start with `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
+- ⚠ **NEVER use `pm2 restart`** — it caches the old process environment and ignores `.env` changes (causes stale HA tokens and wrong secrets)
 - Dependencies: `express`, `pg`, `node-ssh`, `@anthropic-ai/sdk` (in `node_modules`)
 - PM2 env vars required: `HA_TOKEN`, `ANTHROPIC_API_KEY` — sourced from `.env` (never hardcode in ecosystem.config.js)
 
 ## Project Health Page (sidebar: General → Project Health)
 - **System Status card**: live status of all services; fetched from `/api/health/status`; displayed in a 4-column grid:
-  - `postgres` — can query DB
-  - `homeassistant` — HA API responds
-  - `lxc103` — SSH reachable
-  - `pm2` — all processes online
-  - `boiler_agent` — `systemctl is-active boiler-agent` on LXC 103
-  - `boiler_last_decision` — age of last `agent_boiler_data` row ≤ `run_interval_min × 3`; shows age + decision
-  - `ha_to_pg` — cron registered on LXC 103 + `raw_data` age ≤ 15 min; shows age
-  - `collect_weather` — cron registered on LXC 103 + `raw_weather` age ≤ 65 min; shows age
-  - `orchestrator` — `main-agent.timer` + `main-agent-quick.timer` active on LXC 105 (SSH)
-  - `orchestrator_last_run` — age of last `orchestrator_log` row ≤ 70 min; shows age
-  - `active_alerts` — count of unresolved `system_alerts`; shows worst severity
+  - All checks are performed **by the dashboard directly** (not by the orchestrator). Orchestrator contributes only via `system_alerts` table entries.
+  - **Infrastructure** (direct checks): `postgres` — DB query; `homeassistant` — HA API; `vm101`/`lxc100`–`lxc106` — TCP port 22 reachability
+  - **Server**: `pm2` — all pm2 processes online
+  - **Services**:
+    - `boiler_agent` — boiler service on LXC 103 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
+    - `media_agents` — analyzer, player, ingest on LXC 100 (via `system_alerts`: shown as 3 inline dots)
+    - `voice_agent` — whisper-http on LXC 106 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
+  - **Scripts — Cron** (direct SSH checks):
+    - `ha_to_pg` — age of last `raw_data` row ≤ 15 min (DB query)
+    - `collect_weather` — age of last `raw_weather` row ≤ 65 min (DB query)
+    - `auto_scan` — age of `/var/log/auto_scan.log` on LXC 100 ≤ 120 s (SSH)
+  - **Data freshness** (DB queries):
+    - `boiler_last_decision` — age of last `agent_boiler_data` row ≤ `run_interval_min × 3`; shows age + decision
+    - `orchestrator_last_run` — age of last `orchestrator_log` row ≤ 70 min; shows age
+    - `active_alerts` — count of unresolved `system_alerts`; shows worst severity
 - **Orchestrator Log card**: last N entries from `orchestrator_log` table; severity colour-coded (info/warn/error); shows last run time + status summary; `GET /api/health/orch-log?limit=N`
-- **DB Volumes card**: table row counts, disk size, oldest/newest record for all tables; fetched from `/api/health/db-volumes` using `pg_stat_user_tables`
+- **DB Volumes card**: table row counts, disk size, dead tuples, frag %, last vacuum per table; fetched from `/api/health/db-volumes` using `pg_stat_user_tables`; each row has a **Vacuum** button — runs `VACUUM ANALYZE` and updates dead tuples + frag % inline
 - **Retention Policies card**: editable table per DB table — keep_days (blank = forever), auto_clean toggle, clean_interval_hours, last_cleaned timestamp; Save per row, Clean per row, "Clean All Now" global button
   - Policies stored in `retention_policies` DB table (not config file — so orchestrator reads/writes them programmatically)
   - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever, orchestrator_log=30d, system_alerts=90d, sync_signals=7d
 - **API endpoints:**
-  - `GET /api/health/status` — checks PostgreSQL, HA, SSH to LXC 103 + LXC 105, boiler-agent service, orchestrator timers, ha_to_pg cron + freshness, collect_weather cron + freshness, PM2, active alerts count, boiler last decision age
+  - `GET /api/health/status` — checks PostgreSQL, HA, TCP to all LXCs, PM2; boiler-agent + media agents + voice agent (all via system_alerts); ha_to_pg + collect_weather freshness (DB); auto_scan log age (SSH); orchestrator last run age; boiler last decision age; active alerts count
   - `GET /api/health/orch-log?limit=N` — last N orchestrator log entries
   - `GET /api/health/db-volumes` — row counts + sizes + date ranges per table
   - `GET /api/health/retention` — all retention policies
   - `POST /api/health/retention` — update one policy `{table_name, keep_days, auto_clean, clean_interval_hours}`
   - `POST /api/health/cleanup` — run cleanup `{table_name}` (null = all); returns `{results:[{table_name, deleted}]}`
+  - `POST /api/health/vacuum` — run `VACUUM ANALYZE {table_name}`; returns `{ok, dead_tup, frag_pct}` after
 - **retention_policies table schema:** `table_name PK, keep_days INT nullable, auto_clean BOOL, clean_interval_hours INT, last_cleaned_at TIMESTAMPTZ, description TEXT`
 
 # Main Agent (Orchestrator)

@@ -16,27 +16,45 @@ SENSORS = {
 def get_val(sid):
     try:
         r = requests.get(HA_URL + sid, headers={'Authorization': f'Bearer {HA_TOKEN}'}, timeout=5)
+        r.raise_for_status()
         data = r.json()
         v = data.get('state')
         if v in [None, 'unknown', 'unavailable']: return None
         if sid.startswith('switch.'): return v.lower() in ['on', 'open', 'true']
         return float(v)
-    except: return None
+    except Exception as e:
+        logging.getLogger(__name__).warning(f'get_val({sid}): {e}')
+        return None
 
 if __name__ == "__main__":
+    import logging, sys
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    log = logging.getLogger(__name__)
+
+    if not HA_TOKEN:
+        log.error('HA_TOKEN not set — check /etc/environment')
+        sys.exit(1)
+
     now = datetime.now(pytz.utc)
     row = {'ts': now}
     for k, sid in SENSORS.items():
         row[k] = get_val(sid)
 
-    conn = psycopg2.connect(**PG_CONF)
-    cur = conn.cursor()
-    cur.execute(
-        'INSERT INTO raw_data (ts, boiler_temp, panel_temp, valve_state) VALUES (%s,%s,%s,%s)',
-        (row['ts'], row['boiler_temp'], row['panel_temp'], row['valve_state'])
-    )
-    cur.execute("INSERT INTO sync_signals (source) VALUES ('ha_to_pg')")
-    conn.commit()
-    print('Success! Inserted row:', row)
-    cur.close()
-    conn.close()
+    # Don't insert or wake boiler agent if critical sensors are missing
+    if row['boiler_temp'] is None and row['panel_temp'] is None:
+        log.warning(f'Both temperatures are None — skipping insert: {row}')
+        sys.exit(0)
+
+    try:
+        with psycopg2.connect(**PG_CONF) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    'INSERT INTO raw_data (ts, boiler_temp, panel_temp, valve_state) VALUES (%s,%s,%s,%s)',
+                    (row['ts'], row['boiler_temp'], row['panel_temp'], row['valve_state'])
+                )
+                cur.execute("INSERT INTO sync_signals (source) VALUES ('ha_to_pg')")
+            conn.commit()
+        log.info(f'Inserted row: {row}')
+    except Exception as e:
+        log.error(f'DB insert failed: {e}')
+        sys.exit(1)

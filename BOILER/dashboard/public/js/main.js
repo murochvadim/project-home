@@ -1,3 +1,8 @@
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 let autoRefreshTimer  = null;
 let runIntervalMin    = 5;
 let countdownTimer      = null;
@@ -188,7 +193,7 @@ async function loadReport() {
       const dec = rep.decision || '—';
       lastDecision = rep.decision || null;
       const decEl = document.getElementById('last-decision');
-      decEl.innerHTML = `<span class="badge badge-${dec}">${dec}</span>`;
+      decEl.innerHTML = `<span class="badge badge-${escHtml(dec)}">${escHtml(dec)}</span>`;
       document.getElementById('why-decision').textContent = rep.why_decision || '—';
       await loadNextProbe(lastDecision);
 
@@ -232,8 +237,10 @@ async function loadSettings() {
     document.getElementById('s-trend-runs').value        = cfg.trend_runs ?? '';
     document.getElementById('s-debounce').value          = cfg.temp_debounce ?? '';
     document.getElementById('s-probe-interval').value    = cfg.probe_interval_min ?? '';
-    document.getElementById('s-consumption-temp').value  = cfg.consumption_temp_delta ?? '';
-    document.getElementById('s-consumption-time').value  = cfg.consumption_time_delta ?? '';
+    document.getElementById('s-consumption-temp').value   = cfg.consumption_temp_delta ?? '';
+    document.getElementById('s-consumption-time').value   = cfg.consumption_time_delta ?? '';
+    document.getElementById('s-probe-max-boiler').value   = cfg.probe_max_boiler_temp ?? '';
+    document.getElementById('s-probe-max-delta').value    = cfg.probe_max_delta ?? '';
     runIntervalMin = cfg.run_interval_min || 5;
   } catch (e) {
     console.error('loadSettings error:', e);
@@ -251,6 +258,8 @@ async function saveSettings(e) {
     probe_interval_min:         parseInt(document.getElementById('s-probe-interval').value),
     consumption_temp_delta:     parseFloat(document.getElementById('s-consumption-temp').value),
     consumption_time_delta:     parseInt(document.getElementById('s-consumption-time').value),
+    probe_max_boiler_temp:      parseInt(document.getElementById('s-probe-max-boiler').value),
+    probe_max_delta:            parseInt(document.getElementById('s-probe-max-delta').value),
   };
   try {
     const r = await fetch('/api/settings', {
@@ -260,6 +269,7 @@ async function saveSettings(e) {
     }).then(r => r.json());
     const msg = document.getElementById('settings-msg');
     if (r.ok) {
+      msg.style.color = '#2ecc71';
       msg.textContent = 'Saved ✓';
       runIntervalMin = body.run_interval_min;
       scheduleAutoRefresh();

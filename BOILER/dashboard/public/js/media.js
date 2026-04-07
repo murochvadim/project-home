@@ -138,6 +138,18 @@ function showFeedback(msg, ok) {
 refreshState();
 setInterval(refreshState, 30000);
 
+// Restore playback bar if something is already playing (page navigation / reload)
+(async function restorePlayback() {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/position`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.duration > 0 && d.position < d.duration) {
+      startProgressPoll(d.title || 'Now playing');
+    }
+  } catch (_) {}
+})();
+
 // ─── Media Browser ────────────────────────────────────────────
 
 let _currentPath = '';
@@ -743,7 +755,7 @@ async function loadAnalyzerStatus() {
       }
     }
   } catch (e) {
-    if (grid)     grid.innerHTML     = `<div style="color:#c0392b;font-size:0.82rem;">${e.message}</div>`;
+    if (grid)     grid.innerHTML     = `<div style="color:#c0392b;font-size:0.82rem;">${escHtml(e.message)}</div>`;
     if (facesRow) facesRow.innerHTML = '';
   }
 }
@@ -833,7 +845,7 @@ async function loadFaceClusters(clearSkipped) {
     container.innerHTML = '';
     for (const c of visible) container.appendChild(buildClusterCard(c));
   } catch (e) {
-    container.innerHTML = `<div style="color:#c0392b;font-size:0.85rem;">${e.message}</div>`;
+    container.innerHTML = `<div style="color:#c0392b;font-size:0.85rem;">${escHtml(e.message)}</div>`;
   }
 }
 
@@ -988,7 +1000,7 @@ async function loadUnmatchedFaces() {
       container.appendChild(card);
     }
   } catch (e) {
-    container.innerHTML = `<div style="color:#c0392b;font-size:0.85rem;">${e.message}</div>`;
+    container.innerHTML = `<div style="color:#c0392b;font-size:0.85rem;">${escHtml(e.message)}</div>`;
   }
 }
 
@@ -1088,7 +1100,7 @@ function _lbBtnStyle() {
   return 'padding:4px 9px;background:#2a2a2a;border:1px solid #555;color:#ccc;border-radius:4px;font-size:0.8rem;cursor:pointer;';
 }
 
-function lbLoadFrame(faceId, canvas, canvasWrap, hint) {
+function lbLoadFrame(faceId, canvas, _canvasWrap, hint) {
   const box = document.getElementById('face-frame-lightbox');
   if (!box) return;
   const lb = box._lb;
@@ -1321,7 +1333,7 @@ async function loadFacePeople() {
     container.innerHTML = '';
     for (const p of people) container.appendChild(buildPersonRow(p));
   } catch (e) {
-    container.innerHTML = `<div style="color:#c0392b;font-size:0.85rem;">${e.message}</div>`;
+    container.innerHTML = `<div style="color:#c0392b;font-size:0.85rem;">${escHtml(e.message)}</div>`;
   }
 }
 
@@ -1506,7 +1518,7 @@ async function loadPersonFaces(name, panel) {
       panel.appendChild(card);
     }
   } catch (e) {
-    panel.innerHTML = `<div style="color:#c0392b;font-size:0.82rem;">${e.message}</div>`;
+    panel.innerHTML = `<div style="color:#c0392b;font-size:0.82rem;">${escHtml(e.message)}</div>`;
   }
 }
 

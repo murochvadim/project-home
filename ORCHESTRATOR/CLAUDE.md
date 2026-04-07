@@ -53,8 +53,9 @@ For each registered agent:
 | `player` | 100 | 192.168.1.138 | `player` | none | none | false |
 | `ingest` | 100 | 192.168.1.138 | `ingest` | none | none | false |
 | `main-agent` | 105 | 192.168.1.187 | `main-agent` | none | none | true |
+| `whisper-http` | 106 | 192.168.1.188 | `whisper-http` | none | none | false |
 
-> **Not registered:** `whisper-http` on LXC 106 (192.168.1.188) — infrastructure service, not an agent. Not in the agents table; dashboard surfaces transcription errors directly if it goes down.
+> **Not registered:** `media-agent.service` on LXC 100 — wrapper service; individual sub-agents (analyzer, player, ingest) are registered instead. `media-agent.service` itself is not monitored by the orchestrator.
 
 ### Per-agent monitoring detail
 
@@ -65,6 +66,7 @@ For each registered agent:
 | `player` | — (no data_table) | — | ✓ `systemctl is-active player` on LXC 100 |
 | `ingest` | — (no data_table) | — | ✓ `systemctl is-active ingest` on LXC 100 |
 | `main-agent` | — (no data_table) | — | ✓ `systemctl is-active main-agent.timer` on LXC 105 |
+| `whisper-http` | — (no data_table) | — | ✓ `systemctl is-active whisper-http` on LXC 106 |
 
 **All three media agents share deploy_path `/opt/media-agent` on LXC 100.**
 
@@ -82,10 +84,11 @@ For each registered agent:
 | `data_stale` | `raw_data` age > 15 min | error/critical | boiler |
 | `weather_stale` | `raw_weather` age > 65 min | warn | collect_weather |
 | `agent_schedule_check_failed` | DB error during schedule check | error | that agent |
+| `backup_overdue` | last successful backup > `max_age_hours + 4h` | warn | `backup:<job name>` |
 
 - Alerts are **raised once** — no duplicates while condition persists
 - Alerts **auto-resolve** when condition clears on next run
-- `agent_schedule_check_failed` uses a SAVEPOINT so a DB error doesn't abort the outer transaction
+- `agent_schedule_check_failed`, `check_errors`, and `check_backup_freshness` all use SAVEPOINTs so a DB error in one check doesn't abort the outer transaction
 
 ---
 
@@ -113,6 +116,30 @@ alert_type, message, resolved_at
 ```
 Retention: 90 days, auto-clean daily.
 Active alerts = `resolved_at IS NULL`. Dashboard shows last 50, active first.
+Dashboard health page reads `system_alerts` directly to surface agent service status — `boiler_agent`, media agents (analyzer, player, ingest), and `whisper-http` all show red if an active `service_down` or `service_ssh_failed` alert exists for that agent.
+
+### `backup_storages`
+```
+id SERIAL PK, name TEXT, type TEXT, host TEXT, share TEXT,
+smb_user TEXT, smb_pass TEXT, mount_path TEXT, description TEXT, created_at TIMESTAMPTZ
+```
+Mount path = pre-mounted CIFS path on LXC 104 (e.g. `/mnt/qnap-claude`). Used by backup script to resolve destination without SMB remounting.
+
+### `backup_jobs`
+```
+id SERIAL PK, name TEXT, source_host TEXT, source_path TEXT,
+storage_id INT → backup_storages, dest_subdir TEXT,
+max_age_hours INT, retry_interval_min INT, retention INT,
+enabled BOOL, run_now BOOL, created_at TIMESTAMPTZ
+```
+`run_now=TRUE` triggers immediate backup on next cron tick (cleared on success only — failed run_now retries).
+
+### `backup_log`
+```
+id SERIAL PK, job_id INT → backup_jobs, started_at TIMESTAMPTZ,
+finished_at TIMESTAMPTZ, status TEXT, size_bytes BIGINT, message TEXT
+```
+`status` values: `running`, `ok`, `failed`, `unreachable`. Retention: 90 days, auto-clean daily.
 
 ---
 
@@ -151,6 +178,9 @@ Every agent in the `agents` table must follow:
 | `voice_device_entities` | forever | ✗ | — | Voice switch group entity list |
 | `voice_device_settings` | forever | ✗ | — | Voice output device and boiler settings |
 | `voice_intent_phrases` | forever | ✗ | — | Voice intent phrase library |
+| `backup_storages` | forever | ✗ | — | Windows backup storage definitions |
+| `backup_jobs` | forever | ✗ | — | Windows backup job definitions |
+| `backup_log` | 90 | ✓ | 24 | Windows backup run history |
 
 Retention uses the `ts` or `detected_at` column (whichever exists). Table and column names validated with regex before use in dynamic SQL.
 
@@ -183,3 +213,29 @@ ssh root@192.168.1.187 "systemctl daemon-reload && systemctl enable main-agent.t
 - Table and column names used in dynamic SQL are validated against `^[a-z_][a-z0-9_]*$` — prevents injection even if DB is compromised
 - Service names validated against `^[a-zA-Z0-9_.-]+$` before use in SSH shell commands
 - SSH uses key auth only (`/root/.ssh/id_ed25519`), no passwords
+
+---
+
+## Known Incidents & Runbooks
+
+### HA token invalidated (2026-04-06)
+**Symptom:** `weather_stale` + `data_stale` alerts raised; `collect_weather` and `ha_to_pg` both fail with HTTP 401 from 192.168.1.110:8123.
+**Cause:** HA (LXC 101) restarted with a wiped token database (crash/restore from backup). Long-lived tokens are stored in HA's database — a DB reset invalidates all of them.
+**Fix:**
+1. **Test old token first**: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <old>" http://192.168.1.110:8123/api/` — if `200`, token still valid, just restart the failing service. If `401`, proceed.
+2. HA UI → profile → Long-Lived Access Tokens → create new token → **save to password manager immediately**
+3. Update `BOILER/dashboard/.env` → `HA_TOKEN=<new>` — restart: `pm2 restart ecosystem.config.js`
+4. Update `/etc/environment` on LXC 100 → `HA_TOKEN=<new>` — restart tv_control.py
+5. Update `/etc/environment` on LXC 103 → `HA_TOKEN=<new>` — no restart needed
+6. Update `/etc/boiler-agent.env` on LXC 103 → `HA_TOKEN=<new>` — restart: `systemctl restart boiler-agent.service`
+7. Update MCP config → `cline_mcp_settings.json` → `HA_TOKEN` env var — reload VS Code
+8. Run collect_weather manually on LXC 103
+9. Trigger orchestrator: `ssh root@192.168.1.187 "systemctl start main-agent-quick.service"`
+
+**All 5 token locations:**
+- `BOILER/dashboard/.env` — restart: `pm2 restart ecosystem.config.js`
+- `/etc/environment` on LXC 100 (tv_control.py) — restart: kill + nohup tv_control.py
+- `/etc/environment` on LXC 103 (collect_weather, ha_to_pg) — no restart needed
+- `/etc/boiler-agent.env` on LXC 103 (boiler agent systemd) — restart: `systemctl restart boiler-agent.service`
+- `cline_mcp_settings.json` (MCP HA server) — restart: VS Code reload window
+**Prevention:** A dedicated `ha_down` TCP check on 192.168.1.110:8123 would give a clearer alert than waiting for `data_stale`/`weather_stale` — not yet implemented.

@@ -264,12 +264,14 @@ Venv at `/opt/whisper-env` — only update if dependencies change.
 
 ## Orchestrator Integration
 
-`whisper-http.service` on LXC 106 is **not registered** in the `agents` table — the orchestrator does not monitor it.
+`whisper-http.service` is **registered** in the `agents` table — the orchestrator monitors it like all other agents.
 
-- No decision loop, no `data_table`, no run schedule — it is an infrastructure service
-- Not in the git repo deploy flow — script is managed directly on LXC 106
-- If the service goes down, the dashboard returns an immediate transcription error (visible to user)
-- Future: if voice gets a git-based deploy flow, register it in `agents` for service liveness monitoring
+- `name = whisper-http`, `lxc_id = 106`, `lxc_ip = 192.168.1.188`, `service_name = whisper-http`
+- No `data_table`, no `settings_table`, no `deploy_path` — service liveness check only
+- Full run (every 1h): SSH to LXC 106 → `systemctl is-active whisper-http`; auto-restart if down; raises `service_down` alert if still failing
+- SSH key from LXC 105 (`/root/.ssh/id_ed25519`) is authorized on LXC 106
+- Dashboard reads `system_alerts` for `affected_agent = 'whisper-http'` — same path as boiler/media agents
+- Deploy via dashboard not available (`deploy_path` is null) — manage script directly on LXC 106
 
 ---
 

@@ -24,14 +24,21 @@
 
 ## Connection Tools
 MCP Server: postgres-lxc (Connected via SSH bridge to LXC)
-MCP Server: homeassistant (Connected direct via API)
+MCP Server: homeassistant (Connected via `home-assistant-mcp-server` npm package — command-based, NOT SSE)
 Note: The Windows host uses npx.cmd, but the remote LXC requires npx.
 Always use these MCP tools when I ask for data analysis or device status.
+
+### ⚠ MCP HA Server Config — DO NOT CHANGE THE APPROACH
+Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
+- Uses `home-assistant-mcp-server` npm package (command-based) with `HA_URL` + `HA_TOKEN` env vars
+- **Do NOT switch to SSE type** (`http://192.168.1.110:8123/api/mcp/sse`) — HA does not have `mcp_server:` enabled
+- When HA token expires/resets: update only the `HA_TOKEN` value in that file, keep everything else unchanged
 
 ## Dashboard Server
 - Runs locally on **Windows host** (not on any LXC)
 - Managed by **pm2** — available at `C:\Users\muroc\AppData\Roaming\npm\pm2` (already in PATH)
-- Restart command: `cd /c/Users/muroc/project_home/BOILER/dashboard && pm2 restart ecosystem.config.js`
+- Restart command: `cd /c/Users/muroc/project_home/BOILER/dashboard && pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
+- ⚠ **NEVER use `pm2 restart`** — it caches the old process environment and ignores `.env` changes (causes stale HA tokens and wrong secrets)
 - Do NOT look for pm2 or ecosystem.config.js on any LXC
 - **Batch all server.js changes before restarting — restart once at the end, never after each edit**
 
@@ -71,6 +78,60 @@ When asked to **audit** or **clean** any LXC (e.g. "audit lxc 104"), always run 
 
 ---
 
+## Claude Hooks (`.claude/`)
+
+Hooks run automatically on tool use. Configured in `.claude/settings.json` and `.claude/settings.local.json`.
+
+| Hook | Trigger | File | What it does |
+|------|---------|------|-------------|
+| Architecture guard | `PreToolUse: Edit` on `server.js` | `settings.local.json` (inline) | Blocks business logic being added to server.js; enforces LXC architecture rule |
+| LXC pre-check | `PreToolUse: Bash` | `.claude/hooks/pre-lxc-check.sh` | Validates SSH targets before running bash commands on LXCs |
+| Prettier format | `PostToolUse: Edit\|Write` on `*.html` / `*.css` | `settings.json` (inline) | Auto-formats HTML/CSS with `npx prettier --write` |
+| HTML lint | `PostToolUse: Edit\|Write` on `*.html` | `.claude/hooks/post-html-lint.sh` | Checks duplicate IDs, orphaned TAB comments, dead inline handlers |
+| New DB table alert | `PostToolUse: Edit\|Write` on `*.js` / `*.sql` / `*.py` | `settings.json` (inline) | Warns when `CREATE TABLE IF NOT EXISTS` detected — add to retention_policies + DB Volumes |
+| /tmp cleanup | `PostToolUse: Bash` | `.claude/hooks/post-tmp-cleanup.sh` | Removes local and remote /tmp working files after scp/tmp commands |
+
+## Infrastructure Connections
+
+### Windows Laptop (192.168.1.128)
+- **OpenSSH Server** installed — LXC 103 can SSH/scp in as `muroc@192.168.1.128`
+- **SMB1** enabled — required for QNAP SMB access via `\\192.168.1.155\...`
+- LXC 103 authorized key: `/c/ProgramData/ssh/administrators_authorized_keys`
+- Firewall rule: port 22 inbound allowed
+
+### QNAP NAS (192.168.1.155)
+- **NFS exports**: `/PBS_Data` (HA), `/Media` (10.0.0.2), `/Laptop_Data` (LXC 103 + Proxmox host)
+- **SMB shares**: `Claude_Data` (project backups), `Windows_Data` (full image backups), `Laptop_Data`, `PBS_Data`, `Media`, `Public`
+- **SMB user**: `claude` — has read/write on `Claude_Data` and `Windows_Data`
+- **Proxmox host** mounts `/Laptop_Data` at `/mnt/qnap-laptop` → bind-mounted into LXC 103 at `/mnt/qnap-laptop`
+
+### LXC 100 (192.168.1.138) — HA Token Dependency
+- `tv_control.py` uses `HA_TOKEN` from `/etc/environment` for all TV/soundbar commands via HA API
+- Runs as **nohup** (not systemd) — must be manually restarted after token update:
+  ```bash
+  kill $(ps aux | grep tv_control | grep -v grep | awk '{print $1}')
+  export $(grep -v ^# /etc/environment | xargs)
+  nohup /opt/media-agent/venv/bin/python3 /opt/media-agent/tv_control.py >> /opt/media-agent/tv_control.log 2>&1 &
+  ```
+- ⚠ When HA token is renewed, update `/etc/environment` here AND restart tv_control — otherwise TV control silently fails
+
+### LXC 103 (192.168.1.114) — Connections
+- SSH → Windows laptop: `ssh muroc@192.168.1.128` (key auth, no password)
+- SMB → QNAP: `smbclient //192.168.1.155/<share> -U claude%<pass>` (`smbclient` installed)
+- NFS → QNAP: `/mnt/qnap-laptop` (bind-mounted from Proxmox host, always available)
+- HA token locations: `/etc/environment` (cron scripts) + `/etc/boiler-agent.env` (systemd service) — both must be updated together when token changes
+
+### LXC 104 (192.168.1.227) — Windows Backup Agent
+- **Script**: `/opt/backup-script.sh` — runs every 5 min via cron
+- **Local script**: `scripts/backup-script.sh`
+- **Cron**: `*/5 * * * * /opt/backup-script.sh >> /var/log/backup-script.log 2>&1`
+- **Mounts**: `/mnt/qnap-claude` (QNAP Claude_Data), `/mnt/qnap-windows` (QNAP Windows_Data) — pre-mounted CIFS, always available
+- **DB tables**: `backup_storages`, `backup_jobs`, `backup_log` on LXC 102
+- **Logic**: reads jobs from DB → SSH-checks laptop reachability → scp source → QNAP mount → logs result → rotates old copies
+- **Deploy**: `scp scripts/backup-script.sh root@192.168.1.227:/opt/backup-script.sh`
+
+---
+
 ## Project Modules
 Each project has its own CLAUDE.md with full details:
 
@@ -81,3 +142,4 @@ Each project has its own CLAUDE.md with full details:
 | Orchestrator | `ORCHESTRATOR/` | `ORCHESTRATOR/CLAUDE.md` |
 | Voice System | `VOICE/` | `VOICE/CLAUDE.md` |
 | Scripts (LXC 100) | `scripts/` | see `MEDIA/CLAUDE.md` |
+| Windows Backup (LXC 104) | `scripts/backup-script.sh` | see root `CLAUDE.md` LXC 104 section |

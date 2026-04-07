@@ -120,6 +120,7 @@ def check_schedule(cur, agent):
         return
 
     if not row or not row['next_ts']:
+        resolve_alert(cur, 'agent_schedule_check_failed', agent['name'])
         raise_alert(cur, 'agent_no_data', agent['name'], 'warn',
                     f"No rows found in {table} — agent may never have run")
         return
@@ -143,9 +144,11 @@ def check_errors(cur, agent):
     if not _ALLOWED_TABLES.match(table):
         write_log(cur, 'warn', f"check_errors: invalid table name '{table}' for agent {agent['name']} — skipping")
         return
+    cur.execute("SAVEPOINT check_errors")
     try:
         cur.execute(f"SELECT error FROM {table} ORDER BY ts DESC LIMIT %s", (ERROR_LOOKBACK_ROWS,))
         rows = cur.fetchall()
+        cur.execute("RELEASE SAVEPOINT check_errors")
         hard = [r['error'] for r in rows if r['error'] and r['error'].startswith('ERR:')]
         if hard:
             raise_alert(cur, 'agent_hard_errors', agent['name'], 'error',
@@ -153,6 +156,8 @@ def check_errors(cur, agent):
         else:
             resolve_alert(cur, 'agent_hard_errors', agent['name'])
     except Exception as e:
+        cur.execute("ROLLBACK TO SAVEPOINT check_errors")
+        cur.execute("RELEASE SAVEPOINT check_errors")
         write_log(cur, 'warn', f"Error check failed for {agent['name']}: {e}")
 
 
@@ -189,6 +194,7 @@ def check_service(cur, agent):
             restart_cmd = (f'systemctl start {service}.timer' if is_oneshot
                            else f'systemctl restart {service}')
             write_log(cur, 'warn', f'Auto-restart: {label} is down on {lxc_ip} — running: {restart_cmd}')
+            new_status = ''
             ssh2 = paramiko.SSHClient()
             ssh2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh2.connect(lxc_ip, username='root', key_filename='/root/.ssh/id_ed25519', timeout=10)
@@ -257,6 +263,50 @@ def check_data_freshness(cur):
             resolve_alert(cur, 'data_stale', 'boiler')
     except Exception as e:
         raise_alert(cur, 'data_stale', 'boiler', 'error', f"Data freshness check failed: {e}")
+
+
+BACKUP_GRACE_HOURS = 4  # alert if last ok > max_age_hours + this grace
+
+
+def check_backup_freshness(cur):
+    """Check each enabled backup job: is last successful backup within max_age_hours + grace?"""
+    cur.execute("SAVEPOINT check_backup_freshness")
+    try:
+        cur.execute("""
+            SELECT j.id, j.name, j.max_age_hours,
+                   MAX(l.started_at) FILTER (WHERE l.status = 'ok') AS last_ok
+            FROM backup_jobs j
+            LEFT JOIN backup_log l ON l.job_id = j.id
+            WHERE j.enabled = TRUE
+            GROUP BY j.id, j.name, j.max_age_hours
+        """)
+        jobs = cur.fetchall()
+        cur.execute("RELEASE SAVEPOINT check_backup_freshness")
+    except Exception as e:
+        cur.execute("ROLLBACK TO SAVEPOINT check_backup_freshness")
+        cur.execute("RELEASE SAVEPOINT check_backup_freshness")
+        write_log(cur, 'warn', f'Backup freshness check failed: {e}')
+        return
+
+    for job in jobs:
+        agent_name = f"backup:{job['name']}"
+        threshold_h = job['max_age_hours'] + BACKUP_GRACE_HOURS
+        last_ok = job['last_ok']
+
+        if not last_ok:
+            raise_alert(cur, 'backup_overdue', agent_name, 'warn',
+                        f"Backup job '{job['name']}' has never completed successfully")
+            continue
+
+        if last_ok.tzinfo is None:
+            last_ok = last_ok.replace(tzinfo=timezone.utc)
+        age_h = (datetime.now(timezone.utc) - last_ok).total_seconds() / 3600.0
+
+        if age_h > threshold_h:
+            raise_alert(cur, 'backup_overdue', agent_name, 'warn',
+                        f"Backup job '{job['name']}' last OK {age_h:.1f}h ago (threshold: {threshold_h}h)")
+        else:
+            resolve_alert(cur, 'backup_overdue', agent_name)
 
 
 # ── Retention cleanup ────────────────────────────────────────────────────────
@@ -349,6 +399,11 @@ def main(quick=False):
                 check_schedule(cur, agent)
             check_data_freshness(cur)
             check_weather_freshness(cur)
+            check_backup_freshness(cur)
+            cur.execute("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL")
+            active = cur.fetchone()['n']
+            write_log(cur, 'warn' if active else 'info',
+                      f'Quick check — {active} active alert(s)' if active else 'Quick check — all OK')
         else:
             write_log(cur, 'info', f'Checking {len(agents)} agent(s): {", ".join(a["name"] for a in agents)}')
             for agent in agents:
@@ -358,6 +413,7 @@ def main(quick=False):
 
             check_data_freshness(cur)
             check_weather_freshness(cur)
+            check_backup_freshness(cur)
 
             cleaned = run_retention(cur)
             if cleaned:

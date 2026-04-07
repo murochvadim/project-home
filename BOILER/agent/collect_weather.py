@@ -44,9 +44,13 @@ log = logging.getLogger(__name__)
 
 # ── HA helpers ────────────────────────────────────────────────────────────────
 def ha_state(entity_id):
-    r = requests.get(f'{HA_URL}/api/states/{entity_id}', headers=HA_HEADERS, timeout=10)
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = requests.get(f'{HA_URL}/api/states/{entity_id}', headers=HA_HEADERS, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        log.warning(f'ha_state({entity_id}): {e}')
+        return {}
 
 def safe_float(val):
     try:
@@ -153,6 +157,10 @@ def collect_daily(conn):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    if not HA_TOKEN:
+        log.error('HA_TOKEN not set — check /etc/environment')
+        sys.exit(1)
+
     try:
         conn = psycopg2.connect(**DB_CONFIG)
     except Exception as e:
@@ -161,9 +169,15 @@ def main():
 
     try:
         collect_hourly(conn)
+    except Exception as e:
+        log.error(f'Hourly collection error: {e}')
+        try: conn.rollback()
+        except Exception: pass
+
+    try:
         collect_daily(conn)
     except Exception as e:
-        log.error(f'Collection error: {e}')
+        log.error(f'Daily collection error: {e}')
     finally:
         conn.close()
 

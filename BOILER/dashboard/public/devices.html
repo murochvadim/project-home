@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Agent</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* ── Stats bar ── */
+    .device-stats { display:flex; gap:12px; margin-bottom:4px; flex-wrap:wrap; }
+    .stat-chip { background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px; padding:8px 16px; display:flex; flex-direction:column; align-items:center; min-width:90px; }
+    .stat-chip .stat-val { font-size:1.5rem; font-weight:700; color:#2e2e2e; }
+    .stat-chip .stat-lbl { font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:.04em; }
+    #stat-online { color:#1a7a3a; }
+    #stat-local   .stat-val { color:#2980b9; }
+    #stat-gateway .stat-val { color:#8e44ad; }
+    #stat-cloud   .stat-val { color:#27ae60; }
+    #stat-chip-stale { cursor:pointer; }
+    #stat-chip-stale .stat-val { color:#e74c3c; }
+
+    /* ── Filter bar ── */
+    .filter-bar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
+    .filter-bar select, .filter-bar input[type=text] {
+      border:1px solid #d0cbc4; border-radius:4px; background:#faf8f5;
+      color:#2e2e2e; padding:5px 10px; font-size:0.85rem; }
+    .filter-bar input[type=text] { min-width:160px; }
+
+    /* ── Status dots ── */
+    .status-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
+    .dot-present { background:#2ecc71; }
+    .dot-clear   { background:#bbb; }
+    .dot-on      { background:#2ecc71; }
+    .dot-off     { background:#bbb; }
+    .dot-unknown { background:#ddd; border:1px solid #ccc; }
+
+    /* ── Protocol badge (text only) ── */
+    .proto-badge { font-size:0.75rem; font-weight:600; }
+    .proto-local   { color:#2980b9; }
+    .proto-gateway { color:#8e44ad; }
+    .proto-cloud   { color:#27ae60; }
+
+    /* ── Type badge ── */
+    .type-badge { font-size:0.7rem; color:#666; }
+
+    /* ── Editable cell ── */
+    .editable-cell { cursor:pointer; position:relative; }
+    .editable-cell::after { content:'✎'; position:absolute; right:4px; top:50%; transform:translateY(-50%); font-size:0.7rem; color:#bbb; opacity:0; transition:opacity .15s; }
+    .editable-cell:hover { background:rgba(0,0,0,0.04); border-radius:4px; }
+    .editable-cell:hover::after { opacity:1; }
+    .editable-cell input { background:#fff; border:1px solid #97b3cc; border-radius:4px; color:#2e2e2e; padding:2px 6px; font-size:0.84rem; width:100%; min-width:80px; }
+
+    /* ── Toggle switch ── */
+    .toggle { position:relative; display:inline-block; width:34px; height:18px; }
+    .toggle input { opacity:0; width:0; height:0; }
+    .slider { position:absolute; cursor:pointer; inset:0; background:#ccc; border-radius:18px; transition:.2s; }
+    .slider:before { content:''; position:absolute; width:12px; height:12px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
+    input:checked + .slider { background:#7a9ab8; }
+    input:checked + .slider:before { transform:translateX(16px); }
+
+    /* ── Last seen ── */
+    .last-seen-ok   { color:#085c28; }
+    .last-seen-warn  { color:#b7770d; }
+    .last-seen-old   { color:#c0392b; }
+    .last-seen-none  { color:#aaa; }
+    .last-seen-stale { color:#e74c3c; font-weight:600; }
+
+    /* ── Presence cards ── */
+    .presence-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+    .presence-card { background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px; padding:14px 16px; }
+    .presence-card.present { border-color:#2ecc71; background:rgba(46,204,113,0.06); }
+    .presence-card.unknown { border-color:#ddd; }
+    .presence-room  { font-size:0.7rem; color:#888; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+    .presence-name  { font-weight:600; font-size:0.92rem; margin-bottom:8px; color:#2e2e2e; }
+    .presence-state { font-size:1.05rem; font-weight:700; }
+    .presence-state.present { color:#085c28; }
+    .presence-state.clear   { color:#aaa; }
+    .presence-state.unknown { color:#ccc; }
+    .presence-age   { font-size:0.7rem; color:#999; margin-top:4px; }
+
+    /* ── Channel / DPS sub-rows ── */
+    .channel-sub-row td { background:rgba(0,0,0,0.015); border-bottom:1px solid #ece6de; }
+    .chan-indicator { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+    .dps-attr-row td { background:rgba(122,154,184,0.05); border-bottom:1px solid #ece6de; }
+
+    /* ── DPS panel ── */
+    .dps-panel-row td { background:rgba(122,154,184,0.07); padding:10px 14px; }
+    .dps-panel { display:grid; grid-template-columns:60px 1fr 1fr auto; gap:4px 10px; align-items:center; font-size:0.8rem; }
+    .dps-panel .dps-hdr { color:#888; font-size:0.7rem; text-transform:uppercase; letter-spacing:.05em; padding-bottom:4px; border-bottom:1px solid #d0cbc4; }
+    .dps-panel .dps-key { color:#7a9ab8; font-weight:600; font-family:monospace; }
+    .dps-panel .dps-val { color:#888; font-family:monospace; }
+    .dps-panel input.dps-lbl { background:transparent; border:none; border-bottom:1px solid transparent; color:#2e2e2e; padding:2px 4px; font-size:0.8rem; width:100%; }
+    .dps-panel input.dps-lbl:focus { border-bottom-color:#7a9ab8; outline:none; }
+    .dps-panel input.dps-lbl:hover { border-bottom-color:#d0cbc4; }
+    .btn-dps { font-size:0.7rem; padding:2px 7px; background:rgba(122,154,184,0.15); color:#7a9ab8; border:1px solid rgba(122,154,184,0.35); border-radius:4px; cursor:pointer; }
+    .btn-dps:hover { background:rgba(122,154,184,0.3); }
+
+    /* ── Rooms tab ── */
+    #rooms-table td:last-child { display:flex; gap:6px; justify-content:flex-end; }
+  </style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<a href="health.html" id="alert-indicator"></a></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Agents</div>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agent</a>
+  <a href="devices.html" class="active">Device Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Device Agent</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh" style="font-size:0.8rem;color:#888;margin-right:8px;">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadAll()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="card">
+    <h2>Overview</h2>
+    <div class="device-stats" id="stats-bar">
+      <div class="stat-chip"><span class="stat-val" id="stat-total">—</span><span class="stat-lbl">Total</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-online">—</span><span class="stat-lbl">Online</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-present">—</span><span class="stat-lbl">Present</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-switches-on">—</span><span class="stat-lbl">Switches On</span></div>
+      <div class="stat-chip" id="stat-local"><span class="stat-val" id="stat-local-val">—</span><span class="stat-lbl">Local</span></div>
+      <div class="stat-chip" id="stat-gateway"><span class="stat-val" id="stat-gateway-val">—</span><span class="stat-lbl">Gateway</span></div>
+      <div class="stat-chip" id="stat-cloud"><span class="stat-val" id="stat-cloud-val">—</span><span class="stat-lbl">Cloud</span></div>
+      <div class="stat-chip" id="stat-chip-stale" onclick="filterStale()" title="Click to show stale devices" style="cursor:pointer">
+        <span class="stat-val" id="stat-stale">—</span>
+        <span class="stat-lbl">Not Seen &gt;<span id="stale-threshold-lbl">30</span>m</span>
+      </div>
+    </div>
+    <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:0.82rem;color:#888">
+      <label for="stale-threshold-input">Stale threshold:</label>
+      <input id="stale-threshold-input" type="number" min="1" max="1440" value="30"
+             style="width:60px;padding:2px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem"
+             onchange="saveStaleThreshold(this.value)"> min
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('presence', this)">Presence</button>
+    <button class="tab-btn" onclick="showTab('all', this)">All Devices</button>
+    <button class="tab-btn" onclick="showTab('settings', this)">Settings</button>
+    <button class="tab-btn" onclick="showTab('rooms', this)">Rooms</button>
+    <button class="tab-btn" onclick="showTab('history', this)">Device History</button>
+  </div>
+
+  <!-- ═══ TAB: PRESENCE ═══ -->
+  <div class="tab-panel active" id="tab-presence">
+    <div class="card">
+      <h2>Presence Sensors</h2>
+      <div class="presence-grid" id="presence-grid">
+        <div style="color:#aaa">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB: ALL DEVICES ═══ -->
+  <div class="tab-panel" id="tab-all">
+    <div class="card">
+      <h2>All Devices</h2>
+      <div class="filter-bar">
+        <input type="text" id="search-input" placeholder="Search name…" oninput="applyFilters()">
+        <select id="filter-type" onchange="applyFilters()">
+          <option value="">All types</option>
+          <option value="circuit_breaker">Circuit Breaker</option>
+          <option value="co_alarm">CO Alarm</option>
+          <option value="curtain">Curtain</option>
+          <option value="door_sensor">Door Sensor</option>
+          <option value="gas_detector">Gas Detector</option>
+          <option value="gateway">Gateway</option>
+          <option value="light">Light</option>
+          <option value="presence">Presence</option>
+          <option value="remote">Remote</option>
+          <option value="scene">Scene</option>
+          <option value="siren">Siren</option>
+          <option value="switch">Switch</option>
+          <option value="temp_controller">Temp Controller</option>
+          <option value="valve">Valve</option>
+          <option value="water_heater">Water Heater</option>
+          <option value="water_sensor">Water Sensor</option>
+          <option value="wireless_switch">Wireless Switch</option>
+        </select>
+        <select id="filter-room" onchange="applyFilters()">
+          <option value="">All rooms</option>
+        </select>
+        <label style="font-size:0.82rem;color:#666;">
+          <input type="checkbox" id="filter-online" onchange="applyFilters()"> Online only
+        </label>
+        <span style="display:inline-block;width:32px"></span>
+        <select id="filter-proto" onchange="applyFilters()">
+          <option value="">All protocols</option>
+          <option value="local">Local</option>
+          <option value="gateway">Gateway</option>
+          <option value="cloud">Cloud</option>
+        </select>
+        <select id="filter-update" onchange="applyFilters()">
+          <option value="">All updates</option>
+          <option value="tcp_push">TCP Push</option>
+          <option value="local_poll">Local Poll</option>
+          <option value="cloud_poll">Cloud Poll</option>
+          <option value="cloud_push">Pulsar</option>
+          <option value="gateway_push">Gateway Push</option>
+          <option value="ha_api">HA API</option>
+          <option value="mqtt">MQTT</option>
+          <option value="initial">Initial</option>
+        </select>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Name</th>
+              <th>Room</th>
+              <th>Type</th>
+              <th>Protocol</th>
+              <th>Update</th>
+              <th>Last Seen</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody id="devices-tbody">
+            <tr><td colspan="7" style="color:#aaa">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="devices-count" style="font-size:0.78rem;color:#aaa;margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB: SETTINGS ═══ -->
+  <div class="tab-panel" id="tab-settings">
+    <div class="card">
+      <h2>Device Settings</h2>
+      <div class="filter-bar">
+        <input type="text" id="settings-search" placeholder="Search name…" oninput="applySettingsFilters()">
+        <select id="settings-type" onchange="applySettingsFilters()">
+          <option value="">All types</option>
+          <option value="circuit_breaker">Circuit Breaker</option>
+          <option value="co_alarm">CO Alarm</option>
+          <option value="curtain">Curtain</option>
+          <option value="door_sensor">Door Sensor</option>
+          <option value="gas_detector">Gas Detector</option>
+          <option value="gateway">Gateway</option>
+          <option value="light">Light</option>
+          <option value="presence">Presence</option>
+          <option value="remote">Remote</option>
+          <option value="scene">Scene</option>
+          <option value="siren">Siren</option>
+          <option value="switch">Switch</option>
+          <option value="temp_controller">Temp Controller</option>
+          <option value="valve">Valve</option>
+          <option value="water_heater">Water Heater</option>
+          <option value="water_sensor">Water Sensor</option>
+          <option value="wireless_switch">Wireless Switch</option>
+        </select>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Room</th>
+              <th>Type</th>
+              <th>Protocol</th>
+              <th style="text-align:center">Enabled</th>
+              <th style="text-align:center">Dashboard</th>
+              <th style="text-align:center">Poll</th>
+              <th>Notes</th>
+              <th style="width:44px"></th>
+            </tr>
+          </thead>
+          <tbody id="settings-tbody">
+            <tr><td colspan="9" style="color:#aaa">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB: ROOMS ═══ -->
+  <div class="tab-panel" id="tab-rooms">
+    <div class="card">
+      <h2>Rooms</h2>
+      <div style="margin-bottom:14px;display:flex;gap:8px;align-items:center;">
+        <input type="text" id="new-room-input" placeholder="New room name…"
+               onkeydown="if(event.key==='Enter')addRoom()"
+               style="border:1px solid #d0cbc4;border-radius:4px;background:#faf8f5;color:#2e2e2e;padding:5px 10px;font-size:0.85rem;min-width:200px;">
+        <button class="btn btn-secondary btn-sm" onclick="addRoom()">+ Add Room</button>
+      </div>
+      <table class="data-table" id="rooms-table">
+        <thead><tr>
+          <th>Room</th>
+          <th>Devices</th>
+          <th style="width:180px"></th>
+        </tr></thead>
+        <tbody id="rooms-tbody">
+          <tr><td colspan="3" style="color:#aaa">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══ TAB: DEVICE HISTORY ═══ -->
+  <div class="tab-panel" id="tab-history">
+    <div class="card">
+      <h2>Device History</h2>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+        <select id="history-device" style="border:1px solid #d0cbc4;border-radius:4px;background:#faf8f5;color:#2e2e2e;padding:5px 10px;font-size:0.85rem;min-width:200px;" onchange="loadHistory()">
+          <option value="">— select device —</option>
+        </select>
+        <select id="history-range" style="border:1px solid #d0cbc4;border-radius:4px;background:#faf8f5;color:#2e2e2e;padding:5px 10px;font-size:0.85rem;" onchange="loadHistory()">
+          <option value="0.25">15 seconds</option>
+          <option value="0.333">20 seconds</option>
+          <option value="0.417">25 seconds</option>
+          <option value="0.5">30 seconds</option>
+          <option value="0.667">40 seconds</option>
+          <option value="1" selected>1 minute</option>
+          <option value="5">5 minutes</option>
+          <option value="30">30 minutes</option>
+        </select>
+        <span id="history-count" style="font-size:0.78rem;color:#888;"></span>
+        <span style="display:inline-block;width:16px"></span>
+        <span id="history-toggles"></span>
+        <span id="history-toggle-status" style="font-size:0.75rem;color:#888;"></span>
+      </div>
+      <div style="position:relative;height:300px;">
+        <canvas id="history-chart"></canvas>
+      </div>
+      <div style="overflow-x:auto;margin-top:12px;max-height:250px;overflow-y:auto;">
+        <table class="data-table" style="font-size:0.8rem;">
+          <thead><tr><th>Time</th><th>Source</th><th>DPS Changes</th></tr></thead>
+          <tbody id="history-tbody">
+            <tr><td colspan="3" style="color:#aaa">Select a device to view history</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<datalist id="rooms-datalist"></datalist>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="js/scroll-stabilizer.js"></script>
+<script src="js/alerts-monitor.js"></script>
+<script src="js/devices.js"></script>
+</body>
+</html>

@@ -5,7 +5,23 @@
       "Bash(npx.cmd @modelcontextprotocol/server-homeassistant)",
       "mcp__postgres-lxc__query",
       "Bash(scp /c/Users/muroc/project_home/BOILER/dashboard/public/js/arp_scan.py root@192.168.1.227:/opt/network-agent/arp_scan.py)",
-      "Bash(ssh root@192.168.1.227 \"chmod +x /opt/network-agent/arp_scan.py && echo ok\")"
+      "Bash(ssh root@192.168.1.227 \"chmod +x /opt/network-agent/arp_scan.py && echo ok\")",
+      "Bash(ssh root@192.168.1.138 \"curl -s http://localhost:8765/ && echo '---' && grep -n 'app.post\\\\|app.get\\\\|route\\\\|listen' /opt/media-agent/tv_control.py | head -20\")",
+      "Bash(scp \"C:/Users/muroc/project_home/scripts/backup-agent.sh\" root@192.168.1.227:/opt/backup-agent.sh)",
+      "Bash(ssh root@192.168.1.227 \"bash /opt/backup-agent.sh && tail -5 /var/log/backup-agent.log\")"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const i=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const f=i.tool_input&&i.tool_input.file_path||''; const s=i.tool_input&&i.tool_input.new_string||''; if(f.includes('server.js')&&/app\\.(get|post|put|patch|delete|use)\\s*\\(|async function [a-zA-Z]+.*\\{|mediaSSH|ingestFile|haikuIngest|runIngest/.test(s)){console.error('\\u26d4 ARCHITECTURE VIOLATION: Business logic belongs on an LXC, not in server.js (Windows dashboard). Move this to LXC 100 Flask service or appropriate LXC. See CLAUDE.md hard rule.'); process.exit(2);}\" 2>&1"
+          }
+        ]
+      }
     ]
   }
 }

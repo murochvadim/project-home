@@ -78,7 +78,8 @@ app.get('/api/settings', async (req, res) => {
 app.post('/api/settings', async (req, res) => {
   const { run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
           trend_runs, temp_debounce, probe_interval_min,
-          consumption_temp_delta, consumption_time_delta } = req.body;
+          consumption_temp_delta, consumption_time_delta,
+          probe_max_boiler_temp, probe_max_delta } = req.body;
   try {
     await db.query(`
       UPDATE agent_settings SET
@@ -89,10 +90,13 @@ app.post('/api/settings', async (req, res) => {
         temp_debounce              = $5,
         probe_interval_min         = $6,
         consumption_temp_delta     = $7,
-        consumption_time_delta     = $8
+        consumption_time_delta     = $8,
+        probe_max_boiler_temp      = $9,
+        probe_max_delta            = $10
     `, [run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
         trend_runs, temp_debounce, probe_interval_min,
-        consumption_temp_delta, consumption_time_delta]);
+        consumption_temp_delta, consumption_time_delta,
+        probe_max_boiler_temp, probe_max_delta]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -737,7 +741,8 @@ async function sshCheck(host, commands) {
 async function runHealthChecks() {
   const [
     pgResult, haResult, pm2Result,
-    rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts,
+    rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
+    backupJobsResult,
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
@@ -763,6 +768,23 @@ async function runHealthChecks() {
     ]).then(([bd, si]) => ({ lastTs: bd.rows[0]?.ts || null, decision: bd.rows[0]?.decision || null, runInterval: si.rows[0]?.run_interval_min || 5 })),
     db.query(`SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND affected_agent = 'boiler' AND alert_type IN ('service_down','service_ssh_failed')`)
       .then(r => ({ ok: parseInt(r.rows[0]?.n) === 0 })).catch(() => ({ ok: null })),
+    db.query(`SELECT affected_agent, COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND affected_agent IN ('analyzer','player','ingest') AND alert_type IN ('service_down','service_ssh_failed') GROUP BY affected_agent`)
+      .then(r => {
+        const down = new Set(r.rows.map(row => row.affected_agent));
+        return { analyzer: !down.has('analyzer'), player: !down.has('player'), ingest: !down.has('ingest') };
+      }).catch(() => ({ analyzer: null, player: null, ingest: null })),
+    db.query(`SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND affected_agent = 'whisper-http' AND alert_type IN ('service_down','service_ssh_failed')`)
+      .then(r => ({ ok: parseInt(r.rows[0]?.n) === 0 })).catch(() => ({ ok: null })),
+    sshCheck('192.168.1.138', { age: "echo $(($(date +%s) - $(date +%s -r /var/log/auto_scan.log 2>/dev/null || echo 0)))" })
+      .then(r => { const age = parseInt(r.age); return { ok: r.ok && !isNaN(age) && age <= 120, age_sec: isNaN(age) ? null : age }; }).catch(() => ({ ok: false, age_sec: null })),
+    db.query(`
+      SELECT j.id, j.name, j.max_age_hours,
+             MAX(l.started_at) FILTER (WHERE l.status='ok') AS last_ok
+      FROM backup_jobs j
+      LEFT JOIN backup_log l ON l.job_id = j.id
+      WHERE j.enabled = TRUE
+      GROUP BY j.id, j.name, j.max_age_hours
+    `).then(r => r.rows).catch(() => []),
     tcpCheck('192.168.1.110', 8123),  // VM 101 — Home Assistant
     tcpCheck('192.168.1.138', 22),    // LXC 100
     tcpCheck('192.168.1.219', 22),    // LXC 102 — Database
@@ -787,7 +809,15 @@ async function runHealthChecks() {
   // Server
   r.pm2 = pm2Result;
   // Services — boiler_agent status from orchestrator's system_alerts
-  r.boiler_agent = { ok: boilerServiceAlerts.ok };
+  r.boiler_agent  = { ok: boilerServiceAlerts.ok };
+  r.media_agents  = mediaServiceAlerts;
+  r.voice_agent   = { ok: voiceAgentResult.ok };
+  r.auto_scan     = autoScanResult;
+  // Backup jobs freshness
+  r.backup_jobs = (Array.isArray(backupJobsResult) ? backupJobsResult : []).map(j => {
+    const ageH = j.last_ok ? (Date.now() - new Date(j.last_ok).getTime()) / 3600000 : null;
+    return { name: j.name, age_hours: ageH !== null ? Math.round(ageH * 10) / 10 : null, ok: ageH !== null && ageH <= j.max_age_hours };
+  });
   // Scripts — data freshness from DB
   const htpAge = rawDataResult ? (Date.now() - new Date(rawDataResult).getTime()) / 60000 : null;
   r.ha_to_pg = { last_ts: rawDataResult, age_min: htpAge !== null ? Math.round(htpAge) : null, data_ok: htpAge !== null && htpAge <= 15 };
@@ -823,7 +853,8 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'boiler_consumptions', 'orchestrator_log', 'sync_signals', 'system_alerts',
       'voice_token_log', 'manual_requests', 'voice_devices', 'voice_device_settings',
       'voice_intent_phrases', 'voice_device_entities', 'agents', 'agent_settings',
-      'media_library', 'face_registry'
+      'media_library', 'face_registry',
+      'backup_storages', 'backup_jobs', 'backup_log'
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -832,7 +863,8 @@ app.get('/api/health/db-volumes', async (req, res) => {
       voice_devices: 'created_at', voice_device_settings: 'updated_at',
       voice_intent_phrases: 'created_at', voice_device_entities: null,
       agents: 'added_at', agent_settings: null,
-      media_library: 'added_at', face_registry: 'added_at'
+      media_library: 'added_at', face_registry: 'added_at',
+      backup_storages: 'created_at', backup_jobs: 'created_at', backup_log: 'started_at'
     };
 
     const sizes = await db.query(`
@@ -944,6 +976,23 @@ app.post('/api/health/cleanup', async (req, res) => {
       results.push({ table_name: p.table_name, deleted: r.rowCount });
     }
     res.json({ ok: true, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Project Health — Vacuum Table ───────────────────────────
+app.post('/api/health/vacuum', async (req, res) => {
+  const { table_name } = req.body;
+  if (!table_name || !/^[a-z_][a-z0-9_]*$/.test(table_name))
+    return res.status(400).json({ error: 'Invalid table name' });
+  try {
+    await db.query(`VACUUM ANALYZE ${table_name}`);
+    const stat = await db.query(
+      `SELECT n_dead_tup, CASE WHEN (n_live_tup + n_dead_tup) > 0
+         THEN ROUND(n_dead_tup::numeric / (n_live_tup + n_dead_tup) * 100, 1)
+         ELSE 0 END AS frag_pct
+       FROM pg_stat_user_tables WHERE relname = $1`, [table_name]);
+    const row = stat.rows[0] || {};
+    res.json({ ok: true, dead_tup: parseInt(row.n_dead_tup) || 0, frag_pct: parseFloat(row.frag_pct) || 0 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1157,7 +1206,10 @@ async function ensureSchema() {
       ('orchestrator_log',   30,   true,  24, 'Main agent run logs and alerts'),
       ('system_alerts',      90,   true,  24, 'Cross-agent system alerts from orchestrator'),
       ('sync_signals',        7,   true,  24, 'ha_to_pg data-ready signals for boiler agent wake-up'),
-      ('voice_token_log',    365,  true,  24, 'Voice pipeline Claude API token usage and cost')
+      ('voice_token_log',    365,  true,  24, 'Voice pipeline Claude API token usage and cost'),
+      ('backup_log',          90,  true,  24, 'Windows backup run history'),
+      ('backup_jobs',        NULL, false, 24, 'Backup job definitions — keep forever'),
+      ('backup_storages',    NULL, false, 24, 'Backup storage definitions — keep forever')
     ON CONFLICT (table_name) DO NOTHING
   `);
 
@@ -1960,6 +2012,299 @@ app.get('/api/backups/proxmox', async (_req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Windows Backup API ────────────────────────────────────────────
+
+app.get('/api/backup/storages', async (_req, res) => {
+  try {
+    const r = await db.query('SELECT id, name, type, host, share, description, created_at FROM backup_storages ORDER BY id');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/backup/storages', async (req, res) => {
+  const { name, type, host, share, smb_user, smb_pass, mount_path, description } = req.body;
+  if (!name || !host || !share) return res.status(400).json({ error: 'name, host, share required' });
+  try {
+    const r = await db.query(
+      'INSERT INTO backup_storages (name, type, host, share, smb_user, smb_pass, mount_path, description) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+      [name, type || 'smb', host, share, smb_user || '', smb_pass || '', mount_path || null, description || '']
+    );
+    res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/backup/storages/:id', async (req, res) => {
+  try {
+    const jobs = await db.query('SELECT name FROM backup_jobs WHERE storage_id=$1', [req.params.id]);
+    if (jobs.rows.length) {
+      const names = jobs.rows.map(j => j.name).join(', ');
+      return res.status(400).json({ error: `Cannot delete: ${jobs.rows.length} job(s) use this storage (${names}). Delete those jobs first.` });
+    }
+    await db.query('DELETE FROM backup_storages WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/backup/jobs', async (_req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT j.id, j.name, j.source_host, j.source_path, j.dest_subdir,
+             j.max_age_hours, j.retry_interval_min, j.retention,
+             j.enabled, j.run_now, j.created_at,
+             s.name AS storage_name, s.share,
+             l.started_at AS last_run, l.status AS last_status,
+             l.size_bytes AS last_size, l.message AS last_message
+      FROM backup_jobs j
+      JOIN backup_storages s ON s.id = j.storage_id
+      LEFT JOIN LATERAL (
+        SELECT started_at, status, size_bytes, message
+        FROM backup_log WHERE job_id = j.id
+        ORDER BY started_at DESC LIMIT 1
+      ) l ON TRUE
+      ORDER BY j.id
+    `);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/backup/jobs', async (req, res) => {
+  const { name, source_host, source_path, storage_id, dest_subdir, max_age_hours, retry_interval_min, retention } = req.body;
+  if (!name || !source_path || !storage_id || !dest_subdir) return res.status(400).json({ error: 'name, source_path, storage_id, dest_subdir required' });
+  try {
+    const r = await db.query(
+      'INSERT INTO backup_jobs (name, source_host, source_path, storage_id, dest_subdir, max_age_hours, retry_interval_min, retention) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+      [name, source_host || 'muroc@192.168.1.128', source_path, storage_id, dest_subdir, max_age_hours || 26, retry_interval_min || 30, retention || 7]
+    );
+    res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/backup/jobs/:id', async (req, res) => {
+  const allowed = ['enabled', 'run_now', 'max_age_hours', 'retry_interval_min', 'retention', 'name', 'source_path', 'dest_subdir', 'storage_id'];
+  const updates = Object.keys(req.body).filter(k => allowed.includes(k));
+  if (!updates.length) return res.status(400).json({ error: 'no valid fields' });
+  try {
+    const sets = updates.map((k, i) => `${k}=$${i + 1}`).join(', ');
+    const vals = updates.map(k => req.body[k]);
+    await db.query(`UPDATE backup_jobs SET ${sets} WHERE id=$${updates.length + 1}`, [...vals, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/backup/jobs/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM backup_log WHERE job_id=$1', [req.params.id]);
+    await db.query('DELETE FROM backup_jobs WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/backup/log', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const jobId = req.query.job_id;
+  try {
+    const where = jobId ? 'WHERE l.job_id=$2' : '';
+    const params = jobId ? [limit, jobId] : [limit];
+    const r = await db.query(`
+      SELECT l.id, l.job_id, j.name AS job_name, l.started_at, l.finished_at,
+             l.status, l.size_bytes, l.message,
+             EXTRACT(EPOCH FROM (l.finished_at - l.started_at))::INT AS duration_sec
+      FROM backup_log l JOIN backup_jobs j ON j.id = l.job_id
+      ${where} ORDER BY l.started_at DESC LIMIT $1
+    `, params);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/backup/storages/:id/folders', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM backup_storages WHERE id=$1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Storage not found' });
+    const s = r.rows[0];
+    if (!s.mount_path) return res.json([]);
+    const ssh = new NodeSSH();
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    const result = await ssh.execCommand(`find "${s.mount_path}" -mindepth 1 -maxdepth 1 -type d ! -name '@*' -printf '%f\n' 2>/dev/null | sort`);
+    ssh.dispose();
+    const folders = result.stdout.split('\n').map(l => l.trim()).filter(Boolean);
+    res.json(folders);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/backup/windows/browse', (req, res) => {
+  const reqPath = req.query.path || 'C:/';
+  try {
+    const entries = fs.readdirSync(reqPath, { withFileTypes: true });
+    const dirs = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('$'))
+      .map(e => e.name)
+      .sort();
+    res.json({ path: reqPath, dirs });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ─── Device Agent ─────────────────────────────────────────────────────────────
+
+app.get('/api/devices', async (req, res) => {
+  try {
+    const { type, protocol, room, search } = req.query;
+    let sql = 'SELECT * FROM devices WHERE 1=1';
+    const params = [];
+    if (type)     { params.push(type);              sql += ` AND device_type=$${params.length}`; }
+    if (protocol) { params.push(protocol);           sql += ` AND protocol=$${params.length}`; }
+    if (room)     { params.push(room);               sql += ` AND room=$${params.length}`; }
+    if (search)   { params.push(`%${search}%`);      sql += ` AND (name ILIKE $${params.length} OR notes ILIKE $${params.length})`; }
+    sql += ' ORDER BY device_type, room, name';
+    const r = await db.query(sql, params);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/devices/:id', async (req, res) => {
+  try {
+    const allowed = ['name','room','notes','show_dashboard','enabled','poll_enabled','poll_interval_sec'];
+    const sets = []; const vals = [];
+    for (const k of allowed) {
+      if (k in req.body) { vals.push(req.body[k]); sets.push(`${k}=$${vals.length}`); }
+    }
+    if ('channel_config' in req.body) {
+      vals.push(JSON.stringify(req.body.channel_config));
+      sets.push(`channel_config=$${vals.length}::jsonb`);
+    }
+    if ('dps_labels' in req.body) {
+      vals.push(JSON.stringify(req.body.dps_labels));
+      sets.push(`dps_labels=$${vals.length}::jsonb`);
+    }
+    if ('dps_config' in req.body) {
+      vals.push(JSON.stringify(req.body.dps_config));
+      sets.push(`dps_config=$${vals.length}::jsonb`);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
+    vals.push(req.params.id);
+    await db.query(`UPDATE devices SET ${sets.join(',')},updated_at=NOW() WHERE id=$${vals.length}`, vals);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/devices/:id/events', async (req, res) => {
+  try {
+    const seconds = Math.round((parseFloat(req.query.minutes) || 1) * 60);
+    const r = await db.query(
+      `SELECT ts, dps, source FROM device_events
+       WHERE device_id = $1 AND ts > NOW() - make_interval(secs => $2)
+       ORDER BY ts ASC`,
+      [req.params.id, seconds]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/devices/:id/toggle', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { state } = req.body; // true = ON, false = OFF
+    // Look up HA entity for this Tuya device via template
+    const tpl = `{% for s in states %}{% set ids = device_attr(s.entity_id,"identifiers") %}{% if ids %}{% for i in ids %}{% if i[0] == "tuya" and i[1] == "${id}" %}{{ s.entity_id }}|{{ s.state }}\n{% endif %}{% endfor %}{% endif %}{% endfor %}`;
+    const tplRes = await fetch(`${HA_URL}/api/template`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${HA_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template: tpl }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const text = await tplRes.text();
+    const entities = text.trim().split('\n').filter(Boolean).map(l => {
+      const [eid, st] = l.split('|');
+      return { entity_id: eid.trim(), state: st?.trim() };
+    });
+    // Find the matching switchable entity for the requested channel
+    const { channel } = req.body;
+    const suffix = channel ? `_${channel}` : '_1';
+    const switchable = entities.find(e => e.entity_id.startsWith('switch.') && e.entity_id.endsWith(suffix))
+      || entities.find(e => e.entity_id.startsWith('light.') && e.entity_id.endsWith(suffix))
+      || entities.find(e => e.entity_id.startsWith('cover.') && e.entity_id.endsWith(suffix))
+      || entities.find(e => e.entity_id.startsWith('switch.'))
+      || entities.find(e => e.entity_id.startsWith('light.'))
+      || entities.find(e => e.entity_id.startsWith('cover.'));
+    if (!switchable) return res.status(404).json({ error: 'No switchable HA entity found for this device' });
+    const domain = switchable.entity_id.split('.')[0];
+    const service = state ? 'turn_on' : 'turn_off';
+    await callHA(domain, service, { entity_id: switchable.entity_id });
+    res.json({ ok: true, entity_id: switchable.entity_id, service: `${domain}.${service}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Rooms management ─────────────────────────────────────────────────────────
+
+app.get('/api/rooms', async (_req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT r.name AS room,
+        COALESCE(d.device_count, 0) + COALESCE(ch.chan_count, 0) AS device_count
+      FROM rooms r
+      LEFT JOIN (
+        SELECT room, COUNT(*) AS device_count FROM devices
+        WHERE room IS NOT NULL AND room <> '' GROUP BY room
+      ) d ON d.room = r.name
+      LEFT JOIN (
+        SELECT ch.value->>'room' AS room, COUNT(*) AS chan_count
+        FROM devices, jsonb_each(COALESCE(channel_config,'{}')) AS ch(key, value)
+        WHERE ch.value->>'room' IS NOT NULL AND ch.value->>'room' <> ''
+        GROUP BY ch.value->>'room'
+      ) ch ON ch.room = r.name
+      ORDER BY r.name
+    `);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/rooms', async (req, res) => {
+  try {
+    const name = (req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name required' });
+    await db.query(`INSERT INTO rooms (name) VALUES ($1) ON CONFLICT DO NOTHING`, [name]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/rooms/:name', async (req, res) => {
+  try {
+    const oldName = req.params.name;
+    const newName = (req.body.name || '').trim();
+    if (!newName) return res.status(400).json({ error: 'name required' });
+    await db.query(`INSERT INTO rooms (name) VALUES ($1) ON CONFLICT DO NOTHING`, [newName]);
+    await db.query(`UPDATE devices SET room=$1, updated_at=NOW() WHERE room=$2`, [newName, oldName]);
+    await db.query(`
+      UPDATE devices
+      SET channel_config = (
+        SELECT jsonb_object_agg(k, CASE WHEN v->>'room'=$1 THEN v || jsonb_build_object('room',$2::text) ELSE v END)
+        FROM jsonb_each(channel_config) AS t(k,v)
+      ), updated_at=NOW()
+      WHERE channel_config::text LIKE $3
+    `, [oldName, newName, `%"${oldName}"%`]);
+    await db.query(`DELETE FROM rooms WHERE name=$1`, [oldName]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/rooms/:name', async (req, res) => {
+  try {
+    const name = req.params.name;
+    await db.query(`UPDATE devices SET room=NULL, updated_at=NOW() WHERE room=$1`, [name]);
+    await db.query(`
+      UPDATE devices
+      SET channel_config = (
+        SELECT jsonb_object_agg(k, CASE WHEN v->>'room'=$1 THEN v - 'room' ELSE v END)
+        FROM jsonb_each(channel_config) AS t(k,v)
+      ), updated_at=NOW()
+      WHERE channel_config::text LIKE $2
+    `, [name, `%"${name}"%`]);
+    await db.query(`DELETE FROM rooms WHERE name=$1`, [name]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // All media/library/browse/play endpoints → LXC 100 media-service http://192.168.1.138:8766

@@ -1,0 +1,15 @@
+[Unit]
+Description=Device Agent — Tuya persistent TCP listener
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/device-agent/venv/bin/python3 /opt/device-agent/device_agent.py
+WorkingDirectory=/opt/device-agent
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

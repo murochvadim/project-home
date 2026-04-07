@@ -2,6 +2,14 @@ const fmtTs = ts => ts
   ? new Date(ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })
   : '—';
 
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) {
+  return escHtml(s).replace(/'/g,'&#39;');
+}
+
 function setHTML(el, html) {
   el.innerHTML = html;
 }
@@ -63,8 +71,6 @@ async function loadAlerts() {
 
     const sevColor = { critical: '#7a2020', error: '#b55e5e', warn: '#b8860b', info: '#5a8a5a' };
     const sevBg    = { critical: '#fff0f0', error: '#fff5f5', warn: '#fffbf0' };
-    const fmtTs    = ts => ts ? new Date(ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '—';
-
     setHTML(tbody, rows.map(r => {
       const color = sevColor[r.severity] || '#555';
       const bg    = r.resolved_local ? 'transparent' : (sevBg[r.severity] || 'transparent');
@@ -74,9 +80,9 @@ async function loadAlerts() {
         <td style="text-align:center;">
           <span style="color:${r.resolved_local ? '#5a8a5a' : color}; font-size:0.75rem; font-weight:600;">${r.resolved_local ? '✓' : r.severity.toUpperCase()}</span>
         </td>
-        <td style="font-size:0.78rem;">${r.affected_agent || '<span style="color:#aaa;">all</span>'}</td>
-        <td style="font-size:0.75rem; color:#888;">${r.alert_type}</td>
-        <td style="font-size:0.8rem; color:${r.resolved_local ? '#888' : color};">${r.message}</td>
+        <td style="font-size:0.78rem;">${r.affected_agent ? escHtml(r.affected_agent) : '<span style="color:#aaa;">all</span>'}</td>
+        <td style="font-size:0.75rem; color:#888;">${escHtml(r.alert_type)}</td>
+        <td style="font-size:0.8rem; color:${r.resolved_local ? '#888' : color};">${escHtml(r.message)}</td>
         <td style="font-size:0.75rem; color:#5a8a5a;">${r.resolved_local ? fmtTs(r.resolved_local) : ''}</td>
       </tr>`;
     }).join(''));
@@ -133,6 +139,24 @@ function renderStatus(r) {
       ? `<span style="color:#888; font-size:0.85rem;">⬤ unknown</span>`
       : dot(agentOk) + (!agentOk ? `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">service down — see alerts</div>` : '');
 
+  const voiceOk = r.voice_agent?.ok;
+  document.getElementById('svc-voice-agent').innerHTML =
+    voiceOk === null || voiceOk === undefined
+      ? `<span style="color:#888; font-size:0.85rem;">⬤ unknown</span>`
+      : dot(voiceOk) + (!voiceOk ? `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">whisper-http down</div>` : '');
+
+  const ma = r.media_agents;
+  if (ma) {
+    const agents = [
+      { name: 'analyzer', ok: ma.analyzer },
+      { name: 'player',   ok: ma.player   },
+      { name: 'ingest',   ok: ma.ingest   },
+    ];
+    document.getElementById('svc-media-agents').innerHTML = agents.map(a =>
+      `<span style="color:${a.ok === null ? '#888' : a.ok ? '#7a9f5a' : '#b55e5e'}; font-size:0.82rem; margin-right:6px;">⬤ ${a.name}</span>`
+    ).join('');
+  }
+
   const pm2Raw = r.pm2?.raw || '';
   document.getElementById('svc-pm2').innerHTML = dot(r.pm2?.ok) +
     (pm2Raw && pm2Raw !== 'pm2_unavailable'
@@ -145,6 +169,14 @@ function renderStatus(r) {
     document.getElementById('svc-orch-last-run').innerHTML =
       `<span style="color:${color}; font-size:0.85rem;">${olr.ok ? '⬤ OK' : '⬤ Overdue'}</span>` +
       (olr.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${olr.age_min}m ago</div>` : '');
+  }
+
+  const as = r.auto_scan;
+  if (as) {
+    const color = as.ok ? '#7a9f5a' : '#b55e5e';
+    document.getElementById('svc-auto-scan').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${as.ok ? '⬤ OK' : '⬤ Stale'}</span>` +
+      (as.age_sec != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">last run: ${as.age_sec}s ago</div>` : '');
   }
 
   const cw = r.collect_weather;
@@ -161,6 +193,23 @@ function renderStatus(r) {
     document.getElementById('svc-boiler-last').innerHTML =
       `<span style="color:${color}; font-size:0.85rem;">${bld.ok ? '⬤ OK' : '⬤ Stale'}</span>` +
       (bld.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${bld.age_min}m ago — ${bld.decision || '?'}</div>` : '');
+  }
+
+  const bj = r.backup_jobs;
+  if (bj && bj.length) {
+    const allOk = bj.every(j => j.ok);
+    const neverRan = bj.filter(j => j.age_hours === null);
+    const overdue  = bj.filter(j => j.age_hours !== null && !j.ok);
+    const color = allOk ? '#7a9f5a' : '#b55e5e';
+    const label = allOk ? '⬤ OK' : `⬤ ${overdue.length} overdue`;
+    const detail = bj.map(j =>
+      `<div style="font-size:0.7rem; color:${j.ok ? '#888' : '#b55e5e'}; margin-top:2px;">${j.name}: ${j.age_hours !== null ? j.age_hours + 'h ago' : 'never ran'}</div>`
+    ).join('');
+    document.getElementById('svc-backup-jobs').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${label}</span>${detail}`;
+  } else if (bj) {
+    document.getElementById('svc-backup-jobs').innerHTML =
+      `<span style="color:#aaa; font-size:0.85rem;">⬤ no jobs</span>`;
   }
 
   const aa = r.active_alerts;
@@ -185,9 +234,10 @@ async function loadStatus() {
     renderStatus(r);
     try { localStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(r)); } catch (e) {}
   } catch (e) {
-    ['svc-postgres','svc-ha','svc-lxc','svc-lxc104','svc-agent','svc-ha-to-pg','svc-pm2',
-     'svc-orchestrator','svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last'
-    ].forEach(id => { document.getElementById(id).innerHTML = dot(false); });
+    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-vm101',
+     'svc-agent','svc-media-agents','svc-voice-agent','svc-auto-scan','svc-ha-to-pg','svc-pm2',
+     'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs'
+    ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });
   }
 }
 
@@ -215,12 +265,13 @@ async function loadMiniDlna() {
       <td style="text-align:right;font-size:0.82rem;color:${orphanColor};">${d.orphans}</td>
       <td style="text-align:right;color:#aaa;">—</td>
       <td style="font-size:0.78rem;color:#888;">${updated}</td>
+      <td></td>
     `;
     tbody.appendChild(tr);
   } catch (e) {
     const tr = document.createElement('tr');
     tr.id = 'minidlna-row';
-    tr.innerHTML = `<td colspan="8" style="color:#c0392b;font-size:0.82rem;">MiniDLNA: ${e.message}</td>`;
+    tr.innerHTML = `<td colspan="9" style="color:#c0392b;font-size:0.82rem;">MiniDLNA: ${escHtml(e.message)}</td>`;
     tbody.appendChild(tr);
   }
 }
@@ -231,20 +282,49 @@ async function loadVolumes() {
     const tbody = document.getElementById('volumes-body');
     setHTML(tbody, rows.map(r => {
       const fragColor = r.frag_pct >= 20 ? '#c0392b' : r.frag_pct >= 5 ? '#e67e22' : '#2ecc71';
-      return `<tr>
+      return `<tr id="vol-row-${r.table_name}">
         <td><code>${r.table_name}</code></td>
         <td style="text-align:right;">${r.row_count.toLocaleString()}</td>
         <td style="text-align:right;">${r.total_size}</td>
         <td style="font-size:0.78rem; color:#666;">${fmtTs(r.oldest)}</td>
         <td style="font-size:0.78rem; color:#666;">${fmtTs(r.newest)}</td>
-        <td style="text-align:right; font-size:0.82rem;">${r.dead_tup.toLocaleString()}</td>
-        <td style="text-align:right; font-weight:600; color:${fragColor};">${r.frag_pct}%</td>
+        <td style="text-align:right; font-size:0.82rem;" id="vol-dead-${r.table_name}">${r.dead_tup.toLocaleString()}</td>
+        <td style="text-align:right; font-weight:600; color:${fragColor};" id="vol-frag-${r.table_name}">${r.frag_pct}%</td>
         <td style="font-size:0.78rem; color:${r.last_vacuumed ? '#888' : '#c0392b'};">${r.last_vacuumed ? fmtTs(r.last_vacuumed) : '— never'}</td>
+        <td style="text-align:center;">
+          <button class="btn btn-secondary btn-sm" style="font-size:0.72rem;" onclick="vacuumTable('${r.table_name}', this)">Vacuum</button>
+        </td>
       </tr>`;
     }).join(''));
   } catch (e) {
     document.getElementById('volumes-body').innerHTML =
-      '<tr><td colspan="6" style="color:#b55e5e;">Failed to load</td></tr>';
+      '<tr><td colspan="9" style="color:#b55e5e;">Failed to load</td></tr>';
+  }
+}
+
+async function vacuumTable(tableName, btn) {
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch('/api/health/vacuum', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ table_name: tableName })
+    }).then(r => r.json());
+    if (r.error) { btn.textContent = '✗'; btn.style.color = '#b55e5e'; return; }
+    const fragColor = r.frag_pct >= 20 ? '#c0392b' : r.frag_pct >= 5 ? '#e67e22' : '#2ecc71';
+    const deadEl = document.getElementById(`vol-dead-${tableName}`);
+    const fragEl = document.getElementById(`vol-frag-${tableName}`);
+    if (deadEl) deadEl.textContent = r.dead_tup.toLocaleString();
+    if (fragEl) { fragEl.textContent = r.frag_pct + '%'; fragEl.style.color = fragColor; }
+    btn.textContent = '✓';
+    btn.style.color = '#5a8a5a';
+    setTimeout(() => { btn.textContent = origText; btn.style.color = ''; btn.disabled = false; }, 2000);
+  } catch (e) {
+    btn.textContent = '✗';
+    btn.style.color = '#b55e5e';
+    setTimeout(() => { btn.textContent = origText; btn.style.color = ''; btn.disabled = false; }, 2000);
   }
 }
 
@@ -301,7 +381,7 @@ async function savePolicy(tableName) {
     });
     showCleanupResult(`✓ Saved policy for ${tableName}`);
   } catch (e) {
-    showCleanupResult(`✗ Failed: ${e.message}`, true);
+    showCleanupResult(`✗ Failed: ${escHtml(e.message)}`, true);
   }
 }
 
@@ -321,7 +401,7 @@ async function cleanTable(tableName) {
     await loadVolumes();
     await loadRetention();
   } catch (e) {
-    showCleanupResult(`✗ Failed: ${e.message}`, true);
+    showCleanupResult(`✗ Failed: ${escHtml(e.message)}`, true);
   }
 }
 
@@ -340,7 +420,7 @@ async function cleanAll() {
     await loadVolumes();
     await loadRetention();
   } catch (e) {
-    showCleanupResult(`✗ Failed: ${e.message}`, true);
+    showCleanupResult(`✗ Failed: ${escHtml(e.message)}`, true);
   }
 }
 
@@ -381,7 +461,7 @@ async function loadOrchLog() {
         <td style="text-align:center;">
           <span style="color:${labelColor}; font-size:0.75rem; font-weight:600;">${label}</span>
         </td>
-        <td style="font-size:0.8rem; color:${color};">${r.message}</td>
+        <td style="font-size:0.8rem; color:${color};">${escHtml(r.message)}</td>
       </tr>`;
     }).join(''));
 
@@ -402,13 +482,15 @@ async function loadOrchLog() {
 
 async function refreshAll() {
   document.getElementById('last-refresh').textContent = 'Loading…';
-  const dbTabActive      = document.getElementById('tab-database')?.classList.contains('active');
-  const orchLogActive    = document.getElementById('tab-orch-log')?.classList.contains('active');
-  const backupsTabActive = document.getElementById('tab-backups')?.classList.contains('active');
+  const dbTabActive        = document.getElementById('tab-database')?.classList.contains('active');
+  const orchLogActive      = document.getElementById('tab-orch-log')?.classList.contains('active');
+  const backupsTabActive   = document.getElementById('tab-backups')?.classList.contains('active');
+  const winBackupTabActive = document.getElementById('tab-win-backup')?.classList.contains('active');
   const tasks = [loadAlerts(), loadStatus()];
-  if (orchLogActive)    { tasks.push(loadOrchLog()); }
-  if (dbTabActive)      { tasks.push(loadVolumes(), loadMiniDlna(), loadRetention()); }
-  if (backupsTabActive) { tasks.push(loadBackups()); }
+  if (orchLogActive)      { tasks.push(loadOrchLog()); }
+  if (dbTabActive)        { tasks.push(loadVolumes(), loadMiniDlna(), loadRetention()); }
+  if (backupsTabActive)   { tasks.push(loadBackups()); }
+  if (winBackupTabActive) { tasks.push(loadWinStorages(), loadWinJobs(), loadWinLog()); }
   await Promise.all(tasks);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
@@ -473,8 +555,8 @@ async function loadBackups() {
       }).join('');
     }
   } catch (e) {
-    jobsTbody.innerHTML  = `<tr><td colspan="9" style="color:#b55e5e;">Failed: ${e.message}</td></tr>`;
-    tasksTbody.innerHTML = `<tr><td colspan="5" style="color:#b55e5e;">Failed: ${e.message}</td></tr>`;
+    jobsTbody.innerHTML  = `<tr><td colspan="9" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
+    tasksTbody.innerHTML = `<tr><td colspan="5" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -504,7 +586,7 @@ async function loadDocuments() {
     const docs = await fetch('/api/documents').then(r => r.json());
     renderDocuments(docs);
   } catch (e) {
-    document.getElementById('docs-container').innerHTML = `<div class="card" style="color:#b55e5e;">Failed to load documents: ${e.message}</div>`;
+    document.getElementById('docs-container').innerHTML = `<div class="card" style="color:#b55e5e;">Failed to load documents: ${escHtml(e.message)}</div>`;
   }
 }
 
@@ -520,8 +602,8 @@ function renderDocuments(docs) {
       <div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #f0ede8;">
         <span style="font-size:1.3rem; min-width:24px; text-align:center;">${fileIcon(d.url)}</span>
         <div style="flex:1; min-width:0;">
-          <div style="font-size:0.88rem; font-weight:500; color:#2e2e2e; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${d.title}</div>
-          <div style="font-size:0.72rem; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${d.url}</div>
+          <div style="font-size:0.88rem; font-weight:500; color:#2e2e2e; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(d.title)}</div>
+          <div style="font-size:0.72rem; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escHtml(d.url)}</div>
         </div>
         <a href="${docHref(d.url, d.title)}" target="_blank" rel="noopener"
            style="font-size:0.78rem; padding:4px 12px; background:#3a5a8a; color:#fff; border-radius:4px; text-decoration:none; white-space:nowrap;">Open</a>
@@ -592,6 +674,452 @@ async function deleteDoc(id) {
     await fetch(`/api/documents/${id}`, { method: 'DELETE' });
     await loadDocuments();
   } catch (e) { alert('Failed: ' + e.message); }
+}
+
+// ── Windows Backup ───────────────────────────────────────────
+
+function fmtBytes(b) {
+  if (!b && b !== 0) return '—';
+  if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB';
+  if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB';
+  if (b >= 1e3) return (b / 1e3).toFixed(1) + ' KB';
+  return b + ' B';
+}
+
+function fmtDuration(startedAt, finishedAt) {
+  if (!startedAt || !finishedAt) return '—';
+  const sec = Math.round((new Date(finishedAt) - new Date(startedAt)) / 1000);
+  if (sec < 60) return sec + 's';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m + 'm ' + s + 's';
+}
+
+// ─ Storages ──────────────────────────────────────────────────
+let _winStorages = [];
+
+async function loadWinStorages() {
+  try {
+    const rows = await fetch('/api/backup/storages').then(r => r.json());
+    _winStorages = rows;
+    const tbody = document.getElementById('win-storages-body');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#aaa; text-align:center; padding:16px;">No storages configured</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(s => `<tr>
+      <td style="font-size:0.85rem; font-weight:500;">${escHtml(s.name)}</td>
+      <td style="font-size:0.78rem; color:#888;">${escHtml(s.type)}</td>
+      <td style="font-size:0.78rem; color:#666;">${escHtml(s.host)}</td>
+      <td style="font-size:0.78rem; color:#666;">${escHtml(s.share)}</td>
+      <td style="font-size:0.78rem; color:#888;">${escHtml(s.description || '—')}</td>
+      <td style="text-align:center; vertical-align:middle; white-space:nowrap;">
+        <button style="font-size:0.8rem; padding:4px 10px; border-radius:4px; cursor:pointer; border:none; font-weight:500; background:#c0392b; color:#fff;"
+          onclick="deleteWinStorage(${s.id}, this)">✕</button>
+      </td>
+    </tr>`).join('');
+    // Populate storage select in add-job form
+    const sel = document.getElementById('wj-storage');
+    if (sel) {
+      sel.innerHTML = '<option value="">— select —</option>' +
+        rows.map(s => `<option value="${s.id}">${escHtml(s.name)} (${escHtml(s.share)})</option>`).join('');
+    }
+  } catch (e) {
+    document.getElementById('win-storages-body').innerHTML =
+      `<tr><td colspan="6" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function deleteWinStorage(id, btn) {
+  if (!confirm('Delete this storage? Jobs using it will lose their storage reference.')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/backup/storages/${id}`, { method: 'DELETE' }).then(r => r.json());
+    if (r.error) { alert('Error: ' + r.error); btn.disabled = false; return; }
+    await loadWinStorages();
+  } catch (e) { alert('Failed: ' + e.message); btn.disabled = false; }
+}
+
+function showAddWinStorageForm() {
+  document.getElementById('win-add-storage-form').style.display = 'block';
+  document.getElementById('ws-name').focus();
+}
+
+function hideAddWinStorageForm() {
+  document.getElementById('win-add-storage-form').style.display = 'none';
+  ['ws-name','ws-host','ws-share','ws-user','ws-pass','ws-mount','ws-desc'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const err = document.getElementById('win-storage-err');
+  err.style.display = 'none'; err.textContent = '';
+}
+
+async function addWinStorage() {
+  const name  = document.getElementById('ws-name').value.trim();
+  const host  = document.getElementById('ws-host').value.trim();
+  const share = document.getElementById('ws-share').value.trim();
+  const user  = document.getElementById('ws-user').value.trim();
+  const pass  = document.getElementById('ws-pass').value;
+  const desc  = document.getElementById('ws-desc').value.trim();
+  const errEl = document.getElementById('win-storage-err');
+  errEl.style.display = 'none';
+  if (!name || !host || !share) {
+    errEl.textContent = 'Name, Host, and Share are required.';
+    errEl.style.display = 'block'; return;
+  }
+  try {
+    const r = await fetch('/api/backup/storages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type: 'smb', host, share, smb_user: user, smb_pass: pass, mount_path: document.getElementById('ws-mount').value.trim() || null, description: desc })
+    }).then(r => r.json());
+    if (r.error) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
+    hideAddWinStorageForm();
+    await loadWinStorages();
+  } catch (e) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+}
+
+// ─ Jobs ──────────────────────────────────────────────────────
+async function loadWinJobs() {
+  try {
+    const rows = await fetch('/api/backup/jobs').then(r => r.json());
+    const tbody = document.getElementById('win-jobs-body');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="10" style="color:#aaa; text-align:center; padding:16px;">No backup jobs configured</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(j => {
+      const lastRun = j.last_started
+        ? new Date(j.last_started).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })
+        : '—';
+      const statusColor = !j.last_status ? '#aaa'
+        : j.last_status === 'ok' ? '#7a9f5a'
+        : j.last_status === 'unreachable' ? '#b8860b' : '#b55e5e';
+      const statusText = !j.last_status ? '—'
+        : j.last_status === 'ok' ? '✓ OK'
+        : j.last_status === 'unreachable' ? '⚡ offline' : '✗ failed';
+      const toggleBg    = j.enabled ? '#7a9f5a' : '#b0a89e';
+      const toggleLabel = j.enabled ? '● On' : '○ Off';
+      const btnBase = 'font-size:0.8rem; padding:4px 10px; margin-right:4px; border-radius:4px; cursor:pointer; border:none; font-weight:500;';
+      return `<tr id="wj-row-${j.id}">
+        <td style="font-size:0.85rem; font-weight:500;">${j.name}</td>
+        <td style="font-size:0.72rem; color:#666; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+            title="${j.source_path}">${j.source_path}</td>
+        <td style="font-size:0.78rem; color:#666;">${j.storage_name || '—'}</td>
+        <td style="text-align:center; font-size:0.78rem; color:#666;">${j.max_age_hours}h</td>
+        <td style="text-align:center; font-size:0.78rem; color:#666;">${j.retention}</td>
+        <td style="font-size:0.75rem; color:#888; white-space:nowrap;">${lastRun}</td>
+        <td style="text-align:center; font-size:0.8rem; font-weight:600; color:${statusColor};">${statusText}</td>
+        <td style="text-align:right; font-size:0.78rem; color:#666;">${fmtBytes(j.last_size)}</td>
+        <td style="text-align:center; vertical-align:middle; white-space:nowrap;">
+          <button style="${btnBase} background:${toggleBg}; color:#fff;"
+            onclick="toggleWinJob(${j.id}, ${j.enabled}, this)">${toggleLabel}</button>
+          <button style="${btnBase} background:#3a5a8a; color:#fff;"
+            onclick="winJobRunNow(${j.id}, this)">▶ Run</button>
+          <button style="${btnBase} background:#e8e4de; color:#2e2e2e; margin-right:0;"
+            onclick="editWinJob(${j.id})">✎ Edit</button>
+        </td>
+        <td style="text-align:center; vertical-align:middle; width:46px;">
+          <button style="${btnBase} background:#c0392b; color:#fff; margin-right:0;"
+            onclick="deleteWinJob(${j.id}, this)">✕</button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('win-jobs-body').innerHTML =
+      `<tr><td colspan="10" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function toggleWinJob(id, currentEnabled, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/backup/jobs/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !currentEnabled })
+    }).then(r => r.json());
+    if (r.error) { alert('Error: ' + r.error); btn.disabled = false; return; }
+    await loadWinJobs();
+  } catch (e) { alert('Failed: ' + e.message); btn.disabled = false; }
+}
+
+async function winJobRunNow(id, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/backup/jobs/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_now: true })
+    }).then(r => r.json());
+    if (r.error) { btn.textContent = '✗'; btn.style.color = '#b55e5e'; return; }
+    btn.textContent = '✓ queued';
+    setTimeout(() => { btn.textContent = '▶ Run'; btn.disabled = false; }, 3000);
+  } catch (e) { btn.textContent = '✗'; btn.style.color = '#b55e5e'; btn.disabled = false; }
+}
+
+async function deleteWinJob(id, btn) {
+  if (!confirm('Delete this backup job and its log history?')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/backup/jobs/${id}`, { method: 'DELETE' }).then(r => r.json());
+    if (r.error) { alert('Error: ' + r.error); btn.disabled = false; return; }
+    await loadWinJobs();
+    await loadWinLog();
+  } catch (e) { alert('Failed: ' + e.message); btn.disabled = false; }
+}
+
+let _editingJobId = null;
+
+function showAddWinJobForm() {
+  _editingJobId = null;
+  const titleEl = document.getElementById('win-job-form-title');
+  titleEl.textContent = 'New Backup Job';
+  titleEl.style.display = 'block';
+  document.getElementById('win-job-save-btn').textContent = 'Save';
+  // Clear fields
+  ['wj-name','wj-source','wj-dest-new'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('wj-maxage').value = 26;
+  document.getElementById('wj-retention').value = 7;
+  const sel = document.getElementById('wj-storage');
+  sel.innerHTML = '<option value="">— select —</option>' +
+    _winStorages.map(s => `<option value="${s.id}">${s.name} (${s.share})</option>`).join('');
+  const destSel = document.getElementById('wj-dest-select');
+  destSel.innerHTML = '<option value="">— select storage first —</option>';
+  document.getElementById('wj-dest-new').style.display = 'none';
+  document.getElementById('win-add-job-form').style.display = 'block';
+  document.getElementById('wj-name').focus();
+}
+
+async function editWinJob(id) {
+  _editingJobId = id;
+
+  // Fetch both in parallel; ensure storages cache is populated
+  const [jobs, storages] = await Promise.all([
+    fetch('/api/backup/jobs').then(r => r.json()),
+    _winStorages.length ? Promise.resolve(_winStorages) : fetch('/api/backup/storages').then(r => r.json())
+  ]);
+  if (storages !== _winStorages) _winStorages = storages;
+
+  const j = jobs.find(x => x.id === id);
+  if (!j) return;
+
+  document.getElementById('win-job-form-title').textContent = `Edit: ${j.name}`;
+  document.getElementById('win-job-form-title').style.display = 'block';
+  document.getElementById('win-job-save-btn').textContent = 'Update';
+  document.getElementById('win-job-err').style.display = 'none';
+
+  // Populate text fields
+  document.getElementById('wj-name').value      = j.name;
+  document.getElementById('wj-source').value    = j.source_path;
+  document.getElementById('wj-maxage').value    = j.max_age_hours;
+  document.getElementById('wj-retention').value = j.retention;
+
+  // Populate storage dropdown — use String() to match option values
+  const sel = document.getElementById('wj-storage');
+  sel.innerHTML = '<option value="">— select —</option>' +
+    _winStorages.map(s => `<option value="${s.id}">${s.name} (${s.share})</option>`).join('');
+  sel.value = String(j.storage_id || '');
+
+  document.getElementById('win-add-job-form').style.display = 'block';
+
+  // Load folders via same function used by the storage onchange,
+  // then pre-select the current dest_subdir
+  await loadWjFolders();
+
+  const destSel = document.getElementById('wj-dest-select');
+  // Ensure current dest_subdir is in the list (it may not exist on QNAP yet)
+  if (j.dest_subdir && ![...destSel.options].some(o => o.value === j.dest_subdir)) {
+    const opt = document.createElement('option');
+    opt.value = j.dest_subdir; opt.textContent = j.dest_subdir;
+    destSel.insertBefore(opt, destSel.options[1]); // after "— select folder —"
+  }
+  destSel.value = j.dest_subdir || '';
+  onWjDestChange();
+}
+
+// ─ Windows path browser ──────────────────────────────────────
+async function openWinBrowser() {
+  const current = document.getElementById('wj-source').value.trim() || 'C:/Users/muroc';
+  await browseWinPath(current);
+}
+
+async function browseWinPath(p) {
+  const browser  = document.getElementById('win-browser');
+  const pathEl   = document.getElementById('win-browser-path');
+  const listEl   = document.getElementById('win-browser-list');
+  browser.style.display = 'block';
+  pathEl.textContent = p;
+  listEl.innerHTML = '<div style="padding:6px 10px; color:#aaa;">Loading…</div>';
+  try {
+    const data = await fetch(`/api/backup/windows/browse?path=${encodeURIComponent(p)}`).then(r => r.json());
+    if (data.error) throw new Error(data.error);
+    const normalized = p.replace(/\\/g, '/').replace(/\/$/, '');
+    // Up button (not at root like C:/)
+    const parts = normalized.split('/');
+    let upHtml = '';
+    if (parts.length > 1 && !(parts.length === 2 && parts[1] === '')) {
+      const parent = parts.slice(0, -1).join('/') || parts[0] + '/';
+      upHtml = `<div onclick="browseWinPath('${escAttr(parent)}')"
+        style="padding:5px 10px; cursor:pointer; color:#3a5a8a; border-bottom:1px solid #f0ede8;"
+        onmouseover="this.style.background='#f5f3f0'" onmouseout="this.style.background=''">⬆ ..</div>`;
+    }
+    const rows = data.dirs.map(d => {
+      const full = normalized + '/' + d;
+      return `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 10px; border-bottom:1px solid #f0ede8; cursor:pointer;"
+        onmouseover="this.style.background='#f5f3f0'" onmouseout="this.style.background=''">
+        <span onclick="browseWinPath('${escAttr(full)}')" style="flex:1; color:#2e2e2e;">📁 ${escHtml(d)}</span>
+        <button onclick="selectWinPath('${escAttr(full)}')" class="btn btn-secondary btn-sm"
+          style="font-size:0.7rem; padding:2px 7px; margin-left:8px;">Select</button>
+      </div>`;
+    }).join('');
+    listEl.innerHTML = upHtml + (rows || '<div style="padding:6px 10px; color:#aaa;">No subfolders</div>');
+  } catch (e) {
+    listEl.innerHTML = `<div style="padding:6px 10px; color:#b55e5e;">${escHtml(e.message)}</div>`;
+  }
+}
+
+function selectWinPath(p) {
+  document.getElementById('wj-source').value = p;
+  document.getElementById('win-browser').style.display = 'none';
+}
+
+function clearWinBrowser() {
+  document.getElementById('win-browser').style.display = 'none';
+}
+
+async function loadWjFolders() {
+  const storageId = document.getElementById('wj-storage').value;
+  const destSel   = document.getElementById('wj-dest-select');
+  const destNew   = document.getElementById('wj-dest-new');
+  if (!storageId) {
+    destSel.innerHTML = '<option value="">— select storage first —</option>';
+    destNew.style.display = 'none'; destNew.value = '';
+    return;
+  }
+  destSel.innerHTML = '<option value="">Loading…</option>';
+  destNew.style.display = 'none'; destNew.value = '';
+  try {
+    const folders = await fetch(`/api/backup/storages/${storageId}/folders`).then(r => r.json());
+    if (folders.error) throw new Error(folders.error);
+    destSel.innerHTML =
+      (folders.length ? '<option value="">— select folder —</option>' : '') +
+      folders.map(f => `<option value="${f}">${f}</option>`).join('') +
+      '<option value="__new__">+ Create new folder…</option>';
+  } catch (e) {
+    destSel.innerHTML = '<option value="">— select folder —</option><option value="__new__">+ Create new folder…</option>';
+  }
+  onWjDestChange();
+}
+
+function onWjDestChange() {
+  const destSel = document.getElementById('wj-dest-select');
+  const destNew = document.getElementById('wj-dest-new');
+  if (destSel.value === '__new__') {
+    destNew.style.display = 'block';
+    // Pre-fill with job name as suggested folder name
+    if (!destNew.value) {
+      const jobName = document.getElementById('wj-name').value.trim();
+      if (jobName) destNew.value = jobName;
+    }
+    destNew.focus();
+  } else {
+    destNew.style.display = 'none';
+    destNew.value = '';
+  }
+}
+
+function hideAddWinJobForm() {
+  _editingJobId = null;
+  document.getElementById('win-add-job-form').style.display = 'none';
+  document.getElementById('win-job-form-title').style.display = 'none';
+  const wb = document.getElementById('win-browser'); if (wb) wb.style.display = 'none';
+  ['wj-name','wj-source','wj-dest-new'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const destSel = document.getElementById('wj-dest-select');
+  if (destSel) destSel.innerHTML = '<option value="">— select storage first —</option>';
+  const destNew = document.getElementById('wj-dest-new');
+  if (destNew) destNew.style.display = 'none';
+  const err = document.getElementById('win-job-err');
+  err.style.display = 'none'; err.textContent = '';
+}
+
+async function saveWinJob() {
+  const name      = document.getElementById('wj-name').value.trim();
+  const source    = document.getElementById('wj-source').value.trim();
+  const storageId = document.getElementById('wj-storage').value;
+  const destSelVal = document.getElementById('wj-dest-select').value;
+  const dest      = destSelVal === '__new__'
+    ? document.getElementById('wj-dest-new').value.trim()
+    : destSelVal;
+  const maxAge    = parseInt(document.getElementById('wj-maxage').value) || 26;
+  const retention = parseInt(document.getElementById('wj-retention').value) || 7;
+  const errEl     = document.getElementById('win-job-err');
+  errEl.style.display = 'none';
+  if (!name) { errEl.textContent = 'Job name is required.'; errEl.style.display = 'block'; return; }
+  if (!source) { errEl.textContent = 'Source Path is required.'; errEl.style.display = 'block'; return; }
+  if (!storageId) { errEl.textContent = 'Please select a Storage.'; errEl.style.display = 'block'; return; }
+  if (!dest) { errEl.textContent = destSelVal === '__new__' ? 'Enter a name for the new folder.' : 'Please select a Dest Subfolder.'; errEl.style.display = 'block'; return; }
+  try {
+    let r;
+    if (_editingJobId) {
+      r = await fetch(`/api/backup/jobs/${_editingJobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(name       && { name }),
+          ...(source     && { source_path: source }),
+          ...(storageId  && { storage_id: parseInt(storageId) }),
+          ...(dest       && { dest_subdir: dest }),
+          max_age_hours: maxAge,
+          retention
+        })
+      }).then(r => r.json());
+    } else {
+      r = await fetch('/api/backup/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, source_host: 'muroc@192.168.1.128', source_path: source, storage_id: parseInt(storageId), dest_subdir: dest, max_age_hours: maxAge, retention })
+      }).then(r => r.json());
+    }
+    if (r.error) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
+    hideAddWinJobForm();
+    await loadWinJobs();
+  } catch (e) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+}
+
+// ─ Log ───────────────────────────────────────────────────────
+async function loadWinLog() {
+  const limit = document.getElementById('win-log-limit')?.value || 20;
+  try {
+    const rows = await fetch(`/api/backup/log?limit=${limit}`).then(r => r.json());
+    const tbody = document.getElementById('win-log-body');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#aaa; text-align:center; padding:16px;">No log entries yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const statusColor = r.status === 'ok' ? '#7a9f5a'
+        : r.status === 'unreachable' ? '#b8860b'
+        : r.status === 'running' ? '#3a5a8a' : '#b55e5e';
+      const statusText = r.status === 'ok' ? '✓ OK'
+        : r.status === 'unreachable' ? '⚡ offline'
+        : r.status === 'running' ? '⏳ running' : '✗ failed';
+      return `<tr>
+        <td style="font-size:0.82rem; font-weight:500;">${r.job_name || '—'}</td>
+        <td style="font-size:0.75rem; color:#888; white-space:nowrap;">${r.started_at ? new Date(r.started_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '—'}</td>
+        <td style="text-align:center; font-size:0.78rem; color:#666;">${fmtDuration(r.started_at, r.finished_at)}</td>
+        <td style="text-align:center; font-size:0.8rem; font-weight:600; color:${statusColor};">${statusText}</td>
+        <td style="text-align:right; font-size:0.78rem; color:#666;">${fmtBytes(r.size_bytes)}</td>
+        <td style="font-size:0.78rem; color:#888; max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+            title="${(r.message || '').replace(/"/g, '&quot;')}">${r.message || '—'}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('win-log-body').innerHTML =
+      `<tr><td colspan="6" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
+  }
 }
 
 // Initial load — System tab only

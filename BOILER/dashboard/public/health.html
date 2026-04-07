@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Project Health</title>
   <link rel="stylesheet" href="css/style.css">
   <style>
@@ -23,6 +24,7 @@
   <div class="section-label">Agents</div>
   <a href="index.html">Boiler Agent</a>
   <a href="media.html">Media Agent</a>
+  <a href="devices.html">Device Agent</a>
 
 
   <div class="section-label">Voice</div>
@@ -47,7 +49,8 @@
     <button class="tab-btn" onclick="showHealthTab('orch-log', this)">Orchestrator Log</button>
     <button class="tab-btn" onclick="showHealthTab('database', this)">Database</button>
     <button class="tab-btn" onclick="showHealthTab('documents', this)">Documents</button>
-    <button class="tab-btn" onclick="showHealthTab('backups', this)">Backups</button>
+    <button class="tab-btn" onclick="showHealthTab('backups', this)">Proxmox Backup</button>
+    <button class="tab-btn" onclick="showHealthTab('win-backup', this)">Windows Backup</button>
     <button class="tab-btn" onclick="showHealthTab('settings', this)">Settings</button>
   </div>
 
@@ -106,6 +109,14 @@
           <label>Boiler Agent</label>
           <div class="value small" id="svc-agent">—</div>
         </div>
+        <div class="status-item">
+          <label>Media Agent</label>
+          <div class="value small" id="svc-media-agents">—</div>
+        </div>
+        <div class="status-item">
+          <label>Voice Agent</label>
+          <div class="value small" id="svc-voice-agent">—</div>
+        </div>
       </div>
 
       <!-- Data -->
@@ -125,8 +136,8 @@
         </div>
       </div>
 
-      <!-- Scripts (cron) -->
-      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Scripts (cron)</div>
+      <!-- Scripts — Cron -->
+      <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Scripts — Cron</div>
       <div class="status-grid status-grid-divided" style="grid-template-columns: repeat(4, 1fr); margin-bottom:18px;">
         <div class="status-item">
           <label>ha_to_pg (raw data)</label>
@@ -135,6 +146,14 @@
         <div class="status-item">
           <label>collect_weather</label>
           <div class="value small" id="svc-collect-weather">—</div>
+        </div>
+        <div class="status-item">
+          <label>auto_scan (media)</label>
+          <div class="value small" id="svc-auto-scan">—</div>
+        </div>
+        <div class="status-item">
+          <label>Backup Jobs</label>
+          <div class="value small" id="svc-backup-jobs">—</div>
         </div>
       </div>
 
@@ -234,10 +253,11 @@
             <th style="text-align:right;">Dead Tuples</th>
             <th style="text-align:right;">Frag %</th>
             <th>Last Vacuum</th>
+            <th style="text-align:center;">Action</th>
           </tr>
         </thead>
         <tbody id="volumes-body">
-          <tr><td colspan="8" style="color:#aaa;">Loading…</td></tr>
+          <tr><td colspan="9" style="color:#aaa;">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -270,9 +290,6 @@
 
   </div><!-- /tab-database -->
 
-  <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- TAB: Settings                                             -->
-  <!-- ══════════════════════════════════════════════════════════ -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <!-- TAB: Documents                                            -->
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -332,6 +349,173 @@
 
   </div><!-- /tab-backups -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Windows Backup                                        -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-win-backup">
+
+    <!-- Storages -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">Backup Storages</h2>
+        <button class="btn btn-secondary btn-sm" onclick="showAddWinStorageForm()">+ Add</button>
+      </div>
+      <div id="win-add-storage-form" style="display:none; background:#f5f3f0; border-radius:6px; padding:12px; margin-bottom:12px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+          <div style="min-width:120px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Name</div>
+            <input id="ws-name" type="text" placeholder="e.g. claude-data" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="min-width:130px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Host</div>
+            <input id="ws-host" type="text" placeholder="192.168.1.155" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="min-width:120px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Share</div>
+            <input id="ws-share" type="text" placeholder="Claude_Data" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="min-width:100px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">SMB User</div>
+            <input id="ws-user" type="text" placeholder="claude" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="min-width:120px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">SMB Password</div>
+            <input id="ws-pass" type="password" placeholder="••••••••" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="min-width:160px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Mount Path (on LXC 104)</div>
+            <input id="ws-mount" type="text" placeholder="/mnt/qnap-claude" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="flex:1; min-width:150px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Description</div>
+            <input id="ws-desc" type="text" placeholder="Optional note" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="display:flex; gap:6px; align-items:flex-end;">
+            <button onclick="addWinStorage()" class="btn btn-success btn-sm" style="font-size:0.78rem;">Save</button>
+            <button onclick="hideAddWinStorageForm()" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">Cancel</button>
+          </div>
+        </div>
+        <div id="win-storage-err" style="font-size:0.75rem; color:#b55e5e; margin-top:6px; display:none;"></div>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th style="width:60px;">Type</th>
+            <th>Host</th>
+            <th>Share</th>
+            <th>Description</th>
+            <th style="width:46px; text-align:center;"></th>
+          </tr>
+        </thead>
+        <tbody id="win-storages-body">
+          <tr><td colspan="6" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Backup Jobs -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">Backup Jobs</h2>
+        <button class="btn btn-secondary btn-sm" onclick="showAddWinJobForm()">+ Add</button>
+      </div>
+      <div id="win-job-form-title" style="font-size:0.78rem; font-weight:600; color:#3a5a8a; margin-bottom:6px; display:none;"></div>
+      <div id="win-add-job-form" style="display:none; background:#f5f3f0; border-radius:6px; padding:12px; margin-bottom:12px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+          <div style="min-width:130px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Name</div>
+            <input id="wj-name" type="text" placeholder="e.g. project_home" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="min-width:220px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Source Path (on Windows)</div>
+            <div style="display:flex; gap:4px;">
+              <input id="wj-source" type="text" placeholder="C:/Users/muroc/project_home" style="flex:1; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;" oninput="clearWinBrowser()">
+              <button type="button" onclick="openWinBrowser()" class="btn btn-secondary btn-sm" style="font-size:0.78rem; white-space:nowrap;">📁 Browse</button>
+            </div>
+            <div id="win-browser" style="display:none; margin-top:4px; border:1px solid #d0cbc4; border-radius:4px; background:#fff; max-height:200px; overflow-y:auto; font-size:0.8rem;">
+              <div id="win-browser-path" style="padding:5px 8px; background:#f5f3f0; border-bottom:1px solid #e8e4de; font-size:0.72rem; color:#888; font-family:monospace;"></div>
+              <div id="win-browser-list"></div>
+            </div>
+          </div>
+          <div style="min-width:130px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Storage</div>
+            <select id="wj-storage" onchange="loadWjFolders()" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+              <option value="">— select —</option>
+            </select>
+          </div>
+          <div style="min-width:150px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Dest Subfolder</div>
+            <select id="wj-dest-select" onchange="onWjDestChange()" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+              <option value="">— select storage first —</option>
+            </select>
+            <input id="wj-dest-new" type="text" placeholder="new folder name" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff; margin-top:4px; display:none;">
+          </div>
+          <div style="min-width:80px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Max Age (h)</div>
+            <input id="wj-maxage" type="number" min="1" value="26" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="min-width:80px;">
+            <div style="font-size:0.72rem; color:#888; margin-bottom:3px;">Keep copies</div>
+            <input id="wj-retention" type="number" min="1" value="7" style="width:100%; font-size:0.82rem; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; background:#fff;">
+          </div>
+          <div style="display:flex; gap:6px; align-items:flex-end;">
+            <button id="win-job-save-btn" onclick="saveWinJob()" class="btn btn-success btn-sm" style="font-size:0.78rem;">Save</button>
+            <button onclick="hideAddWinJobForm()" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">Cancel</button>
+          </div>
+        </div>
+        <div id="win-job-err" style="font-size:0.75rem; color:#b55e5e; margin-top:6px; display:none;"></div>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Source</th>
+            <th>Storage</th>
+            <th style="text-align:center;">Max Age</th>
+            <th style="text-align:center;">Keep</th>
+            <th>Last Run</th>
+            <th style="text-align:center; width:80px;">Status</th>
+            <th style="text-align:right;">Size</th>
+            <th style="text-align:center; width:160px;"></th>
+            <th style="text-align:center; width:46px;"></th>
+          </tr>
+        </thead>
+        <tbody id="win-jobs-body">
+          <tr><td colspan="10" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Recent Log -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h2 style="margin:0;">Recent Backup Log</h2>
+        <span style="font-size:0.78rem; color:#888;">Last <select id="win-log-limit" onchange="loadWinLog()" style="font-size:0.78rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:#faf8f5;">
+          <option value="20">20</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select> entries</span>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Started</th>
+            <th style="text-align:center;">Duration</th>
+            <th style="text-align:center;">Status</th>
+            <th style="text-align:right;">Size</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="win-log-body">
+          <tr><td colspan="6" style="color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /tab-win-backup -->
+
   <div class="tab-panel" id="tab-settings">
 
     <!-- Deploy -->
@@ -377,6 +561,13 @@ function showHealthTab(name, btn) {
   if (name === 'backups' && !window._backupsTabLoaded) {
     window._backupsTabLoaded = true;
     loadBackups();
+  }
+  // Load win-backup tab lazily on first visit
+  if (name === 'win-backup' && !window._winBackupTabLoaded) {
+    window._winBackupTabLoaded = true;
+    loadWinStorages();
+    loadWinJobs();
+    loadWinLog();
   }
   // Load settings tab data lazily on first visit
   if (name === 'settings' && !window._settingsTabLoaded) {

@@ -69,6 +69,18 @@ like Project folder ,like Laptop Image Backup
 
 ## Agent
 
+### Future: Diagnostic Agent
+**Goal:** Read active alerts from `system_alerts`, diagnose root cause, and either auto-fix (safe actions) or inform what to do.
+**Trigger:** runs after orchestrator checks, only when unresolved alerts exist
+**Location:** LXC 105 (has SSH keys to all LXCs)
+**Design:**
+- Detect `agent_hard_errors` with `ERR: 401` → identify as HA token invalidation → post step-by-step fix instructions to `orchestrator_log` + dashboard alert
+- Detect `service_down` after failed auto-restart → suggest manual intervention steps
+- Detect `backup_overdue` → check LXC 104 cron + mount points, report findings
+- Auto-fix only for safe/reversible actions (service restarts already done by orchestrator)
+- All other cases: enrich the existing alert with a `diagnosis` field showing exactly what to do
+**Why:** HA token invalidation took multiple sessions to fully diagnose (5 token locations discovered one by one). A diagnostic agent would surface all of them immediately.
+
 
 ## Dashboard
 

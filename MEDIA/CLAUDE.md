@@ -109,6 +109,22 @@ Dashboard: user labels clusters → person_embeddings updated
 
 ---
 
+## player_service.py — Patches Applied on LXC 100
+
+> `player_service.py` is patched directly on LXC 100 via Python patch scripts (scp + ssh). No local copy is source of truth.
+
+| Patch | Reason |
+|-------|--------|
+| Wrap `dlna_soap()` calls in try/except + `log.error`; increase subprocess timeout 10→15s | Silent failures when Samsung TV unreachable or slow |
+| Add response logging for SetAVTransportURI and Play | Visibility into TV SOAP responses |
+| `_stream_tokens = {}` dict + `/api/media/token/<token>` route | Samsung TV rejects non-ASCII/space filenames in DLNA URLs even when percent-encoded |
+| Recompute `stream_url_xml` after token replaces `stream_url` | Bug: old Cyrillic URL was still being sent in SOAP body |
+| Add `protocolInfo="http-get:*:<mime>:*"` to DIDL-Lite `<res>` element | Samsung TV rejects SetAVTransportURI without it |
+| `_current_duration` global — set from `media_library.duration_sec` on play | TV doesn't report duration via GetPositionInfo; needed for dashboard progress bar |
+| `parse_secs`: `int(p[2])` → `int(float(p[2]))` | TV returns fractional seconds e.g. `05.449`, causing `ValueError` in `/api/media/position` |
+
+---
+
 ## analyzer.py — Patches Applied on LXC 100
 
 | Patch | Reason |
@@ -148,12 +164,18 @@ Dashboard: user labels clusters → person_embeddings updated
 | TV-49 Bedroom | `tv_bed` | HA |
 
 ### Playback flow
-- **Video/image**: `minidlna_id()` looks up file in MiniDLNA SQLite DB → Samsung UPnP `SetAVTransportURI` + `Play` SOAP call via `curl`
-- **Audio**: streamed via `/api/media/stream/<path>` HTTP range-request endpoint directly from LXC 100
-- **Search results image**: `gen_results.py` generates JPEG → sent to TV via DLNA as image
+
+> ⛔ **HARD RULE: Video ALWAYS uses MiniDLNA. Never replace the MiniDLNA URL for video.**
+> Samsung TV requires DLNA-specific response headers (`contentFeatures.dlna.org`, `transferMode.dlna.org`) that only MiniDLNA provides. Bypassing MiniDLNA for video causes the TV to accept the SOAP command but silently refuse to render the stream.
+
+- **Video**: `minidlna_id()` looks up file in MiniDLNA SQLite DB → stream URL is `http://192.168.1.138:8200/MediaItems/{id}.{ext}` → Samsung UPnP `SetAVTransportURI` + `Play` SOAP call. This must never be changed to a direct Flask endpoint.
+- **Audio**: token URL generated per play session — `_stream_tokens[hex_token] = full_path` → `http://192.168.1.138:8766/api/media/token/{token}` (pure ASCII). Required because Samsung TV rejects `SetAVTransportURI` if the URL contains non-ASCII or spaces, even when percent-encoded. Token route supports full Range requests.
+- **Search results image**: `gen_results.py` generates PNG → served by player_service via `/api/media/results-image`
 - MiniDLNA SIGHUP: `os.kill(int(pid_file), signal.SIGHUP)` — no shell subprocess
 - Samsung TV: IP `192.168.1.129`, port 9197, path `/upnp/control/AVTransport1`
 - TV control proxied through `tv_control.py` on port 8765 (LXC 100 local)
+- DIDL-Lite `<res>` element **must include** `protocolInfo="http-get:*:<mime>:*"` — Samsung rejects SetAVTransportURI without it
+- `_current_duration` global: set from `media_library.duration_sec` when play starts; used by `/api/media/position` as fallback when TV returns duration=0 (enabling dashboard progress bar)
 
 ---
 
@@ -168,7 +190,9 @@ Dashboard: user labels clusters → person_embeddings updated
 | `/api/media/library` | GET | Paginated library list (filter by type, unrecognized) |
 | `/api/media/library/<path>` | GET | Single file record |
 | `/api/media/browse` | GET | Directory browser |
-| `/api/media/stream/<path>` | GET | Range-request audio streaming |
+| `/api/media/stream/<path>` | GET | Range-request audio streaming (direct path — use token for DLNA) |
+| `/api/media/token/<token>` | GET | Range-request streaming via ASCII token (used for DLNA playback) |
+| `/api/media/results-image` | GET | Serve `/mnt/media/tmp/search_results.png` to TV |
 | `/api/media/thumb` | GET | Image thumbnail (LRU cache, 200 items) |
 | `/api/media/play` | POST | Play file on TV (by relPath) |
 | `/api/media/play-number` | POST | Play file by search result number |
@@ -240,6 +264,7 @@ Dashboard: user labels clusters → person_embeddings updated
 #### Player Agent tab
 - Media feedback bar (animated, shows play status)
 - Playback bar: title, time, progress, ⏪30s / ⏸Pause / 30s⏩ / ⏹Stop, seek ±30s
+- Playback bar **auto-restores on page load/navigation** — on init, `GET /api/media/position` is called; if duration>0 and position<duration, playback bar is shown immediately (fixes disappearing controls when navigating away and back)
 - QNAP Media browser: grid of files/folders, breadcrumb navigation, play on click
 - Edit metadata modal: event, year, location, people fields, Save + Delete buttons
 

@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/main-agent.env
-ExecStart=/opt/main-agent/venv/bin/python3 /opt/main-agent/project/main-agent/orchestrator.py --quick
+ExecStart=/opt/main-agent/venv/bin/python3 /opt/main-agent/project/ORCHESTRATOR/orchestrator.py --quick
 StandardOutput=journal
 StandardError=journal
 

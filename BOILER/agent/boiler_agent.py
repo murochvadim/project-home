@@ -362,6 +362,8 @@ def run_agent():
         trend_runs            = int(settings['trend_runs'])
         temp_debounce         = float(settings['temp_debounce'])
         probe_interval_min    = int(settings['probe_interval_min'])
+        probe_max_boiler_temp = int(settings['probe_max_boiler_temp'])
+        probe_max_delta       = int(settings['probe_max_delta'])
         agent_enabled         = bool(settings['agent_enabled'])
         next_ts               = now + timedelta(minutes=run_interval_min)
 
@@ -565,12 +567,24 @@ def run_agent():
                                         f'(trend_runs={trend_runs}+1) × run_interval={run_interval_min})')
                         log.info(f'Probe fire logic: {minutes_to_end:.0f} min remaining < {probe_cost_min:.0f} min needed → skip')
 
+                    elif boiler_temp >= probe_max_boiler_temp:
+                        decision     = 'no_action'
+                        why_decision = (f'Probe skipped: boiler {boiler_temp:.1f}°C >= probe_max_boiler_temp {probe_max_boiler_temp}°C'
+                                        f' — boiler warm enough, cold water entry loss not worth it')
+                        log.info(f'Probe guard: boiler {boiler_temp:.1f} >= {probe_max_boiler_temp} → skip')
+
+                    elif (boiler_temp - panel_temp) > probe_max_delta:
+                        decision     = 'no_action'
+                        why_decision = (f'Probe skipped: delta {boiler_temp - panel_temp:.1f}°C > probe_max_delta {probe_max_delta}°C'
+                                        f' — panel too cold relative to boiler ({boiler_temp:.1f}°C − {panel_temp:.1f}°C)')
+                        log.info(f'Probe guard: delta {boiler_temp - panel_temp:.1f} > {probe_max_delta} → skip')
+
                     elif time_since_close >= probe_interval_min:
                         decision     = 'turn_on'
                         why_decision = (f'Probe: panel reading invalid '
                                         f'(valve OFF {close_str} min > {panel_valid_after_off} min), '
                                         f'opening valve to evaluate solar heating')
-                        log.info(f'Probe Turn ON: valve OFF {close_str} min >= probe interval {probe_interval_min} min')
+                        log.info(f'Probe Turn ON: boiler {boiler_temp:.1f}°C < {probe_max_boiler_temp}°C, delta {boiler_temp - panel_temp:.1f}°C <= {probe_max_delta}°C, valve OFF {close_str} min >= {probe_interval_min} min')
                         set_valve_ha(True)
                         valve_state = True
 
@@ -640,41 +654,50 @@ def run_agent():
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
-def get_last_sync_id():
-    """Return the latest id in sync_signals, or 0 on any error."""
-    try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        with conn.cursor() as cur:
-            cur.execute('SELECT COALESCE(MAX(id), 0) FROM sync_signals')
-            result = cur.fetchone()[0]
-        conn.close()
-        return int(result)
-    except Exception:
-        return 0
-
 
 def wait_for_next_run(interval_min: int) -> None:
     """
     Sleep until either:
     - a new sync_signal row appears (id > last seen) → wake immediately, or
     - interval_min minutes have elapsed → fallback wake.
-    Polls every 30 s.
+    Polls every 30 s using a single reusable connection.
     """
     deadline = time.monotonic() + interval_min * 60
-    last_id  = get_last_sync_id()
+    conn = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        with conn.cursor() as cur:
+            cur.execute('SELECT COALESCE(MAX(id), 0) FROM sync_signals')
+            last_id = cur.fetchone()[0]
 
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(30, remaining))
-        new_id = get_last_sync_id()
-        if new_id > last_id:
-            log.info('sync_signal detected — waking up early')
-            return
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(30, remaining))
+            try:
+                with conn.cursor() as cur:
+                    cur.execute('SELECT COALESCE(MAX(id), 0) FROM sync_signals')
+                    new_id = cur.fetchone()[0]
+                if new_id > last_id:
+                    log.info('sync_signal detected — waking up early')
+                    return
+            except Exception:
+                # Connection went bad — just wait for deadline
+                return
+    except Exception:
+        # Can't connect — just sleep the full interval
+        time.sleep(interval_min * 60)
+    finally:
+        if conn:
+            try: conn.close()
+            except Exception: pass
 
 
 def main():
+    if not HA_TOKEN:
+        log.error('HA_TOKEN not set — check /etc/environment or /etc/boiler-agent.env')
+        sys.exit(1)
     log.info('Boiler Agent starting up')
     while True:
         interval = run_agent()

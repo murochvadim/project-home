@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Boiler Dashboard</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -19,6 +20,7 @@
   <div class="section-label">Agents</div>
   <a href="index.html" class="active">Boiler Agent</a>
   <a href="media.html">Media Agent</a>
+  <a href="devices.html">Device Agent</a>
 
 
   <div class="section-label">Voice</div>
@@ -400,7 +402,7 @@
     <div class="card">
       <h2>Settings</h2>
       <form id="settings-form" onsubmit="saveSettings(event)">
-        <div class="settings-grid">
+        <div class="settings-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr))">
           <div class="form-group">
             <label>Run Interval (min)</label>
             <input type="number" id="s-run-interval" min="1" max="60">
@@ -425,6 +427,9 @@
             <label>Probe Interval (min)</label>
             <input type="number" id="s-probe-interval" min="1">
           </div>
+          <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-top:6px; padding-top:10px; border-top:1px solid #e8e2db;">
+            Hot Water Consumption
+          </div>
           <div class="form-group">
             <label>Consumption Temp Delta (°C)</label>
             <input type="number" id="s-consumption-temp" min="0.5" step="0.5">
@@ -432,6 +437,17 @@
           <div class="form-group">
             <label>Consumption Time Delta (min)</label>
             <input type="number" id="s-consumption-time" min="1">
+          </div>
+          <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-top:6px; padding-top:10px; border-top:1px solid #e8e2db;">
+            Probe Temperature Constraints
+          </div>
+          <div class="form-group" style="grid-column:span 1; min-width:240px;">
+            <label>Skip Probe If Boiler Above (°C)</label>
+            <input type="number" id="s-probe-max-boiler" min="0">
+          </div>
+          <div class="form-group" style="grid-column:span 1; min-width:240px;">
+            <label>Skip Probe If (Boiler−Panel) Delta Above (°C)</label>
+            <input type="number" id="s-probe-max-delta" min="0">
           </div>
         </div>
         <div style="margin-top:14px;">

@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Voice — Smart Home</title>
     <link rel="stylesheet" href="css/style.css" />
     <style>
@@ -263,6 +264,7 @@
       <div class="section-label">Agents</div>
       <a href="index.html">Boiler Agent</a>
       <a href="media.html">Media Agent</a>
+  <a href="devices.html">Device Agent</a>
 
       <div class="section-label">Voice</div>
       <a href="voice.html" class="active">Voice</a>
@@ -409,7 +411,7 @@
             </div>
           </label>
           <label class="setting-row">
-            <input type="radio" name="pipeline-mode" value="auto" id="mode-auto" onchange="applyMode()" />
+            <input type="radio" name="pipeline-mode" value="auto" id="mode-auto" onchange="saveVoiceSettings()" />
             <div>
               <div class="setting-title">Auto</div>
               <div class="setting-desc">Record → stop → full pipeline runs automatically</div>
@@ -1301,9 +1303,7 @@
         localStorage.setItem("voice_settings", JSON.stringify({ mode, input, tts }));
       }
 
-      function applyMode() {
-        saveVoiceSettings();
-      }
+
 
       function loadVoiceSettings() {
         try {
@@ -2340,5 +2340,7 @@
         loadPhrases();
       }
     </script>
+<script src="js/scroll-stabilizer.js"></script>
+<script src="js/alerts-monitor.js"></script>
   </body>
 </html>
