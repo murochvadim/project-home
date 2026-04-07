@@ -84,6 +84,24 @@ function decodeStatus(dev) {
     if (v !== undefined) return { label: 'on', cls: 'dot-on', text: (v / 10).toFixed(1) + '°C' };
   }
 
+  // BSH Home Connect appliances
+  if (['oven','dishwasher','hood','hob','washer'].includes(type)) {
+    const op = dps['BSH.Common.Status.OperationState'] || '';
+    const short = op.split('.').pop();
+    if (short === 'Run')       return { label: 'on',  cls: 'dot-on',  text: 'Running' };
+    if (short === 'Finished')  return { label: 'on',  cls: 'dot-on',  text: 'Finished' };
+    if (short === 'DelayedStart') return { label: 'on', cls: 'dot-on', text: 'Delayed' };
+    if (short === 'Pause')     return { label: 'on',  cls: 'dot-on',  text: 'Paused' };
+    if (short === 'Aborting')  return { label: 'on',  cls: 'dot-on',  text: 'Aborting' };
+    if (short === 'Ready')     return { label: 'off', cls: 'dot-off', text: 'Ready' };
+    if (short === 'Inactive')  return { label: 'off', cls: 'dot-off', text: 'Inactive' };
+    const door = dps['BSH.Common.Status.DoorState'] || '';
+    const doorShort = door.split('.').pop();
+    if (doorShort === 'Open')  return { label: 'on',  cls: 'dot-on',  text: 'Door Open' };
+    if (op) return { label: 'off', cls: 'dot-off', text: short };
+    return { label: 'unknown', cls: 'dot-unknown', text: '—' };
+  }
+
   if (type === 'gateway') {
     return { label: 'on', cls: 'dot-on', text: 'Online' };
   }
@@ -149,6 +167,7 @@ function updateBadge(src) {
     gateway_init: { label: 'Initial',       color: '#999' },
     initial:      { label: 'Initial',       color: '#999' },
     ha_api:       { label: 'HA API',        color: '#2980b9' },
+    home_connect: { label: 'Home Connect',  color: '#1a5276' },
     mqtt:         { label: 'MQTT',          color: '#16a085' },
   };
   const m = map[src] || { label: src || '—', color: '#999' };
@@ -285,7 +304,7 @@ function applyFilters() {
           <td>${protoBadge(d.protocol)}</td>
           <td>${updateBadge(d.last_source)}</td>
           <td class="${ls.cls}">${ls.text}</td>
-          <td style="font-size:0.75rem;color:var(--muted)">${d.local_ip || '—'}</td>
+          <td style="font-size:0.75rem;color:var(--muted)">${d.mac ? (d.local_ip || '—') : '—'}</td>
         </tr>`);
         totalRows++;
       }
@@ -314,7 +333,10 @@ function applyFilters() {
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; statusTxt = (raw / 10).toFixed(1) + '°C';
         } else {
-          dot = 'dot-on'; statusTxt = String(raw);
+          dot = 'dot-on';
+          statusTxt = String(raw);
+          // Shorten BSH enum values
+          if (typeof raw === 'string' && raw.includes('.')) statusTxt = raw.split('.').pop();
         }
         rows.push(`<tr>
           <td><span class="status-dot ${dot}"></span>${escHtml(statusTxt)}</td>
@@ -324,7 +346,7 @@ function applyFilters() {
           <td>${protoBadge(d.protocol)}</td>
           <td>${updateBadge(d.last_source)}</td>
           <td class="${ls.cls}">${ls.text}</td>
-          <td style="font-size:0.75rem;color:var(--muted)">${d.local_ip || '—'}</td>
+          <td style="font-size:0.75rem;color:var(--muted)">${d.mac ? (d.local_ip || '—') : '—'}</td>
         </tr>`);
         totalRows++;
       }
@@ -340,7 +362,7 @@ function applyFilters() {
         <td>${protoBadge(d.protocol)}</td>
         <td>${updateBadge(d.last_source)}</td>
         <td class="${ls.cls}">${ls.text}</td>
-        <td style="font-size:0.75rem;color:var(--muted)">${d.local_ip || '—'}</td>
+        <td style="font-size:0.75rem;color:var(--muted)">${d.mac ? (d.local_ip || '—') : '—'}</td>
       </tr>`);
       totalRows++;
     }
@@ -449,6 +471,10 @@ function applySettingsFilters() {
       <td style="text-align:center">
         <button class="btn-dps" onclick="toggleDpsPanel('${escAttr(d.id)}', this)">DPS</button>
       </td>
+      <td style="text-align:center">
+        <button onclick="deactivateDevice('${escAttr(d.id)}','${escAttr(d.name)}')" title="Remove from project"
+          style="font-size:0.7rem;padding:2px 6px;border:1px solid #c0392b;color:#c0392b;background:transparent;border-radius:4px;cursor:pointer;">✕</button>
+      </td>
     </tr>`);
 
     // Channel sub-rows for multi-gang switches
@@ -495,15 +521,17 @@ function applySettingsFilters() {
       const showDash = dpsCfg[k]?.show_dashboard !== false;
       let valTxt = String(raw);
       if (typeof raw === 'number' && lbl.includes('x0.1')) valTxt = (raw / 10).toFixed(1) + '°C';
+      // Shorten BSH enum values: BSH.Common.EnumType.DoorState.Closed → Closed
+      if (typeof raw === 'string' && raw.includes('.')) valTxt = raw.split('.').pop();
       const dot = (raw === true || raw === 1) ? 'dot-on' : (raw === false || raw === 0) ? 'dot-off' : 'dot-on';
       rows.push(`
     <tr class="dps-attr-row" data-parent-id="${escHtml(d.id)}" data-dps="${k}">
-      <td style="padding-left:28px;color:var(--muted);font-size:0.8rem;">
+      <td style="padding-left:28px;color:var(--muted);font-size:0.8rem;" title="${escHtml(k)}">
         <span class="chan-indicator ${dot}"></span>${escHtml(valTxt)}
       </td>
       <td class="editable-cell dps-attr-name" data-field="name">${escHtml(attrName)}</td>
       <td class="editable-cell dps-attr-room" data-field="room">${escHtml(attrRoom)}</td>
-      <td><span style="font-size:0.72rem;color:var(--muted)">dps ${k}</span></td>
+      <td><span style="font-size:0.72rem;color:var(--muted)" title="${escHtml(k)}">dps ${k.includes('.') ? escHtml(k.split('.').pop()) : k}</span></td>
       <td style="text-align:center">
         <label class="toggle"><input type="checkbox" class="dps-attr-toggle" data-parent-id="${escHtml(d.id)}" data-dps="${k}" data-field="enabled" ${enabled ? 'checked' : ''}>
           <span class="slider"></span></label>
@@ -520,7 +548,7 @@ function applySettingsFilters() {
   }
 
   tbody.innerHTML = rows.join('') ||
-    '<tr><td colspan="8" style="color:var(--muted)">No devices match</td></tr>';
+    '<tr><td colspan="10" style="color:var(--muted)">No devices match</td></tr>';
 }
 
 // ─── Inline edit ──────────────────────────────────────────────────────────────
@@ -700,8 +728,10 @@ function toggleDpsPanel(id, btn) {
         if (typeof raw === 'number' && lbl.includes('x0.1')) {
           display = `${(raw / 10).toFixed(1)}°C`;
         }
+        // Shorten BSH keys for display: BSH.Common.Status.DoorState → DoorState
+        const shortKey = k.includes('.') ? k.split('.').pop() : k;
         return `
-        <span class="dps-key">${k}</span>
+        <span class="dps-key" title="${escHtml(k)}">${escHtml(shortKey)}</span>
         <span class="dps-val">${escHtml(display)}</span>
         <input class="dps-lbl" data-dps="${k}" value="${escHtml(lbl)}" placeholder="label…">
         <span></span>`;
@@ -837,7 +867,7 @@ function showTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
-  if (name === 'settings') { settingsRendered = false; applySettingsFilters(); settingsRendered = true; }
+  if (name === 'settings') { settingsRendered = false; applySettingsFilters(); settingsRendered = true; loadBlocklist(); }
   if (name === 'rooms') loadRooms();
   if (name === 'history') populateHistorySelect();
 }
@@ -936,6 +966,60 @@ document.getElementById('settings-tbody').addEventListener('change', function(e)
 document.getElementById('stale-threshold-input').value = staleThresholdMin;
 document.getElementById('stale-threshold-lbl').textContent = staleThresholdMin;
 
+// ─── Device blocklist ─────────────────────────────────────────────────────────
+
+async function deactivateDevice(id, name) {
+  if (!confirm(`Remove "${name}" from project?\n\nThis will delete the device and all its event history. It can be reactivated later from the blocklist.`)) return;
+  try {
+    const r = await fetch(`/api/devices/blocklist/${encodeURIComponent(id)}/deactivate`, { method: 'POST' });
+    const data = await r.json();
+    if (data.ok) {
+      allDevices = allDevices.filter(d => d.id !== id);
+      applySettingsFilters();
+      loadBlocklist();
+    } else {
+      alert('Error: ' + (data.error || 'unknown'));
+    }
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function loadBlocklist() {
+  const tbody = document.getElementById('blocklist-tbody');
+  try {
+    const r = await fetch('/api/devices/blocklist');
+    const rows = await r.json();
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="color:#aaa">No blocked devices</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(d => `<tr>
+      <td>${escHtml(d.name)}</td>
+      <td><span class="type-badge">${escHtml(d.device_type || '?')}</span></td>
+      <td>${protoBadge(d.protocol || 'local')}</td>
+      <td style="font-size:0.75rem;color:#888">${new Date(d.blocked_at).toLocaleDateString('he-IL')}</td>
+      <td><button onclick="reactivateDevice('${escAttr(d.id)}','${escAttr(d.name)}')"
+        style="font-size:0.75rem;padding:3px 10px;border:1px solid #27ae60;color:#27ae60;background:transparent;border-radius:4px;cursor:pointer;">Activate</button></td>
+    </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:#c0392b">Error: ${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function reactivateDevice(id, name) {
+  if (!confirm(`Reactivate "${name}"? It will be added back as a fresh device with no history.`)) return;
+  try {
+    const r = await fetch(`/api/devices/blocklist/${encodeURIComponent(id)}/reactivate`, { method: 'POST' });
+    const data = await r.json();
+    if (data.ok) {
+      await loadAll();
+      applySettingsFilters();
+      loadBlocklist();
+    } else {
+      alert('Error: ' + (data.error || 'unknown'));
+    }
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
 // ─── Device History tab ───────────────────────────────────────────────────────
 
 let historyChart = null;
@@ -1023,22 +1107,24 @@ function renderHistoryChart(events, minutes, dev) {
   };
 
   // Build set of allowed DPS keys — whitelist approach
-  // Only show keys that are: channel keys (from channel_config), or enabled in dps_config, or DPS "1" as default
   const dpsCfg = (dev && dev.dps_config) || {};
   const chanCfg = (dev && dev.channel_config) || {};
-  const allowedKeys = new Set();
+  const dpsLabelsChart = (dev && dev.dps_labels) || {};
+  const hasAnyConfig = Object.keys(dpsCfg).length > 0 || Object.keys(chanCfg).length > 0 || Object.keys(dpsLabelsChart).length > 0;
+  let allowedKeys = null; // null = allow all
 
-  // Always allow main switch key
-  allowedKeys.add('1');
-
-  // Allow configured channel keys
-  for (const [k, cfg] of Object.entries(chanCfg)) {
-    if (cfg.enabled !== false) allowedKeys.add(k);
-  }
-
-  // Allow explicitly enabled DPS keys
-  for (const [k, cfg] of Object.entries(dpsCfg)) {
-    if (cfg.enabled !== false) allowedKeys.add(k);
+  if (hasAnyConfig) {
+    allowedKeys = new Set();
+    allowedKeys.add('1');
+    for (const [k, cfg] of Object.entries(chanCfg)) {
+      if (cfg.enabled !== false) allowedKeys.add(k);
+    }
+    for (const [k, cfg] of Object.entries(dpsCfg)) {
+      if (cfg.enabled !== false) allowedKeys.add(k);
+    }
+    for (const k of Object.keys(dpsLabelsChart)) {
+      allowedKeys.add(k);
+    }
   }
 
   // ── State lines: one line per allowed DPS key ──
@@ -1047,16 +1133,20 @@ function renderHistoryChart(events, minutes, dev) {
 
   function toVal(raw) {
     if (typeof raw === 'boolean') return raw ? 1 : 0;
-    if (raw === 'on' || raw === 'open' || raw === 'present') return 1;
-    if (raw === 'off' || raw === 'close' || raw === 'none') return 0;
     if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const s = raw.toLowerCase();
+      const short = raw.includes('.') ? raw.split('.').pop().toLowerCase() : s;
+      if (['on','open','present','run','active','true','running'].includes(short)) return 1;
+      if (['off','close','closed','none','inactive','false','ready'].includes(short)) return 0;
+    }
     return null;
   }
 
   for (const e of events) {
     const dps = e.dps || {};
     for (const [k, raw] of Object.entries(dps)) {
-      if (!allowedKeys.has(k)) continue;
+      if (allowedKeys && !allowedKeys.has(k)) continue;
       const v = toVal(raw);
       if (v === null) continue;
       if (!byKey[k]) byKey[k] = [];

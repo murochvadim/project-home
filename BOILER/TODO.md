@@ -87,6 +87,7 @@ like Project folder ,like Laptop Image Backup
 
 ## Bugs
 - [ ] TV volume display not updating after volume_up/down — HA `media_player.samsung_85_qled` volume_level attribute doesn't push state back after volume commands
+- [x] Boiler ON→OFF→ON oscillation (2026-04-07 14:25–14:35): FIXED — waiting phase abort now checks absolute panel-vs-boiler delta, not just trend direction. If panel is still hotter than boiler + debounce, valve stays open even with downward trend.
 
 ---
 

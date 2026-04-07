@@ -854,7 +854,9 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'voice_token_log', 'manual_requests', 'voice_devices', 'voice_device_settings',
       'voice_intent_phrases', 'voice_device_entities', 'agents', 'agent_settings',
       'media_library', 'face_registry',
-      'backup_storages', 'backup_jobs', 'backup_log'
+      'backup_storages', 'backup_jobs', 'backup_log',
+      'devices', 'device_events', 'device_agent_log', 'device_blocklist',
+      'rooms', 'net_devices'
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -864,7 +866,9 @@ app.get('/api/health/db-volumes', async (req, res) => {
       voice_intent_phrases: 'created_at', voice_device_entities: null,
       agents: 'added_at', agent_settings: null,
       media_library: 'added_at', face_registry: 'added_at',
-      backup_storages: 'created_at', backup_jobs: 'created_at', backup_log: 'started_at'
+      backup_storages: 'created_at', backup_jobs: 'created_at', backup_log: 'started_at',
+      devices: 'last_seen', device_events: 'ts', device_agent_log: 'ts',
+      device_blocklist: 'blocked_at', rooms: null, net_devices: 'last_seen'
     };
 
     const sizes = await db.query(`
@@ -1209,7 +1213,12 @@ async function ensureSchema() {
       ('voice_token_log',    365,  true,  24, 'Voice pipeline Claude API token usage and cost'),
       ('backup_log',          90,  true,  24, 'Windows backup run history'),
       ('backup_jobs',        NULL, false, 24, 'Backup job definitions — keep forever'),
-      ('backup_storages',    NULL, false, 24, 'Backup storage definitions — keep forever')
+      ('backup_storages',    NULL, false, 24, 'Backup storage definitions — keep forever'),
+      ('device_events',       30,  true,  24, 'Device state change events'),
+      ('device_agent_log',    30,  true,  24, 'Device agent heartbeat log'),
+      ('device_blocklist',  NULL, false, 24, 'Deactivated devices — keep forever'),
+      ('devices',           NULL, false, 24, 'Device definitions — keep forever'),
+      ('rooms',             NULL, false, 24, 'Room definitions — keep forever')
     ON CONFLICT (table_name) DO NOTHING
   `);
 
@@ -2161,6 +2170,46 @@ app.get('/api/devices', async (req, res) => {
     sql += ' ORDER BY device_type, room, name';
     const r = await db.query(sql, params);
     res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/devices/blocklist', async (_req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM device_blocklist ORDER BY blocked_at DESC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/devices/blocklist/:id/deactivate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const dev = await db.query('SELECT id, name, vendor, device_type, protocol, mac, local_ip, local_key, version FROM devices WHERE id = $1', [id]);
+    if (!dev.rows.length) return res.status(404).json({ error: 'Device not found' });
+    const d = dev.rows[0];
+    await db.query(
+      `INSERT INTO device_blocklist (id, name, vendor, device_type, protocol, mac, local_ip, local_key, version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET blocked_at = NOW()`,
+      [d.id, d.name, d.vendor, d.device_type, d.protocol, d.mac, d.local_ip, d.local_key, d.version]
+    );
+    await db.query('DELETE FROM device_events WHERE device_id = $1', [id]);
+    await db.query('DELETE FROM devices WHERE id = $1', [id]);
+    res.json({ ok: true, name: d.name });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/devices/blocklist/:id/reactivate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bl = await db.query('SELECT * FROM device_blocklist WHERE id = $1', [id]);
+    if (!bl.rows.length) return res.status(404).json({ error: 'Not in blocklist' });
+    const d = bl.rows[0];
+    await db.query(
+      `INSERT INTO devices (id, name, vendor, device_type, protocol, mac, local_ip, local_key, version, enabled, show_dashboard)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, true) ON CONFLICT (id) DO NOTHING`,
+      [d.id, d.name, d.vendor, d.device_type, d.protocol, d.mac, d.local_ip, d.local_key, d.version]
+    );
+    await db.query('DELETE FROM device_blocklist WHERE id = $1', [id]);
+    res.json({ ok: true, name: d.name });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

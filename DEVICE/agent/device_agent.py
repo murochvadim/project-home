@@ -45,7 +45,7 @@ SOURCE_PRI = {
     'initial': 0, 'gateway_init': 0,
     'cloud_poll': 1, 'local_poll': 2,
     'gateway_push': 3, 'cloud_push': 3,
-    'ha_api': 4, 'tcp_push': 5, 'mqtt': 5,
+    'ha_api': 4, 'home_connect': 4, 'tcp_push': 5, 'mqtt': 5,
 }
 
 
@@ -81,13 +81,22 @@ class DeviceAgent:
 
     def _load_devices(self):
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Auto-populate MAC for devices that have local_ip but no mac
             cur.execute("""
-                SELECT id, name, vendor, device_type, protocol,
-                       local_ip, local_key, gateway_id, version,
-                       poll_enabled, poll_interval_sec, enabled
-                FROM devices
-                WHERE enabled = true
-                ORDER BY vendor, protocol, name
+                UPDATE devices d SET mac = n.mac
+                FROM net_devices n
+                WHERE n.ip = d.local_ip AND d.mac IS NULL AND d.local_ip IS NOT NULL
+            """)
+            # Load devices with fresh IP from net_devices (via MAC lookup)
+            cur.execute("""
+                SELECT d.id, d.name, d.vendor, d.device_type, d.protocol,
+                       COALESCE(n.ip, d.local_ip) AS local_ip,
+                       d.local_key, d.gateway_id, d.version,
+                       d.poll_enabled, d.poll_interval_sec, d.enabled, d.mac
+                FROM devices d
+                LEFT JOIN net_devices n ON n.mac = d.mac
+                WHERE d.enabled = true
+                ORDER BY d.vendor, d.protocol, d.name
             """)
             return cur.fetchall()
 

@@ -84,7 +84,7 @@
 
     /* ── DPS panel ── */
     .dps-panel-row td { background:rgba(122,154,184,0.07); padding:10px 14px; }
-    .dps-panel { display:grid; grid-template-columns:60px 1fr 1fr auto; gap:4px 10px; align-items:center; font-size:0.8rem; }
+    .dps-panel { display:grid; grid-template-columns:auto 1fr 1fr auto; gap:4px 10px; align-items:center; font-size:0.8rem; }
     .dps-panel .dps-hdr { color:#888; font-size:0.7rem; text-transform:uppercase; letter-spacing:.05em; padding-bottom:4px; border-bottom:1px solid #d0cbc4; }
     .dps-panel .dps-key { color:#7a9ab8; font-weight:600; font-family:monospace; }
     .dps-panel .dps-val { color:#888; font-family:monospace; }
@@ -180,10 +180,14 @@
           <option value="circuit_breaker">Circuit Breaker</option>
           <option value="co_alarm">CO Alarm</option>
           <option value="curtain">Curtain</option>
+          <option value="dishwasher">Dishwasher</option>
           <option value="door_sensor">Door Sensor</option>
           <option value="gas_detector">Gas Detector</option>
           <option value="gateway">Gateway</option>
+          <option value="hob">Hob</option>
+          <option value="hood">Hood</option>
           <option value="light">Light</option>
+          <option value="oven">Oven</option>
           <option value="presence">Presence</option>
           <option value="remote">Remote</option>
           <option value="scene">Scene</option>
@@ -191,6 +195,7 @@
           <option value="switch">Switch</option>
           <option value="temp_controller">Temp Controller</option>
           <option value="valve">Valve</option>
+          <option value="washer">Washer</option>
           <option value="water_heater">Water Heater</option>
           <option value="water_sensor">Water Sensor</option>
           <option value="wireless_switch">Wireless Switch</option>
@@ -216,6 +221,7 @@
           <option value="cloud_push">Pulsar</option>
           <option value="gateway_push">Gateway Push</option>
           <option value="ha_api">HA API</option>
+          <option value="home_connect">Home Connect</option>
           <option value="mqtt">MQTT</option>
           <option value="initial">Initial</option>
         </select>
@@ -235,7 +241,7 @@
             </tr>
           </thead>
           <tbody id="devices-tbody">
-            <tr><td colspan="7" style="color:#aaa">Loading…</td></tr>
+            <tr><td colspan="8" style="color:#aaa">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -254,10 +260,14 @@
           <option value="circuit_breaker">Circuit Breaker</option>
           <option value="co_alarm">CO Alarm</option>
           <option value="curtain">Curtain</option>
+          <option value="dishwasher">Dishwasher</option>
           <option value="door_sensor">Door Sensor</option>
           <option value="gas_detector">Gas Detector</option>
           <option value="gateway">Gateway</option>
+          <option value="hob">Hob</option>
+          <option value="hood">Hood</option>
           <option value="light">Light</option>
+          <option value="oven">Oven</option>
           <option value="presence">Presence</option>
           <option value="remote">Remote</option>
           <option value="scene">Scene</option>
@@ -265,6 +275,7 @@
           <option value="switch">Switch</option>
           <option value="temp_controller">Temp Controller</option>
           <option value="valve">Valve</option>
+          <option value="washer">Washer</option>
           <option value="water_heater">Water Heater</option>
           <option value="water_sensor">Water Sensor</option>
           <option value="wireless_switch">Wireless Switch</option>
@@ -283,10 +294,25 @@
               <th style="text-align:center">Poll</th>
               <th>Notes</th>
               <th style="width:44px"></th>
+              <th style="width:44px"></th>
             </tr>
           </thead>
           <tbody id="settings-tbody">
-            <tr><td colspan="9" style="color:#aaa">Loading…</td></tr>
+            <tr><td colspan="10" style="color:#aaa">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px;">
+      <h2>Blocked Devices</h2>
+      <p style="font-size:0.78rem;color:#888;margin-bottom:10px;">Devices removed from the project. Reactivate to bring them back as fresh devices.</p>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr><th>Name</th><th>Type</th><th>Protocol</th><th>Blocked</th><th style="width:80px"></th></tr>
+          </thead>
+          <tbody id="blocklist-tbody">
+            <tr><td colspan="5" style="color:#aaa">Loading…</td></tr>
           </tbody>
         </table>
       </div>

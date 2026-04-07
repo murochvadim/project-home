@@ -450,20 +450,29 @@ def run_agent():
                 log.info(f'Waiting phase: run {run_num}/{total}  last={is_last_run}')
 
                 if is_last_run:
-                    # Final waiting run — decide based on panel trend
+                    # Final waiting run — decide based on panel trend + absolute delta
                     if panel_trend == 'up':
                         decision     = 'keep_on'
                         why_decision = (f'Last waiting run ({run_num}/{total}): '
                                         f'panel trend UP → heating confirmed')
                         log.info('Waiting last run: panel UP → keep_on')
 
-                    elif panel_trend == 'down':
+                    elif panel_trend == 'down' and panel_temp < boiler_temp + temp_debounce:
                         decision     = 'turn_off'
                         why_decision = (f'Last waiting run ({run_num}/{total}): '
-                                        f'panel trend DOWN → panel is cooling')
-                        log.info('Waiting last run: panel DOWN → turn_off')
+                                        f'panel trend DOWN and panel {panel_temp:.1f}°C '
+                                        f'< boiler {boiler_temp:.1f}°C + {temp_debounce}°C → panel is cooling')
+                        log.info('Waiting last run: panel DOWN + below boiler → turn_off')
                         set_valve_ha(False)
                         valve_state = False
+
+                    elif panel_trend == 'down':
+                        # Panel trending down but still hotter than boiler — keep heating
+                        decision     = 'keep_on'
+                        why_decision = (f'Last waiting run ({run_num}/{total}): '
+                                        f'panel trend DOWN but panel {panel_temp:.1f}°C '
+                                        f'still > boiler {boiler_temp:.1f}°C → keep heating')
+                        log.info(f'Waiting last run: panel DOWN but still hot ({panel_temp:.1f} > {boiler_temp:.1f}) → keep_on')
 
                     else:  # stable or unavailable
                         decision     = 'hold'
@@ -472,14 +481,23 @@ def run_agent():
                         log.info('Waiting last run: panel stable/unavailable → hold')
 
                 else:
-                    # Mid-wait — early abort if panel trend DOWN (and readings are valid)
-                    if panel_trend_available and panel_trend == 'down':
+                    # Mid-wait — early abort only if panel trend DOWN AND panel cooler than boiler
+                    if panel_trend_available and panel_trend == 'down' and panel_temp < boiler_temp + temp_debounce:
                         decision     = 'turn_off'
                         why_decision = (f'Waiting run {run_num}/{total}: '
-                                        f'panel trend DOWN → early abort, panel is cooling')
-                        log.info(f'Waiting run {run_num}: panel DOWN → early abort turn_off')
+                                        f'panel trend DOWN and panel {panel_temp:.1f}°C '
+                                        f'< boiler {boiler_temp:.1f}°C + {temp_debounce}°C → early abort')
+                        log.info(f'Waiting run {run_num}: panel DOWN + below boiler → early abort turn_off')
                         set_valve_ha(False)
                         valve_state = False
+
+                    elif panel_trend_available and panel_trend == 'down':
+                        # Panel trending down but still hotter — continue waiting
+                        decision     = 'waiting'
+                        why_decision = (f'Waiting run {run_num}/{total}: '
+                                        f'panel trend DOWN but panel {panel_temp:.1f}°C '
+                                        f'still > boiler {boiler_temp:.1f}°C → continue waiting')
+                        log.info(f'Waiting run {run_num}: panel DOWN but still hot → continue')
 
                     else:
                         decision = 'waiting'
