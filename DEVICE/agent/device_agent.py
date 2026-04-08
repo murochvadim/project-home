@@ -71,7 +71,8 @@ class DeviceAgent:
         self._stop = threading.Event()
         self._device_best_source = {}   # device_id → (source, timestamp)
         self._device_last_event = {}    # (device_id, source) → dps_json
-        self._device_states = {}        # device_id → merged last_state dict (cache)
+        self._device_states = {}        # device_id → merged last_state dict (cache, filtered)
+        self._allowed_dps = {}          # device_id → set of allowed DPS keys (None = all allowed)
         self._connect_db()
 
         self._mqtt = MqttPublisher(
@@ -119,7 +120,33 @@ class DeviceAgent:
                 WHERE d.enabled = true
                 ORDER BY d.vendor, d.protocol, d.name
             """)
-            return cur.fetchall()
+            devices = cur.fetchall()
+
+            # Build allowed DPS keys per device (for filtering events/MQTT)
+            cur.execute("""
+                SELECT id, dps_config, channel_config, dps_labels
+                FROM devices WHERE enabled = true
+            """)
+            for row in cur.fetchall():
+                allowed = {'1'}  # DPS "1" always allowed
+                for k, cfg in (row.get('channel_config') or {}).items():
+                    if cfg.get('enabled') is not False:
+                        allowed.add(k)
+                for k, cfg in (row.get('dps_config') or {}).items():
+                    if cfg.get('enabled') is not False:
+                        allowed.add(k)
+                for k in (row.get('dps_labels') or {}).keys():
+                    allowed.add(k)
+                self._allowed_dps[row['id']] = allowed
+
+            return devices
+
+    def _filter_dps(self, device_id: str, dps: dict) -> dict:
+        """Filter DPS to only allowed keys for this device."""
+        allowed = self._allowed_dps.get(device_id)
+        if not allowed:
+            return dps  # no config loaded → allow all (safety fallback)
+        return {k: v for k, v in dps.items() if k in allowed}
 
     def _db_write(self, device_id: str, dps: dict, source: str):
         """Execute the DB writes for a state change event. Must be called under _db_lock."""
@@ -142,6 +169,9 @@ class DeviceAgent:
                 best = cur_best
 
             dps_json = json.dumps(dps, sort_keys=True)
+            # Filter DPS for events/MQTT (DB last_state gets all, events/MQTT get filtered)
+            filtered = self._filter_dps(device_id, dps)
+            filtered_json = json.dumps(filtered, sort_keys=True) if filtered else None
             now = time.time()
 
             # Purge stale dedup entries older than 120s to prevent unbounded growth
@@ -156,13 +186,13 @@ class DeviceAgent:
                     for sk in stale_src_keys:
                         del self._device_last_event[sk]
 
-            # Dedup per device+source: skip event if DPS unchanged since last write from same source
-            # Cross-source dedup: skip if same DPS within 2 seconds (e.g. tcp_push + ha_api)
+            # Dedup uses filtered DPS — changes to disabled keys don't trigger events
             dedup_key = (device_id, source)
             last_same_src = self._device_last_event.get(dedup_key)
             last_any = self._device_last_event.get(device_id)
-            is_dup = (last_same_src == dps_json) or (last_any and (now - last_any[0]) < 2 and last_any[1] == dps_json)
+            is_dup = (not filtered_json) or (last_same_src == filtered_json) or (last_any and (now - last_any[0]) < 2 and last_any[1] == filtered_json)
 
+            # DB last_state gets ALL DPS (for Settings view)
             cur.execute("""
                 UPDATE devices
                 SET last_state = COALESCE(last_state, '{}'::jsonb) || %s::jsonb,
@@ -170,21 +200,23 @@ class DeviceAgent:
                 WHERE id = %s
             """, (dps_json, best, device_id))
 
-            if not is_dup:
+            # Events + MQTT get only filtered (allowed) DPS
+            if not is_dup and filtered_json:
                 cur.execute("""
                     INSERT INTO device_events (device_id, ts, dps, source)
                     VALUES (%s, NOW(), %s, %s)
-                """, (device_id, dps_json, source))
-                self._device_last_event[dedup_key] = dps_json
-                self._device_last_event[device_id] = (now, dps_json)
+                """, (device_id, filtered_json, source))
+                self._device_last_event[dedup_key] = filtered_json
+                self._device_last_event[device_id] = (now, filtered_json)
 
-            # MQTT: merge into cached state (avoids extra SELECT per event)
+            # MQTT: cached state only has filtered keys
             cached = self._device_states.get(device_id, {})
-            cached.update(dps)
+            cached.update(filtered)
             self._device_states[device_id] = cached
-            self._mqtt.publish_device_state(device_id, cached, source)
-            if not is_dup:
-                self._mqtt.publish_device_event(device_id, dps, source)
+            if filtered:
+                self._mqtt.publish_device_state(device_id, cached, source)
+            if not is_dup and filtered_json:
+                self._mqtt.publish_device_event(device_id, filtered, source)
 
     def on_state_change(self, device_id: str, dps: dict, source: str):
         """Called by any adapter when a device state changes. Thread-safe."""
@@ -598,11 +630,11 @@ class DeviceAgent:
         devices = self._load_devices()
         log.info(f'Loaded {len(devices)} enabled devices')
 
-        # Seed state cache from DB (avoids extra SELECT per event in _db_write)
+        # Seed state cache from DB with filtered keys only
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT id, last_state FROM devices WHERE enabled = true AND last_state IS NOT NULL")
             for row in cur.fetchall():
-                self._device_states[row['id']] = dict(row['last_state'])
+                self._device_states[row['id']] = self._filter_dps(row['id'], dict(row['last_state']))
 
         # Group by vendor+protocol key
         by_key = {}
