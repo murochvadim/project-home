@@ -84,24 +84,32 @@
       const actLevel = s.activity_level || '—';
       document.getElementById('activity-level').textContent = actLevel.charAt(0).toUpperCase() + actLevel.slice(1);
       document.getElementById('last-heartbeat').textContent = hb.ts ? formatTimestamp(hb.ts) : '—';
-      document.getElementById('last-decision').textContent = hb.decision || '—';
+      const rules = parseJsonSafe(s._rules);
+      const activeRules = rules.length;
+      const disabledRules = new Set(parseJsonSafe(s._disabled_rules));
+      document.getElementById('last-decision').textContent = `${activeRules - disabledRules.size} active / ${disabledRules.size} disabled`;
 
       const activeRooms = parseJsonSafe(s.active_rooms);
       const occupiedRooms = parseJsonSafe(s.occupied_rooms);
 
       // ── Rules tab ──
-      const rules = parseJsonSafe(s._rules);
-      const disabledRules = new Set(parseJsonSafe(s._disabled_rules));
       const rulesBody = document.getElementById('rules-body');
       if (rules.length === 0) {
-        rulesBody.innerHTML = '<tr><td colspan="4" style="color:#aaa">No rules loaded</td></tr>';
+        rulesBody.innerHTML = '<tr><td colspan="7" style="color:#aaa">No rules loaded</td></tr>';
       } else {
         rulesBody.innerHTML = rules.map(r => {
           const enabled = !disabledRules.has(r.name);
+          const st = r.stats || {};
+          const runs = st.count || 0;
+          const avg = runs > 0 ? (st.total_ms / runs).toFixed(1) + 'ms' : '—';
+          const max = st.max_ms ? st.max_ms.toFixed(1) + 'ms' : '—';
           return `<tr>
             <td class="rule-name">${escHtml(r.name)}</td>
             <td class="rule-desc">${escHtml(r.description)}</td>
             <td class="rule-cat">${escHtml(r.category)}</td>
+            <td style="text-align:center">${runs}</td>
+            <td style="text-align:center">${avg}</td>
+            <td style="text-align:center">${max}</td>
             <td>
               <label class="toggle">
                 <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleRule('${escHtml(r.name)}', this.checked)">

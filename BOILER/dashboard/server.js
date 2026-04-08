@@ -1194,6 +1194,26 @@ app.get('/api/rule-engine/state', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/rule-engine/toggle', async (req, res) => {
+  try {
+    const { name, enabled } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing rule name' });
+    const r = await db.query("SELECT value FROM rule_engine_state WHERE key = '_disabled_rules'");
+    let disabled = (r.rows.length > 0 && Array.isArray(r.rows[0].value)) ? r.rows[0].value : [];
+    if (enabled) {
+      disabled = disabled.filter(n => n !== name);
+    } else {
+      if (!disabled.includes(name)) disabled.push(name);
+    }
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_disabled_rules', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()`,
+      [JSON.stringify(disabled)]
+    );
+    res.json({ ok: true, disabled });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Start ────────────────────────────────────────────────────
 async function ensureSchema() {
   await db.query(`

@@ -49,6 +49,7 @@ class RuleEngine:
         self.trigger_index = {}         # device_id -> [rule_module, ...]
         self._disabled_rules = set()    # set of rule names
         self._command_log = {}          # device_id -> [(ts, action), ...]
+        self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms}
         self._stop = threading.Event()
         self._last_computed_publish = 0
 
@@ -107,16 +108,7 @@ class RuleEngine:
         self._disabled_rules = set(disabled_raw)
 
         # Store rules metadata in shared state for dashboard
-        self.state.shared['_rules'] = [
-            {
-                'name': m.RULE['name'],
-                'description': m.RULE.get('description', ''),
-                'category': m.RULE.get('category', ''),
-                'triggers': len(m.RULE.get('triggers', [])),
-                'controls': len(m.RULE.get('controls', [])),
-            }
-            for m in self.rules
-        ]
+        self._update_rules_metadata()
 
         log.info('Loaded %d rules (%d disabled)', len(self.rules), len(self._disabled_rules))
 
@@ -126,6 +118,20 @@ class RuleEngine:
         for module in self.rules:
             for device_id in module.RULE.get('triggers', []):
                 self.trigger_index.setdefault(device_id, []).append(module)
+
+    def _update_rules_metadata(self):
+        """Store rules metadata + execution stats in shared state for dashboard."""
+        self.state.shared['_rules'] = [
+            {
+                'name': m.RULE['name'],
+                'description': m.RULE.get('description', ''),
+                'category': m.RULE.get('category', ''),
+                'triggers': len(m.RULE.get('triggers', [])),
+                'controls': len(m.RULE.get('controls', [])),
+                'stats': self._rule_stats.get(m.RULE['name'], {}),
+            }
+            for m in self.rules
+        ]
 
     # ------------------------------------------------------------------
     # MQTT event callback (runs in paho network thread — must be fast)
@@ -294,11 +300,22 @@ class RuleEngine:
 
     def _evaluate_rule(self, rule, event):
         """Call rule.evaluate() safely, return list of command dicts."""
+        t0 = time.time()
         try:
             result = rule.evaluate(event, self.state)
         except Exception as e:
             log.error("Rule '%s' failed: %s", rule.RULE['name'], e, exc_info=True)
             return []
+        finally:
+            elapsed_ms = (time.time() - t0) * 1000
+            name = rule.RULE['name']
+            # Track execution time per rule
+            stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+            stats['count'] += 1
+            stats['total_ms'] += elapsed_ms
+            if elapsed_ms > stats['max_ms']:
+                stats['max_ms'] = elapsed_ms
+            self._rule_stats[name] = stats
 
         if result is None:
             return []
@@ -416,12 +433,22 @@ class RuleEngine:
         while not self._stop.is_set():
             now = time.time()
 
-            # Save shared state every 60s
+            # Save shared state + sync disabled rules from DB every 60s
             if now - last_save >= 60:
                 try:
+                    # Reload disabled rules from DB (dashboard may have changed them)
+                    self.state.load_shared_state()
+                    disabled_raw = self.state.shared.get('_disabled_rules', [])
+                    if isinstance(disabled_raw, str):
+                        try:
+                            disabled_raw = json.loads(disabled_raw)
+                        except (json.JSONDecodeError, TypeError):
+                            disabled_raw = []
+                    self._disabled_rules = set(disabled_raw)
+                    self._update_rules_metadata()
                     self.state.save_shared_state()
                 except Exception:
-                    log.warning('Failed to save shared state', exc_info=True)
+                    log.warning('Failed to sync shared state', exc_info=True)
                 last_save = now
 
             # Write heartbeat every 60s
