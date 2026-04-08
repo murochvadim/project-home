@@ -128,10 +128,13 @@ class DeviceAgent:
                 FROM devices WHERE enabled = true
             """)
             for row in cur.fetchall():
-                allowed = {'1'}  # DPS "1" always allowed
-                # Only DPS keys with labels are enabled — everything else filtered out
-                for k in (row.get('dps_labels') or {}).keys():
-                    allowed.add(k)
+                labels = row.get('dps_labels') or {}
+                if labels:
+                    # Only labeled DPS keys are enabled — nothing else
+                    allowed = set(labels.keys())
+                else:
+                    # No labels at all → default to DPS "1" only
+                    allowed = {'1'}
                 self._allowed_dps[row['id']] = allowed
 
             return devices

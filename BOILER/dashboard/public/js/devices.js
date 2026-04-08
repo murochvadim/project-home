@@ -410,6 +410,7 @@ function renderPresence() {
 
 function getChannelKeys(dev) {
   if (!dev.last_state) return [];
+  const labels = dev.dps_labels || {};
   const bools = [], nums = [];
   for (let i = 1; i <= 8; i++) {
     const k = String(i);
@@ -419,7 +420,12 @@ function getChannelKeys(dev) {
   }
   // Include numeric 0/1 only if there are already 2+ booleans —
   // confirming this is a genuine multi-gang device, not a counter/setting.
-  const keys = bools.length >= 2 ? [...bools, ...nums].sort((a,b) => +a - +b) : bools;
+  let keys = bools.length >= 2 ? [...bools, ...nums].sort((a,b) => +a - +b) : bools;
+  // If device has dps_labels, only show labeled channels
+  // DPS "1" is the main device row — don't duplicate as channel row unless labeled
+  if (Object.keys(labels).length > 0) {
+    keys = keys.filter(k => labels[k]);
+  }
   return keys.length > 1 ? keys : [];
 }
 
@@ -1113,12 +1119,14 @@ function renderHistoryChart(events, minutes, dev) {
     ha_api: '#2980b9', mqtt: '#16a085'
   };
 
-  // Build set of allowed DPS keys — only labeled keys + DPS "1"
+  // Allowed DPS: labeled keys only. No labels → default to "1"
   const dpsLabelsChart = (dev && dev.dps_labels) || {};
   const allowedKeys = new Set();
-  allowedKeys.add('1');
-  for (const k of Object.keys(dpsLabelsChart)) {
-    allowedKeys.add(k);
+  const labelKeys = Object.keys(dpsLabelsChart);
+  if (labelKeys.length > 0) {
+    for (const k of labelKeys) allowedKeys.add(k);
+  } else {
+    allowedKeys.add('1');
   }
 
   // ── State lines: one line per allowed DPS key ──
