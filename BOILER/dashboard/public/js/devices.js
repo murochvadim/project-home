@@ -1119,14 +1119,20 @@ function renderHistoryChart(events, minutes, dev) {
     ha_api: '#2980b9', mqtt: '#16a085'
   };
 
-  // Allowed DPS: labeled keys only. No labels → default to "1"
+  // Allowed DPS: "1" default + labels + channel_config + dps_config (enabled !== false)
+  // dps_config enabled=false is a kill switch that overrides everything
   const dpsLabelsChart = (dev && dev.dps_labels) || {};
+  const chanCfg = (dev && dev.channel_config) || {};
+  const dpsCfg = (dev && dev.dps_config) || {};
   const allowedKeys = new Set();
-  const labelKeys = Object.keys(dpsLabelsChart);
-  if (labelKeys.length > 0) {
-    for (const k of labelKeys) allowedKeys.add(k);
-  } else {
-    allowedKeys.add('1');
+  allowedKeys.add('1');
+  for (const k of Object.keys(dpsLabelsChart)) allowedKeys.add(k);
+  for (const [k, cfg] of Object.entries(chanCfg)) {
+    if (cfg.enabled !== false) allowedKeys.add(k);
+  }
+  for (const [k, cfg] of Object.entries(dpsCfg)) {
+    if (cfg.enabled === false) allowedKeys.delete(k);
+    else allowedKeys.add(k);
   }
 
   // ── State lines: one line per allowed DPS key ──

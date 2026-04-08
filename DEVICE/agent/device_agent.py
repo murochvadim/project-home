@@ -128,13 +128,19 @@ class DeviceAgent:
                 FROM devices WHERE enabled = true
             """)
             for row in cur.fetchall():
-                labels = row.get('dps_labels') or {}
-                if labels:
-                    # Only labeled DPS keys are enabled — nothing else
-                    allowed = set(labels.keys())
-                else:
-                    # No labels at all → default to DPS "1" only
-                    allowed = {'1'}
+                allowed = {'1'}  # DPS "1" default
+                for k in (row.get('dps_labels') or {}).keys():
+                    allowed.add(k)
+                for k, cfg in (row.get('channel_config') or {}).items():
+                    if cfg.get('enabled') is not False:
+                        allowed.add(k)
+                for k, cfg in (row.get('dps_config') or {}).items():
+                    if cfg.get('enabled') is not False:
+                        allowed.add(k)
+                # enabled=false in dps_config is a kill switch — overrides everything
+                for k, cfg in (row.get('dps_config') or {}).items():
+                    if cfg.get('enabled') is False:
+                        allowed.discard(k)
                 self._allowed_dps[row['id']] = allowed
 
             return devices
