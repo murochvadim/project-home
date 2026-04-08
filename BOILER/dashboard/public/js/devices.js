@@ -299,7 +299,8 @@ function applyFilters() {
         const isOn  = d.last_state[k] === true || d.last_state[k] === 1;
         const dot   = isOn ? 'dot-on' : 'dot-off';
         const txt   = isOn ? 'ON' : 'OFF';
-        const name  = cfg[k]?.name ? `${escHtml(d.name)} — ${escHtml(cfg[k].name)}` : `${escHtml(d.name)} Ch.${k}`;
+        const chanName = cfg[k]?.name || (d.dps_labels || {})[k] || '';
+        const name  = chanName ? `${escHtml(d.name)} — ${escHtml(chanName)}` : `${escHtml(d.name)} Ch.${k}`;
         const room  = cfg[k]?.room || d.room || '—';
         rows.push(`<tr>
           <td><span class="status-dot ${dot}"></span>${txt}</td>
