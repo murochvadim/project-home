@@ -512,10 +512,11 @@ function applySettingsFilters() {
     </tr>`);
     }
 
-    // DPS attribute sub-rows for devices with labeled DPS
+    // DPS attribute sub-rows for devices with labeled DPS (skip keys already in channel_config)
     const dpsLabels = d.dps_labels || {};
     const dpsCfg    = d.dps_config || {};
-    const dpsKeys   = Object.keys(dpsLabels).sort((a, b) => Number(a) - Number(b));
+    const chanCfgKeys = new Set(Object.keys(d.channel_config || {}));
+    const dpsKeys   = Object.keys(dpsLabels).filter(k => !chanCfgKeys.has(k)).sort((a, b) => Number(a) - Number(b));
     for (const k of dpsKeys) {
       if (!d.last_state || d.last_state[k] === undefined) continue;
       const raw      = d.last_state[k];
