@@ -224,7 +224,7 @@ ssh root@192.168.1.187 "systemctl daemon-reload && systemctl enable main-agent.t
 **Fix:**
 1. **Test old token first**: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <old>" http://192.168.1.110:8123/api/` — if `200`, token still valid, just restart the failing service. If `401`, proceed.
 2. HA UI → profile → Long-Lived Access Tokens → create new token → **save to password manager immediately**
-3. Update `BOILER/dashboard/.env` → `HA_TOKEN=<new>` — restart: `pm2 restart ecosystem.config.js`
+3. Update `BOILER/dashboard/.env` → `HA_TOKEN=<new>` — restart: `cd /c/Users/muroc/project_home/BOILER/dashboard && pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
 4. Update `/etc/environment` on LXC 100 → `HA_TOKEN=<new>` — restart tv_control.py
 5. Update `/etc/environment` on LXC 103 → `HA_TOKEN=<new>` — no restart needed
 6. Update `/etc/boiler-agent.env` on LXC 103 → `HA_TOKEN=<new>` — restart: `systemctl restart boiler-agent.service`
@@ -233,7 +233,7 @@ ssh root@192.168.1.187 "systemctl daemon-reload && systemctl enable main-agent.t
 9. Trigger orchestrator: `ssh root@192.168.1.187 "systemctl start main-agent-quick.service"`
 
 **All 5 token locations:**
-- `BOILER/dashboard/.env` — restart: `pm2 restart ecosystem.config.js`
+- `BOILER/dashboard/.env` — restart: `cd /c/Users/muroc/project_home/BOILER/dashboard && pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
 - `/etc/environment` on LXC 100 (tv_control.py) — restart: kill + nohup tv_control.py
 - `/etc/environment` on LXC 103 (collect_weather, ha_to_pg) — no restart needed
 - `/etc/boiler-agent.env` on LXC 103 (boiler agent systemd) — restart: `systemctl restart boiler-agent.service`

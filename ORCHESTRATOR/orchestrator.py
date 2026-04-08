@@ -330,7 +330,7 @@ def run_retention(cur):
 
         cur.execute("""
             SELECT column_name FROM information_schema.columns
-            WHERE table_name = %s AND column_name IN ('ts','detected_at')
+            WHERE table_schema = 'public' AND table_name = %s AND column_name IN ('ts','detected_at')
             ORDER BY ordinal_position LIMIT 1
         """, (p['table_name'],))
         col_row = cur.fetchone()
@@ -341,11 +341,18 @@ def run_retention(cur):
             log.warning(f"run_retention: invalid table/column name '{p['table_name']}'/'{col_row['column_name']}' — skipping")
             continue
         cutoff = now - timedelta(days=p['keep_days'])
-        cur.execute(f"DELETE FROM {p['table_name']} WHERE {col_row['column_name']} < %s", (cutoff,))
-        deleted = cur.rowcount
-        cur.execute("UPDATE retention_policies SET last_cleaned_at = %s WHERE table_name = %s",
-                    (now, p['table_name']))
-        results.append((p['table_name'], deleted))
+        # Use SAVEPOINT so a failure on one table doesn't roll back others
+        cur.execute("SAVEPOINT retention_delete")
+        try:
+            cur.execute(f"DELETE FROM {p['table_name']} WHERE {col_row['column_name']} < %s", (cutoff,))
+            deleted = cur.rowcount
+            cur.execute("UPDATE retention_policies SET last_cleaned_at = %s WHERE table_name = %s",
+                        (now, p['table_name']))
+            cur.execute("RELEASE SAVEPOINT retention_delete")
+            results.append((p['table_name'], deleted))
+        except Exception as e:
+            cur.execute("ROLLBACK TO SAVEPOINT retention_delete")
+            log.warning(f'Retention cleanup failed for {p["table_name"]}: {e}')
 
     return results
 
@@ -373,6 +380,12 @@ def run_vacuum_if_due(db, cur):
             vc.execute('VACUUM ANALYZE')
     finally:
         db.autocommit = False
+    # Log VACUUM completion in its own transaction so it's not lost on later rollback
+    with db.cursor() as vc:
+        vc.execute(
+            "INSERT INTO orchestrator_log (severity, message) VALUES ('info', 'VACUUM ANALYZE completed — all tables cleaned')"
+        )
+    db.commit()
     return True
 
 
@@ -380,6 +393,7 @@ def run_vacuum_if_due(db, cur):
 def main(quick=False):
     mode = 'quick-check' if quick else 'full'
     log.info(f'Orchestrator run started ({mode})')
+    db = None
     cur = None
     try:
         db  = get_db()
@@ -422,9 +436,8 @@ def main(quick=False):
             else:
                 write_log(cur, 'info', 'Retention cleanup: nothing due')
 
-            # Weekly VACUUM ANALYZE
-            if run_vacuum_if_due(db, cur):
-                write_log(cur, 'info', 'VACUUM ANALYZE completed — all tables cleaned')
+            # Weekly VACUUM ANALYZE (logs its own completion inside the function)
+            run_vacuum_if_due(db, cur)
 
             # Count active alerts for summary
             cur.execute("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL")
@@ -453,7 +466,8 @@ def main(quick=False):
     finally:
         if cur:
             cur.close()
-        db.close()
+        if db:
+            db.close()
 
 
 if __name__ == '__main__':

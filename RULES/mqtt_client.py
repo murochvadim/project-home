@@ -1,14 +1,15 @@
 """
-Reusable MQTT publisher with LWT, auto-reconnect, and retained state publishing.
+MQTT client for the Rule Engine.
 
-Designed for fire-and-forget publishing — MQTT failures never block the caller.
-Will be reused by Boiler/Media agents with different topic prefixes.
+Adapted from Device Agent's MqttPublisher with rule-engine topic prefix,
+command publishing (QoS 1), and computed state publishing.
 
 Requires: paho-mqtt >= 2.0
 """
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 
@@ -21,9 +22,15 @@ except ImportError:
 
 TZ = ZoneInfo('Asia/Jerusalem')
 
-log = logging.getLogger('mqtt_publisher')
+log = logging.getLogger('rule_engine.mqtt')
 
-TOPIC_PREFIX = 'mur/home/device'
+TOPIC_PREFIX = 'mur/home/rule-engine'
+
+# Credentials from environment
+MQTT_BROKER = os.environ.get('MQTT_BROKER', '192.168.1.189')
+MQTT_PORT = int(os.environ.get('MQTT_PORT', '1883'))
+MQTT_USER = os.environ.get('MQTT_USER', 'rule_engine')
+MQTT_PASS = os.environ.get('MQTT_PASS', '')
 
 
 def _now_iso() -> str:
@@ -31,33 +38,27 @@ def _now_iso() -> str:
     return datetime.now(tz=TZ).isoformat()
 
 
-class MqttPublisher:
-    """Reusable MQTT publisher with LWT, auto-reconnect, and retained state."""
+class MqttClient:
+    """MQTT client for Rule Engine — connect, subscribe, publish commands and computed state."""
 
-    def __init__(self, broker: str, port: int, username: str, password: str,
-                 client_id: str, lwt_topic: str):
+    def __init__(self):
+        """Initialize MQTT client using env-var credentials.
+
+        LWT topic: mur/home/rule-engine/state → {"state":"offline"}
+        Client ID: rule-engine-105
         """
-        broker     — Mosquitto host (e.g. '192.168.1.189')
-        port       — Mosquitto port (default 1883)
-        username   — MQTT username (e.g. 'device_agent')
-        password   — MQTT password (required — empty means MQTT disabled)
-        client_id  — unique client ID (e.g. 'device-agent-103')
-        lwt_topic  — Last Will topic (e.g. 'mur/home/device/_bridge/state')
-        """
-        self._broker = broker
-        self._port = port
-        self._lwt_topic = lwt_topic
+        self._broker = MQTT_BROKER
+        self._port = MQTT_PORT
+        self._lwt_topic = f'{TOPIC_PREFIX}/state'
         self._connected = False
         self._enabled = True
         self._drop_warned = False
 
         # Stored for republish on reconnect
-        self._device_count = 0
-        self._adapter_count = 0
-        self._last_inventory = None
+        self._rule_count = 0
         self._lock = threading.Lock()
 
-        if not password:
+        if not MQTT_PASS:
             log.error('MQTT_PASS not set — MQTT publishing disabled')
             self._enabled = False
             self._client = None
@@ -66,14 +67,14 @@ class MqttPublisher:
         # paho-mqtt v2.x requires CallbackAPIVersion
         self._client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=client_id,
+            client_id='rule-engine-105',
             protocol=mqtt.MQTTv311,
         )
-        self._client.username_pw_set(username, password)
+        self._client.username_pw_set(MQTT_USER, MQTT_PASS)
 
         # LWT: broker publishes this when client disconnects unexpectedly
-        lwt_payload = json.dumps({'state': 'offline', 'ts': _now_iso()})
-        self._client.will_set(lwt_topic, lwt_payload, qos=1, retain=True)
+        lwt_payload = json.dumps({'state': 'offline'})
+        self._client.will_set(self._lwt_topic, lwt_payload, qos=1, retain=True)
 
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
@@ -122,10 +123,8 @@ class MqttPublisher:
             self._connected = True
             self._drop_warned = False
             log.info('MQTT connected to %s:%d', self._broker, self._port)
-            # Republish bridge online + inventory on every (re)connect
-            self.publish_bridge_online(self._device_count, self._adapter_count)
-            if self._last_inventory is not None:
-                self.publish_inventory(self._last_inventory)
+            # Republish bridge online on every (re)connect
+            self.publish_bridge_online(self._rule_count)
             # Re-subscribe if subscriptions were set before reconnect
             if hasattr(self, '_subscriptions') and self._subscriptions:
                 for topic, qos in self._subscriptions:
@@ -163,69 +162,13 @@ class MqttPublisher:
                 self._drop_warned = True
 
     # ------------------------------------------------------------------
-    # Domain-specific publish helpers
-    # ------------------------------------------------------------------
-
-    def publish_device_state(self, device_id: str, full_state: dict, source: str):
-        """Publish full merged state to mur/home/device/{id}/state (retained)."""
-        topic = f'{TOPIC_PREFIX}/{device_id}/state'
-        payload = {
-            'dps': full_state,
-            'source': source,
-            'ts': _now_iso(),
-        }
-        self.publish(topic, payload, retain=True, qos=0)
-
-    def publish_device_event(self, device_id: str, dps: dict, source: str):
-        """Publish changed DPS to mur/home/device/{id}/event (transient)."""
-        topic = f'{TOPIC_PREFIX}/{device_id}/event'
-        payload = {
-            'device_id': device_id,
-            'dps': dps,
-            'source': source,
-            'ts': _now_iso(),
-        }
-        self.publish(topic, payload, retain=False, qos=0)
-
-    def publish_availability(self, device_id: str, online: bool, last_seen: str):
-        """Publish online/offline to mur/home/device/{id}/availability (retained, QoS 1)."""
-        topic = f'{TOPIC_PREFIX}/{device_id}/availability'
-        payload = {
-            'online': online,
-            'last_seen': last_seen,
-        }
-        self.publish(topic, payload, retain=True, qos=1)
-
-    def publish_inventory(self, devices: list):
-        """Publish full device list to mur/home/device/_bridge/devices (retained)."""
-        self._last_inventory = devices
-        topic = f'{TOPIC_PREFIX}/_bridge/devices'
-        self.publish(topic, devices, retain=True, qos=0)
-
-    def publish_bridge_online(self, device_count: int, adapter_count: int):
-        """Publish bridge state as online (retained, QoS 1).
-
-        Stores counts so on_connect can republish after reconnect.
-        """
-        with self._lock:
-            self._device_count = device_count
-            self._adapter_count = adapter_count
-        payload = {
-            'state': 'online',
-            'devices': device_count,
-            'adapters': adapter_count,
-            'ts': _now_iso(),
-        }
-        self.publish(self._lwt_topic, payload, retain=True, qos=1)
-
-    # ------------------------------------------------------------------
-    # Subscribe (for universal MQTT ingest)
+    # Subscribe
     # ------------------------------------------------------------------
 
     def subscribe(self, topics: list, on_message):
         """Subscribe to a list of topic patterns and set message callback.
 
-        topics   — list of (topic_pattern, qos) tuples, e.g. [('hasp/+/state', 0)]
+        topics     — list of (topic_pattern, qos) tuples, e.g. [('mur/home/device/+/state', 0)]
         on_message — callback(client, userdata, message)
         """
         if not self._enabled or self._client is None:
@@ -235,3 +178,40 @@ class MqttPublisher:
         for topic, qos in topics:
             self._client.subscribe(topic, qos)
             log.info('MQTT subscribed to %s (qos=%d)', topic, qos)
+
+    # ------------------------------------------------------------------
+    # Rule Engine publish helpers
+    # ------------------------------------------------------------------
+
+    def publish_command(self, topic: str, payload: dict):
+        """Publish a command with QoS 1 (guaranteed delivery).
+
+        Used to send commands to device agents or other services.
+        """
+        self.publish(topic, payload, retain=False, qos=1)
+
+    def publish_bridge_online(self, rule_count: int):
+        """Publish rule engine state as online (retained, QoS 1).
+
+        Stores rule_count so _on_connect can republish after reconnect.
+        """
+        with self._lock:
+            self._rule_count = rule_count
+        payload = {
+            'state': 'online',
+            'rules': rule_count,
+            'ts': _now_iso(),
+        }
+        self.publish(self._lwt_topic, payload, retain=True, qos=1)
+
+    def publish_computed_state(self, key: str, value):
+        """Publish a computed value to mur/home/rule-engine/computed/{key} (retained, QoS 0).
+
+        Used for derived/aggregated state that other agents or the dashboard can read.
+        """
+        topic = f'{TOPIC_PREFIX}/computed/{key}'
+        payload = {
+            'value': value,
+            'ts': _now_iso(),
+        }
+        self.publish(topic, payload, retain=True, qos=0)

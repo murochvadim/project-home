@@ -25,7 +25,10 @@ import pytz
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+import requests
+
 from adapters import ADAPTERS, CLOUD_ADAPTERS, PUSH_ADAPTERS, HAApiAdapter
+from adapters.ha_api import HA_URL, HA_TOKEN
 from adapters.mqtt_publisher import MqttPublisher
 
 logging.basicConfig(
@@ -68,6 +71,7 @@ class DeviceAgent:
         self._stop = threading.Event()
         self._device_best_source = {}   # device_id → (source, timestamp)
         self._device_last_event = {}    # (device_id, source) → dps_json
+        self._device_states = {}        # device_id → merged last_state dict (cache)
         self._connect_db()
 
         self._mqtt = MqttPublisher(
@@ -174,11 +178,11 @@ class DeviceAgent:
                 self._device_last_event[dedup_key] = dps_json
                 self._device_last_event[device_id] = (now, dps_json)
 
-            # MQTT: read back full merged state, then publish
-            cur.execute("SELECT last_state FROM devices WHERE id = %s", (device_id,))
-            row = cur.fetchone()
-            full_state = row[0] if row and row[0] else dps
-            self._mqtt.publish_device_state(device_id, full_state, source)
+            # MQTT: merge into cached state (avoids extra SELECT per event)
+            cached = self._device_states.get(device_id, {})
+            cached.update(dps)
+            self._device_states[device_id] = cached
+            self._mqtt.publish_device_state(device_id, cached, source)
             if not is_dup:
                 self._mqtt.publish_device_event(device_id, dps, source)
 
@@ -305,6 +309,8 @@ class DeviceAgent:
                             for r in rows
                         ]
                         self._mqtt.publish_inventory(inventory)
+                        # Refresh MQTT ingest map so new HASP/Awtrix/Zigbee devices are picked up
+                        self._build_mqtt_device_map()
 
                     log.info(f'Config poll: {len(changed)} changes, {len(new_devices)} new devices')
                     last_check = datetime.now(pytz.utc)
@@ -312,6 +318,108 @@ class DeviceAgent:
                     log.exception('Config poll error')
         except Exception:
             log.exception('Config poll thread crashed')
+
+    # ── MQTT command handler ──────────────────────────────────────
+
+    # Entities to skip when resolving switchable target
+    _SKIP_SUFFIXES = ('child_lock', 'countdown', 'indicator')
+    # Preferred entity suffixes, in priority order
+    _PREFER_SUFFIXES = ('_switch', '_switch_1', '_light', '_curtain')
+
+    def _resolve_entity(self, device_id: str, channel: str | None) -> dict | None:
+        """Pick the best HA entity for a command. Returns {entity_id, domain} or None."""
+        ha_adapter = self.adapters.get('ha_api')
+        if not ha_adapter:
+            return None
+        entities = ha_adapter._entity_map.get(device_id, [])
+        if not entities:
+            return None
+
+        # Filter out non-actionable entities (sensors, child_lock, etc.)
+        candidates = [
+            e for e in entities
+            if e['domain'] in ('switch', 'light', 'fan', 'cover')
+            and not any(e['entity_id'].endswith(s) for s in self._SKIP_SUFFIXES)
+        ]
+        if not candidates:
+            return None
+
+        # If channel specified, find exact match
+        if channel:
+            suffix = f'_{channel}'
+            for e in candidates:
+                if e['entity_id'].endswith(suffix):
+                    return e
+            return None
+
+        # Prefer known suffixes
+        for pref in self._PREFER_SUFFIXES:
+            for e in candidates:
+                if e['entity_id'].endswith(pref):
+                    return e
+
+        # Fall back to first switch entity
+        for e in candidates:
+            if e['domain'] == 'switch':
+                return e
+        return candidates[0]
+
+    def _handle_command(self, device_id: str, payload: dict):
+        """Execute a device command via HA API. Runs in a daemon thread."""
+        rule = payload.get('rule', '')
+        resp_topic = f'mur/home/device/{device_id}/command/response'
+        try:
+            action = payload.get('action')
+            if not action:
+                self._mqtt.publish(resp_topic, {'ok': False, 'error': 'Missing action', 'rule': rule})
+                return
+
+            channel = payload.get('channel')
+            entity = self._resolve_entity(device_id, channel)
+            if not entity:
+                self._mqtt.publish(resp_topic, {
+                    'ok': False, 'error': 'No switchable entity found', 'rule': rule,
+                })
+                return
+
+            entity_id = entity['entity_id']
+            domain = entity['domain']
+            headers = {'Authorization': f'Bearer {HA_TOKEN}', 'Content-Type': 'application/json'}
+            svc_data: dict = {'entity_id': entity_id}
+
+            if action in ('turn_on', 'turn_off'):
+                service = f'{domain}/{action}'
+            elif action == 'set_brightness':
+                service = 'light/turn_on'
+                svc_data['brightness'] = int(payload.get('brightness', 128))
+            elif action == 'set_color_temp':
+                service = 'light/turn_on'
+                svc_data['color_temp'] = int(payload.get('color_temp', 370))
+            elif action == 'set_position':
+                service = 'cover/set_cover_position'
+                svc_data['position'] = int(payload.get('position', 50))
+            else:
+                self._mqtt.publish(resp_topic, {
+                    'ok': False, 'error': f'Unknown action: {action}', 'rule': rule,
+                })
+                return
+
+            r = requests.post(
+                f'{HA_URL}/api/services/{service}',
+                headers=headers, json=svc_data, timeout=10,
+            )
+            r.raise_for_status()
+
+            log.info(f'Command OK: {device_id} → {service} ({entity_id}) rule={rule}')
+            self._mqtt.publish(resp_topic, {
+                'ok': True, 'entity_id': entity_id, 'service': service, 'rule': rule,
+            })
+
+        except Exception as e:
+            log.error(f'Command failed for {device_id}: {e}')
+            self._mqtt.publish(resp_topic, {
+                'ok': False, 'error': str(e), 'rule': rule,
+            })
 
     # ── MQTT ingest ──────────────────────────────────────────────
 
@@ -335,6 +443,21 @@ class DeviceAgent:
         try:
             topic = msg.topic
             parts = topic.split('/')
+
+            # --- mur/home/device/+/command ---
+            if topic.startswith('mur/home/device/') and topic.endswith('/command'):
+                device_id = parts[3]
+                try:
+                    payload = json.loads(msg.payload)
+                except (json.JSONDecodeError, ValueError):
+                    log.warning(f'Invalid command JSON for {device_id}')
+                    return
+                # Run in thread to avoid blocking MQTT callback loop
+                threading.Thread(
+                    target=self._handle_command, args=(device_id, payload),
+                    daemon=True, name=f'cmd-{device_id[:8]}',
+                ).start()
+                return
 
             # --- mur/home/device/+/ingest ---
             if topic.startswith('mur/home/device/') and topic.endswith('/ingest'):
@@ -418,6 +541,7 @@ class DeviceAgent:
             return
         topics = [
             ('mur/home/device/+/ingest', 0),
+            ('mur/home/device/+/command', 1),   # QoS 1 — commands must be delivered
             ('hasp/+/state', 0),
             ('hasp/+/state/+', 0),
             ('awtrix/+/stats', 0),
@@ -473,6 +597,12 @@ class DeviceAgent:
         # Load devices from DB
         devices = self._load_devices()
         log.info(f'Loaded {len(devices)} enabled devices')
+
+        # Seed state cache from DB (avoids extra SELECT per event in _db_write)
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id, last_state FROM devices WHERE enabled = true AND last_state IS NOT NULL")
+            for row in cur.fetchall():
+                self._device_states[row['id']] = dict(row['last_state'])
 
         # Group by vendor+protocol key
         by_key = {}
