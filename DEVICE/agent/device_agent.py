@@ -128,10 +128,9 @@ class DeviceAgent:
                 FROM devices WHERE enabled = true
             """)
             for row in cur.fetchall():
-                allowed = {'1'}  # DPS "1" default
-                # dps_labels = source of truth for enabling DPS keys
-                for k in (row.get('dps_labels') or {}).keys():
-                    allowed.add(k)
+                labels = row.get('dps_labels') or {}
+                # dps_labels = source of truth. Has labels → only labeled. No labels → DPS "1" default
+                allowed = set(labels.keys()) if labels else {'1'}
                 # dps_config: enabled=false is a kill switch, overrides everything
                 for k, cfg in (row.get('dps_config') or {}).items():
                     if cfg.get('enabled') is False:
@@ -143,8 +142,10 @@ class DeviceAgent:
     def _filter_dps(self, device_id: str, dps: dict) -> dict:
         """Filter DPS to only allowed keys for this device."""
         allowed = self._allowed_dps.get(device_id)
+        if allowed is None:
+            return dps  # device not in allowed map at all → allow all (safety fallback)
         if not allowed:
-            return dps  # no config loaded → allow all (safety fallback)
+            return {}   # empty set = all keys disabled
         return {k: v for k, v in dps.items() if k in allowed}
 
     def _db_write(self, device_id: str, dps: dict, source: str):
@@ -208,9 +209,11 @@ class DeviceAgent:
                 self._device_last_event[dedup_key] = filtered_json
                 self._device_last_event[device_id] = (now, filtered_json)
 
-            # MQTT: cached state only has filtered keys
+            # MQTT: merge filtered keys into cache, then re-filter entire cache
+            # (prevents accumulation of keys from different sources/adapters)
             cached = self._device_states.get(device_id, {})
             cached.update(filtered)
+            cached = self._filter_dps(device_id, cached)
             self._device_states[device_id] = cached
             if filtered:
                 self._mqtt.publish_device_state(device_id, cached, source)
@@ -629,11 +632,15 @@ class DeviceAgent:
         devices = self._load_devices()
         log.info(f'Loaded {len(devices)} enabled devices')
 
-        # Seed state cache from DB with filtered keys only
+        # Seed state cache from DB with filtered keys only + publish to MQTT
+        # This overwrites any stale retained messages on the broker
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id, last_state FROM devices WHERE enabled = true AND last_state IS NOT NULL")
+            cur.execute("SELECT id, last_state, last_source FROM devices WHERE enabled = true AND last_state IS NOT NULL")
             for row in cur.fetchall():
-                self._device_states[row['id']] = self._filter_dps(row['id'], dict(row['last_state']))
+                filtered = self._filter_dps(row['id'], dict(row['last_state']))
+                self._device_states[row['id']] = filtered
+                # Publish filtered state (or empty to clear stale retained messages)
+                self._mqtt.publish_device_state(row['id'], filtered, row.get('last_source', 'initial'))
 
         # Group by vendor+protocol key
         by_key = {}
