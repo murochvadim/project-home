@@ -129,12 +129,7 @@ class DeviceAgent:
             """)
             for row in cur.fetchall():
                 allowed = {'1'}  # DPS "1" always allowed
-                for k, cfg in (row.get('channel_config') or {}).items():
-                    if cfg.get('enabled') is not False:
-                        allowed.add(k)
-                for k, cfg in (row.get('dps_config') or {}).items():
-                    if cfg.get('enabled') is not False:
-                        allowed.add(k)
+                # Only DPS keys with labels are enabled — everything else filtered out
                 for k in (row.get('dps_labels') or {}).keys():
                     allowed.add(k)
                 self._allowed_dps[row['id']] = allowed

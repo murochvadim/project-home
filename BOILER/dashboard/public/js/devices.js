@@ -1113,21 +1113,10 @@ function renderHistoryChart(events, minutes, dev) {
     ha_api: '#2980b9', mqtt: '#16a085'
   };
 
-  // Build set of allowed DPS keys — whitelist approach
-  const dpsCfg = (dev && dev.dps_config) || {};
-  const chanCfg = (dev && dev.channel_config) || {};
+  // Build set of allowed DPS keys — only labeled keys + DPS "1"
   const dpsLabelsChart = (dev && dev.dps_labels) || {};
-  let allowedKeys = null;
-
-  // Always use whitelist — default to DPS "1" when no config
-  allowedKeys = new Set();
+  const allowedKeys = new Set();
   allowedKeys.add('1');
-  for (const [k, cfg] of Object.entries(chanCfg)) {
-    if (cfg.enabled !== false) allowedKeys.add(k);
-  }
-  for (const [k, cfg] of Object.entries(dpsCfg)) {
-    if (cfg.enabled !== false) allowedKeys.add(k);
-  }
   for (const k of Object.keys(dpsLabelsChart)) {
     allowedKeys.add(k);
   }
