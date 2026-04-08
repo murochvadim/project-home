@@ -53,7 +53,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 | 102 | LXC | PostgreSQL DB | 192.168.1.219 |
 | 103 | LXC | App / Agents + Zigbee2MQTT | 192.168.1.114 |
 | 104 | LXC | Commands / Timers | 192.168.1.227 |
-| 105 | LXC | Main Agent (Orchestrator) | 192.168.1.187 |
+| 105 | LXC | Orchestrator + Rule Engine | 192.168.1.187 |
 | 106 | LXC | Voice | 192.168.1.188 |
 | 107 | LXC | MQTT Broker (Mosquitto) | 192.168.1.189 |
 
@@ -149,6 +149,7 @@ Each project has its own CLAUDE.md with full details:
 | Boiler Agent | `BOILER/` | `BOILER/CLAUDE.md` |
 | Media Agent | `MEDIA/` | `MEDIA/CLAUDE.md` |
 | Orchestrator | `ORCHESTRATOR/` | `ORCHESTRATOR/CLAUDE.md` |
+| Rule Engine | `RULES/` | see `docs/rule-engine/tech-design.md` |
 | Voice System | `VOICE/` | `VOICE/CLAUDE.md` |
 | Scripts (LXC 100) | `scripts/` | see `MEDIA/CLAUDE.md` |
 | Windows Backup (LXC 104) | `scripts/backup-script.sh` | see root `CLAUDE.md` LXC 104 section |
