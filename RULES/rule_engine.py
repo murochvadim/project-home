@@ -501,6 +501,24 @@ class RuleEngine:
 
         log.info('Rule Engine running — %d rules loaded', len(self.rules))
 
+        # Evaluate all rules once on startup using current device state
+        # This ensures computed state (people_home, activity) is correct immediately
+        self._stop.wait(5)  # wait for retained MQTT messages to arrive
+        if not self._stop.is_set():
+            count = 0
+            for dev_id, dev in self.state.devices.items():
+                dps = dev.get('dps', {})
+                if not dps:
+                    continue
+                event = {'device_id': dev_id, 'dps': dps, 'source': 'startup', 'ts': datetime.now(tz=TZ).isoformat()}
+                matching = self.trigger_index.get(dev_id, []) + self.trigger_index.get('*', [])
+                for rule in matching:
+                    if rule.RULE['name'] not in self._disabled_rules:
+                        self._evaluate_rule(rule, event)
+                count += 1
+            self._maybe_publish_computed()
+            log.info('Startup evaluation: processed %d devices', count)
+
         # Main loop — just wait
         while not self._stop.is_set():
             self._stop.wait(10)

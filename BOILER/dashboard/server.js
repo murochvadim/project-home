@@ -1183,14 +1183,12 @@ app.get('/api/rule-engine/state', async (req, res) => {
     );
     const heartbeat = hbR.rows[0] || {};
 
-    // Gather all known rooms from device_rooms table (if exists) or from state
+    // Gather all known rooms
     let rooms = [];
     try {
-      const roomsR = await db.query(
-        `SELECT DISTINCT room FROM device_rooms WHERE room IS NOT NULL ORDER BY room`
-      );
-      rooms = roomsR.rows.map(r => r.room);
-    } catch (_) { /* table may not exist */ }
+      const roomsR = await db.query('SELECT name FROM rooms ORDER BY name');
+      rooms = roomsR.rows.map(r => r.name);
+    } catch (_) { }
 
     res.json({ state, heartbeat, rooms });
   } catch (e) { res.status(500).json({ error: e.message }); }

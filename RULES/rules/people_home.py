@@ -23,7 +23,9 @@ def evaluate(event, state):
         if not dev.get("online", False):
             continue
         dps = dev.get("dps", {})
-        if dps.get("1") == True or dps.get("1") == "true":
+        # DPS "1": True, "true", "presence" all mean someone is there
+        val = dps.get("1")
+        if val in (True, "true", "presence"):
             room = dev.get("room", "unknown")
             occupied.setdefault(room, []).append(dev.get("name", dev_id))
 

@@ -23,8 +23,10 @@ def evaluate(event, state):
         if not dev.get("online", False):
             continue
         dps = dev.get("dps", {})
-        # DPS key "1" = presence state for Tuya presence sensors (True = detected)
-        if dps.get("1") == True or dps.get("1") == "true":
+        # DPS "1": True, "true", "presence" all mean someone is there
+        # "none", False, "false" mean clear
+        val = dps.get("1")
+        if val in (True, "true", "presence"):
             room = dev.get("room", "")
             if room and room not in active_rooms:
                 active_rooms.append(room)
@@ -41,7 +43,8 @@ def evaluate(event, state):
     # Track last motion room
     if device.get("device_type") == "presence":
         dps = event.get("dps", {})
-        if dps.get("1") == True or dps.get("1") == "true":
+        val = dps.get("1")
+        if val in (True, "true", "presence"):
             state.shared["last_motion_room"] = device.get("room", "unknown")
             state.set_timer("last_motion")
 
