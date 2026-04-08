@@ -743,7 +743,7 @@ async function runHealthChecks() {
     pgResult, haResult, pm2Result,
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
     backupJobsResult,
-    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result,
+    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(5000) })
@@ -792,6 +792,7 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.227', 22),    // LXC 104 — Commands
     tcpCheck('192.168.1.187', 22),    // LXC 105 — MainAgent
     tcpCheck('192.168.1.188', 22),    // LXC 106 — Voice
+    tcpCheck('192.168.1.189', 22),    // LXC 107 — MQTT
   ]);
 
   const r = {};
@@ -806,6 +807,7 @@ async function runHealthChecks() {
   r.lxc104 = { ok: lxc104Result.ok };
   r.lxc105 = { ok: lxc105Result.ok };
   r.lxc106 = { ok: lxc106Result.ok };
+  r.lxc107 = { ok: lxc107Result.ok };
   // Server
   r.pm2 = pm2Result;
   // Services — boiler_agent status from orchestrator's system_alerts
@@ -1190,7 +1192,27 @@ app.get('/api/rule-engine/state', async (req, res) => {
       rooms = roomsR.rows.map(r => r.name);
     } catch (_) { }
 
-    res.json({ state, heartbeat, rooms });
+    // MQTT data health — count device DPS status
+    let mqttHealth = { total: 0, clean: 0, empty: 0, noisy: 0 };
+    try {
+      const mR = await db.query(`
+        SELECT
+          count(*) AS total,
+          count(*) FILTER (WHERE dps_config IS NOT NULL AND EXISTS (
+            SELECT 1 FROM jsonb_each(dps_config) e WHERE (e.value->>'enabled')::text = 'false'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM jsonb_each(dps_config) e WHERE (e.value->>'enabled')::text != 'false'
+          ) AND (dps_labels IS NULL OR dps_labels = '{}'::jsonb)) AS empty
+        FROM devices WHERE enabled = true
+      `);
+      const row = mR.rows[0] || {};
+      mqttHealth.total = parseInt(row.total) || 0;
+      mqttHealth.empty = parseInt(row.empty) || 0;
+      mqttHealth.clean = mqttHealth.total - mqttHealth.empty;
+      mqttHealth.noisy = 0;
+    } catch (_) { }
+
+    res.json({ state, heartbeat, rooms, mqttHealth });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
