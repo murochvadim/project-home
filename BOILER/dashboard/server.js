@@ -1231,7 +1231,12 @@ app.get('/api/pixoo/status', async (_req, res) => {
     const hb = await db.query('SELECT ts, decision, error FROM pixoo_log ORDER BY ts DESC LIMIT 1')
       .then(r => r.rows[0] || {}).catch(() => ({}));
 
-    res.json({ device: pixooResp, heartbeat: hb });
+    // Get screen content from DB (Pixoo service writes it there)
+    const screenR = await db.query("SELECT value FROM rule_engine_state WHERE key = '_pixoo_screen'")
+      .catch(() => ({ rows: [] }));
+    const screen = screenR.rows.length > 0 ? screenR.rows[0].value : {};
+
+    res.json({ device: pixooResp, heartbeat: hb, screen });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

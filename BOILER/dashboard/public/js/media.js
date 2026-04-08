@@ -1708,11 +1708,30 @@ document.getElementById('edit-modal-overlay').addEventListener('click', function
 
 // ── Pixoo64 ─────────────────────────────────────────────────────
 
+let _pixooTimer = null;
+
+function drawPixooCanvas(items) {
+  const canvas = document.getElementById('pixoo-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const scale = 4; // 64px * 4 = 256px canvas
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.textBaseline = 'top';
+  for (const item of (items || [])) {
+    ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
+    // Pixoo font is ~5px high, scale up
+    ctx.font = `${5 * scale}px monospace`;
+    ctx.fillText(item.t, item.x * scale, item.y * scale);
+  }
+}
+
 async function loadPixoo() {
   try {
     const r = await fetch('/api/pixoo/status').then(r => r.json());
     const hb = r.heartbeat || {};
     const dev = r.device || {};
+    const screen = r.screen || {};
 
     // Status
     const hbAge = hb.ts ? (Date.now() - new Date(hb.ts).getTime()) / 1000 : Infinity;
@@ -1720,8 +1739,15 @@ async function loadPixoo() {
     document.getElementById('pixoo-status').innerHTML =
       `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;background:${online ? '#27ae60' : '#e74c3c'}"></span>${online ? 'Online' : 'Offline'}`;
 
-    // Screen info from heartbeat decision
-    document.getElementById('pixoo-screen').textContent = hb.decision || '—';
+    // Screen name
+    const screenName = screen.screen || hb.decision || '—';
+    document.getElementById('pixoo-screen').textContent = screenName;
+    document.getElementById('pixoo-screen-label').textContent = screenName;
+
+    // Draw canvas mirror
+    if (screen.items) {
+      drawPixooCanvas(screen.items);
+    }
 
     // Heartbeat time
     if (hb.ts) {
@@ -1729,7 +1755,7 @@ async function loadPixoo() {
       document.getElementById('pixoo-heartbeat').textContent = d.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     }
 
-    // Brightness from device
+    // Brightness
     if (dev && dev.Brightness !== undefined) {
       document.getElementById('pixoo-brightness').value = dev.Brightness;
       document.getElementById('pixoo-brightness-val').textContent = dev.Brightness;
@@ -1739,6 +1765,16 @@ async function loadPixoo() {
   }
 }
 
+function pixooPlay() {
+  if (_pixooTimer) return;
+  _pixooTimer = setInterval(loadPixoo, 5000);
+  loadPixoo();
+}
+
+function pixooStop() {
+  if (_pixooTimer) { clearInterval(_pixooTimer); _pixooTimer = null; }
+}
+
 async function pixooPower(on) {
   try {
     await fetch('/api/pixoo/power', {
@@ -1746,6 +1782,7 @@ async function pixooPower(on) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ on }),
     });
+    setTimeout(loadPixoo, 1000);
   } catch (e) { console.error('Pixoo power error:', e); }
 }
 

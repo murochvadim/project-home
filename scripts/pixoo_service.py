@@ -188,10 +188,11 @@ class PixooService:
     # ------------------------------------------------------------------
     def render_clock(self):
         try:
-            now = datetime.now(tz=ZoneInfo("Asia/Jerusalem"))
+            now = datetime.now(tz=TZ)
             self.pixoo.clear()
-            self.pixoo.draw_text(now.strftime("%H:%M"), (8, 20), (255, 255, 255))
-            self.pixoo.draw_text(now.strftime("%a %d %b"), (4, 40), (128, 128, 128))
+            self._screen_items = []
+            self._draw(now.strftime("%H:%M"), 8, 20, 255, 255, 255)
+            self._draw(now.strftime("%a %d %b"), 4, 40, 128, 128, 128)
             self.pixoo.push()
         except Exception:
             log.exception("render_clock failed")
@@ -199,26 +200,19 @@ class PixooService:
     def render_home_status(self):
         try:
             self.pixoo.clear()
+            self._screen_items = []
             mode = self.state.get("home_mode", "?")
-            mode_colors = {
-                "active": (0, 200, 0),
-                "idle": (200, 200, 0),
-                "away": (128, 128, 128),
-            }
-            color = mode_colors.get(mode, (128, 128, 128))
-            self.pixoo.draw_text(f"HOME: {mode}", (2, 2), color)
-
+            mc = {"active": (0,200,0), "idle": (200,200,0), "away": (128,128,128)}
+            r, g, b = mc.get(mode, (128,128,128))
+            self._draw(f"HOME: {mode}", 2, 2, r, g, b)
             people = self.state.get("people_home", 0)
-            self.pixoo.draw_text(f"People: {people}", (2, 14), (255, 255, 255))
-
+            self._draw(f"People: {people}", 2, 14, 255, 255, 255)
             rooms = self.state.get("active_rooms", [])
             if rooms:
                 for i, room in enumerate(rooms[:3]):
-                    y = 26 + i * 12
-                    self.pixoo.draw_text(str(room)[:10], (2, y), (0, 200, 200))
+                    self._draw(str(room)[:10], 2, 26 + i * 12, 0, 200, 200)
             else:
-                self.pixoo.draw_text("No activity", (2, 26), (128, 128, 128))
-
+                self._draw("No activity", 2, 26, 128, 128, 128)
             self.pixoo.push()
         except Exception:
             log.exception("render_home_status failed")
@@ -226,11 +220,12 @@ class PixooService:
     def render_weather(self):
         try:
             self.pixoo.clear()
-            self.pixoo.draw_text("WEATHER", (2, 2), (100, 150, 255))
+            self._screen_items = []
+            self._draw("WEATHER", 2, 2, 100, 150, 255)
 
             self._ensure_db()
             if self.db is None:
-                self.pixoo.draw_text("No data", (2, 20), (128, 128, 128))
+                self._draw("No data", 2, 20, 128, 128, 128)
                 self.pixoo.push()
                 return
 
@@ -243,16 +238,12 @@ class PixooService:
 
             if row:
                 temp, humidity, uv, condition = row
-                temp_s = f"{temp:.0f}C" if temp is not None else "N/A"
-                self.pixoo.draw_text(temp_s, (2, 14), (255, 255, 255))
-                cond_s = str(condition)[:10] if condition else "N/A"
-                self.pixoo.draw_text(cond_s, (2, 26), (200, 200, 200))
-                hum_s = f"Hum: {humidity:.0f}%" if humidity is not None else "Hum: N/A"
-                self.pixoo.draw_text(hum_s, (2, 38), (100, 200, 255))
-                uv_s = f"UV: {uv:.0f}" if uv is not None else "UV: N/A"
-                self.pixoo.draw_text(uv_s, (2, 50), (255, 200, 0))
+                self._draw(f"{temp:.0f}C" if temp is not None else "N/A", 2, 14, 255, 255, 255)
+                self._draw(str(condition)[:10] if condition else "N/A", 2, 26, 200, 200, 200)
+                self._draw(f"Hum: {humidity:.0f}%" if humidity is not None else "Hum: N/A", 2, 38, 100, 200, 255)
+                self._draw(f"UV: {uv:.0f}" if uv is not None else "UV: N/A", 2, 50, 255, 200, 0)
             else:
-                self.pixoo.draw_text("No data", (2, 20), (128, 128, 128))
+                self._draw("No data", 2, 20, 128, 128, 128)
 
             self.pixoo.push()
         except Exception:
@@ -261,11 +252,12 @@ class PixooService:
     def render_boiler(self):
         try:
             self.pixoo.clear()
-            self.pixoo.draw_text("BOILER", (2, 2), (255, 150, 0))
+            self._screen_items = []
+            self._draw("BOILER", 2, 2, 255, 150, 0)
 
             self._ensure_db()
             if self.db is None:
-                self.pixoo.draw_text("No data", (2, 20), (128, 128, 128))
+                self._draw("No data", 2, 20, 128, 128, 128)
                 self.pixoo.push()
                 return
 
@@ -278,16 +270,14 @@ class PixooService:
 
             if row:
                 boiler_temp, panel_temp, valve = row
-                panel_s = f"Panel:{panel_temp:.1f}" if panel_temp is not None else "Panel:N/A"
-                self.pixoo.draw_text(panel_s, (2, 14), (255, 200, 100))
-                boiler_s = f"Boilr:{boiler_temp:.1f}" if boiler_temp is not None else "Boilr:N/A"
-                self.pixoo.draw_text(boiler_s, (2, 26), (255, 200, 100))
+                self._draw(f"Panel:{panel_temp:.1f}" if panel_temp is not None else "Panel:N/A", 2, 14, 255, 200, 100)
+                self._draw(f"Boilr:{boiler_temp:.1f}" if boiler_temp is not None else "Boilr:N/A", 2, 26, 255, 200, 100)
                 if valve:
-                    self.pixoo.draw_text("Valve: ON", (2, 38), (0, 200, 0))
+                    self._draw("Valve: ON", 2, 38, 0, 200, 0)
                 else:
-                    self.pixoo.draw_text("Valve: OFF", (2, 38), (200, 0, 0))
+                    self._draw("Valve: OFF", 2, 38, 200, 0, 0)
             else:
-                self.pixoo.draw_text("No data", (2, 20), (128, 128, 128))
+                self._draw("No data", 2, 20, 128, 128, 128)
 
             self.pixoo.push()
         except Exception:
@@ -311,19 +301,35 @@ class PixooService:
         self.current_screen = (self.current_screen + 1) % len(self.screens)
 
     def _publish_screen_info(self, screen_name):
-        """Publish what the display is currently showing."""
-        info = {'screen': screen_name, 'ts': datetime.now(tz=TZ).isoformat()}
-        if screen_name == 'home_status':
-            info['mode'] = self.state.get('home_mode', '?')
-            info['people'] = self.state.get('people_home', 0)
-            info['rooms'] = self.state.get('active_rooms', [])
-        elif screen_name == 'clock':
-            info['time'] = datetime.now(tz=TZ).strftime('%H:%M')
+        """Store screen content in DB + MQTT for dashboard mirror."""
+        info = {
+            'screen': screen_name,
+            'ts': datetime.now(tz=TZ).isoformat(),
+            'items': getattr(self, '_screen_items', []),
+        }
+        # Store in DB for dashboard to read
+        self._ensure_db()
+        if self.db:
+            try:
+                with self.db.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO rule_engine_state (key, value, updated_at) "
+                        "VALUES ('_pixoo_screen', %s::jsonb, NOW()) "
+                        "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                        (json.dumps(info), json.dumps(info)),
+                    )
+            except Exception:
+                pass
+        # Also publish to MQTT
         try:
-            payload = json.dumps(info)
-            self.mqtt_client.publish('mur/home/pixoo/screen', payload, retain=True, qos=0)
+            self.mqtt_client.publish('mur/home/pixoo/screen', json.dumps(info), retain=True, qos=0)
         except Exception:
             pass
+
+    def _draw(self, text, x, y, r, g, b):
+        """Draw text on Pixoo + record for dashboard mirror."""
+        self.pixoo.draw_text(text, (x, y), (r, g, b))
+        self._screen_items.append({'t': text, 'x': x, 'y': y, 'r': r, 'g': g, 'b': b})
 
     # ------------------------------------------------------------------
     # Lifecycle

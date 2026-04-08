@@ -438,29 +438,40 @@
   <div class="tab-panel" id="tab-pixoo">
     <div class="card">
       <h2>Pixoo64 Display</h2>
-      <div class="status-grid">
-        <div class="status-item">
-          <label>Status</label>
-          <div class="value" id="pixoo-status">—</div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;">
+        <!-- Display mirror -->
+        <div>
+          <canvas id="pixoo-canvas" width="256" height="256" style="background:#000;border:2px solid #d0cbc4;border-radius:8px;image-rendering:pixelated;"></canvas>
+          <div style="text-align:center;margin-top:6px;font-size:0.75rem;color:#888;" id="pixoo-screen-label">—</div>
         </div>
-        <div class="status-item">
-          <label>Current Screen</label>
-          <div class="value" id="pixoo-screen">—</div>
+        <!-- Status + Controls -->
+        <div style="flex:1;min-width:200px;">
+          <div class="status-grid" style="margin-bottom:16px;">
+            <div class="status-item">
+              <label>Status</label>
+              <div class="value" id="pixoo-status">—</div>
+            </div>
+            <div class="status-item">
+              <label>Screen</label>
+              <div class="value" id="pixoo-screen">—</div>
+            </div>
+            <div class="status-item">
+              <label>Heartbeat</label>
+              <div class="value" id="pixoo-heartbeat">—</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+            <button class="btn btn-secondary btn-sm" onclick="pixooPower(true)">ON</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooPower(false)">OFF</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooPlay()">&#9654; Play</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooStop()">&#9632; Stop</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span style="font-size:0.82rem;color:#888;">Brightness:</span>
+            <input type="range" id="pixoo-brightness" min="0" max="100" value="50" style="width:120px;" onchange="pixooBrightness(this.value)">
+            <span id="pixoo-brightness-val" style="font-size:0.82rem;font-weight:600;">50</span>
+          </div>
         </div>
-        <div class="status-item">
-          <label>Last Heartbeat</label>
-          <div class="value" id="pixoo-heartbeat">—</div>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Controls</h2>
-      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
-        <button class="btn btn-secondary btn-sm" id="pixoo-on-btn" onclick="pixooPower(true)">Screen ON</button>
-        <button class="btn btn-secondary btn-sm" id="pixoo-off-btn" onclick="pixooPower(false)">Screen OFF</button>
-        <span style="font-size:0.82rem;color:#888;margin-left:8px;">Brightness:</span>
-        <input type="range" id="pixoo-brightness" min="0" max="100" value="50" style="width:150px;" onchange="pixooBrightness(this.value)">
-        <span id="pixoo-brightness-val" style="font-size:0.82rem;font-weight:600;">50</span>
       </div>
     </div>
   </div>
