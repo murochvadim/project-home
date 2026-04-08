@@ -1,118 +1,90 @@
-"""Determines which rooms are active from ALL device types.
+"""Determines which rooms are active.
 
-Evidence sources (strongest to weakest):
-- Presence sensor: DPS "1" = presence/true → direct human detection (continuous)
-- Switch/light/circuit_breaker/curtain/remote: recent DPS change → someone operated it
-- BSH appliance running: someone started it → "someone is home" but not "in this room"
+Simple approach — only two evidence types:
+1. Presence sensor: DPS "1" = presence/true → someone detected
+2. Switch (name contains room name): recent DPS change → someone operated it
 
-Timing:
-- Presence detected → room immediately active
-- Presence cleared → 10s hold-off (avoids sensor flicker)
-- Device operated → room active for 120s (interaction window)
-- BSH running → contributes to "someone_home" flag, not room activity
-
-Ignored device types (not presence indicators):
-- siren, gateway, gas_detector, co_alarm, water_sensor, temp_controller
+Everything else ignored for now. Easy to expand later.
 """
 
 HOLD_OFF_SEC = 10       # presence sensor clear hold-off
-INTERACT_WINDOW = 120   # seconds after device operation to count room as active
+INTERACT_WINDOW = 120   # seconds after switch operation to count room as active
 
-# Device types that indicate someone operated a device in the room
-INTERACT_TYPES = {'switch', 'circuit_breaker', 'light', 'curtain', 'remote',
-                  'water_heater', 'door_sensor'}
-
-# BSH appliance types — indicate someone is home but not necessarily in the room
-BSH_TYPES = {'dishwasher', 'oven', 'washer', 'hood', 'hob'}
-
-# Ignored — infrastructure or alert devices, not presence indicators
-IGNORE_TYPES = {'siren', 'gateway', 'gas_detector', 'co_alarm',
-                'water_sensor', 'temp_controller'}
+# Switch-like types that count if their name contains the room name
+SWITCH_TYPES = {'switch', 'circuit_breaker', 'light'}
 
 RULE = {
     "name": "Home Activity",
-    "description": "Track active rooms from all device types — presence, switches, appliances",
+    "description": "Track active rooms from presence sensors + named switches",
     "triggers": ["*"],
     "controls": [],
     "category": "info",
 }
 
 
+def _name_matches_room(device_name, room):
+    """Check if device name contains the room name (case-insensitive)."""
+    if not device_name or not room:
+        return False
+    return room.lower() in device_name.lower()
+
+
 def evaluate(event, state):
-    device = state.devices.get(event.get("device_id", ""), {})
+    dev_id = event.get("device_id", "")
+    device = state.devices.get(dev_id, {})
     dtype = device.get("device_type", "")
     room = device.get("room", "")
-    dev_id = event.get("device_id", "")
+    name = device.get("name", "")
 
-    # Skip ignored device types
-    if dtype in IGNORE_TYPES:
-        return []
+    # ── Track events ──
 
-    # ── Track events per device type ──
-
-    if dtype == "presence":
+    if dtype == "presence" and room:
         event_val = event.get("dps", {}).get("1")
-        if event_val in (True, "true", "presence") and room:
+        if event_val in (True, "true", "presence"):
             state.set_timer(f"room_active:{room}")
             state.shared["last_motion_room"] = room
             state.set_timer("last_motion")
-        elif room:
-            # Clear event — still set timer so hold-off works
+        else:
+            # Clear event — set timer for hold-off
             state.set_timer(f"room_active:{room}")
 
-    elif dtype in INTERACT_TYPES and room:
-        # Any DPS change from an interactive device = someone in the room
-        # Skip startup events — we only care about real-time changes
-        if event.get("source") != "startup":
+    elif dtype in SWITCH_TYPES and room and event.get("source") != "startup":
+        # Only count if device name contains room name
+        if _name_matches_room(name, room):
             state.set_timer(f"room_interact:{room}")
             state.set_timer(f"room_active:{room}")
             state.shared["last_motion_room"] = room
             state.set_timer("last_motion")
 
-    elif dtype in BSH_TYPES:
-        # BSH appliance event — track globally, not per-room
-        state.set_timer("bsh_active")
-
-    # ── Scan all devices to build active rooms list ──
+    # ── Scan devices to build active rooms ──
 
     active_rooms = []
-    bsh_running = False
 
     for did, dev in state.devices.items():
         dt = dev.get("device_type", "")
-        if dt in IGNORE_TYPES:
-            continue
         if not dev.get("online", False):
             continue
         r = dev.get("room", "")
         if not r or r in active_rooms:
             continue
 
-        # Presence sensor — strongest signal
+        # Presence sensor
         if dt == "presence":
             val = dev.get("dps", {}).get("1")
             if val in (True, "true", "presence"):
                 active_rooms.append(r)
                 continue
-            # Hold-off after clear
             if state.get_timer(f"room_active:{r}") < HOLD_OFF_SEC:
                 active_rooms.append(r)
                 continue
 
-        # Interactive device — recent operation
-        if dt in INTERACT_TYPES:
+        # Named switch — recent operation
+        if dt in SWITCH_TYPES and _name_matches_room(dev.get("name", ""), r):
             if state.get_timer(f"room_interact:{r}") < INTERACT_WINDOW:
                 active_rooms.append(r)
                 continue
 
-        # BSH appliance — check if running
-        if dt in BSH_TYPES:
-            dps = dev.get("dps", {})
-            op = dps.get("BSH.Common.Status.OperationState", "")
-            if "Run" in str(op):
-                bsh_running = True
-
-    # ── Determine activity level ──
+    # ── Activity level ──
 
     count = len(active_rooms)
     if count == 0:
@@ -122,11 +94,8 @@ def evaluate(event, state):
     else:
         level = "active"
 
-    # ── Update shared state ──
-
     state.shared["activity_level"] = level
     state.shared["active_rooms"] = sorted(active_rooms)
     state.shared["active_room_count"] = count
-    state.shared["someone_home"] = count > 0 or bsh_running
 
     return []
