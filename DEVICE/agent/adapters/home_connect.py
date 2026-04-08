@@ -72,6 +72,7 @@ class HomeConnectAdapter(DeviceAdapter):
             try:
                 with open(self.TOKEN_FILE, 'w') as f:
                     f.write(self._refresh_token)
+                os.chmod(self.TOKEN_FILE, 0o600)
                 log.info('Home Connect: refresh token rotated and saved')
             except Exception as e:
                 log.warning(f'Home Connect: failed to persist refresh token: {e}')
@@ -200,7 +201,7 @@ class HomeConnectAdapter(DeviceAdapter):
                 headers['Accept'] = 'text/event-stream'
                 response = requests.get(
                     f'{HC_API}/api/homeappliances/events',
-                    headers=headers, stream=True, timeout=(10, None)
+                    headers=headers, stream=True, timeout=(10, 300)
                 )
 
                 if response.status_code == 401:
@@ -223,8 +224,8 @@ class HomeConnectAdapter(DeviceAdapter):
                     log.warning('Home Connect: token expired — refreshing')
                     try:
                         self._refresh_access_token()
-                    except Exception as re:
-                        log.error(f'Home Connect: token refresh failed: {re}')
+                    except Exception as refresh_err:
+                        log.error(f'Home Connect: token refresh failed: {refresh_err}')
                 else:
                     log.warning(f'Home Connect: SSE error: {e}')
             except Exception as e:

@@ -191,12 +191,16 @@ def get_time_since_last_close(conn):
     """
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT ts FROM (
-                SELECT ts, valve_state,
-                       LAG(valve_state) OVER (ORDER BY ts) AS prev_state
+            WITH recent AS (
+                SELECT ts, valve_state
                 FROM raw_data
                 ORDER BY ts DESC
                 LIMIT 500
+            )
+            SELECT ts FROM (
+                SELECT ts, valve_state,
+                       LAG(valve_state) OVER (ORDER BY ts ASC) AS prev_state
+                FROM recent
             ) t
             WHERE valve_state = false AND prev_state = true
             ORDER BY ts DESC

@@ -21,10 +21,11 @@ log = logging.getLogger('tuya_push')
 # Suppress noisy tuya_connector internal logging
 TUYA_LOGGER.setLevel(logging.WARNING)
 
+from .base import DeviceAdapter
 from .tuya_config import API_REGION, API_KEY, API_SECRET, API_ENDPOINT, PULSAR_ENDPOINT
 
 
-class TuyaPushAdapter:
+class TuyaPushAdapter(DeviceAdapter):
     """
     Subscribes to Tuya's Pulsar message service.
     Receives real-time dp_report events for ALL devices.
@@ -32,8 +33,7 @@ class TuyaPushAdapter:
     """
 
     def __init__(self, devices, on_state_change):
-        self.devices = devices
-        self.on_state_change = on_state_change
+        super().__init__(devices, on_state_change)
         self._stop_event = threading.Event()
         self._pulsar = None
         self._api = None
@@ -121,7 +121,7 @@ class TuyaPushAdapter:
                 while not self._stop_event.is_set():
                     self._stop_event.wait(30)
                     # Check if pulsar thread is still alive
-                    if self._pulsar and not self._pulsar.is_alive():
+                    if self._pulsar and hasattr(self._pulsar, 'is_alive') and not self._pulsar.is_alive():
                         log.warning('TuyaPushAdapter: Pulsar thread died — reconnecting')
                         break
 

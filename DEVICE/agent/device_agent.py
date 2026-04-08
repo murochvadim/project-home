@@ -13,16 +13,20 @@ Env:
 
 import json
 import logging
+import os
 import signal
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+import pytz
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from adapters import ADAPTERS, CLOUD_ADAPTERS, PUSH_ADAPTERS, HAApiAdapter
+from adapters.mqtt_publisher import MqttPublisher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +41,11 @@ DB_CONFIG = {
     'database': 'home_data',
     'user':     'postgres',
 }
+
+MQTT_BROKER = os.environ.get('MQTT_BROKER', '192.168.1.189')
+MQTT_PORT   = int(os.environ.get('MQTT_PORT', '1883'))
+MQTT_USER   = os.environ.get('MQTT_USER', 'device_agent')
+MQTT_PASS   = os.environ.get('MQTT_PASS', '')
 
 LOG_INTERVAL = 300   # write device_agent_log every 5 min
 
@@ -57,9 +66,17 @@ class DeviceAgent:
         self._error_count = 0
         self._db_lock = threading.Lock()
         self._stop = threading.Event()
-        self._device_best_source = {}   # device_id → best source seen
+        self._device_best_source = {}   # device_id → (source, timestamp)
         self._device_last_event = {}    # (device_id, source) → dps_json
         self._connect_db()
+
+        self._mqtt = MqttPublisher(
+            broker=MQTT_BROKER, port=MQTT_PORT,
+            username=MQTT_USER, password=MQTT_PASS,
+            client_id='device-agent-103',
+            lwt_topic='mur/home/device/_bridge/state',
+        )
+        self._mqtt.connect()
 
     def _connect_db(self):
         """Open a new DB connection. Caller must hold _db_lock if threads are running."""
@@ -107,18 +124,33 @@ class DeviceAgent:
                 cur.execute("UPDATE devices SET last_seen = NOW() WHERE id = %s", (device_id,))
                 return
 
-            # Track best source per device — only upgrade
-            cur_best = self._device_best_source.get(device_id)
+            # Track best source per device — upgrade, or downgrade after 600s silence
+            cur_entry = self._device_best_source.get(device_id)
+            cur_best = cur_entry[0] if cur_entry else None
+            cur_ts = cur_entry[1] if cur_entry else 0
             new_pri = SOURCE_PRI.get(source, 0)
             cur_pri = SOURCE_PRI.get(cur_best, -1)
-            if new_pri >= cur_pri:
-                self._device_best_source[device_id] = source
+            now_ts = time.time()
+            if new_pri >= cur_pri or (now_ts - cur_ts) > 600:
+                self._device_best_source[device_id] = (source, now_ts)
                 best = source
             else:
                 best = cur_best
 
             dps_json = json.dumps(dps, sort_keys=True)
             now = time.time()
+
+            # Purge stale dedup entries older than 120s to prevent unbounded growth
+            if len(self._device_last_event) > 500:
+                stale_keys = [k for k, v in self._device_last_event.items()
+                              if isinstance(v, tuple) and (now - v[0]) > 120]
+                for k in stale_keys:
+                    del self._device_last_event[k]
+                    # Also remove the corresponding (device_id, source) entries
+                    stale_src_keys = [sk for sk in self._device_last_event
+                                      if isinstance(sk, tuple) and sk[0] == k]
+                    for sk in stale_src_keys:
+                        del self._device_last_event[sk]
 
             # Dedup per device+source: skip event if DPS unchanged since last write from same source
             # Cross-source dedup: skip if same DPS within 2 seconds (e.g. tcp_push + ha_api)
@@ -141,6 +173,14 @@ class DeviceAgent:
                 """, (device_id, dps_json, source))
                 self._device_last_event[dedup_key] = dps_json
                 self._device_last_event[device_id] = (now, dps_json)
+
+            # MQTT: read back full merged state, then publish
+            cur.execute("SELECT last_state FROM devices WHERE id = %s", (device_id,))
+            row = cur.fetchone()
+            full_state = row[0] if row and row[0] else dps
+            self._mqtt.publish_device_state(device_id, full_state, source)
+            if not is_dup:
+                self._mqtt.publish_device_event(device_id, dps, source)
 
     def on_state_change(self, device_id: str, dps: dict, source: str):
         """Called by any adapter when a device state changes. Thread-safe."""
@@ -175,6 +215,257 @@ class DeviceAgent:
                     """, (decision, error))
             except Exception as e:
                 log.error(f'Failed to write agent log: {e}')
+
+    def _seconds_until_midnight(self):
+        """Calculate seconds from now until next midnight in Asia/Jerusalem."""
+        now = datetime.now(pytz.timezone('Asia/Jerusalem'))
+        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return (midnight - now).total_seconds()
+
+    def _daily_refresh(self):
+        """Republish full device inventory to MQTT at midnight daily."""
+        try:
+            seconds = self._seconds_until_midnight()
+            while not self._stop.is_set():
+                self._stop.wait(seconds)
+                if self._stop.is_set():
+                    break
+                try:
+                    with self._db_lock:
+                        self._ensure_conn()
+                        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                            cur.execute("""
+                                SELECT id, name, room, device_type, protocol, vendor
+                                FROM devices WHERE enabled = true
+                            """)
+                            rows = cur.fetchall()
+
+                    inventory = [
+                        {'id': r['id'], 'name': r['name'], 'room': r.get('room', ''),
+                         'device_type': r.get('device_type', ''), 'protocol': r['protocol'],
+                         'vendor': r['vendor']}
+                        for r in rows
+                    ]
+                    self._mqtt.publish_inventory(inventory)
+                    log.info(f'Daily refresh: published {len(inventory)} devices')
+                except Exception:
+                    log.exception('Daily refresh error')
+
+                seconds = self._seconds_until_midnight()
+        except Exception:
+            log.exception('Daily refresh thread crashed')
+
+    def _config_poll_loop(self):
+        """Poll devices table for enable/disable changes and new devices every 30s."""
+        last_check = datetime.now(pytz.utc)
+        try:
+            while not self._stop.is_set():
+                self._stop.wait(30)
+                if self._stop.is_set():
+                    break
+                try:
+                    with self._db_lock:
+                        self._ensure_conn()
+                        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                            cur.execute(
+                                "SELECT id, enabled FROM devices WHERE updated_at > %s",
+                                (last_check,)
+                            )
+                            changed = cur.fetchall()
+                            cur.execute(
+                                "SELECT id FROM devices WHERE created_at > %s AND enabled = true",
+                                (last_check,)
+                            )
+                            new_devices = cur.fetchall()
+
+                    if not changed and not new_devices:
+                        last_check = datetime.now(pytz.utc)
+                        continue
+
+                    # Publish offline for disabled devices
+                    disabled = [r for r in changed if not r['enabled']]
+                    for r in disabled:
+                        self._mqtt.publish_availability(r['id'], False, '')
+
+                    # Republish inventory if new or re-enabled devices found
+                    re_enabled = [r for r in changed if r['enabled']]
+                    if new_devices or re_enabled:
+                        with self._db_lock:
+                            self._ensure_conn()
+                            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                                cur.execute("""
+                                    SELECT id, name, room, device_type, protocol, vendor
+                                    FROM devices WHERE enabled = true
+                                """)
+                                rows = cur.fetchall()
+                        inventory = [
+                            {'id': r['id'], 'name': r['name'], 'room': r.get('room', ''),
+                             'device_type': r.get('device_type', ''), 'protocol': r['protocol'],
+                             'vendor': r['vendor']}
+                            for r in rows
+                        ]
+                        self._mqtt.publish_inventory(inventory)
+
+                    log.info(f'Config poll: {len(changed)} changes, {len(new_devices)} new devices')
+                    last_check = datetime.now(pytz.utc)
+                except Exception:
+                    log.exception('Config poll error')
+        except Exception:
+            log.exception('Config poll thread crashed')
+
+    # ── MQTT ingest ──────────────────────────────────────────────
+
+    def _build_mqtt_device_map(self):
+        """Build name→device_id lookup for MQTT-protocol devices."""
+        with self._db_lock:
+            self._ensure_conn()
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, name, protocol FROM devices
+                    WHERE protocol IN ('mqtt', 'hasp', 'awtrix', 'zigbee')
+                      AND enabled = true
+                """)
+                rows = cur.fetchall()
+
+        self._mqtt_id_map = {r['name'].lower(): r['id'] for r in rows}
+        log.info(f'MQTT device map: {len(self._mqtt_id_map)} devices')
+
+    def _on_mqtt_message(self, client, userdata, msg):
+        """Callback for subscribed MQTT topics — routes to on_state_change."""
+        try:
+            topic = msg.topic
+            parts = topic.split('/')
+
+            # --- mur/home/device/+/ingest ---
+            if topic.startswith('mur/home/device/') and topic.endswith('/ingest'):
+                device_id = parts[3]
+                source = 'mqtt'
+                try:
+                    dps = json.loads(msg.payload)
+                except (json.JSONDecodeError, ValueError):
+                    return
+
+            # --- hasp/+/state/+ (object state — before hasp/+/state to avoid prefix clash) ---
+            elif topic.startswith('hasp/') and len(parts) == 4 and parts[2] == 'state':
+                node = parts[1]
+                obj_key = parts[3]
+                device_id = self._mqtt_id_map.get(node.lower())
+                if not device_id:
+                    log.debug(f'Unmapped HASP device: {node}')
+                    return
+                source = 'hasp'
+                # Payload may be raw value or JSON
+                raw = msg.payload.decode('utf-8', errors='replace')
+                try:
+                    val = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    val = raw
+                dps = {obj_key: val}
+
+            # --- hasp/+/state (plate status JSON) ---
+            elif topic.startswith('hasp/') and len(parts) == 3 and parts[2] == 'state':
+                node = parts[1]
+                device_id = self._mqtt_id_map.get(node.lower())
+                if not device_id:
+                    log.debug(f'Unmapped HASP device: {node}')
+                    return
+                source = 'hasp'
+                try:
+                    dps = json.loads(msg.payload)
+                except (json.JSONDecodeError, ValueError):
+                    return
+
+            # --- awtrix/+/stats ---
+            elif topic.startswith('awtrix/') and len(parts) == 3 and parts[2] == 'stats':
+                uid = parts[1]
+                device_id = self._mqtt_id_map.get(uid.lower())
+                if not device_id:
+                    log.debug(f'Unmapped Awtrix device: {uid}')
+                    return
+                source = 'awtrix'
+                try:
+                    dps = json.loads(msg.payload)
+                except (json.JSONDecodeError, ValueError):
+                    return
+
+            # --- zigbee2mqtt/+ (skip bridge) ---
+            elif topic.startswith('zigbee2mqtt/') and len(parts) == 2:
+                friendly_name = parts[1]
+                if friendly_name == 'bridge':
+                    return
+                device_id = self._mqtt_id_map.get(friendly_name.lower())
+                if not device_id:
+                    log.debug(f'Unmapped Zigbee device: {friendly_name}')
+                    return
+                source = 'zigbee'
+                try:
+                    dps = json.loads(msg.payload)
+                except (json.JSONDecodeError, ValueError):
+                    return
+
+            else:
+                return
+
+            self.on_state_change(device_id, dps, source)
+        except Exception:
+            log.exception(f'MQTT ingest error on topic {msg.topic}')
+
+    def _setup_mqtt_ingest(self):
+        """Subscribe to external MQTT topics for DIY, HASP, Awtrix, Zigbee devices."""
+        self._build_mqtt_device_map()
+        if not self._mqtt_id_map:
+            log.info('No MQTT-protocol devices configured — skipping MQTT ingest')
+            return
+        topics = [
+            ('mur/home/device/+/ingest', 0),
+            ('hasp/+/state', 0),
+            ('hasp/+/state/+', 0),
+            ('awtrix/+/stats', 0),
+            ('zigbee2mqtt/+', 0),
+        ]
+        self._mqtt.subscribe(topics, self._on_mqtt_message)
+        log.info(f'MQTT ingest: subscribed to {len(topics)} topic patterns')
+
+    def _availability_loop(self):
+        """Periodically check device last_seen and publish availability to MQTT."""
+        tz_jerusalem = pytz.timezone('Asia/Jerusalem')
+        while not self._stop.is_set():
+            self._stop.wait(180)
+            if self._stop.is_set():
+                break
+            try:
+                with self._db_lock:
+                    self._ensure_conn()
+                    with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("SELECT id, last_seen FROM devices WHERE enabled = true")
+                        rows = cur.fetchall()
+
+                now = datetime.now(timezone.utc)
+                online_count = 0
+                offline_count = 0
+                for row in rows:
+                    device_id = row['id']
+                    last_seen = row['last_seen']
+                    if last_seen is None:
+                        online = False
+                        last_seen_str = ''
+                    else:
+                        # Ensure last_seen is timezone-aware (DB may return naive as UTC)
+                        if last_seen.tzinfo is None:
+                            last_seen = last_seen.replace(tzinfo=timezone.utc)
+                        age = (now - last_seen).total_seconds()
+                        online = age <= 180
+                        last_seen_str = last_seen.astimezone(tz_jerusalem).isoformat()
+
+                    self._mqtt.publish_availability(device_id, online, last_seen_str)
+                    if online:
+                        online_count += 1
+                    else:
+                        offline_count += 1
+
+                log.info(f'Availability check: {online_count} online, {offline_count} offline')
+            except Exception:
+                log.exception('Availability loop error')
 
     def run(self):
         log.info('Device Agent starting')
@@ -228,6 +519,28 @@ class DeviceAgent:
             'NO ERROR'
         )
 
+        # Publish device inventory and bridge status to MQTT
+        inventory = [
+            {'id': d['id'], 'name': d['name'], 'room': d.get('room', ''),
+             'device_type': d.get('device_type', ''), 'protocol': d['protocol'],
+             'vendor': d['vendor']}
+            for d in devices
+        ]
+        self._mqtt.publish_inventory(inventory)
+        self._mqtt.publish_bridge_online(len(devices), len(self.adapters))
+
+        # Subscribe to external MQTT topics (DIY, HASP, Awtrix, Zigbee)
+        self._setup_mqtt_ingest()
+
+        # Start availability checker thread (first check after 180s)
+        threading.Thread(target=self._availability_loop, daemon=True, name='avail-check').start()
+
+        # Start daily inventory refresh thread (publishes at midnight Asia/Jerusalem)
+        threading.Thread(target=self._daily_refresh, daemon=True, name='daily-refresh').start()
+
+        # Start config change polling thread (checks for enable/disable/new devices every 30s)
+        threading.Thread(target=self._config_poll_loop, daemon=True, name='config-poll').start()
+
         # Main loop — write heartbeat log periodically
         last_log = time.time()
         try:
@@ -248,6 +561,7 @@ class DeviceAgent:
             for adapter in self.adapters.values():
                 adapter.stop()
             self._write_log('Stopped', 'NO ERROR')
+            self._mqtt.disconnect()
             try:
                 self.conn.close()
             except Exception:

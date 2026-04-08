@@ -12,18 +12,18 @@ import tinytuya
 
 log = logging.getLogger('tuya_cloud')
 
+from .base import DeviceAdapter
 from .tuya_config import API_REGION, API_KEY, API_SECRET
 
 POLL_INTERVAL = 60   # seconds between polls per device
 BATCH_DELAY   = 1.0  # seconds between individual API calls (rate limit)
 
 
-class TuyaCloudAdapter:
+class TuyaCloudAdapter(DeviceAdapter):
     vendor = 'tuya'
 
     def __init__(self, devices, on_state_change):
-        self.devices        = devices          # list of dicts from DB
-        self.on_state_change = on_state_change
+        super().__init__(devices, on_state_change)
         self._stop          = threading.Event()
         self._thread        = None
         self._cloud         = None
