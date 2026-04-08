@@ -109,10 +109,10 @@
   <a href="general.html">Weather</a>
 
   <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
   <a href="index.html">Boiler Agent</a>
   <a href="media.html">Media Agent</a>
   <a href="devices.html" class="active">Device Agent</a>
-  <a href="main-agent.html">Main Agent</a>
 
   <div class="section-label">Voice</div>
   <a href="voice.html">Voice</a>
@@ -155,25 +155,14 @@
 
   <!-- Tabs -->
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="showTab('presence', this)">Presence</button>
-    <button class="tab-btn" onclick="showTab('all', this)">All Devices</button>
+    <button class="tab-btn active" onclick="showTab('all', this)">All Devices</button>
     <button class="tab-btn" onclick="showTab('settings', this)">Settings</button>
     <button class="tab-btn" onclick="showTab('rooms', this)">Rooms</button>
     <button class="tab-btn" onclick="showTab('history', this)">Device History</button>
   </div>
 
-  <!-- ═══ TAB: PRESENCE ═══ -->
-  <div class="tab-panel active" id="tab-presence">
-    <div class="card">
-      <h2>Presence Sensors</h2>
-      <div class="presence-grid" id="presence-grid">
-        <div style="color:#aaa">Loading...</div>
-      </div>
-    </div>
-  </div>
-
   <!-- ═══ TAB: ALL DEVICES ═══ -->
-  <div class="tab-panel" id="tab-all">
+  <div class="tab-panel active" id="tab-all">
     <div class="card">
       <h2>All Devices</h2>
       <div class="filter-bar">

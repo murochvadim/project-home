@@ -6,10 +6,11 @@
   <title>Main Agent</title>
   <link rel="stylesheet" href="css/style.css">
   <style>
-    /* ── Stats bar (same as device agent) ── */
+    /* ── Stats bar (copied from devices.html) ── */
     .device-stats { display:flex; gap:12px; margin-bottom:4px; flex-wrap:wrap; }
     .stat-chip { background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px; padding:8px 16px; display:flex; flex-direction:column; align-items:center; min-width:90px; }
-    .stat-chip .stat-val { font-size:1.5rem; font-weight:700; color:#2e2e2e; }
+    .stat-chip .stat-val { font-size:1.1rem; font-weight:700; color:#2e2e2e; }
+    #stat-last-room, #stat-motion-ago { font-size:0.95rem; }
     .stat-chip .stat-lbl { font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:.04em; }
     #stat-mode-val.active { color:#1a7a3a; }
     #stat-mode-val.idle   { color:#f39c12; }
@@ -18,6 +19,15 @@
     #stat-people.p1 { color:#2980b9; }
     #stat-people.pm { color:#1a7a3a; }
     #stat-active-rooms { color:#2980b9; }
+    #stat-last-room { color:#b7770d; }
+    #stat-motion-ago { color:#8e44ad; }
+
+    /* ── Engine status row ── */
+    .engine-row { display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; font-size:0.82rem; color:#888; }
+    .engine-row .eval { color:#2e2e2e; font-weight:600; }
+    .engine-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+    .engine-dot.online  { background:#27ae60; }
+    .engine-dot.offline { background:#e74c3c; }
 
     /* ── Room grid ── */
     .room-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
@@ -34,20 +44,6 @@
     }
     .room-chip.occupied .room-dot { background:#27ae60; }
 
-    /* ── Active rooms pills ── */
-    .room-pills { display:flex; flex-wrap:wrap; gap:6px; }
-    .room-pill {
-      background:rgba(39,174,96,0.12); color:#1a7a3a; border-radius:12px;
-      padding:3px 10px; font-size:0.78rem; font-weight:600;
-    }
-
-    /* ── Engine status ── */
-    .engine-row { display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; font-size:0.82rem; color:#888; }
-    .engine-row .eval { color:#2e2e2e; font-weight:600; }
-    .engine-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
-    .engine-dot.online  { background:#27ae60; }
-    .engine-dot.offline { background:#e74c3c; }
-
     /* ── Rules table ── */
     .rules-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
     .rules-table th { text-align:left; font-size:0.75rem; color:#888; text-transform:uppercase; letter-spacing:.04em; padding:6px 12px; border-bottom:1px solid #d0cbc4; }
@@ -56,7 +52,7 @@
     .rules-table .rule-desc { color:#888; font-size:0.8rem; }
     .rules-table .rule-cat { font-size:0.75rem; color:#7a9ab8; }
 
-    /* ── Toggle (same as device agent) ── */
+    /* ── Toggle ── */
     .toggle { position:relative; display:inline-block; width:36px; height:20px; }
     .toggle input { opacity:0; width:0; height:0; }
     .toggle .slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ccc; border-radius:20px; transition:.2s; }
@@ -69,18 +65,15 @@
 
 <nav id="sidebar">
   <div class="logo">Smart Home<a href="health.html" id="alert-indicator"></a></div>
-
   <div class="section-label">General</div>
   <a href="health.html">Project Health</a>
   <a href="network.html">Project Network</a>
   <a href="general.html">Weather</a>
-
   <div class="section-label">Agents</div>
+  <a href="main-agent.html" class="active">Main Agent</a>
   <a href="index.html">Boiler Agent</a>
   <a href="media.html">Media Agent</a>
   <a href="devices.html">Device Agent</a>
-  <a href="main-agent.html" class="active">Main Agent</a>
-
   <div class="section-label">Voice</div>
   <a href="voice.html">Voice</a>
 </nav>
@@ -94,86 +87,25 @@
     </div>
   </div>
 
-  <!-- Overview card -->
-  <div class="card">
-    <h2>Overview</h2>
-    <div class="device-stats">
-      <div class="stat-chip"><span class="stat-val" id="stat-mode-val">—</span><span class="stat-lbl">Home</span></div>
-      <div class="stat-chip"><span class="stat-val" id="stat-people">—</span><span class="stat-lbl">People</span></div>
-      <div class="stat-chip"><span class="stat-val" id="stat-active-rooms">—</span><span class="stat-lbl">Active Rooms</span></div>
-      <div class="stat-chip"><span class="stat-val" id="stat-last-room" style="font-size:1rem;">—</span><span class="stat-lbl">Last Motion</span></div>
-      <div class="stat-chip"><span class="stat-val" id="stat-motion-ago" style="font-size:1rem;">—</span><span class="stat-lbl">Motion Ago</span></div>
-    </div>
-    <div class="engine-row">
-      <span><span class="engine-dot" id="engine-dot"></span><span class="eval" id="engine-label">—</span></span>
-      <span>Activity: <span class="eval" id="activity-level">—</span></span>
-      <span>Heartbeat: <span class="eval" id="last-heartbeat">—</span></span>
-      <span>Rules: <span class="eval" id="last-decision">—</span></span>
-    </div>
-  </div>
-
   <!-- Tabs -->
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="showTab('activity',this)">Home Activity</button>
-    <button class="tab-btn" onclick="showTab('rules',this)">Rules</button>
-    <button class="tab-btn" onclick="showTab('rooms',this)">Room Map</button>
-  </div>
-
-  <!-- TAB: Home Activity -->
-  <div class="tab-panel active" id="tab-activity">
-    <div class="card">
-      <h2>Home Activity</h2>
-      <div class="status-grid" id="activity-grid">
-        <div class="status-item">
-          <label>Home Mode</label>
-          <div class="value" id="ha-mode">—</div>
-        </div>
-        <div class="status-item">
-          <label>People Home</label>
-          <div class="value" id="ha-people">—</div>
-        </div>
-        <div class="status-item">
-          <label>Activity Level</label>
-          <div class="value" id="ha-activity">—</div>
-        </div>
-        <div class="status-item">
-          <label>Active Room Count</label>
-          <div class="value" id="ha-room-count">—</div>
-        </div>
-        <div class="status-item">
-          <label>Last Motion Room</label>
-          <div class="value" id="ha-last-room">—</div>
-        </div>
-        <div class="status-item">
-          <label>Last Motion Time</label>
-          <div class="value" id="ha-last-time">—</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Active Rooms</h2>
-      <div class="room-pills" id="active-room-list"></div>
-    </div>
-
-    <div class="card">
-      <h2>Occupied Rooms</h2>
-      <div class="room-pills" id="occupied-room-list"></div>
-    </div>
+    <button class="tab-btn active" onclick="showTab('rules',this)">Rules</button>
+    <button class="tab-btn" onclick="showTab('activity',this)">Home Activity</button>
   </div>
 
   <!-- TAB: Rules -->
-  <div class="tab-panel" id="tab-rules">
+  <div class="tab-panel active" id="tab-rules">
     <div class="card">
       <h2>Rules</h2>
-      <table class="rules-table" id="rules-table">
+      <div class="engine-row" style="margin-bottom:14px;">
+        <span><span class="engine-dot" id="engine-dot"></span><span class="eval" id="engine-label">—</span></span>
+        <span>Activity: <span class="eval" id="activity-level">—</span></span>
+        <span>Heartbeat: <span class="eval" id="last-heartbeat">—</span></span>
+        <span>Rules: <span class="eval" id="last-decision">—</span></span>
+      </div>
+      <table class="rules-table">
         <thead>
-          <tr>
-            <th>Name</th>
-            <th>Description</th>
-            <th>Category</th>
-            <th>Enabled</th>
-          </tr>
+          <tr><th>Name</th><th>Description</th><th>Category</th><th>Enabled</th></tr>
         </thead>
         <tbody id="rules-body">
           <tr><td colspan="4" style="color:#aaa">Loading...</td></tr>
@@ -182,14 +114,29 @@
     </div>
   </div>
 
-  <!-- TAB: Room Map -->
-  <div class="tab-panel" id="tab-rooms">
+  <!-- TAB: Home Activity -->
+  <div class="tab-panel" id="tab-activity">
+
+    <!-- Overview card (same as Device Agent) -->
+    <div class="card">
+      <h2>Overview</h2>
+      <div class="device-stats">
+        <div class="stat-chip"><span class="stat-val" id="stat-mode-val">—</span><span class="stat-lbl">Home</span></div>
+        <div class="stat-chip"><span class="stat-val" id="stat-people">—</span><span class="stat-lbl">People</span></div>
+        <div class="stat-chip"><span class="stat-val" id="stat-active-rooms">—</span><span class="stat-lbl">Active Rooms</span></div>
+        <div class="stat-chip"><span class="stat-val" id="stat-last-room">—</span><span class="stat-lbl">Last Motion</span></div>
+        <div class="stat-chip"><span class="stat-val" id="stat-motion-ago">—</span><span class="stat-lbl">Ago</span></div>
+      </div>
+    </div>
+
+    <!-- Room Occupancy card -->
     <div class="card">
       <h2>Room Occupancy</h2>
       <div class="room-grid" id="room-grid">
         <div style="color:#aaa">Loading...</div>
       </div>
     </div>
+
   </div>
 
 </main>

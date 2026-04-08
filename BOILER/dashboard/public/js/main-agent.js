@@ -40,8 +40,6 @@
 
   // Toggle rule enable/disable
   window.toggleRule = function (name, enabled) {
-    const topic = enabled ? 'enable' : 'disable';
-    // Publish via API — we'll add this endpoint later. For now log.
     fetch('/api/rule-engine/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -73,7 +71,9 @@
       document.getElementById('stat-last-room').textContent = s.last_motion_room || '—';
 
       const lastMotionTs = parseFloat(s['_timer:last_motion']) || 0;
-      document.getElementById('stat-motion-ago').textContent = lastMotionTs ? formatTimeAgo(lastMotionTs) : '—';
+      // Format time without "ago" suffix — label already says context
+      const motionAgo = lastMotionTs ? formatTimeAgo(lastMotionTs).replace(' ago', '') : '—';
+      document.getElementById('stat-motion-ago').textContent = motionAgo;
 
       // ── Engine status row ──
       const heartbeatAge = hb.ts ? (Date.now() - new Date(hb.ts).getTime()) / 1000 : Infinity;
@@ -86,45 +86,8 @@
       document.getElementById('last-heartbeat').textContent = hb.ts ? formatTimestamp(hb.ts) : '—';
       document.getElementById('last-decision').textContent = hb.decision || '—';
 
-      // ── Home Activity tab ──
-      document.getElementById('ha-mode').textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
-      document.getElementById('ha-mode').style.color = mode === 'active' ? '#1a7a3a' : mode === 'idle' ? '#f39c12' : '#95a5a6';
-      document.getElementById('ha-people').textContent = people;
-      document.getElementById('ha-people').style.color = people === 0 ? '#95a5a6' : people === 1 ? '#2980b9' : '#1a7a3a';
-      document.getElementById('ha-activity').textContent = actLevel.charAt(0).toUpperCase() + actLevel.slice(1);
-      document.getElementById('ha-room-count').textContent = activeCount;
-      document.getElementById('ha-last-room').textContent = s.last_motion_room || '—';
-      document.getElementById('ha-last-time').textContent = lastMotionTs ? formatTimeAgo(lastMotionTs) : '—';
-
-      // Active rooms pills
       const activeRooms = parseJsonSafe(s.active_rooms);
-      const listEl = document.getElementById('active-room-list');
-      listEl.innerHTML = '';
-      if (activeRooms.length === 0) {
-        listEl.innerHTML = '<span style="color:#888;font-size:0.85rem;">No active rooms</span>';
-      } else {
-        activeRooms.forEach(r => {
-          const pill = document.createElement('span');
-          pill.className = 'room-pill';
-          pill.textContent = r;
-          listEl.appendChild(pill);
-        });
-      }
-
-      // Occupied rooms pills
       const occupiedRooms = parseJsonSafe(s.occupied_rooms);
-      const occEl = document.getElementById('occupied-room-list');
-      occEl.innerHTML = '';
-      if (occupiedRooms.length === 0) {
-        occEl.innerHTML = '<span style="color:#888;font-size:0.85rem;">No occupied rooms</span>';
-      } else {
-        occupiedRooms.forEach(r => {
-          const pill = document.createElement('span');
-          pill.className = 'room-pill';
-          pill.textContent = r;
-          occEl.appendChild(pill);
-        });
-      }
 
       // ── Rules tab ──
       const rules = parseJsonSafe(s._rules);
