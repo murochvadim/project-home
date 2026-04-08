@@ -129,15 +129,10 @@ class DeviceAgent:
             """)
             for row in cur.fetchall():
                 allowed = {'1'}  # DPS "1" default
+                # dps_labels = source of truth for enabling DPS keys
                 for k in (row.get('dps_labels') or {}).keys():
                     allowed.add(k)
-                for k, cfg in (row.get('channel_config') or {}).items():
-                    if cfg.get('enabled') is not False:
-                        allowed.add(k)
-                for k, cfg in (row.get('dps_config') or {}).items():
-                    if cfg.get('enabled') is not False:
-                        allowed.add(k)
-                # enabled=false in dps_config is a kill switch — overrides everything
+                # dps_config: enabled=false is a kill switch, overrides everything
                 for k, cfg in (row.get('dps_config') or {}).items():
                     if cfg.get('enabled') is False:
                         allowed.discard(k)

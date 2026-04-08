@@ -296,10 +296,23 @@ function applyFilters() {
         return (cfg[k]?.room || d.room || '') === roomFilt;
       });
       for (const k of visibleChans) {
-        const isOn  = d.last_state[k] === true || d.last_state[k] === 1;
-        const dot   = isOn ? 'dot-on' : 'dot-off';
-        const txt   = isOn ? 'ON' : 'OFF';
-        const chanName = cfg[k]?.name || (d.dps_labels || {})[k] || '';
+        const raw = d.last_state[k];
+        const lbl = (d.dps_labels || {})[k] || '';
+        let dot, txt;
+        if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
+          const isOn = raw === true || raw === 1;
+          dot = isOn ? 'dot-on' : 'dot-off';
+          txt = isOn ? 'ON' : 'OFF';
+        } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
+          dot = 'dot-on'; txt = (raw / 10).toFixed(1) + '°C';
+        } else if (typeof raw === 'number') {
+          dot = 'dot-on'; txt = String(raw);
+        } else if (typeof raw === 'string' && raw.includes('.')) {
+          dot = 'dot-on'; txt = raw.split('.').pop();
+        } else {
+          dot = 'dot-on'; txt = String(raw);
+        }
+        const chanName = cfg[k]?.name || lbl.replace(/\s*\(x[\d.]+[^)]*\)/i, '').trim() || '';
         const name  = chanName ? `${escHtml(d.name)} — ${escHtml(chanName)}` : `${escHtml(d.name)} Ch.${k}`;
         const room  = cfg[k]?.room || d.room || '—';
         rows.push(`<tr>
@@ -411,21 +424,14 @@ function renderPresence() {
 function getChannelKeys(dev) {
   if (!dev.last_state) return [];
   const labels = dev.dps_labels || {};
-  const bools = [], nums = [];
-  for (let i = 1; i <= 8; i++) {
-    const k = String(i);
-    const v = dev.last_state[k];
-    if (typeof v === 'boolean')  bools.push(k);
-    else if (v === 0 || v === 1) nums.push(k);
-  }
-  // Include numeric 0/1 only if there are already 2+ booleans —
-  // confirming this is a genuine multi-gang device, not a counter/setting.
-  let keys = bools.length >= 2 ? [...bools, ...nums].sort((a,b) => +a - +b) : bools;
-  // If device has dps_labels, only show labeled channels
-  // DPS "1" is the main device row — don't duplicate as channel row unless labeled
-  if (Object.keys(labels).length > 0) {
-    keys = keys.filter(k => labels[k]);
-  }
+  const dpsCfg = dev.dps_config || {};
+  // Only labeled DPS keys become channels — skip disabled (kill switch)
+  const keys = Object.keys(labels).filter(k => {
+    if (dev.last_state[k] === undefined) return false;
+    if (dpsCfg[k]?.enabled === false) return false;
+    if (dpsCfg[k]?.show_dashboard === false) return false;
+    return true;
+  }).sort((a, b) => +a - +b);
   return keys.length > 1 ? keys : [];
 }
 
@@ -713,10 +719,12 @@ async function patchDevice(id, body) {
 
 function toggleDpsPanel(id, btn) {
   const row = btn.closest('tr');
+  window._scrollStabilizerPaused = true;
   const existing = row.nextElementSibling;
   if (existing && existing.classList.contains('dps-panel-row')) {
     existing.remove();
     btn.textContent = 'DPS';
+    requestAnimationFrame(() => { window._scrollStabilizerPaused = false; });
     return;
   }
   btn.textContent = '▾';
@@ -757,6 +765,7 @@ function toggleDpsPanel(id, btn) {
   </td>`;
 
   row.insertAdjacentElement('afterend', panelRow);
+  requestAnimationFrame(() => { window._scrollStabilizerPaused = false; });
 }
 
 async function saveDpsLabels(id, btn) {
@@ -1119,17 +1128,13 @@ function renderHistoryChart(events, minutes, dev) {
     ha_api: '#2980b9', mqtt: '#16a085'
   };
 
-  // Allowed DPS: "1" default + labels + channel_config + dps_config (enabled !== false)
+  // Allowed DPS: dps_labels = source of truth. No labels → DPS "1" only.
   // dps_config enabled=false is a kill switch that overrides everything
   const dpsLabelsChart = (dev && dev.dps_labels) || {};
-  const chanCfg = (dev && dev.channel_config) || {};
   const dpsCfg = (dev && dev.dps_config) || {};
   const allowedKeys = new Set();
   allowedKeys.add('1');
   for (const k of Object.keys(dpsLabelsChart)) allowedKeys.add(k);
-  for (const [k, cfg] of Object.entries(chanCfg)) {
-    if (cfg.enabled !== false) allowedKeys.add(k);
-  }
   for (const [k, cfg] of Object.entries(dpsCfg)) {
     if (cfg.enabled === false) allowedKeys.delete(k);
     else allowedKeys.add(k);

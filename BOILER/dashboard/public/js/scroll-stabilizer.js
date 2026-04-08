@@ -1,11 +1,13 @@
 // Prevents scroll jumps when content above the viewport changes height.
 // Works for any element: tables, status grids, dynamic text, etc.
+window._scrollStabilizerPaused = false;
 (function () {
   if (typeof ResizeObserver === 'undefined') return;
 
   const prevHeights = new WeakMap();
 
   const ro = new ResizeObserver(entries => {
+    if (window._scrollStabilizerPaused) return;
     // Never move scroll when window doesn't have focus —
     // avoids unwanted scrolls while user is in another app.
     if (!document.hasFocus()) return;
