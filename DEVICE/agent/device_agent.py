@@ -632,15 +632,12 @@ class DeviceAgent:
         devices = self._load_devices()
         log.info(f'Loaded {len(devices)} enabled devices')
 
-        # Seed state cache from DB with filtered keys only + publish to MQTT
-        # This overwrites any stale retained messages on the broker
+        # Seed state cache from DB with filtered keys only
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT id, last_state, last_source FROM devices WHERE enabled = true AND last_state IS NOT NULL")
             for row in cur.fetchall():
                 filtered = self._filter_dps(row['id'], dict(row['last_state']))
                 self._device_states[row['id']] = filtered
-                # Publish filtered state (or empty to clear stale retained messages)
-                self._mqtt.publish_device_state(row['id'], filtered, row.get('last_source', 'initial'))
 
         # Group by vendor+protocol key
         by_key = {}
@@ -696,6 +693,11 @@ class DeviceAgent:
         ]
         self._mqtt.publish_inventory(inventory)
         self._mqtt.publish_bridge_online(len(devices), len(self.adapters))
+
+        # Publish filtered state for all devices (overwrites stale retained messages)
+        for dev_id, cached in self._device_states.items():
+            if cached:
+                self._mqtt.publish_device_state(dev_id, cached, 'initial')
 
         # Subscribe to external MQTT topics (DIY, HASP, Awtrix, Zigbee)
         self._setup_mqtt_ingest()
