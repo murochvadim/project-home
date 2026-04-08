@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import logging
 import os
 import requests, psycopg2, pytz
 from datetime import datetime
@@ -27,7 +28,7 @@ def get_val(sid):
         return None
 
 if __name__ == "__main__":
-    import logging, sys
+    import sys
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     log = logging.getLogger(__name__)
 

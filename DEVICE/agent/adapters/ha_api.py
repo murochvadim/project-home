@@ -220,9 +220,15 @@ class HAApiAdapter(DeviceAdapter):
             log.error('HA_TOKEN not set — HA API adapter disabled')
             return
 
-        self._build_entity_map()
-        if not self._entity_map:
-            log.warning('No HA entities mapped — HA API adapter has nothing to do')
+        delay = RECONNECT_DELAY
+        while not self._stop_event.is_set():
+            self._build_entity_map()
+            if self._entity_map:
+                break
+            log.warning(f'No HA entities mapped — retrying in {delay}s')
+            self._stop_event.wait(delay)
+            delay = min(delay * 2, RECONNECT_MAX)
+        if self._stop_event.is_set():
             return
 
         # Initial bulk fetch — set ha_api as source for all mapped devices
