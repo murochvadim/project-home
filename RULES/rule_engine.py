@@ -236,6 +236,9 @@ class RuleEngine:
             'ts': datetime.now(tz=TZ).isoformat(),
         }
 
+        # Snapshot shared state before rules run
+        shared_before = dict(self.state.shared)
+
         for rule in matching:
             rule_name = rule.RULE['name']
             if rule_name in self._disabled_rules:
@@ -245,6 +248,13 @@ class RuleEngine:
                 self._dispatch_command(cmd, rule_name)
 
         self._maybe_publish_computed()
+
+        # Immediate DB save if shared state changed (responsive presence updates)
+        if self.state.shared != shared_before:
+            try:
+                self.state.save_shared_state()
+            except Exception:
+                log.warning('Immediate state save failed', exc_info=True)
 
     # ------------------------------------------------------------------
     # Helpers
