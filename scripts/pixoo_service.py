@@ -173,7 +173,7 @@ class PixooService:
                 cur.execute(
                     "INSERT INTO pixoo_log (decision, error, next_ts) "
                     "VALUES (%s, %s, NOW() + INTERVAL '1 minute')",
-                    ("heartbeat", None),
+                    (f"Screen: {self.screens[self.current_screen].__name__.replace('render_', '')}", "NO ERROR"),
                 )
             log.debug("Heartbeat written")
         except psycopg2.errors.UndefinedTable:
@@ -297,13 +297,31 @@ class PixooService:
     def rotate_screen(self):
         """Call the current screen render function and advance index."""
         fn = self.screens[self.current_screen]
+        screen_name = fn.__name__.replace('render_', '')
         try:
             fn()
-            log.debug("Rendered screen %s (%s)", self.current_screen, fn.__name__)
+            log.debug("Rendered screen %s (%s)", self.current_screen, screen_name)
         except Exception:
-            log.exception("Screen render failed: %s", fn.__name__)
+            log.exception("Screen render failed: %s", screen_name)
 
+        # Publish current screen info to MQTT for dashboard
+        self._publish_screen_info(screen_name)
         self.current_screen = (self.current_screen + 1) % len(self.screens)
+
+    def _publish_screen_info(self, screen_name):
+        """Publish what the display is currently showing."""
+        info = {'screen': screen_name, 'ts': datetime.now(tz=TZ).isoformat()}
+        if screen_name == 'home_status':
+            info['mode'] = self.state.get('home_mode', '?')
+            info['people'] = self.state.get('people_home', 0)
+            info['rooms'] = self.state.get('active_rooms', [])
+        elif screen_name == 'clock':
+            info['time'] = datetime.now(tz=TZ).strftime('%H:%M')
+        try:
+            payload = json.dumps(info)
+            self.mqtt_client.publish('mur/home/pixoo/screen', payload, retain=True, qos=0)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Lifecycle

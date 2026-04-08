@@ -51,6 +51,7 @@
     <button class="tab-btn" onclick="showTab('analyzer', this); loadAnalyzer()">Analyzer Agent</button>
     <button class="tab-btn" onclick="showTab('ingest', this); loadIngest()">Ingest Agent</button>
     <button class="tab-btn" onclick="showTab('player', this); loadPlayer()">Player Agent</button>
+    <button class="tab-btn" onclick="showTab('pixoo', this); loadPixoo()">Pixoo64</button>
     <button class="tab-btn" onclick="showTab('settings', this); loadMediaSettings()">Settings</button>
   </div>
 
@@ -429,6 +430,37 @@
         <button class="btn btn-secondary btn-sm" onclick="closeEditModal()">Cancel</button>
         <button class="btn btn-secondary btn-sm" style="color:#c0392b; border-color:#e0b0ad;" onclick="deleteLibraryItem()">Delete</button>
         <button class="btn btn-success btn-sm" onclick="saveMetadata()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: Pixoo64 -->
+  <div class="tab-panel" id="tab-pixoo">
+    <div class="card">
+      <h2>Pixoo64 Display</h2>
+      <div class="status-grid">
+        <div class="status-item">
+          <label>Status</label>
+          <div class="value" id="pixoo-status">—</div>
+        </div>
+        <div class="status-item">
+          <label>Current Screen</label>
+          <div class="value" id="pixoo-screen">—</div>
+        </div>
+        <div class="status-item">
+          <label>Last Heartbeat</label>
+          <div class="value" id="pixoo-heartbeat">—</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Controls</h2>
+      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" id="pixoo-on-btn" onclick="pixooPower(true)">Screen ON</button>
+        <button class="btn btn-secondary btn-sm" id="pixoo-off-btn" onclick="pixooPower(false)">Screen OFF</button>
+        <span style="font-size:0.82rem;color:#888;margin-left:8px;">Brightness:</span>
+        <input type="range" id="pixoo-brightness" min="0" max="100" value="50" style="width:150px;" onchange="pixooBrightness(this.value)">
+        <span id="pixoo-brightness-val" style="font-size:0.82rem;font-weight:600;">50</span>
       </div>
     </div>
   </div>

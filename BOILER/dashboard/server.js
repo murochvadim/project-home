@@ -1216,6 +1216,51 @@ app.get('/api/rule-engine/state', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Pixoo64 Display ─────────────────────────────────────────
+app.get('/api/pixoo/status', async (_req, res) => {
+  try {
+    // Get current screen from pixoo (forward to device)
+    const pixooResp = await fetch('http://192.168.1.243:80/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Command: 'Channel/GetIndex' }),
+      signal: AbortSignal.timeout(3000),
+    }).then(r => r.json()).catch(() => null);
+
+    // Get heartbeat from DB
+    const hb = await db.query('SELECT ts, decision, error FROM pixoo_log ORDER BY ts DESC LIMIT 1')
+      .then(r => r.rows[0] || {}).catch(() => ({}));
+
+    res.json({ device: pixooResp, heartbeat: hb });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/pixoo/brightness', async (req, res) => {
+  try {
+    const { value } = req.body;
+    const r = await fetch('http://192.168.1.243:80/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Command: 'Channel/SetBrightness', Brightness: parseInt(value) || 50 }),
+      signal: AbortSignal.timeout(3000),
+    }).then(r => r.json());
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/pixoo/power', async (req, res) => {
+  try {
+    const { on } = req.body;
+    const r = await fetch('http://192.168.1.243:80/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Command: 'Device/SetScreenSwitch', OnOff: on ? 1 : 0 }),
+      signal: AbortSignal.timeout(3000),
+    }).then(r => r.json());
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/rule-engine/toggle', async (req, res) => {
   try {
     const { name, enabled } = req.body;
