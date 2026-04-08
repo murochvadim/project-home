@@ -190,6 +190,17 @@ class MqttClient:
         """
         self.publish(topic, payload, retain=False, qos=1)
 
+    def publish_raw(self, topic: str, payload_str: str):
+        """Publish a raw string payload (no json.dumps). For HASP commands."""
+        if not self._enabled or self._client is None:
+            return
+        try:
+            self._client.publish(topic, payload_str, qos=1, retain=False)
+        except Exception:
+            if not self._drop_warned:
+                log.warning('MQTT raw publish failed (first drop)', exc_info=True)
+                self._drop_warned = True
+
     def publish_bridge_online(self, rule_count: int):
         """Publish rule engine state as online (retained, QoS 1).
 

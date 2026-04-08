@@ -31,7 +31,7 @@ def evaluate(event, state):
     # ── Track presence room transitions for corridor detection ──
     if dtype == "presence" and room:
         val = event.get("dps", {}).get("1")
-        if val in (True, "true", "presence"):
+        if val in (True, 1, "true", "presence", "True"):
             prev_room = state.shared.get("_prev_presence_room", "")
             prev_timer = state.get_timer("_prev_presence_time")
             state.shared["_prev_presence_room"] = room
@@ -51,7 +51,7 @@ def evaluate(event, state):
         if not r or r in presence_rooms:
             continue
         val = dev.get("dps", {}).get("1")
-        if val in (True, "true", "presence"):
+        if val in (True, 1, "true", "presence", "True"):
             presence_rooms.append(r)
 
     # ── People count from presence rooms minus corridor movements ──

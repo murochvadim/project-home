@@ -168,6 +168,7 @@ class RuleEngine:
         if parts == ['mur', 'home', 'device', '_bridge', 'devices']:
             if isinstance(payload, list):
                 self.state.update_inventory(payload)
+                self._rebuild_name_index()
             return
 
         # mur/home/device/+/command/response — just log
@@ -286,13 +287,18 @@ class RuleEngine:
         except (json.JSONDecodeError, TypeError, ValueError):
             return {}
 
+    def _rebuild_name_index(self):
+        """Build name→device_id lookup for fast name-based queries."""
+        self._name_to_id = {dev.get('name', ''): did for did, dev in self.state.devices.items()}
+
     def _lookup_device_by_name(self, name):
         """Find device_id by device name. Returns None if not found."""
-        for dev_id, dev in self.state.devices.items():
-            if dev.get('name', '') == name:
-                return dev_id
-        log.debug('Device lookup failed for name=%s', name)
-        return None
+        if not hasattr(self, '_name_to_id'):
+            self._rebuild_name_index()
+        dev_id = self._name_to_id.get(name)
+        if dev_id is None:
+            log.debug('Device lookup failed for name=%s', name)
+        return dev_id
 
     # ------------------------------------------------------------------
     # Rule evaluation
@@ -347,16 +353,23 @@ class RuleEngine:
         protocol = dev.get('protocol', '')
         device_name = dev.get('name', device_id)
 
+        # Strip internal keys — only pass device-specific payload
+        _internal = {'device_id', 'action', 'channel', 'rule', 'path', 'value'}
+
         if protocol == 'hasp':
             path = cmd.get('path', '')
             value = cmd.get('value', '')
-            self.mqtt.publish_command(f'hasp/{device_name}/command/{path}', value)
+            self.mqtt.publish_raw(f'hasp/{device_name}/command/{path}', str(value))
 
         elif protocol == 'zigbee':
-            self.mqtt.publish_command(f'zigbee2mqtt/{device_name}/set', cmd)
+            z2m_payload = {k: v for k, v in cmd.items() if k not in _internal}
+            if action == 'turn_on': z2m_payload['state'] = 'ON'
+            elif action == 'turn_off': z2m_payload['state'] = 'OFF'
+            self.mqtt.publish_command(f'zigbee2mqtt/{device_name}/set', z2m_payload)
 
         elif protocol == 'awtrix':
-            self.mqtt.publish_command(f'awtrix/{device_name}/custom', cmd)
+            awtrix_payload = {k: v for k, v in cmd.items() if k not in _internal}
+            self.mqtt.publish_command(f'awtrix/{device_name}/custom', awtrix_payload)
 
         else:
             # Default: Tuya / BSH / other

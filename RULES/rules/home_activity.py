@@ -71,7 +71,7 @@ def evaluate(event, state):
         # Presence sensor
         if dt == "presence":
             val = dev.get("dps", {}).get("1")
-            if val in (True, "true", "presence"):
+            if val in (True, 1, "true", "presence", "True"):
                 active_rooms.append(r)
                 continue
             if state.get_timer(f"room_active:{r}") < HOLD_OFF_SEC:

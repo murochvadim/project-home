@@ -11,6 +11,7 @@ Runs on LXC 105 (Main Agent / Orchestrator).
 import json
 import logging
 import os
+import threading
 import time
 
 import psycopg2
@@ -36,6 +37,7 @@ class StateManager:
         self._timers = {}      # timer_name -> timestamp (float)
         self._db_config = db_config
         self.conn = None
+        self.lock = threading.Lock()  # protects shared + _timers from concurrent access
 
     # ------------------------------------------------------------------
     # DB connection helpers (same pattern as Device Agent)
@@ -140,9 +142,12 @@ class StateManager:
     def save_shared_state(self):
         """Persist shared state + timers to rule_engine_state table."""
         self._ensure_conn()
+        with self.lock:
+            snapshot = dict(self.shared)
+            timers = dict(self._timers)
         try:
             with self.conn.cursor() as cur:
-                for key, value in self.shared.items():
+                for key, value in snapshot.items():
                     val_str = json.dumps(value)
                     cur.execute(
                         "INSERT INTO rule_engine_state (key, value, updated_at) "
@@ -151,7 +156,7 @@ class StateManager:
                         "SET value = EXCLUDED.value, updated_at = NOW()",
                         (key, val_str),
                     )
-                for name, ts in self._timers.items():
+                for name, ts in timers.items():
                     cur.execute(
                         "INSERT INTO rule_engine_state (key, value, updated_at) "
                         "VALUES (%s, %s, NOW()) "
@@ -228,10 +233,12 @@ class StateManager:
 
     def set_timer(self, name: str):
         """Record current time for a named timer."""
-        self._timers[name] = time.time()
+        with self.lock:
+            self._timers[name] = time.time()
 
     def get_timer(self, name: str) -> float:
         """Seconds since timer was set. Returns float('inf') if never set."""
-        if name in self._timers:
-            return time.time() - self._timers[name]
-        return float('inf')
+        with self.lock:
+            if name in self._timers:
+                return time.time() - self._timers[name]
+            return float('inf')
