@@ -397,7 +397,7 @@ class RuleEngine:
     # ------------------------------------------------------------------
 
     def _heartbeat_loop(self):
-        """Write heartbeat to DB every 300s, save shared state every 60s."""
+        """Write heartbeat to DB every 60s, save shared state every 60s."""
         last_heartbeat = 0
         last_save = 0
 
@@ -412,8 +412,8 @@ class RuleEngine:
                     log.warning('Failed to save shared state', exc_info=True)
                 last_save = now
 
-            # Write heartbeat every 300s
-            if now - last_heartbeat >= 300:
+            # Write heartbeat every 60s
+            if now - last_heartbeat >= 60:
                 try:
                     self._write_heartbeat()
                 except Exception:
