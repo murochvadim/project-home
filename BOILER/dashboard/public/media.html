@@ -463,13 +463,31 @@
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
             <button class="btn btn-secondary btn-sm" onclick="pixooPower(true)">ON</button>
             <button class="btn btn-secondary btn-sm" onclick="pixooPower(false)">OFF</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooPlay()">&#9654; Play</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooPlay()">&#9654; Mirror</button>
             <button class="btn btn-secondary btn-sm" onclick="pixooStop()">&#9632; Stop</button>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+            <span style="font-size:0.82rem;color:#888;">Channel:</span>
+            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(0)">Clock</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(1)">Cloud</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(2)">Visualizer</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+            <span style="font-size:0.82rem;color:#888;">Custom:</span>
+            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(0)">Page 1</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(1)">Page 2</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(2)" style="background:#7a9ab8;color:#fff;">Page 3</button>
+            <span style="margin-left:12px;"></span>
+            <button class="btn btn-secondary btn-sm" onclick="pixooResume()" style="background:#27ae60;color:#fff;">Service</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
             <span style="font-size:0.82rem;color:#888;">Brightness:</span>
             <input type="range" id="pixoo-brightness" min="0" max="100" value="50" style="width:120px;" onchange="pixooBrightness(this.value)">
             <span id="pixoo-brightness-val" style="font-size:0.82rem;font-weight:600;">50</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="pixoo-text" placeholder="Text to display..." style="flex:1;padding:5px 10px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.85rem;">
+            <button class="btn btn-secondary btn-sm" onclick="pixooSendText()" style="background:#3a5a8a;color:#fff;">Send</button>
           </div>
         </div>
       </div>
@@ -556,6 +574,6 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=27"></script>
+<script src="js/media.js?v=31"></script>
 </body>
 </html>

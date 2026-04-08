@@ -98,6 +98,7 @@ class PixooService:
 
         # Timestamps
         self._last_heartbeat = 0.0
+        self._paused = False
 
     # ------------------------------------------------------------------
     # MQTT callbacks
@@ -159,13 +160,30 @@ class PixooService:
             log.exception("DB connect failed")
             self.db = None
 
+    def _check_paused(self):
+        """Check if dashboard paused the service via DB flag."""
+        self._ensure_db()
+        if self.db is None:
+            return
+        try:
+            with self.db.cursor() as cur:
+                cur.execute("SELECT value FROM rule_engine_state WHERE key = '_pixoo_paused'")
+                row = cur.fetchone()
+                if row:
+                    self._paused = row[0] is True or row[0] == 'true'
+                else:
+                    self._paused = False
+        except Exception:
+            pass
+
     def write_heartbeat(self):
-        """Write heartbeat row to pixoo_log."""
+        """Write heartbeat row to pixoo_log + check pause flag."""
         now = time.time()
         if now - self._last_heartbeat < HEARTBEAT_INTERVAL:
             return
 
         self._last_heartbeat = now
+        self._check_paused()
         self._ensure_db()
         if self.db is None:
             return
@@ -288,6 +306,9 @@ class PixooService:
     # ------------------------------------------------------------------
     def rotate_screen(self):
         """Call the current screen render function and advance index."""
+        # Check if paused by dashboard (manual channel switch)
+        if self._paused:
+            return
         fn = self.screens[self.current_screen]
         screen_name = fn.__name__.replace('render_', '')
         try:
@@ -355,6 +376,7 @@ class PixooService:
 
         while not self.stopped:
             try:
+                self._check_paused()
                 self.rotate_screen()
                 self.write_heartbeat()
             except Exception:

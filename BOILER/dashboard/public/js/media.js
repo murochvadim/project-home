@@ -1786,6 +1786,45 @@ async function pixooPower(on) {
   } catch (e) { console.error('Pixoo power error:', e); }
 }
 
+async function pixooSendText() {
+  const text = document.getElementById('pixoo-text').value.trim();
+  if (!text) return;
+  try {
+    await fetch('/api/pixoo/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, color: [255, 255, 255] }),
+    });
+  } catch (e) { console.error('Pixoo text error:', e); }
+}
+
+async function pixooResume() {
+  try {
+    await fetch('/api/pixoo/resume', { method: 'POST' });
+  } catch (e) { console.error('Pixoo resume error:', e); }
+}
+
+async function pixooCustom(page) {
+  try {
+    await fetch('/api/pixoo/custom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page }),
+    });
+  } catch (e) { console.error('Pixoo custom error:', e); }
+}
+
+async function pixooChannel(index) {
+  try {
+    await fetch('/api/pixoo/channel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index }),
+    });
+    setTimeout(loadPixoo, 1000);
+  } catch (e) { console.error('Pixoo channel error:', e); }
+}
+
 async function pixooBrightness(val) {
   document.getElementById('pixoo-brightness-val').textContent = val;
   try {
