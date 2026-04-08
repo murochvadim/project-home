@@ -51,10 +51,11 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 | 100 | LXC | Media Agent (TV + Soundbar) | 192.168.1.138 |
 | 101 | VM | Home Assistant | 192.168.1.110 |
 | 102 | LXC | PostgreSQL DB | 192.168.1.219 |
-| 103 | LXC | App / Agents | 192.168.1.114 |
+| 103 | LXC | App / Agents + Zigbee2MQTT | 192.168.1.114 |
 | 104 | LXC | Commands / Timers | 192.168.1.227 |
 | 105 | LXC | Main Agent (Orchestrator) | 192.168.1.187 |
 | 106 | LXC | Voice | 192.168.1.188 |
+| 107 | LXC | MQTT Broker (Mosquitto) | 192.168.1.189 |
 
 ## Domain Rules
 - All temperatures are in **Celsius**.
@@ -120,6 +121,14 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - SMB → QNAP: `smbclient //192.168.1.155/<share> -U claude%<pass>` (`smbclient` installed)
 - NFS → QNAP: `/mnt/qnap-laptop` (bind-mounted from Proxmox host, always available)
 - HA token locations: `/etc/environment` (cron scripts) + `/etc/boiler-agent.env` (systemd service) — both must be updated together when token changes
+- **Zigbee2MQTT**: `/opt/zigbee2mqtt`, systemd service `zigbee2mqtt`, frontend on port 8080, USB dongle EFR32 (ember adapter) at `/dev/ttyUSB0`
+- Z2M connects to Mosquitto on LXC 107 (`mqtt://192.168.1.189:1883`), user `zigbee` / password in Z2M config
+
+### LXC 107 (192.168.1.189) — MQTT Broker
+- **Mosquitto** only — dedicated message bus, no other services
+- Config: `/etc/mosquitto/conf.d/*.conf` — listener 1883, auth required, password file `/etc/mosquitto/passwd`
+- Persistence: `/var/lib/mosquitto/mosquitto.db`
+- Log: `/var/log/mosquitto/mosquitto.log` (logrotate daily, 7 rotations)
 
 ### LXC 104 (192.168.1.227) — Windows Backup Agent
 - **Script**: `/opt/backup-script.sh` — runs every 5 min via cron
