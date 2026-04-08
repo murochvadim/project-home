@@ -10,7 +10,7 @@ Everything else ignored for now. Easy to expand later.
 HOLD_OFF_SEC = 10       # presence sensor clear hold-off
 INTERACT_WINDOW = 120   # seconds after switch operation to count room as active
 
-# Switch-like types that count if their name contains the room name
+# Switch-like types that count if name matches "{Room} Switch" or "{Room} ... Switch" pattern
 SWITCH_TYPES = {'switch', 'circuit_breaker', 'light'}
 
 RULE = {
