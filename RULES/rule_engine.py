@@ -106,6 +106,18 @@ class RuleEngine:
                 disabled_raw = []
         self._disabled_rules = set(disabled_raw)
 
+        # Store rules metadata in shared state for dashboard
+        self.state.shared['_rules'] = [
+            {
+                'name': m.RULE['name'],
+                'description': m.RULE.get('description', ''),
+                'category': m.RULE.get('category', ''),
+                'triggers': len(m.RULE.get('triggers', [])),
+                'controls': len(m.RULE.get('controls', [])),
+            }
+            for m in self.rules
+        ]
+
         log.info('Loaded %d rules (%d disabled)', len(self.rules), len(self._disabled_rules))
 
     def _index_rules(self):

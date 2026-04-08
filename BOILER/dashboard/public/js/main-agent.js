@@ -28,12 +28,25 @@
     return [];
   }
 
-  // Tab switching
-  window.switchTab = function (id, btn) {
-    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.tab-bar button').forEach(el => el.classList.remove('active'));
+  function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  // Tab switching (same as Device Agent)
+  window.showTab = function (id, btn) {
+    document.querySelectorAll('.tab-panel').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     document.getElementById('tab-' + id).classList.add('active');
     btn.classList.add('active');
+  };
+
+  // Toggle rule enable/disable
+  window.toggleRule = function (name, enabled) {
+    const topic = enabled ? 'enable' : 'disable';
+    // Publish via API — we'll add this endpoint later. For now log.
+    fetch('/api/rule-engine/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, enabled }),
+    }).catch(() => {});
   };
 
   window.loadState = async function loadState() {
@@ -44,35 +57,28 @@
       const s = data.state || {};
       const hb = data.heartbeat || {};
 
-      // ── Stats bar ──
+      // ── Stats chips ──
       const mode = s.home_mode || 'unknown';
-      const modeEl = document.getElementById('home-mode');
-      const chipMode = document.getElementById('chip-mode');
+      const modeEl = document.getElementById('stat-mode-val');
       modeEl.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
-      chipMode.className = 'stat-chip mode-' + mode;
+      modeEl.className = 'stat-val ' + mode;
 
       const people = parseInt(s.people_home) || 0;
-      const peopleEl = document.getElementById('people-count');
-      const chipPeople = document.getElementById('chip-people');
+      const peopleEl = document.getElementById('stat-people');
       peopleEl.textContent = people;
-      chipPeople.className = 'stat-chip ' + (people === 0 ? 'people-0' : people === 1 ? 'people-1' : 'people-multi');
+      peopleEl.className = 'stat-val ' + (people === 0 ? 'p0' : people === 1 ? 'p1' : 'pm');
 
       const activeCount = parseInt(s.active_room_count) || 0;
-      const chipRooms = document.getElementById('chip-rooms');
-      document.getElementById('active-room-count').textContent = activeCount;
-      chipRooms.className = 'stat-chip' + (activeCount > 0 ? ' rooms-active' : '');
-
-      const lastRoom = s.last_motion_room || '—';
-      document.getElementById('last-motion-room').textContent = lastRoom;
+      document.getElementById('stat-active-rooms').textContent = activeCount;
+      document.getElementById('stat-last-room').textContent = s.last_motion_room || '—';
 
       const lastMotionTs = parseFloat(s['_timer:last_motion']) || 0;
-      document.getElementById('last-motion-ago').textContent = lastMotionTs ? formatTimeAgo(lastMotionTs) : '—';
+      document.getElementById('stat-motion-ago').textContent = lastMotionTs ? formatTimeAgo(lastMotionTs) : '—';
 
-      // ── Engine status ──
+      // ── Engine status row ──
       const heartbeatAge = hb.ts ? (Date.now() - new Date(hb.ts).getTime()) / 1000 : Infinity;
       const isOnline = heartbeatAge < 120;
-      const dotEl = document.getElementById('engine-dot');
-      dotEl.className = 'engine-dot ' + (isOnline ? 'online' : 'offline');
+      document.getElementById('engine-dot').className = 'engine-dot ' + (isOnline ? 'online' : 'offline');
       document.getElementById('engine-label').textContent = isOnline ? 'Online' : 'Offline';
 
       const actLevel = s.activity_level || '—';
@@ -80,7 +86,17 @@
       document.getElementById('last-heartbeat').textContent = hb.ts ? formatTimestamp(hb.ts) : '—';
       document.getElementById('last-decision').textContent = hb.decision || '—';
 
-      // ── Active rooms pills ──
+      // ── Home Activity tab ──
+      document.getElementById('ha-mode').textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
+      document.getElementById('ha-mode').style.color = mode === 'active' ? '#1a7a3a' : mode === 'idle' ? '#f39c12' : '#95a5a6';
+      document.getElementById('ha-people').textContent = people;
+      document.getElementById('ha-people').style.color = people === 0 ? '#95a5a6' : people === 1 ? '#2980b9' : '#1a7a3a';
+      document.getElementById('ha-activity').textContent = actLevel.charAt(0).toUpperCase() + actLevel.slice(1);
+      document.getElementById('ha-room-count').textContent = activeCount;
+      document.getElementById('ha-last-room').textContent = s.last_motion_room || '—';
+      document.getElementById('ha-last-time').textContent = lastMotionTs ? formatTimeAgo(lastMotionTs) : '—';
+
+      // Active rooms pills
       const activeRooms = parseJsonSafe(s.active_rooms);
       const listEl = document.getElementById('active-room-list');
       listEl.innerHTML = '';
@@ -95,13 +111,46 @@
         });
       }
 
+      // Occupied rooms pills
       const occupiedRooms = parseJsonSafe(s.occupied_rooms);
-      document.getElementById('occupied-label').textContent =
-        occupiedRooms.length > 0 ? 'Occupied: ' + occupiedRooms.join(', ') : '';
+      const occEl = document.getElementById('occupied-room-list');
+      occEl.innerHTML = '';
+      if (occupiedRooms.length === 0) {
+        occEl.innerHTML = '<span style="color:#888;font-size:0.85rem;">No occupied rooms</span>';
+      } else {
+        occupiedRooms.forEach(r => {
+          const pill = document.createElement('span');
+          pill.className = 'room-pill';
+          pill.textContent = r;
+          occEl.appendChild(pill);
+        });
+      }
+
+      // ── Rules tab ──
+      const rules = parseJsonSafe(s._rules);
+      const disabledRules = new Set(parseJsonSafe(s._disabled_rules));
+      const rulesBody = document.getElementById('rules-body');
+      if (rules.length === 0) {
+        rulesBody.innerHTML = '<tr><td colspan="4" style="color:#aaa">No rules loaded</td></tr>';
+      } else {
+        rulesBody.innerHTML = rules.map(r => {
+          const enabled = !disabledRules.has(r.name);
+          return `<tr>
+            <td class="rule-name">${escHtml(r.name)}</td>
+            <td class="rule-desc">${escHtml(r.description)}</td>
+            <td class="rule-cat">${escHtml(r.category)}</td>
+            <td>
+              <label class="toggle">
+                <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleRule('${escHtml(r.name)}', this.checked)">
+                <span class="slider"></span>
+              </label>
+            </td>
+          </tr>`;
+        }).join('');
+      }
 
       // ── Room grid ──
       const occupiedSet = new Set(occupiedRooms.map(r => r.toLowerCase()));
-
       const allRooms = new Set();
       occupiedRooms.forEach(r => allRooms.add(r));
       activeRooms.forEach(r => allRooms.add(r));
@@ -121,10 +170,8 @@
         ALL_ROOMS.forEach(room => {
           const chip = document.createElement('div');
           chip.className = 'room-chip';
-          if (occupiedSet.has(room.toLowerCase())) {
-            chip.classList.add('occupied');
-          }
-          chip.innerHTML = '<span class="room-dot"></span>' + room;
+          if (occupiedSet.has(room.toLowerCase())) chip.classList.add('occupied');
+          chip.innerHTML = '<span class="room-dot"></span>' + escHtml(room);
           gridEl.appendChild(chip);
         });
       }

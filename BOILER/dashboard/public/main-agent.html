@@ -11,34 +11,19 @@
     .stat-chip { background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px; padding:8px 16px; display:flex; flex-direction:column; align-items:center; min-width:90px; }
     .stat-chip .stat-val { font-size:1.5rem; font-weight:700; color:#2e2e2e; }
     .stat-chip .stat-lbl { font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:.04em; }
-
-    /* ── Status colors ── */
-    .mode-active .stat-val { color:#1a7a3a; }
-    .mode-idle .stat-val   { color:#f39c12; }
-    .mode-away .stat-val   { color:#95a5a6; }
-    .people-0 .stat-val    { color:#95a5a6; }
-    .people-1 .stat-val    { color:#2980b9; }
-    .people-multi .stat-val { color:#1a7a3a; }
-    .rooms-active .stat-val { color:#2980b9; }
-
-    /* ── Tabs (same as device agent) ── */
-    .tab-bar { display:flex; gap:0; margin-bottom:16px; border-bottom:2px solid #d0cbc4; }
-    .tab-bar button {
-      background:none; border:none; padding:8px 20px; cursor:pointer;
-      font-size:0.9rem; color:#888; border-bottom:2px solid transparent;
-      margin-bottom:-2px; transition:color .15s, border-color .15s;
-    }
-    .tab-bar button:hover { color:#2e2e2e; }
-    .tab-bar button.active { color:#2e2e2e; border-bottom-color:#3a5a8a; font-weight:600; }
-    .tab-content { display:none; }
-    .tab-content.active { display:block; }
+    #stat-mode-val.active { color:#1a7a3a; }
+    #stat-mode-val.idle   { color:#f39c12; }
+    #stat-mode-val.away   { color:#95a5a6; }
+    #stat-people.p0 { color:#95a5a6; }
+    #stat-people.p1 { color:#2980b9; }
+    #stat-people.pm { color:#1a7a3a; }
+    #stat-active-rooms { color:#2980b9; }
 
     /* ── Room grid ── */
     .room-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
     .room-chip {
       background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px;
       padding:12px 14px; text-align:center; font-size:0.85rem; color:#888;
-      transition:all 0.3s;
     }
     .room-chip.occupied {
       background:rgba(39,174,96,0.12); border-color:#27ae60; color:#1a7a3a; font-weight:600;
@@ -49,20 +34,35 @@
     }
     .room-chip.occupied .room-dot { background:#27ae60; }
 
-    /* ── Engine status row ── */
-    .engine-status-row { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px; }
-    .engine-item { font-size:0.82rem; color:#888; }
-    .engine-item .val { color:#2e2e2e; font-weight:600; }
-    .engine-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
-    .engine-dot.online  { background:#27ae60; }
-    .engine-dot.offline { background:#e74c3c; }
-
-    /* ── Active rooms list ── */
-    .room-pills { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    /* ── Active rooms pills ── */
+    .room-pills { display:flex; flex-wrap:wrap; gap:6px; }
     .room-pill {
       background:rgba(39,174,96,0.12); color:#1a7a3a; border-radius:12px;
       padding:3px 10px; font-size:0.78rem; font-weight:600;
     }
+
+    /* ── Engine status ── */
+    .engine-row { display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; font-size:0.82rem; color:#888; }
+    .engine-row .eval { color:#2e2e2e; font-weight:600; }
+    .engine-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+    .engine-dot.online  { background:#27ae60; }
+    .engine-dot.offline { background:#e74c3c; }
+
+    /* ── Rules table ── */
+    .rules-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+    .rules-table th { text-align:left; font-size:0.75rem; color:#888; text-transform:uppercase; letter-spacing:.04em; padding:6px 12px; border-bottom:1px solid #d0cbc4; }
+    .rules-table td { padding:8px 12px; border-bottom:1px solid #e8e2da; }
+    .rules-table .rule-name { font-weight:600; color:#2e2e2e; }
+    .rules-table .rule-desc { color:#888; font-size:0.8rem; }
+    .rules-table .rule-cat { font-size:0.75rem; color:#7a9ab8; }
+
+    /* ── Toggle (same as device agent) ── */
+    .toggle { position:relative; display:inline-block; width:36px; height:20px; }
+    .toggle input { opacity:0; width:0; height:0; }
+    .toggle .slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ccc; border-radius:20px; transition:.2s; }
+    .toggle .slider:before { position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
+    .toggle input:checked + .slider { background:#27ae60; }
+    .toggle input:checked + .slider:before { transform:translateX(16px); }
   </style>
 </head>
 <body>
@@ -94,55 +94,96 @@
     </div>
   </div>
 
-  <!-- Stats bar -->
-  <div class="device-stats">
-    <div class="stat-chip" id="chip-mode">
-      <span class="stat-val" id="home-mode">—</span>
-      <span class="stat-lbl">Home</span>
+  <!-- Overview card -->
+  <div class="card">
+    <h2>Overview</h2>
+    <div class="device-stats">
+      <div class="stat-chip"><span class="stat-val" id="stat-mode-val">—</span><span class="stat-lbl">Home</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-people">—</span><span class="stat-lbl">People</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-active-rooms">—</span><span class="stat-lbl">Active Rooms</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-last-room" style="font-size:1rem;">—</span><span class="stat-lbl">Last Motion</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-motion-ago" style="font-size:1rem;">—</span><span class="stat-lbl">Motion Ago</span></div>
     </div>
-    <div class="stat-chip" id="chip-people">
-      <span class="stat-val" id="people-count">—</span>
-      <span class="stat-lbl">People</span>
+    <div class="engine-row">
+      <span><span class="engine-dot" id="engine-dot"></span><span class="eval" id="engine-label">—</span></span>
+      <span>Activity: <span class="eval" id="activity-level">—</span></span>
+      <span>Heartbeat: <span class="eval" id="last-heartbeat">—</span></span>
+      <span>Rules: <span class="eval" id="last-decision">—</span></span>
     </div>
-    <div class="stat-chip" id="chip-rooms">
-      <span class="stat-val" id="active-room-count">—</span>
-      <span class="stat-lbl">Active Rooms</span>
-    </div>
-    <div class="stat-chip">
-      <span class="stat-val" id="last-motion-room" style="font-size:1rem;">—</span>
-      <span class="stat-lbl">Last Motion</span>
-    </div>
-    <div class="stat-chip">
-      <span class="stat-val" id="last-motion-ago" style="font-size:1rem;">—</span>
-      <span class="stat-lbl">Motion Ago</span>
-    </div>
-  </div>
-
-  <!-- Engine status -->
-  <div class="engine-status-row">
-    <span class="engine-item"><span class="engine-dot" id="engine-dot"></span><span class="val" id="engine-label">—</span></span>
-    <span class="engine-item">Activity: <span class="val" id="activity-level">—</span></span>
-    <span class="engine-item">Heartbeat: <span class="val" id="last-heartbeat">—</span></span>
-    <span class="engine-item">Rules: <span class="val" id="last-decision">—</span></span>
   </div>
 
   <!-- Tabs -->
   <div class="tab-bar">
-    <button class="active" onclick="switchTab('overview',this)">Overview</button>
-    <button onclick="switchTab('rooms',this)">Room Map</button>
+    <button class="tab-btn active" onclick="showTab('activity',this)">Home Activity</button>
+    <button class="tab-btn" onclick="showTab('rules',this)">Rules</button>
+    <button class="tab-btn" onclick="showTab('rooms',this)">Room Map</button>
   </div>
 
-  <!-- Overview tab -->
-  <div id="tab-overview" class="tab-content active">
+  <!-- TAB: Home Activity -->
+  <div class="tab-panel active" id="tab-activity">
+    <div class="card">
+      <h2>Home Activity</h2>
+      <div class="status-grid" id="activity-grid">
+        <div class="status-item">
+          <label>Home Mode</label>
+          <div class="value" id="ha-mode">—</div>
+        </div>
+        <div class="status-item">
+          <label>People Home</label>
+          <div class="value" id="ha-people">—</div>
+        </div>
+        <div class="status-item">
+          <label>Activity Level</label>
+          <div class="value" id="ha-activity">—</div>
+        </div>
+        <div class="status-item">
+          <label>Active Room Count</label>
+          <div class="value" id="ha-room-count">—</div>
+        </div>
+        <div class="status-item">
+          <label>Last Motion Room</label>
+          <div class="value" id="ha-last-room">—</div>
+        </div>
+        <div class="status-item">
+          <label>Last Motion Time</label>
+          <div class="value" id="ha-last-time">—</div>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <h2>Active Rooms</h2>
       <div class="room-pills" id="active-room-list"></div>
-      <div style="margin-top:12px;color:#888;font-size:0.8rem;" id="occupied-label"></div>
+    </div>
+
+    <div class="card">
+      <h2>Occupied Rooms</h2>
+      <div class="room-pills" id="occupied-room-list"></div>
     </div>
   </div>
 
-  <!-- Room Map tab -->
-  <div id="tab-rooms" class="tab-content">
+  <!-- TAB: Rules -->
+  <div class="tab-panel" id="tab-rules">
+    <div class="card">
+      <h2>Rules</h2>
+      <table class="rules-table" id="rules-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Category</th>
+            <th>Enabled</th>
+          </tr>
+        </thead>
+        <tbody id="rules-body">
+          <tr><td colspan="4" style="color:#aaa">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: Room Map -->
+  <div class="tab-panel" id="tab-rooms">
     <div class="card">
       <h2>Room Occupancy</h2>
       <div class="room-grid" id="room-grid">
