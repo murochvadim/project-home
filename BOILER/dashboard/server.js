@@ -1254,7 +1254,7 @@ app.post('/api/pixoo/power', async (req, res) => {
     const r = await fetch('http://192.168.1.243:80/post', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ Command: 'Device/SetScreenSwitch', OnOff: on ? 1 : 0 }),
+      body: JSON.stringify({ Command: 'Channel/OnOffScreen', OnOff: on ? 1 : 0 }),
       signal: AbortSignal.timeout(3000),
     }).then(r => r.json());
     res.json(r);

@@ -38,6 +38,8 @@ DB_HOST = os.getenv("DB_HOST", "192.168.1.219")
 DB_NAME = os.getenv("DB_NAME", "home_data")
 DB_USER = os.getenv("DB_USER", "postgres")
 
+TZ = ZoneInfo("Asia/Jerusalem")
+
 SCREEN_INTERVAL = 10   # seconds between screen rotations
 HEARTBEAT_INTERVAL = 60  # seconds between heartbeat writes
 
