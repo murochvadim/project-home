@@ -17,6 +17,9 @@
 - [x] task-004-mqtt-client: MQTT client for Rule Engine (done before task-003 — core depends on client)
 - [x] task-005-starter-rules: Starter rules (read-only, home activity + people)
 
+## Dashboard
+- [x] Main Agent dashboard page (`main-agent.html`) — live rule engine state cards, room occupancy map, auto-refresh every 10s
+
 ## Infrastructure (manual, not code tasks)
 - Create Mosquitto user `rule_engine` + ACL on LXC 107
 - Create DB tables `rule_engine_log` + `rule_engine_state` on LXC 102

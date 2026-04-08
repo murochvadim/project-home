@@ -1170,6 +1170,32 @@ app.get('/api/health/orch-log', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Rule Engine State ───────────────────────────────────────
+app.get('/api/rule-engine/state', async (req, res) => {
+  try {
+    const stateR = await db.query('SELECT key, value FROM rule_engine_state ORDER BY key');
+    const state = {};
+    for (const row of stateR.rows) state[row.key] = row.value;
+
+    const hbR = await db.query(
+      `SELECT ts AT TIME ZONE 'Asia/Jerusalem' AS ts, decision, error
+       FROM rule_engine_log ORDER BY ts DESC LIMIT 1`
+    );
+    const heartbeat = hbR.rows[0] || {};
+
+    // Gather all known rooms from device_rooms table (if exists) or from state
+    let rooms = [];
+    try {
+      const roomsR = await db.query(
+        `SELECT DISTINCT room FROM device_rooms WHERE room IS NOT NULL ORDER BY room`
+      );
+      rooms = roomsR.rows.map(r => r.room);
+    } catch (_) { /* table may not exist */ }
+
+    res.json({ state, heartbeat, rooms });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Start ────────────────────────────────────────────────────
 async function ensureSchema() {
   await db.query(`

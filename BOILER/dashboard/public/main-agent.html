@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Main Agent</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* ── State cards grid ── */
+    .state-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-bottom:20px; }
+
+    .state-card {
+      background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px;
+      padding:20px 24px; text-align:center; transition:opacity 0.3s;
+    }
+    .state-card .card-icon { font-size:2.2rem; margin-bottom:6px; }
+    .state-card .card-value { font-size:2rem; font-weight:700; color:#2e2e2e; }
+    .state-card .card-label { font-size:0.78rem; color:#888; text-transform:uppercase; letter-spacing:0.04em; margin-top:4px; }
+    .state-card .card-sub { font-size:0.85rem; color:#555; margin-top:6px; }
+
+    /* ── Status colors ── */
+    .status-active { color:#27ae60; }
+    .status-idle   { color:#f39c12; }
+    .status-away   { color:#95a5a6; }
+
+    .count-zero  { color:#95a5a6; }
+    .count-one   { color:#2980b9; }
+    .count-multi { color:#27ae60; }
+
+    /* ── Room grid ── */
+    .room-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:10px; }
+    .room-chip {
+      background:#e8e2da; border:1px solid #d0cbc4; border-radius:6px;
+      padding:10px 12px; text-align:center; font-size:0.85rem; color:#888;
+      transition:all 0.3s;
+    }
+    .room-chip.occupied {
+      background:rgba(39,174,96,0.12); border-color:#27ae60; color:#1a7a3a; font-weight:600;
+    }
+    .room-chip.active-room {
+      background:rgba(39,174,96,0.22); border-color:#1a7a3a; color:#155724; font-weight:700;
+    }
+    .room-chip .room-dot {
+      display:inline-block; width:8px; height:8px; border-radius:50%;
+      margin-right:5px; vertical-align:middle; background:#ccc;
+    }
+    .room-chip.occupied .room-dot { background:#27ae60; }
+    .room-chip.active-room .room-dot { background:#1a7a3a; }
+
+    /* ── Active rooms list ── */
+    .room-pills { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; justify-content:center; }
+    .room-pill {
+      background:rgba(39,174,96,0.12); color:#1a7a3a; border-radius:12px;
+      padding:3px 10px; font-size:0.78rem; font-weight:600;
+    }
+
+    /* ── Engine status ── */
+    .engine-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+    .engine-dot.online  { background:#27ae60; }
+    .engine-dot.offline { background:#e74c3c; }
+
+    /* ── Fade animation ── */
+    .fade-update { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity:0.5; } to { opacity:1; } }
+  </style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<a href="health.html" id="alert-indicator"></a></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Agents</div>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agent</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="main-agent.html" class="active">Main Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Main Agent</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh" style="font-size:0.8rem;color:#888;margin-right:8px;">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadState()">&#8634; Refresh</button>
+    </div>
+  </div>
+
+  <!-- State cards -->
+  <div class="state-cards">
+    <!-- Home Status -->
+    <div class="state-card" id="card-home-status">
+      <div class="card-icon" id="home-icon">&#127968;</div>
+      <div class="card-value" id="home-mode">—</div>
+      <div class="card-label">Home Status</div>
+    </div>
+
+    <!-- People Home -->
+    <div class="state-card" id="card-people">
+      <div class="card-icon">&#128100;</div>
+      <div class="card-value" id="people-count">—</div>
+      <div class="card-label">People Home</div>
+    </div>
+
+    <!-- Active Rooms -->
+    <div class="state-card" id="card-active-rooms">
+      <div class="card-icon">&#128203;</div>
+      <div class="card-value" id="active-room-count">—</div>
+      <div class="card-label">Active Rooms</div>
+      <div class="room-pills" id="active-room-list"></div>
+    </div>
+
+    <!-- Last Motion -->
+    <div class="state-card" id="card-last-motion">
+      <div class="card-icon">&#127939;</div>
+      <div class="card-value" id="last-motion-room">—</div>
+      <div class="card-label">Last Motion</div>
+      <div class="card-sub" id="last-motion-ago">—</div>
+    </div>
+  </div>
+
+  <!-- Rule Engine Status -->
+  <div class="card">
+    <h2>Rule Engine Status</h2>
+    <div class="status-grid">
+      <div class="status-item">
+        <label>Engine</label>
+        <div class="value" id="engine-status"><span class="engine-dot offline"></span>Unknown</div>
+      </div>
+      <div class="status-item">
+        <label>Activity Level</label>
+        <div class="value" id="activity-level">—</div>
+      </div>
+      <div class="status-item">
+        <label>Last Heartbeat</label>
+        <div class="value" id="last-heartbeat">—</div>
+      </div>
+      <div class="status-item">
+        <label>Last Decision</label>
+        <div class="value" id="last-decision">—</div>
+      </div>
+      <div class="status-item">
+        <label>Last Error</label>
+        <div class="value" id="last-error">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Occupied Rooms Map -->
+  <div class="card">
+    <h2>Room Occupancy Map</h2>
+    <div class="room-grid" id="room-grid">
+      <div style="color:#aaa">Loading...</div>
+    </div>
+  </div>
+
+</main>
+
+<script src="js/scroll-stabilizer.js"></script>
+<script src="js/alerts-monitor.js"></script>
+<script src="js/main-agent.js"></script>
+</body>
+</html>
