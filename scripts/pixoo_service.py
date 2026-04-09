@@ -390,10 +390,46 @@ class PixooService:
                         # Draw background image if provided (base64 data URL)
                         if image and ',' in image:
                             try:
-                                from PIL import Image
+                                from PIL import Image as PILImage
+                                import requests as _req
                                 img_data = base64.b64decode(image.split(',')[1])
-                                img = Image.open(io.BytesIO(img_data)).convert('RGB').resize((64, 64))
-                                svc.pixoo.draw_image(img)
+                                img = PILImage.open(io.BytesIO(img_data))
+                                PIXOO_URL = f'http://{PIXOO_IP}:80/post'
+
+                                n_frames = getattr(img, 'n_frames', 1)
+                                if n_frames > 1:
+                                    # Animated GIF — save to temp, serve via HTTP, tell Pixoo to fetch
+                                    import requests as _req
+                                    tmp = '/tmp/pixoo_push.gif'
+                                    frames = []
+                                    durations = []
+                                    for i in range(n_frames):
+                                        img.seek(i)
+                                        frames.append(img.convert('RGB').resize((64, 64)))
+                                        durations.append(img.info.get('duration', 100))
+                                    frames[0].save(tmp, save_all=True, append_images=frames[1:],
+                                                   duration=durations, loop=0)
+                                    # Clear everything before playing GIF
+                                    _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                        'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                                    _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                        'Command': 'Draw/ClearHttpText'}, timeout=3)
+                                    _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                        'Command': 'Device/PlayTFGif',
+                                        'FileType': 2,
+                                        'FileName': f'http://192.168.1.138:8769/pixoo_push.gif',
+                                    }, timeout=10)
+                                    svc._paused = True
+                                    self.send_response(200)
+                                    self.send_header('Content-Type', 'application/json')
+                                    self.send_header('Access-Control-Allow-Origin', '*')
+                                    self.end_headers()
+                                    self.wfile.write(b'{"ok":true}')
+                                    return
+                                else:
+                                    # Static image — use pixoo library
+                                    img = img.convert('RGB').resize((64, 64))
+                                    svc.pixoo.draw_image(img)
                             except Exception:
                                 log.exception("Image draw failed")
 
@@ -442,9 +478,18 @@ class PixooService:
                 pass  # suppress access logs
 
         server = HTTPServer(('0.0.0.0', 8768), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
         log.info("HTTP server started on port 8768")
+
+        # Static file server on port 8769 for serving GIFs to Pixoo device
+        import http.server as _httpmod
+        class GifHandler(_httpmod.SimpleHTTPRequestHandler):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, directory='/tmp', **kw)
+            def log_message(self, *a): pass
+        gif_server = HTTPServer(('0.0.0.0', 8769), GifHandler)
+        threading.Thread(target=gif_server.serve_forever, daemon=True).start()
+        log.info("GIF server started on port 8769")
 
     def run(self):
         """Main service loop."""

@@ -20,7 +20,7 @@ const upload = multer({ dest: voiceUploadDir });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 // PostgreSQL connection to LXC 102
@@ -1357,10 +1357,10 @@ app.post('/api/pixoo/push-items', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(30000),
     }).then(r => r.json());
     res.json(r);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Pixoo push error:', e.message); res.status(500).json({ error: e.message }); }
 });
 
 // ─── Pixoo64 Presets ──────────────────────────────────────────
@@ -1380,6 +1380,17 @@ app.post('/api/pixoo/presets', async (req, res) => {
       [name, type || 'text', JSON.stringify(content || []), image_data || null]
     );
     res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/pixoo/presets/:id', async (req, res) => {
+  try {
+    const { name, type, content, image_data } = req.body;
+    await db.query(
+      'UPDATE pixoo_presets SET name=$1, type=$2, content=$3, image_data=$4 WHERE id=$5',
+      [name, type || 'text', JSON.stringify(content || {}), image_data || null, req.params.id]
+    );
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

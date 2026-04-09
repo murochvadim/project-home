@@ -1715,10 +1715,12 @@ document.getElementById('edit-modal-overlay').addEventListener('click', function
 let _pixooTimer = null;
 let _pixooEditorItems = [];
 let _pixooPixels = {};       // "x,y" → {r,g,b}
+let _pixooPixelHistory = []; // stack of keys for undo
 let _pixooCrosshair = null;
 let _pixooBgImage = null;
 let _pixooBgBase64 = null;
 let _pixooMode = 'text';     // 'text' or 'pixel'
+let _pixooLoadedPresetId = null; // currently loaded preset ID for update
 let _pixooDrawing = false;   // mouse held down for pixel drawing
 
 // Attach canvas handlers once DOM is ready
@@ -1745,16 +1747,19 @@ function pixooSetMode(mode) {
 function pixooDrawPixelAt(event) {
   const canvas = event.target;
   const rect = canvas.getBoundingClientRect();
-  const px = Math.floor((event.clientX - rect.left) * (320 / rect.width));
-  const py = Math.floor((event.clientY - rect.top) * (320 / rect.height));
-  const x = Math.floor(px / PIXOO_SCALE);
-  const y = Math.floor(py / PIXOO_SCALE);
+  const s = canvas.width / 64;
+  const px = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
+  const py = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
+  const x = Math.floor(px / s);
+  const y = Math.floor(py / s);
   if (x < 0 || x > 63 || y < 0 || y > 63) return;
   const hex = document.getElementById('pixoo-ed-color').value;
   const r = parseInt(hex.substring(1, 3), 16);
   const g = parseInt(hex.substring(3, 5), 16);
   const b = parseInt(hex.substring(5, 7), 16);
-  _pixooPixels[`${x},${y}`] = { r, g, b };
+  const key = `${x},${y}`;
+  _pixooPixels[key] = { r, g, b };
+  _pixooPixelHistory.push(key);
   pixooRedrawEditor();
 }
 
@@ -1762,14 +1767,13 @@ function drawPixooCanvas(items) {
   const canvas = document.getElementById('pixoo-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const s = PIXOO_SCALE;
+  const s = canvas.width / 64;
   ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, 320, 320);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.textBaseline = 'top';
   for (const item of (items || [])) {
     ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
-    const fontSize = (item.sz || 1) * 5 * s;
-    ctx.font = `${fontSize}px monospace`;
+    ctx.font = `${5 * s}px monospace`;
     ctx.fillText(item.t, item.x * s, item.y * s);
   }
 }
@@ -1887,32 +1891,31 @@ async function pixooBrightness(val) {
 // ── Pixoo64 Editor ──────────────────────────────────────────────
 
 function pixooCanvasClick(event) {
-  if (_pixooMode === 'pixel') return; // pixel mode uses mousedown/move
+  if (_pixooMode === 'pixel') return;
   const canvas = event.target;
   const rect = canvas.getBoundingClientRect();
-  const px = Math.floor((event.clientX - rect.left) * (320 / rect.width));
-  const py = Math.floor((event.clientY - rect.top) * (320 / rect.height));
-  const x64 = Math.floor(px / PIXOO_SCALE);
-  const y64 = Math.floor(py / PIXOO_SCALE);
+  const s = canvas.width / 64;
+  const px = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
+  const py = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
+  const x64 = Math.floor(px / s);
+  const y64 = Math.floor(py / s);
   document.getElementById('pixoo-ed-x').value = x64;
   document.getElementById('pixoo-ed-y').value = y64;
-  _pixooCrosshair = { px: x64 * PIXOO_SCALE, py: y64 * PIXOO_SCALE };
+  _pixooCrosshair = { px: x64 * s, py: y64 * s };
   pixooRedrawEditor();
 }
-
-const PIXOO_SCALE = 5; // 320 / 64
 
 function pixooRedrawEditor() {
   const canvas = document.getElementById('pixoo-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const s = PIXOO_SCALE;
+  const s = canvas.width / 64;
   ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, 320, 320);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   // Draw background image if loaded
   if (_pixooBgImage) {
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(_pixooBgImage, 0, 0, 320, 320);
+    ctx.drawImage(_pixooBgImage, 0, 0, canvas.width, canvas.height);
   }
   // Draw pixels
   for (const [key, c] of Object.entries(_pixooPixels)) {
@@ -1949,8 +1952,7 @@ function pixooAddText() {
   const r = parseInt(hex.substring(1, 3), 16);
   const g = parseInt(hex.substring(3, 5), 16);
   const b = parseInt(hex.substring(5, 7), 16);
-  const sz = parseInt(document.getElementById('pixoo-ed-size').value) || 1;
-  _pixooEditorItems.push({ t: text, x, y, r, g, b, sz });
+  _pixooEditorItems.push({ t: text, x, y, r, g, b });
   document.getElementById('pixoo-ed-text').value = '';
   pixooRedrawEditor();
   pixooRenderItemsList();
@@ -2003,13 +2005,41 @@ function pixooClearImage() {
 function pixooClearCanvas() {
   _pixooEditorItems = [];
   _pixooPixels = {};
+  _pixooPixelHistory = [];
   _pixooCrosshair = null;
+  _pixooLoadedPresetId = null;
   _pixooBgImage = null;
   _pixooBgBase64 = null;
   document.getElementById('pixoo-image-upload').value = '';
   document.getElementById('pixoo-image-info').textContent = '';
   pixooRedrawEditor();
   pixooRenderItemsList();
+}
+
+function pixooUndoPixel() {
+  if (_pixooPixelHistory.length === 0) return;
+  const key = _pixooPixelHistory.pop();
+  delete _pixooPixels[key];
+  pixooRedrawEditor();
+}
+
+async function pixooWipeDisplay() {
+  try {
+    // Send empty push — clears the physical Pixoo
+    await fetch('/api/pixoo/push-items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [], pixels: {}, image: null }),
+    });
+  } catch (e) { console.error('Wipe error:', e); }
+}
+
+function pixooZoom(size) {
+  const canvas = document.getElementById('pixoo-canvas');
+  if (!canvas) return;
+  canvas.width = size;
+  canvas.height = size;
+  pixooRedrawEditor();
 }
 
 async function pixooPushCanvas() {
@@ -2026,15 +2056,26 @@ async function pixooPushCanvas() {
 async function pixooSavePreset() {
   const name = document.getElementById('pixoo-preset-name').value.trim();
   if (!name) return alert('Enter a preset name');
-  if (_pixooEditorItems.length === 0 && !_pixooBgBase64) return alert('Add content first');
+  const hasPixels = Object.keys(_pixooPixels).length > 0;
+  if (_pixooEditorItems.length === 0 && !_pixooBgBase64 && !hasPixels) return alert('Add content first');
   try {
-    const type = _pixooBgBase64 ? 'image' : 'text';
-    await fetch('/api/pixoo/presets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, type, content: _pixooEditorItems, image_data: _pixooBgBase64 }),
-    });
-    document.getElementById('pixoo-preset-name').value = '';
+    const type = _pixooBgBase64 ? 'image' : hasPixels ? 'pixel' : 'text';
+    const payload = { name, type, content: { items: _pixooEditorItems, pixels: _pixooPixels }, image_data: _pixooBgBase64 };
+    if (_pixooLoadedPresetId) {
+      // Update existing preset
+      await fetch('/api/pixoo/presets/' + _pixooLoadedPresetId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      // Create new
+      await fetch('/api/pixoo/presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
     loadPixooPresets();
   } catch (e) { console.error('Pixoo save preset error:', e); }
 }
@@ -2049,8 +2090,11 @@ async function loadPixooPresets() {
       return;
     }
     el.innerHTML = presets.map(p => {
-      const items = typeof p.content === 'string' ? JSON.parse(p.content) : (p.content || []);
-      const summary = items.map(i => i.t).join(', ');
+      const content = typeof p.content === 'string' ? JSON.parse(p.content) : (p.content || {});
+      const items = Array.isArray(content) ? content : (content.items || []);
+      const pixelCount = content.pixels ? Object.keys(content.pixels).length : 0;
+      const textSummary = items.map(i => i.t).join(', ');
+      const summary = textSummary || (pixelCount > 0 ? `${pixelCount} pixels` : '—');
       return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">` +
         `<span style="flex:1;font-weight:500;">${p.name}</span>` +
         `<span style="color:#aaa;font-size:0.72rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${summary}</span>` +
@@ -2067,9 +2111,21 @@ async function pixooLoadPreset(id) {
     const presets = await fetch('/api/pixoo/presets').then(r => r.json());
     const preset = presets.find(p => p.id === id);
     if (!preset) return;
-    const items = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || []);
-    _pixooEditorItems = items;
+    const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
+    _pixooEditorItems = Array.isArray(content) ? content : (content.items || []);
+    _pixooPixels = content.pixels || {};
+    _pixooPixelHistory = Object.keys(_pixooPixels);
     _pixooCrosshair = null;
+    if (preset.image_data) {
+      const img = new Image();
+      img.onload = () => { _pixooBgImage = img; _pixooBgBase64 = preset.image_data; pixooRedrawEditor(); };
+      img.src = preset.image_data;
+    } else {
+      _pixooBgImage = null;
+      _pixooBgBase64 = null;
+    }
+    _pixooLoadedPresetId = id;
+    document.getElementById('pixoo-preset-name').value = preset.name;
     pixooRedrawEditor();
     pixooRenderItemsList();
   } catch (e) { console.error('Pixoo load preset error:', e); }
@@ -2085,6 +2141,16 @@ async function pixooDeletePreset(id) {
 
 async function pixooPushPreset(id) {
   try {
-    await fetch(`/api/pixoo/presets/${id}/push`, { method: 'POST' });
+    const presets = await fetch('/api/pixoo/presets').then(r => r.json());
+    const preset = presets.find(p => p.id === id);
+    if (!preset) return;
+    const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
+    const items = Array.isArray(content) ? content : (content.items || []);
+    const pixels = content.pixels || {};
+    await fetch('/api/pixoo/push-items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items, pixels, image: preset.image_data }),
+    });
   } catch (e) { console.error('Pixoo push preset error:', e); }
 }

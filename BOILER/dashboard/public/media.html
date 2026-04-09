@@ -442,8 +442,15 @@
 
         <!-- LEFT: Canvas + Controls (moved from right) -->
         <div style="display:flex;flex-direction:column;align-items:center;">
-          <canvas id="pixoo-canvas" width="320" height="320" style="background:#000;border:2px solid #d0cbc4;border-radius:8px;image-rendering:pixelated;cursor:crosshair;"></canvas>
-          <div style="font-size:0.72rem;color:#888;margin-top:4px;" id="pixoo-screen-label">Click canvas to set XY</div>
+          <canvas id="pixoo-canvas" width="320" height="320" style="background:#000;border:2px solid #d0cbc4;border-radius:8px;image-rendering:pixelated;cursor:crosshair;" id-size="320"></canvas>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+            <span style="font-size:0.72rem;color:#888;" id="pixoo-screen-label">Click canvas to set XY</span>
+            <span style="flex:1"></span>
+            <span style="font-size:0.72rem;color:#888;">Zoom:</span>
+            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(320)" style="padding:2px 8px;font-size:0.7rem;">1x</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(448)" style="padding:2px 8px;font-size:0.7rem;">1.5x</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(640)" style="padding:2px 8px;font-size:0.7rem;">2x</button>
+          </div>
           <div style="display:flex;gap:12px;margin-top:10px;font-size:0.78rem;color:#888;">
             <span id="pixoo-status">—</span>
             <span>Screen: <span id="pixoo-screen">—</span></span>
@@ -492,6 +499,7 @@
               <button class="btn btn-secondary btn-sm" id="pixoo-mode-text" onclick="pixooSetMode('text')" style="background:#7a9ab8;color:#fff;">Text</button>
               <button class="btn btn-secondary btn-sm" id="pixoo-mode-pixel" onclick="pixooSetMode('pixel')">Pixel</button>
               <input type="color" id="pixoo-ed-color" value="#ffffff" style="width:28px;height:28px;border:1px solid #d0cbc4;border-radius:4px;padding:0;cursor:pointer;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooUndoPixel()" title="Undo last pixel">Undo</button>
             </div>
           </div>
 
@@ -516,6 +524,7 @@
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
               <button class="btn btn-secondary btn-sm" onclick="pixooPushCanvas()" style="background:#27ae60;color:#fff;">Push to Display</button>
               <button class="btn btn-secondary btn-sm" onclick="pixooClearCanvas()">Clear All</button>
+              <button class="btn btn-secondary btn-sm" onclick="pixooWipeDisplay()" style="background:#c0392b;color:#fff;">Wipe Display</button>
             </div>
           </div>
 
@@ -616,6 +625,6 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=36"></script>
+<script src="js/media.js?v=44"></script>
 </body>
 </html>
