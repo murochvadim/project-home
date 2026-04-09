@@ -11,6 +11,10 @@ function showTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+  // load pixoo presets when tab opens
+  if (name === 'pixoo') {
+    loadPixooPresets();
+  }
   // start/stop analyzer status polling
   clearInterval(window._azPollTimer);
   if (name === 'analyzer') {
@@ -1709,20 +1713,30 @@ document.getElementById('edit-modal-overlay').addEventListener('click', function
 // ── Pixoo64 ─────────────────────────────────────────────────────
 
 let _pixooTimer = null;
+let _pixooEditorItems = [];
+let _pixooCrosshair = null;
+let _pixooBgImage = null;
+let _pixooBgBase64 = null;
+
+// Attach canvas click handler once DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  const c = document.getElementById('pixoo-canvas');
+  if (c) c.addEventListener('click', pixooCanvasClick);
+});
 
 function drawPixooCanvas(items) {
   const canvas = document.getElementById('pixoo-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const scale = 4; // 64px * 4 = 256px canvas
+  const s = PIXOO_SCALE;
   ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillRect(0, 0, 320, 320);
   ctx.textBaseline = 'top';
   for (const item of (items || [])) {
     ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
-    // Pixoo font is ~5px high, scale up
-    ctx.font = `${5 * scale}px monospace`;
-    ctx.fillText(item.t, item.x * scale, item.y * scale);
+    const fontSize = (item.sz || 1) * 5 * s;
+    ctx.font = `${fontSize}px monospace`;
+    ctx.fillText(item.t, item.x * s, item.y * s);
   }
 }
 
@@ -1834,4 +1848,203 @@ async function pixooBrightness(val) {
       body: JSON.stringify({ value: parseInt(val) }),
     });
   } catch (e) { console.error('Pixoo brightness error:', e); }
+}
+
+// ── Pixoo64 Editor ──────────────────────────────────────────────
+
+function pixooCanvasClick(event) {
+  const canvas = event.target;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = 320 / rect.width;
+  const scaleY = 320 / rect.height;
+  const px = Math.floor((event.clientX - rect.left) * scaleX);
+  const py = Math.floor((event.clientY - rect.top) * scaleY);
+  const x64 = Math.floor(px / PIXOO_SCALE);
+  const y64 = Math.floor(py / PIXOO_SCALE);
+  document.getElementById('pixoo-ed-x').value = x64;
+  document.getElementById('pixoo-ed-y').value = y64;
+  _pixooCrosshair = { px: x64 * PIXOO_SCALE, py: y64 * PIXOO_SCALE };
+  pixooRedrawEditor();
+}
+
+const PIXOO_SCALE = 5; // 320 / 64
+
+function pixooRedrawEditor() {
+  const canvas = document.getElementById('pixoo-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const s = PIXOO_SCALE;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 320, 320);
+  // Draw background image if loaded
+  if (_pixooBgImage) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(_pixooBgImage, 0, 0, 320, 320);
+  }
+  ctx.textBaseline = 'top';
+  for (const item of _pixooEditorItems) {
+    ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
+    const fontSize = (item.sz || 1) * 5 * s;
+    ctx.font = `${fontSize}px monospace`;
+    ctx.fillText(item.t, item.x * s, item.y * s);
+  }
+  // Draw crosshair
+  if (_pixooCrosshair) {
+    ctx.strokeStyle = 'rgba(255,255,0,0.8)';
+    ctx.lineWidth = 1;
+    const cx = _pixooCrosshair.px + 2;
+    const cy = _pixooCrosshair.py + 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 8, cy); ctx.lineTo(cx + 8, cy);
+    ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
+    ctx.stroke();
+  }
+}
+
+function pixooAddText() {
+  const text = document.getElementById('pixoo-ed-text').value.trim();
+  if (!text) return;
+  const x = parseInt(document.getElementById('pixoo-ed-x').value) || 0;
+  const y = parseInt(document.getElementById('pixoo-ed-y').value) || 0;
+  const hex = document.getElementById('pixoo-ed-color').value;
+  const r = parseInt(hex.substring(1, 3), 16);
+  const g = parseInt(hex.substring(3, 5), 16);
+  const b = parseInt(hex.substring(5, 7), 16);
+  const sz = parseInt(document.getElementById('pixoo-ed-size').value) || 1;
+  _pixooEditorItems.push({ t: text, x, y, r, g, b, sz });
+  document.getElementById('pixoo-ed-text').value = '';
+  pixooRedrawEditor();
+  pixooRenderItemsList();
+}
+
+function pixooRenderItemsList() {
+  const el = document.getElementById('pixoo-ed-items');
+  if (!el) return;
+  if (_pixooEditorItems.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = _pixooEditorItems.map((it, i) =>
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">` +
+    `<span style="color:rgb(${it.r},${it.g},${it.b});">"${it.t}"</span>` +
+    `<span>@ ${it.x},${it.y}</span>` +
+    `<button onclick="pixooRemoveItem(${i})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.75rem;padding:0;">&#10005;</button>` +
+    `</div>`
+  ).join('');
+}
+
+function pixooRemoveItem(index) {
+  _pixooEditorItems.splice(index, 1);
+  pixooRedrawEditor();
+  pixooRenderItemsList();
+}
+
+function pixooLoadImage(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      _pixooBgImage = img;
+      _pixooBgBase64 = e.target.result;
+      document.getElementById('pixoo-image-info').textContent = `${img.width}x${img.height} — ${file.name}`;
+      pixooRedrawEditor();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function pixooClearImage() {
+  _pixooBgImage = null;
+  _pixooBgBase64 = null;
+  document.getElementById('pixoo-image-upload').value = '';
+  document.getElementById('pixoo-image-info').textContent = '';
+  pixooRedrawEditor();
+}
+
+function pixooClearCanvas() {
+  _pixooEditorItems = [];
+  _pixooCrosshair = null;
+  _pixooBgImage = null;
+  _pixooBgBase64 = null;
+  document.getElementById('pixoo-image-upload').value = '';
+  document.getElementById('pixoo-image-info').textContent = '';
+  pixooRedrawEditor();
+  pixooRenderItemsList();
+}
+
+async function pixooPushCanvas() {
+  if (_pixooEditorItems.length === 0 && !_pixooBgBase64) return;
+  try {
+    await fetch('/api/pixoo/push-items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: _pixooEditorItems, image: _pixooBgBase64 }),
+    });
+  } catch (e) { console.error('Pixoo push error:', e); }
+}
+
+async function pixooSavePreset() {
+  const name = document.getElementById('pixoo-preset-name').value.trim();
+  if (!name) return alert('Enter a preset name');
+  if (_pixooEditorItems.length === 0 && !_pixooBgBase64) return alert('Add content first');
+  try {
+    const type = _pixooBgBase64 ? 'image' : 'text';
+    await fetch('/api/pixoo/presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, content: _pixooEditorItems, image_data: _pixooBgBase64 }),
+    });
+    document.getElementById('pixoo-preset-name').value = '';
+    loadPixooPresets();
+  } catch (e) { console.error('Pixoo save preset error:', e); }
+}
+
+async function loadPixooPresets() {
+  try {
+    const presets = await fetch('/api/pixoo/presets').then(r => r.json());
+    const el = document.getElementById('pixoo-presets-list');
+    if (!el) return;
+    if (!Array.isArray(presets) || presets.length === 0) {
+      el.innerHTML = '<div style="color:#aaa;font-size:0.78rem;">No presets saved</div>';
+      return;
+    }
+    el.innerHTML = presets.map(p => {
+      const items = typeof p.content === 'string' ? JSON.parse(p.content) : (p.content || []);
+      const summary = items.map(i => i.t).join(', ');
+      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">` +
+        `<span style="flex:1;font-weight:500;">${p.name}</span>` +
+        `<span style="color:#aaa;font-size:0.72rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${summary}</span>` +
+        `<button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:0.72rem;" onclick="pixooLoadPreset(${p.id})">Load</button>` +
+        `<button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:0.72rem;background:#27ae60;color:#fff;" onclick="pixooPushPreset(${p.id})">Push</button>` +
+        `<button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:0.72rem;color:#c0392b;border-color:#e0b0ad;" onclick="pixooDeletePreset(${p.id})">Del</button>` +
+        `</div>`;
+    }).join('');
+  } catch (e) { console.error('Pixoo load presets error:', e); }
+}
+
+async function pixooLoadPreset(id) {
+  try {
+    const presets = await fetch('/api/pixoo/presets').then(r => r.json());
+    const preset = presets.find(p => p.id === id);
+    if (!preset) return;
+    const items = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || []);
+    _pixooEditorItems = items;
+    _pixooCrosshair = null;
+    pixooRedrawEditor();
+    pixooRenderItemsList();
+  } catch (e) { console.error('Pixoo load preset error:', e); }
+}
+
+async function pixooDeletePreset(id) {
+  if (!confirm('Delete this preset?')) return;
+  try {
+    await fetch(`/api/pixoo/presets/${id}`, { method: 'DELETE' });
+    loadPixooPresets();
+  } catch (e) { console.error('Pixoo delete preset error:', e); }
+}
+
+async function pixooPushPreset(id) {
+  try {
+    await fetch(`/api/pixoo/presets/${id}/push`, { method: 'POST' });
+  } catch (e) { console.error('Pixoo push preset error:', e); }
 }

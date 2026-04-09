@@ -1350,6 +1350,97 @@ app.post('/api/pixoo/resume', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/pixoo/push-items', async (req, res) => {
+  try {
+    // Route through Pixoo service on LXC 100 (uses pixoo library for rendering)
+    const r = await fetch('http://192.168.1.138:8768/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(10000),
+    }).then(r => r.json());
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Pixoo64 Presets ──────────────────────────────────────────
+app.get('/api/pixoo/presets', async (_req, res) => {
+  try {
+    const r = await db.query('SELECT id, name, type, content, image_data, created_at FROM pixoo_presets ORDER BY created_at DESC LIMIT 10');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/pixoo/presets', async (req, res) => {
+  try {
+    const { name, type, content, image_data } = req.body;
+    if (!name || !type) return res.status(400).json({ error: 'Missing name or type' });
+    const r = await db.query(
+      'INSERT INTO pixoo_presets (name, type, content, image_data) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, type || 'text', JSON.stringify(content || []), image_data || null]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/pixoo/presets/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM pixoo_presets WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/pixoo/presets/:id/push', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM pixoo_presets WHERE id = $1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Preset not found' });
+    const preset = r.rows[0];
+
+    // Reset display
+    await fetch('http://192.168.1.243:80/post', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Command: 'Draw/ResetHttpGifId' }),
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (preset.type === 'text') {
+      const items = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || []);
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const hex = `#${(item.r||255).toString(16).padStart(2,'0')}${(item.g||255).toString(16).padStart(2,'0')}${(item.b||255).toString(16).padStart(2,'0')}`;
+        await fetch('http://192.168.1.243:80/post', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            Command: 'Draw/SendHttpText',
+            TextId: i + 1, x: item.x || 0, y: item.y || 0, dir: 0, font: 4,
+            TextWidth: 64, TextString: item.t || '', speed: 60,
+            color: hex, align: 1,
+          }),
+          signal: AbortSignal.timeout(3000),
+        });
+      }
+    } else if (preset.type === 'image' && preset.image_data) {
+      await fetch('http://192.168.1.243:80/post', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          Command: 'Draw/SendHttpGif',
+          PicNum: 1, PicWidth: 64, PicOffset: 0, PicID: 1,
+          PicSpeed: 1000, PicData: preset.image_data,
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+    }
+
+    // Pause service
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_pixoo_paused', 'true'::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()`
+    ).catch(() => {});
+
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/rule-engine/toggle', async (req, res) => {
   try {
     const { name, enabled } = req.body;

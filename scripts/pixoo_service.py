@@ -7,12 +7,16 @@ writes heartbeat to PostgreSQL.
 Runs on LXC 100 (192.168.1.138).
 """
 
+import base64
+import io
 import json
 import logging
 import os
 import signal
+import threading
 import time
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
@@ -367,10 +371,97 @@ class PixooService:
         self.mqtt.connect(MQTT_BROKER, 1883, keepalive=60)
         self.mqtt.loop_start()
 
+    def _start_http_server(self):
+        """Start HTTP server for dashboard push commands on port 8768."""
+        svc = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                try:
+                    length = int(self.headers.get('Content-Length', 0))
+                    body = json.loads(self.rfile.read(length)) if length else {}
+
+                    if self.path == '/push':
+                        items = body.get('items', [])
+                        image = body.get('image')
+
+                        svc.pixoo.clear()
+
+                        # Draw background image if provided (base64 data URL)
+                        if image and ',' in image:
+                            try:
+                                from PIL import Image
+                                img_data = base64.b64decode(image.split(',')[1])
+                                img = Image.open(io.BytesIO(img_data)).convert('RGB').resize((64, 64))
+                                svc.pixoo.draw_image(img)
+                            except Exception:
+                                log.exception("Image draw failed")
+
+                        # Draw text items — use Pillow for larger fonts
+                        from PIL import Image as PILImage, ImageDraw, ImageFont
+                        # Get current frame as PIL image for text overlay
+                        txt_img = PILImage.new('RGB', (64, 64), (0, 0, 0))
+                        draw = ImageDraw.Draw(txt_img)
+                        has_large = any(item.get('sz', 1) > 1 for item in items)
+
+                        for item in items:
+                            sz = item.get('sz', 1)
+                            text = str(item.get('t', ''))
+                            x = item.get('x', 0)
+                            y = item.get('y', 0)
+                            color = (item.get('r', 255), item.get('g', 255), item.get('b', 255))
+                            if sz <= 1:
+                                # Small: use pixoo built-in font
+                                svc.pixoo.draw_text(text, (x, y), color)
+                            else:
+                                # Medium/Large: draw via Pillow
+                                font_size = sz * 8
+                                try:
+                                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", font_size)
+                                except Exception:
+                                    font = ImageFont.load_default()
+                                draw.text((x, y), text, fill=color, font=font)
+
+                        # Overlay Pillow text image if any large text was drawn
+                        if has_large:
+                            svc.pixoo.draw_image(txt_img)
+
+                        svc.pixoo.push()
+                        svc._paused = True  # pause rotation
+
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(b'{"ok":true}')
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                except Exception as e:
+                    log.exception("HTTP handler error")
+                    self.send_response(500)
+                    self.end_headers()
+
+            def do_OPTIONS(self):
+                self.send_response(200)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'POST')
+                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass  # suppress access logs
+
+        server = HTTPServer(('0.0.0.0', 8768), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        log.info("HTTP server started on port 8768")
+
     def run(self):
         """Main service loop."""
         self.connect_pixoo()
         self.connect_mqtt()
+        self._start_http_server()
 
         log.info("Service started — %d screens, %ds interval", len(self.screens), SCREEN_INTERVAL)
 
