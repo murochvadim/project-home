@@ -398,27 +398,30 @@ class PixooService:
 
                                 n_frames = getattr(img, 'n_frames', 1)
                                 if n_frames > 1:
-                                    # Animated GIF — save to temp, serve via HTTP, tell Pixoo to fetch
+                                    # Animated GIF — native frame API (clean, no background)
                                     import requests as _req
-                                    tmp = '/tmp/pixoo_push.gif'
-                                    frames = []
-                                    durations = []
-                                    for i in range(n_frames):
-                                        img.seek(i)
-                                        frames.append(img.convert('RGB').resize((64, 64)))
-                                        durations.append(img.info.get('duration', 100))
-                                    frames[0].save(tmp, save_all=True, append_images=frames[1:],
-                                                   duration=durations, loop=0)
-                                    # Clear everything before playing GIF
+                                    duration = img.info.get('duration', 100)
+                                    # Reduce frames: max 15 for speed (~2s upload)
+                                    step = max(1, n_frames // 15)
+                                    indices = list(range(0, n_frames, step))[:15]
+                                    use = len(indices)
+                                    speed = duration * step
+
                                     _req.post(f'http://{PIXOO_IP}:80/post', json={
                                         'Command': 'Draw/ResetHttpGifId'}, timeout=3)
-                                    _req.post(f'http://{PIXOO_IP}:80/post', json={
-                                        'Command': 'Draw/ClearHttpText'}, timeout=3)
-                                    _req.post(f'http://{PIXOO_IP}:80/post', json={
-                                        'Command': 'Device/PlayTFGif',
-                                        'FileType': 2,
-                                        'FileName': f'http://192.168.1.138:8769/pixoo_push.gif',
-                                    }, timeout=10)
+                                    for i, fi in enumerate(indices):
+                                        img.seek(fi)
+                                        frame = img.convert('RGB').resize((64, 64))
+                                        fb64 = base64.b64encode(frame.tobytes()).decode()
+                                        _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                            'Command': 'Draw/SendHttpGif',
+                                            'PicNum': use,
+                                            'PicWidth': 64,
+                                            'PicOffset': i,
+                                            'PicID': 1,
+                                            'PicSpeed': speed,
+                                            'PicData': fb64,
+                                        }, timeout=10)
                                     svc._paused = True
                                     self.send_response(200)
                                     self.send_header('Content-Type', 'application/json')
