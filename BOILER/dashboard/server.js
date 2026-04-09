@@ -1253,6 +1253,18 @@ app.post('/api/pixoo/brightness', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/pixoo/wipe', async (_req, res) => {
+  try {
+    const P = 'http://192.168.1.243:80/post';
+    const h = { 'Content-Type': 'application/json' };
+    const t = AbortSignal.timeout(3000);
+    await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Draw/ResetHttpGifId' }), signal: t });
+    await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Draw/ClearHttpText' }), signal: t });
+    await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Channel/SetIndex', SelectIndex: 0 }), signal: t });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/pixoo/power', async (req, res) => {
   try {
     const { on } = req.body;

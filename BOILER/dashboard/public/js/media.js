@@ -2025,12 +2025,7 @@ function pixooUndoPixel() {
 
 async function pixooWipeDisplay() {
   try {
-    // Send empty push — clears the physical Pixoo
-    await fetch('/api/pixoo/push-items', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: [], pixels: {}, image: null }),
-    });
+    await fetch('/api/pixoo/wipe', { method: 'POST' });
   } catch (e) { console.error('Wipe error:', e); }
 }
 
