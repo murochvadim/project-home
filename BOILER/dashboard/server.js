@@ -1258,9 +1258,13 @@ app.post('/api/pixoo/wipe', async (_req, res) => {
     const P = 'http://192.168.1.243:80/post';
     const h = { 'Content-Type': 'application/json' };
     const t = AbortSignal.timeout(3000);
+    // Clear: reset + black frame overwrite (only reliable method)
+    const black = Buffer.alloc(64 * 64 * 3, 0).toString('base64');
     await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Draw/ResetHttpGifId' }), signal: t });
     await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Draw/ClearHttpText' }), signal: t });
-    await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Channel/SetIndex', SelectIndex: 0 }), signal: t });
+    await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({
+      Command: 'Draw/SendHttpGif', PicNum: 1, PicWidth: 64, PicOffset: 0, PicID: 1, PicSpeed: 1000, PicData: black
+    }), signal: AbortSignal.timeout(10000) });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
