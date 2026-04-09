@@ -1714,15 +1714,49 @@ document.getElementById('edit-modal-overlay').addEventListener('click', function
 
 let _pixooTimer = null;
 let _pixooEditorItems = [];
+let _pixooPixels = {};       // "x,y" → {r,g,b}
 let _pixooCrosshair = null;
 let _pixooBgImage = null;
 let _pixooBgBase64 = null;
+let _pixooMode = 'text';     // 'text' or 'pixel'
+let _pixooDrawing = false;   // mouse held down for pixel drawing
 
-// Attach canvas click handler once DOM is ready
+// Attach canvas handlers once DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
   const c = document.getElementById('pixoo-canvas');
-  if (c) c.addEventListener('click', pixooCanvasClick);
+  if (!c) return;
+  c.addEventListener('click', pixooCanvasClick);
+  c.addEventListener('mousedown', (e) => { if (_pixooMode === 'pixel') { _pixooDrawing = true; pixooDrawPixelAt(e); } });
+  c.addEventListener('mousemove', (e) => { if (_pixooDrawing) pixooDrawPixelAt(e); });
+  c.addEventListener('mouseup', () => { _pixooDrawing = false; });
+  c.addEventListener('mouseleave', () => { _pixooDrawing = false; });
 });
+
+function pixooSetMode(mode) {
+  _pixooMode = mode;
+  document.getElementById('pixoo-mode-text').style.background = mode === 'text' ? '#7a9ab8' : '';
+  document.getElementById('pixoo-mode-text').style.color = mode === 'text' ? '#fff' : '';
+  document.getElementById('pixoo-mode-pixel').style.background = mode === 'pixel' ? '#7a9ab8' : '';
+  document.getElementById('pixoo-mode-pixel').style.color = mode === 'pixel' ? '#fff' : '';
+  const textSection = document.getElementById('pixoo-text-section');
+  if (textSection) textSection.style.display = mode === 'text' ? 'block' : 'none';
+}
+
+function pixooDrawPixelAt(event) {
+  const canvas = event.target;
+  const rect = canvas.getBoundingClientRect();
+  const px = Math.floor((event.clientX - rect.left) * (320 / rect.width));
+  const py = Math.floor((event.clientY - rect.top) * (320 / rect.height));
+  const x = Math.floor(px / PIXOO_SCALE);
+  const y = Math.floor(py / PIXOO_SCALE);
+  if (x < 0 || x > 63 || y < 0 || y > 63) return;
+  const hex = document.getElementById('pixoo-ed-color').value;
+  const r = parseInt(hex.substring(1, 3), 16);
+  const g = parseInt(hex.substring(3, 5), 16);
+  const b = parseInt(hex.substring(5, 7), 16);
+  _pixooPixels[`${x},${y}`] = { r, g, b };
+  pixooRedrawEditor();
+}
 
 function drawPixooCanvas(items) {
   const canvas = document.getElementById('pixoo-canvas');
@@ -1853,12 +1887,11 @@ async function pixooBrightness(val) {
 // ── Pixoo64 Editor ──────────────────────────────────────────────
 
 function pixooCanvasClick(event) {
+  if (_pixooMode === 'pixel') return; // pixel mode uses mousedown/move
   const canvas = event.target;
   const rect = canvas.getBoundingClientRect();
-  const scaleX = 320 / rect.width;
-  const scaleY = 320 / rect.height;
-  const px = Math.floor((event.clientX - rect.left) * scaleX);
-  const py = Math.floor((event.clientY - rect.top) * scaleY);
+  const px = Math.floor((event.clientX - rect.left) * (320 / rect.width));
+  const py = Math.floor((event.clientY - rect.top) * (320 / rect.height));
   const x64 = Math.floor(px / PIXOO_SCALE);
   const y64 = Math.floor(py / PIXOO_SCALE);
   document.getElementById('pixoo-ed-x').value = x64;
@@ -1881,11 +1914,17 @@ function pixooRedrawEditor() {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(_pixooBgImage, 0, 0, 320, 320);
   }
+  // Draw pixels
+  for (const [key, c] of Object.entries(_pixooPixels)) {
+    const [px, py] = key.split(',').map(Number);
+    ctx.fillStyle = `rgb(${c.r},${c.g},${c.b})`;
+    ctx.fillRect(px * s, py * s, s, s);
+  }
+  // Draw text items
   ctx.textBaseline = 'top';
   for (const item of _pixooEditorItems) {
     ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
-    const fontSize = (item.sz || 1) * 5 * s;
-    ctx.font = `${fontSize}px monospace`;
+    ctx.font = `${5 * s}px monospace`;
     ctx.fillText(item.t, item.x * s, item.y * s);
   }
   // Draw crosshair
@@ -1963,6 +2002,7 @@ function pixooClearImage() {
 
 function pixooClearCanvas() {
   _pixooEditorItems = [];
+  _pixooPixels = {};
   _pixooCrosshair = null;
   _pixooBgImage = null;
   _pixooBgBase64 = null;
@@ -1973,12 +2013,12 @@ function pixooClearCanvas() {
 }
 
 async function pixooPushCanvas() {
-  if (_pixooEditorItems.length === 0 && !_pixooBgBase64) return;
+  if (_pixooEditorItems.length === 0 && !_pixooBgBase64 && Object.keys(_pixooPixels).length === 0) return;
   try {
     await fetch('/api/pixoo/push-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: _pixooEditorItems, image: _pixooBgBase64 }),
+      body: JSON.stringify({ items: _pixooEditorItems, image: _pixooBgBase64, pixels: _pixooPixels }),
     });
   } catch (e) { console.error('Pixoo push error:', e); }
 }

@@ -397,34 +397,23 @@ class PixooService:
                             except Exception:
                                 log.exception("Image draw failed")
 
-                        # Draw text items — use Pillow for larger fonts
-                        from PIL import Image as PILImage, ImageDraw, ImageFont
-                        # Get current frame as PIL image for text overlay
-                        txt_img = PILImage.new('RGB', (64, 64), (0, 0, 0))
-                        draw = ImageDraw.Draw(txt_img)
-                        has_large = any(item.get('sz', 1) > 1 for item in items)
+                        # Draw individual pixels
+                        pixels = body.get('pixels', {})
+                        for key, c in pixels.items():
+                            try:
+                                px, py = key.split(',')
+                                svc.pixoo.draw_pixel_at_location_rgb(
+                                    int(px), int(py), c.get('r', 255), c.get('g', 255), c.get('b', 255))
+                            except Exception:
+                                pass
 
+                        # Draw text items
                         for item in items:
-                            sz = item.get('sz', 1)
-                            text = str(item.get('t', ''))
-                            x = item.get('x', 0)
-                            y = item.get('y', 0)
-                            color = (item.get('r', 255), item.get('g', 255), item.get('b', 255))
-                            if sz <= 1:
-                                # Small: use pixoo built-in font
-                                svc.pixoo.draw_text(text, (x, y), color)
-                            else:
-                                # Medium/Large: draw via Pillow
-                                font_size = sz * 8
-                                try:
-                                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", font_size)
-                                except Exception:
-                                    font = ImageFont.load_default()
-                                draw.text((x, y), text, fill=color, font=font)
-
-                        # Overlay Pillow text image if any large text was drawn
-                        if has_large:
-                            svc.pixoo.draw_image(txt_img)
+                            svc.pixoo.draw_text(
+                                str(item.get('t', '')),
+                                (item.get('x', 0), item.get('y', 0)),
+                                (item.get('r', 255), item.get('g', 255), item.get('b', 255)),
+                            )
 
                         svc.pixoo.push()
                         svc._paused = True  # pause rotation

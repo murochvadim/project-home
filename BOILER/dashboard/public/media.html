@@ -485,17 +485,21 @@
             <span id="pixoo-image-info" style="font-size:0.72rem;color:#888;"></span>
           </div>
 
-          <!-- Text -->
+          <!-- Draw Mode -->
           <div style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+              <span style="font-size:0.78rem;font-weight:600;color:#888;">MODE:</span>
+              <button class="btn btn-secondary btn-sm" id="pixoo-mode-text" onclick="pixooSetMode('text')" style="background:#7a9ab8;color:#fff;">Text</button>
+              <button class="btn btn-secondary btn-sm" id="pixoo-mode-pixel" onclick="pixooSetMode('pixel')">Pixel</button>
+              <input type="color" id="pixoo-ed-color" value="#ffffff" style="width:28px;height:28px;border:1px solid #d0cbc4;border-radius:4px;padding:0;cursor:pointer;">
+            </div>
+          </div>
+
+          <!-- Text -->
+          <div id="pixoo-text-section" style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
             <div style="font-size:0.78rem;font-weight:600;color:#888;margin-bottom:6px;">ADD TEXT</div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
               <input type="text" id="pixoo-ed-text" placeholder="Text..." style="flex:1;min-width:80px;padding:4px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-              <input type="color" id="pixoo-ed-color" value="#ffffff" style="width:28px;height:28px;border:1px solid #d0cbc4;border-radius:4px;padding:0;cursor:pointer;">
-              <select id="pixoo-ed-size" style="padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
-                <option value="1">Small</option>
-                <option value="2" selected>Medium</option>
-                <option value="3">Large</option>
-              </select>
             </div>
             <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
               <span style="font-size:0.75rem;color:#888;">X:</span>
@@ -612,6 +616,6 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=35"></script>
+<script src="js/media.js?v=36"></script>
 </body>
 </html>
