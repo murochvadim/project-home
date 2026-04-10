@@ -130,7 +130,7 @@ class StateManager:
                             self._timers[timer_name] = float(raw)
                         except (ValueError, TypeError):
                             log.warning("Invalid timer value for %s: %s", key, raw)
-                    else:
+                    elif not key.startswith('_pixoo_'):
                         self.shared[key] = raw
                 log.info("Loaded %d shared keys + %d timers",
                          len(self.shared), len(self._timers))
@@ -148,6 +148,9 @@ class StateManager:
         try:
             with self.conn.cursor() as cur:
                 for key, value in snapshot.items():
+                    # Skip keys owned by other services
+                    if key.startswith('_pixoo_'):
+                        continue
                     val_str = json.dumps(value)
                     cur.execute(
                         "INSERT INTO rule_engine_state (key, value, updated_at) "

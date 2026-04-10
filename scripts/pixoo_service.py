@@ -399,6 +399,17 @@ class PixooService:
                                 'PicID': 1, 'PicSpeed': 1000, 'PicData': black,
                             }, timeout=10)
                             svc._paused = True
+                            # Write pause to DB so _check_paused() doesn't override
+                            svc._ensure_db()
+                            if svc.db:
+                                try:
+                                    with svc.db.cursor() as _cur:
+                                        _cur.execute(
+                                            "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                            "VALUES ('_pixoo_paused', 'true'::jsonb, NOW()) "
+                                            "ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()")
+                                except Exception:
+                                    pass
                             # Clear dashboard screen content
                             svc._screen_items = []
                             svc._publish_screen_info('wiped')
@@ -444,6 +455,26 @@ class PixooService:
                                                 (item.get('x', 0), item.get('y', 0)),
                                                 (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
                                         fb64 = base64.b64encode(bytearray(svc.pixoo._Pixoo__buffer)).decode()
+                                        # Save first frame as preview for dashboard
+                                        if i == 0:
+                                            preview = frame.copy()
+                                            buf = io.BytesIO()
+                                            preview.save(buf, format='PNG')
+                                            preview_b64 = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+                                            svc._screen_items = items
+                                            svc._publish_screen_info('animation')
+                                            # Store preview image
+                                            svc._ensure_db()
+                                            if svc.db:
+                                                try:
+                                                    with svc.db.cursor() as _c:
+                                                        _c.execute(
+                                                            "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                                            "VALUES ('_pixoo_preview', %s::jsonb, NOW()) "
+                                                            "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                                                            (json.dumps(preview_b64), json.dumps(preview_b64)))
+                                                except Exception:
+                                                    pass
                                         _req.post(f'http://{PIXOO_IP}:80/post', json={
                                             'Command': 'Draw/SendHttpGif',
                                             'PicNum': use,

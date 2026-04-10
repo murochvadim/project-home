@@ -1796,8 +1796,29 @@ async function loadPixoo() {
     document.getElementById('pixoo-screen').textContent = screenName;
     document.getElementById('pixoo-screen-label').textContent = screenName;
 
-    // Draw canvas mirror
-    if (screen.items) {
+    // Draw canvas: preview image first, then text items on top
+    const preview = r.preview;
+    if (preview) {
+      const img = new Image();
+      img.onload = function() {
+        const canvas = document.getElementById('pixoo-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // Draw text items on top
+        if (screen.items) {
+          const s = canvas.width / 64;
+          ctx.textBaseline = 'top';
+          for (const item of screen.items) {
+            ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
+            ctx.font = `${5 * s}px monospace`;
+            ctx.fillText(item.t, item.x * s, item.y * s);
+          }
+        }
+      };
+      img.src = preview;
+    } else if (screen.items) {
       drawPixooCanvas(screen.items);
     }
 
@@ -1834,7 +1855,29 @@ async function pixooPower(on) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ on }),
     });
-    setTimeout(loadPixoo, 1000);
+    if (!on) {
+      // Show OFF on dashboard canvas
+      const canvas = document.getElementById('pixoo-canvas');
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        const s = canvas.width / 64;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#888';
+        ctx.font = `${10 * s}px monospace`;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center';
+        ctx.fillText('OFF', canvas.width / 2, canvas.height / 2);
+        ctx.textAlign = 'left';
+      }
+      document.getElementById('pixoo-screen-label').textContent = 'OFF';
+      document.getElementById('pixoo-screen-label').style.color = '#888';
+    } else {
+      // ON — restore last content on canvas
+      document.getElementById('pixoo-screen-label').textContent = 'ON';
+      document.getElementById('pixoo-screen-label').style.color = '#27ae60';
+      pixooRedrawEditor();
+    }
   } catch (e) { console.error('Pixoo power error:', e); }
 }
 
@@ -1878,9 +1921,24 @@ async function pixooChannel(index) {
 }
 
 async function pixooRestart() {
-  try {
-    await fetch('/api/pixoo/restart', { method: 'POST' });
-  } catch (e) { console.error('Pixoo restart error:', e); }
+  const label = document.getElementById('pixoo-screen-label');
+  // Start countdown immediately
+  let sec = 90;
+  label.style.color = '#c0392b';
+  label.textContent = `Rebooting... ${sec}s`;
+  const timer = setInterval(() => {
+    sec--;
+    if (sec > 0) {
+      label.textContent = `Rebooting... ${sec}s`;
+    } else {
+      clearInterval(timer);
+      label.textContent = 'Reboot complete';
+      label.style.color = '#27ae60';
+      setTimeout(() => { label.textContent = 'Ready'; label.style.color = '#888'; }, 3000);
+    }
+  }, 1000);
+  // Send reboot (will timeout — expected)
+  fetch('/api/pixoo/restart', { method: 'POST' }).catch(() => {});
 }
 
 async function pixooNoise() {
@@ -2036,13 +2094,17 @@ function pixooUndoPixel() {
 }
 
 async function pixooWipeDisplay() {
+  const label = document.getElementById('pixoo-screen-label');
   try {
-    await fetch('/api/pixoo/push-items', {
+    label.textContent = 'Wiping...'; label.style.color = '#888';
+    const r = await fetch('/api/pixoo/push-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: [], pixels: {}, image: null, wipe: true }),
     });
-  } catch (e) { console.error('Wipe error:', e); }
+    if (r.ok) { label.textContent = 'Wiped'; label.style.color = '#27ae60'; }
+    else { label.textContent = 'Wipe failed'; label.style.color = '#c0392b'; }
+  } catch (e) { label.textContent = 'Connection error'; label.style.color = '#c0392b'; }
 }
 
 function pixooZoom(size) {
@@ -2054,14 +2116,18 @@ function pixooZoom(size) {
 }
 
 async function pixooPushCanvas() {
+  const label = document.getElementById('pixoo-screen-label');
   if (_pixooEditorItems.length === 0 && !_pixooBgBase64 && Object.keys(_pixooPixels).length === 0) return;
   try {
-    await fetch('/api/pixoo/push-items', {
+    label.textContent = 'Pushing...'; label.style.color = '#888';
+    const r = await fetch('/api/pixoo/push-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: _pixooEditorItems, image: _pixooBgBase64, pixels: _pixooPixels }),
     });
-  } catch (e) { console.error('Pixoo push error:', e); }
+    if (r.ok) { label.textContent = 'Pushed'; label.style.color = '#27ae60'; }
+    else { label.textContent = 'Push failed'; label.style.color = '#c0392b'; }
+  } catch (e) { label.textContent = 'Connection error'; label.style.color = '#c0392b'; }
 }
 
 async function pixooSavePreset() {
@@ -2151,17 +2217,24 @@ async function pixooDeletePreset(id) {
 }
 
 async function pixooPushPreset(id) {
+  const label = document.getElementById('pixoo-screen-label');
   try {
+    label.textContent = 'Pushing...'; label.style.color = '#888';
+    // Load preset to canvas first so we see it
+    await pixooLoadPreset(id);
+    // Then push
     const presets = await fetch('/api/pixoo/presets').then(r => r.json());
     const preset = presets.find(p => p.id === id);
     if (!preset) return;
     const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
     const items = Array.isArray(content) ? content : (content.items || []);
     const pixels = content.pixels || {};
-    await fetch('/api/pixoo/push-items', {
+    const r = await fetch('/api/pixoo/push-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items, pixels, image: preset.image_data }),
     });
-  } catch (e) { console.error('Pixoo push preset error:', e); }
+    if (r.ok) { label.textContent = 'Pushed: ' + preset.name; label.style.color = '#27ae60'; }
+    else { label.textContent = 'Push failed'; label.style.color = '#c0392b'; }
+  } catch (e) { label.textContent = 'Connection error'; label.style.color = '#c0392b'; }
 }

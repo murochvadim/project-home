@@ -1236,7 +1236,11 @@ app.get('/api/pixoo/status', async (_req, res) => {
       .catch(() => ({ rows: [] }));
     const screen = screenR.rows.length > 0 ? screenR.rows[0].value : {};
 
-    res.json({ device: pixooResp, heartbeat: hb, screen });
+    const previewR = await db.query("SELECT value FROM rule_engine_state WHERE key = '_pixoo_preview'")
+      .catch(() => ({ rows: [] }));
+    const preview = previewR.rows.length > 0 ? previewR.rows[0].value : null;
+
+    res.json({ device: pixooResp, heartbeat: hb, screen, preview });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1394,6 +1398,11 @@ app.post('/api/pixoo/resume', async (_req, res) => {
 
 app.post('/api/pixoo/push-items', async (req, res) => {
   try {
+    // Pause service in DB FIRST before sending to Pixoo
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_pixoo_paused', 'true'::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()`
+    ).catch(() => {});
     // Route through Pixoo service on LXC 100 (uses pixoo library for rendering)
     const r = await fetch('http://192.168.1.138:8768/push', {
       method: 'POST',
