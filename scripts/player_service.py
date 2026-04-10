@@ -85,8 +85,9 @@ def db_query(sql, params=None, fetch=True):
 
 # ── Path safety helper ───────────────────────────────────────────
 def safe_path(rel, base=MEDIA_MOUNT):
+    real_base = os.path.realpath(base)
     full = os.path.realpath(os.path.join(base, rel.lstrip('/')))
-    if not full.startswith(os.path.realpath(base)):
+    if full != real_base and not full.startswith(real_base + '/'):
         raise ValueError(f'Path traversal attempt: {rel!r}')
     return full
 
@@ -641,7 +642,7 @@ def faces_video_frame():
         sec = float(request.args.get('sec', 0))
     except ValueError:
         return jsonify({'error': 'invalid sec'}), 400
-    if not file_path or not os.path.realpath(file_path).startswith(os.path.realpath(MEDIA_MOUNT)):
+    if not file_path or not os.path.realpath(file_path).startswith(os.path.realpath(MEDIA_MOUNT) + '/'):
         return jsonify({'error': 'invalid path'}), 400
     if not os.path.isfile(file_path):
         return jsonify({'error': 'file not found'}), 404
@@ -787,7 +788,7 @@ def faces_assign():
     """Assign a single unmatched face crop to a person name."""
     body      = request.json or {}
     face_id   = body.get('face_id')
-    name      = (body.get('name') or '').strip()
+    name      = re.sub(r'[^a-z0-9 ]', '', (body.get('name') or '').strip().lower())
     if not face_id or not name:
         return jsonify({'error': 'face_id and name required'}), 400
     try:
@@ -1025,8 +1026,10 @@ def stream_file(rel_path):
     if range_header:
         import re as _re
         m = _re.match(r'bytes=(\d+)-(\d*)', range_header)
-        start = int(m.group(1)) if m else 0
-        end   = int(m.group(2)) if m and m.group(2) else size - 1
+        if not m:
+            return Response('Invalid Range header', 416, headers={'Content-Range': f'bytes */{size}'})
+        start = int(m.group(1))
+        end   = int(m.group(2)) if m.group(2) else size - 1
         length = end - start + 1
         def generate():
             with open(full_path, 'rb') as f:
@@ -1182,8 +1185,11 @@ def position():
             '<InstanceID>0</InstanceID></u:GetPositionInfo>'
         )
         def parse_secs(t):
-            p = (t or '').split(':')
-            return int(p[0])*3600 + int(p[1])*60 + int(p[2]) if len(p) == 3 else 0
+            try:
+                p = (t or '').split(':')
+                return int(p[0])*3600 + int(p[1])*60 + int(p[2]) if len(p) == 3 else 0
+            except (ValueError, IndexError):
+                return 0
 
         dur_str = (re.search(r'<TrackDuration[^>]*>([^<]+)<', xml) or [None, '0:00:00'])[1]
         pos_str = (re.search(r'<RelTime[^>]*>([^<]+)<', xml) or [None, '0:00:00'])[1]

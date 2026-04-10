@@ -64,14 +64,18 @@ def db_query(sql, params=None, fetch=True):
                 if fetch:
                     return [dict(r) for r in cur.fetchall()]
                 return None
-    finally:
+    except Exception:
+        pool.putconn(conn, close=True)
+        raise
+    else:
         pool.putconn(conn)
 
 
 # ── Path safety helper ───────────────────────────────────────────
 def safe_path(rel, base=MEDIA_MOUNT):
+    real_base = os.path.realpath(base)
     full = os.path.realpath(os.path.join(base, rel.lstrip('/')))
-    if not full.startswith(os.path.realpath(base)):
+    if full != real_base and not full.startswith(real_base + '/'):
         raise ValueError(f'Path traversal attempt: {rel!r}')
     return full
 
@@ -172,8 +176,8 @@ def scan():
         threading.Thread(target=run_ingest_worker, daemon=True).start()
         return jsonify({'ok': True, 'found': len(files), 'queued': len(new_files), 'progress': _ingest_progress})
     except Exception as e:
-        log.error(f'scan error: {e}')
-        return jsonify({'error': str(e)}), 500
+        log.error(f'scan error: {e}', exc_info=True)
+        return jsonify({'error': 'scan failed — check server logs'}), 500
 
 
 # ── GET /api/media/scan/progress ─────────────────────────────────
@@ -210,9 +214,13 @@ def upload():
 # ── PATCH /api/media/library ──────────────────────────────────────
 @app.route('/api/media/library', methods=['PATCH'])
 def library_update():
-    file_path = request.args.get('path', '')
-    if not file_path:
+    raw_path = request.args.get('path', '')
+    if not raw_path:
         return jsonify({'error': 'path required'}), 400
+    try:
+        file_path = safe_path(raw_path, MEDIA_MOUNT)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     body = request.json or {}
     person = body.get('person') or None
     if person is not None:
@@ -236,11 +244,11 @@ def library_update():
 # ── DELETE /api/media/library ─────────────────────────────────────
 @app.route('/api/media/library', methods=['DELETE'])
 def library_delete():
-    file_path = request.args.get('path', '')
-    if not file_path:
+    raw_path = request.args.get('path', '')
+    if not raw_path:
         return jsonify({'error': 'path required'}), 400
     try:
-        safe_path(file_path, MEDIA_MOUNT)
+        file_path = safe_path(raw_path, MEDIA_MOUNT)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     try:

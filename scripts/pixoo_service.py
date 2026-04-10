@@ -344,12 +344,12 @@ class PixooService:
                         (json.dumps(info), json.dumps(info)),
                     )
             except Exception:
-                pass
+                log.warning("Failed to write screen info to DB")
         # Also publish to MQTT
         try:
-            self.mqtt_client.publish('mur/home/pixoo/screen', json.dumps(info), retain=True, qos=0)
+            self.mqtt.publish('mur/home/pixoo/screen', json.dumps(info), retain=True, qos=0)
         except Exception:
-            pass
+            log.warning("Failed to publish screen info to MQTT")
 
     def _draw(self, text, x, y, r, g, b):
         """Draw text on Pixoo + record for dashboard mirror."""
@@ -569,9 +569,11 @@ class PixooService:
 
         # Static file server on port 8769 for serving GIFs to Pixoo device
         import http.server as _httpmod
+        gif_dir = '/tmp/pixoo-gifs'
+        os.makedirs(gif_dir, exist_ok=True)
         class GifHandler(_httpmod.SimpleHTTPRequestHandler):
             def __init__(self, *a, **kw):
-                super().__init__(*a, directory='/tmp', **kw)
+                super().__init__(*a, directory=gif_dir, **kw)
             def log_message(self, *a): pass
         gif_server = HTTPServer(('0.0.0.0', 8769), GifHandler)
         threading.Thread(target=gif_server.serve_forever, daemon=True).start()
