@@ -20,20 +20,23 @@ RULE = {
 def evaluate(event, state):
     commands = []
 
-    last_motion_room = state.shared.get("last_motion_room", "")
+    dev_id = event.get("device_id", "")
+    device = state.devices.get(dev_id, {})
+    dtype = device.get("device_type", "")
+    room = device.get("room", "")
     activity = state.shared.get("activity_level", "idle")
-    people = state.shared.get("people_home", 0)
+    try:
+        people = int(state.shared.get("people_home", 0))
+    except (ValueError, TypeError):
+        people = 0
 
-    # Track previous activity to detect transitions
-    prev_activity = state.shared.get("_pixoo_prev_activity", "idle")
-    state.shared["_pixoo_prev_activity"] = activity
-
-    # ── Entrance activity → push welcome preset ──
-    if last_motion_room.lower() in ("entrance", "corridor"):
-        cooldown = state.get_timer("pixoo_last_push")
-        if cooldown > COOLDOWN_SEC:
-            # Transition from idle/low to active at entrance
-            if activity in ("active", "low") and prev_activity == "idle":
+    # ── Entrance/corridor presence → push welcome preset ──
+    if dtype == "presence" and room.lower() in ("entrance", "corridor"):
+        dps = event.get("dps", {})
+        presence_val = dps.get("1")
+        if presence_val in (True, "true", "presence", 1, "True"):
+            cooldown = state.get_timer("pixoo_last_push")
+            if cooldown > COOLDOWN_SEC:
                 state.set_timer("pixoo_last_push")
                 commands.append({
                     "device_id": "pixoo",
@@ -47,7 +50,6 @@ def evaluate(event, state):
     if activity == "idle":
         idle_time = state.get_timer("last_motion")
         if idle_time > IDLE_TIMEOUT_SEC:
-            # Only resume once (check if already resumed)
             if state.shared.get("_pixoo_resumed") != "yes":
                 state.shared["_pixoo_resumed"] = "yes"
                 commands.append({
@@ -56,7 +58,6 @@ def evaluate(event, state):
                     "action": "resume",
                 })
     else:
-        # Reset resumed flag when activity returns
         state.shared["_pixoo_resumed"] = "no"
 
     return commands
