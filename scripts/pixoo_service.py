@@ -384,6 +384,27 @@ class PixooService:
                     if self.path == '/push':
                         items = body.get('items', [])
                         image = body.get('image')
+                        wipe = body.get('wipe', False)
+
+                        # Wipe: channel switch + reset + black frame (tested reliable)
+                        if wipe:
+                            import requests as _req
+                            svc.pixoo.set_channel(4)
+                            _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                            black = base64.b64encode(bytes([0]*64*64*3)).decode()
+                            _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                'Command': 'Draw/SendHttpGif',
+                                'PicNum': 1, 'PicWidth': 64, 'PicOffset': 0,
+                                'PicID': 1, 'PicSpeed': 1000, 'PicData': black,
+                            }, timeout=10)
+                            svc._paused = True
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'application/json')
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.end_headers()
+                            self.wfile.write(b'{"ok":true}')
+                            return
 
                         svc.pixoo.clear()
 
@@ -398,10 +419,9 @@ class PixooService:
 
                                 n_frames = getattr(img, 'n_frames', 1)
                                 if n_frames > 1:
-                                    # Animated GIF — native frame API (clean, no background)
+                                    # Animated GIF — Pixoo pixel font burned into frames
                                     import requests as _req
                                     duration = img.info.get('duration', 100)
-                                    # Reduce frames: max 15 for speed (~2s upload)
                                     step = max(1, n_frames // 15)
                                     indices = list(range(0, n_frames, step))[:15]
                                     use = len(indices)
@@ -412,7 +432,15 @@ class PixooService:
                                     for i, fi in enumerate(indices):
                                         img.seek(fi)
                                         frame = img.convert('RGB').resize((64, 64))
-                                        fb64 = base64.b64encode(frame.tobytes()).decode()
+                                        # Composite: image + text using Pixoo pixel font
+                                        svc.pixoo.clear()
+                                        svc.pixoo.draw_image(frame)
+                                        for item in items:
+                                            svc.pixoo.draw_text(
+                                                str(item.get('t', '')),
+                                                (item.get('x', 0), item.get('y', 0)),
+                                                (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
+                                        fb64 = base64.b64encode(bytearray(svc.pixoo._Pixoo__buffer)).decode()
                                         _req.post(f'http://{PIXOO_IP}:80/post', json={
                                             'Command': 'Draw/SendHttpGif',
                                             'PicNum': use,

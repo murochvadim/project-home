@@ -1258,17 +1258,13 @@ app.post('/api/pixoo/wipe', async (_req, res) => {
     const P = 'http://192.168.1.243:80/post';
     const h = { 'Content-Type': 'application/json' };
     const t = AbortSignal.timeout(3000);
-    // Clear: reset all layers + overwrite all PicIDs with black
-    const black = Buffer.alloc(64 * 64 * 3, 0).toString('base64');
-    const t10 = AbortSignal.timeout(10000);
+    // Screen off/on is the only reliable wipe
     await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Draw/ResetHttpGifId' }), signal: t });
     await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Draw/ClearHttpText' }), signal: t });
-    for (let pid = 0; pid <= 5; pid++) {
-      await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({
-        Command: 'Draw/SendHttpGif', PicNum: 1, PicWidth: 64, PicOffset: 0, PicID: pid, PicSpeed: 1000, PicData: black
-      }), signal: t10 }).catch(() => {});
-    }
-    // Pause the service so it doesn't overwrite
+    await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Channel/OnOffScreen', OnOff: 0 }), signal: t });
+    await new Promise(r => setTimeout(r, 500));
+    await fetch(P, { method: 'POST', headers: h, body: JSON.stringify({ Command: 'Channel/OnOffScreen', OnOff: 1 }), signal: t });
+    // Pause service
     await db.query(
       `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_pixoo_paused', 'true'::jsonb, NOW())
        ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()`
