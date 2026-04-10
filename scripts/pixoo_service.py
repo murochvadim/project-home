@@ -389,15 +389,20 @@ class PixooService:
                         # Wipe: channel switch + reset + black frame (tested reliable)
                         if wipe:
                             import requests as _req
-                            svc.pixoo.set_channel(4)
-                            _req.post(f'http://{PIXOO_IP}:80/post', json={
-                                'Command': 'Draw/ResetHttpGifId'}, timeout=3)
-                            black = base64.b64encode(bytes([0]*64*64*3)).decode()
-                            _req.post(f'http://{PIXOO_IP}:80/post', json={
-                                'Command': 'Draw/SendHttpGif',
-                                'PicNum': 1, 'PicWidth': 64, 'PicOffset': 0,
-                                'PicID': 1, 'PicSpeed': 1000, 'PicData': black,
-                            }, timeout=10)
+                            device_ok = True
+                            try:
+                                svc.pixoo.set_channel(4)
+                                _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                    'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                                black = base64.b64encode(bytes([0]*64*64*3)).decode()
+                                _req.post(f'http://{PIXOO_IP}:80/post', json={
+                                    'Command': 'Draw/SendHttpGif',
+                                    'PicNum': 1, 'PicWidth': 64, 'PicOffset': 0,
+                                    'PicID': 1, 'PicSpeed': 1000, 'PicData': black,
+                                }, timeout=10)
+                            except Exception as exc:
+                                log.warning("Wipe: device unreachable (%s), clearing state only", exc)
+                                device_ok = False
                             svc._paused = True
                             # Write pause to DB so _check_paused() doesn't override
                             svc._ensure_db()
@@ -410,14 +415,22 @@ class PixooService:
                                             "ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()")
                                 except Exception:
                                     pass
-                            # Clear dashboard screen content
+                            # Clear dashboard screen content + preview
                             svc._screen_items = []
                             svc._publish_screen_info('wiped')
+                            if svc.db:
+                                try:
+                                    with svc.db.cursor() as _cur2:
+                                        _cur2.execute(
+                                            "DELETE FROM rule_engine_state WHERE key = '_pixoo_preview'")
+                                except Exception:
+                                    pass
                             self.send_response(200)
                             self.send_header('Content-Type', 'application/json')
                             self.send_header('Access-Control-Allow-Origin', '*')
                             self.end_headers()
-                            self.wfile.write(b'{"ok":true}')
+                            msg = '{"ok":true}' if device_ok else '{"ok":true,"warn":"device offline, state cleared"}'
+                            self.wfile.write(msg.encode())
                             return
 
                         svc.pixoo.clear()
@@ -449,6 +462,14 @@ class PixooService:
                                         # Composite: image + text using Pixoo pixel font
                                         svc.pixoo.clear()
                                         svc.pixoo.draw_image(frame)
+                                        # Burn pixels into frame
+                                        for pkey, pc in body.get('pixels', {}).items():
+                                            try:
+                                                ppx, ppy = pkey.split(',')
+                                                svc.pixoo.draw_pixel_at_location_rgb(
+                                                    int(ppx), int(ppy), pc.get('r', 255), pc.get('g', 255), pc.get('b', 255))
+                                            except Exception:
+                                                pass
                                         for item in items:
                                             svc.pixoo.draw_text(
                                                 str(item.get('t', '')),

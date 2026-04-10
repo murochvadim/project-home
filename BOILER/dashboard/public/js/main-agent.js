@@ -89,6 +89,11 @@
       const disabledRules = new Set(parseJsonSafe(s._disabled_rules));
       document.getElementById('last-decision').textContent = `${activeRules - disabledRules.size} active / ${disabledRules.size} disabled`;
 
+      // MQTT data health
+      const mh = data.mqttHealth || {};
+      document.getElementById('mqtt-health').textContent =
+        `MQTT: ${mh.total || 0} devices | ${mh.clean || 0} clean | ${mh.empty || 0} empty | ${mh.noisy || 0} noisy`;
+
       const activeRooms = parseJsonSafe(s.active_rooms);
       const occupiedRooms = parseJsonSafe(s.occupied_rooms);
 

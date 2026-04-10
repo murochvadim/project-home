@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Corridor Agents</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<a href="health.html" id="alert-indicator"></a></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html" class="active">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Corridor Agents</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadPixoo()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('pixoo', this)">Pixoo64</button>
+  </div>
+
+  <!-- TAB: Pixoo64 -->
+  <div class="tab-panel active" id="tab-pixoo">
+    <div class="card">
+      <h2>Pixoo64 Display</h2>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;">
+
+        <!-- LEFT: Canvas + Controls -->
+        <div style="display:flex;flex-direction:column;align-items:center;">
+          <canvas id="pixoo-canvas" width="320" height="320" style="background:#000;border:2px solid #d0cbc4;border-radius:8px;image-rendering:pixelated;cursor:crosshair;" id-size="320"></canvas>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+            <span style="font-size:0.72rem;color:#888;" id="pixoo-screen-label">Click canvas to set XY</span>
+            <span style="flex:1"></span>
+            <span style="font-size:0.72rem;color:#888;">Zoom:</span>
+            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(320)" style="padding:2px 8px;font-size:0.7rem;">1x</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(448)" style="padding:2px 8px;font-size:0.7rem;">1.5x</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(640)" style="padding:2px 8px;font-size:0.7rem;">2x</button>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:10px;font-size:0.78rem;color:#888;">
+            <span id="pixoo-status">—</span>
+            <span>Screen: <span id="pixoo-screen">—</span></span>
+            <span>HB: <span id="pixoo-heartbeat">—</span></span>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
+            <button class="btn btn-secondary btn-sm" onclick="pixooPower(true)">ON</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooPower(false)">OFF</button>
+          </div>
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
+            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(0)">Clock</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(1)">Cloud</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooNoise()">Sound</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(0)">C1</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(1)">C2</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(2)" style="background:#7a9ab8;color:#fff;">C3</button>
+          </div>
+          <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+            <span style="font-size:0.75rem;color:#888;">Bri:</span>
+            <input type="range" id="pixoo-brightness" min="0" max="100" value="50" style="width:100px;" onchange="pixooBrightness(this.value)">
+            <span id="pixoo-brightness-val" style="font-size:0.78rem;font-weight:600;">50</span>
+          </div>
+        </div>
+
+        <!-- RIGHT: Editor -->
+        <div class="card" style="flex:1;min-width:280px;margin-bottom:0;">
+          <h2>Editor</h2>
+
+          <!-- Background Image -->
+          <div style="margin-bottom:12px;">
+            <div style="font-size:0.78rem;font-weight:600;color:#888;margin-bottom:6px;">BACKGROUND IMAGE</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input type="file" id="pixoo-image-upload" accept=".png,.gif,.jpg,.jpeg" style="font-size:0.78rem;" onchange="pixooLoadImage(this)">
+              <button class="btn btn-secondary btn-sm" onclick="pixooClearImage()">Clear</button>
+            </div>
+            <span id="pixoo-image-info" style="font-size:0.72rem;color:#888;"></span>
+          </div>
+
+          <!-- Draw Mode -->
+          <div style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+              <span style="font-size:0.78rem;font-weight:600;color:#888;">MODE:</span>
+              <button class="btn btn-secondary btn-sm" id="pixoo-mode-text" onclick="pixooSetMode('text')" style="background:#7a9ab8;color:#fff;">Text</button>
+              <button class="btn btn-secondary btn-sm" id="pixoo-mode-pixel" onclick="pixooSetMode('pixel')">Pixel</button>
+              <input type="color" id="pixoo-ed-color" value="#ffffff" style="width:28px;height:28px;border:1px solid #d0cbc4;border-radius:4px;padding:0;cursor:pointer;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooUndoPixel()" title="Undo last pixel">Undo</button>
+            </div>
+          </div>
+
+          <!-- Text -->
+          <div id="pixoo-text-section" style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
+            <div style="font-size:0.78rem;font-weight:600;color:#888;margin-bottom:6px;">ADD TEXT</div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+              <input type="text" id="pixoo-ed-text" placeholder="Text..." style="flex:1;min-width:80px;padding:4px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+              <span style="font-size:0.75rem;color:#888;">X:</span>
+              <input type="number" id="pixoo-ed-x" min="0" max="63" value="0" style="width:45px;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+              <span style="font-size:0.75rem;color:#888;">Y:</span>
+              <input type="number" id="pixoo-ed-y" min="0" max="63" value="0" style="width:45px;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooAddText()">Add</button>
+            </div>
+            <div id="pixoo-ed-items" style="font-size:0.72rem;color:#888;margin-bottom:6px;max-height:60px;overflow-y:auto;"></div>
+          </div>
+
+          <!-- Actions -->
+          <div style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooClearCanvas()">Clear Local</button>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooPushCanvas()" style="background:#27ae60;color:#fff;">Push to Display</button>
+              <button class="btn btn-secondary btn-sm" onclick="pixooWipeDisplay()" style="background:#c0392b;color:#fff;">Wipe Display</button>
+            </div>
+          </div>
+
+          <!-- Presets -->
+          <div style="border-top:1px solid #e0dcd6;padding-top:10px;">
+            <div style="font-size:0.78rem;font-weight:600;color:#888;margin-bottom:6px;">PRESETS</div>
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+              <input type="text" id="pixoo-preset-name" placeholder="Name..." style="flex:1;padding:4px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooSavePreset()" style="background:#3a5a8a;color:#fff;">Save</button>
+            </div>
+            <div id="pixoo-presets-list" style="font-size:0.78rem;"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script src="js/corridor.js"></script>
+</body>
+</html>
