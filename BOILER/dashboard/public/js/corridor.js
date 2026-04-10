@@ -96,18 +96,21 @@ async function loadPixoo() {
     document.getElementById('pixoo-screen').textContent = screenName;
     document.getElementById('pixoo-screen-label').textContent = screenName;
 
-    // Draw canvas: black if wiped/no content, otherwise preview + items
+    // Draw canvas: black if wiped, items with browser font for custom, preview for animation
     const preview = r.preview;
     const screenId = screen.screen || '';
     if (screenId === 'wiped' || (!preview && (!screen.items || screen.items.length === 0))) {
-      // Black canvas — display is wiped or off
       const canvas = document.getElementById('pixoo-canvas');
       if (canvas) {
         const ctx = canvas.getContext('2d');
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
-    } else if (preview) {
+    } else if (screenId === 'custom' && screen.items && screen.items.length > 0) {
+      // Custom text push — draw with browser font (clean rendering)
+      drawPixooCanvas(screen.items);
+    } else if (screenId === 'animation' && preview) {
+      // Animation — preview is frame image, draw browser font text on top
       const img = new Image();
       img.onload = function() {
         const canvas = document.getElementById('pixoo-canvas');
@@ -115,7 +118,7 @@ async function loadPixoo() {
         const ctx = canvas.getContext('2d');
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        if (screen.items) {
+        if (screen.items && screen.items.length > 0) {
           const s = canvas.width / 64;
           ctx.textBaseline = 'top';
           for (const item of screen.items) {
@@ -124,6 +127,17 @@ async function loadPixoo() {
             ctx.fillText(item.t, item.x * s, item.y * s);
           }
         }
+      };
+      img.src = preview;
+    } else if (preview) {
+      // Rotation screens — use preview
+      const img = new Image();
+      img.onload = function() {
+        const canvas = document.getElementById('pixoo-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       };
       img.src = preview;
     } else if (screen.items) {

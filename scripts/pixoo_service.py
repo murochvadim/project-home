@@ -476,7 +476,7 @@ class PixooService:
                                                 (item.get('x', 0), item.get('y', 0)),
                                                 (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
                                         fb64 = base64.b64encode(bytearray(svc.pixoo._Pixoo__buffer)).decode()
-                                        # Save first frame as preview for dashboard
+                                        # Save first frame as preview (image only, text drawn by dashboard JS)
                                         if i == 0:
                                             preview = frame.copy()
                                             buf = io.BytesIO()
@@ -539,6 +539,27 @@ class PixooService:
 
                         svc.pixoo.push()
                         svc._paused = True  # pause rotation
+
+                        # Save screen info + preview for dashboard reload
+                        svc._screen_items = items
+                        svc._publish_screen_info('custom')
+                        try:
+                            from PIL import Image as _PILImg
+                            fb = bytearray(svc.pixoo._Pixoo__buffer)
+                            prev_img = _PILImg.frombytes('RGB', (64, 64), bytes(fb))
+                            buf = io.BytesIO()
+                            prev_img.save(buf, format='PNG')
+                            preview_b64 = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+                            svc._ensure_db()
+                            if svc.db:
+                                with svc.db.cursor() as _c:
+                                    _c.execute(
+                                        "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                        "VALUES ('_pixoo_preview', %s::jsonb, NOW()) "
+                                        "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                                        (json.dumps(preview_b64), json.dumps(preview_b64)))
+                        except Exception:
+                            log.warning("Failed to save preview for text/static push")
 
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')
