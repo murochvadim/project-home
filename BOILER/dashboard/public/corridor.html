@@ -44,112 +44,144 @@
     <button class="tab-btn active" onclick="showTab('pixoo', this)">Pixoo64</button>
   </div>
 
-  <!-- TAB: Pixoo64 -->
   <div class="tab-panel active" id="tab-pixoo">
-    <div class="card">
-      <h2>Pixoo64 Display</h2>
-      <div style="display:flex;gap:20px;flex-wrap:wrap;">
+  <div style="display:flex;gap:16px;flex-wrap:wrap;">
 
-        <!-- LEFT: Canvas + Controls -->
-        <div style="display:flex;flex-direction:column;align-items:center;">
-          <canvas id="pixoo-canvas" width="320" height="320" style="background:#000;border:2px solid #d0cbc4;border-radius:8px;image-rendering:pixelated;cursor:crosshair;" id-size="320"></canvas>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
-            <span style="font-size:0.72rem;color:#888;" id="pixoo-screen-label">Click canvas to set XY</span>
-            <span style="flex:1"></span>
-            <span style="font-size:0.72rem;color:#888;">Zoom:</span>
-            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(320)" style="padding:2px 8px;font-size:0.7rem;">1x</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(448)" style="padding:2px 8px;font-size:0.7rem;">1.5x</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooZoom(640)" style="padding:2px 8px;font-size:0.7rem;">2x</button>
+    <!-- LEFT: Canvas + Controls -->
+    <div style="display:flex;flex-direction:column;align-items:center;">
+      <canvas id="pixoo-canvas" width="320" height="320" style="background:#000;border:2px solid #d0cbc4;border-radius:8px;image-rendering:pixelated;cursor:crosshair;" id-size="320"></canvas>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+        <span style="font-size:0.72rem;color:#888;" id="pixoo-screen-label">Click canvas to set XY</span>
+        <span style="flex:1"></span>
+        <span style="font-size:0.72rem;color:#888;">Zoom:</span>
+        <button class="btn btn-secondary btn-sm" onclick="pixooZoom(320)" style="padding:2px 8px;font-size:0.7rem;">1x</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooZoom(448)" style="padding:2px 8px;font-size:0.7rem;">1.5x</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooZoom(640)" style="padding:2px 8px;font-size:0.7rem;">2x</button>
+      </div>
+      <div style="display:flex;gap:12px;margin-top:10px;font-size:0.78rem;color:#888;">
+        <span id="pixoo-status">—</span>
+        <span>Screen: <span id="pixoo-screen">—</span></span>
+        <span>HB: <span id="pixoo-heartbeat">—</span></span>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
+        <button class="btn btn-secondary btn-sm" onclick="pixooPower(true)">ON</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooPower(false)">OFF</button>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
+        <button class="btn btn-secondary btn-sm" onclick="pixooChannel(0)">Clock</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooChannel(1)">Cloud</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooNoise()">Sound</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooCustom(0)">C1</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooCustom(1)">C2</button>
+        <button class="btn btn-secondary btn-sm" onclick="pixooCustom(2)" style="background:#7a9ab8;color:#fff;">C3</button>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+        <span style="font-size:0.75rem;color:#888;">Bri:</span>
+        <input type="range" id="pixoo-brightness" min="0" max="100" value="50" style="width:100px;" onchange="pixooBrightness(this.value)">
+        <span id="pixoo-brightness-val" style="font-size:0.78rem;font-weight:600;">50</span>
+      </div>
+    </div>
+
+    <!-- RIGHT: Simulator + Editor, then Presets below -->
+    <div style="flex:1;min-width:280px;">
+
+      <!-- Row 1: Editor + Simulator side by side -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+
+        <!-- Editor card -->
+        <div class="card" style="flex:1;min-width:250px;margin-bottom:0;">
+          <h2>Editor</h2>
+          <div style="margin-bottom:8px;">
+            <div style="font-size:0.72rem;font-weight:600;color:#888;margin-bottom:4px;">BACKGROUND IMAGE</div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <input type="file" id="pixoo-image-upload" accept=".png,.gif,.jpg,.jpeg" style="font-size:0.72rem;" onchange="pixooLoadImage(this)">
+              <button class="btn btn-secondary btn-sm" onclick="pixooClearImage()" style="font-size:0.72rem;">Clear</button>
+            </div>
+            <span id="pixoo-image-info" style="font-size:0.68rem;color:#888;"></span>
           </div>
-          <div style="display:flex;gap:12px;margin-top:10px;font-size:0.78rem;color:#888;">
-            <span id="pixoo-status">—</span>
-            <span>Screen: <span id="pixoo-screen">—</span></span>
-            <span>HB: <span id="pixoo-heartbeat">—</span></span>
+          <div style="border-top:1px solid #e0dcd6;padding-top:8px;margin-bottom:8px;">
+            <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px;">
+              <span style="font-size:0.72rem;font-weight:600;color:#888;">MODE:</span>
+              <button class="btn btn-secondary btn-sm" id="pixoo-mode-text" onclick="pixooSetMode('text')" style="background:#7a9ab8;color:#fff;font-size:0.72rem;">Text</button>
+              <button class="btn btn-secondary btn-sm" id="pixoo-mode-pixel" onclick="pixooSetMode('pixel')" style="font-size:0.72rem;">Pixel</button>
+              <input type="color" id="pixoo-ed-color" value="#ffffff" style="width:24px;height:24px;border:1px solid #d0cbc4;border-radius:4px;padding:0;cursor:pointer;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooUndoPixel()" title="Undo last pixel" style="font-size:0.72rem;">Undo</button>
+            </div>
           </div>
-          <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
-            <button class="btn btn-secondary btn-sm" onclick="pixooPower(true)">ON</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooPower(false)">OFF</button>
+          <div id="pixoo-text-section" style="border-top:1px solid #e0dcd6;padding-top:8px;margin-bottom:8px;">
+            <div style="font-size:0.72rem;font-weight:600;color:#888;margin-bottom:4px;">ADD TEXT</div>
+            <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
+              <input type="text" id="pixoo-ed-text" placeholder="Text or {{var}}..." style="flex:1;min-width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
+            </div>
+            <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px;">
+              <span style="font-size:0.72rem;color:#888;">X:</span>
+              <input type="number" id="pixoo-ed-x" min="0" max="63" value="0" style="width:40px;padding:3px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
+              <span style="font-size:0.72rem;color:#888;">Y:</span>
+              <input type="number" id="pixoo-ed-y" min="0" max="63" value="0" style="width:40px;padding:3px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooAddText()" style="font-size:0.72rem;">Add</button>
+            </div>
+            <div id="pixoo-ed-items" style="font-size:0.68rem;color:#888;margin-bottom:4px;max-height:50px;overflow-y:auto;"></div>
           </div>
-          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
-            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(0)">Clock</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(1)">Cloud</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooNoise()">Sound</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(0)">C1</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(1)">C2</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooCustom(2)" style="background:#7a9ab8;color:#fff;">C3</button>
-          </div>
-          <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
-            <span style="font-size:0.75rem;color:#888;">Bri:</span>
-            <input type="range" id="pixoo-brightness" min="0" max="100" value="50" style="width:100px;" onchange="pixooBrightness(this.value)">
-            <span id="pixoo-brightness-val" style="font-size:0.78rem;font-weight:600;">50</span>
+          <div style="border-top:1px solid #e0dcd6;padding-top:8px;">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooClearCanvas()" style="font-size:0.72rem;">Clear Local</button>
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-sm" onclick="pixooPushCanvas()" style="background:#27ae60;color:#fff;font-size:0.72rem;">Push to Display</button>
+              <button class="btn btn-secondary btn-sm" onclick="pixooWipeDisplay()" style="background:#c0392b;color:#fff;font-size:0.72rem;">Wipe Display</button>
+            </div>
           </div>
         </div>
 
-        <!-- RIGHT: Editor -->
-        <div class="card" style="flex:1;min-width:280px;margin-bottom:0;">
-          <h2>Editor</h2>
-
-          <!-- Background Image -->
-          <div style="margin-bottom:12px;">
-            <div style="font-size:0.78rem;font-weight:600;color:#888;margin-bottom:6px;">BACKGROUND IMAGE</div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <input type="file" id="pixoo-image-upload" accept=".png,.gif,.jpg,.jpeg" style="font-size:0.78rem;" onchange="pixooLoadImage(this)">
-              <button class="btn btn-secondary btn-sm" onclick="pixooClearImage()">Clear</button>
-            </div>
-            <span id="pixoo-image-info" style="font-size:0.72rem;color:#888;"></span>
-          </div>
-
-          <!-- Draw Mode -->
-          <div style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
-            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-              <span style="font-size:0.78rem;font-weight:600;color:#888;">MODE:</span>
-              <button class="btn btn-secondary btn-sm" id="pixoo-mode-text" onclick="pixooSetMode('text')" style="background:#7a9ab8;color:#fff;">Text</button>
-              <button class="btn btn-secondary btn-sm" id="pixoo-mode-pixel" onclick="pixooSetMode('pixel')">Pixel</button>
-              <input type="color" id="pixoo-ed-color" value="#ffffff" style="width:28px;height:28px;border:1px solid #d0cbc4;border-radius:4px;padding:0;cursor:pointer;">
-              <button class="btn btn-secondary btn-sm" onclick="pixooUndoPixel()" title="Undo last pixel">Undo</button>
-            </div>
-          </div>
-
-          <!-- Text -->
-          <div id="pixoo-text-section" style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
-            <div style="font-size:0.78rem;font-weight:600;color:#888;margin-bottom:6px;">ADD TEXT</div>
+        <!-- Simulator card -->
+        <div class="card" style="flex:1;min-width:250px;margin-bottom:0;">
+          <h2>Simulator</h2>
+          <div style="margin-bottom:8px;">
+            <div style="font-size:0.72rem;font-weight:600;color:#888;margin-bottom:3px;">PUSH PRESET</div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
-              <input type="text" id="pixoo-ed-text" placeholder="Text..." style="flex:1;min-width:80px;padding:4px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+              <select id="sim-preset" style="flex:1;min-width:100px;padding:4px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;" onchange="simPresetChanged()">
+                <option value="">— preset —</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="simPushPreset()" style="background:#27ae60;color:#fff;padding:3px 10px;font-size:0.72rem;">Push</button>
+              <button class="btn btn-secondary btn-sm" onclick="simResume()" style="padding:3px 10px;font-size:0.72rem;">Resume</button>
+              <button class="btn btn-secondary btn-sm" onclick="simWipe()" style="background:#c0392b;color:#fff;padding:3px 10px;font-size:0.72rem;">Wipe</button>
             </div>
-            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-              <span style="font-size:0.75rem;color:#888;">X:</span>
-              <input type="number" id="pixoo-ed-x" min="0" max="63" value="0" style="width:45px;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-              <span style="font-size:0.75rem;color:#888;">Y:</span>
-              <input type="number" id="pixoo-ed-y" min="0" max="63" value="0" style="width:45px;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-              <button class="btn btn-secondary btn-sm" onclick="pixooAddText()">Add</button>
-            </div>
-            <div id="pixoo-ed-items" style="font-size:0.72rem;color:#888;margin-bottom:6px;max-height:60px;overflow-y:auto;"></div>
+            <div id="sim-vars" style="font-size:0.78rem;"></div>
           </div>
-
-          <!-- Actions -->
-          <div style="border-top:1px solid #e0dcd6;padding-top:10px;margin-bottom:12px;">
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
-              <button class="btn btn-secondary btn-sm" onclick="pixooClearCanvas()">Clear Local</button>
+          <div style="border-top:1px solid #e0dcd6;padding-top:8px;">
+            <div style="font-size:0.72rem;font-weight:600;color:#888;margin-bottom:3px;">SEQUENCE</div>
+            <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
+              <select id="sim-seq-preset" style="padding:3px 4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.72rem;min-width:90px;">
+                <option value="">preset...</option>
+              </select>
+              <input type="number" id="sim-seq-dur" min="1" max="300" value="10" style="width:40px;padding:3px 4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.72rem;" title="Duration (sec)">
+              <span style="font-size:0.68rem;color:#888;">s</span>
+              <button class="btn btn-secondary btn-sm" onclick="simSeqAdd()" style="padding:2px 6px;font-size:0.68rem;">+ Add</button>
             </div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <button class="btn btn-secondary btn-sm" onclick="pixooPushCanvas()" style="background:#27ae60;color:#fff;">Push to Display</button>
-              <button class="btn btn-secondary btn-sm" onclick="pixooWipeDisplay()" style="background:#c0392b;color:#fff;">Wipe Display</button>
+            <div id="sim-seq-list" style="font-size:0.72rem;margin-bottom:4px;"></div>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-secondary btn-sm" onclick="simSeqPlay()" style="background:#3a5a8a;color:#fff;padding:2px 8px;font-size:0.68rem;">Play</button>
+              <button class="btn btn-secondary btn-sm" onclick="simSeqClear()" style="padding:2px 8px;font-size:0.68rem;">Clear</button>
             </div>
           </div>
-
-          <!-- Presets -->
-          <div style="border-top:1px solid #e0dcd6;padding-top:10px;">
-            <div style="font-size:0.78rem;font-weight:600;color:#888;margin-bottom:6px;">PRESETS</div>
-            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-              <input type="text" id="pixoo-preset-name" placeholder="Name..." style="flex:1;padding:4px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-              <button class="btn btn-secondary btn-sm" onclick="pixooSavePreset()" style="background:#3a5a8a;color:#fff;">Save</button>
-            </div>
-            <div id="pixoo-presets-list" style="font-size:0.78rem;"></div>
-          </div>
+          <div id="sim-status" style="font-size:0.72rem;color:#888;margin-top:6px;"></div>
         </div>
 
       </div>
+
+      <!-- Row 2: Presets card (full width under both) -->
+      <div class="card">
+        <h2>Presets</h2>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+          <input type="text" id="pixoo-preset-name" placeholder="Name..." style="flex:1;padding:4px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+          <button class="btn btn-secondary btn-sm" onclick="pixooSavePreset()" style="background:#3a5a8a;color:#fff;">Save</button>
+        </div>
+        <div id="pixoo-presets-list" style="font-size:0.78rem;"></div>
+      </div>
+
     </div>
+
+  </div>
   </div>
 
 </main>

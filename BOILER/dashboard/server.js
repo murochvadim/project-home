@@ -1414,6 +1414,18 @@ app.post('/api/pixoo/push-items', async (req, res) => {
   } catch (e) { console.error('Pixoo push error:', e.message); res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/pixoo/command', async (req, res) => {
+  try {
+    const r = await fetch('http://192.168.1.138:8768/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(10000),
+    }).then(r => r.json());
+    res.json(r);
+  } catch (e) { console.error('Pixoo command error:', e.message); res.status(500).json({ error: e.message }); }
+});
+
 // ─── Pixoo64 Presets ──────────────────────────────────────────
 app.get('/api/pixoo/presets', async (_req, res) => {
   try {

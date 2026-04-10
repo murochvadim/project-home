@@ -49,6 +49,7 @@ HEARTBEAT_INTERVAL = 60  # seconds between heartbeat writes
 
 LWT_TOPIC = "mur/home/pixoo/state"
 SUBSCRIBE_TOPIC = "mur/home/rule-engine/computed/+"
+COMMAND_TOPIC = "mur/home/pixoo/command"
 
 STATE_KEYS = [
     "people_home",
@@ -103,6 +104,8 @@ class PixooService:
         # Timestamps
         self._last_heartbeat = 0.0
         self._paused = False
+        self._sequence_stop = threading.Event()
+        self._sequence_thread = None
 
     # ------------------------------------------------------------------
     # MQTT callbacks
@@ -111,6 +114,7 @@ class PixooService:
         if rc == 0:
             log.info("MQTT connected to %s", MQTT_BROKER)
             client.subscribe(SUBSCRIBE_TOPIC, qos=1)
+            client.subscribe(COMMAND_TOPIC, qos=1)
             client.publish(
                 LWT_TOPIC,
                 payload=json.dumps({"state": "online"}),
@@ -122,9 +126,13 @@ class PixooService:
 
     def _on_message(self, client, userdata, msg):
         try:
-            key = msg.topic.rsplit("/", 1)[-1]
             raw = json.loads(msg.payload.decode())
+            # Route command messages to handler
+            if msg.topic == COMMAND_TOPIC:
+                threading.Thread(target=self._handle_command, args=(raw,), daemon=True).start()
+                return
             # Computed state topics wrap value in {"value": ..., "ts": ...}
+            key = msg.topic.rsplit("/", 1)[-1]
             value = raw.get('value', raw) if isinstance(raw, dict) else raw
             self.state[key] = value
             log.debug("State update: %s = %s", key, value)
@@ -351,6 +359,243 @@ class PixooService:
         except Exception:
             log.warning("Failed to publish screen info to MQTT")
 
+    # ------------------------------------------------------------------
+    # MQTT command handler (Rule Engine → Pixoo)
+    # ------------------------------------------------------------------
+
+    def _handle_command(self, payload):
+        """Dispatch an MQTT command from the rule engine or test button."""
+        action = payload.get('action', '')
+        log.info("Pixoo command: %s | payload: %s", action, json.dumps(payload)[:300])
+        try:
+            if action == 'push_preset':
+                self._render_preset(payload.get('preset_name', ''), payload.get('vars'))
+            elif action == 'play_sequence':
+                self._play_sequence(payload.get('presets', []))
+            elif action == 'resume':
+                self._stop_sequence()
+                self._paused = False
+                self._ensure_db()
+                if self.db:
+                    try:
+                        with self.db.cursor() as cur:
+                            cur.execute(
+                                "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                "VALUES ('_pixoo_paused', 'false'::jsonb, NOW()) "
+                                "ON CONFLICT (key) DO UPDATE SET value = 'false'::jsonb, updated_at = NOW()")
+                    except Exception:
+                        pass
+                log.info("Pixoo rotation resumed")
+            elif action == 'wipe':
+                self._stop_sequence()
+                import requests as _req
+                try:
+                    self.pixoo.set_channel(4)
+                    _req.post(f'http://{PIXOO_IP}:80/post', json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                    black = base64.b64encode(bytes([0]*64*64*3)).decode()
+                    _req.post(f'http://{PIXOO_IP}:80/post', json={
+                        'Command': 'Draw/SendHttpGif',
+                        'PicNum': 1, 'PicWidth': 64, 'PicOffset': 0,
+                        'PicID': 1, 'PicSpeed': 1000, 'PicData': black,
+                    }, timeout=10)
+                except Exception as exc:
+                    log.warning("Wipe: device unreachable (%s)", exc)
+                self._paused = True
+                self._screen_items = []
+                self._publish_screen_info('wiped')
+                self._ensure_db()
+                if self.db:
+                    try:
+                        with self.db.cursor() as cur:
+                            cur.execute(
+                                "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                "VALUES ('_pixoo_paused', 'true'::jsonb, NOW()) "
+                                "ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()")
+                            cur.execute("DELETE FROM rule_engine_state WHERE key = '_pixoo_preview'")
+                    except Exception:
+                        pass
+                log.info("Pixoo wiped via command")
+            else:
+                log.warning("Unknown pixoo command: %s", action)
+        except Exception:
+            log.exception("Pixoo command error: %s", action)
+
+    def _render_preset(self, preset_name, vars_dict=None):
+        """Load a preset by name, replace {{var}} placeholders, render to device."""
+        if not preset_name:
+            log.warning("push_preset: no preset_name")
+            return
+        self._ensure_db()
+        if not self.db:
+            log.error("push_preset: no DB connection")
+            return
+
+        # Load preset from DB
+        with self.db.cursor() as cur:
+            cur.execute("SELECT content, image_data FROM pixoo_presets WHERE name = %s", (preset_name,))
+            row = cur.fetchone()
+        if not row:
+            log.warning("push_preset: preset '%s' not found", preset_name)
+            return
+
+        content = row[0] if isinstance(row[0], dict) else json.loads(row[0] or '{}')
+        image_data = row[1]
+        items = list(content.get('items', []))
+        pixels = content.get('pixels', {})
+
+        # Replace {{var}} placeholders in text items
+        if vars_dict:
+            import re as _re
+            for item in items:
+                text = item.get('t', '')
+                for key, val in vars_dict.items():
+                    text = text.replace('{{' + key + '}}', str(val))
+                # Remove any unreplaced vars
+                text = _re.sub(r'\{\{[^}]*\}\}', '', text)
+                item['t'] = text
+
+        # Stop any running sequence/GIF, then render
+        import requests as _req
+        try:
+            self.pixoo.set_channel(4)
+            _req.post(f'http://{PIXOO_IP}:80/post', json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+        self.pixoo.clear()
+        is_animation = False
+
+        # Draw background image if present
+        if image_data and ',' in image_data:
+            try:
+                from PIL import Image as PILImage
+                img_data = base64.b64decode(image_data.split(',')[1])
+                img = PILImage.open(io.BytesIO(img_data))
+                n_frames = getattr(img, 'n_frames', 1)
+
+                if n_frames > 1:
+                    # Animated GIF — same logic as /push handler
+                    is_animation = True
+                    duration = img.info.get('duration', 100)
+                    step = max(1, n_frames // 15)
+                    indices = list(range(0, n_frames, step))[:15]
+                    use = len(indices)
+                    speed = duration * step
+
+                    _req.post(f'http://{PIXOO_IP}:80/post', json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                    for fi_idx, fi in enumerate(indices):
+                        img.seek(fi)
+                        frame = img.convert('RGB').resize((64, 64))
+                        self.pixoo.clear()
+                        self.pixoo.draw_image(frame)
+                        # Burn pixels into frame
+                        for pkey, pc in pixels.items():
+                            try:
+                                ppx, ppy = pkey.split(',')
+                                self.pixoo.draw_pixel_at_location_rgb(
+                                    int(ppx), int(ppy), pc.get('r', 255), pc.get('g', 255), pc.get('b', 255))
+                            except Exception:
+                                pass
+                        # Burn text into frame
+                        for item in items:
+                            self.pixoo.draw_text(
+                                str(item.get('t', '')),
+                                (item.get('x', 0), item.get('y', 0)),
+                                (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
+                        fb64 = base64.b64encode(bytearray(self.pixoo._Pixoo__buffer)).decode()
+                        # Save first frame as preview
+                        if fi_idx == 0:
+                            preview_frame = frame.copy()
+                        _req.post(f'http://{PIXOO_IP}:80/post', json={
+                            'Command': 'Draw/SendHttpGif',
+                            'PicNum': use, 'PicWidth': 64, 'PicOffset': fi_idx,
+                            'PicID': 1, 'PicSpeed': speed, 'PicData': fb64,
+                        }, timeout=10)
+                else:
+                    # Static image
+                    img = img.convert('RGB').resize((64, 64))
+                    self.pixoo.draw_image(img)
+            except Exception:
+                log.exception("Failed to draw preset image")
+
+        if not is_animation:
+            # Draw pixels
+            for key, c in pixels.items():
+                try:
+                    px, py = key.split(',')
+                    self.pixoo.draw_pixel_at_location_rgb(int(px), int(py), c.get('r', 255), c.get('g', 255), c.get('b', 255))
+                except Exception:
+                    pass
+
+            # Draw text items
+            for item in items:
+                self.pixoo.draw_text(
+                    str(item.get('t', '')),
+                    (item.get('x', 0), item.get('y', 0)),
+                    (item.get('r', 255), item.get('g', 255), item.get('b', 255)),
+                )
+
+            self.pixoo.push()
+
+        self._paused = True
+
+        # Save preview + screen info
+        self._screen_items = items
+        screen_type = 'animation' if is_animation else 'preset:' + preset_name
+        self._publish_screen_info(screen_type)
+        try:
+            from PIL import Image as _PILImg
+            if is_animation and preview_frame:
+                prev_img = preview_frame
+            else:
+                fb = bytearray(self.pixoo._Pixoo__buffer)
+                prev_img = _PILImg.frombytes('RGB', (64, 64), bytes(fb))
+            buf = io.BytesIO()
+            prev_img.save(buf, format='PNG')
+            preview_b64 = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+            self._ensure_db()
+            if self.db:
+                with self.db.cursor() as _c:
+                    _c.execute(
+                        "INSERT INTO rule_engine_state (key, value, updated_at) "
+                        "VALUES ('_pixoo_preview', %s::jsonb, NOW()) "
+                        "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                        (json.dumps(preview_b64), json.dumps(preview_b64)))
+        except Exception:
+            log.warning("Failed to save preset preview")
+
+        log.info("Pushed preset '%s'", preset_name)
+
+    def _play_sequence(self, presets_list):
+        """Play a sequence of presets with timing."""
+        self._stop_sequence()
+        self._sequence_stop.clear()
+
+        def run():
+            while not self._sequence_stop.is_set():
+                for entry in presets_list:
+                    if self._sequence_stop.is_set():
+                        return
+                    name = entry.get('name', '')
+                    vars_dict = entry.get('vars')
+                    duration = entry.get('duration', 10)
+                    self._render_preset(name, vars_dict)
+                    self._sequence_stop.wait(duration)
+                    if self._sequence_stop.is_set():
+                        return
+
+        self._sequence_thread = threading.Thread(target=run, daemon=True)
+        self._sequence_thread.start()
+        log.info("Playing sequence: %d presets", len(presets_list))
+
+    def _stop_sequence(self):
+        """Stop any running sequence."""
+        self._sequence_stop.set()
+        if self._sequence_thread and self._sequence_thread.is_alive():
+            self._sequence_thread.join(timeout=2)
+        self._sequence_thread = None
+
     def _draw(self, text, x, y, r, g, b):
         """Draw text on Pixoo + record for dashboard mirror."""
         self.pixoo.draw_text(text, (x, y), (r, g, b))
@@ -432,6 +677,16 @@ class PixooService:
                             msg = '{"ok":true}' if device_ok else '{"ok":true,"warn":"device offline, state cleared"}'
                             self.wfile.write(msg.encode())
                             return
+
+                        # Stop any running GIF animation before drawing static content
+                        import requests as _req_reset
+                        try:
+                            svc.pixoo.set_channel(4)
+                            _req_reset.post(f'http://{PIXOO_IP}:80/post', json={
+                                'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                            time.sleep(0.3)
+                        except Exception:
+                            pass
 
                         svc.pixoo.clear()
 
@@ -561,6 +816,14 @@ class PixooService:
                         except Exception:
                             log.warning("Failed to save preview for text/static push")
 
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(b'{"ok":true}')
+                    elif self.path == '/command':
+                        # Simulator / API command — same as MQTT command
+                        threading.Thread(target=svc._handle_command, args=(body,), daemon=True).start()
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')
                         self.send_header('Access-Control-Allow-Origin', '*')

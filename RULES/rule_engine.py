@@ -346,6 +346,14 @@ class RuleEngine:
             log.warning("Rule '%s' returned command without device_id", rule_name)
             return
 
+        # Pixoo is a virtual device — route directly to pixoo command topic
+        protocol = cmd.get('protocol', '')
+        if protocol == 'pixoo':
+            pixoo_payload = {k: v for k, v in cmd.items() if k not in {'device_id', 'protocol', 'rule'}}
+            self.mqtt.publish_command('mur/home/pixoo/command', pixoo_payload)
+            log.info("Rule '%s' -> pixoo %s", rule_name, action)
+            return
+
         if self._check_loop(device_id, action, rule_name):
             return
 

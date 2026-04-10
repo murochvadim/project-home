@@ -5,7 +5,6 @@ function showTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
-  if (name === 'pixoo') loadPixooPresets();
 }
 
 // ── Pixoo state ──
@@ -32,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Auto-load on page open
   loadPixoo();
   loadPixooPresets();
+  loadSimPresets();
 });
 
 function pixooSetMode(mode) {
@@ -96,9 +96,10 @@ async function loadPixoo() {
     document.getElementById('pixoo-screen').textContent = screenName;
     document.getElementById('pixoo-screen-label').textContent = screenName;
 
-    // Draw canvas: black if wiped, items with browser font for custom, preview for animation
+    // Draw canvas
     const preview = r.preview;
     const screenId = screen.screen || '';
+    const isAnimation = screenId === 'animation';
     if (screenId === 'wiped' || (!preview && (!screen.items || screen.items.length === 0))) {
       const canvas = document.getElementById('pixoo-canvas');
       if (canvas) {
@@ -106,11 +107,11 @@ async function loadPixoo() {
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
-    } else if (screenId === 'custom' && screen.items && screen.items.length > 0) {
-      // Custom text push — draw with browser font (clean rendering)
+    } else if (screen.items && screen.items.length > 0 && !isAnimation) {
+      // Text/pixel/preset screens — draw with browser font (clean)
       drawPixooCanvas(screen.items);
-    } else if (screenId === 'animation' && preview) {
-      // Animation — preview is frame image, draw browser font text on top
+    } else if (preview) {
+      // Animation or rotation — use preview image
       const img = new Image();
       img.onload = function() {
         const canvas = document.getElementById('pixoo-canvas');
@@ -118,7 +119,8 @@ async function loadPixoo() {
         const ctx = canvas.getContext('2d');
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        if (screen.items && screen.items.length > 0) {
+        // For animations, draw text items on top with browser font
+        if (isAnimation && screen.items && screen.items.length > 0) {
           const s = canvas.width / 64;
           ctx.textBaseline = 'top';
           for (const item of screen.items) {
@@ -127,17 +129,6 @@ async function loadPixoo() {
             ctx.fillText(item.t, item.x * s, item.y * s);
           }
         }
-      };
-      img.src = preview;
-    } else if (preview) {
-      // Rotation screens — use preview
-      const img = new Image();
-      img.onload = function() {
-        const canvas = document.getElementById('pixoo-canvas');
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       };
       img.src = preview;
     } else if (screen.items) {
@@ -550,4 +541,211 @@ async function pixooPushPreset(id) {
     if (r.ok) { label.textContent = 'Pushed: ' + preset.name; label.style.color = '#27ae60'; }
     else { label.textContent = 'Push failed'; label.style.color = '#c0392b'; }
   } catch (e) { label.textContent = 'Connection error'; label.style.color = '#c0392b'; }
+}
+
+// ── Simulator ──────────────────────────────────────────────────
+
+let _simPresets = [];
+
+async function loadSimPresets() {
+  try {
+    _simPresets = await fetch('/api/pixoo/presets').then(r => r.json());
+    const opts = _simPresets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+    const sel = document.getElementById('sim-preset');
+    if (sel) sel.innerHTML = '<option value="">— select preset —</option>' + opts;
+    const seqSel = document.getElementById('sim-seq-preset');
+    if (seqSel) seqSel.innerHTML = '<option value="">add preset...</option>' + opts;
+  } catch (e) { console.error('Failed to load sim presets:', e); }
+}
+
+function simPresetChanged() {
+  const id = parseInt(document.getElementById('sim-preset').value);
+  const el = document.getElementById('sim-vars');
+  if (!el) return;
+  if (!id) { el.innerHTML = ''; return; }
+  const preset = _simPresets.find(p => p.id === id);
+  if (!preset) { el.innerHTML = ''; return; }
+  const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
+  const items = Array.isArray(content) ? content : (content.items || []);
+  // Find all {{var}} placeholders
+  const vars = new Set();
+  for (const item of items) {
+    const matches = (item.t || '').match(/\{\{(\w+)\}\}/g);
+    if (matches) matches.forEach(m => vars.add(m.slice(2, -2)));
+  }
+  if (vars.size === 0) {
+    el.innerHTML = '<span style="color:#aaa;">No variables in this preset</span>';
+    return;
+  }
+  let html = '';
+  for (const v of Array.from(vars)) {
+    html += `<div style="font-size:0.68rem;color:#888;">{{${v}}}</div>`;
+    html += `<input type="text" id="sim-var-${v}" placeholder="${v}..." style="width:100%;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;box-sizing:border-box;margin-bottom:6px;">`;
+  }
+  el.innerHTML = html;
+}
+
+async function simPushPreset() {
+  const id = parseInt(document.getElementById('sim-preset').value);
+  const preset = _simPresets.find(p => p.id === id);
+  const status = document.getElementById('sim-status');
+  if (!preset) { if (status) status.textContent = 'Select a preset first'; return; }
+  // Collect vars
+  const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
+  const items = Array.isArray(content) ? content : (content.items || []);
+  const vars = {};
+  for (const item of items) {
+    const matches = (item.t || '').match(/\{\{(\w+)\}\}/g);
+    if (matches) matches.forEach(m => {
+      const key = m.slice(2, -2);
+      const input = document.getElementById('sim-var-' + key);
+      if (input && input.value) vars[key] = input.value;
+    });
+  }
+  try {
+    if (status) { status.textContent = 'Pushing...'; status.style.color = '#888'; }
+    const r = await fetch('/api/pixoo/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'push_preset', preset_name: preset.name, vars }),
+    });
+    if (r.ok) {
+      if (status) { status.textContent = 'Pushed: ' + preset.name; status.style.color = '#27ae60'; }
+      setTimeout(loadPixoo, 2000);
+    } else {
+      if (status) { status.textContent = 'Push failed'; status.style.color = '#c0392b'; }
+    }
+  } catch (e) {
+    if (status) { status.textContent = 'Connection error'; status.style.color = '#c0392b'; }
+  }
+}
+
+async function simResume() {
+  if (window._simSeqRefresh) { clearInterval(window._simSeqRefresh); window._simSeqRefresh = null; }
+  const status = document.getElementById('sim-status');
+  try {
+    if (status) { status.textContent = 'Resuming...'; status.style.color = '#888'; }
+    await fetch('/api/pixoo/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'resume' }),
+    });
+    if (status) { status.textContent = 'Rotation resumed'; status.style.color = '#27ae60'; }
+    setTimeout(loadPixoo, 2000);
+  } catch (e) {
+    if (status) { status.textContent = 'Connection error'; status.style.color = '#c0392b'; }
+  }
+}
+
+async function simWipe() {
+  if (window._simSeqRefresh) { clearInterval(window._simSeqRefresh); window._simSeqRefresh = null; }
+  const status = document.getElementById('sim-status');
+  try {
+    if (status) { status.textContent = 'Wiping...'; status.style.color = '#888'; }
+    await fetch('/api/pixoo/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'wipe' }),
+    });
+    if (status) { status.textContent = 'Wiped'; status.style.color = '#27ae60'; }
+    setTimeout(loadPixoo, 1000);
+  } catch (e) {
+    if (status) { status.textContent = 'Connection error'; status.style.color = '#c0392b'; }
+  }
+}
+
+// ── Sequence builder ───────────────────────────────────────────
+
+let _simSequence = []; // [{id, name, duration, vars}]
+
+function _getPresetVarNames(presetId) {
+  const preset = _simPresets.find(p => p.id === presetId);
+  if (!preset) return [];
+  const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
+  const items = Array.isArray(content) ? content : (content.items || []);
+  const vars = new Set();
+  for (const item of items) {
+    const matches = (item.t || '').match(/\{\{(\w+)\}\}/g);
+    if (matches) matches.forEach(m => vars.add(m.slice(2, -2)));
+  }
+  return Array.from(vars);
+}
+
+function simSeqAdd() {
+  const id = parseInt(document.getElementById('sim-seq-preset').value);
+  const preset = _simPresets.find(p => p.id === id);
+  if (!preset) return;
+  const dur = parseInt(document.getElementById('sim-seq-dur').value) || 10;
+  const varNames = _getPresetVarNames(id);
+  const vars = {};
+  varNames.forEach(v => { vars[v] = ''; });
+  _simSequence.push({ id, name: preset.name, duration: dur, vars, varNames });
+  simSeqRender();
+}
+
+function simSeqRender() {
+  const el = document.getElementById('sim-seq-list');
+  if (!el) return;
+  if (_simSequence.length === 0) { el.innerHTML = '<span style="color:#aaa;">No presets in sequence</span>'; return; }
+  el.innerHTML = _simSequence.map((s, i) => {
+    let varsHtml = '';
+    if (s.varNames && s.varNames.length > 0) {
+      varsHtml = `<div style="margin-left:18px;margin-bottom:4px;">` +
+        s.varNames.map(v =>
+          `<div style="margin-bottom:3px;">` +
+          `<div style="font-size:0.68rem;color:#888;">{{${v}}}</div>` +
+          `<input type="text" id="seq-var-${i}-${v}" value="${s.vars[v] || ''}" placeholder="${v}..." ` +
+          `oninput="_simSequence[${i}].vars['${v}']=this.value" ` +
+          `style="width:100%;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.75rem;box-sizing:border-box;">` +
+          `</div>`
+        ).join('') + `</div>`;
+    }
+    return `<div style="margin-bottom:2px;">` +
+    `<div style="display:flex;align-items:center;gap:6px;">` +
+    `<span style="font-weight:500;">${i + 1}. ${s.name}</span>` +
+    `<span style="color:#888;">${s.duration}s</span>` +
+    `<button onclick="simSeqRemove(${i})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.72rem;padding:0;">&#10005;</button>` +
+    `</div>${varsHtml}</div>`;
+  }).join('');
+}
+
+function simSeqRemove(index) {
+  _simSequence.splice(index, 1);
+  simSeqRender();
+}
+
+async function simSeqPlay() {
+  if (_simSequence.length === 0) return;
+  const status = document.getElementById('sim-status');
+  // Collect current var values from inline inputs
+  _simSequence.forEach((s, i) => {
+    (s.varNames || []).forEach(v => {
+      const input = document.getElementById(`seq-var-${i}-${v}`);
+      if (input) s.vars[v] = input.value;
+    });
+  });
+  const presets = _simSequence.map(s => ({ name: s.name, duration: s.duration, vars: s.vars }));
+  try {
+    if (status) { status.textContent = 'Playing sequence...'; status.style.color = '#888'; }
+    const r = await fetch('/api/pixoo/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'play_sequence', presets }),
+    });
+    if (r.ok) {
+      if (status) { status.textContent = 'Sequence playing: ' + presets.map(p => p.name).join(' → '); status.style.color = '#27ae60'; }
+      // Auto-refresh canvas while sequence plays
+      if (window._simSeqRefresh) clearInterval(window._simSeqRefresh);
+      window._simSeqRefresh = setInterval(loadPixoo, 3000);
+    } else {
+      if (status) { status.textContent = 'Sequence failed'; status.style.color = '#c0392b'; }
+    }
+  } catch (e) {
+    if (status) { status.textContent = 'Connection error'; status.style.color = '#c0392b'; }
+  }
+}
+
+function simSeqClear() {
+  _simSequence = [];
+  simSeqRender();
 }
