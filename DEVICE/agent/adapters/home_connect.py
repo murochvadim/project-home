@@ -161,7 +161,7 @@ class HomeConnectAdapter(DeviceAdapter):
 
     def _run(self):
         """Main loop: authenticate, fetch appliances, connect SSE with reconnect."""
-        if not HC_CLIENT_ID or not HC_CLIENT_SECRET or not HC_REFRESH_TOKEN:
+        if not HC_CLIENT_ID or not HC_CLIENT_SECRET or not (HC_REFRESH_TOKEN or self._refresh_token):
             log.error('Home Connect: credentials not set — adapter disabled')
             return
 

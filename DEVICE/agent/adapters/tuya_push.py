@@ -41,6 +41,7 @@ class TuyaPushAdapter(DeviceAdapter):
         self._dps_map: dict[str, dict[str, int]] = {}
         # Set of known device IDs for filtering
         self._known_ids = {d['id'] for d in devices}
+        self._last_msg_time = time.time()
 
     def _build_dps_maps(self):
         """Build code_name → dp_id map for each device using Cloud API."""
@@ -60,7 +61,8 @@ class TuyaPushAdapter(DeviceAdapter):
     def _on_message(self, msg):
         """Handle incoming Pulsar message."""
         try:
-            log.info(f'Push message received: {str(msg)[:200]}')
+            self._last_msg_time = time.time()
+            log.debug(f'Push message received: {str(msg)[:200]}')
             payload = json.loads(msg) if isinstance(msg, str) else msg
             # Only handle dp_report events
             event_type = payload.get('bizCode') or payload.get('eventType')
@@ -123,6 +125,10 @@ class TuyaPushAdapter(DeviceAdapter):
                     # Check if pulsar thread is still alive
                     if self._pulsar and hasattr(self._pulsar, 'is_alive') and not self._pulsar.is_alive():
                         log.warning('TuyaPushAdapter: Pulsar thread died — reconnecting')
+                        break
+                    # Secondary check: no messages in 10 min → likely dead
+                    if time.time() - self._last_msg_time > 600:
+                        log.warning('TuyaPushAdapter: no messages in 10 min — reconnecting')
                         break
 
             except Exception as e:

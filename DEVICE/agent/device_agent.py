@@ -75,6 +75,9 @@ class DeviceAgent:
         self._allowed_dps = {}          # device_id → set of allowed DPS keys (None = all allowed)
         self._connect_db()
 
+        if not MQTT_PASS:
+            log.warning("MQTT_PASS not set — MQTT publishing will be disabled")
+
         self._mqtt = MqttPublisher(
             broker=MQTT_BROKER, port=MQTT_PORT,
             username=MQTT_USER, password=MQTT_PASS,
@@ -114,7 +117,7 @@ class DeviceAgent:
                 SELECT d.id, d.name, d.vendor, d.device_type, d.protocol,
                        COALESCE(n.ip, d.local_ip) AS local_ip,
                        d.local_key, d.gateway_id, d.version,
-                       d.poll_enabled, d.poll_interval_sec, d.enabled, d.mac
+                       d.poll_enabled, d.poll_interval_sec, d.enabled, d.mac, d.room
                 FROM devices d
                 LEFT JOIN net_devices n ON n.mac = d.mac
                 WHERE d.enabled = true
@@ -176,15 +179,15 @@ class DeviceAgent:
 
             # Purge stale dedup entries older than 120s to prevent unbounded growth
             if len(self._device_last_event) > 500:
-                stale_keys = [k for k, v in self._device_last_event.items()
-                              if isinstance(v, tuple) and (now - v[0]) > 120]
-                for k in stale_keys:
+                # Find stale device_ids (string keys with timestamp tuples)
+                stale_ids = {k for k, v in self._device_last_event.items()
+                             if isinstance(k, str) and isinstance(v, tuple) and (now - v[0]) > 120}
+                # Remove both string-keyed and tuple-keyed entries for stale devices
+                purge = [k for k in self._device_last_event
+                         if (isinstance(k, str) and k in stale_ids) or
+                            (isinstance(k, tuple) and k[0] in stale_ids)]
+                for k in purge:
                     del self._device_last_event[k]
-                    # Also remove the corresponding (device_id, source) entries
-                    stale_src_keys = [sk for sk in self._device_last_event
-                                      if isinstance(sk, tuple) and sk[0] == k]
-                    for sk in stale_src_keys:
-                        del self._device_last_event[sk]
 
             # Dedup uses filtered DPS — changes to disabled keys don't trigger events
             dedup_key = (device_id, source)

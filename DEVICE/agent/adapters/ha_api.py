@@ -238,14 +238,14 @@ class HAApiAdapter(DeviceAdapter):
         while not self._stop_event.is_set():
             try:
                 log.info(f'Connecting to HA WebSocket at {HA_WS}')
-                ws = websocket.WebSocketApp(
+                self._ws = websocket.WebSocketApp(
                     HA_WS,
                     on_message=self._on_ws_message,
                     on_error=self._on_ws_error,
                     on_close=self._on_ws_close,
                 )
                 # run_forever blocks until connection closes
-                ws.run_forever(ping_interval=30, ping_timeout=10)
+                self._ws.run_forever(ping_interval=30, ping_timeout=10)
                 delay = RECONNECT_DELAY
             except Exception as e:
                 log.error(f'HA WebSocket connection failed: {e}')
@@ -261,6 +261,11 @@ class HAApiAdapter(DeviceAdapter):
 
     def stop(self):
         self._stop_event.set()
+        if hasattr(self, '_ws') and self._ws:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
 
     def get_state(self, device_id: str) -> dict:
         return {}

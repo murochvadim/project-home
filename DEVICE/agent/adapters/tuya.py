@@ -28,7 +28,7 @@ log = logging.getLogger('tuya_adapter')
 HEARTBEAT_INTERVAL = 12    # seconds — Tuya drops connection after ~20s without heartbeat
 RECONNECT_DELAY    = 5     # seconds — initial reconnect wait
 RECONNECT_MAX      = 60    # seconds — maximum reconnect wait
-SOCKET_TIMEOUT     = 15    # seconds — receive timeout (> heartbeat interval)
+SOCKET_TIMEOUT     = 5     # seconds — receive timeout (must be < heartbeat interval)
 
 from .tuya_config import API_REGION, API_KEY, API_SECRET
 
@@ -220,11 +220,12 @@ class TuyaAdapter(DeviceAdapter):
                 d.set_socketPersistent(True)
                 d.set_socketTimeout(SOCKET_TIMEOUT)
 
+                delay = RECONNECT_DELAY  # reset backoff on successful connect
+
                 # Get initial state
                 status = d.status()
                 if status and 'dps' in status:
                     self.on_state_change(dev_id, status['dps'], 'initial')
-                    delay = RECONNECT_DELAY
 
                 last_heartbeat  = time.time()
                 last_poll       = time.time()

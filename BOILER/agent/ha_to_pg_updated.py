@@ -45,6 +45,9 @@ if __name__ == "__main__":
     if row['boiler_temp'] is None and row['panel_temp'] is None:
         log.warning(f'Both temperatures are None — skipping insert: {row}')
         sys.exit(0)
+    if row['boiler_temp'] is None or row['panel_temp'] is None:
+        missing = 'boiler_temp' if row['boiler_temp'] is None else 'panel_temp'
+        log.warning(f'Single sensor NULL ({missing}) — inserting but boiler agent may trigger safety shutdown')
 
     try:
         with psycopg2.connect(**PG_CONF) as conn:

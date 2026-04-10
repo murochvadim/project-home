@@ -140,7 +140,7 @@ def collect_daily(conn):
 
     with conn.cursor() as cur:
         for entry in forecasts:
-            fd = entry.get('datetime', '')[:10]   # "2026-03-27T00:00:00+00:00" → "2026-03-27"
+            fd = (entry.get('datetime') or '')[:10]   # "2026-03-27T00:00:00+00:00" → "2026-03-27"
             cur.execute("""
                 INSERT INTO raw_weather_daily
                   (forecast_date, condition, temp_high, temp_low, precipitation_mm)
@@ -178,6 +178,8 @@ def main():
         collect_daily(conn)
     except Exception as e:
         log.error(f'Daily collection error: {e}')
+        try: conn.rollback()
+        except Exception: pass
     finally:
         conn.close()
 

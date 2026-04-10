@@ -624,8 +624,10 @@ def run_agent():
                      boiler_trend, panel_trend, decision, why_decision, error, next_ts, version)
 
         # ── Step 7: Detect consumption events ────────────────────────────────
-        consumption_temp_delta = float(settings.get('consumption_temp_delta') or 3.0)
-        consumption_time_delta = int(settings.get('consumption_time_delta') or 15)
+        ct = settings.get('consumption_temp_delta')
+        consumption_temp_delta = float(ct) if ct is not None else 3.0
+        cd = settings.get('consumption_time_delta')
+        consumption_time_delta = int(cd) if cd is not None else 15
         detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta)
 
         conn.commit()
@@ -653,7 +655,7 @@ def run_agent():
 
         if conn:
             try:
-                interval = int(settings['run_interval_min']) if settings else 5
+                interval = int(settings.get('run_interval_min', 5)) if settings else 5
                 next_ts  = now + timedelta(minutes=interval)
                 if safety_b_triggered:
                     dec = 'turn_off'
@@ -667,7 +669,7 @@ def run_agent():
             except Exception as write_exc:
                 log.error(f'Failed to write error result: {write_exc}')
 
-        return int(settings['run_interval_min']) if settings else 5
+        return int(settings.get('run_interval_min', 5)) if settings else 5
 
     finally:
         if conn:
