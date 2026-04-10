@@ -399,6 +399,9 @@ class PixooService:
                                 'PicID': 1, 'PicSpeed': 1000, 'PicData': black,
                             }, timeout=10)
                             svc._paused = True
+                            # Clear dashboard screen content
+                            svc._screen_items = []
+                            svc._publish_screen_info('wiped')
                             self.send_response(200)
                             self.send_header('Content-Type', 'application/json')
                             self.send_header('Access-Control-Allow-Origin', '*')

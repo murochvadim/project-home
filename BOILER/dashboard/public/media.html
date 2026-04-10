@@ -459,17 +459,15 @@
           <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
             <button class="btn btn-secondary btn-sm" onclick="pixooPower(true)">ON</button>
             <button class="btn btn-secondary btn-sm" onclick="pixooPower(false)">OFF</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooPlay()">Mirror</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooStop()">Stop</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooRestart()" style="color:#c0392b;">Restart</button>
           </div>
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
             <button class="btn btn-secondary btn-sm" onclick="pixooChannel(0)">Clock</button>
             <button class="btn btn-secondary btn-sm" onclick="pixooChannel(1)">Cloud</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooChannel(2)">Viz</button>
+            <button class="btn btn-secondary btn-sm" onclick="pixooNoise()">Sound</button>
             <button class="btn btn-secondary btn-sm" onclick="pixooCustom(0)">C1</button>
             <button class="btn btn-secondary btn-sm" onclick="pixooCustom(1)">C2</button>
             <button class="btn btn-secondary btn-sm" onclick="pixooCustom(2)" style="background:#7a9ab8;color:#fff;">C3</button>
-            <button class="btn btn-secondary btn-sm" onclick="pixooResume()" style="background:#27ae60;color:#fff;">Svc</button>
           </div>
           <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
             <span style="font-size:0.75rem;color:#888;">Bri:</span>
@@ -625,6 +623,6 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=46"></script>
+<script src="js/media.js?v=47"></script>
 </body>
 </html>

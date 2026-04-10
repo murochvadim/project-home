@@ -1273,6 +1273,28 @@ app.post('/api/pixoo/wipe', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/pixoo/restart', async (_req, res) => {
+  try {
+    await fetch('http://192.168.1.243:80/post', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Command: 'Device/SysReboot' }),
+      signal: AbortSignal.timeout(2000),
+    }).catch(() => {}); // device reboots immediately, response times out — expected
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/pixoo/noise', async (_req, res) => {
+  try {
+    await fetch('http://192.168.1.243:80/post', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Command: 'Tools/SetNoiseStatus', NoiseStatus: 1 }),
+      signal: AbortSignal.timeout(3000),
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/pixoo/power', async (req, res) => {
   try {
     const { on } = req.body;

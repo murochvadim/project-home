@@ -1877,6 +1877,18 @@ async function pixooChannel(index) {
   } catch (e) { console.error('Pixoo channel error:', e); }
 }
 
+async function pixooRestart() {
+  try {
+    await fetch('/api/pixoo/restart', { method: 'POST' });
+  } catch (e) { console.error('Pixoo restart error:', e); }
+}
+
+async function pixooNoise() {
+  try {
+    await fetch('/api/pixoo/noise', { method: 'POST' });
+  } catch (e) { console.error('Pixoo noise error:', e); }
+}
+
 async function pixooBrightness(val) {
   document.getElementById('pixoo-brightness-val').textContent = val;
   try {
