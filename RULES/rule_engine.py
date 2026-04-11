@@ -8,6 +8,7 @@ evaluates matching rules on each event, and dispatches commands.
 Runs on LXC 105 (Main Agent / Orchestrator).
 """
 
+import copy
 import importlib.util
 import json
 import logging
@@ -51,6 +52,7 @@ class RuleEngine:
         self._command_log = {}          # device_id -> [(ts, action), ...]
         self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms, last_fired}
         self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
+        self._rule_originals = {}       # rule_name -> {priority, group, conditions} from file
         self._stop = threading.Event()
         self._last_computed_publish = 0
 
@@ -104,6 +106,13 @@ class RuleEngine:
             rule_dict.setdefault('depends_on', [])
             rule_dict.setdefault('conditions', {})
 
+            # Store original values before any overrides
+            self._rule_originals[rule_dict['name']] = {
+                'priority': rule_dict.get('priority', 10),
+                'group': rule_dict.get('group'),
+                'conditions': copy.deepcopy(rule_dict.get('conditions', {})),
+            }
+
             self.rules.append(module)
 
         # Load disabled list from shared state
@@ -154,8 +163,8 @@ class RuleEngine:
 
         Overrides stored in shared state as _rule_overrides: {rule_name: {field: value}}
         Overridable fields: priority, group, conditions
+        Always applies from file-original base to prevent accumulation.
         """
-        import copy
         overrides_raw = copy.deepcopy(self.state.shared.get('_rule_overrides', {}))
         if isinstance(overrides_raw, str):
             try:
@@ -167,6 +176,14 @@ class RuleEngine:
 
         for module in self.rules:
             name = module.RULE['name']
+            orig = self._rule_originals.get(name, {})
+
+            # Restore file originals first (prevents accumulation)
+            module.RULE['priority'] = orig.get('priority', 10)
+            module.RULE['group'] = orig.get('group')
+            module.RULE['conditions'] = copy.deepcopy(orig.get('conditions', {}))
+
+            # Apply DB overrides on top
             ovr = overrides_raw.get(name, {})
             if not ovr:
                 continue
@@ -177,16 +194,13 @@ class RuleEngine:
                     pass
             if 'group' in ovr:
                 module.RULE['group'] = ovr['group'] or None
-            if 'conditions' in ovr:
-                # Merge: DB conditions override file conditions per key
-                file_conds = module.RULE.get('conditions', {})
-                db_conds = ovr['conditions'] if isinstance(ovr['conditions'], dict) else {}
-                for ck, cv in db_conds.items():
+            if 'conditions' in ovr and isinstance(ovr['conditions'], dict):
+                file_conds = module.RULE['conditions']
+                for ck, cv in ovr['conditions'].items():
                     if cv is None:
-                        file_conds.pop(ck, None)  # null = remove condition
+                        file_conds.pop(ck, None)
                     else:
                         file_conds[ck] = cv
-                module.RULE['conditions'] = file_conds
 
         if overrides_raw:
             log.info('Applied DB overrides for %d rules', len(overrides_raw))
@@ -318,8 +332,8 @@ class RuleEngine:
             'ts': datetime.now(tz=TZ).isoformat(),
         }
 
-        # Snapshot shared state before rules run
-        shared_before = dict(self.state.shared)
+        # Snapshot shared state before rules run (deep copy for reliable comparison)
+        shared_before = copy.deepcopy(self.state.shared)
 
         # Clear group-active tracking for this event cycle
         self._group_active.clear()
@@ -336,7 +350,6 @@ class RuleEngine:
             ok, reason = self._check_conditions(rule)
             if not ok:
                 log.debug("Rule '%s' skipped: %s", rule_name, reason)
-                self._log_rule_event(rule_name, device_id, source, 'skipped', f'condition: {reason}', 0)
                 continue
 
             # Check group conflict — skip if higher priority rule in same group already acted
@@ -345,12 +358,10 @@ class RuleEngine:
                 active = self._group_active[group]
                 log.debug("Rule '%s' skipped: group '%s' already served by '%s'",
                           rule_name, group, active['rule'])
-                self._log_rule_event(rule_name, device_id, source, 'skipped',
-                                     f'group:{group} served by {active["rule"]}', 0)
                 continue
 
             # Snapshot shared state before this rule
-            rule_shared_before = dict(self.state.shared)
+            rule_shared_before = copy.deepcopy(self.state.shared)
 
             commands = self._evaluate_rule(rule, event)
             for cmd in commands:
@@ -395,17 +406,12 @@ class RuleEngine:
     # ------------------------------------------------------------------
 
     def _log_rule_event(self, rule_name, device_id, source, event_type, result, duration_ms):
-        """Log a meaningful rule event to DB (state change, command, skip)."""
-        try:
-            self.state._ensure_conn()
-            with self.state.conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO rule_events (rule_name, device_id, source, event_type, result, duration_ms) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (rule_name, device_id, source, event_type, str(result)[:500], duration_ms),
-                )
-        except Exception:
-            log.debug("Failed to log rule event", exc_info=True)
+        """Log a meaningful rule event to DB (state change or command only)."""
+        self.state.db_execute(
+            "INSERT INTO rule_events (rule_name, device_id, source, event_type, result, duration_ms) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (rule_name, device_id, source, event_type, str(result)[:500], duration_ms),
+        )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -470,23 +476,29 @@ class RuleEngine:
         return True, ''
 
     def _sort_rules(self, rules):
-        """Sort rules by depends_on (topological) then priority (lower first)."""
+        """Sort rules by depends_on (topological) then priority (lower first).
+        Detects cycles and breaks them with a warning."""
         name_to_rule = {r.RULE['name']: r for r in rules}
         sorted_rules = []
         visited = set()
+        visiting = set()  # gray set for cycle detection
 
         def visit(rule):
             name = rule.RULE['name']
             if name in visited:
                 return
-            visited.add(name)
+            if name in visiting:
+                log.warning("Dependency cycle detected at rule '%s' — breaking cycle", name)
+                return
+            visiting.add(name)
             for dep_name in rule.RULE.get('depends_on', []):
                 dep = name_to_rule.get(dep_name)
                 if dep and dep in rules:
                     visit(dep)
+            visiting.discard(name)
+            visited.add(name)
             sorted_rules.append(rule)
 
-        # Visit all, respecting dependencies
         for r in sorted(rules, key=lambda r: r.RULE.get('priority', 10)):
             visit(r)
 
@@ -612,17 +624,31 @@ class RuleEngine:
         log.info("Rule '%s' ENABLED", rule_name)
 
     def _reload_rules(self):
-        """Hot-reload rules from disk without restarting."""
+        """Hot-reload rules from disk without restarting.
+        Preserves stats for rules that still exist. Atomic index swap."""
         old_count = len(self.rules)
-        old_stats = dict(self._rule_stats)  # preserve stats
+        old_stats = dict(self._rule_stats)
+        existing_names = {m.RULE['name'] for m in self.rules}
+
+        # Load into temporary list
         self.rules = []
         self.load_rules()
-        self._index_rules()
+        new_names = {m.RULE['name'] for m in self.rules}
+
         # Restore stats for rules that still exist
         for name, stats in old_stats.items():
-            if name not in self._rule_stats:
+            if name in new_names and name not in self._rule_stats:
                 self._rule_stats[name] = stats
-        log.info("Rules reloaded: %d -> %d rules", old_count, len(self.rules))
+
+        # Atomic index rebuild
+        self._index_rules()
+
+        added = new_names - existing_names
+        removed = existing_names - new_names
+        log.info("Rules reloaded: %d -> %d (added: %s, removed: %s)",
+                 old_count, len(self.rules),
+                 list(added) if added else 'none',
+                 list(removed) if removed else 'none')
 
     # ------------------------------------------------------------------
     # Computed state publish (debounced)

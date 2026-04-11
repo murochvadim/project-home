@@ -5,9 +5,11 @@ StateManager — in-memory device/room state for rule evaluation.
 Loads devices and rooms from PostgreSQL at startup, merges MQTT updates
 in real-time, and manages shared persistent state + timers.
 
+Thread-safe: all state mutations are protected by locks.
 Runs on LXC 105 (Main Agent / Orchestrator).
 """
 
+import copy
 import json
 import logging
 import os
@@ -26,6 +28,9 @@ DB_CONFIG = {
     'user': os.environ.get('DB_USER', 'postgres'),
 }
 
+# Keys owned by the dashboard — loaded from DB but never overwritten by save
+_DASHBOARD_KEYS = {'_disabled_rules', '_rule_overrides', '_reload_request'}
+
 
 class StateManager:
     """In-memory device/room state with shared persistent state for rule evaluation."""
@@ -37,14 +42,16 @@ class StateManager:
         self._timers = {}      # timer_name -> timestamp (float)
         self._db_config = db_config
         self.conn = None
-        self.lock = threading.Lock()  # protects shared + _timers from concurrent access
+        self._db_lock = threading.Lock()   # protects DB connection
+        self.lock = threading.Lock()       # protects shared + _timers
+        self._dev_lock = threading.Lock()  # protects devices + rooms
 
     # ------------------------------------------------------------------
-    # DB connection helpers (same pattern as Device Agent)
+    # DB connection helpers
     # ------------------------------------------------------------------
 
     def _connect_db(self):
-        """Open DB connection with autocommit."""
+        """Open DB connection with autocommit. Must hold _db_lock."""
         try:
             if self.conn:
                 self.conn.close()
@@ -54,7 +61,7 @@ class StateManager:
         self.conn.autocommit = True
 
     def _ensure_conn(self):
-        """Reconnect if connection dropped."""
+        """Reconnect if connection dropped. Must hold _db_lock."""
         try:
             if self.conn is None or self.conn.closed:
                 self._connect_db()
@@ -67,111 +74,137 @@ class StateManager:
 
     def load_from_db(self):
         """Load devices + rooms from PostgreSQL. Called at startup and midnight."""
-        self._ensure_conn()
-        devices = {}
-        rooms = {}
+        with self._db_lock:
+            self._ensure_conn()
+            devices = {}
+            rooms = {}
 
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT id, name, room, device_type, protocol, last_state "
-                "FROM devices WHERE enabled = true"
-            )
-            for row in cur.fetchall():
-                dev_id = str(row['id'])
-                last_state = row['last_state']
-                # last_state may be NULL, a JSON string, or already a dict
-                if last_state is None:
-                    dps = {}
-                elif isinstance(last_state, str):
-                    try:
-                        dps = json.loads(last_state)
-                    except (json.JSONDecodeError, TypeError):
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT id, name, room, device_type, protocol, last_state "
+                    "FROM devices WHERE enabled = true"
+                )
+                for row in cur.fetchall():
+                    dev_id = str(row['id'])
+                    last_state = row['last_state']
+                    if last_state is None:
                         dps = {}
-                else:
-                    dps = dict(last_state)
+                    elif isinstance(last_state, str):
+                        try:
+                            dps = json.loads(last_state)
+                        except (json.JSONDecodeError, TypeError):
+                            dps = {}
+                    else:
+                        dps = dict(last_state)
 
-                devices[dev_id] = {
-                    'dps': dps,
-                    'online': True,
-                    'name': row['name'] or '',
-                    'room': row['room'] or '',
-                    'device_type': row['device_type'] or '',
-                    'protocol': row['protocol'] or '',
-                }
+                    devices[dev_id] = {
+                        'dps': dps,
+                        'online': True,
+                        'name': row['name'] or '',
+                        'room': row['room'] or '',
+                        'device_type': row['device_type'] or '',
+                        'protocol': row['protocol'] or '',
+                    }
 
-            cur.execute("SELECT name FROM rooms")
-            for row in cur.fetchall():
-                rooms[row['name']] = {'devices': []}
+                cur.execute("SELECT name FROM rooms")
+                for row in cur.fetchall():
+                    rooms[row['name']] = {'devices': []}
 
-        # Group devices by room
-        for dev_id, dev in devices.items():
-            room = dev['room']
-            if room:
-                if room not in rooms:
-                    rooms[room] = {'devices': []}
-                rooms[room]['devices'].append(dev_id)
+            # Group devices by room
+            for dev_id, dev in devices.items():
+                room = dev['room']
+                if room:
+                    if room not in rooms:
+                        rooms[room] = {'devices': []}
+                    rooms[room]['devices'].append(dev_id)
 
-        self.devices = devices
-        self.rooms = rooms
+        # Atomic swap (GIL makes dict assignment atomic)
+        with self._dev_lock:
+            self.devices = devices
+            self.rooms = rooms
         log.info("Loaded %d devices across %d rooms", len(devices), len(rooms))
 
     def load_shared_state(self):
-        """Load shared state + timers from rule_engine_state table."""
-        self._ensure_conn()
-        try:
-            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT key, value FROM rule_engine_state")
-                for row in cur.fetchall():
-                    key = row['key']
-                    raw = row['value']
-                    if key.startswith('_timer:'):
-                        timer_name = key[len('_timer:'):]
-                        try:
-                            self._timers[timer_name] = float(raw)
-                        except (ValueError, TypeError):
-                            log.warning("Invalid timer value for %s: %s", key, raw)
-                    elif not key.startswith('_pixoo_'):
-                        self.shared[key] = raw
-                log.info("Loaded %d shared keys + %d timers",
-                         len(self.shared), len(self._timers))
-        except psycopg2.errors.UndefinedTable:
-            log.warning("rule_engine_state table does not exist — starting with empty state")
-            # Roll back the failed transaction (autocommit still marks it as aborted)
-            self.conn.rollback()
+        """Load dashboard-owned keys from DB into shared state.
+
+        Only loads keys that the dashboard controls (_disabled_rules,
+        _rule_overrides, _reload_request). Rule-computed keys are kept
+        as-is in memory to avoid overwriting fresh values.
+        """
+        with self._db_lock:
+            self._ensure_conn()
+            try:
+                with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT key, value FROM rule_engine_state")
+                    with self.lock:
+                        for row in cur.fetchall():
+                            key = row['key']
+                            raw = row['value']
+                            if key.startswith('_timer:'):
+                                timer_name = key[len('_timer:'):]
+                                try:
+                                    self._timers[timer_name] = float(raw)
+                                except (ValueError, TypeError):
+                                    log.warning("Invalid timer value for %s: %s", key, raw)
+                            elif key.startswith('_pixoo_'):
+                                continue  # pixoo-owned, skip
+                            elif key in _DASHBOARD_KEYS:
+                                # Dashboard-owned: always take DB value (parsed)
+                                self.shared[key] = self._parse_value(raw)
+                            elif key not in self.shared:
+                                # First load only: seed keys not yet in memory
+                                self.shared[key] = self._parse_value(raw)
+                    log.info("Loaded %d shared keys + %d timers",
+                             len(self.shared), len(self._timers))
+            except psycopg2.errors.UndefinedTable:
+                log.warning("rule_engine_state table does not exist — starting with empty state")
+                self.conn.rollback()
+
+    @staticmethod
+    def _parse_value(raw):
+        """Parse a DB value — already deserialized by psycopg2 JSONB, but handle strings."""
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return raw
+        return raw
 
     def save_shared_state(self):
         """Persist shared state + timers to rule_engine_state table."""
-        self._ensure_conn()
         with self.lock:
-            snapshot = dict(self.shared)
+            snapshot = copy.deepcopy(self.shared)
             timers = dict(self._timers)
-        try:
-            with self.conn.cursor() as cur:
-                for key, value in snapshot.items():
-                    # Skip keys owned by other services / dashboard
-                    if key.startswith('_pixoo_') or key.startswith('_rule_override'):
-                        continue
-                    val_str = json.dumps(value)
-                    cur.execute(
-                        "INSERT INTO rule_engine_state (key, value, updated_at) "
-                        "VALUES (%s, %s, NOW()) "
-                        "ON CONFLICT (key) DO UPDATE "
-                        "SET value = EXCLUDED.value, updated_at = NOW()",
-                        (key, val_str),
-                    )
-                for name, ts in timers.items():
-                    cur.execute(
-                        "INSERT INTO rule_engine_state (key, value, updated_at) "
-                        "VALUES (%s, %s, NOW()) "
-                        "ON CONFLICT (key) DO UPDATE "
-                        "SET value = EXCLUDED.value, updated_at = NOW()",
-                        (f'_timer:{name}', str(ts)),
-                    )
-            log.debug("Saved %d shared keys + %d timers",
-                      len(self.shared), len(self._timers))
-        except psycopg2.errors.UndefinedTable:
-            log.warning("rule_engine_state table does not exist — cannot persist state")
-            self.conn.rollback()
+        with self._db_lock:
+            self._ensure_conn()
+            try:
+                with self.conn.cursor() as cur:
+                    for key, value in snapshot.items():
+                        # Skip keys owned by other services / dashboard
+                        if (key.startswith('_pixoo_') or key in _DASHBOARD_KEYS
+                                or key.startswith('_rule_override')):
+                            continue
+                        val_str = json.dumps(value)
+                        cur.execute(
+                            "INSERT INTO rule_engine_state (key, value, updated_at) "
+                            "VALUES (%s, %s, NOW()) "
+                            "ON CONFLICT (key) DO UPDATE "
+                            "SET value = EXCLUDED.value, updated_at = NOW()",
+                            (key, val_str),
+                        )
+                    for name, ts in timers.items():
+                        cur.execute(
+                            "INSERT INTO rule_engine_state (key, value, updated_at) "
+                            "VALUES (%s, %s, NOW()) "
+                            "ON CONFLICT (key) DO UPDATE "
+                            "SET value = EXCLUDED.value, updated_at = NOW()",
+                            (f'_timer:{name}', str(ts)),
+                        )
+                log.debug("Saved %d shared keys + %d timers",
+                          len(self.shared), len(self._timers))
+            except psycopg2.errors.UndefinedTable:
+                log.warning("rule_engine_state table does not exist — cannot persist state")
+                self.conn.rollback()
 
     # ------------------------------------------------------------------
     # Real-time state updates (called from MQTT callbacks)
@@ -179,15 +212,19 @@ class StateManager:
 
     def update_device(self, device_id: str, dps: dict, source: str = ''):
         """Merge incoming DPS into device state."""
-        if device_id not in self.devices:
-            log.debug("update_device: unknown device_id %s (source=%s)", device_id, source)
-            return
-        self.devices[device_id]['dps'].update(dps)
+        with self._dev_lock:
+            dev = self.devices.get(device_id)
+            if dev is None:
+                log.debug("update_device: unknown device_id %s (source=%s)", device_id, source)
+                return
+            dev['dps'].update(dps)
 
     def update_availability(self, device_id: str, online: bool):
         """Update device online status."""
-        if device_id in self.devices:
-            self.devices[device_id]['online'] = online
+        with self._dev_lock:
+            dev = self.devices.get(device_id)
+            if dev is not None:
+                dev['online'] = online
 
     def update_inventory(self, inventory: list):
         """Refresh devices and rooms from _bridge/devices topic.
@@ -198,6 +235,9 @@ class StateManager:
         new_devices = {}
         new_rooms = {}
 
+        with self._dev_lock:
+            old_devices = self.devices
+
         for item in inventory:
             dev_id = str(item.get('id', ''))
             if not dev_id:
@@ -206,9 +246,9 @@ class StateManager:
             # Preserve existing DPS if we already track this device
             existing_dps = {}
             existing_online = True
-            if dev_id in self.devices:
-                existing_dps = self.devices[dev_id].get('dps', {})
-                existing_online = self.devices[dev_id].get('online', True)
+            if dev_id in old_devices:
+                existing_dps = old_devices[dev_id].get('dps', {})
+                existing_online = old_devices[dev_id].get('online', True)
 
             new_devices[dev_id] = {
                 'dps': existing_dps,
@@ -225,8 +265,10 @@ class StateManager:
                     new_rooms[room] = {'devices': []}
                 new_rooms[room]['devices'].append(dev_id)
 
-        self.devices = new_devices
-        self.rooms = new_rooms
+        # Atomic swap
+        with self._dev_lock:
+            self.devices = new_devices
+            self.rooms = new_rooms
         log.info("Inventory refresh: %d devices across %d rooms",
                  len(new_devices), len(new_rooms))
 
@@ -245,3 +287,17 @@ class StateManager:
             if name in self._timers:
                 return time.time() - self._timers[name]
             return float('inf')
+
+    # ------------------------------------------------------------------
+    # DB access for rule event logging (thread-safe)
+    # ------------------------------------------------------------------
+
+    def db_execute(self, sql, params=None):
+        """Execute a DB statement with thread-safe connection. Fire-and-forget."""
+        with self._db_lock:
+            self._ensure_conn()
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(sql, params or ())
+            except Exception:
+                log.debug("db_execute failed", exc_info=True)

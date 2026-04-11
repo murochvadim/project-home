@@ -46,9 +46,7 @@ def evaluate(event, state):
             state.set_timer(f"room_active:{room}")
             state.shared["last_motion_room"] = room
             state.set_timer("last_motion")
-        else:
-            # Clear event — set timer for hold-off
-            state.set_timer(f"room_active:{room}")
+        # Clear event: do NOT reset timer — let detect timer expire naturally
 
     elif dtype in SWITCH_TYPES and room and event.get("source") != "startup":
         # Only count if device name contains room name
