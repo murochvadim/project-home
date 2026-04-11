@@ -120,6 +120,46 @@
     if (e.target === this) closeRuleTimePopup();
   });
 
+  window.showRuleTrace = async function (name) {
+    const overlay = document.getElementById('rule-trace-overlay');
+    const title = document.getElementById('rule-trace-title');
+    const body = document.getElementById('rule-trace-body');
+    if (!overlay || !body) return;
+    title.textContent = name + ' — Event Trace';
+    body.innerHTML = '<span style="color:#888;">Loading...</span>';
+    overlay.style.display = 'flex';
+    try {
+      const r = await fetch(`/api/rule-engine/events?rule=${encodeURIComponent(name)}&limit=30`);
+      const events = await r.json();
+      if (!Array.isArray(events) || events.length === 0) {
+        body.innerHTML = '<span style="color:#aaa;">No events recorded yet</span>';
+        return;
+      }
+      const typeColors = { state_changed: '#3498db', command: '#27ae60', auto_disabled: '#e74c3c', skipped: '#f39c12' };
+      body.innerHTML = events.map(e => {
+        const time = e.ts ? new Date(e.ts).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+        const date = e.ts ? new Date(e.ts).toLocaleDateString('en-IL', { day: '2-digit', month: '2-digit' }) : '';
+        const color = typeColors[e.event_type] || '#888';
+        const devName = e.device_id ? e.device_id.substring(0, 12) + '...' : '—';
+        return `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid #f0ebe3;align-items:flex-start;">
+          <span style="min-width:75px;color:#888;font-size:0.75rem;white-space:nowrap;">${date} ${time}</span>
+          <span style="min-width:80px;font-weight:600;color:${color};font-size:0.75rem;">${escHtml(e.event_type)}</span>
+          <span style="flex:1;color:#444;font-size:0.78rem;">${escHtml(e.result || '—')}</span>
+          <span style="min-width:50px;color:#aaa;font-size:0.68rem;text-align:right;" title="${escHtml(e.device_id || '')}">${devName}</span>
+        </div>`;
+      }).join('');
+    } catch (err) {
+      body.innerHTML = '<span style="color:#e74c3c;">Failed to load events</span>';
+    }
+  };
+
+  window.closeRuleTrace = function () {
+    document.getElementById('rule-trace-overlay').style.display = 'none';
+  };
+  document.getElementById('rule-trace-overlay')?.addEventListener('click', function(e) {
+    if (e.target === this) closeRuleTrace();
+  });
+
   window.testRule = async function (name, force) {
     const el = document.getElementById('test-result');
     if (!el) return;
@@ -317,7 +357,7 @@
           return `<tr style="${rowStyle}">
             <td style="text-align:center;color:#888;font-size:0.75rem;">#${r.id || ''}</td>
             <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${dotColor};" title="${escHtml(group)}"></span></td>
-            <td class="rule-name">${escHtml(r.name)}${errorBadge}</td>
+            <td class="rule-name"><span style="cursor:pointer;text-decoration:underline;" onclick="showRuleTrace('${escHtml(r.name)}')">${escHtml(r.name)}</span>${errorBadge}</td>
             <td style="font-size:0.78rem;color:#555;font-weight:500;">${escHtml(group)}</td>
             <td style="text-align:center">${priHtml}</td>
             <td style="text-align:center">${timeHtml}</td>

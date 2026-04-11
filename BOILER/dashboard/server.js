@@ -1611,6 +1611,25 @@ app.post('/api/rule-engine/test', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/rule-engine/events', async (req, res) => {
+  try {
+    const name = req.query.rule || '';
+    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    let query, params;
+    if (name) {
+      query = `SELECT ts AT TIME ZONE 'Asia/Jerusalem' AS ts, rule_name, device_id, source, event_type, result, duration_ms
+               FROM rule_events WHERE rule_name = $1 ORDER BY ts DESC LIMIT $2`;
+      params = [name, limit];
+    } else {
+      query = `SELECT ts AT TIME ZONE 'Asia/Jerusalem' AS ts, rule_name, device_id, source, event_type, result, duration_ms
+               FROM rule_events ORDER BY ts DESC LIMIT $1`;
+      params = [limit];
+    }
+    const r = await db.query(query, params);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Start ────────────────────────────────────────────────────
 async function ensureSchema() {
   await db.query(`
