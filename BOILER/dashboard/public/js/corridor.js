@@ -85,11 +85,18 @@ async function loadPixoo() {
     const dev = r.device || {};
     const screen = r.screen || {};
 
-    // Status
+    // Status — authoritative signal is whether the device responds to HTTP.
+    // Service heartbeat keeps firing even when the hardware is unplugged, so
+    // relying on it alone leaves the dot green after a power loss.
+    const deviceReachable = r.device != null && typeof r.device === 'object' && Object.keys(r.device).length > 0;
     const hbAge = hb.ts ? (Date.now() - new Date(hb.ts).getTime()) / 1000 : Infinity;
-    const online = hbAge < 120;
+    const serviceAlive = hbAge < 120;
+    const online = deviceReachable && serviceAlive;
+    const label = !deviceReachable ? 'Offline — no HTTP response'
+                 : !serviceAlive   ? 'Offline — service heartbeat stale'
+                 : 'Online';
     document.getElementById('pixoo-status').innerHTML =
-      `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;background:${online ? '#27ae60' : '#e74c3c'}"></span>${online ? 'Online' : 'Offline'}`;
+      `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;background:${online ? '#27ae60' : '#e74c3c'}"></span>${label}`;
 
     // Screen name
     const screenName = screen.screen || hb.decision || '—';

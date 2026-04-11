@@ -499,7 +499,7 @@
             </td>
             <td style="white-space:nowrap;">
               <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',false)" style="font-size:0.68rem;padding:2px 6px;" title="Dry-run test">Test</button>
-              <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#e67e22;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
+              <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#7a9ab8;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
             </td>
           </tr>`;
         }).join('');
