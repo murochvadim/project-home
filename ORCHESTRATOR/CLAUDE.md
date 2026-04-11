@@ -85,10 +85,14 @@ For each registered agent:
 | `weather_stale` | `raw_weather` age > 65 min | warn | collect_weather |
 | `agent_schedule_check_failed` | DB error during schedule check | error | that agent |
 | `backup_overdue` | last successful backup > `max_age_hours + 4h` | warn | `backup:<job name>` |
+| `rule_error` | Rule auto-disabled after N consecutive evaluate() failures (raised by rule_engine itself, not orchestrator) | warn | `rule_engine` |
+| `rule_load_error` | Rule file fails to import, missing RULE dict, missing required keys, or missing evaluate() — raised by rule_engine at load time | error | `rule_engine` |
+| `rule_engine_state_save_failed` | `save_shared_state()` failed 5 times in a row — shared state may be stale | error | `rule_engine` |
 
 - Alerts are **raised once** — no duplicates while condition persists
 - Alerts **auto-resolve** when condition clears on next run
 - `agent_schedule_check_failed`, `check_errors`, and `check_backup_freshness` all use SAVEPOINTs so a DB error in one check doesn't abort the outer transaction
+- The three `rule_*` alerts are raised by the **rule engine on LXC 105**, not by the orchestrator. The orchestrator never generates them, but they appear in `system_alerts` and are surfaced on the dashboard Health page like any other alert. They do not auto-resolve — a rule file must be fixed/reloaded, or the state-save condition must recover, for them to stop being raised.
 
 ---
 
