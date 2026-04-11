@@ -96,6 +96,18 @@ async function loadConsumptions() {
       return;
     }
     empty.style.display = 'none';
+    const causeColor = { human: '#2e7d32', thermal: '#1565c0', unknown: '#b8860b' };
+    const causeChip = c => {
+      if (!c) return '<span style="color:#999;">—</span>';
+      const col = causeColor[c] || '#666';
+      return `<span style="background:${col}1a; color:${col}; padding:2px 8px; border-radius:10px; font-size:0.75rem; font-weight:600;">${c}</span>`;
+    };
+    const roomBadges = rooms => {
+      if (!rooms || !rooms.length) return '';
+      return rooms.map(rm =>
+        `<span style="background:#e8f5e9; color:#2e7d32; padding:2px 6px; border-radius:8px; font-size:0.7rem; margin-right:3px;">${rm}</span>`
+      ).join('');
+    };
     const html = rows.map(r => `
       <tr>
         <td>${fmtTs(r.start_ts)}</td>
@@ -104,6 +116,8 @@ async function loadConsumptions() {
         <td>${fmtTemp(r.end_temp)}</td>
         <td style="color:#e67e22; font-weight:600;">▼ ${parseFloat(r.drop_c).toFixed(1)}</td>
         <td>${r.duration_min} min</td>
+        <td>${causeChip(r.cause)}</td>
+        <td>${roomBadges(r.likely_rooms)}</td>
       </tr>
     `).join('');
     setHTML(tbody, html);

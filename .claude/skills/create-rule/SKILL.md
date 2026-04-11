@@ -218,7 +218,7 @@ After the user approves the generated code:
    ```bash
    scp RULES/rules/{filename}.py root@192.168.1.187:/opt/main-agent/project/RULES/rules/
    ```
-3. Tell the user: "Rule deployed. Click **Reload** on the Main Agent dashboard to load it."
+3. Tell the user: "Rule deployed. Click **Reload** on the Main Agent dashboard to load it — the button stays on **Reloading...** until the engine confirms the new rule is loaded (up to ~60s on the next background cycle), then returns to **Reload**."
 4. After reload, suggest: "Try clicking **Test** or **Force** on the new rule to verify it works."
 
 ## Important Notes

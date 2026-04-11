@@ -320,15 +320,32 @@
   };
 
   window.reloadRules = async function () {
+    const btn = document.querySelector('[onclick="reloadRules()"]');
     try {
-      const btn = document.querySelector('[onclick="reloadRules()"]');
       if (btn) btn.textContent = 'Reloading...';
       const r = await fetch('/api/rule-engine/reload', { method: 'POST' });
       const data = await r.json();
-      if (data.ok && btn) {
-        setTimeout(() => { btn.textContent = 'Reload'; loadState(); }, 3000);
+      if (!data.ok) {
+        if (btn) btn.textContent = 'Reload';
+        return;
       }
-    } catch (e) { console.error('Reload error:', e); }
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        await new Promise(res => setTimeout(res, 500));
+        try {
+          const sResp = await fetch('/api/rule-engine/state');
+          const sData = await sResp.json();
+          const loaded = (sData.rules || []).length;
+          const onDisk = (sData.state && sData.state._rules_on_disk) || 0;
+          if (loaded === onDisk) break;
+        } catch (_) {}
+      }
+      await loadState();
+      if (btn) btn.textContent = 'Reload';
+    } catch (e) {
+      console.error('Reload error:', e);
+      if (btn) btn.textContent = 'Reload';
+    }
   };
 
   window.updateReloadBadge = function (rulesLoaded, rulesOnDisk) {

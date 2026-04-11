@@ -29,6 +29,12 @@ HA_TOKEN  = os.environ.get('HA_TOKEN', '')
 HA_ENTITY = 'switch.boiler_valve_switch_switch_1'
 AGENT_DIR = '/opt/Agents-agent/project'
 
+MQTT_HOST = '192.168.1.189'
+MQTT_PORT = 1883
+MQTT_USER = os.environ.get('MQTT_USER', '')
+MQTT_PASS = os.environ.get('MQTT_PASS', '')
+MQTT_CONSUMPTION_TOPIC = 'mur/home/device/boiler/event'
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -283,6 +289,7 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
     if not events:
         return
 
+    new_events = []
     with conn.cursor() as cur:
         for ev in events:
             cur.execute("""
@@ -291,6 +298,41 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
                 VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (start_ts) DO NOTHING
             """, ev)
+            if cur.rowcount == 1:
+                new_events.append(ev)
+
+    for ev in new_events:
+        _publish_consumption_event(ev)
+
+
+def _publish_consumption_event(ev):
+    """Publish a new consumption event to MQTT so rules can react.
+    Fails silently — MQTT broker downtime must never break detection."""
+    if not MQTT_USER or not MQTT_PASS:
+        return
+    try:
+        import json
+        import paho.mqtt.publish as publish
+        start_ts, end_ts, start_temp, end_temp, drop_c, duration_min = ev
+        payload = json.dumps({
+            "dps": {
+                "event_type":   "consumption",
+                "drop_c":       float(drop_c),
+                "duration_min": int(duration_min),
+                "start_ts":     start_ts.isoformat(),
+                "end_ts":       end_ts.isoformat(),
+                "start_temp":   float(start_temp),
+                "end_temp":     float(end_temp),
+            }
+        })
+        publish.single(
+            MQTT_CONSUMPTION_TOPIC, payload=payload, qos=0, retain=False,
+            hostname=MQTT_HOST, port=MQTT_PORT,
+            auth={'username': MQTT_USER, 'password': MQTT_PASS},
+        )
+        log.info(f'MQTT consumption event published: drop={drop_c}°C at {start_ts}')
+    except Exception as e:
+        log.warning(f'MQTT consumption publish failed (non-fatal): {e}')
 
 
 def write_result(conn, boiler_temp, panel_temp, valve_state,

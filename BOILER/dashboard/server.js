@@ -471,20 +471,20 @@ app.get('/api/consumptions', async (req, res) => {
   try {
     const r = (from && to)
       ? await db.query(`
-          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at
+          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms
           FROM boiler_consumptions
           WHERE start_ts >= $1 AND start_ts < $2
           ORDER BY start_ts ASC
         `, [from, to])
       : from
       ? await db.query(`
-          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at
+          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms
           FROM boiler_consumptions
           WHERE start_ts >= $1
           ORDER BY start_ts ASC
         `, [from])
       : await db.query(`
-          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at
+          SELECT id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms
           FROM boiler_consumptions
           ORDER BY start_ts DESC
           LIMIT $1
@@ -497,10 +497,14 @@ app.get('/api/consumptions/today', async (req, res) => {
   try {
     const r = await db.query(`
       SELECT
-        COUNT(*)                          AS count,
-        MAX(drop_c)                       AS max_drop,
-        ROUND(AVG(drop_c)::numeric, 1)    AS avg_drop,
-        MAX(start_ts)                     AS last_ts
+        COUNT(*)                                                   AS count,
+        COUNT(*) FILTER (WHERE cause = 'human')                    AS human,
+        COUNT(*) FILTER (WHERE cause = 'thermal')                  AS thermal,
+        COUNT(*) FILTER (WHERE cause = 'unknown')                  AS unknown,
+        COUNT(*) FILTER (WHERE cause IS NULL)                      AS unclassified,
+        MAX(drop_c)                                                AS max_drop,
+        ROUND(AVG(drop_c)::numeric, 1)                             AS avg_drop,
+        MAX(start_ts)                                              AS last_ts
       FROM boiler_consumptions
       WHERE start_ts >= (NOW() AT TIME ZONE 'Asia/Jerusalem')::date
     `);
@@ -750,6 +754,7 @@ async function runHealthChecks() {
   const [
     pgResult, haResult, pm2Result,
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
+    ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result,
   ] = await Promise.all([
@@ -785,6 +790,9 @@ async function runHealthChecks() {
       .then(r => ({ ok: parseInt(r.rows[0]?.n) === 0 })).catch(() => ({ ok: null })),
     sshCheck('192.168.1.138', { age: "echo $(($(date +%s) - $(date +%s -r /var/log/auto_scan.log 2>/dev/null || echo 0)))" })
       .then(r => { const age = parseInt(r.age); return { ok: r.ok && !isNaN(age) && age <= 120, age_sec: isNaN(age) ? null : age }; }).catch(() => ({ ok: false, age_sec: null })),
+    db.query('SELECT MAX(ts) AS last_ts FROM rule_engine_log').then(r => r.rows[0]?.last_ts || null).catch(() => null),
+    db.query(`SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND affected_agent = 'rule-engine' AND alert_type IN ('service_down','service_ssh_failed')`)
+      .then(r => ({ ok: parseInt(r.rows[0]?.n) === 0 })).catch(() => ({ ok: null })),
     db.query(`
       SELECT j.id, j.name, j.max_age_hours,
              MAX(l.started_at) FILTER (WHERE l.status='ok') AS last_ok
@@ -838,6 +846,15 @@ async function runHealthChecks() {
   r.orchestrator_last_run = { last_ts: orchLogResult, age_min: orchAge !== null ? Math.round(orchAge) : null, ok: orchAge !== null && orchAge <= 70 };
   const bdAge = boilerDecisionResult.lastTs ? (Date.now() - new Date(boilerDecisionResult.lastTs).getTime()) / 60000 : null;
   r.boiler_last_decision = { last_ts: boilerDecisionResult.lastTs, age_min: bdAge !== null ? Math.round(bdAge) : null, decision: boilerDecisionResult.decision, ok: bdAge !== null && bdAge <= boilerDecisionResult.runInterval * 3 };
+  const reAge = ruleEngineHeartbeat ? (Date.now() - new Date(ruleEngineHeartbeat).getTime()) / 60000 : null;
+  const reHeartbeatOk = reAge !== null && reAge <= 3;
+  r.rule_engine = {
+    last_ts: ruleEngineHeartbeat,
+    age_min: reAge !== null ? Math.round(reAge * 10) / 10 : null,
+    service_ok: ruleEngineServiceAlerts.ok,
+    heartbeat_ok: reHeartbeatOk,
+    ok: ruleEngineServiceAlerts.ok === true && reHeartbeatOk,
+  };
   r.active_alerts = { count: alertsResult.n, worst: alertsResult.worst, ok: alertsResult.n === 0 };
 
   r.cached_at = new Date().toISOString();

@@ -140,6 +140,14 @@
           <label>Events</label>
           <div class="value" id="usage-count">—</div>
         </div>
+        <div class="status-item" style="grid-column: 2; text-align: center;">
+          <label>Classification</label>
+          <div class="value small" id="usage-classification" style="display:flex; gap:8px; justify-content:center; font-size:0.78rem;">
+            <span id="usage-human"   style="color:#2e7d32;">Human: —</span>
+            <span id="usage-thermal" style="color:#1565c0;">Thermal: —</span>
+            <span id="usage-unknown" style="color:#b8860b;">Unknown: —</span>
+          </div>
+        </div>
         <div class="status-item" style="grid-column: 3; border-left: 1px solid #d0cbc4; margin-left: -16px; padding-left: 16px; text-align: center;">
           <label>Largest Drop</label>
           <div class="value small" id="usage-max-drop">—</div>
@@ -384,6 +392,8 @@
               <th>Temp After</th>
               <th>Drop (°C)</th>
               <th>Duration (min)</th>
+              <th>Cause</th>
+              <th>Rooms</th>
             </tr>
           </thead>
           <tbody id="consumption-body"></tbody>

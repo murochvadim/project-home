@@ -339,8 +339,7 @@ class RuleEngine:
             'ts': datetime.now(tz=TZ).isoformat(),
         }
 
-        # Snapshot shared state before rules run (deep copy for reliable comparison)
-        shared_before = copy.deepcopy(self.state.shared)
+        shared_before = self.state.shared.copy()
 
         # Clear group-active tracking for this event cycle
         self._group_active.clear()
@@ -367,8 +366,7 @@ class RuleEngine:
                           rule_name, group, active['rule'])
                 continue
 
-            # Snapshot shared state before this rule
-            rule_shared_before = copy.deepcopy(self.state.shared)
+            rule_shared_before = self.state.shared.copy()
 
             commands = self._evaluate_rule(rule, event)
             for cmd in commands:
@@ -625,10 +623,7 @@ class RuleEngine:
         now = time.time()
         entries = self._command_log.setdefault(device_id, [])
 
-        # Purge entries older than 10 seconds
-        self._command_log[device_id] = [(ts, a) for ts, a in entries if now - ts < 10]
-        entries = self._command_log[device_id]
-
+        entries[:] = [(ts, a) for ts, a in entries if now - ts < 10]
         entries.append((now, action))
 
         same_action_count = sum(1 for _, a in entries if a == action)
@@ -897,6 +892,15 @@ class RuleEngine:
                     if self.state.shared.get('_reload_request') == 'pending':
                         self._reload_rules()
                         self.state.shared['_reload_request'] = 'done'
+                        # Explicit DELETE — _reload_request is in _DASHBOARD_KEYS
+                        # so save_shared_state() skips it; without this, the flag
+                        # stays 'pending' in DB and triggers reload every cycle.
+                        try:
+                            self.state.db_execute(
+                                "DELETE FROM rule_engine_state WHERE key = '_reload_request'"
+                            )
+                        except Exception:
+                            log.warning('Failed to clear _reload_request flag', exc_info=True)
                     # Count rule files on disk for dashboard "new rule" badge
                     rules_dir = os.path.join(os.path.dirname(__file__), 'rules')
                     disk_count = len([f for f in os.listdir(rules_dir)

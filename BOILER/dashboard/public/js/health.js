@@ -146,6 +146,18 @@ function renderStatus(r) {
       ? `<span style="color:#888; font-size:0.85rem;">⬤ unknown</span>`
       : dot(voiceOk) + (!voiceOk ? `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">whisper-http down</div>` : '');
 
+  const re = r.rule_engine;
+  if (re) {
+    const color = re.ok ? '#7a9f5a' : '#b55e5e';
+    let label;
+    if (re.service_ok === false) label = '⬤ Service down';
+    else if (!re.heartbeat_ok)   label = '⬤ Stale heartbeat';
+    else                          label = '⬤ OK';
+    document.getElementById('svc-rule-engine').innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${label}</span>` +
+      (re.age_min != null ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">heartbeat ${re.age_min}m ago</div>` : '');
+  }
+
   const ma = r.media_agents;
   if (ma) {
     const agents = [
