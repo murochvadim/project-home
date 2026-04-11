@@ -1590,7 +1590,7 @@ app.post('/api/rule-engine/reload', async (_req, res) => {
 
 app.post('/api/rule-engine/test', async (req, res) => {
   try {
-    const { rule_name } = req.body;
+    const { rule_name, force } = req.body;
     if (!rule_name) return res.status(400).json({ error: 'Missing rule_name' });
     // Clear previous result
     await db.query(
@@ -1598,7 +1598,7 @@ app.post('/api/rule-engine/test', async (req, res) => {
        ON CONFLICT (key) DO UPDATE SET value = 'null'::jsonb, updated_at = NOW()`
     );
     // Publish test request via MQTT (instant delivery)
-    mqttClient.publish('mur/home/rule-engine/test', JSON.stringify({ rule_name }));
+    mqttClient.publish('mur/home/rule-engine/test', JSON.stringify({ rule_name, force: !!force }));
     // Poll for result (up to 5s)
     for (let i = 0; i < 10; i++) {
       await new Promise(r => setTimeout(r, 500));

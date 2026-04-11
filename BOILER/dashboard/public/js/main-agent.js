@@ -120,21 +120,27 @@
     if (e.target === this) closeRuleTimePopup();
   });
 
-  window.testRule = async function (name) {
+  window.testRule = async function (name, force) {
     const el = document.getElementById('test-result');
     if (!el) return;
     el.style.display = 'block';
     el.style.background = '#f0ebe3';
     el.style.borderLeft = '4px solid #888';
-    el.innerHTML = `Testing <b>${escHtml(name)}</b>...`;
+    el.innerHTML = force ? `Force-running <b>${escHtml(name)}</b>...` : `Testing <b>${escHtml(name)}</b>...`;
     try {
       const r = await fetch('/api/rule-engine/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rule_name: name }),
+        body: JSON.stringify({ rule_name: name, force: !!force }),
       });
       const data = await r.json();
-      if (data.status === 'would_fire') {
+      if (data.status === 'force_fired') {
+        el.style.background = 'rgba(230,126,34,0.1)';
+        el.style.borderLeft = '4px solid #e67e22';
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#e67e22;font-weight:600;">FORCE FIRED</span><br>` +
+          (data.commands || []).map(c => `&nbsp;&nbsp;→ ${escHtml(c)}`).join('<br>') +
+          `<br><span style="color:#888;font-size:0.75rem;">Commands dispatched to device</span>`;
+      } else if (data.status === 'would_fire') {
         el.style.background = 'rgba(39,174,96,0.1)';
         el.style.borderLeft = '4px solid #27ae60';
         el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#27ae60;font-weight:600;">WOULD FIRE</span><br>` +
@@ -323,7 +329,10 @@
                 <span class="slider"></span>
               </label>
             </td>
-            <td><button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 8px;" title="Dry-run test">Test</button></td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',false)" style="font-size:0.68rem;padding:2px 6px;" title="Dry-run test">Test</button>
+              <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#e67e22;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
+            </td>
           </tr>`;
         }).join('');
       }

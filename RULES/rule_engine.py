@@ -685,8 +685,12 @@ class RuleEngine:
                  list(removed) if removed else 'none')
 
     def _test_rule(self, payload):
-        """Dry-run a rule against current state. Write result to DB for dashboard."""
+        """Test a rule. Two modes:
+        - force=false (default): dry-run, shows what state looks like, no side effects
+        - force=true: resets cooldown timers, runs evaluate, dispatches commands for real
+        """
         rule_name = payload.get('rule_name', '') if isinstance(payload, dict) else ''
+        force = payload.get('force', False) if isinstance(payload, dict) else False
         if not rule_name:
             log.warning("Test request missing rule_name")
             return
@@ -698,31 +702,20 @@ class RuleEngine:
                 rule = m
                 break
         if not rule:
-            result = {'rule': rule_name, 'status': 'error', 'reason': f'Rule not found: {rule_name}'}
-            self.state.db_execute(
-                "INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_test_result', %s::jsonb, NOW()) "
-                "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
-                (json.dumps(result), json.dumps(result)),
-            )
+            self._write_test_result({'rule': rule_name, 'status': 'error', 'reason': 'Rule not found'})
             return
 
-        log.info("Testing rule '%s' (dry run)", rule_name)
-
-        # Check conditions first
+        # Check conditions
         ok, reason = self._check_conditions(rule)
         if not ok:
-            result = {
-                'rule': rule_name, 'status': 'skip', 'reason': f'Condition failed: {reason}',
+            self._write_test_result({
+                'rule': rule_name, 'status': 'skip',
+                'reason': f'Condition failed: {reason}',
                 'ts': datetime.now(tz=TZ).isoformat(),
-            }
-            self.state.db_execute(
-                "INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_test_result', %s::jsonb, NOW()) "
-                "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
-                (json.dumps(result), json.dumps(result)),
-            )
+            })
             return
 
-        # Build synthetic event from last motion device or first presence device
+        # Build synthetic event from first presence device
         test_device_id = ''
         for did, dev in self.state.devices.items():
             if dev.get('device_type') == 'presence':
@@ -735,51 +728,103 @@ class RuleEngine:
             'ts': datetime.now(tz=TZ).isoformat(),
         }
 
-        # Evaluate (dry run — no state changes)
-        shared_backup = copy.deepcopy(self.state.shared)
-        try:
+        if force:
+            # Force mode: reset cooldown timers, run for real, dispatch commands
+            log.info("Force-testing rule '%s'", rule_name)
+            # Reset common cooldown timers
+            with self.state.lock:
+                timer_keys = [k for k in self.state._timers if 'last_push' in k or 'cooldown' in k]
+                saved_timers = {k: self.state._timers[k] for k in timer_keys}
+                for k in timer_keys:
+                    self.state._timers[k] = 0  # ancient timestamp = cooldown expired
+
             commands = self._evaluate_rule(rule, event)
-        finally:
-            # Restore shared state (undo any changes the rule made)
-            self.state.shared = shared_backup
 
-        if commands:
-            cmd_strs = [f'{c.get("action","?")}' +
-                        (f': {c.get("preset_name","")}' if c.get('preset_name') else '') +
-                        (f' vars={c.get("vars",{})}' if c.get('vars') else '')
-                        for c in commands]
-            result = {
-                'rule': rule_name, 'status': 'would_fire',
-                'commands': cmd_strs,
-                'device': test_device_id,
-                'ts': datetime.now(tz=TZ).isoformat(),
-            }
+            # Dispatch for real
+            for cmd in commands:
+                self._dispatch_command(cmd, rule_name)
+
+            if commands:
+                cmd_strs = [self._format_cmd(c) for c in commands]
+                self._write_test_result({
+                    'rule': rule_name, 'status': 'force_fired',
+                    'commands': cmd_strs, 'device': test_device_id,
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                })
+            else:
+                # Even with timers reset, rule didn't fire — other conditions blocking
+                # Restore timers since nothing happened
+                with self.state.lock:
+                    self.state._timers.update(saved_timers)
+                hints = self._collect_state_hints()
+                self._write_test_result({
+                    'rule': rule_name, 'status': 'no_action',
+                    'reason': 'Rule did not fire even with cooldowns reset — check rule logic conditions',
+                    'state': hints['state'], 'timers': hints['timers'],
+                    'device': test_device_id,
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                })
         else:
-            # Check why it didn't fire — inspect timers
-            hints = []
-            for timer_name in ['pixoo_last_push', 'last_motion']:
-                val = self.state.get_timer(timer_name)
-                if val != float('inf'):
-                    hints.append(f'{timer_name}: {val:.0f}s ago')
-            result = {
-                'rule': rule_name, 'status': 'no_action',
-                'reason': 'Rule evaluated but returned no commands',
-                'state': {
-                    'activity_level': self.state.shared.get('activity_level'),
-                    'people_home': self.state.shared.get('people_home'),
-                    'last_motion_room': self.state.shared.get('last_motion_room'),
-                },
-                'timers': hints,
-                'device': test_device_id,
-                'ts': datetime.now(tz=TZ).isoformat(),
-            }
+            # Dry-run mode: no side effects
+            log.info("Testing rule '%s' (dry run)", rule_name)
+            shared_backup = copy.deepcopy(self.state.shared)
+            try:
+                commands = self._evaluate_rule(rule, event)
+            finally:
+                self.state.shared = shared_backup
 
+            if commands:
+                cmd_strs = [self._format_cmd(c) for c in commands]
+                self._write_test_result({
+                    'rule': rule_name, 'status': 'would_fire',
+                    'commands': cmd_strs, 'device': test_device_id,
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                })
+            else:
+                hints = self._collect_state_hints()
+                self._write_test_result({
+                    'rule': rule_name, 'status': 'no_action',
+                    'reason': 'Rule evaluated but returned no commands',
+                    'state': hints['state'], 'timers': hints['timers'],
+                    'device': test_device_id,
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                })
+
+        log.info("Test result for '%s': %s (force=%s)", rule_name,
+                 'fired' if force and commands else 'no_action', force)
+
+    def _write_test_result(self, result):
+        """Write test result to DB for dashboard polling."""
         self.state.db_execute(
             "INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_test_result', %s::jsonb, NOW()) "
             "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
             (json.dumps(result), json.dumps(result)),
         )
-        log.info("Test result for '%s': %s", rule_name, result.get('status'))
+
+    def _format_cmd(self, cmd):
+        """Format a command dict for test result display."""
+        s = cmd.get('action', '?')
+        if cmd.get('preset_name'):
+            s += f': {cmd["preset_name"]}'
+        if cmd.get('vars'):
+            s += f' vars={cmd["vars"]}'
+        return s
+
+    def _collect_state_hints(self):
+        """Collect current state + timer info for test result."""
+        hints = []
+        for timer_name in ['pixoo_last_push', 'last_motion', 'room_active:Corridor', 'room_active:Entrance']:
+            val = self.state.get_timer(timer_name)
+            if val != float('inf'):
+                hints.append(f'{timer_name}: {val:.0f}s ago')
+        return {
+            'state': {
+                'activity_level': self.state.shared.get('activity_level'),
+                'people_home': self.state.shared.get('people_home'),
+                'last_motion_room': self.state.shared.get('last_motion_room'),
+            },
+            'timers': hints,
+        }
 
     # ------------------------------------------------------------------
     # Computed state publish (debounced)
