@@ -284,14 +284,25 @@
         el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#27ae60;font-weight:600;">WOULD FIRE</span><br>` +
           (data.commands || []).map(c => `&nbsp;&nbsp;→ ${escHtml(c)}`).join('<br>') +
           `<br><span style="color:#888;font-size:0.75rem;">Device: ${escHtml(data.device || '—')}</span>`;
+      } else if (data.status === 'state_updated') {
+        el.style.background = 'rgba(52,152,219,0.1)';
+        el.style.borderLeft = '4px solid #3498db';
+        const ch = data.state_changes || {};
+        const chStr = Object.entries(ch).map(([k,v]) =>
+          `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`
+        ).join(', ');
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#3498db;font-weight:600;">STATE UPDATED</span><br>` +
+          `<span style="color:#888;font-size:0.75rem;">${escHtml(data.reason || '')}</span><br>` +
+          (chStr ? `<span style="color:#555;font-size:0.75rem;">Changes: ${escHtml(chStr)}</span><br>` : '') +
+          `<span style="color:#888;font-size:0.75rem;">Device: ${escHtml(data.device || '—')}</span>`;
       } else if (data.status === 'no_action') {
         el.style.background = 'rgba(149,165,166,0.1)';
         el.style.borderLeft = '4px solid #95a5a6';
         const state = data.state || {};
         const stateStr = Object.entries(state).map(([k,v]) => `${k}=${v}`).join(', ');
         const timerStr = (data.timers || []).join(', ');
-        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#95a5a6;font-weight:600;">NO ACTION</span><br>` +
-          `<span style="color:#888;font-size:0.75rem;">${escHtml(data.reason || '')}</span><br>` +
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#95a5a6;font-weight:600;">NO ACTION · RAN</span><br>` +
+          `<span style="color:#888;font-size:0.75rem;">Rule executed successfully but would not change state or emit commands</span><br>` +
           (stateStr ? `<span style="color:#888;font-size:0.75rem;">State: ${escHtml(stateStr)}</span><br>` : '') +
           (timerStr ? `<span style="color:#888;font-size:0.75rem;">Timers: ${escHtml(timerStr)}</span>` : '');
       } else if (data.status === 'skip') {

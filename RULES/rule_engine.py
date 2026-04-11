@@ -54,6 +54,9 @@ class RuleEngine:
         self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
         self._rule_originals = {}       # rule_name -> {priority, group, conditions} from file
         self._rule_errors = {}          # rule_name -> consecutive error count
+        self._rule_load_errors = {}     # filename -> error message (for invalid rule files)
+        self._sorted_rules = []         # global DAG-sorted order (computed at load time)
+        self._save_failures = 0         # consecutive save_shared_state failures
         self._stop = threading.Event()
         self._last_computed_publish = 0
 
@@ -69,6 +72,7 @@ class RuleEngine:
             return
 
         required_keys = {'name', 'description', 'triggers', 'controls', 'category'}
+        self._rule_load_errors = {}  # reset on every load
 
         for filename in sorted(os.listdir(rules_dir)):
             if not filename.endswith('.py') or filename.startswith('_'):
@@ -81,23 +85,35 @@ class RuleEngine:
                 spec = importlib.util.spec_from_file_location(module_name, filepath)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-            except Exception:
-                log.error('Failed to import rule %s', filename, exc_info=True)
+            except Exception as e:
+                msg = f'import failed: {type(e).__name__}: {e}'
+                log.error('Failed to import rule %s: %s', filename, msg, exc_info=True)
+                self._rule_load_errors[filename] = msg
+                self._raise_load_error_alert(filename, msg)
                 continue
 
             # Validate RULE dict
             rule_dict = getattr(module, 'RULE', None)
             if not isinstance(rule_dict, dict):
-                log.warning('Rule %s missing RULE dict — skipped', filename)
+                msg = 'missing RULE dict'
+                log.warning('Rule %s %s — skipped', filename, msg)
+                self._rule_load_errors[filename] = msg
+                self._raise_load_error_alert(filename, msg)
                 continue
 
             missing = required_keys - set(rule_dict.keys())
             if missing:
-                log.warning('Rule %s RULE dict missing keys %s — skipped', filename, missing)
+                msg = f'RULE dict missing keys {sorted(missing)}'
+                log.warning('Rule %s %s — skipped', filename, msg)
+                self._rule_load_errors[filename] = msg
+                self._raise_load_error_alert(filename, msg)
                 continue
 
             if not callable(getattr(module, 'evaluate', None)):
-                log.warning('Rule %s missing evaluate() callable — skipped', filename)
+                msg = 'missing evaluate() callable'
+                log.warning('Rule %s %s — skipped', filename, msg)
+                self._rule_load_errors[filename] = msg
+                self._raise_load_error_alert(filename, msg)
                 continue
 
             # Assign rule ID and parse optional fields with defaults
@@ -128,10 +144,29 @@ class RuleEngine:
         # Apply DB overrides (priority, conditions, group — set from dashboard)
         self._apply_overrides()
 
+        # Build global dependency-sorted order once. Per-event dispatch filters
+        # from this list so depends_on is honored even across rule subsets.
+        self._sorted_rules = self._sort_rules(self.rules)
+
+        # Expose load errors for dashboard
+        self.state.shared['_rule_load_errors'] = self._rule_load_errors
+
         # Store rules metadata in shared state for dashboard
         self._update_rules_metadata()
 
-        log.info('Loaded %d rules (%d disabled)', len(self.rules), len(self._disabled_rules))
+        log.info('Loaded %d rules (%d disabled, %d load errors)',
+                 len(self.rules), len(self._disabled_rules), len(self._rule_load_errors))
+
+    def _raise_load_error_alert(self, filename, msg):
+        """Write a system_alerts row for a rule file that failed to load."""
+        try:
+            self.state.db_execute(
+                "INSERT INTO system_alerts (ts, severity, alert_type, affected_agent, message) "
+                "VALUES (NOW(), 'error', 'rule_load_error', 'rule_engine', %s)",
+                (f"Rule file {filename}: {msg[:200]}",),
+            )
+        except Exception:
+            log.warning('Failed to write rule_load_error alert', exc_info=True)
 
     def _index_rules(self):
         """Build trigger_index mapping device_id -> [rule_module, ...]."""
@@ -329,8 +364,8 @@ class RuleEngine:
         if isinstance(dps, dict):
             self.state.update_device(device_id, dps, source=source)
 
-        # Find matching rules
-        matching = self.trigger_index.get(device_id, []) + self.trigger_index.get('*', [])
+        # Find matching rules (device-specific + wildcard)
+        matching_set = set(self.trigger_index.get(device_id, []) + self.trigger_index.get('*', []))
 
         event = {
             'device_id': device_id,
@@ -344,8 +379,10 @@ class RuleEngine:
         # Clear group-active tracking for this event cycle
         self._group_active.clear()
 
-        # Sort by dependency + priority, then evaluate
-        sorted_matching = self._sort_rules(matching)
+        # Filter from pre-sorted global list so depends_on is respected even
+        # across rule subsets (a rule may depend on a rule that isn't triggered
+        # by this event — the dependency order from load time still applies).
+        sorted_matching = [r for r in self._sorted_rules if r in matching_set]
 
         for rule in sorted_matching:
             rule_name = rule.RULE['name']
@@ -401,10 +438,28 @@ class RuleEngine:
 
         # Immediate DB save if shared state changed (responsive presence updates)
         if self.state.shared != shared_before:
-            try:
-                self.state.save_shared_state()
-            except Exception:
-                log.warning('Immediate state save failed', exc_info=True)
+            self._save_state_tracked()
+
+    def _save_state_tracked(self):
+        """Wrap save_shared_state with consecutive-failure tracking + alerting."""
+        try:
+            self.state.save_shared_state()
+            if self._save_failures:
+                log.info('save_shared_state recovered after %d failures', self._save_failures)
+            self._save_failures = 0
+        except Exception as e:
+            self._save_failures += 1
+            log.warning('save_shared_state failed (%d consecutive): %s',
+                        self._save_failures, e, exc_info=True)
+            if self._save_failures == 5:
+                try:
+                    self.state.db_execute(
+                        "INSERT INTO system_alerts (ts, severity, alert_type, affected_agent, message) "
+                        "VALUES (NOW(), 'error', 'rule_engine_state_save_failed', 'rule_engine', %s)",
+                        (f"save_shared_state failed 5 consecutive times — shared state may be stale. Last error: {str(e)[:200]}",),
+                    )
+                except Exception:
+                    log.error('Failed to raise save-failure alert', exc_info=True)
 
     # ------------------------------------------------------------------
     # Rule event logging
@@ -522,6 +577,12 @@ class RuleEngine:
             log.error("Rule '%s' failed: %s", name, e, exc_info=True)
             # Track consecutive errors
             self._rule_errors[name] = self._rule_errors.get(name, 0) + 1
+            # Log to rule_events so dashboard shows the failure
+            self._log_rule_event(
+                name, event.get('device_id', ''), event.get('source', ''),
+                'error', f'{type(e).__name__}: {str(e)[:250]}',
+                (time.time() - t0) * 1000,
+            )
             if self._rule_errors[name] >= self._MAX_CONSECUTIVE_ERRORS:
                 self._auto_disable_rule(name, str(e))
             return []
@@ -751,22 +812,44 @@ class RuleEngine:
             self.state.shared['activity_level'] = 'active'
             self.state.shared['_pixoo_resumed'] = 'yes'
 
-            # Build event that matches rule triggers: corridor presence with dps 1=true
-            force_device_id = ''
-            for did, dev in self.state.devices.items():
-                if dev.get('device_type') == 'presence' and dev.get('room', '').lower() in ('corridor', 'entrance'):
-                    force_device_id = did
-                    break
-            if not force_device_id:
-                force_device_id = test_device_id
-            force_event = {
-                'device_id': force_device_id,
-                'dps': {'1': True},
-                'source': 'force_test',
-                'ts': datetime.now(tz=TZ).isoformat(),
-            }
+            # Build event — honor RULE["test_event"] if rule declares one,
+            # otherwise fall back to corridor/entrance presence with dps 1=true
+            # (which matches typical presence/switch rules).
+            custom_test = rule.RULE.get('test_event')
+            if isinstance(custom_test, dict):
+                force_device_id = custom_test.get('device_id', '')
+                force_event = {
+                    'device_id': force_device_id,
+                    'dps':       custom_test.get('dps', {}),
+                    'source':    custom_test.get('source', 'event'),
+                    'ts':        datetime.now(tz=TZ).isoformat(),
+                }
+            else:
+                force_device_id = ''
+                for did, dev in self.state.devices.items():
+                    if dev.get('device_type') == 'presence' and dev.get('room', '').lower() in ('corridor', 'entrance'):
+                        force_device_id = did
+                        break
+                if not force_device_id:
+                    force_device_id = test_device_id
+                force_event = {
+                    'device_id': force_device_id,
+                    'dps': {'1': True},
+                    'source': 'force_test',
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                }
 
             commands = self._evaluate_rule(rule, force_event)
+
+            # Detect state mutations (compare against the saved snapshot)
+            changed_keys = [
+                k for k in self.state.shared
+                if not k.startswith('_')
+                and self.state.shared.get(k) != saved_shared.get(k)
+            ]
+            state_diff = {
+                k: self.state.shared.get(k) for k in changed_keys
+            } if changed_keys else {}
 
             # Dispatch for real
             for cmd in commands:
@@ -782,6 +865,15 @@ class RuleEngine:
                 self._write_test_result({
                     'rule': rule_name, 'status': 'force_fired',
                     'commands': cmd_strs, 'device': force_device_id,
+                    'state_changes': state_diff,
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                })
+            elif state_diff:
+                self._write_test_result({
+                    'rule': rule_name, 'status': 'state_updated',
+                    'reason': f'Rule updated {len(state_diff)} state key(s) (no device commands)',
+                    'state_changes': state_diff,
+                    'device': force_device_id,
                     'ts': datetime.now(tz=TZ).isoformat(),
                 })
             else:
@@ -799,6 +891,15 @@ class RuleEngine:
             shared_backup = copy.deepcopy(self.state.shared)
             try:
                 commands = self._evaluate_rule(rule, event)
+                # Detect user-visible state mutations (ignore internal `_` prefixed)
+                changed_keys = [
+                    k for k in self.state.shared
+                    if not k.startswith('_')
+                    and self.state.shared.get(k) != shared_backup.get(k)
+                ]
+                state_diff = {
+                    k: self.state.shared.get(k) for k in changed_keys
+                } if changed_keys else {}
             finally:
                 self.state.shared = shared_backup
 
@@ -807,13 +908,23 @@ class RuleEngine:
                 self._write_test_result({
                     'rule': rule_name, 'status': 'would_fire',
                     'commands': cmd_strs, 'device': test_device_id,
+                    'state_changes': state_diff,
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                })
+            elif state_diff:
+                # Info rule: no commands but state was updated — success
+                self._write_test_result({
+                    'rule': rule_name, 'status': 'state_updated',
+                    'reason': f'Rule updated {len(state_diff)} state key(s)',
+                    'state_changes': state_diff,
+                    'device': test_device_id,
                     'ts': datetime.now(tz=TZ).isoformat(),
                 })
             else:
                 hints = self._collect_state_hints()
                 self._write_test_result({
                     'rule': rule_name, 'status': 'no_action',
-                    'reason': 'Rule evaluated but returned no commands',
+                    'reason': 'Rule evaluated but returned no commands and no state changes',
                     'state': hints['state'], 'timers': hints['timers'],
                     'device': test_device_id,
                     'ts': datetime.now(tz=TZ).isoformat(),
@@ -918,8 +1029,9 @@ class RuleEngine:
                     disk_count = len([f for f in os.listdir(rules_dir)
                                      if f.endswith('.py') and not f.startswith('_')]) if os.path.isdir(rules_dir) else 0
                     self.state.shared['_rules_on_disk'] = disk_count
+                    self.state.shared['_rule_stats'] = self._rule_stats
                     self._update_rules_metadata()
-                    self.state.save_shared_state()
+                    self._save_state_tracked()
                 except Exception:
                     log.warning('Failed to sync shared state', exc_info=True)
                 last_save = now
@@ -980,6 +1092,17 @@ class RuleEngine:
         # Load state from DB
         self.state.load_from_db()
         self.state.load_shared_state()
+
+        # Restore rule stats from last run (count, total_ms, max_ms, last_fired)
+        stored_stats = self.state.shared.get('_rule_stats')
+        if isinstance(stored_stats, str):
+            try:
+                stored_stats = json.loads(stored_stats)
+            except (json.JSONDecodeError, TypeError):
+                stored_stats = {}
+        if isinstance(stored_stats, dict):
+            self._rule_stats = stored_stats
+            log.info('Restored stats for %d rules', len(stored_stats))
 
         # Load and index rules
         self.load_rules()
