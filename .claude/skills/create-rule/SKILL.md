@@ -78,6 +78,22 @@ Ask which conditions apply (can pick multiple):
 - **Activity level** — only when activity_level equals a value
 - **None** — always active
 
+## Step 6.5: Testable payload (for custom-event rules)
+
+Ask: does this rule react to a **custom MQTT payload** (not a plain presence or switch event)? If yes, the dashboard's **Test** button needs a `test_event` template in the RULE dict — otherwise Test will synthesize a presence sensor event that won't match the rule's conditions and the result will always be `no_action`.
+
+If yes, ask the user to describe a realistic payload and add it to the RULE dict:
+
+```python
+"test_event": {
+    "device_id": "<device the rule listens for>",
+    "source":    "event",   # or whatever source the real publisher uses
+    "dps":       { ... payload that would cause the rule to fire ... },
+},
+```
+
+If the rule only reacts to presence/switch events, skip this step — the default test synthesis is enough.
+
 ## Step 7: Group & Priority
 
 Ask:

@@ -710,18 +710,30 @@ class RuleEngine:
             })
             return
 
-        # Build synthetic event from first presence device
-        test_device_id = ''
-        for did, dev in self.state.devices.items():
-            if dev.get('device_type') == 'presence':
-                test_device_id = did
-                break
-        event = {
-            'device_id': test_device_id,
-            'dps': self.state.devices.get(test_device_id, {}).get('dps', {}),
-            'source': 'test',
-            'ts': datetime.now(tz=TZ).isoformat(),
-        }
+        # Build synthetic event. Rules that react to custom payloads can
+        # declare a RULE["test_event"] template; otherwise fall back to the
+        # first presence device's current state (works for presence/switch rules).
+        custom_test = rule.RULE.get('test_event')
+        if isinstance(custom_test, dict):
+            event = {
+                'device_id': custom_test.get('device_id', ''),
+                'dps':       custom_test.get('dps', {}),
+                'source':    custom_test.get('source', 'test'),
+                'ts':        datetime.now(tz=TZ).isoformat(),
+            }
+            test_device_id = event['device_id']
+        else:
+            test_device_id = ''
+            for did, dev in self.state.devices.items():
+                if dev.get('device_type') == 'presence':
+                    test_device_id = did
+                    break
+            event = {
+                'device_id': test_device_id,
+                'dps':       self.state.devices.get(test_device_id, {}).get('dps', {}),
+                'source':    'test',
+                'ts':        datetime.now(tz=TZ).isoformat(),
+            }
 
         if force:
             # Force mode: fake all conditions so rule fires, dispatch for real

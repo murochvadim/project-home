@@ -18,6 +18,21 @@ RULE = {
     "group": "boiler",
     "priority": 10,
     "depends_on": ["Home Activity"],
+    # Payload used by the dashboard Test button — mirrors what the
+    # boiler agent publishes on a real detection so classification runs.
+    "test_event": {
+        "device_id": "boiler",
+        "source": "event",
+        "dps": {
+            "event_type":   "consumption",
+            "drop_c":       5.0,
+            "duration_min": 6,
+            "start_ts":     "1970-01-01T00:00:00+00:00",
+            "end_ts":       "1970-01-01T00:06:00+00:00",
+            "start_temp":   50.0,
+            "end_temp":     45.0,
+        },
+    },
 }
 
 

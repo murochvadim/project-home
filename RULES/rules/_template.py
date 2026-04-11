@@ -9,6 +9,15 @@ RULE = {
     "triggers": [],     # device IDs that trigger this rule (or ["*"] for any event)
     "controls": [],     # device IDs this rule may command (empty = read-only)
     "category": "info", # lighting, security, comfort, info
+    # Optional — only needed if the rule reacts to a custom event payload
+    # (not a normal presence/switch event). The dashboard Test button will
+    # use this payload to synthesize an event so the rule actually fires.
+    # Without it, Test defaults to the first presence device's current state.
+    # "test_event": {
+    #     "device_id": "boiler",
+    #     "source":    "event",
+    #     "dps":       {"event_type": "consumption", "drop_c": 5.0, ...},
+    # },
 }
 
 
