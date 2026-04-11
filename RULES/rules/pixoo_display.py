@@ -14,6 +14,9 @@ RULE = {
     "triggers": ["*"],
     "controls": [],
     "category": "display",
+    "group": "pixoo",
+    "priority": 10,
+    "depends_on": ["Home Activity", "People Home"],
 }
 
 

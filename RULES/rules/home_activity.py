@@ -19,6 +19,8 @@ RULE = {
     "triggers": ["*"],
     "controls": [],
     "category": "info",
+    "group": "info",
+    "priority": 1,
 }
 
 

@@ -1535,6 +1535,44 @@ app.post('/api/rule-engine/toggle', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/rule-engine/override', async (req, res) => {
+  try {
+    const { name, priority, conditions } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing rule name' });
+    const r = await db.query("SELECT value FROM rule_engine_state WHERE key = '_rule_overrides'");
+    let overrides = (r.rows.length > 0 && typeof r.rows[0].value === 'object') ? r.rows[0].value : {};
+    if (!overrides[name]) overrides[name] = {};
+    if (priority !== undefined) overrides[name].priority = parseInt(priority);
+    if (conditions !== undefined) {
+      if (!overrides[name].conditions) overrides[name].conditions = {};
+      Object.assign(overrides[name].conditions, conditions);
+    }
+    // Remove empty overrides
+    if (Object.keys(overrides[name]).length === 0 ||
+        (Object.keys(overrides[name]).length === 1 && overrides[name].conditions && Object.keys(overrides[name].conditions).length === 0)) {
+      delete overrides[name];
+    }
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_rule_overrides', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()`,
+      [JSON.stringify(overrides)]
+    );
+    res.json({ ok: true, overrides });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/rule-engine/reload', async (_req, res) => {
+  try {
+    // Publish reload command to MQTT via pixoo service (it has MQTT access)
+    // Actually, use DB flag — rule engine checks it on next cycle
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_reload_request', '"pending"'::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = '"pending"'::jsonb, updated_at = NOW()`
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Start ────────────────────────────────────────────────────
 async function ensureSchema() {
   await db.query(`

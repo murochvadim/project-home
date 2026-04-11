@@ -103,16 +103,40 @@
         <span>Heartbeat: <span class="eval" id="last-heartbeat">—</span></span>
         <span>Rules: <span class="eval" id="last-decision">—</span></span>
         <span style="flex:1"></span>
-        <span id="mqtt-health" style="font-size:0.78rem;color:#444;margin-right:40px;">—</span>
+        <span id="mqtt-health" style="font-size:0.78rem;color:#444;margin-right:12px;">—</span>
+        <button class="btn btn-secondary btn-sm" onclick="reloadRules()" style="font-size:0.72rem;padding:2px 10px;" title="Reload rules from disk (no restart)">Reload</button>
       </div>
       <table class="rules-table">
         <thead>
-          <tr><th>Name</th><th>Description</th><th>Category</th><th>Runs</th><th>Avg</th><th>Max</th><th>Enabled</th></tr>
+          <tr><th>#</th><th></th><th>Name</th><th>Group</th><th>Pri</th><th>Time</th><th>Runs</th><th>Avg</th><th>Max</th><th>Last Fired</th><th>Enabled</th></tr>
         </thead>
         <tbody id="rules-body">
           <tr><td colspan="4" style="color:#aaa">Loading...</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Rule Time Popup -->
+    <div id="rule-time-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.3);z-index:1000;justify-content:center;align-items:center;">
+      <div style="background:#fff;border-radius:10px;padding:24px 28px;min-width:280px;box-shadow:0 4px 20px rgba(0,0,0,0.15);">
+        <h3 style="margin:0 0 16px 0;font-size:1rem;" id="rule-time-title">Set Working Hours</h3>
+        <div style="display:flex;gap:16px;align-items:center;margin-bottom:16px;">
+          <div>
+            <div style="font-size:0.75rem;color:#888;margin-bottom:4px;">FROM</div>
+            <input type="text" id="rule-time-after" placeholder="HH:MM" maxlength="5" style="width:70px;padding:6px 10px;border:1px solid #d0cbc4;border-radius:6px;font-size:0.9rem;text-align:center;">
+          </div>
+          <span style="font-size:1.2rem;color:#888;margin-top:16px;">—</span>
+          <div>
+            <div style="font-size:0.75rem;color:#888;margin-bottom:4px;">TILL</div>
+            <input type="text" id="rule-time-before" placeholder="HH:MM" maxlength="5" style="width:70px;padding:6px 10px;border:1px solid #d0cbc4;border-radius:6px;font-size:0.9rem;text-align:center;">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn btn-secondary btn-sm" onclick="clearRuleTime()" style="padding:6px 14px;">Clear</button>
+          <button class="btn btn-secondary btn-sm" onclick="closeRuleTimePopup()" style="padding:6px 14px;">Cancel</button>
+          <button class="btn btn-secondary btn-sm" onclick="saveRuleTime()" style="background:#27ae60;color:#fff;padding:6px 14px;">Save</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -145,6 +169,6 @@
 
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js"></script>
-<script src="js/main-agent.js"></script>
+<script src="js/main-agent.js?v=5"></script>
 </body>
 </html>

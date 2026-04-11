@@ -20,6 +20,9 @@ RULE = {
     "triggers": ["*"],
     "controls": [],
     "category": "info",
+    "group": "info",
+    "priority": 2,
+    "depends_on": ["Home Activity"],
 }
 
 

@@ -148,8 +148,8 @@ class StateManager:
         try:
             with self.conn.cursor() as cur:
                 for key, value in snapshot.items():
-                    # Skip keys owned by other services
-                    if key.startswith('_pixoo_'):
+                    # Skip keys owned by other services / dashboard
+                    if key.startswith('_pixoo_') or key.startswith('_rule_override'):
                         continue
                     val_str = json.dumps(value)
                     cur.execute(

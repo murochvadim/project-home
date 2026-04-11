@@ -49,7 +49,8 @@ class RuleEngine:
         self.trigger_index = {}         # device_id -> [rule_module, ...]
         self._disabled_rules = set()    # set of rule names
         self._command_log = {}          # device_id -> [(ts, action), ...]
-        self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms}
+        self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms, last_fired}
+        self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
         self._stop = threading.Event()
         self._last_computed_publish = 0
 
@@ -96,6 +97,13 @@ class RuleEngine:
                 log.warning('Rule %s missing evaluate() callable — skipped', filename)
                 continue
 
+            # Assign rule ID and parse optional fields with defaults
+            rule_dict.setdefault('id', len(self.rules) + 1)
+            rule_dict.setdefault('group', None)
+            rule_dict.setdefault('priority', 10)
+            rule_dict.setdefault('depends_on', [])
+            rule_dict.setdefault('conditions', {})
+
             self.rules.append(module)
 
         # Load disabled list from shared state
@@ -106,6 +114,9 @@ class RuleEngine:
             except (json.JSONDecodeError, TypeError):
                 disabled_raw = []
         self._disabled_rules = set(disabled_raw)
+
+        # Apply DB overrides (priority, conditions, group — set from dashboard)
+        self._apply_overrides()
 
         # Store rules metadata in shared state for dashboard
         self._update_rules_metadata()
@@ -123,15 +134,62 @@ class RuleEngine:
         """Store rules metadata + execution stats in shared state for dashboard."""
         self.state.shared['_rules'] = [
             {
+                'id': m.RULE.get('id', i + 1),
                 'name': m.RULE['name'],
                 'description': m.RULE.get('description', ''),
                 'category': m.RULE.get('category', ''),
+                'group': m.RULE.get('group'),
+                'priority': m.RULE.get('priority', 10),
+                'depends_on': m.RULE.get('depends_on', []),
+                'conditions': m.RULE.get('conditions', {}),
                 'triggers': len(m.RULE.get('triggers', [])),
                 'controls': len(m.RULE.get('controls', [])),
                 'stats': self._rule_stats.get(m.RULE['name'], {}),
             }
-            for m in self.rules
+            for i, m in enumerate(self.rules)
         ]
+
+    def _apply_overrides(self):
+        """Apply DB overrides (from dashboard) to rule RULE dicts.
+
+        Overrides stored in shared state as _rule_overrides: {rule_name: {field: value}}
+        Overridable fields: priority, group, conditions
+        """
+        import copy
+        overrides_raw = copy.deepcopy(self.state.shared.get('_rule_overrides', {}))
+        if isinstance(overrides_raw, str):
+            try:
+                overrides_raw = json.loads(overrides_raw)
+            except (json.JSONDecodeError, TypeError):
+                overrides_raw = {}
+        if not isinstance(overrides_raw, dict):
+            return
+
+        for module in self.rules:
+            name = module.RULE['name']
+            ovr = overrides_raw.get(name, {})
+            if not ovr:
+                continue
+            if 'priority' in ovr:
+                try:
+                    module.RULE['priority'] = int(ovr['priority'])
+                except (ValueError, TypeError):
+                    pass
+            if 'group' in ovr:
+                module.RULE['group'] = ovr['group'] or None
+            if 'conditions' in ovr:
+                # Merge: DB conditions override file conditions per key
+                file_conds = module.RULE.get('conditions', {})
+                db_conds = ovr['conditions'] if isinstance(ovr['conditions'], dict) else {}
+                for ck, cv in db_conds.items():
+                    if cv is None:
+                        file_conds.pop(ck, None)  # null = remove condition
+                    else:
+                        file_conds[ck] = cv
+                module.RULE['conditions'] = file_conds
+
+        if overrides_raw:
+            log.info('Applied DB overrides for %d rules', len(overrides_raw))
 
     # ------------------------------------------------------------------
     # MQTT event callback (runs in paho network thread — must be fast)
@@ -189,6 +247,11 @@ class RuleEngine:
         if (len(parts) == 5 and parts[:3] == ['mur', 'home', 'rule-engine']
                 and parts[3] == 'enable'):
             self._enable_rule(parts[4])
+            return
+
+        # mur/home/rule-engine/reload
+        if parts == ['mur', 'home', 'rule-engine', 'reload']:
+            self._reload_rules()
             return
 
         # ---- Event topics (update state AND trigger rules) ----
@@ -258,13 +321,65 @@ class RuleEngine:
         # Snapshot shared state before rules run
         shared_before = dict(self.state.shared)
 
-        for rule in matching:
+        # Clear group-active tracking for this event cycle
+        self._group_active.clear()
+
+        # Sort by dependency + priority, then evaluate
+        sorted_matching = self._sort_rules(matching)
+
+        for rule in sorted_matching:
             rule_name = rule.RULE['name']
             if rule_name in self._disabled_rules:
                 continue
+
+            # Check conditions (time, state)
+            ok, reason = self._check_conditions(rule)
+            if not ok:
+                log.debug("Rule '%s' skipped: %s", rule_name, reason)
+                self._log_rule_event(rule_name, device_id, source, 'skipped', f'condition: {reason}', 0)
+                continue
+
+            # Check group conflict — skip if higher priority rule in same group already acted
+            group = rule.RULE.get('group')
+            if group and group in self._group_active:
+                active = self._group_active[group]
+                log.debug("Rule '%s' skipped: group '%s' already served by '%s'",
+                          rule_name, group, active['rule'])
+                self._log_rule_event(rule_name, device_id, source, 'skipped',
+                                     f'group:{group} served by {active["rule"]}', 0)
+                continue
+
+            # Snapshot shared state before this rule
+            rule_shared_before = dict(self.state.shared)
+
             commands = self._evaluate_rule(rule, event)
             for cmd in commands:
                 self._dispatch_command(cmd, rule_name)
+
+            # Detect what changed
+            elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0)
+            changed_keys = [k for k in self.state.shared
+                           if self.state.shared.get(k) != rule_shared_before.get(k)
+                           and not k.startswith('_')]
+
+            if commands:
+                result = '; '.join(f'cmd:{c.get("action","?")}:{c.get("preset_name", c.get("device_id",""))}' for c in commands)
+                self._log_rule_event(rule_name, device_id, source, 'command', result, elapsed)
+                if group:
+                    self._group_active[group] = {
+                        'rule': rule_name,
+                        'action': commands[0].get('action', ''),
+                        'ts': time.time(),
+                    }
+                stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+                stats['last_fired'] = datetime.now(tz=TZ).isoformat()
+                self._rule_stats[rule_name] = stats
+            elif changed_keys:
+                result = '; '.join(f'{k}={self.state.shared[k]}' for k in changed_keys[:5])
+                self._log_rule_event(rule_name, device_id, source, 'state_changed', result, elapsed)
+                stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+                stats['last_fired'] = datetime.now(tz=TZ).isoformat()
+                self._rule_stats[rule_name] = stats
 
         self._maybe_publish_computed()
 
@@ -274,6 +389,23 @@ class RuleEngine:
                 self.state.save_shared_state()
             except Exception:
                 log.warning('Immediate state save failed', exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Rule event logging
+    # ------------------------------------------------------------------
+
+    def _log_rule_event(self, rule_name, device_id, source, event_type, result, duration_ms):
+        """Log a meaningful rule event to DB (state change, command, skip)."""
+        try:
+            self.state._ensure_conn()
+            with self.state.conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO rule_events (rule_name, device_id, source, event_type, result, duration_ms) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (rule_name, device_id, source, event_type, str(result)[:500], duration_ms),
+                )
+        except Exception:
+            log.debug("Failed to log rule event", exc_info=True)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -304,6 +436,62 @@ class RuleEngine:
     # Rule evaluation
     # ------------------------------------------------------------------
 
+    def _check_conditions(self, rule):
+        """Check if rule conditions are met. Returns (ok, reason)."""
+        conditions = rule.RULE.get('conditions', {})
+        if not conditions:
+            return True, ''
+
+        # Time condition
+        time_cond = conditions.get('time')
+        if time_cond:
+            now = datetime.now(tz=TZ)
+            now_str = now.strftime('%H:%M')
+            after = time_cond.get('after', '00:00')
+            before = time_cond.get('before', '23:59')
+            if after <= before:
+                if not (after <= now_str <= before):
+                    return False, f'time {now_str} outside {after}-{before}'
+            else:  # wraps midnight (e.g., 22:00-06:00)
+                if not (now_str >= after or now_str <= before):
+                    return False, f'time {now_str} outside {after}-{before}'
+
+        # State condition
+        state_cond = conditions.get('state')
+        if state_cond:
+            for key, expected in state_cond.items():
+                actual = self.state.shared.get(key)
+                if isinstance(expected, list):
+                    if actual not in expected:
+                        return False, f'state {key}={actual} not in {expected}'
+                elif actual != expected:
+                    return False, f'state {key}={actual} != {expected}'
+
+        return True, ''
+
+    def _sort_rules(self, rules):
+        """Sort rules by depends_on (topological) then priority (lower first)."""
+        name_to_rule = {r.RULE['name']: r for r in rules}
+        sorted_rules = []
+        visited = set()
+
+        def visit(rule):
+            name = rule.RULE['name']
+            if name in visited:
+                return
+            visited.add(name)
+            for dep_name in rule.RULE.get('depends_on', []):
+                dep = name_to_rule.get(dep_name)
+                if dep and dep in rules:
+                    visit(dep)
+            sorted_rules.append(rule)
+
+        # Visit all, respecting dependencies
+        for r in sorted(rules, key=lambda r: r.RULE.get('priority', 10)):
+            visit(r)
+
+        return sorted_rules
+
     def _evaluate_rule(self, rule, event):
         """Call rule.evaluate() safely, return list of command dicts."""
         t0 = time.time()
@@ -319,6 +507,7 @@ class RuleEngine:
             stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
             stats['count'] += 1
             stats['total_ms'] += elapsed_ms
+            stats['_last_ms'] = elapsed_ms
             if elapsed_ms > stats['max_ms']:
                 stats['max_ms'] = elapsed_ms
             self._rule_stats[name] = stats
@@ -422,6 +611,19 @@ class RuleEngine:
         self.state.shared['_disabled_rules'] = list(self._disabled_rules)
         log.info("Rule '%s' ENABLED", rule_name)
 
+    def _reload_rules(self):
+        """Hot-reload rules from disk without restarting."""
+        old_count = len(self.rules)
+        old_stats = dict(self._rule_stats)  # preserve stats
+        self.rules = []
+        self.load_rules()
+        self._index_rules()
+        # Restore stats for rules that still exist
+        for name, stats in old_stats.items():
+            if name not in self._rule_stats:
+                self._rule_stats[name] = stats
+        log.info("Rules reloaded: %d -> %d rules", old_count, len(self.rules))
+
     # ------------------------------------------------------------------
     # Computed state publish (debounced)
     # ------------------------------------------------------------------
@@ -466,6 +668,16 @@ class RuleEngine:
                         except (json.JSONDecodeError, TypeError):
                             disabled_raw = []
                     self._disabled_rules = set(disabled_raw)
+                    self._apply_overrides()
+                    # Check for reload request from dashboard
+                    if self.state.shared.get('_reload_request') == 'pending':
+                        self._reload_rules()
+                        self.state.shared['_reload_request'] = 'done'
+                    # Count rule files on disk for dashboard "new rule" badge
+                    rules_dir = os.path.join(os.path.dirname(__file__), 'rules')
+                    disk_count = len([f for f in os.listdir(rules_dir)
+                                     if f.endswith('.py') and not f.startswith('_')]) if os.path.isdir(rules_dir) else 0
+                    self.state.shared['_rules_on_disk'] = disk_count
                     self._update_rules_metadata()
                     self.state.save_shared_state()
                 except Exception:
@@ -544,6 +756,7 @@ class RuleEngine:
             ('mur/home/device/+/command/response', 0),
             ('mur/home/rule-engine/disable/+', 0),
             ('mur/home/rule-engine/enable/+', 0),
+            ('mur/home/rule-engine/reload', 0),
             ('hasp/+/state', 0),
             ('hasp/+/state/+', 0),
             ('awtrix/+/stats', 0),

@@ -47,6 +47,106 @@
     }).catch(() => {});
   };
 
+  window.saveRuleOverride = async function (name, overrides) {
+    try {
+      const r = await fetch('/api/rule-engine/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, ...overrides }),
+      });
+      const data = await r.json();
+      if (!data.ok) console.error('Override save failed:', data);
+    } catch (e) { console.error('Override save error:', e); }
+  };
+
+  window._ruleTimeTarget = null;
+  window.editRuleTime = function (name, curAfter, curBefore) {
+    window._ruleTimeTarget = name;
+    document.getElementById('rule-time-title').textContent = name + ' — Working Hours';
+    document.getElementById('rule-time-after').value = curAfter || '';
+    document.getElementById('rule-time-before').value = curBefore || '';
+    document.getElementById('rule-time-overlay').style.display = 'flex';
+  };
+  window.closeRuleTimePopup = function () {
+    document.getElementById('rule-time-overlay').style.display = 'none';
+    window._ruleTimeTarget = null;
+  };
+  window.saveRuleTime = async function () {
+    const name = window._ruleTimeTarget;
+    if (!name) return;
+    const after = document.getElementById('rule-time-after').value.trim();
+    const before = document.getElementById('rule-time-before').value.trim();
+    if (!after && !before) {
+      await saveRuleOverride(name, { conditions: { time: null } });
+      closeRuleTimePopup();
+      return;
+    }
+    // Validate HH:MM format
+    const timeRe = /^\d{1,2}:\d{2}$/;
+    if ((after && !timeRe.test(after)) || (before && !timeRe.test(before))) {
+      alert('Use HH:MM format (e.g., 08:00)');
+      return;
+    }
+    const time = { after: after || '00:00', before: before || '23:59' };
+    const conditions = { time };
+    await saveRuleOverride(name, { conditions });
+    closeRuleTimePopup();
+    // Temporarily show the saved time in the table until rule engine picks it up
+    const cells = document.querySelectorAll('#rules-body tr');
+    cells.forEach(row => {
+      const nameCell = row.querySelector('.rule-name');
+      if (nameCell && nameCell.textContent === name) {
+        const timeCell = row.querySelectorAll('td')[5];
+        if (timeCell) timeCell.innerHTML = `<span style="font-size:0.72rem;color:#27ae60;">${after || '00:00'} - ${before || '23:59'}</span>`;
+      }
+    });
+  };
+  window.clearRuleTime = async function () {
+    const name = window._ruleTimeTarget;
+    if (!name) return;
+    await saveRuleOverride(name, { conditions: { time: null } });
+    closeRuleTimePopup();
+    const cells = document.querySelectorAll('#rules-body tr');
+    cells.forEach(row => {
+      const nameCell = row.querySelector('.rule-name');
+      if (nameCell && nameCell.textContent === name) {
+        const timeCell = row.querySelectorAll('td')[5];
+        if (timeCell) timeCell.innerHTML = `<span style="font-size:0.72rem;color:#27ae60;">—</span>`;
+      }
+    });
+  };
+  // Close popup on overlay click
+  document.getElementById('rule-time-overlay')?.addEventListener('click', function(e) {
+    if (e.target === this) closeRuleTimePopup();
+  });
+
+  window.reloadRules = async function () {
+    try {
+      const btn = document.querySelector('[onclick="reloadRules()"]');
+      if (btn) btn.textContent = 'Reloading...';
+      const r = await fetch('/api/rule-engine/reload', { method: 'POST' });
+      const data = await r.json();
+      if (data.ok && btn) {
+        setTimeout(() => { btn.textContent = 'Reload'; loadState(); }, 3000);
+      }
+    } catch (e) { console.error('Reload error:', e); }
+  };
+
+  window.updateReloadBadge = function (rulesLoaded, rulesOnDisk) {
+    const btn = document.querySelector('[onclick="reloadRules()"]');
+    if (!btn) return;
+    const newCount = (rulesOnDisk || 0) - (rulesLoaded || 0);
+    if (newCount > 0) {
+      btn.textContent = `Reload (${newCount} new)`;
+      btn.style.background = '#e67e22';
+      btn.style.color = '#fff';
+    } else {
+      btn.textContent = 'Reload';
+      btn.style.background = '';
+      btn.style.color = '';
+    }
+  };
+
   window.loadState = async function loadState() {
     try {
       const resp = await fetch('/api/rule-engine/state');
@@ -85,6 +185,20 @@
       document.getElementById('activity-level').textContent = actLevel.charAt(0).toUpperCase() + actLevel.slice(1);
       document.getElementById('last-heartbeat').textContent = hb.ts ? formatTimestamp(hb.ts) : '—';
       const rules = parseJsonSafe(s._rules);
+      // Merge DB overrides into rules (dashboard changes take effect immediately)
+      const overrides = (typeof s._rule_overrides === 'object' && s._rule_overrides) ? s._rule_overrides : {};
+      rules.forEach(r => {
+        const ovr = overrides[r.name];
+        if (!ovr) return;
+        if (ovr.priority !== undefined) r.priority = ovr.priority;
+        if (ovr.conditions) {
+          if (!r.conditions) r.conditions = {};
+          for (const [k, v] of Object.entries(ovr.conditions)) {
+            if (v === null) delete r.conditions[k];
+            else r.conditions[k] = v;
+          }
+        }
+      });
       const activeRules = rules.length;
       const disabledRules = new Set(parseJsonSafe(s._disabled_rules));
       document.getElementById('last-decision').textContent = `${activeRules - disabledRules.size} active / ${disabledRules.size} disabled`;
@@ -99,8 +213,15 @@
 
       // ── Rules tab ──
       const rulesBody = document.getElementById('rules-body');
+      const groupColors = {};
+      const palette = ['#3498db','#e67e22','#27ae60','#9b59b6','#e74c3c','#1abc9c','#f39c12','#2980b9'];
+      let colorIdx = 0;
+      // Count rules per group to determine if priority is editable
+      const groupCounts = {};
+      rules.forEach(r => { if (r.group) groupCounts[r.group] = (groupCounts[r.group] || 0) + 1; });
+
       if (rules.length === 0) {
-        rulesBody.innerHTML = '<tr><td colspan="7" style="color:#aaa">No rules loaded</td></tr>';
+        rulesBody.innerHTML = '<tr><td colspan="11" style="color:#aaa">No rules loaded</td></tr>';
       } else {
         rulesBody.innerHTML = rules.map(r => {
           const enabled = !disabledRules.has(r.name);
@@ -108,13 +229,36 @@
           const runs = st.count || 0;
           const avg = runs > 0 ? (st.total_ms / runs).toFixed(1) + 'ms' : '—';
           const max = st.max_ms ? st.max_ms.toFixed(1) + 'ms' : '—';
+          const lastFired = st.last_fired ? formatTimestamp(st.last_fired) : '—';
+          const group = r.group || '';
+          const pri = r.priority != null ? r.priority : 10;
+          const conds = r.conditions || {};
+          const timeCond = conds.time || {};
+          const timeAfter = timeCond.after || '';
+          const timeBefore = timeCond.before || '';
+          const timeStr = (timeAfter && timeBefore) ? `${timeAfter} - ${timeBefore}` : '';
+          let dotColor = '#ccc';
+          if (group) {
+            if (!groupColors[group]) { groupColors[group] = palette[colorIdx++ % palette.length]; }
+            dotColor = groupColors[group];
+          }
+          // Priority editable only if group has 2+ rules
+          const groupSize = groupCounts[group] || 0;
+          const priHtml = (group && groupSize >= 2)
+            ? `<input type="number" min="1" max="99" value="${pri}" style="width:36px;padding:1px 3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.75rem;text-align:center;" onchange="saveRuleOverride('${escHtml(r.name)}',{priority:this.value})">`
+            : `<span style="color:#ccc;">${pri}</span>`;
+          const timeHtml = `<span style="cursor:pointer;text-decoration:underline;color:#3a5a8a;font-size:0.72rem;" onclick="editRuleTime('${escHtml(r.name)}','${timeAfter}','${timeBefore}')">${timeStr || '—'}</span>`;
           return `<tr>
+            <td style="text-align:center;color:#888;font-size:0.75rem;">#${r.id || ''}</td>
+            <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${dotColor};" title="${escHtml(group)}"></span></td>
             <td class="rule-name">${escHtml(r.name)}</td>
-            <td class="rule-desc">${escHtml(r.description)}</td>
-            <td class="rule-cat">${escHtml(r.category)}</td>
+            <td style="font-size:0.78rem;color:#555;font-weight:500;">${escHtml(group)}</td>
+            <td style="text-align:center">${priHtml}</td>
+            <td style="text-align:center">${timeHtml}</td>
             <td style="text-align:center">${runs}</td>
             <td style="text-align:center">${avg}</td>
             <td style="text-align:center">${max}</td>
+            <td style="font-size:0.75rem;color:#888;">${lastFired}</td>
             <td>
               <label class="toggle">
                 <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleRule('${escHtml(r.name)}', this.checked)">
@@ -124,6 +268,9 @@
           </tr>`;
         }).join('');
       }
+
+      // ── Reload badge ──
+      updateReloadBadge(rules.length, s._rules_on_disk);
 
       // ── Room grid ──
       const occupiedSet = new Set(occupiedRooms.map(r => r.toLowerCase()));
