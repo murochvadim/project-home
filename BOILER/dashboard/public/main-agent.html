@@ -142,12 +142,15 @@
 
     <!-- Rule Event Trace Popup -->
     <div id="rule-trace-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.3);z-index:1000;justify-content:center;align-items:center;">
-      <div style="background:#fff;border-radius:10px;padding:20px 24px;min-width:500px;max-width:700px;max-height:80vh;box-shadow:0 4px 20px rgba(0,0,0,0.15);display:flex;flex-direction:column;">
+      <div style="background:#fff;border-radius:10px;padding:20px 24px;width:80vw;max-width:900px;max-height:85vh;box-shadow:0 4px 20px rgba(0,0,0,0.15);display:flex;flex-direction:column;">
         <div style="display:flex;align-items:center;margin-bottom:12px;">
           <h3 style="margin:0;font-size:1rem;flex:1;" id="rule-trace-title">Event Trace</h3>
           <button onclick="closeRuleTrace()" style="background:none;border:none;cursor:pointer;color:#888;font-size:1.2rem;">&times;</button>
         </div>
-        <div id="rule-trace-body" style="overflow-y:auto;flex:1;font-size:0.82rem;"></div>
+        <div style="flex:1;min-height:200px;position:relative;">
+          <canvas id="rule-trace-chart"></canvas>
+        </div>
+        <div id="rule-trace-list" style="overflow-y:auto;max-height:200px;font-size:0.78rem;margin-top:10px;border-top:1px solid #e8e2da;padding-top:8px;"></div>
       </div>
     </div>
   </div>
@@ -181,6 +184,7 @@
 
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js"></script>
-<script src="js/main-agent.js?v=10"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="js/main-agent.js?v=11"></script>
 </body>
 </html>

@@ -120,36 +120,98 @@
     if (e.target === this) closeRuleTimePopup();
   });
 
+  let _traceChart = null;
   window.showRuleTrace = async function (name) {
     const overlay = document.getElementById('rule-trace-overlay');
     const title = document.getElementById('rule-trace-title');
-    const body = document.getElementById('rule-trace-body');
-    if (!overlay || !body) return;
+    const list = document.getElementById('rule-trace-list');
+    if (!overlay) return;
     title.textContent = name + ' — Event Trace';
-    body.innerHTML = '<span style="color:#888;">Loading...</span>';
+    if (list) list.innerHTML = '<span style="color:#888;">Loading...</span>';
     overlay.style.display = 'flex';
     try {
-      const r = await fetch(`/api/rule-engine/events?rule=${encodeURIComponent(name)}&limit=30`);
+      const r = await fetch(`/api/rule-engine/events?rule=${encodeURIComponent(name)}&limit=50`);
       const events = await r.json();
       if (!Array.isArray(events) || events.length === 0) {
-        body.innerHTML = '<span style="color:#aaa;">No events recorded yet</span>';
+        if (list) list.innerHTML = '<span style="color:#aaa;">No events recorded yet</span>';
         return;
       }
-      const typeColors = { state_changed: '#3498db', command: '#27ae60', auto_disabled: '#e74c3c', skipped: '#f39c12' };
-      body.innerHTML = events.map(e => {
-        const time = e.ts ? new Date(e.ts).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
-        const date = e.ts ? new Date(e.ts).toLocaleDateString('en-IL', { day: '2-digit', month: '2-digit' }) : '';
-        const color = typeColors[e.event_type] || '#888';
-        const devName = e.device_id ? e.device_id.substring(0, 12) + '...' : '—';
-        return `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid #f0ebe3;align-items:flex-start;">
-          <span style="min-width:75px;color:#888;font-size:0.75rem;white-space:nowrap;">${date} ${time}</span>
-          <span style="min-width:80px;font-weight:600;color:${color};font-size:0.75rem;">${escHtml(e.event_type)}</span>
-          <span style="flex:1;color:#444;font-size:0.78rem;">${escHtml(e.result || '—')}</span>
-          <span style="min-width:50px;color:#aaa;font-size:0.68rem;text-align:right;" title="${escHtml(e.device_id || '')}">${devName}</span>
-        </div>`;
-      }).join('');
+      const typeColors = { state_changed: '#3498db', command: '#27ae60', auto_disabled: '#e74c3c', force_fired: '#e67e22' };
+
+      // Build chart
+      if (_traceChart) { _traceChart.destroy(); _traceChart = null; }
+      const canvas = document.getElementById('rule-trace-chart');
+      if (canvas) {
+        const sorted = [...events].reverse();
+        const labels = sorted.map(e => {
+          const d = new Date(e.ts);
+          return d.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false }) +
+            ' ' + d.toLocaleDateString('en-IL', { day: '2-digit', month: '2-digit' });
+        });
+        // Group by event_type
+        const types = [...new Set(sorted.map(e => e.event_type))];
+        const datasets = types.map(t => ({
+          label: t,
+          data: sorted.map((e, i) => e.event_type === t ? 1 : null),
+          backgroundColor: typeColors[t] || '#888',
+          borderColor: typeColors[t] || '#888',
+          pointRadius: 6,
+          pointHoverRadius: 9,
+          showLine: false,
+          type: 'scatter',
+          xAxisID: 'x',
+          yAxisID: 'y',
+        }));
+        // Use simple bar chart — one bar per event, colored by type
+        _traceChart = new Chart(canvas, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Events',
+              data: sorted.map(() => 1),
+              backgroundColor: sorted.map(e => typeColors[e.event_type] || '#888'),
+              borderRadius: 3,
+              barPercentage: 0.6,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  title: (items) => items[0]?.label || '',
+                  label: (item) => {
+                    const e = sorted[item.dataIndex];
+                    return [e.event_type + ': ' + (e.result || '').substring(0, 80)];
+                  },
+                },
+              },
+            },
+            scales: {
+              y: { display: false, max: 1.5 },
+              x: { ticks: { maxRotation: 45, font: { size: 9 } } },
+            },
+          },
+        });
+      }
+
+      // List below chart
+      if (list) {
+        list.innerHTML = events.map(e => {
+          const time = e.ts ? new Date(e.ts).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+          const color = typeColors[e.event_type] || '#888';
+          return `<div style="display:flex;gap:6px;padding:3px 0;border-bottom:1px solid #f0ebe3;">
+            <span style="min-width:55px;color:#888;font-size:0.72rem;">${time}</span>
+            <span style="min-width:70px;font-weight:600;color:${color};font-size:0.72rem;">${escHtml(e.event_type)}</span>
+            <span style="flex:1;color:#444;font-size:0.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(e.result || '—')}</span>
+          </div>`;
+        }).join('');
+      }
     } catch (err) {
-      body.innerHTML = '<span style="color:#e74c3c;">Failed to load events</span>';
+      if (list) list.innerHTML = '<span style="color:#e74c3c;">Failed to load events</span>';
     }
   };
 
