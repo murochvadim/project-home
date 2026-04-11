@@ -740,9 +740,9 @@ class RuleEngine:
                 for k in list(self.state._timers):
                     self.state._timers[k] = 0
 
-            # Fake favorable conditions
-            self.state.shared['activity_level'] = 'idle'
-            self.state.shared['_pixoo_resumed'] = 'no'
+            # Fake favorable conditions for the main trigger path
+            self.state.shared['activity_level'] = 'active'
+            self.state.shared['_pixoo_resumed'] = 'yes'
 
             # Build event that matches rule triggers: corridor presence with dps 1=true
             force_device_id = ''
