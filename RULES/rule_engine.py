@@ -53,6 +53,7 @@ class RuleEngine:
         self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms, last_fired}
         self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
         self._rule_originals = {}       # rule_name -> {priority, group, conditions} from file
+        self._rule_errors = {}          # rule_name -> consecutive error count
         self._stop = threading.Event()
         self._last_computed_publish = 0
 
@@ -154,6 +155,7 @@ class RuleEngine:
                 'triggers': len(m.RULE.get('triggers', [])),
                 'controls': len(m.RULE.get('controls', [])),
                 'stats': self._rule_stats.get(m.RULE['name'], {}),
+                'errors': self._rule_errors.get(m.RULE['name'], 0),
             }
             for i, m in enumerate(self.rules)
         ]
@@ -504,18 +506,24 @@ class RuleEngine:
 
         return sorted_rules
 
+    _MAX_CONSECUTIVE_ERRORS = 3
+
     def _evaluate_rule(self, rule, event):
-        """Call rule.evaluate() safely, return list of command dicts."""
+        """Call rule.evaluate() safely, return list of command dicts.
+        Auto-disables rule after _MAX_CONSECUTIVE_ERRORS consecutive failures."""
+        name = rule.RULE['name']
         t0 = time.time()
         try:
             result = rule.evaluate(event, self.state)
         except Exception as e:
-            log.error("Rule '%s' failed: %s", rule.RULE['name'], e, exc_info=True)
+            log.error("Rule '%s' failed: %s", name, e, exc_info=True)
+            # Track consecutive errors
+            self._rule_errors[name] = self._rule_errors.get(name, 0) + 1
+            if self._rule_errors[name] >= self._MAX_CONSECUTIVE_ERRORS:
+                self._auto_disable_rule(name, str(e))
             return []
         finally:
             elapsed_ms = (time.time() - t0) * 1000
-            name = rule.RULE['name']
-            # Track execution time per rule
             stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
             stats['count'] += 1
             stats['total_ms'] += elapsed_ms
@@ -524,12 +532,33 @@ class RuleEngine:
                 stats['max_ms'] = elapsed_ms
             self._rule_stats[name] = stats
 
+        # Success — reset error counter
+        self._rule_errors[name] = 0
+
         if result is None:
             return []
         if not isinstance(result, list):
-            log.warning("Rule '%s' returned non-list: %s", rule.RULE['name'], type(result).__name__)
+            log.warning("Rule '%s' returned non-list: %s", name, type(result).__name__)
             return []
         return result
+
+    def _auto_disable_rule(self, rule_name, error_msg):
+        """Auto-disable a rule after repeated errors. Write alert to system_alerts."""
+        if rule_name in self._disabled_rules:
+            return  # already disabled
+        self._disabled_rules.add(rule_name)
+        self.state.shared['_disabled_rules'] = list(self._disabled_rules)
+        log.warning("Rule '%s' AUTO-DISABLED after %d consecutive errors: %s",
+                     rule_name, self._MAX_CONSECUTIVE_ERRORS, error_msg)
+        # Write to system_alerts for dashboard + orchestrator
+        self.state.db_execute(
+            "INSERT INTO system_alerts (ts, severity, alert_type, affected_agent, message) "
+            "VALUES (NOW(), 'warn', 'rule_error', 'rule_engine', %s)",
+            (f"Rule '{rule_name}' auto-disabled after {self._MAX_CONSECUTIVE_ERRORS} "
+             f"consecutive errors: {error_msg[:200]}",),
+        )
+        # Log to rule_events
+        self._log_rule_event(rule_name, '', '', 'auto_disabled', error_msg[:300], 0)
 
     # ------------------------------------------------------------------
     # Command dispatch

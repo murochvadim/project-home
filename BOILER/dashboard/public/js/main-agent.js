@@ -248,10 +248,15 @@
             ? `<input type="number" min="1" max="99" value="${pri}" style="width:36px;padding:1px 3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.75rem;text-align:center;" onchange="saveRuleOverride('${escHtml(r.name)}',{priority:this.value})">`
             : `<span style="color:#ccc;">${pri}</span>`;
           const timeHtml = `<span style="cursor:pointer;text-decoration:underline;color:#3a5a8a;font-size:0.72rem;" onclick="editRuleTime('${escHtml(r.name)}','${timeAfter}','${timeBefore}')">${timeStr || '—'}</span>`;
-          return `<tr>
+          const hasError = (r.errors || 0) > 0;
+          const isAutoDisabled = hasError && disabledRules.has(r.name);
+          const rowStyle = isAutoDisabled ? 'background:rgba(231,76,60,0.08);' : hasError ? 'background:rgba(243,156,18,0.08);' : '';
+          const errorBadge = isAutoDisabled ? ' <span style="font-size:0.65rem;color:#e74c3c;font-weight:600;">AUTO-DISABLED</span>'
+            : hasError ? ` <span style="font-size:0.65rem;color:#e67e22;">${r.errors} err</span>` : '';
+          return `<tr style="${rowStyle}">
             <td style="text-align:center;color:#888;font-size:0.75rem;">#${r.id || ''}</td>
             <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${dotColor};" title="${escHtml(group)}"></span></td>
-            <td class="rule-name">${escHtml(r.name)}</td>
+            <td class="rule-name">${escHtml(r.name)}${errorBadge}</td>
             <td style="font-size:0.78rem;color:#555;font-weight:500;">${escHtml(group)}</td>
             <td style="text-align:center">${priHtml}</td>
             <td style="text-align:center">${timeHtml}</td>
