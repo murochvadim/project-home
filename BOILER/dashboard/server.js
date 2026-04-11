@@ -1389,37 +1389,6 @@ app.post('/api/pixoo/custom', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/pixoo/text', async (req, res) => {
-  try {
-    const { text, color } = req.body;
-    if (!text) return res.status(400).json({ error: 'Missing text' });
-    const [r, g, b] = color || [255, 255, 255];
-    // Clear + draw text + push via Pixoo HTTP API
-    await fetch('http://192.168.1.243:80/post', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ Command: 'Draw/ResetHttpGifId' }),
-      signal: AbortSignal.timeout(3000),
-    });
-    await fetch('http://192.168.1.243:80/post', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        Command: 'Draw/SendHttpText',
-        TextId: 1, x: 0, y: 24, dir: 0, font: 4,
-        TextWidth: 64, TextString: text, speed: 60,
-        color: `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`,
-        align: 2,
-      }),
-      signal: AbortSignal.timeout(3000),
-    });
-    // Pause service
-    await db.query(
-      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_pixoo_paused', 'true'::jsonb, NOW())
-       ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()`
-    ).catch(() => {});
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 app.post('/api/pixoo/resume', async (_req, res) => {
   try {
     await db.query(
