@@ -855,10 +855,13 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'boiler_consumptions', 'orchestrator_log', 'sync_signals', 'system_alerts',
       'voice_token_log', 'manual_requests', 'voice_devices', 'voice_device_settings',
       'voice_intent_phrases', 'voice_device_entities', 'agents', 'agent_settings',
-      'media_library', 'face_registry',
+      'media_library', 'face_registry', 'face_crops', 'person_embeddings', 'documents',
       'backup_storages', 'backup_jobs', 'backup_log',
       'devices', 'device_events', 'device_agent_log', 'device_blocklist',
-      'rooms', 'net_devices'
+      'rooms', 'net_devices', 'net_ports', 'net_scans',
+      'rule_events', 'rule_engine_state', 'rule_engine_log',
+      'pixoo_presets', 'pixoo_log', 'analyzer_settings', 'analyzer_log',
+      'retention_policies',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -870,7 +873,13 @@ app.get('/api/health/db-volumes', async (req, res) => {
       media_library: 'added_at', face_registry: 'added_at',
       backup_storages: 'created_at', backup_jobs: 'created_at', backup_log: 'started_at',
       devices: 'last_seen', device_events: 'ts', device_agent_log: 'ts',
-      device_blocklist: 'blocked_at', rooms: null, net_devices: 'last_seen'
+      device_blocklist: 'blocked_at', rooms: null, net_devices: 'last_seen',
+      net_ports: null, net_scans: 'ts',
+      rule_events: 'ts', rule_engine_state: 'updated_at', rule_engine_log: 'ts',
+      pixoo_presets: 'created_at', pixoo_log: 'ts',
+      analyzer_settings: null, analyzer_log: 'ts',
+      face_crops: null, person_embeddings: null, documents: null,
+      retention_policies: null,
     };
 
     const sizes = await db.query(`
