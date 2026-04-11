@@ -121,88 +121,102 @@
   });
 
   let _traceChart = null;
-  window.showRuleTrace = async function (name) {
-    const overlay = document.getElementById('rule-trace-overlay');
-    const title = document.getElementById('rule-trace-title');
+  let _traceRuleName = '';
+  const _typeColors = { state_changed: '#3498db', command: '#27ae60', auto_disabled: '#e74c3c', force_fired: '#e67e22' };
+  const _typeY = { state_changed: 1, command: 2, auto_disabled: 3, force_fired: 2 };
+
+  window.showRuleTrace = function (name) {
+    _traceRuleName = name;
+    document.getElementById('rule-trace-title').textContent = name + ' — Event Trace';
+    document.getElementById('rule-trace-overlay').style.display = 'flex';
+    loadRuleTrace('6h');
+  };
+
+  window.loadRuleTrace = async function (range) {
+    // Update active button
+    ['1h', '6h', '24h'].forEach(r => {
+      const btn = document.getElementById('trace-btn-' + r);
+      if (btn) { btn.style.background = r === range ? '#7a9ab8' : ''; btn.style.color = r === range ? '#fff' : ''; }
+    });
     const list = document.getElementById('rule-trace-list');
-    if (!overlay) return;
-    title.textContent = name + ' — Event Trace';
     if (list) list.innerHTML = '<span style="color:#888;">Loading...</span>';
-    overlay.style.display = 'flex';
     try {
-      const r = await fetch(`/api/rule-engine/events?rule=${encodeURIComponent(name)}&limit=50`);
+      const r = await fetch(`/api/rule-engine/events?rule=${encodeURIComponent(_traceRuleName)}&range=${range}`);
       const events = await r.json();
       if (!Array.isArray(events) || events.length === 0) {
-        if (list) list.innerHTML = '<span style="color:#aaa;">No events recorded yet</span>';
+        if (_traceChart) { _traceChart.destroy(); _traceChart = null; }
+        if (list) list.innerHTML = '<span style="color:#aaa;">No events in this time range</span>';
         return;
       }
-      const typeColors = { state_changed: '#3498db', command: '#27ae60', auto_disabled: '#e74c3c', force_fired: '#e67e22' };
+      const sorted = [...events].reverse();
 
-      // Build chart
+      // Build scatter chart
       if (_traceChart) { _traceChart.destroy(); _traceChart = null; }
       const canvas = document.getElementById('rule-trace-chart');
       if (canvas) {
-        const sorted = [...events].reverse();
-        const labels = sorted.map(e => {
-          const d = new Date(e.ts);
-          return d.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false }) +
-            ' ' + d.toLocaleDateString('en-IL', { day: '2-digit', month: '2-digit' });
-        });
-        // Group by event_type
         const types = [...new Set(sorted.map(e => e.event_type))];
         const datasets = types.map(t => ({
           label: t,
-          data: sorted.map((e, i) => e.event_type === t ? 1 : null),
-          backgroundColor: typeColors[t] || '#888',
-          borderColor: typeColors[t] || '#888',
-          pointRadius: 6,
-          pointHoverRadius: 9,
-          showLine: false,
-          type: 'scatter',
-          xAxisID: 'x',
-          yAxisID: 'y',
+          data: sorted.filter(e => e.event_type === t).map(e => ({
+            x: new Date(e.ts).getTime(),
+            y: _typeY[t] || 1,
+            _result: e.result,
+            _device: e.device_id,
+          })),
+          backgroundColor: _typeColors[t] || '#888',
+          pointRadius: 5,
+          pointHoverRadius: 8,
         }));
-        // Use simple bar chart — one bar per event, colored by type
         _traceChart = new Chart(canvas, {
-          type: 'bar',
-          data: {
-            labels,
-            datasets: [{
-              label: 'Events',
-              data: sorted.map(() => 1),
-              backgroundColor: sorted.map(e => typeColors[e.event_type] || '#888'),
-              borderRadius: 3,
-              barPercentage: 0.6,
-            }],
-          },
+          type: 'scatter',
+          data: { datasets },
           options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-              legend: { display: false },
+              legend: {
+                position: 'bottom',
+                labels: { boxWidth: 10, font: { size: 10 }, padding: 8 },
+              },
               tooltip: {
                 callbacks: {
-                  title: (items) => items[0]?.label || '',
+                  title: (items) => {
+                    const d = new Date(items[0]?.raw?.x);
+                    return d.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                  },
                   label: (item) => {
-                    const e = sorted[item.dataIndex];
-                    return [e.event_type + ': ' + (e.result || '').substring(0, 80)];
+                    const p = item.raw;
+                    return (p._result || '').substring(0, 100);
                   },
                 },
               },
             },
             scales: {
-              y: { display: false, max: 1.5 },
-              x: { ticks: { maxRotation: 45, font: { size: 9 } } },
+              x: {
+                type: 'linear',
+                ticks: {
+                  callback: (v) => new Date(v).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false }),
+                  maxRotation: 0, font: { size: 9 }, maxTicksLimit: 12,
+                },
+              },
+              y: {
+                min: 0, max: 4,
+                ticks: {
+                  callback: (v) => ({ 1: 'state', 2: 'command', 3: 'error' }[v] || ''),
+                  font: { size: 9 },
+                },
+                grid: { display: false },
+              },
             },
           },
         });
       }
 
-      // List below chart
+      // List below
       if (list) {
         list.innerHTML = events.map(e => {
           const time = e.ts ? new Date(e.ts).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
-          const color = typeColors[e.event_type] || '#888';
+          const color = _typeColors[e.event_type] || '#888';
           return `<div style="display:flex;gap:6px;padding:3px 0;border-bottom:1px solid #f0ebe3;">
             <span style="min-width:55px;color:#888;font-size:0.72rem;">${time}</span>
             <span style="min-width:70px;font-weight:600;color:${color};font-size:0.72rem;">${escHtml(e.event_type)}</span>

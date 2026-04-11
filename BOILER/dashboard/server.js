@@ -1614,16 +1614,19 @@ app.post('/api/rule-engine/test', async (req, res) => {
 app.get('/api/rule-engine/events', async (req, res) => {
   try {
     const name = req.query.rule || '';
-    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const range = req.query.range || '6h';
+    const rangeMs = { '1h': 3600000, '6h': 21600000, '24h': 86400000 }[range] || 21600000;
+    const from = new Date(Date.now() - rangeMs).toISOString();
+    const limit = 500;
     let query, params;
     if (name) {
       query = `SELECT ts AT TIME ZONE 'Asia/Jerusalem' AS ts, rule_name, device_id, source, event_type, result, duration_ms
-               FROM rule_events WHERE rule_name = $1 ORDER BY ts DESC LIMIT $2`;
-      params = [name, limit];
+               FROM rule_events WHERE rule_name = $1 AND ts >= $2 ORDER BY ts DESC LIMIT $3`;
+      params = [name, from, limit];
     } else {
       query = `SELECT ts AT TIME ZONE 'Asia/Jerusalem' AS ts, rule_name, device_id, source, event_type, result, duration_ms
-               FROM rule_events ORDER BY ts DESC LIMIT $1`;
-      params = [limit];
+               FROM rule_events WHERE ts >= $1 ORDER BY ts DESC LIMIT $2`;
+      params = [from, limit];
     }
     const r = await db.query(query, params);
     res.json(r.rows);
