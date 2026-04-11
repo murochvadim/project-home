@@ -202,18 +202,6 @@ async function pixooPower(on) {
   } catch (e) { console.error('Pixoo power error:', e); }
 }
 
-async function pixooSendText() {
-  const text = document.getElementById('pixoo-text').value.trim();
-  if (!text) return;
-  try {
-    await fetch('/api/pixoo/text', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, color: [255, 255, 255] }),
-    });
-  } catch (e) { console.error('Pixoo text error:', e); }
-}
-
 async function pixooResume() {
   try {
     await fetch('/api/pixoo/resume', { method: 'POST' });
