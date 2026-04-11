@@ -161,20 +161,28 @@
         if (container) container.innerHTML = '<span style="color:#aaa;">No events in this time range</span>';
         return;
       }
-      const sorted = [...events].reverse();
+      // Filter out skip events (noise from old data)
+      const sorted = [...events].filter(e => e.event_type !== 'skipped').reverse();
+      if (sorted.length === 0) {
+        if (container) container.innerHTML = '<span style="color:#aaa;">No events in this time range</span>';
+        return;
+      }
 
       // Resolution in ms
       const resMs = { '1m': 60000, '2m': 120000, '5m': 300000, '10m': 600000, '30m': 1800000, '1h': 3600000 }[resolution] || 300000;
 
-      // Collect all unique keys
+      // Collect all unique keys, filter redundant ones
+      const redundantKeys = new Set(['active_room_count']); // always same as active_rooms
       const allKeys = [];
       const keySet = new Set();
       sorted.forEach(e => {
         if (e.event_type === 'state_changed') {
-          _extractKeys(e.result).forEach(k => { if (!keySet.has(k)) { keySet.add(k); allKeys.push(k); } });
+          _extractKeys(e.result).forEach(k => {
+            if (!keySet.has(k) && !redundantKeys.has(k)) { keySet.add(k); allKeys.push(k); }
+          });
         } else {
           const k = e.event_type;
-          if (!keySet.has(k)) { keySet.add(k); allKeys.push(k); }
+          if (!keySet.has(k) && k !== 'skipped') { keySet.add(k); allKeys.push(k); }
         }
       });
 
@@ -191,17 +199,23 @@
       // Sort buckets chronologically
       const bucketTimes = Object.keys(bucketMap).map(Number).sort((a, b) => a - b);
 
-      // Shorten key names for header
-      const shortKey = (k) => {
-        const parts = k.split('_');
-        if (parts.length <= 2) return k;
-        return parts.map(p => p.substring(0, 4)).join('_');
+      const shortKey = (k) => k;
+      const keyTooltips = {
+        'activity_level': 'Home activity state: idle / low / active',
+        'active_rooms': 'List of rooms with current presence or recent switch activity',
+        'last_motion_room': 'Room with most recent motion detection',
+        'people_home': 'Estimated number of people currently home',
+        'occupied_rooms': 'Rooms with confirmed occupancy',
+        'home_mode': 'Home mode: home / away',
+        'command': 'Command dispatched to a device (pixoo push, etc.)',
+        'force_fired': 'Rule force-tested from dashboard',
+        'auto_disabled': 'Rule auto-disabled after repeated errors',
       };
 
       // Build HTML table
       const cellStyle = (count) => {
         if (!count) return 'color:#ccc;';
-        if (count >= 3) return 'color:#fff;background:#3498db;font-weight:600;';
+        if (count >= 3) return 'color:#2e2e2e;font-weight:600;';
         if (count >= 1) return 'color:#2e2e2e;';
         return 'color:#ccc;';
       };
@@ -210,7 +224,8 @@
       html += '<thead><tr style="border-bottom:2px solid #d0cbc4;">';
       html += '<th style="text-align:left;padding:4px 8px;font-size:0.7rem;color:#888;">Time</th>';
       allKeys.forEach(k => {
-        html += `<th style="text-align:center;padding:4px 6px;font-size:0.68rem;color:#888;white-space:nowrap;" title="${escHtml(k)}">${escHtml(shortKey(k))}</th>`;
+        const tip = keyTooltips[k] || k;
+        html += `<th style="text-align:center;padding:4px 6px;font-size:0.68rem;color:#888;white-space:nowrap;cursor:help;" title="${escHtml(tip)}">${escHtml(shortKey(k))}</th>`;
       });
       html += '</tr></thead><tbody>';
 
@@ -229,6 +244,7 @@
       });
 
       html += '</tbody></table>';
+      html += `<div style="font-size:0.68rem;color:#aaa;margin-top:6px;padding:0 8px;">Number = how many times this state key changed in the time bucket. Bold = 3+ changes. — = no change.</div>`;
       if (container) container.innerHTML = html;
     } catch (err) {
       if (container) container.innerHTML = '<span style="color:#e74c3c;">Failed to load events</span>';
