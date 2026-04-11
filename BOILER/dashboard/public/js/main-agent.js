@@ -177,6 +177,8 @@
       el.style.borderLeft = '4px solid #e74c3c';
       el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#e74c3c;">Connection error</span>`;
     }
+    // Add close button
+    el.innerHTML += `<button onclick="this.parentElement.style.display='none'" style="position:absolute;top:6px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:1rem;" title="Close">&times;</button>`;
   };
 
   window.reloadRules = async function () {

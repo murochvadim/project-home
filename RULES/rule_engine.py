@@ -729,39 +729,61 @@ class RuleEngine:
         }
 
         if force:
-            # Force mode: reset cooldown timers, run for real, dispatch commands
-            log.info("Force-testing rule '%s'", rule_name)
-            # Reset common cooldown timers
-            with self.state.lock:
-                timer_keys = [k for k in self.state._timers if 'last_push' in k or 'cooldown' in k]
-                saved_timers = {k: self.state._timers[k] for k in timer_keys}
-                for k in timer_keys:
-                    self.state._timers[k] = 0  # ancient timestamp = cooldown expired
+            # Force mode: fake all conditions so rule fires, dispatch for real
+            log.info("Force-running rule '%s'", rule_name)
 
-            commands = self._evaluate_rule(rule, event)
+            # Save state
+            saved_shared = copy.deepcopy(self.state.shared)
+            with self.state.lock:
+                saved_timers = dict(self.state._timers)
+                # Reset ALL timers to ancient time (all cooldowns expired)
+                for k in list(self.state._timers):
+                    self.state._timers[k] = 0
+
+            # Fake favorable conditions
+            self.state.shared['activity_level'] = 'idle'
+            self.state.shared['_pixoo_resumed'] = 'no'
+
+            # Build event that matches rule triggers: corridor presence with dps 1=true
+            force_device_id = ''
+            for did, dev in self.state.devices.items():
+                if dev.get('device_type') == 'presence' and dev.get('room', '').lower() in ('corridor', 'entrance'):
+                    force_device_id = did
+                    break
+            if not force_device_id:
+                force_device_id = test_device_id
+            force_event = {
+                'device_id': force_device_id,
+                'dps': {'1': True},
+                'source': 'force_test',
+                'ts': datetime.now(tz=TZ).isoformat(),
+            }
+
+            commands = self._evaluate_rule(rule, force_event)
 
             # Dispatch for real
             for cmd in commands:
                 self._dispatch_command(cmd, rule_name)
 
+            # Restore state + timers
+            self.state.shared = saved_shared
+            with self.state.lock:
+                self.state._timers = saved_timers
+
             if commands:
                 cmd_strs = [self._format_cmd(c) for c in commands]
                 self._write_test_result({
                     'rule': rule_name, 'status': 'force_fired',
-                    'commands': cmd_strs, 'device': test_device_id,
+                    'commands': cmd_strs, 'device': force_device_id,
                     'ts': datetime.now(tz=TZ).isoformat(),
                 })
             else:
-                # Even with timers reset, rule didn't fire — other conditions blocking
-                # Restore timers since nothing happened
-                with self.state.lock:
-                    self.state._timers.update(saved_timers)
                 hints = self._collect_state_hints()
                 self._write_test_result({
                     'rule': rule_name, 'status': 'no_action',
-                    'reason': 'Rule did not fire even with cooldowns reset — check rule logic conditions',
+                    'reason': 'Rule did not fire even with all conditions faked',
                     'state': hints['state'], 'timers': hints['timers'],
-                    'device': test_device_id,
+                    'device': force_device_id,
                     'ts': datetime.now(tz=TZ).isoformat(),
                 })
         else:
