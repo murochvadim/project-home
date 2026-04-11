@@ -6,17 +6,14 @@
   <title>Device Agent</title>
   <link rel="stylesheet" href="css/style.css">
   <style>
-    /* ── Stats bar ── */
-    .device-stats { display:flex; gap:12px; margin-bottom:4px; flex-wrap:wrap; }
-    .stat-chip { background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px; padding:8px 16px; display:flex; flex-direction:column; align-items:center; min-width:90px; }
-    .stat-chip .stat-val { font-size:1.5rem; font-weight:700; color:#2e2e2e; }
-    .stat-chip .stat-lbl { font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:.04em; }
+    /* Page-specific: larger stat values on devices page */
+    .stat-chip .stat-val { font-size: 1.5rem; }
     #stat-online { color:#1a7a3a; }
-    #stat-local   .stat-val { color:#2980b9; }
+    #stat-local   .stat-val { color:var(--info); }
     #stat-gateway .stat-val { color:#8e44ad; }
-    #stat-cloud   .stat-val { color:#27ae60; }
+    #stat-cloud   .stat-val { color:var(--success); }
     #stat-chip-stale { cursor:pointer; }
-    #stat-chip-stale .stat-val { color:#e74c3c; }
+    #stat-chip-stale .stat-val { color:var(--danger); }
 
     /* ── Filter bar ── */
     .filter-bar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
@@ -49,13 +46,7 @@
     .editable-cell:hover::after { opacity:1; }
     .editable-cell input { background:#fff; border:1px solid #97b3cc; border-radius:4px; color:#2e2e2e; padding:2px 6px; font-size:0.84rem; width:100%; min-width:80px; }
 
-    /* ── Toggle switch ── */
-    .toggle { position:relative; display:inline-block; width:34px; height:18px; }
-    .toggle input { opacity:0; width:0; height:0; }
-    .slider { position:absolute; cursor:pointer; inset:0; background:#ccc; border-radius:18px; transition:.2s; }
-    .slider:before { content:''; position:absolute; width:12px; height:12px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
-    input:checked + .slider { background:#7a9ab8; }
-    input:checked + .slider:before { transform:translateX(16px); }
+    /* Toggle switch inherits from style.css — no overrides on this page */
 
     /* ── Last seen ── */
     .last-seen-ok   { color:#085c28; }

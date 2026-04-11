@@ -1,8 +1,64 @@
+:root {
+  /* Brand + neutrals */
+  --brand-blue: #7a9ab8;
+  --text-primary: #2e2e2e;
+  --text-muted: #888;
+  --text-dim: #aaa;
+  --bg-body: #faf8f5;
+  --bg-card: #f0ebe3;
+  --border-light: #d0cbc4;
+  /* Semantic */
+  --success: #27ae60;
+  --danger: #e74c3c;
+  --warning: #e67e22;
+  --info: #2980b9;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
+
+/* ── Utility layout classes ── */
+.flex-row     { display: flex; flex-direction: row; }
+.flex-col     { display: flex; flex-direction: column; }
+.flex-center  { display: flex; align-items: center; justify-content: center; }
+.flex-between { display: flex; align-items: center; justify-content: space-between; }
+.flex-wrap    { flex-wrap: wrap; }
+.gap-1 { gap: 4px; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+
+/* ── Shared: stats bar + toggle (extracted from devices.html, main-agent.html) ── */
+.device-stats { display: flex; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+.stat-chip {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 8px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 90px;
+}
+.stat-chip .stat-val { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); }
+.stat-chip .stat-lbl { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+.toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: #ccc; border-radius: 20px; transition: 0.2s;
+}
+.toggle .slider:before {
+  content: ''; position: absolute; height: 14px; width: 14px;
+  left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s;
+}
+.toggle input:checked + .slider { background: var(--brand-blue); }
+.toggle input:checked + .slider:before { transform: translateX(16px); }
+
 
 body {
   font-family: "Segoe UI", sans-serif;

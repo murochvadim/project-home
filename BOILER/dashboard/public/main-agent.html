@@ -6,58 +6,46 @@
   <title>Main Agent</title>
   <link rel="stylesheet" href="css/style.css">
   <style>
-    /* ── Stats bar (copied from devices.html) ── */
-    .device-stats { display:flex; gap:12px; margin-bottom:4px; flex-wrap:wrap; }
-    .stat-chip { background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px; padding:8px 16px; display:flex; flex-direction:column; align-items:center; min-width:90px; }
-    .stat-chip .stat-val { font-size:1.1rem; font-weight:700; color:#2e2e2e; line-height:1.6em; }
-    .stat-chip .stat-lbl { font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:.04em; line-height:1.2em; }
+    /* Page-specific: state-chip value accent colors */
     #stat-mode-val.active { color:#1a7a3a; }
     #stat-mode-val.idle   { color:#f39c12; }
     #stat-mode-val.away   { color:#95a5a6; }
     #stat-people.p0 { color:#95a5a6; }
-    #stat-people.p1 { color:#2980b9; }
+    #stat-people.p1 { color:var(--info); }
     #stat-people.pm { color:#1a7a3a; }
-    #stat-active-rooms { color:#2980b9; }
+    #stat-active-rooms { color:var(--info); }
     #stat-last-room { color:#b7770d; }
     #stat-motion-ago { color:#8e44ad; }
 
-    /* ── Engine status row ── */
-    .engine-row { display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; font-size:0.82rem; color:#888; }
-    .engine-row .eval { color:#2e2e2e; font-weight:600; }
+    /* Engine status row */
+    .engine-row { display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; font-size:0.82rem; color:var(--text-muted); }
+    .engine-row .eval { color:var(--text-primary); font-weight:600; }
     .engine-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
-    .engine-dot.online  { background:#27ae60; }
-    .engine-dot.offline { background:#e74c3c; }
+    .engine-dot.online  { background:var(--success); }
+    .engine-dot.offline { background:var(--danger); }
 
-    /* ── Room grid ── */
+    /* Room grid */
     .room-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
     .room-chip {
-      background:#f0ebe3; border:1px solid #d0cbc4; border-radius:8px;
-      padding:12px 14px; text-align:center; font-size:0.85rem; color:#888;
+      background:var(--bg-card); border:1px solid var(--border-light); border-radius:8px;
+      padding:12px 14px; text-align:center; font-size:0.85rem; color:var(--text-muted);
     }
     .room-chip.occupied {
-      background:rgba(39,174,96,0.12); border-color:#27ae60; color:#1a7a3a; font-weight:600;
+      background:rgba(39,174,96,0.12); border-color:var(--success); color:#1a7a3a; font-weight:600;
     }
     .room-chip .room-dot {
       display:inline-block; width:8px; height:8px; border-radius:50%;
       margin-right:5px; vertical-align:middle; background:#ccc;
     }
-    .room-chip.occupied .room-dot { background:#27ae60; }
+    .room-chip.occupied .room-dot { background:var(--success); }
 
-    /* ── Rules table ── */
+    /* Rules table */
     .rules-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
-    .rules-table th { text-align:left; font-size:0.75rem; color:#888; text-transform:uppercase; letter-spacing:.04em; padding:6px 12px; border-bottom:1px solid #d0cbc4; }
+    .rules-table th { text-align:left; font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em; padding:6px 12px; border-bottom:1px solid var(--border-light); }
     .rules-table td { padding:8px 12px; border-bottom:1px solid #e8e2da; }
-    .rules-table .rule-name { font-weight:600; color:#2e2e2e; }
-    .rules-table .rule-desc { color:#888; font-size:0.8rem; }
-    .rules-table .rule-cat { font-size:0.75rem; color:#7a9ab8; }
-
-    /* ── Toggle ── */
-    .toggle { position:relative; display:inline-block; width:36px; height:20px; }
-    .toggle input { opacity:0; width:0; height:0; }
-    .toggle .slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ccc; border-radius:20px; transition:.2s; }
-    .toggle .slider:before { position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
-    .toggle input:checked + .slider { background:#7a9ab8; }
-    .toggle input:checked + .slider:before { transform:translateX(16px); }
+    .rules-table .rule-name { font-weight:600; color:var(--text-primary); }
+    .rules-table .rule-desc { color:var(--text-muted); font-size:0.8rem; }
+    .rules-table .rule-cat { font-size:0.75rem; color:var(--brand-blue); }
   </style>
 </head>
 <body>
