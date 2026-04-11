@@ -120,112 +120,118 @@
     if (e.target === this) closeRuleTimePopup();
   });
 
-  let _traceChart = null;
   let _traceRuleName = '';
-  const _typeColors = { state_changed: '#3498db', command: '#27ae60', auto_disabled: '#e74c3c', force_fired: '#e67e22' };
-  const _typeY = { state_changed: 1, command: 2, auto_disabled: 3, force_fired: 2 };
+  let _traceRange = '6h';
+
+  function _extractKeys(result) {
+    if (!result) return [];
+    return result.split(';').map(s => s.trim().split('=')[0]).filter(Boolean);
+  }
 
   window.showRuleTrace = function (name) {
     _traceRuleName = name;
+    _traceRange = '6h';
     document.getElementById('rule-trace-title').textContent = name + ' — Event Trace';
     document.getElementById('rule-trace-overlay').style.display = 'flex';
-    loadRuleTrace('6h');
+    document.getElementById('trace-resolution').value = '5m';
+    ['1h', '6h', '24h'].forEach(r => {
+      const btn = document.getElementById('trace-btn-' + r);
+      if (btn) { btn.style.background = r === '6h' ? '#7a9ab8' : ''; btn.style.color = r === '6h' ? '#fff' : ''; }
+    });
+    loadRuleTrace();
   };
 
-  window.loadRuleTrace = async function (range) {
-    // Update active button
+  window.setTraceRange = function (range) {
+    _traceRange = range;
     ['1h', '6h', '24h'].forEach(r => {
       const btn = document.getElementById('trace-btn-' + r);
       if (btn) { btn.style.background = r === range ? '#7a9ab8' : ''; btn.style.color = r === range ? '#fff' : ''; }
     });
-    const list = document.getElementById('rule-trace-list');
-    if (list) list.innerHTML = '<span style="color:#888;">Loading...</span>';
+    loadRuleTrace();
+  };
+
+  window.loadRuleTrace = async function () {
+    const container = document.getElementById('rule-trace-table');
+    const resolution = document.getElementById('trace-resolution')?.value || '5m';
+    if (container) container.innerHTML = '<span style="color:#888;">Loading...</span>';
     try {
-      const r = await fetch(`/api/rule-engine/events?rule=${encodeURIComponent(_traceRuleName)}&range=${range}`);
+      const r = await fetch(`/api/rule-engine/events?rule=${encodeURIComponent(_traceRuleName)}&range=${_traceRange}`);
       const events = await r.json();
       if (!Array.isArray(events) || events.length === 0) {
-        if (_traceChart) { _traceChart.destroy(); _traceChart = null; }
-        if (list) list.innerHTML = '<span style="color:#aaa;">No events in this time range</span>';
+        if (container) container.innerHTML = '<span style="color:#aaa;">No events in this time range</span>';
         return;
       }
       const sorted = [...events].reverse();
 
-      // Build scatter chart
-      if (_traceChart) { _traceChart.destroy(); _traceChart = null; }
-      const canvas = document.getElementById('rule-trace-chart');
-      if (canvas) {
-        const types = [...new Set(sorted.map(e => e.event_type))];
-        const datasets = types.map(t => ({
-          label: t,
-          data: sorted.filter(e => e.event_type === t).map(e => ({
-            x: new Date(e.ts).getTime(),
-            y: _typeY[t] || 1,
-            _result: e.result,
-            _device: e.device_id,
-          })),
-          backgroundColor: _typeColors[t] || '#888',
-          pointRadius: 5,
-          pointHoverRadius: 8,
-        }));
-        _traceChart = new Chart(canvas, {
-          type: 'scatter',
-          data: { datasets },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: {
-                position: 'bottom',
-                labels: { boxWidth: 10, font: { size: 10 }, padding: 8 },
-              },
-              tooltip: {
-                callbacks: {
-                  title: (items) => {
-                    const d = new Date(items[0]?.raw?.x);
-                    return d.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-                  },
-                  label: (item) => {
-                    const p = item.raw;
-                    return (p._result || '').substring(0, 100);
-                  },
-                },
-              },
-            },
-            scales: {
-              x: {
-                type: 'linear',
-                ticks: {
-                  callback: (v) => new Date(v).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false }),
-                  maxRotation: 0, font: { size: 9 }, maxTicksLimit: 12,
-                },
-              },
-              y: {
-                min: 0, max: 4,
-                ticks: {
-                  callback: (v) => ({ 1: 'state', 2: 'command', 3: 'error' }[v] || ''),
-                  font: { size: 9 },
-                },
-                grid: { display: false },
-              },
-            },
-          },
-        });
-      }
+      // Resolution in ms
+      const resMs = { '1m': 60000, '2m': 120000, '5m': 300000, '10m': 600000, '30m': 1800000, '1h': 3600000 }[resolution] || 300000;
 
-      // List below
-      if (list) {
-        list.innerHTML = events.map(e => {
-          const time = e.ts ? new Date(e.ts).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
-          const color = _typeColors[e.event_type] || '#888';
-          return `<div style="display:flex;gap:6px;padding:3px 0;border-bottom:1px solid #f0ebe3;">
-            <span style="min-width:55px;color:#888;font-size:0.72rem;">${time}</span>
-            <span style="min-width:70px;font-weight:600;color:${color};font-size:0.72rem;">${escHtml(e.event_type)}</span>
-            <span style="flex:1;color:#444;font-size:0.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(e.result || '—')}</span>
-          </div>`;
-        }).join('');
-      }
+      // Collect all unique keys
+      const allKeys = [];
+      const keySet = new Set();
+      sorted.forEach(e => {
+        if (e.event_type === 'state_changed') {
+          _extractKeys(e.result).forEach(k => { if (!keySet.has(k)) { keySet.add(k); allKeys.push(k); } });
+        } else {
+          const k = e.event_type;
+          if (!keySet.has(k)) { keySet.add(k); allKeys.push(k); }
+        }
+      });
+
+      // Build time buckets with counts per key
+      const bucketMap = {};
+      sorted.forEach(e => {
+        const ts = new Date(e.ts).getTime();
+        const bucket = Math.floor(ts / resMs) * resMs;
+        if (!bucketMap[bucket]) bucketMap[bucket] = {};
+        const keys = e.event_type === 'state_changed' ? _extractKeys(e.result) : [e.event_type];
+        keys.forEach(k => { bucketMap[bucket][k] = (bucketMap[bucket][k] || 0) + 1; });
+      });
+
+      // Sort buckets chronologically
+      const bucketTimes = Object.keys(bucketMap).map(Number).sort((a, b) => a - b);
+
+      // Shorten key names for header
+      const shortKey = (k) => {
+        const parts = k.split('_');
+        if (parts.length <= 2) return k;
+        return parts.map(p => p.substring(0, 4)).join('_');
+      };
+
+      // Build HTML table
+      const cellStyle = (count) => {
+        if (!count) return 'color:#ccc;';
+        if (count >= 3) return 'color:#fff;background:#3498db;font-weight:600;';
+        if (count >= 1) return 'color:#2e2e2e;';
+        return 'color:#ccc;';
+      };
+
+      let html = '<table style="width:100%;border-collapse:collapse;font-size:0.75rem;">';
+      html += '<thead><tr style="border-bottom:2px solid #d0cbc4;">';
+      html += '<th style="text-align:left;padding:4px 8px;font-size:0.7rem;color:#888;">Time</th>';
+      allKeys.forEach(k => {
+        html += `<th style="text-align:center;padding:4px 6px;font-size:0.68rem;color:#888;white-space:nowrap;" title="${escHtml(k)}">${escHtml(shortKey(k))}</th>`;
+      });
+      html += '</tr></thead><tbody>';
+
+      bucketTimes.forEach(ts => {
+        const d = new Date(ts);
+        const time = d.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const counts = bucketMap[ts];
+        html += '<tr style="border-bottom:1px solid #f0ebe3;">';
+        html += `<td style="padding:3px 8px;color:#888;font-size:0.72rem;white-space:nowrap;">${time}</td>`;
+        allKeys.forEach(k => {
+          const count = counts[k] || 0;
+          const val = count === 0 ? '—' : count;
+          html += `<td style="text-align:center;padding:3px 6px;font-size:0.75rem;border-radius:3px;${cellStyle(count)}">${val}</td>`;
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      if (container) container.innerHTML = html;
     } catch (err) {
-      if (list) list.innerHTML = '<span style="color:#e74c3c;">Failed to load events</span>';
+      if (container) container.innerHTML = '<span style="color:#e74c3c;">Failed to load events</span>';
     }
   };
 

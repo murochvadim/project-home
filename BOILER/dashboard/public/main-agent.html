@@ -142,20 +142,25 @@
 
     <!-- Rule Event Trace Popup -->
     <div id="rule-trace-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.3);z-index:1000;justify-content:center;align-items:center;">
-      <div style="background:#fff;border-radius:10px;padding:20px 24px;width:80vw;max-width:900px;max-height:85vh;box-shadow:0 4px 20px rgba(0,0,0,0.15);display:flex;flex-direction:column;">
-        <div style="display:flex;align-items:center;margin-bottom:8px;">
+      <div style="background:#fff;border-radius:10px;padding:20px 24px;width:85vw;max-width:950px;max-height:85vh;box-shadow:0 4px 20px rgba(0,0,0,0.15);display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;margin-bottom:10px;">
           <h3 style="margin:0;font-size:1rem;flex:1;" id="rule-trace-title">Event Trace</h3>
-          <div style="display:flex;gap:4px;margin-right:12px;">
-            <button class="btn btn-secondary btn-sm" onclick="loadRuleTrace('1h')" id="trace-btn-1h" style="padding:2px 10px;font-size:0.72rem;">1h</button>
-            <button class="btn btn-secondary btn-sm" onclick="loadRuleTrace('6h')" id="trace-btn-6h" style="padding:2px 10px;font-size:0.72rem;background:#7a9ab8;color:#fff;">6h</button>
-            <button class="btn btn-secondary btn-sm" onclick="loadRuleTrace('24h')" id="trace-btn-24h" style="padding:2px 10px;font-size:0.72rem;">24h</button>
+          <div style="display:flex;gap:4px;margin-right:8px;">
+            <button class="btn btn-secondary btn-sm" onclick="setTraceRange('1h')" id="trace-btn-1h" style="padding:2px 8px;font-size:0.68rem;">1h</button>
+            <button class="btn btn-secondary btn-sm" onclick="setTraceRange('6h')" id="trace-btn-6h" style="padding:2px 8px;font-size:0.68rem;background:#7a9ab8;color:#fff;">6h</button>
+            <button class="btn btn-secondary btn-sm" onclick="setTraceRange('24h')" id="trace-btn-24h" style="padding:2px 8px;font-size:0.68rem;">24h</button>
           </div>
+          <select id="trace-resolution" onchange="loadRuleTrace()" style="padding:2px 4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.68rem;margin-right:12px;">
+            <option value="1m">1m</option>
+            <option value="2m">2m</option>
+            <option value="5m" selected>5m</option>
+            <option value="10m">10m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+          </select>
           <button onclick="closeRuleTrace()" style="background:none;border:none;cursor:pointer;color:#888;font-size:1.2rem;">&times;</button>
         </div>
-        <div style="flex:1;min-height:220px;position:relative;">
-          <canvas id="rule-trace-chart"></canvas>
-        </div>
-        <div id="rule-trace-list" style="overflow-y:auto;max-height:180px;font-size:0.78rem;margin-top:8px;border-top:1px solid #e8e2da;padding-top:6px;"></div>
+        <div id="rule-trace-table" style="overflow:auto;flex:1;"></div>
       </div>
     </div>
   </div>
@@ -189,7 +194,6 @@
 
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/main-agent.js?v=12"></script>
+<script src="js/main-agent.js?v=14"></script>
 </body>
 </html>
