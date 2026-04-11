@@ -120,6 +120,59 @@
     if (e.target === this) closeRuleTimePopup();
   });
 
+  window.testRule = async function (name) {
+    const el = document.getElementById('test-result');
+    if (!el) return;
+    el.style.display = 'block';
+    el.style.background = '#f0ebe3';
+    el.style.borderLeft = '4px solid #888';
+    el.innerHTML = `Testing <b>${escHtml(name)}</b>...`;
+    try {
+      const r = await fetch('/api/rule-engine/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule_name: name }),
+      });
+      const data = await r.json();
+      if (data.status === 'would_fire') {
+        el.style.background = 'rgba(39,174,96,0.1)';
+        el.style.borderLeft = '4px solid #27ae60';
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#27ae60;font-weight:600;">WOULD FIRE</span><br>` +
+          (data.commands || []).map(c => `&nbsp;&nbsp;→ ${escHtml(c)}`).join('<br>') +
+          `<br><span style="color:#888;font-size:0.75rem;">Device: ${escHtml(data.device || '—')}</span>`;
+      } else if (data.status === 'no_action') {
+        el.style.background = 'rgba(149,165,166,0.1)';
+        el.style.borderLeft = '4px solid #95a5a6';
+        const state = data.state || {};
+        const stateStr = Object.entries(state).map(([k,v]) => `${k}=${v}`).join(', ');
+        const timerStr = (data.timers || []).join(', ');
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#95a5a6;font-weight:600;">NO ACTION</span><br>` +
+          `<span style="color:#888;font-size:0.75rem;">${escHtml(data.reason || '')}</span><br>` +
+          (stateStr ? `<span style="color:#888;font-size:0.75rem;">State: ${escHtml(stateStr)}</span><br>` : '') +
+          (timerStr ? `<span style="color:#888;font-size:0.75rem;">Timers: ${escHtml(timerStr)}</span>` : '');
+      } else if (data.status === 'skip') {
+        el.style.background = 'rgba(243,156,18,0.1)';
+        el.style.borderLeft = '4px solid #f39c12';
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#f39c12;font-weight:600;">SKIP</span><br>` +
+          `<span style="color:#888;font-size:0.75rem;">${escHtml(data.reason || '')}</span>`;
+      } else if (data.status === 'timeout') {
+        el.style.background = 'rgba(231,76,60,0.1)';
+        el.style.borderLeft = '4px solid #e74c3c';
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#e74c3c;font-weight:600;">TIMEOUT</span><br>` +
+          `<span style="color:#888;font-size:0.75rem;">Rule engine did not respond</span>`;
+      } else {
+        el.style.background = 'rgba(231,76,60,0.1)';
+        el.style.borderLeft = '4px solid #e74c3c';
+        el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#e74c3c;">${escHtml(data.status || 'error')}</span><br>` +
+          `<span style="color:#888;font-size:0.75rem;">${escHtml(data.reason || '')}</span>`;
+      }
+    } catch (e) {
+      el.style.background = 'rgba(231,76,60,0.1)';
+      el.style.borderLeft = '4px solid #e74c3c';
+      el.innerHTML = `<b>${escHtml(name)}</b> — <span style="color:#e74c3c;">Connection error</span>`;
+    }
+  };
+
   window.reloadRules = async function () {
     try {
       const btn = document.querySelector('[onclick="reloadRules()"]');
@@ -270,6 +323,7 @@
                 <span class="slider"></span>
               </label>
             </td>
+            <td><button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 8px;" title="Dry-run test">Test</button></td>
           </tr>`;
         }).join('');
       }

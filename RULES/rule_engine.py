@@ -270,6 +270,11 @@ class RuleEngine:
             self._reload_rules()
             return
 
+        # mur/home/rule-engine/test
+        if parts == ['mur', 'home', 'rule-engine', 'test']:
+            self._test_rule(payload)
+            return
+
         # ---- Event topics (update state AND trigger rules) ----
 
         device_id = None
@@ -679,6 +684,103 @@ class RuleEngine:
                  list(added) if added else 'none',
                  list(removed) if removed else 'none')
 
+    def _test_rule(self, payload):
+        """Dry-run a rule against current state. Write result to DB for dashboard."""
+        rule_name = payload.get('rule_name', '') if isinstance(payload, dict) else ''
+        if not rule_name:
+            log.warning("Test request missing rule_name")
+            return
+
+        # Find the rule
+        rule = None
+        for m in self.rules:
+            if m.RULE['name'] == rule_name:
+                rule = m
+                break
+        if not rule:
+            result = {'rule': rule_name, 'status': 'error', 'reason': f'Rule not found: {rule_name}'}
+            self.state.db_execute(
+                "INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_test_result', %s::jsonb, NOW()) "
+                "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                (json.dumps(result), json.dumps(result)),
+            )
+            return
+
+        log.info("Testing rule '%s' (dry run)", rule_name)
+
+        # Check conditions first
+        ok, reason = self._check_conditions(rule)
+        if not ok:
+            result = {
+                'rule': rule_name, 'status': 'skip', 'reason': f'Condition failed: {reason}',
+                'ts': datetime.now(tz=TZ).isoformat(),
+            }
+            self.state.db_execute(
+                "INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_test_result', %s::jsonb, NOW()) "
+                "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                (json.dumps(result), json.dumps(result)),
+            )
+            return
+
+        # Build synthetic event from last motion device or first presence device
+        test_device_id = ''
+        for did, dev in self.state.devices.items():
+            if dev.get('device_type') == 'presence':
+                test_device_id = did
+                break
+        event = {
+            'device_id': test_device_id,
+            'dps': self.state.devices.get(test_device_id, {}).get('dps', {}),
+            'source': 'test',
+            'ts': datetime.now(tz=TZ).isoformat(),
+        }
+
+        # Evaluate (dry run — no state changes)
+        shared_backup = copy.deepcopy(self.state.shared)
+        try:
+            commands = self._evaluate_rule(rule, event)
+        finally:
+            # Restore shared state (undo any changes the rule made)
+            self.state.shared = shared_backup
+
+        if commands:
+            cmd_strs = [f'{c.get("action","?")}' +
+                        (f': {c.get("preset_name","")}' if c.get('preset_name') else '') +
+                        (f' vars={c.get("vars",{})}' if c.get('vars') else '')
+                        for c in commands]
+            result = {
+                'rule': rule_name, 'status': 'would_fire',
+                'commands': cmd_strs,
+                'device': test_device_id,
+                'ts': datetime.now(tz=TZ).isoformat(),
+            }
+        else:
+            # Check why it didn't fire — inspect timers
+            hints = []
+            for timer_name in ['pixoo_last_push', 'last_motion']:
+                val = self.state.get_timer(timer_name)
+                if val != float('inf'):
+                    hints.append(f'{timer_name}: {val:.0f}s ago')
+            result = {
+                'rule': rule_name, 'status': 'no_action',
+                'reason': 'Rule evaluated but returned no commands',
+                'state': {
+                    'activity_level': self.state.shared.get('activity_level'),
+                    'people_home': self.state.shared.get('people_home'),
+                    'last_motion_room': self.state.shared.get('last_motion_room'),
+                },
+                'timers': hints,
+                'device': test_device_id,
+                'ts': datetime.now(tz=TZ).isoformat(),
+            }
+
+        self.state.db_execute(
+            "INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_test_result', %s::jsonb, NOW()) "
+            "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+            (json.dumps(result), json.dumps(result)),
+        )
+        log.info("Test result for '%s': %s", rule_name, result.get('status'))
+
     # ------------------------------------------------------------------
     # Computed state publish (debounced)
     # ------------------------------------------------------------------
@@ -812,6 +914,7 @@ class RuleEngine:
             ('mur/home/rule-engine/disable/+', 0),
             ('mur/home/rule-engine/enable/+', 0),
             ('mur/home/rule-engine/reload', 0),
+            ('mur/home/rule-engine/test', 0),
             ('hasp/+/state', 0),
             ('hasp/+/state/+', 0),
             ('awtrix/+/stats', 0),

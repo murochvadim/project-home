@@ -13,6 +13,7 @@ const fs = require('fs');
 
 
 const os = require('os');
+const mqtt = require('mqtt');
 const voiceUploadDir = path.join(os.tmpdir(), 'voice-uploads');
 if (!fs.existsSync(voiceUploadDir)) fs.mkdirSync(voiceUploadDir, { recursive: true });
 const upload = multer({ dest: voiceUploadDir });
@@ -30,6 +31,13 @@ const db = new Pool({
   user: 'postgres',
   port: 5432,
 });
+
+// MQTT client for rule engine commands (test, reload)
+const mqttClient = mqtt.connect('mqtt://192.168.1.189:1883', {
+  username: 'rule_engine', password: process.env.MQTT_RULE_PASS || 'rule_engine_2024',
+  clientId: 'dashboard-' + process.pid, reconnectPeriod: 5000,
+});
+mqttClient.on('error', (e) => console.error('MQTT error:', e.message));
 
 // HA config
 const HA_URL = 'http://192.168.1.110:8123';
@@ -1572,13 +1580,34 @@ app.post('/api/rule-engine/override', async (req, res) => {
 
 app.post('/api/rule-engine/reload', async (_req, res) => {
   try {
-    // Publish reload command to MQTT via pixoo service (it has MQTT access)
-    // Actually, use DB flag — rule engine checks it on next cycle
     await db.query(
       `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_reload_request', '"pending"'::jsonb, NOW())
        ON CONFLICT (key) DO UPDATE SET value = '"pending"'::jsonb, updated_at = NOW()`
     );
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/rule-engine/test', async (req, res) => {
+  try {
+    const { rule_name } = req.body;
+    if (!rule_name) return res.status(400).json({ error: 'Missing rule_name' });
+    // Clear previous result
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_test_result', 'null'::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = 'null'::jsonb, updated_at = NOW()`
+    );
+    // Publish test request via MQTT (instant delivery)
+    mqttClient.publish('mur/home/rule-engine/test', JSON.stringify({ rule_name }));
+    // Poll for result (up to 5s)
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      const r = await db.query("SELECT value FROM rule_engine_state WHERE key = '_test_result'");
+      if (r.rows.length > 0 && r.rows[0].value !== null) {
+        return res.json(r.rows[0].value);
+      }
+    }
+    res.json({ status: 'timeout', reason: 'Rule engine did not respond within 5s' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
