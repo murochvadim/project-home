@@ -906,6 +906,8 @@ function showTab(name, btn) {
   if (name === 'settings') { settingsRendered = false; applySettingsFilters(); settingsRendered = true; loadBlocklist(); }
   if (name === 'rooms') loadRooms();
   if (name === 'history') populateHistorySelect();
+  if (name === 'battery') renderBatteryTab();
+  if (name === 'dash-settings') { loadBatterySettings().then(() => renderDashSettingsTab()); }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1303,6 +1305,228 @@ async function historyToggle(state, channel) {
     statusEl.textContent = escHtml(e.message);
     statusEl.style.color = '#c0392b';
   }
+}
+
+// ─── Battery Tab ─────────────────────────────────────────────────────────────
+
+let _battThresholds = null;  // cached from API
+let _activeBatteryChart = null;
+let _activeBatteryCardId = null;
+
+function getBatteryKey(device) {
+  const labels = device.dps_labels || {};
+  for (const [k, v] of Object.entries(labels)) {
+    if (typeof v === 'string' && v.toLowerCase() === 'battery') return k;
+  }
+  return null;
+}
+
+function getBatteryValue(device) {
+  const key = getBatteryKey(device);
+  if (!key) return null;
+  const state = device.last_state || {};
+  const val = state[key];
+  return typeof val === 'number' ? val : null;
+}
+
+function batteryColor(value, thresholds) {
+  if (value == null) return '#999';
+  const t = thresholds || { good: 60, low: 20 };
+  if (value >= t.good) return '#1a5c2a';
+  if (value >= t.low)  return '#8b6914';
+  return '#8b1a1a';
+}
+
+function groupByRoom(batteryDevices) {
+  const rooms = {};
+  for (const item of batteryDevices) {
+    const room = item.device.room || 'Unassigned';
+    if (!rooms[room]) rooms[room] = [];
+    rooms[room].push(item);
+  }
+  // Sort devices within each room by battery ascending
+  for (const arr of Object.values(rooms)) {
+    arr.sort((a, b) => (a.batteryVal ?? 999) - (b.batteryVal ?? 999));
+  }
+  // Sort rooms by worst (lowest) battery
+  const sorted = Object.entries(rooms).sort((a, b) => {
+    const aMin = a[1][0]?.batteryVal ?? 999;
+    const bMin = b[1][0]?.batteryVal ?? 999;
+    return aMin - bMin;
+  });
+  return sorted.map(([room, devices]) => ({ room, devices }));
+}
+
+function renderBatteryCard(device, batteryVal, color) {
+  const name = escHtml(device.name);
+  const pct = batteryVal != null ? batteryVal : '--';
+  const fillH = batteryVal != null ? Math.max(2, batteryVal) : 0;
+  const ls = lastSeenText(device.last_seen, false);
+  const online = isOnline(device);
+  const cardColor = online ? color : '#999';
+  const battKey = getBatteryKey(device);
+  return `<div class="presence-card battery-card" onclick="toggleBatteryChart('${escAttr(device.id)}','${escAttr(battKey)}','${cardColor}')" title="Click for 24h chart">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div class="battery-icon" style="border-color:${cardColor}">
+        <div class="battery-fill" style="height:${fillH}%;background:${cardColor}"></div>
+      </div>
+      <div>
+        <div class="presence-name">${name}</div>
+        <div style="font-size:1.4rem;font-weight:700;color:${cardColor}">${pct}${batteryVal != null ? '%' : ''}</div>
+        <div class="presence-age">${online ? ls.text : 'offline'}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function renderBatteryTab() {
+  await loadBatterySettings();
+  const grid = document.getElementById('battery-grid');
+  const empty = document.getElementById('battery-empty');
+
+  const battDevices = allDevices
+    .filter(d => d.enabled !== false && getBatteryKey(d))
+    .map(d => ({
+      device: d,
+      batteryVal: getBatteryValue(d),
+      color: batteryColor(getBatteryValue(d), _battThresholds),
+    }));
+
+  if (!battDevices.length) {
+    grid.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  const groups = groupByRoom(battDevices);
+  let html = '';
+  for (const { room, devices } of groups) {
+    html += `<div class="battery-room-group">`;
+    html += `<div class="battery-room-header">${escHtml(room)}</div>`;
+    html += `<div class="battery-grid">`;
+    for (const { device, batteryVal, color } of devices) {
+      html += renderBatteryCard(device, batteryVal, color);
+    }
+    html += `</div></div>`;
+  }
+  grid.innerHTML = html;
+  _activeBatteryCardId = null;
+}
+
+// ─── Battery Chart (click card → inline 24h chart) ──────────────────────────
+
+async function toggleBatteryChart(deviceId, batteryKey, color) {
+  // Collapse existing chart
+  const existing = document.querySelector('.battery-chart-panel');
+  if (existing) {
+    if (_activeBatteryChart) { _activeBatteryChart.destroy(); _activeBatteryChart = null; }
+    existing.remove();
+    if (_activeBatteryCardId === deviceId) { _activeBatteryCardId = null; return; }
+  }
+
+  _activeBatteryCardId = deviceId;
+
+  // Find the clicked card and insert chart panel after it
+  const cards = document.querySelectorAll('.battery-card');
+  let targetCard = null;
+  for (const card of cards) {
+    if (card.getAttribute('onclick')?.includes(deviceId)) { targetCard = card; break; }
+  }
+  if (!targetCard) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'battery-chart-panel';
+  panel.innerHTML = '<div style="color:#888;font-size:0.82rem;">Loading chart...</div>';
+  targetCard.after(panel);
+
+  try {
+    const events = await fetch(`/api/devices/${deviceId}/events?minutes=1440`).then(r => r.json());
+    const batteryData = events
+      .filter(e => e.dps && e.dps[batteryKey] != null)
+      .map(e => ({ x: new Date(e.ts), y: typeof e.dps[batteryKey] === 'number' ? e.dps[batteryKey] : parseFloat(e.dps[batteryKey]) }))
+      .filter(p => !isNaN(p.y));
+
+    if (!batteryData.length) {
+      panel.innerHTML = '<div style="color:#888;font-size:0.82rem;">No battery data in last 24h</div>';
+      return;
+    }
+
+    panel.innerHTML = '<canvas style="height:120px;width:100%;"></canvas>';
+    const ctx = panel.querySelector('canvas').getContext('2d');
+    _activeBatteryChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        datasets: [{
+          data: batteryData,
+          borderColor: color,
+          backgroundColor: color + '20',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 2,
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { type: 'time', time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } }, grid: { display: false } },
+          y: { min: 0, max: 100, ticks: { stepSize: 25, callback: v => v + '%' }, grid: { color: '#e8e2da' } },
+        },
+      },
+    });
+  } catch (e) {
+    panel.innerHTML = `<div style="color:#8b1a1a;font-size:0.82rem;">Error loading chart: ${escHtml(e.message)}</div>`;
+  }
+}
+
+// ─── Battery Settings ────────────────────────────────────────────────────────
+
+async function loadBatterySettings() {
+  if (_battThresholds) return;
+  try {
+    const r = await fetch('/api/dashboard-settings/battery_thresholds').then(r => r.json());
+    _battThresholds = r.value || { good: 60, low: 20 };
+  } catch (e) {
+    _battThresholds = { good: 60, low: 20 };
+  }
+}
+
+async function saveBatterySettings() {
+  const good = parseInt(document.getElementById('batt-good').value) || 60;
+  const low = parseInt(document.getElementById('batt-low').value) || 20;
+  const status = document.getElementById('batt-save-status');
+  if (good <= low) {
+    status.textContent = 'Error: Good must be > Low';
+    status.style.color = '#8b1a1a';
+    return;
+  }
+  try {
+    await fetch('/api/dashboard-settings/battery_thresholds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: { good, low } }),
+    });
+    _battThresholds = { good, low };
+    status.textContent = '✓ Saved';
+    status.style.color = '#1a5c2a';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+    // Re-render battery tab if it was open
+    if (document.getElementById('tab-battery').classList.contains('active')) {
+      renderBatteryTab();
+    }
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    status.style.color = '#8b1a1a';
+  }
+}
+
+function renderDashSettingsTab() {
+  const t = _battThresholds || { good: 60, low: 20 };
+  document.getElementById('batt-good').value = t.good;
+  document.getElementById('batt-low').value = t.low;
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────

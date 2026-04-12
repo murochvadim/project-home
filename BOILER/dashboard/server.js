@@ -1682,8 +1682,22 @@ async function ensureSchema() {
       ('device_agent_log',    30,  true,  24, 'Device agent heartbeat log'),
       ('device_blocklist',  NULL, false, 24, 'Deactivated devices — keep forever'),
       ('devices',           NULL, false, 24, 'Device definitions — keep forever'),
-      ('rooms',             NULL, false, 24, 'Room definitions — keep forever')
+      ('rooms',             NULL, false, 24, 'Room definitions — keep forever'),
+      ('dashboard_settings', NULL, false, 24, 'Dashboard settings — keep forever')
     ON CONFLICT (table_name) DO NOTHING
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS dashboard_settings (
+      key         TEXT PRIMARY KEY,
+      value       JSONB NOT NULL,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    INSERT INTO dashboard_settings (key, value)
+    VALUES ('battery_thresholds', '{"good": 60, "low": 20}'::jsonb)
+    ON CONFLICT (key) DO NOTHING
   `);
 
   await db.query(`
@@ -2778,6 +2792,27 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
     const service = state ? 'turn_on' : 'turn_off';
     await callHA(domain, service, { entity_id: switchable.entity_id });
     res.json({ ok: true, entity_id: switchable.entity_id, service: `${domain}.${service}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Dashboard Settings ─────────────────────────────────────────────────────
+app.get('/api/dashboard-settings/:key', async (req, res) => {
+  try {
+    const r = await db.query('SELECT value, updated_at FROM dashboard_settings WHERE key = $1', [req.params.key]);
+    res.json(r.rows.length ? { value: r.rows[0].value, updated_at: r.rows[0].updated_at } : { value: null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/dashboard-settings/:key', async (req, res) => {
+  try {
+    const { value } = req.body;
+    if (value === undefined) return res.status(400).json({ error: 'Missing value' });
+    await db.query(
+      `INSERT INTO dashboard_settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()`,
+      [req.params.key, JSON.stringify(value)]
+    );
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

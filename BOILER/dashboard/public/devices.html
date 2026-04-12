@@ -72,6 +72,17 @@
     .presence-state.unknown { color:#ccc; }
     .presence-age   { font-size:0.7rem; color:#999; margin-top:4px; }
 
+    /* ── Battery tab ── */
+    .battery-room-group { margin-bottom:18px; }
+    .battery-room-header { font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid #e0dbd4; }
+    .battery-grid { display:grid; grid-template-columns:repeat(auto-fill, 200px); gap:12px; }
+    .battery-card { cursor:pointer; transition:border-color 0.15s; width:200px; }
+    .battery-card:hover { border-color:var(--brand-blue); }
+    .battery-icon { width:28px; height:46px; border:2px solid; border-radius:4px; position:relative; flex-shrink:0; }
+    .battery-icon::before { content:''; position:absolute; top:-5px; left:50%; transform:translateX(-50%); width:10px; height:4px; border-radius:2px 2px 0 0; border:2px solid inherit; border-bottom:none; background:var(--bg-body); }
+    .battery-fill { position:absolute; bottom:2px; left:2px; right:2px; border-radius:1px; transition:height 0.3s; }
+    .battery-chart-panel { padding:10px 14px; background:#faf8f5; border:1px solid #e0dbd4; border-top:none; border-radius:0 0 8px 8px; margin-top:-1px; margin-bottom:12px; }
+
     /* ── Channel / DPS sub-rows ── */
     .channel-sub-row td { background:rgba(0,0,0,0.015); border-bottom:1px solid #ece6de; }
     .chan-indicator { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; vertical-align:middle; }
@@ -158,9 +169,11 @@
   <!-- Tabs -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('all', this)">All Devices</button>
+    <button class="tab-btn" onclick="showTab('battery', this)">Batt Devices</button>
     <button class="tab-btn" onclick="showTab('settings', this)">Set Devices</button>
     <button class="tab-btn" onclick="showTab('rooms', this)">Rooms</button>
     <button class="tab-btn" onclick="showTab('history', this)">Device History</button>
+    <button class="tab-btn" onclick="showTab('dash-settings', this)" style="margin-left:auto">Settings</button>
   </div>
 
   <!-- ═══ TAB: ALL DEVICES ═══ -->
@@ -372,6 +385,35 @@
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB: BATT DEVICES ═══ -->
+  <div class="tab-panel" id="tab-battery">
+    <div class="card">
+      <h2>Battery Devices</h2>
+      <div id="battery-grid"></div>
+      <div id="battery-empty" style="display:none; padding:12px; color:#666; font-size:0.85rem;">No battery devices found.</div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB: DASHBOARD SETTINGS ═══ -->
+  <div class="tab-panel" id="tab-dash-settings">
+    <div class="card" style="max-width:420px;">
+      <h2>Dashboard Settings</h2>
+      <h3 style="font-size:0.85rem; color:#555; margin-bottom:10px;">Battery Thresholds</h3>
+      <div style="display:flex; gap:20px; align-items:center; margin:12px 0;">
+        <label style="font-size:0.85rem;">Good &ge; <input type="number" id="batt-good" min="1" max="100" value="60" style="width:55px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.85rem;"> %</label>
+        <label style="font-size:0.85rem;">Low &lt; <input type="number" id="batt-low" min="1" max="100" value="20" style="width:55px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.85rem;"> %</label>
+      </div>
+      <div style="font-size:0.72rem; color:#888; margin-bottom:14px; line-height:1.6;">
+        <span style="color:#1a5c2a;">&#9632;</span> Good &ge; good threshold &nbsp;
+        <span style="color:#8b6914;">&#9632;</span> Mid &ge; low threshold &nbsp;
+        <span style="color:#8b1a1a;">&#9632;</span> Low &lt; low threshold &nbsp;
+        <span style="color:#999;">&#9632;</span> Offline
+      </div>
+      <button class="btn btn-primary" onclick="saveBatterySettings()" style="padding:6px 20px;">Save</button>
+      <span id="batt-save-status" style="margin-left:8px; font-size:0.82rem;"></span>
     </div>
   </div>
 
