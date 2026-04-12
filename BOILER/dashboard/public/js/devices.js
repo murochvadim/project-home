@@ -153,6 +153,7 @@ function isOnline(dev) {
   // If it has valid last_state, consider it online (TCP push would detect disconnect).
   if (dev.protocol === 'local') return dev.last_state ? true : ageSec < 300;
   if (dev.protocol === 'zigbee') return dev.last_state ? true : ageSec < 600;  // Z2M push on state change only
+  if (dev.protocol === 'zwave') return dev.last_state ? true : ageSec < 600;  // HA WebSocket push on state change
   return ageSec < 180;  // gateway/cloud poll every 60s
 }
 
@@ -220,6 +221,7 @@ function updateStats() {
   const gateway   = counted.filter(d => d.protocol === 'gateway').length;
   const cloud     = counted.filter(d => d.protocol === 'cloud').length;
   const zigbee    = counted.filter(d => d.protocol === 'zigbee').length;
+  const zwave     = counted.filter(d => d.protocol === 'zwave').length;
   const stale     = counted.filter(isStale).length;
 
   document.getElementById('stat-total').textContent       = total;
@@ -230,6 +232,7 @@ function updateStats() {
   document.getElementById('stat-gateway-val').textContent = gateway;
   document.getElementById('stat-cloud-val').textContent   = cloud;
   document.getElementById('stat-zigbee-val').textContent  = zigbee;
+  document.getElementById('stat-zwave-val').textContent   = zwave;
   document.getElementById('stat-stale').textContent       = stale;
 
   // Blocked count — fetch from API

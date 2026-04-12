@@ -2697,6 +2697,33 @@ app.patch('/api/devices/:id', async (req, res) => {
       sets.push(`dps_config=$${vals.length}::jsonb`);
     }
     if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
+
+    // Sync channel_config.name ↔ dps_labels for matching keys
+    if ('channel_config' in req.body || 'dps_labels' in req.body) {
+      const cur = await db.query('SELECT channel_config, dps_labels FROM devices WHERE id=$1', [req.params.id]);
+      if (cur.rows.length) {
+        let cc = req.body.channel_config || cur.rows[0].channel_config || {};
+        let dl = req.body.dps_labels || cur.rows[0].dps_labels || {};
+        if ('channel_config' in req.body) {
+          // channel_config changed → sync names into dps_labels
+          for (const [k, ch] of Object.entries(cc)) {
+            if (ch.name && k in dl) dl[k] = ch.name;
+          }
+          if (!('dps_labels' in req.body)) {
+            vals.push(JSON.stringify(dl));
+            sets.push(`dps_labels=$${vals.length}::jsonb`);
+          }
+        } else {
+          // dps_labels changed → sync names into channel_config
+          for (const [k, label] of Object.entries(dl)) {
+            if (k in cc) cc[k] = { ...cc[k], name: label };
+          }
+          vals.push(JSON.stringify(cc));
+          sets.push(`channel_config=$${vals.length}::jsonb`);
+        }
+      }
+    }
+
     vals.push(req.params.id);
     await db.query(`UPDATE devices SET ${sets.join(',')},updated_at=NOW() WHERE id=$${vals.length}`, vals);
     res.json({ ok: true });
