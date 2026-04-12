@@ -215,3 +215,32 @@ Each new agent only needs: decision logic + settings schema + DB tables.
 - Why build framework last: by step 3 we have two real working agents.
   Every framework design decision is based on proven patterns, not
   assumptions. No over-engineering.
+
+---
+
+## SmartThings → Z2M Migration (planned 2026-04-12)
+
+Migrate Zigbee devices off SmartThings hub to local Z2M (LXC 103, EFR32 dongle). Eliminates cloud dependency, fixes "unavailable" devices, gives direct MQTT to rule engine.
+
+### Keep on SmartThings/HA (no change)
+- Samsung 85" QLED, Samsung Soundbar (WiFi, Samsung-proprietary)
+- Q49 + Q60 TVs — not in use, can be removed from HA
+
+### Migrate to Z2M
+- **8-9 Aeotec multi-sensors** (motion + temp + humidity + illuminance + UV + battery): Balcony, Bedroom, Entrance, Hallway×2, Kitchen, Sallon Corner, TV Wall Corner
+- **4 Zigbee scene switches**: DiningRoom Lower (4ch), DiningRoom Upper (4ch), Hallway (4ch), Wireless (4 buttons)
+
+### Migration per device
+1. Factory reset device (remove from SmartThings hub)
+2. Z2M pairing mode → re-pair
+3. Device agent auto-discovers → `devices` table → rule engine
+
+### Dependencies
+- **Balcony Aeotec sensor** is used by `collect_weather.py` (reads temp/UV/illuminance/humidity via HA). Migrating it requires updating `collect_weather.py` to read from MQTT/DB instead of HA API.
+- Scene switches that are "unavailable" (DiningRoom Lower, Hallway) — migrate first, nothing to lose.
+
+### Order
+1. Pilot: one Aeotec sensor (e.g., Hallway Motion)
+2. Remaining Aeotec sensors
+3. Scene switches
+4. Update `collect_weather.py` when Balcony sensor migrates

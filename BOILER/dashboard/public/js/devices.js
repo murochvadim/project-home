@@ -152,6 +152,7 @@ function isOnline(dev) {
   // Local devices only push on state change — an idle switch may not push for hours.
   // If it has valid last_state, consider it online (TCP push would detect disconnect).
   if (dev.protocol === 'local') return dev.last_state ? true : ageSec < 300;
+  if (dev.protocol === 'zigbee') return dev.last_state ? true : ageSec < 600;  // Z2M push on state change only
   return ageSec < 180;  // gateway/cloud poll every 60s
 }
 
@@ -218,6 +219,7 @@ function updateStats() {
   const local     = counted.filter(d => d.protocol === 'local').length;
   const gateway   = counted.filter(d => d.protocol === 'gateway').length;
   const cloud     = counted.filter(d => d.protocol === 'cloud').length;
+  const zigbee    = counted.filter(d => d.protocol === 'zigbee').length;
   const stale     = counted.filter(isStale).length;
 
   document.getElementById('stat-total').textContent       = total;
@@ -227,6 +229,7 @@ function updateStats() {
   document.getElementById('stat-local-val').textContent   = local;
   document.getElementById('stat-gateway-val').textContent = gateway;
   document.getElementById('stat-cloud-val').textContent   = cloud;
+  document.getElementById('stat-zigbee-val').textContent  = zigbee;
   document.getElementById('stat-stale').textContent       = stale;
 
   // Blocked count — fetch from API

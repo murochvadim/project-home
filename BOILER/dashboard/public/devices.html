@@ -12,6 +12,7 @@
     #stat-local   .stat-val { color:var(--info); }
     #stat-gateway .stat-val { color:#8e44ad; }
     #stat-cloud   .stat-val { color:var(--success); }
+    #stat-zigbee  .stat-val { color:#e67e22; }
     #stat-chip-stale { cursor:pointer; }
     #stat-chip-stale .stat-val { color:var(--danger); }
 
@@ -35,6 +36,7 @@
     .proto-local   { color:#2980b9; }
     .proto-gateway { color:#8e44ad; }
     .proto-cloud   { color:#27ae60; }
+    .proto-zigbee  { color:#e67e22; }
 
     /* ── Type badge ── */
     .type-badge { font-size:0.7rem; color:#666; }
@@ -130,6 +132,7 @@
       <div class="stat-chip" id="stat-local"><span class="stat-val" id="stat-local-val">—</span><span class="stat-lbl">Local</span></div>
       <div class="stat-chip" id="stat-gateway"><span class="stat-val" id="stat-gateway-val">—</span><span class="stat-lbl">Gateway</span></div>
       <div class="stat-chip" id="stat-cloud"><span class="stat-val" id="stat-cloud-val">—</span><span class="stat-lbl">Cloud</span></div>
+      <div class="stat-chip" id="stat-zigbee"><span class="stat-val" id="stat-zigbee-val">—</span><span class="stat-lbl">Zigbee</span></div>
       <div class="stat-chip" id="stat-chip-stale" onclick="filterStale()" title="Click to show stale devices" style="cursor:pointer">
         <span class="stat-val" id="stat-stale">—</span>
         <span class="stat-lbl">Not Seen &gt;<span id="stale-threshold-lbl">30</span>m</span>
@@ -196,6 +199,7 @@
           <option value="local">Local</option>
           <option value="gateway">Gateway</option>
           <option value="cloud">Cloud</option>
+          <option value="zigbee">Zigbee</option>
         </select>
         <select id="filter-update" onchange="applyFilters()">
           <option value="">All updates</option>
