@@ -24,6 +24,7 @@ If **Add**: continue with the steps below.
 
 Ask which protocol:
 - **zigbee** — Zigbee device via Z2M on LXC 103. Requires Z2M pairing.
+- **zwave** ��� Z-Wave device on SmartThings hub, connected via HA WebSocket adapter. Cannot go local without a Z-Wave USB dongle. Device ID = SmartThings UUID (from HA template query with `id[0] == "smartthings"`).
 - **local** — Tuya local device. Already discovered by device agent.
 - **gateway** — Tuya device behind a gateway.
 - **cloud** — Cloud-only device (BSH, etc.).
@@ -46,6 +47,18 @@ Ask which protocol:
 3. After pairing, the `id` = IEEE address (e.g. `0xa4c138...`), get it from Z2M.
 
 4. If Z2M says "NOT supported", an external converter may be needed at `/opt/zigbee2mqtt/data/external_converters/`. Check the model + manufacturer from Z2M logs and search for community converters.
+
+### If Z-Wave:
+1. Query HA for SmartThings device IDs:
+   ```bash
+   HA_TOKEN=$(grep HA_TOKEN BOILER/dashboard/.env | cut -d= -f2-)
+   curl -s -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" \
+     http://192.168.1.110:8123/api/template \
+     -d '{"template": "{% for state in states %}{% set ids = device_attr(state.entity_id,\"identifiers\") %}{% if ids %}{% for id in ids %}{% if id[0] == \"smartthings\" %}{{ id[1] }}|{{ state.entity_id }}|{{ state_attr(state.entity_id, \"friendly_name\") }}\n{% endif %}{% endfor %}{% endif %}{% endfor %}"}'
+   ```
+2. Parse output to find the SmartThings UUID for the target device.
+3. The `id` = SmartThings UUID. No pairing needed — device is already on SmartThings hub → HA.
+4. **Event entities** (buttons/remotes): HA exposes `event.*` entities that fire with `attributes.event_type` = `pushed` / `held`. The adapter produces `"pushed:timestamp"` / `"held:timestamp"` as DPS values — unique per press, action type parseable.
 
 ### If Local/Gateway/Cloud:
 Ask the user for the device ID (Tuya ID from the device agent logs or dashboard).
@@ -136,8 +149,18 @@ SELECT rule_name, device_id, ts FROM rule_events WHERE device_id = '<id>' ORDER 
 - **Zigbee device names MUST match Z2M friendly names exactly** — the device agent maps by name. A mismatch means events are silently dropped.
 - **No duplicate names** — two devices with the same name break the device agent's name→id mapping.
 - **poll_enabled = false for ALL Zigbee devices** — Z2M pushes state changes via MQTT. Polling is not supported.
+- **poll_enabled = false for ALL Z-Wave devices** — HA WebSocket pushes state changes. No polling needed.
+- **Z-Wave devices require restart of device-agent** after adding — same as Zigbee, the HA adapter rebuilds its SmartThings entity map on startup.
+- **Z-Wave event entities** (buttons): the adapter reads `attributes.event_type` and produces `"pushed:timestamp"` or `"held:timestamp"`. Rules parse action via `dps.get("button1", "").split(":")[0]`.
 - **External converters** for unsupported Tuya TS0601 devices go in `/opt/zigbee2mqtt/data/external_converters/`. Z2M auto-loads `.js` files from this directory on startup.
 - **After adding a Zigbee device**: restart the device agent (`systemctl restart device-agent` on LXC 103) so it rebuilds the MQTT name→id map.
 - Auto-populated columns (do NOT set manually): `last_seen`, `last_state`, `last_source`, `created_at`, `updated_at`. The device agent fills these on first event.
 - `mac` column: auto-populated by device agent from net_devices table if available. Leave NULL on insert.
-- `channel_config`: set to `'{}'::jsonb` unless the device has multiple channels (e.g. multi-gang relay with per-channel rooms).
+- `channel_config`: set to `'{}'::jsonb` unless the device has multiple functional channels:
+  - **Multi-gang switches** (e.g. 4 Buttons Device, 8 Gang Switch): each gang = one channel with its own name + room
+  - **Button remotes** (e.g. Wallmote): each button = one channel (room = where the remote is)
+  - **Multi-channel relays** (e.g. My Bathroom Switch): each relay = one channel with its own room
+  - Format: `{"button1": {"name": "Button 1", "room": "Living Room", "enabled": true, "show_dashboard": true}}`
+  - Channels render as expandable sub-rows on the dashboard (same as Tuya multi-gang devices)
+  - Attributes like battery stay in `dps_config` (not `channel_config`) — they're not independent channels
+  - When `channel_config.name` is edited, `dps_labels` syncs automatically (and vice versa) via the server PATCH endpoint
