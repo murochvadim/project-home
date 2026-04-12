@@ -106,15 +106,13 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - **SMB user**: `claude` — has read/write on `Claude_Data` and `Windows_Data`
 - **Proxmox host** mounts `/Laptop_Data` at `/mnt/qnap-laptop` → bind-mounted into LXC 103 at `/mnt/qnap-laptop`
 
-### LXC 100 (192.168.1.138) — HA Token Dependency
-- `tv_control.py` uses `HA_TOKEN` from `/etc/environment` for all TV/soundbar commands via HA API
-- Runs as **nohup** (not systemd) — must be manually restarted after token update:
-  ```bash
-  kill $(ps aux | grep tv_control | grep -v grep | awk '{print $1}')
-  export $(grep -v ^# /etc/environment | xargs)
-  nohup /opt/media-agent/venv/bin/python3 /opt/media-agent/tv_control.py >> /opt/media-agent/tv_control.log 2>&1 &
-  ```
-- ⚠ When HA token is renewed, update `/etc/environment` here AND restart tv_control — otherwise TV control silently fails
+### LXC 100 (192.168.1.138) — Media Agent Services
+- **Services**: `media-agent` (tv_control.py:8765), `player` (player_service.py:8766), `ingest` (ingest_service.py:8767), `pixoo` (pixoo_service.py:8768-8769), `analyzer` (analyzer.py)
+- All use `HA_TOKEN` from `/etc/environment`
+- **Orphan guard**: all 4 services (except analyzer) have `ExecStartPre=/opt/media-agent/kill-orphan.sh <script>` to kill stray processes before starting — prevents port-conflict crash loops
+- **Local script**: `scripts/lxc100-kill-orphan.sh`
+- ⚠ When HA token is renewed, update `/etc/environment` here AND restart media-agent — otherwise TV control silently fails
+- **Restart**: `systemctl restart media-agent player ingest pixoo` — orphan guard handles cleanup automatically
 
 ### LXC 103 (192.168.1.114) — Connections
 - SSH → Windows laptop: `ssh muroc@192.168.1.128` (key auth, no password)
