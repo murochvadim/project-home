@@ -223,8 +223,14 @@ function updateStats() {
   const zigbee    = counted.filter(d => d.protocol === 'zigbee').length;
   const zwave     = counted.filter(d => d.protocol === 'zwave').length;
   const stale     = counted.filter(isStale).length;
+  const channels  = counted.reduce((sum, d) => {
+    const cc = Object.keys(d.channel_config || {}).length;
+    const dc = Object.values(d.dps_config || {}).filter(v => v && v.show_dashboard !== false).length;
+    return sum + (cc || dc || 0);
+  }, 0);
 
   document.getElementById('stat-total').textContent       = total;
+  document.getElementById('stat-channels').textContent    = channels;
   document.getElementById('stat-online').textContent      = online;
   document.getElementById('stat-present').textContent     = present;
   document.getElementById('stat-switches-on').textContent = switchOn;

@@ -128,7 +128,16 @@
     <h2>Overview</h2>
     <div class="device-stats" id="stats-bar">
       <div class="stat-chip"><span class="stat-val" id="stat-total">—</span><span class="stat-lbl">Total</span></div>
+      <div class="stat-chip"><span class="stat-val" id="stat-channels">—</span><span class="stat-lbl">Channels</span></div>
       <div class="stat-chip"><span class="stat-val" id="stat-online">—</span><span class="stat-lbl">Online</span></div>
+      <div style="flex:1"></div>
+      <div class="stat-chip" style="opacity:0.6"><span class="stat-val" id="stat-blocked" style="color:#555">—</span><span class="stat-lbl" style="color:#888">Blocked</span></div>
+      <div class="stat-chip" id="stat-chip-stale" onclick="filterStale()" title="Click to show stale devices" style="cursor:pointer;opacity:0.6">
+        <span class="stat-val" id="stat-stale" style="color:#555">—</span>
+        <span class="stat-lbl" style="color:#888">Not Seen &gt;<span id="stale-threshold-lbl">30</span>m</span>
+      </div>
+    </div>
+    <div class="device-stats" style="margin-top:4px;">
       <div class="stat-chip"><span class="stat-val" id="stat-present">—</span><span class="stat-lbl">Present</span></div>
       <div class="stat-chip"><span class="stat-val" id="stat-switches-on">—</span><span class="stat-lbl">Switches On</span></div>
       <div class="stat-chip" id="stat-local"><span class="stat-val" id="stat-local-val">—</span><span class="stat-lbl">Local</span></div>
@@ -136,25 +145,20 @@
       <div class="stat-chip" id="stat-cloud"><span class="stat-val" id="stat-cloud-val">—</span><span class="stat-lbl">Cloud</span></div>
       <div class="stat-chip" id="stat-zigbee"><span class="stat-val" id="stat-zigbee-val">—</span><span class="stat-lbl">Zigbee</span></div>
       <div class="stat-chip" id="stat-zwave"><span class="stat-val" id="stat-zwave-val">—</span><span class="stat-lbl">Z-Wave</span></div>
-      <div class="stat-chip" id="stat-chip-stale" onclick="filterStale()" title="Click to show stale devices" style="cursor:pointer">
-        <span class="stat-val" id="stat-stale">—</span>
-        <span class="stat-lbl">Not Seen &gt;<span id="stale-threshold-lbl">30</span>m</span>
-      </div>
       <div style="flex:1"></div>
-      <div class="stat-chip" style="opacity:0.6"><span class="stat-val" id="stat-blocked" style="color:#555">—</span><span class="stat-lbl" style="color:#888">Blocked</span></div>
-    </div>
-    <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:0.82rem;color:#888">
-      <label for="stale-threshold-input">Stale threshold:</label>
-      <input id="stale-threshold-input" type="number" min="1" max="1440" value="30"
-             style="width:60px;padding:2px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem"
-             onchange="saveStaleThreshold(this.value)"> min
+      <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#888">
+        <label for="stale-threshold-input">Stale threshold:</label>
+        <input id="stale-threshold-input" type="number" min="1" max="1440" value="120"
+               style="width:50px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.75rem"
+               onchange="saveStaleThreshold(this.value)"> min
+      </div>
     </div>
   </div>
 
   <!-- Tabs -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('all', this)">All Devices</button>
-    <button class="tab-btn" onclick="showTab('settings', this)">Settings</button>
+    <button class="tab-btn" onclick="showTab('settings', this)">Set Devices</button>
     <button class="tab-btn" onclick="showTab('rooms', this)">Rooms</button>
     <button class="tab-btn" onclick="showTab('history', this)">Device History</button>
   </div>
