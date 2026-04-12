@@ -41,7 +41,22 @@ mqttClient.on('error', (e) => console.error('MQTT error:', e.message));
 
 // HA config
 const HA_URL = 'http://192.168.1.110:8123';
-const HA_TOKEN = process.env.HA_TOKEN || '';
+// HA_TOKEN is read from .env with a 5-minute TTL cache. This means a token
+// update in .env takes effect within 5 min without restarting pm2.
+let _haTokenCache = { value: process.env.HA_TOKEN || '', ts: Date.now() };
+const HA_TOKEN_TTL = 5 * 60 * 1000; // 5 min
+function getHaToken() {
+  if (Date.now() - _haTokenCache.ts < HA_TOKEN_TTL) return _haTokenCache.value;
+  try {
+    const lines = require('fs').readFileSync(require('path').join(__dirname, '.env'), 'utf8').split('\n');
+    for (const line of lines) {
+      const [k, ...v] = line.trim().split('=');
+      if (k === 'HA_TOKEN') { _haTokenCache = { value: v.join('='), ts: Date.now() }; return _haTokenCache.value; }
+    }
+  } catch (_) {}
+  _haTokenCache.ts = Date.now(); // don't retry for 5 min on read failure
+  return _haTokenCache.value;
+}
 
 const SSH_USER    = 'root';
 const SSH_KEY     = process.env.SSH_KEY_PATH || require('os').homedir() + '/.ssh/id_ed25519';
@@ -321,7 +336,7 @@ app.get('/api/weather/scores', async (req, res) => {
     let nextSetting = null;
     try {
       const sunRes = await fetch(`${HA_URL}/api/states/sun.sun`, {
-        headers: { Authorization: `Bearer ${HA_TOKEN}` },
+        headers: { Authorization: `Bearer ${getHaToken()}` },
         signal: AbortSignal.timeout(4000),
       });
       if (sunRes.ok) {
@@ -443,7 +458,7 @@ app.get('/api/status', async (req, res) => {
   await Promise.all([
     db.query('SELECT 1').then(() => { result.db = true; }).catch(() => {}),
     fetch(`${HA_URL}/api/`, {
-      headers: HA_TOKEN ? { Authorization: `Bearer ${HA_TOKEN}` } : {},
+      headers: getHaToken() ? { Authorization: `Bearer ${getHaToken()}` } : {},
       signal: AbortSignal.timeout(4000)
     }).then(r => { if (r.ok) result.ha = true; }).catch(() => {}),
   ]);
@@ -454,7 +469,7 @@ app.get('/api/status', async (req, res) => {
 app.get('/api/timer', async (req, res) => {
   try {
     const r = await fetch(`${HA_URL}/api/states/timer.boiler_temp_update_timer`, {
-      headers: { Authorization: `Bearer ${HA_TOKEN}` },
+      headers: { Authorization: `Bearer ${getHaToken()}` },
       signal: AbortSignal.timeout(4000),
     });
     if (!r.ok) return res.status(502).json({ error: 'HA error' });
@@ -759,7 +774,7 @@ async function runHealthChecks() {
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
-    fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${HA_TOKEN}` }, signal: AbortSignal.timeout(5000) })
+    fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
       .then(r => ({ ok: r.ok })).catch(e => ({ ok: false, error: e.message })),
     new Promise(resolve => {
       exec('pm2.cmd jlist', { windowsHide: true }, (err, stdout) => {
@@ -1917,7 +1932,7 @@ async function ensureSchema() {
 async function callHA(domain, service, data) {
   const r = await fetch(`${HA_URL}/api/services/${domain}/${service}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${HA_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${getHaToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
     signal: AbortSignal.timeout(5000)
   });
@@ -2204,7 +2219,7 @@ app.post('/api/voice/intent', async (req, res) => {
 app.get('/api/ha/switches', async (_req, res) => {
   try {
     const r = await fetch(`${HA_URL}/api/states`, {
-      headers: { Authorization: `Bearer ${HA_TOKEN}` },
+      headers: { Authorization: `Bearer ${getHaToken()}` },
       signal: AbortSignal.timeout(5000)
     });
     if (!r.ok) throw new Error(`HA states error: ${r.status}`);
@@ -2709,7 +2724,7 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
     const tpl = `{% for s in states %}{% set ids = device_attr(s.entity_id,"identifiers") %}{% if ids %}{% for i in ids %}{% if i[0] == "tuya" and i[1] == "${id}" %}{{ s.entity_id }}|{{ s.state }}\n{% endif %}{% endfor %}{% endif %}{% endfor %}`;
     const tplRes = await fetch(`${HA_URL}/api/template`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${HA_TOKEN}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${getHaToken()}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ template: tpl }),
       signal: AbortSignal.timeout(10000),
     });
