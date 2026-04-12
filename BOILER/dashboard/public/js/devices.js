@@ -32,6 +32,8 @@ function decodeStatus(dev) {
   const dps = dev.last_state;
   const type = dev.device_type;
 
+  // Remote devices with keepalive have no DPS — check before the null guard
+  if (type === 'remote' && dev.last_source === 'keepalive') return { label: 'on', cls: 'dot-on', text: 'Alive' };
   if (!dps) return { label: 'unknown', cls: 'dot-unknown', text: '—' };
 
   if (type === 'presence') {
