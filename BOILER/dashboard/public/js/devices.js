@@ -179,7 +179,7 @@ function updateBadge(src) {
     ha_api:       { label: 'HA API',        color: '#2980b9' },
     home_connect: { label: 'Home Connect',  color: '#1a5276' },
     mqtt:         { label: 'MQTT',          color: '#16a085' },
-    keepalive:    { label: 'Keepalive',      color: '#7a9ab8' },
+    keepalive:    { label: '—',              color: '#999' },
     zigbee:       { label: 'Zigbee',        color: '#e67e22' },
   };
   const m = map[src] || { label: src || '—', color: '#999' };
