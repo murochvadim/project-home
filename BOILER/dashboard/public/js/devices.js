@@ -106,6 +106,12 @@ function decodeStatus(dev) {
     return { label: 'on', cls: 'dot-on', text: 'Online' };
   }
 
+  if (type === 'remote') {
+    if (dev.last_source === 'keepalive') return { label: 'on', cls: 'dot-on', text: 'Alive' };
+    if (dps['1'] !== undefined) return { label: 'on', cls: 'dot-on', text: 'Ready' };
+    return { label: 'unknown', cls: 'dot-unknown', text: '—' };
+  }
+
   return { label: 'unknown', cls: 'dot-unknown', text: '—' };
 }
 
@@ -171,7 +177,7 @@ function updateBadge(src) {
     ha_api:       { label: 'HA API',        color: '#2980b9' },
     home_connect: { label: 'Home Connect',  color: '#1a5276' },
     mqtt:         { label: 'MQTT',          color: '#16a085' },
-    keepalive:    { label: 'Alive',         color: '#7a9ab8' },
+    keepalive:    { label: 'Keepalive',      color: '#7a9ab8' },
     zigbee:       { label: 'Zigbee',        color: '#e67e22' },
   };
   const m = map[src] || { label: src || '—', color: '#999' };
