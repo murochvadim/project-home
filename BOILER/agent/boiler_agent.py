@@ -225,6 +225,35 @@ def get_time_since_last_close(conn):
     return (datetime.now(pytz.utc) - last_close_ts).total_seconds() / 60.0
 
 
+def get_time_since_last_open(conn):
+    """Returns minutes since the last OFF→ON valve transition in raw_data.
+    Returns None if no such transition found."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            WITH recent AS (
+                SELECT ts, valve_state
+                FROM raw_data
+                ORDER BY ts DESC
+                LIMIT 500
+            )
+            SELECT ts FROM (
+                SELECT ts, valve_state,
+                       LAG(valve_state) OVER (ORDER BY ts ASC) AS prev_state
+                FROM recent
+            ) t
+            WHERE valve_state = true AND prev_state = false
+            ORDER BY ts DESC
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+
+    if row is None:
+        return None
+
+    last_open_ts = ensure_utc(row[0])
+    return (datetime.now(pytz.utc) - last_open_ts).total_seconds() / 60.0
+
+
 def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta):
     """
     Scan recent raw_data for completed boiler temperature drop events.
@@ -305,11 +334,32 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
             if cur.rowcount == 1:
                 new_events.append(ev)
 
+    # Get valve context for classification
+    valve_ctx = _get_valve_context(conn)
     for ev in new_events:
-        _publish_consumption_event(ev)
+        _publish_consumption_event(ev, valve_ctx)
 
 
-def _publish_consumption_event(ev):
+def _get_valve_context(conn):
+    """Get current valve state + timing for consumption classification."""
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute('SELECT valve_state FROM raw_data ORDER BY ts DESC LIMIT 1')
+            row = cur.fetchone()
+        valve_state = bool(row['valve_state']) if row else False
+        valve_on_min = get_time_since_last_open(conn) if valve_state else None
+        valve_off_min = get_time_since_last_close(conn) if not valve_state else None
+        return {
+            'valve_state': valve_state,
+            'valve_on_min': round(valve_on_min, 1) if valve_on_min is not None else None,
+            'valve_off_min': round(valve_off_min, 1) if valve_off_min is not None else None,
+        }
+    except Exception as e:
+        log.warning(f'Failed to get valve context: {e}')
+        return {'valve_state': False, 'valve_on_min': None, 'valve_off_min': None}
+
+
+def _publish_consumption_event(ev, valve_ctx=None):
     """Publish a new consumption event to MQTT so rules can react.
     Fails silently — MQTT broker downtime must never break detection."""
     if not MQTT_USER or not MQTT_PASS or not mqtt_publish:
@@ -317,17 +367,18 @@ def _publish_consumption_event(ev):
     try:
         import json
         start_ts, end_ts, start_temp, end_temp, drop_c, duration_min = ev
-        payload = json.dumps({
-            "dps": {
-                "event_type":   "consumption",
-                "drop_c":       float(drop_c),
-                "duration_min": int(duration_min),
-                "start_ts":     start_ts.isoformat(),
-                "end_ts":       end_ts.isoformat(),
-                "start_temp":   float(start_temp),
-                "end_temp":     float(end_temp),
-            }
-        })
+        dps = {
+            "event_type":   "consumption",
+            "drop_c":       float(drop_c),
+            "duration_min": int(duration_min),
+            "start_ts":     start_ts.isoformat(),
+            "end_ts":       end_ts.isoformat(),
+            "start_temp":   float(start_temp),
+            "end_temp":     float(end_temp),
+        }
+        if valve_ctx:
+            dps.update(valve_ctx)
+        payload = json.dumps({"dps": dps})
         mqtt_publish.single(
             MQTT_CONSUMPTION_TOPIC, payload=payload, qos=0, retain=False,
             hostname=MQTT_HOST, port=MQTT_PORT,

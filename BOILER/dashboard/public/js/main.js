@@ -85,7 +85,9 @@ async function loadUsageToday() {
     const fmt = v => v !== null && v !== undefined ? v : '—';
     document.getElementById('usage-count').textContent    = fmt(r.count);
     document.getElementById('usage-human').textContent    = 'Human: '   + fmt(r.human);
+    document.getElementById('usage-panel').textContent    = 'Panel: '   + fmt(r.panel);
     document.getElementById('usage-thermal').textContent  = 'Thermal: ' + fmt(r.thermal);
+    document.getElementById('usage-boiler').textContent   = 'Boiler: '  + fmt(r.boiler);
     document.getElementById('usage-unknown').textContent  = 'Unknown: ' + fmt(r.unknown);
     document.getElementById('usage-max-drop').textContent = r.max_drop ? parseFloat(r.max_drop).toFixed(1) + ' °C' : '—';
     document.getElementById('usage-avg-drop').textContent = r.avg_drop ? parseFloat(r.avg_drop).toFixed(1) + ' °C' : '—';

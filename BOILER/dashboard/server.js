@@ -514,7 +514,9 @@ app.get('/api/consumptions/today', async (req, res) => {
       SELECT
         COUNT(*)                                                   AS count,
         COUNT(*) FILTER (WHERE cause = 'human')                    AS human,
+        COUNT(*) FILTER (WHERE cause = 'panel')                    AS panel,
         COUNT(*) FILTER (WHERE cause = 'thermal')                  AS thermal,
+        COUNT(*) FILTER (WHERE cause = 'boiler')                   AS boiler,
         COUNT(*) FILTER (WHERE cause = 'unknown')                  AS unknown,
         COUNT(*) FILTER (WHERE cause IS NULL)                      AS unclassified,
         MAX(drop_c)                                                AS max_drop,
