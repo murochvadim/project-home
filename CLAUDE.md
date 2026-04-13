@@ -67,7 +67,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - `device_events` — device state changes from all protocols. Retention: 30 days.
 - `devices` — device registry with last_state, dps_labels, dps_config, channel_config. Retention: forever.
 - `rooms` — room definitions. Retention: forever.
-- `net_devices` — ARP-scanned network devices. Used for MAC→IP resolution.
+- `net_devices` — network devices. Populated by ARP scanner (LXC 104, every 5 min) + device agent IP writeback (LXC 103, every 5 min for local Tuya devices with active TCP connections). Used for MAC→IP resolution.
 
 ### Device Agent System
 - Runs on LXC 103 as `device-agent.service`
@@ -75,6 +75,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - Source priority: tcp_push(5) = mqtt(5) > ha_api(4) > home_connect(4) > gateway_push(3) > cloud_push(3) > local_poll(2) > cloud_poll(1)
 - HA adapter: SmartThings + Ring identifiers, initial seed restricted to external devices only
 - Keepalive: hourly for IR remotes with no DPS + every ~15s for BSH appliances (Home Connect SSE KEEP-ALIVE). Updates `last_seen` only — does NOT overwrite `last_source` (preserves the real data source like `home_connect`, `local_poll`). IR remotes show "Alive" status via `last_seen` freshness check (< 2h + no DPS).
+- **Net_devices IP writeback**: for local Tuya devices, writes IP + `last_online` to `net_devices` every 5 min per device (throttled). Complements ARP scanner which can't detect some Tuya devices.
 - Scripts: `scripts/ha_api_patched.py` (HA adapter), `scripts/tuya_adapter_patched.py` (Tuya adapter)
 - **BSH/Home Connect** (Siemens appliances): `home_connect` adapter, 6 appliances (Dishwasher, Oven, Hob, Hood, Microwave, Washer). `RemainingProgramTime` displayed as minutes, `ProgramFinished` as event. DPS labels must be added per device for dashboard visibility.
 
