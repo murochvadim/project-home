@@ -69,6 +69,19 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - `rooms` — room definitions. Retention: forever.
 - `net_devices` — ARP-scanned network devices. Used for MAC→IP resolution.
 
+### Device Agent System
+- Runs on LXC 103 as `device-agent.service`
+- Protocols: local (Tuya TCP), gateway (Tuya sub-devices), cloud (Tuya cloud poll), zigbee (Z2M MQTT), zwave (HA WebSocket), ring (HA WebSocket)
+- Source priority: tcp_push(5) = mqtt(5) > ha_api(4) > home_connect(4) > gateway_push(3) > cloud_push(3) > local_poll(2) > cloud_poll(1)
+- HA adapter: SmartThings + Ring identifiers, initial seed restricted to external devices only
+- Keepalive: hourly for IR remotes with no DPS (updates last_seen, shows "Alive" status)
+- Scripts: `scripts/ha_api_patched.py` (HA adapter), `scripts/tuya_adapter_patched.py` (Tuya adapter)
+
+### Hot Water Consumption Classification
+- Boiler agent detects drops → publishes to MQTT `mur/home/device/boiler/event`
+- Rule `Boiler Consumption Classify` correlates with presence in Bathroom/Kitchen/My BathRoom
+- Writes `cause` (human/thermal/unknown) + `likely_rooms` back to `boiler_consumptions` table
+
 ## LXC Infrastructure
 > ⚠️ **LXC 104 = COMMANDS/TIMERS SERVER — all scheduled tasks, cron jobs, and systemd timers go here**
 - Before deploying any timer/cron/systemd service to an LXC, confirm target is LXC 104
@@ -133,6 +146,10 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - **SMB user**: `claude` — has read/write on `Claude_Data` and `Windows_Data`
 - **Proxmox host** mounts `/Laptop_Data` at `/mnt/qnap-laptop` → bind-mounted into LXC 103 at `/mnt/qnap-laptop`
 
+### Orphan Process Guards
+- **LXC 100**: `/opt/media-agent/kill-orphan.sh` in `ExecStartPre` for player, ingest, pixoo, media-agent services
+- **LXC 105**: `/opt/main-agent/kill-orphans.sh` in `ExecStartPre` for rule-engine service
+
 ### LXC 100 (192.168.1.138) — Media Agent Services
 - **Services**: `media-agent` (tv_control.py:8765), `player` (player_service.py:8766), `ingest` (ingest_service.py:8767), `pixoo` (pixoo_service.py:8768-8769), `analyzer` (analyzer.py)
 - All use `HA_TOKEN` from `/etc/environment`
@@ -167,6 +184,13 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - **Logic**: reads jobs from DB → SSH-checks laptop reachability → scp source → QNAP mount → logs result → rotates old copies
 - **Deploy**: `scp scripts/backup-script.sh root@192.168.1.227:/opt/backup-script.sh`
 
+### LXC 105 (192.168.1.187) — Rule Engine
+- Runs on LXC 105 as `rule-engine.service` with orphan guard (`ExecStartPre=/opt/main-agent/kill-orphans.sh`)
+- Global DAG sort for depends_on, load-error alerts, stats persistence, save-failure alerts
+- Test button: honors RULE["test_event"], state_updated status for info rules
+- Current rules: Home Activity, People Home, Boiler Consumption Classify
+- External converter: `/opt/zigbee2mqtt/data/external_converters/tuya_scene_switch.js` (DPs 24/25/26)
+
 ---
 
 ## Project Modules
@@ -181,3 +205,55 @@ Each project has its own CLAUDE.md with full details:
 | Voice System | `VOICE/` | `VOICE/CLAUDE.md` |
 | Scripts (LXC 100) | `scripts/` | see `MEDIA/CLAUDE.md` |
 | Windows Backup (LXC 104) | `scripts/backup-script.sh` | see root `CLAUDE.md` LXC 104 section |
+
+## System-Wide Dashboard Pages
+
+### Project Health Page (sidebar: General → Project Health)
+- **System Status card**: live status of all services; fetched from `/api/health/status`; displayed in a 4-column grid:
+  - All checks are performed **by the dashboard directly** (not by the orchestrator). Orchestrator contributes only via `system_alerts` table entries.
+  - **Infrastructure** (direct checks): `postgres` — DB query; `homeassistant` — HA API; `vm101`/`lxc100`–`lxc106` — TCP port 22 reachability
+  - **Server**: `pm2` — all pm2 processes online
+  - **Services**:
+    - `boiler_agent` — boiler service on LXC 103 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
+    - `media_agents` — analyzer, player, ingest on LXC 100 (via `system_alerts`: shown as 3 inline dots)
+    - `voice_agent` — whisper-http on LXC 106 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
+  - **Scripts — Cron** (direct SSH checks):
+    - `ha_to_pg` — age of last `raw_data` row ≤ 15 min (DB query)
+    - `collect_weather` — age of last `raw_weather` row ≤ 65 min (DB query)
+    - `auto_scan` — age of `/var/log/auto_scan.log` on LXC 100 ≤ 120 s (SSH)
+  - **Data freshness** (DB queries):
+    - `boiler_last_decision` — age of last `agent_boiler_data` row ≤ `run_interval_min × 3`; shows age + decision
+    - `orchestrator_last_run` — age of last `orchestrator_log` row ≤ 70 min; shows age
+    - `active_alerts` — count of unresolved `system_alerts`; shows worst severity
+- **Orchestrator Log card**: last N entries from `orchestrator_log` table; severity colour-coded (info/warn/error); shows last run time + status summary; `GET /api/health/orch-log?limit=N`
+- **DB Volumes card**: table row counts, disk size, dead tuples, frag %, last vacuum per table; fetched from `/api/health/db-volumes` using `pg_stat_user_tables`; each row has a **Vacuum** button — runs `VACUUM ANALYZE` and updates dead tuples + frag % inline
+- **Retention Policies card**: editable table per DB table — keep_days (blank = forever), auto_clean toggle, clean_interval_hours, last_cleaned timestamp; Save per row, Clean per row, "Clean All Now" global button
+  - Policies stored in `retention_policies` DB table (not config file — so orchestrator reads/writes them programmatically)
+  - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever, orchestrator_log=30d, system_alerts=90d, sync_signals=7d
+- **API endpoints:**
+  - `GET /api/health/status` — checks PostgreSQL, HA, TCP to all LXCs, PM2; boiler-agent + media agents + voice agent (all via system_alerts); ha_to_pg + collect_weather freshness (DB); auto_scan log age (SSH); orchestrator last run age; boiler last decision age; active alerts count
+  - `GET /api/health/orch-log?limit=N` — last N orchestrator log entries
+  - `GET /api/health/db-volumes` — row counts + sizes + date ranges per table
+  - `GET /api/health/retention` — all retention policies
+  - `POST /api/health/retention` — update one policy `{table_name, keep_days, auto_clean, clean_interval_hours}`
+  - `POST /api/health/cleanup` — run cleanup `{table_name}` (null = all); returns `{results:[{table_name, deleted}]}`
+  - `POST /api/health/vacuum` — run `VACUUM ANALYZE {table_name}`; returns `{ok, dead_tup, frag_pct}` after
+- **retention_policies table schema:** `table_name PK, keep_days INT nullable, auto_clean BOOL, clean_interval_hours INT, last_cleaned_at TIMESTAMPTZ, description TEXT`
+
+### Project Health — System Alerts card
+- Top card on Health page — shows all alerts (active first, resolved below with 50% opacity)
+- Badge: `N active` (red/amber) or `all clear` (green)
+- `GET /api/health/alerts` — returns last 50 alerts ordered active-first
+- **Schema source of truth:** `server.js` `ensureSchema()` — `create_alerts.sql` was removed (was a duplicate)
+
+### General Page / Weather (sidebar: General → Weather)
+- **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10) + Season; updated every 30 min
+  - Scores computed on-the-fly in `/api/weather/scores` from latest `raw_weather` + today's `raw_weather_daily` — not stored in DB
+  - Solar score: based on `condition` + `uv_index` (max of IMS and balcony); displayed as large colored number with description label (no icon)
+  - Rain score: based on `condition` + `precipitation_mm` from today's forecast
+  - Season: derived from current month (client-side, no API); Spring Mar–May, Summer Jun–Sep, Autumn Oct–Nov, Winter Dec–Feb
+- **Current Conditions card**: reads latest row from `raw_weather` (no HA token needed on Windows dashboard)
+- **Hourly Weather Log table**: last 24/48/72 rows from `raw_weather`
+- **Daily Forecast Log table**: last 14/30 rows from `raw_weather_daily` (precipitation in mm)
+- API endpoints: `/api/weather/scores`, `/api/weather/latest`, `/api/weather/hourly`, `/api/weather/daily`
+- `collect_weather.py` cron runs every 60 min on LXC 103 (`0 * * * *`)

@@ -322,37 +322,7 @@
 - Dependencies: `express`, `pg`, `node-ssh`, `@anthropic-ai/sdk` (in `node_modules`)
 - PM2 env vars required: `HA_TOKEN`, `ANTHROPIC_API_KEY` — sourced from `.env` (never hardcode in ecosystem.config.js)
 
-## Project Health Page (sidebar: General → Project Health)
-- **System Status card**: live status of all services; fetched from `/api/health/status`; displayed in a 4-column grid:
-  - All checks are performed **by the dashboard directly** (not by the orchestrator). Orchestrator contributes only via `system_alerts` table entries.
-  - **Infrastructure** (direct checks): `postgres` — DB query; `homeassistant` — HA API; `vm101`/`lxc100`–`lxc106` — TCP port 22 reachability
-  - **Server**: `pm2` — all pm2 processes online
-  - **Services**:
-    - `boiler_agent` — boiler service on LXC 103 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
-    - `media_agents` — analyzer, player, ingest on LXC 100 (via `system_alerts`: shown as 3 inline dots)
-    - `voice_agent` — whisper-http on LXC 106 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
-  - **Scripts — Cron** (direct SSH checks):
-    - `ha_to_pg` — age of last `raw_data` row ≤ 15 min (DB query)
-    - `collect_weather` — age of last `raw_weather` row ≤ 65 min (DB query)
-    - `auto_scan` — age of `/var/log/auto_scan.log` on LXC 100 ≤ 120 s (SSH)
-  - **Data freshness** (DB queries):
-    - `boiler_last_decision` — age of last `agent_boiler_data` row ≤ `run_interval_min × 3`; shows age + decision
-    - `orchestrator_last_run` — age of last `orchestrator_log` row ≤ 70 min; shows age
-    - `active_alerts` — count of unresolved `system_alerts`; shows worst severity
-- **Orchestrator Log card**: last N entries from `orchestrator_log` table; severity colour-coded (info/warn/error); shows last run time + status summary; `GET /api/health/orch-log?limit=N`
-- **DB Volumes card**: table row counts, disk size, dead tuples, frag %, last vacuum per table; fetched from `/api/health/db-volumes` using `pg_stat_user_tables`; each row has a **Vacuum** button — runs `VACUUM ANALYZE` and updates dead tuples + frag % inline
-- **Retention Policies card**: editable table per DB table — keep_days (blank = forever), auto_clean toggle, clean_interval_hours, last_cleaned timestamp; Save per row, Clean per row, "Clean All Now" global button
-  - Policies stored in `retention_policies` DB table (not config file — so orchestrator reads/writes them programmatically)
-  - Default policies seeded on first run: raw_data=90d, agent_boiler_data=365d, raw_weather=60d, raw_weather_daily=60d, boiler_consumptions=forever, orchestrator_log=30d, system_alerts=90d, sync_signals=7d
-- **API endpoints:**
-  - `GET /api/health/status` — checks PostgreSQL, HA, TCP to all LXCs, PM2; boiler-agent + media agents + voice agent (all via system_alerts); ha_to_pg + collect_weather freshness (DB); auto_scan log age (SSH); orchestrator last run age; boiler last decision age; active alerts count
-  - `GET /api/health/orch-log?limit=N` — last N orchestrator log entries
-  - `GET /api/health/db-volumes` — row counts + sizes + date ranges per table
-  - `GET /api/health/retention` — all retention policies
-  - `POST /api/health/retention` — update one policy `{table_name, keep_days, auto_clean, clean_interval_hours}`
-  - `POST /api/health/cleanup` — run cleanup `{table_name}` (null = all); returns `{results:[{table_name, deleted}]}`
-  - `POST /api/health/vacuum` — run `VACUUM ANALYZE {table_name}`; returns `{ok, dead_tup, frag_pct}` after
-- **retention_policies table schema:** `table_name PK, keep_days INT nullable, auto_clean BOOL, clean_interval_hours INT, last_cleaned_at TIMESTAMPTZ, description TEXT`
+> System-wide page specs (Health, Weather, Network) are in root `CLAUDE.md`.
 
 # Main Agent (Orchestrator)
 > Full orchestrator documentation: see `ORCHESTRATOR/CLAUDE.md`
@@ -362,21 +332,3 @@ At start of each run, before any logic:
 - Query `system_alerts` for unresolved alerts where `affected_agent = 'boiler' OR affected_agent IS NULL`
 - If `severity = error/critical` → write `decision = no_action`, `error = WARN: System alert: <type>: <message>`, exit safely
 - If `severity = warn` → continue run, include in error field as warning
-
-## Project Health Page — System Alerts card
-- Top card on Health page — shows all alerts (active first, resolved below with 50% opacity)
-- Badge: `N active` (red/amber) or `all clear` (green)
-- `GET /api/health/alerts` — returns last 50 alerts ordered active-first
-- **Schema source of truth:** `server.js` `ensureSchema()` — `create_alerts.sql` was removed (was a duplicate)
-
-## General Page (sidebar: General → Weather)
-- **Today's Outlook card**: Solar Heating Potential (1–10) + Rain Probability (1–10) + Season; updated every 30 min
-  - Scores computed on-the-fly in `/api/weather/scores` from latest `raw_weather` + today's `raw_weather_daily` — not stored in DB
-  - Solar score: based on `condition` + `uv_index` (max of IMS and balcony); displayed as large colored number with description label (no icon)
-  - Rain score: based on `condition` + `precipitation_mm` from today's forecast
-  - Season: derived from current month (client-side, no API); Spring Mar–May, Summer Jun–Sep, Autumn Oct–Nov, Winter Dec–Feb
-- **Current Conditions card**: reads latest row from `raw_weather` (no HA token needed on Windows dashboard)
-- **Hourly Weather Log table**: last 24/48/72 rows from `raw_weather`
-- **Daily Forecast Log table**: last 14/30 rows from `raw_weather_daily` (precipitation in mm)
-- API endpoints: `/api/weather/scores`, `/api/weather/latest`, `/api/weather/hourly`, `/api/weather/daily`
-- `collect_weather.py` cron runs every 60 min on LXC 103 (`0 * * * *`)
