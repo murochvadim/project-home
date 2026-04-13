@@ -32,8 +32,8 @@ function decodeStatus(dev) {
   const dps = dev.last_state;
   const type = dev.device_type;
 
-  // Remote devices with keepalive have no DPS — check before the null guard
-  if (type === 'remote' && dev.last_source === 'keepalive') return { label: 'on', cls: 'dot-on', text: 'Alive' };
+  // Remote devices with no DPS but recently seen — show Alive (keepalive keeps last_seen fresh)
+  if (type === 'remote' && !dps && dev.last_seen && (Date.now() - new Date(dev.last_seen)) / 1000 < 7200) return { label: 'on', cls: 'dot-on', text: 'Alive' };
   if (!dps) return { label: 'unknown', cls: 'dot-unknown', text: '—' };
 
   if (type === 'presence') {
@@ -331,8 +331,10 @@ function applyFilters() {
           txt = isOn ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; txt = (raw / 10).toFixed(1) + '°C';
-        } else if (typeof raw === 'number' && k.includes('RemainingProgramTime')) {
+        } else if (typeof raw === 'number' && (k.includes('RemainingProgramTime') || k.includes('ElapsedProgramTime') || k.includes('Duration'))) {
           dot = 'dot-on'; txt = raw > 0 ? Math.round(raw / 60) + ' min' : 'Done';
+        } else if (typeof raw === 'number' && k.includes('Temperature')) {
+          dot = 'dot-on'; txt = Math.round(raw) + '°C';
         } else if (typeof raw === 'number') {
           dot = 'dot-on'; txt = String(raw);
         } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
@@ -391,8 +393,10 @@ function applyFilters() {
           dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; statusTxt = (raw / 10).toFixed(1) + '°C';
-        } else if (typeof raw === 'number' && k.includes('RemainingProgramTime')) {
+        } else if (typeof raw === 'number' && (k.includes('RemainingProgramTime') || k.includes('ElapsedProgramTime') || k.includes('Duration'))) {
           dot = 'dot-on'; statusTxt = raw > 0 ? Math.round(raw / 60) + ' min' : 'Done';
+        } else if (typeof raw === 'number' && k.includes('Temperature')) {
+          dot = 'dot-on'; statusTxt = Math.round(raw) + '°C';
         } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
           const action = raw.split(':')[0];
           if (action === 'pushed' || action === 'held') {
