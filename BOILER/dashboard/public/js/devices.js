@@ -258,6 +258,7 @@ function updateStats() {
   fetch('/api/devices/blocklist').then(r => r.json()).then(rows => {
     document.getElementById('stat-blocked').textContent = rows.length;
   }).catch(() => {});
+
 }
 
 function populateRoomFilter() {

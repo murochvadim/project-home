@@ -114,6 +114,19 @@ body {
   animation: alert-blink 1s ease-in-out infinite;
 }
 
+#batt-indicator {
+  font-size: 0.65rem;
+  background: #3a7d44;
+  color: #fff;
+  border-radius: 10px;
+  padding: 2px 7px;
+  font-weight: 600;
+  letter-spacing: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
 @keyframes alert-blink {
   0%,
   100% {

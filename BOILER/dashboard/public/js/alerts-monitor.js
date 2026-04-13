@@ -84,7 +84,58 @@
     } catch (e) {}
   }
 
+  // ── Battery low-count badge ──────────────────────────────────
+  const BATT_STORE = '_batt_low_count';
+
+  function applyBattState(count) {
+    const el = document.getElementById('batt-indicator');
+    if (!el) return;
+    if (count > 0) {
+      el.textContent = `Batt Low - ${count}`;
+      el.title = `${count} device${count > 1 ? 's' : ''} with low/offline battery\nClick to see Battery tab`;
+      el.style.background = '#5c0e0e';
+      el.style.color = '#fff';
+    } else {
+      el.textContent = 'Batt ✓';
+      el.title = 'All batteries OK';
+      el.style.background = '#3a7d44';
+      el.style.color = '#fff';
+    }
+  }
+
+  // Restore last known battery state
+  try {
+    const saved = localStorage.getItem(BATT_STORE);
+    if (saved !== null) applyBattState(parseInt(saved, 10));
+  } catch (e) {}
+
+  async function checkBattery() {
+    try {
+      const [devRes, settRes] = await Promise.all([
+        fetch('/api/devices').then(r => r.json()),
+        fetch('/api/dashboard-settings/battery_thresholds').then(r => r.json()),
+      ]);
+      const thresh = settRes.value || { good: 60, low: 20 };
+      let lowCount = 0;
+      for (const d of devRes) {
+        if (d.enabled === false) continue;
+        const labels = d.dps_labels || {};
+        let battKey = null;
+        for (const [k, v] of Object.entries(labels)) {
+          if (typeof v === 'string' && v.toLowerCase() === 'battery') { battKey = k; break; }
+        }
+        if (!battKey) continue;
+        const val = (d.last_state || {})[battKey];
+        if (val == null || (typeof val === 'number' && val < thresh.low)) lowCount++;
+      }
+      applyBattState(lowCount);
+      try { localStorage.setItem(BATT_STORE, lowCount); } catch (e) {}
+    } catch (e) {}
+  }
+
   // First check after page settles, then every 60 s
   setTimeout(checkAlerts, 1500);
+  setTimeout(checkBattery, 2000);
   setInterval(checkAlerts, 60000);
+  setInterval(checkBattery, 60000);
 })();

@@ -253,7 +253,7 @@
     <nav id="sidebar">
       <div class="logo">
         Smart Home
-        <a href="health.html" id="alert-indicator"></a>
+        <div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div>
       </div>
 
       <div class="section-label">General</div>
@@ -1794,20 +1794,6 @@
       loadVoiceSettings();
       loadDeviceSettings();
       loadDeviceList();
-
-      // ── Alert indicator ───────────────────────────────────────────
-      fetch("/api/health/alerts")
-        .then((r) => r.json())
-        .then((data) => {
-          const active = (data || []).filter((a) => !a.resolved_at);
-          const el = document.getElementById("alert-indicator");
-          if (!el || active.length === 0) return;
-          const worst = active.some((a) => a.severity === "critical" || a.severity === "error") ? "error" : "warn";
-          el.textContent = " ⬤";
-          el.style.color = worst === "error" ? "#e74c3c" : "#e67e22";
-          el.title = `${active.length} active alert(s)`;
-        })
-        .catch(() => {});
 
       // ── Recording ─────────────────────────────────────────────────
       async function toggleRecord() {
