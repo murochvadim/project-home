@@ -162,6 +162,7 @@ function isOnline(dev) {
   if (dev.protocol === 'local') return dev.last_state ? true : ageSec < 300;
   if (dev.protocol === 'zigbee') return dev.last_state ? true : ageSec < 600;  // Z2M push on state change only
   if (dev.protocol === 'zwave') return dev.last_state ? true : ageSec < 600;  // HA WebSocket push on state change
+  if (dev.protocol === 'ring') return dev.last_state ? true : ageSec < 600;  // HA WebSocket push
   return ageSec < 180;  // gateway/cloud poll every 60s
 }
 
@@ -232,6 +233,7 @@ function updateStats() {
   const cloud     = counted.filter(d => d.protocol === 'cloud').length;
   const zigbee    = counted.filter(d => d.protocol === 'zigbee').length;
   const zwave     = counted.filter(d => d.protocol === 'zwave').length;
+  const ring      = counted.filter(d => d.protocol === 'ring').length;
   const stale     = counted.filter(isStale).length;
   const channels  = counted.reduce((sum, d) => {
     const cc = Object.keys(d.channel_config || {}).length;
@@ -249,6 +251,7 @@ function updateStats() {
   document.getElementById('stat-cloud-val').textContent   = cloud;
   document.getElementById('stat-zigbee-val').textContent  = zigbee;
   document.getElementById('stat-zwave-val').textContent   = zwave;
+  document.getElementById('stat-ring-val').textContent    = ring;
   document.getElementById('stat-stale').textContent       = stale;
 
   // Blocked count — fetch from API
@@ -329,7 +332,19 @@ function applyFilters() {
           dot = 'dot-on'; txt = (raw / 10).toFixed(1) + '°C';
         } else if (typeof raw === 'number') {
           dot = 'dot-on'; txt = String(raw);
-        } else if (typeof raw === 'string' && raw.includes('.')) {
+        } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+          // ISO timestamp (event entities: ding, motion, button presses)
+          const action = raw.split(':')[0]; // "pushed" or "held" prefix if present
+          if (action === 'pushed' || action === 'held') {
+            dot = 'dot-on'; txt = action.charAt(0).toUpperCase() + action.slice(1);
+          } else {
+            dot = 'dot-on'; txt = new Date(raw).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
+          }
+        } else if (typeof raw === 'string' && !isNaN(parseFloat(raw)) && /^[\d.]+$/.test(raw)) {
+          // String number ("4.0", "5.0") from HA
+          dot = 'dot-on'; txt = parseFloat(raw).toString();
+        } else if (typeof raw === 'string' && raw.includes('.') && /[a-zA-Z]/.test(raw)) {
+          // Dotted enum (BSH: "BSH.Common.Status.Ready" → "Ready")
           dot = 'dot-on'; txt = raw.split('.').pop();
         } else {
           dot = 'dot-on'; txt = String(raw);
@@ -373,11 +388,19 @@ function applyFilters() {
           dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; statusTxt = (raw / 10).toFixed(1) + '°C';
+        } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+          const action = raw.split(':')[0];
+          if (action === 'pushed' || action === 'held') {
+            dot = 'dot-on'; statusTxt = action.charAt(0).toUpperCase() + action.slice(1);
+          } else {
+            dot = 'dot-on'; statusTxt = new Date(raw).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
+          }
+        } else if (typeof raw === 'string' && !isNaN(parseFloat(raw)) && /^[\d.]+$/.test(raw)) {
+          dot = 'dot-on'; statusTxt = parseFloat(raw).toString();
+        } else if (typeof raw === 'string' && raw.includes('.') && /[a-zA-Z]/.test(raw)) {
+          dot = 'dot-on'; statusTxt = raw.split('.').pop();
         } else {
-          dot = 'dot-on';
-          statusTxt = String(raw);
-          // Shorten BSH enum values
-          if (typeof raw === 'string' && raw.includes('.')) statusTxt = raw.split('.').pop();
+          dot = 'dot-on'; statusTxt = String(raw);
         }
         rows.push(`<tr>
           <td><span class="status-dot ${dot}"></span>${escHtml(statusTxt)}</td>

@@ -14,6 +14,7 @@
     #stat-cloud   .stat-val { color:var(--success); }
     #stat-zigbee  .stat-val { color:#e67e22; }
     #stat-zwave   .stat-val { color:#9b59b6; }
+    #stat-ring    .stat-val { color:#1a9fff; }
     #stat-chip-stale { cursor:pointer; }
     #stat-chip-stale .stat-val { color:var(--danger); }
 
@@ -39,6 +40,7 @@
     .proto-cloud   { color:#27ae60; }
     .proto-zigbee  { color:#e67e22; }
     .proto-zwave   { color:#9b59b6; }
+    .proto-ring    { color:#1a9fff; }
 
     /* ── Type badge ── */
     .type-badge { font-size:0.7rem; color:#666; }
@@ -156,6 +158,7 @@
       <div class="stat-chip" id="stat-cloud"><span class="stat-val" id="stat-cloud-val">—</span><span class="stat-lbl">Cloud</span></div>
       <div class="stat-chip" id="stat-zigbee"><span class="stat-val" id="stat-zigbee-val">—</span><span class="stat-lbl">Zigbee</span></div>
       <div class="stat-chip" id="stat-zwave"><span class="stat-val" id="stat-zwave-val">—</span><span class="stat-lbl">Z-Wave</span></div>
+      <div class="stat-chip" id="stat-ring"><span class="stat-val" id="stat-ring-val">—</span><span class="stat-lbl">Ring</span></div>
       <div style="flex:1"></div>
       <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#888">
         <label for="stale-threshold-input">Stale threshold:</label>
@@ -221,6 +224,7 @@
           <option value="cloud">Cloud</option>
           <option value="zigbee">Zigbee</option>
           <option value="zwave">Z-Wave</option>
+          <option value="ring">Ring</option>
         </select>
         <select id="filter-update" onchange="applyFilters()">
           <option value="">All updates</option>

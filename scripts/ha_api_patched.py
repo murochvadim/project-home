@@ -103,7 +103,7 @@ class HAApiAdapter(DeviceAdapter):
         except Exception as e:
             log.error(f'Failed to build Tuya entity map: {e}')
 
-        # ── SmartThings entities (Z-Wave / Aeotec devices) ──
+        # ── External HA integrations (SmartThings + Ring) ──
         self._smartthings_ids.clear()
         try:
             st_tpl = (
@@ -111,8 +111,8 @@ class HAApiAdapter(DeviceAdapter):
                 '{% for state in states %}'
                 '{% set ids = device_attr(state.entity_id,"identifiers") %}'
                 '{% if ids %}{% for id in ids %}'
-                '{% if id[0] == "smartthings" %}'
-                '{% set ns.items = ns.items + [id[1] ~ "|" ~ state.entity_id] %}'
+                '{% if id[0] in ["smartthings", "ring"] %}'
+                '{% set ns.items = ns.items + [id[1] ~ "|" ~ state.entity_id ~ "|" ~ device_attr(state.entity_id, "name")] %}'
                 '{% endif %}{% endfor %}{% endif %}{% endfor %}'
                 '{{ ns.items | join("\\n") }}'
             )
@@ -127,17 +127,27 @@ class HAApiAdapter(DeviceAdapter):
             for line in st_r.text.strip().split('\n'):
                 if '|' not in line:
                     continue
-                st_id, entity_id = line.split('|', 1)
-                st_id = st_id.strip()
-                entity_id = entity_id.strip()
+                parts = line.split('|')
+                if len(parts) < 2:
+                    continue
+                st_id = parts[0].strip()
+                entity_id = parts[1].strip()
 
                 if st_id not in self._known_ids:
                     continue
 
                 domain = entity_id.split('.')[0]
+
+                # Skip camera entities — can't handle streams as DPS
+                if domain == 'camera':
+                    continue
+
                 # Derive dp_key from entity purpose
                 if domain == 'binary_sensor':
                     dp_key = 'motion' if 'motion' in entity_id else 'door' if 'door' in entity_id else 'presence'
+                elif domain == 'event':
+                    # Use device_class hint: ding/doorbell → 'ding', motion → 'motion'
+                    dp_key = 'ding' if 'ding' in entity_id else 'motion' if ('motion' in entity_id or 'ring_ring' in entity_id) else entity_id.split('.')[-1].rsplit('_', 1)[-1]
                 elif 'temperature' in entity_id:
                     dp_key = 'temperature'
                 elif 'humidity' in entity_id:
@@ -148,6 +158,14 @@ class HAApiAdapter(DeviceAdapter):
                     dp_key = 'uv'
                 elif 'battery' in entity_id:
                     dp_key = 'battery'
+                elif 'volume' in entity_id:
+                    dp_key = 'volume'
+                elif 'motion_enab' in entity_id or 'motion_detection' in entity_id:
+                    dp_key = 'motion_detection'
+                elif 'chime' in entity_id:
+                    dp_key = 'chime'
+                elif 'siren' in entity_id:
+                    dp_key = 'siren'
                 else:
                     dp_key = entity_id.split('.')[-1].rsplit('_', 1)[-1]
 
