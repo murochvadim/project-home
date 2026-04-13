@@ -25,6 +25,9 @@ DB_CONFIG = {
 }
 HA_URL   = 'http://192.168.1.110:8123'
 HA_TOKEN = os.environ.get('HA_TOKEN', '')
+if not HA_TOKEN:
+    print('ERROR: HA_TOKEN not set — check /etc/environment', file=sys.stderr)
+    sys.exit(1)
 
 HA_HEADERS = {
     'Authorization': f'Bearer {HA_TOKEN}',

@@ -14,6 +14,10 @@ from datetime import datetime, timedelta
 import psycopg2
 import psycopg2.extras
 import requests
+try:
+    import paho.mqtt.publish as mqtt_publish
+except ImportError:
+    mqtt_publish = None
 import pytz
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -308,11 +312,10 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
 def _publish_consumption_event(ev):
     """Publish a new consumption event to MQTT so rules can react.
     Fails silently — MQTT broker downtime must never break detection."""
-    if not MQTT_USER or not MQTT_PASS:
+    if not MQTT_USER or not MQTT_PASS or not mqtt_publish:
         return
     try:
         import json
-        import paho.mqtt.publish as publish
         start_ts, end_ts, start_temp, end_temp, drop_c, duration_min = ev
         payload = json.dumps({
             "dps": {
@@ -325,7 +328,7 @@ def _publish_consumption_event(ev):
                 "end_temp":     float(end_temp),
             }
         })
-        publish.single(
+        mqtt_publish.single(
             MQTT_CONSUMPTION_TOPIC, payload=payload, qos=0, retain=False,
             hostname=MQTT_HOST, port=MQTT_PORT,
             auth={'username': MQTT_USER, 'password': MQTT_PASS},
