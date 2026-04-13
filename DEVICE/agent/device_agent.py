@@ -73,6 +73,8 @@ class DeviceAgent:
         self._device_last_event = {}    # (device_id, source) → dps_json
         self._device_states = {}        # device_id → merged last_state dict (cache, filtered)
         self._allowed_dps = {}          # device_id → set of allowed DPS keys (None = all allowed)
+        self._device_net_info = {}      # device_id → (mac, ip) for local Tuya devices
+        self._net_update_throttle = {}  # mac → last_update_timestamp
         self._connect_db()
 
         if not MQTT_PASS:
@@ -151,11 +153,36 @@ class DeviceAgent:
             return {}   # empty set = all keys disabled
         return {k: v for k, v in dps.items() if k in allowed}
 
+    def _update_net_device(self, mac: str, ip: str):
+        """Upsert IP + online status into net_devices for a locally-connected device.
+        Must be called under _db_lock. Throttled to once per 5 min per device."""
+        if not mac or not ip:
+            return
+        now = time.time()
+        if now - self._net_update_throttle.get(mac, 0) < 300:
+            return
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO net_devices (mac, ip, last_seen, last_online)
+                    VALUES (%s, %s, NOW(), NOW())
+                    ON CONFLICT (mac) DO UPDATE
+                    SET ip = EXCLUDED.ip,
+                        last_seen   = NOW(),
+                        last_online = NOW()
+                """, (mac, ip))
+            self._net_update_throttle[mac] = now
+        except Exception as e:
+            log.warning(f'net_devices upsert failed for {mac}: {e}')
+
     def _db_write(self, device_id: str, dps: dict, source: str):
         """Execute the DB writes for a state change event. Must be called under _db_lock."""
         with self.conn.cursor() as cur:
             if source == 'keepalive':
                 cur.execute("UPDATE devices SET last_seen = NOW() WHERE id = %s", (device_id,))
+                net = self._device_net_info.get(device_id)
+                if net:
+                    self._update_net_device(net[0], net[1])
                 return
 
             # Track best source per device — upgrade, or downgrade after 600s silence
@@ -202,6 +229,12 @@ class DeviceAgent:
                     last_seen = NOW(), updated_at = NOW(), last_source = %s
                 WHERE id = %s
             """, (dps_json, best, device_id))
+
+            # Update net_devices IP/online for locally-connected Tuya devices
+            if source in ('initial', 'local_poll', 'tcp_push'):
+                net = self._device_net_info.get(device_id)
+                if net:
+                    self._update_net_device(net[0], net[1])
 
             # Events + MQTT get only filtered (allowed) DPS
             if not is_dup and filtered_json:
@@ -634,6 +667,12 @@ class DeviceAgent:
         # Load devices from DB
         devices = self._load_devices()
         log.info(f'Loaded {len(devices)} enabled devices')
+
+        # Build MAC/IP lookup for local Tuya devices (for net_devices updates)
+        for dev in devices:
+            if dev.get('mac') and dev.get('local_ip') and dev.get('protocol') == 'local':
+                self._device_net_info[dev['id']] = (dev['mac'], dev['local_ip'])
+        log.info(f'Tracking {len(self._device_net_info)} local devices for net_devices updates')
 
         # Seed state cache from DB with filtered keys only
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
