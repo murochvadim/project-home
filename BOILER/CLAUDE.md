@@ -21,7 +21,7 @@
 - `raw_data`: ts, boiler_temp, panel_temp, valve_state
 - `agent_boiler_data`: ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision, error, next_ts, version
 - `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, probe_max_boiler_temp, probe_max_delta, consumption_temp_delta, consumption_time_delta
-- `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms — hot water drop events detected by agent each run; `cause` and `likely_rooms` are filled asynchronously by the rule engine (rule `Boiler Consumption Classify`) after a correlation with presence in Bathroom/Kitchen/My BathRoom; `cause` ∈ {`human`,`thermal`,`unknown`}; deduplicated by start_ts
+- `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms — hot water drop events detected by agent each run; `cause` and `likely_rooms` filled asynchronously by rule engine using presence + valve context; `cause` ∈ {`human`,`panel`,`thermal`,`boiler`,`unknown`}; deduplicated by start_ts
 - `sync_signals`: id, ts, source — written by ha_to_pg after each raw_data insert; boiler agent polls every 30s and wakes immediately on new row
 - `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 60 min
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
@@ -208,7 +208,7 @@
 - Scan raw_data for the last `consumption_time_delta` minutes
 - Group consecutive drops (≥ 0.5°C per step) into events; only record completed events (drop has ended)
 - Record event if total drop ≥ `consumption_temp_delta`; insert into `boiler_consumptions` with ON CONFLICT DO NOTHING (deduplicated by start_ts)
-- On each genuinely new insert (rowcount=1), publish the event to MQTT topic `mur/home/device/boiler/event` (user `boiler_agent` on LXC 107) with payload `{dps: {event_type, drop_c, duration_min, start_ts, end_ts, start_temp, end_temp}}`. Publish is fail-silent — broker downtime never breaks detection. The rule engine on LXC 105 subscribes via `mur/home/device/+/event`; the `Boiler Consumption Classify` rule correlates with presence timers (`room_active:{Room}`) and writes back `cause` + `likely_rooms` to the same row asynchronously.
+- On each genuinely new insert (rowcount=1), publish the event to MQTT topic `mur/home/device/boiler/event` (user `boiler_agent` on LXC 107) with payload `{dps: {event_type, drop_c, duration_min, start_ts, end_ts, start_temp, end_temp, valve_state, valve_on_min, valve_off_min}}`. Publish is fail-silent — broker downtime never breaks detection. The rule engine on LXC 105 subscribes via `mur/home/device/+/event`; the `Boiler Consumption Classify` rule uses presence + valve context for 5-category classification (human/panel/thermal/boiler/unknown) and writes back `cause` + `likely_rooms` to the same row asynchronously.
 
 ## 8. Return report:
   boiler_temp, panel_temp, valve_state,
