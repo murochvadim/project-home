@@ -188,7 +188,7 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 
 ### LXC 105 (192.168.1.187) — Rule Engine
 - Runs on LXC 105 as `rule-engine.service` with orphan guard (`ExecStartPre=/opt/main-agent/kill-orphans.sh`)
-- Global DAG sort for depends_on, load-error alerts, stats persistence, save-failure alerts
+- Global DAG sort for depends_on, load-error alerts, stats persistence, save-failure alerts, db_execute single retry on failure
 - Test button: honors RULE["test_event"], state_updated status for info rules
 - Current rules: Home Activity, People Home, Boiler Consumption Classify
 - External converter: `/opt/zigbee2mqtt/data/external_converters/tuya_scene_switch.js` (DPs 24/25/26)
