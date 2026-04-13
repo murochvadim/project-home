@@ -79,9 +79,14 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - **BSH/Home Connect** (Siemens appliances): `home_connect` adapter, 6 appliances (Dishwasher, Oven, Hob, Hood, Microwave, Washer). `RemainingProgramTime` displayed as minutes, `ProgramFinished` as event. DPS labels must be added per device for dashboard visibility.
 
 ### Hot Water Consumption Classification
-- Boiler agent detects drops → publishes to MQTT `mur/home/device/boiler/event`
-- Rule `Boiler Consumption Classify` correlates with presence in Bathroom/Kitchen/My BathRoom
-- Writes `cause` (human/thermal/unknown) + `likely_rooms` back to `boiler_consumptions` table
+- Boiler agent detects drops → publishes to MQTT `mur/home/device/boiler/event` with valve context (`valve_state`, `valve_on_min`, `valve_off_min`)
+- Rule `Boiler Consumption Classify` classifies into 5 categories (priority order):
+  1. `human` — presence in Bathroom/Kitchen/My BathRoom (always wins)
+  2. `panel` — valve was ON ≥ 4 min, no human (solar cycle drop)
+  3. `thermal` — nobody home (overnight/away cooling)
+  4. `boiler` — valve OFF ≥ 10 min, someone home (natural day cooling)
+  5. `unknown` — fallback
+- Writes `cause` + `likely_rooms` back to `boiler_consumptions` table
 
 ## LXC Infrastructure
 > ⚠️ **LXC 104 = COMMANDS/TIMERS SERVER — all scheduled tasks, cron jobs, and systemd timers go here**
