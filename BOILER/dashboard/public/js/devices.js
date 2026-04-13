@@ -331,6 +331,8 @@ function applyFilters() {
           txt = isOn ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; txt = (raw / 10).toFixed(1) + '°C';
+        } else if (typeof raw === 'number' && k.includes('RemainingProgramTime')) {
+          dot = 'dot-on'; txt = raw > 0 ? Math.round(raw / 60) + ' min' : 'Done';
         } else if (typeof raw === 'number') {
           dot = 'dot-on'; txt = String(raw);
         } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
@@ -389,6 +391,8 @@ function applyFilters() {
           dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; statusTxt = (raw / 10).toFixed(1) + '°C';
+        } else if (typeof raw === 'number' && k.includes('RemainingProgramTime')) {
+          dot = 'dot-on'; statusTxt = raw > 0 ? Math.round(raw / 60) + ' min' : 'Done';
         } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
           const action = raw.split(':')[0];
           if (action === 'pushed' || action === 'held') {
