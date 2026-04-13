@@ -29,6 +29,10 @@
           {
             "type": "command",
             "command": "bash /c/Users/muroc/project_home/.claude/hooks/post-tmp-cleanup.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash /c/Users/muroc/project_home/.claude/hooks/post-commit-docs-check.sh"
           }
         ]
       },
