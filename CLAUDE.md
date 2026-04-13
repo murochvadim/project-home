@@ -132,6 +132,7 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 | HTML lint | `PostToolUse: Edit\|Write` on `*.html` | `.claude/hooks/post-html-lint.sh` | Checks duplicate IDs, orphaned TAB comments, dead inline handlers |
 | New DB table alert | `PostToolUse: Edit\|Write` on `*.js` / `*.sql` / `*.py` | `settings.json` (inline) | Warns when `CREATE TABLE IF NOT EXISTS` detected — add to retention_policies + DB Volumes |
 | /tmp cleanup | `PostToolUse: Bash` | `.claude/hooks/post-tmp-cleanup.sh` | Removes local and remote /tmp working files after scp/tmp commands |
+| Docs check | `PostToolUse: Bash` (git commit) | `.claude/hooks/post-commit-docs-check.sh` | After git commit, warns if no CLAUDE.md was updated — prints checklist of root/module docs + memory |
 
 ## Infrastructure Connections
 
