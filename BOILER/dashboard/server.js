@@ -2761,6 +2761,16 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
   try {
     const { id } = req.params;
     const { state } = req.body; // true = ON, false = OFF
+
+    // Zigbee devices: toggle via Z2M MQTT (not HA API)
+    const devR = await db.query('SELECT name, protocol FROM devices WHERE id = $1', [id]);
+    if (devR.rows.length && devR.rows[0].protocol === 'zigbee') {
+      const key = req.body.channel || 'state_l1';
+      const payload = JSON.stringify({ [key]: state ? 'ON' : 'OFF' });
+      mqttClient.publish(`zigbee2mqtt/${devR.rows[0].name}/set`, payload);
+      return res.json({ ok: true, entity_id: `z2m:${devR.rows[0].name}`, service: state ? 'ON' : 'OFF' });
+    }
+
     // Look up HA entity for this Tuya device via template
     const tpl = `{% for s in states %}{% set ids = device_attr(s.entity_id,"identifiers") %}{% if ids %}{% for i in ids %}{% if i[0] == "tuya" and i[1] == "${id}" %}{{ s.entity_id }}|{{ s.state }}\n{% endif %}{% endfor %}{% endif %}{% endfor %}`;
     const tplRes = await fetch(`${HA_URL}/api/template`, {
