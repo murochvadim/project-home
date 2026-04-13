@@ -74,7 +74,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - Protocols: local (Tuya TCP), gateway (Tuya sub-devices), cloud (Tuya cloud poll), zigbee (Z2M MQTT), zwave (HA WebSocket), ring (HA WebSocket)
 - Source priority: tcp_push(5) = mqtt(5) > ha_api(4) > home_connect(4) > gateway_push(3) > cloud_push(3) > local_poll(2) > cloud_poll(1)
 - HA adapter: SmartThings + Ring identifiers, initial seed restricted to external devices only
-- Keepalive: hourly for IR remotes with no DPS (updates last_seen, shows "Alive" status)
+- Keepalive: hourly for IR remotes with no DPS + every ~15s for BSH appliances (Home Connect SSE KEEP-ALIVE). Updates `last_seen` only — does NOT overwrite `last_source` (preserves the real data source like `home_connect`, `local_poll`). IR remotes show "Alive" status via `last_seen` freshness check (< 2h + no DPS).
 - Scripts: `scripts/ha_api_patched.py` (HA adapter), `scripts/tuya_adapter_patched.py` (Tuya adapter)
 - **BSH/Home Connect** (Siemens appliances): `home_connect` adapter, 6 appliances (Dishwasher, Oven, Hob, Hood, Microwave, Washer). `RemainingProgramTime` displayed as minutes, `ProgramFinished` as event. DPS labels must be added per device for dashboard visibility.
 
