@@ -73,7 +73,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - Runs on LXC 103 as `device-agent.service`
 - Protocols: local (Tuya TCP), gateway (Tuya sub-devices), cloud (Tuya cloud poll), zigbee (Z2M MQTT), zwave (HA WebSocket), ring (HA WebSocket)
 - Source priority: tcp_push(5) = mqtt(5) > ha_api(4) > home_connect(4) > gateway_push(3) > cloud_push(3) > local_poll(2) > cloud_poll(1)
-- HA adapter: SmartThings + Ring identifiers, initial seed restricted to external devices only
+- HA adapter: SmartThings + Ring identifiers, initial seed restricted to external devices only; rebuilds entity map on WS reconnect; handles `auth_invalid`
 - Keepalive: hourly for IR remotes with no DPS + every ~15s for BSH appliances (Home Connect SSE KEEP-ALIVE). Updates `last_seen` only — does NOT overwrite `last_source` (preserves the real data source like `home_connect`, `local_poll`). IR remotes show "Alive" status via `last_seen` freshness check (< 2h + no DPS).
 - **Net_devices IP writeback**: for local Tuya devices, writes IP + `last_online` to `net_devices` every 5 min per device (throttled). Complements ARP scanner which can't detect some Tuya devices.
 - Scripts: `scripts/ha_api_patched.py` (HA adapter), `scripts/tuya_adapter_patched.py` (Tuya adapter)
