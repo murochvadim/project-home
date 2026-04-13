@@ -41,6 +41,33 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - ⚠ **NEVER use `pm2 restart`** — it caches the old process environment and ignores `.env` changes (causes stale HA tokens and wrong secrets)
 - Do NOT look for pm2 or ecosystem.config.js on any LXC
 - **Batch all server.js changes before restarting — restart once at the end, never after each edit**
+- `HA_TOKEN` auto-refreshed from `.env` with 5-min TTL cache (`getHaToken()`) — no restart needed after token update
+
+### Dashboard Pages (all served from `BOILER/dashboard/public/`)
+| Page | File | Purpose |
+|------|------|---------|
+| Boiler Agent | `index.html` | Boiler control, reports, settings, AI investigation |
+| Main Agent | `main-agent.html` | Rule engine state, rules table, room grid |
+| Device Agent | `devices.html` | All devices, Batt Devices, Set Devices, Rooms, Device History, Settings |
+| Media Agents | `media.html` | TV + Soundbar control |
+| Corridor Agents | `corridor.html` | Pixoo display editor + control |
+| Project Health | `health.html` | System status, DB volumes, retention, alerts |
+| Project Network | `network.html` | ARP scan, network devices |
+| Weather | `general.html` | Weather data, solar heating potential |
+| Voice | `voice.html` | Voice pipeline, intents, TTS |
+
+### Sidebar (all pages)
+- **Status badge**: `✓ OK` (green) / `⚠ N issues` (red blink) — polls `/api/health/status` every 60s
+- **Battery badge**: `Batt ✓` (green) / `Batt Low - N` (dark red) — counts devices below low threshold + offline battery devices, polls every 60s
+- Both managed by `alerts-monitor.js` (loaded on all 9 pages)
+- Battery thresholds stored in `dashboard_settings` table (key `battery_thresholds`, default `{good: 60, low: 20}`)
+
+### Dashboard DB Tables (system-wide, not module-specific)
+- `dashboard_settings` — key/value store for dashboard-wide settings (battery thresholds, future settings). Retention: forever.
+- `device_events` — device state changes from all protocols. Retention: 30 days.
+- `devices` — device registry with last_state, dps_labels, dps_config, channel_config. Retention: forever.
+- `rooms` — room definitions. Retention: forever.
+- `net_devices` — ARP-scanned network devices. Used for MAC→IP resolution.
 
 ## LXC Infrastructure
 > ⚠️ **LXC 104 = COMMANDS/TIMERS SERVER — all scheduled tasks, cron jobs, and systemd timers go here**

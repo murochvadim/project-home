@@ -217,20 +217,13 @@
   next_ts, version.
 
 
-# Dashboard
+# Boiler Dashboard Pages
 
-## 1. Multi-Agent Framework
-- Dashboard is designed to support multiple agents
-- Main navigation sidebar lists each agent as a separate section
-- Boiler Agent is the first section; future agents are added as new sections
-- Each agent section is fully independent (own pages, settings, data)
-- **Sidebar indicators** (all 9 pages via `alerts-monitor.js`):
-  - **Status badge**: `✓ OK` (green) / `⚠ N issues` (red blink) — polls `/api/health/status` every 60s
-  - **Battery badge**: `Batt ✓` (green) / `Batt Low - N` (dark red) — counts devices below low threshold + offline battery devices, polls every 60s
-  - Thresholds stored in `dashboard_settings` table (`battery_thresholds` key)
+> System-wide dashboard info (sidebar, pages list, DB tables, settings) is in root `CLAUDE.md` under "Dashboard Server".
+> This file documents only boiler-specific dashboard pages and logic.
 
-## 2. CRM Style
-## 3. Paged
+## Style
+- CRM style, paged
 ## 4. Pagination data of DB
   table raw_data
 - 10,20,30 last rows
