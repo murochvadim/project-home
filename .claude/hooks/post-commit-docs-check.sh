@@ -5,11 +5,7 @@
 CMD="${CLAUDE_TOOL_INPUT_COMMAND:-}"
 
 # Only act on git commit commands
-if ! echo "$CMD" | grep -q 'git commit'; then
-  exit 0
-fi
-
-echo "[hook] docs-check: scanning commit for CLAUDE.md updates..."
+echo "$CMD" | grep -q 'git commit' || exit 0
 
 # Check if any CLAUDE.md was modified in this commit
 COMMITTED_MDS=$(cd /c/Users/muroc/project_home && git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | grep -i 'CLAUDE.md')
