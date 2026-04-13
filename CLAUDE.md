@@ -129,6 +129,7 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - Log: `/var/log/mosquitto/mosquitto.log` (logrotate daily, 7 rotations)
 - **Users (ACL)**: `zigbee` (zigbee2mqtt/#), `device_agent` (mur/home/device/#), `hasp` (hasp/#), `awtrix` (awtrix/#), `rule_engine` (read all + write commands + rule-engine topics + zigbee2mqtt/+/set), `pixoo_service` (pixoo topics), `boiler_agent` (write `mur/home/device/boiler/#` — publishes consumption events from LXC 103)
 - **Z-Wave devices** (Aeotec sensors, Wallmotes) stay on SmartThings hub → HA WebSocket → device agent. Cannot go local without a Z-Wave USB dongle.
+- **Ring devices** (Doorbell, Chime) connected via HA Ring integration → HA WebSocket → device agent. Events (ding/motion), battery, chime control, volume work. Camera snapshots require Ring Protect subscription (not active). Auth token + python-ring-doorbell venv at `/opt/ring-snapshot/` on LXC 103 for future use.
 
 ### LXC 104 (192.168.1.227) — Windows Backup Agent
 - **Script**: `/opt/backup-script.sh` — runs every 5 min via cron
