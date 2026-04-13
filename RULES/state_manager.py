@@ -293,11 +293,17 @@ class StateManager:
     # ------------------------------------------------------------------
 
     def db_execute(self, sql, params=None):
-        """Execute a DB statement with thread-safe connection. Fire-and-forget."""
+        """Execute a DB statement with thread-safe connection. Single retry on failure."""
         with self._db_lock:
             self._ensure_conn()
             try:
                 with self.conn.cursor() as cur:
                     cur.execute(sql, params or ())
             except Exception:
-                log.debug("db_execute failed", exc_info=True)
+                log.warning("db_execute failed, retrying after reconnect", exc_info=True)
+                try:
+                    self._connect_db()
+                    with self.conn.cursor() as cur:
+                        cur.execute(sql, params or ())
+                except Exception:
+                    log.warning("db_execute retry also failed", exc_info=True)
