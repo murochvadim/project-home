@@ -262,6 +262,12 @@ class HAApiAdapter(DeviceAdapter):
                 }))
                 return
 
+            # Auth rejected — close and reconnect
+            if msg.get('type') == 'auth_invalid':
+                log.error(f'HA WebSocket auth rejected: {msg.get("message", "invalid token")}')
+                ws.close()
+                return
+
             # State change event
             if msg.get('type') == 'event' and msg.get('event', {}).get('event_type') == 'state_changed':
                 data = msg['event']['data']
@@ -321,12 +327,12 @@ class HAApiAdapter(DeviceAdapter):
         if self._stop_event.is_set():
             return
 
-        # Initial bulk fetch — set ha_api as source for all mapped devices
-        self._fetch_all_states()
-
         delay = RECONNECT_DELAY
         while not self._stop_event.is_set():
             try:
+                # Rebuild entity map on each reconnect (picks up new devices)
+                self._build_entity_map()
+                self._fetch_all_states()
                 log.info(f'Connecting to HA WebSocket at {HA_WS}')
                 ws = websocket.WebSocketApp(
                     HA_WS,

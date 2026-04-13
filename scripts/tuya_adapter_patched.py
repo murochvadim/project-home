@@ -160,6 +160,16 @@ class TuyaAdapter(DeviceAdapter):
                         if dps:
                             self.on_state_change(dev['id'], dps, 'cloud_poll')
                         consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        log.warning(f'Gateway poll API error for {dev["name"]}: {r.get("msg", r)}')
+                        if consecutive_failures >= 10:
+                            log.warning('Gateway poll: 10 consecutive API failures — recreating Cloud session')
+                            try:
+                                cloud = tinytuya.Cloud(apiRegion=API_REGION, apiKey=API_KEY, apiSecret=API_SECRET)
+                                consecutive_failures = 0
+                            except Exception as ce:
+                                log.error(f'Gateway poll: Cloud reconnect failed: {ce}')
                     time.sleep(0.5)
                 except Exception as e:
                     consecutive_failures += 1
@@ -280,7 +290,7 @@ class TuyaAdapter(DeviceAdapter):
                     pass
 
             if not self._stop_event.is_set():
-                time.sleep(delay)
+                self._stop_event.wait(delay)
                 delay = min(delay * 2, RECONNECT_MAX)
 
     # ─── Gateway thread (Zigbee sub-devices via TCP push) ──────────────────
@@ -342,7 +352,7 @@ class TuyaAdapter(DeviceAdapter):
                     pass
 
             if not self._stop_event.is_set():
-                time.sleep(delay)
+                self._stop_event.wait(delay)
                 delay = min(delay * 2, RECONNECT_MAX)
 
     # ─── Direct state control ───────────────────────────────────────────────

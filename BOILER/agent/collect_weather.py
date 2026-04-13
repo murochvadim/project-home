@@ -1,8 +1,8 @@
 #!/opt/Agents-agent/venv/bin/python3
 """
-Weather Collection Script — runs every 30 min via cron (*/30 * * * *).
+Weather Collection Script — runs every 60 min via cron (0 * * * *).
 Collects IMS weather + balcony sensors from HA and stores in:
-  raw_weather       — current conditions (every 30 min)
+  raw_weather       — current conditions (every 60 min)
   raw_weather_daily — daily forecast entries (once per day at 06:00)
 """
 
