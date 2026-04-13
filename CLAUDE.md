@@ -76,6 +76,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - HA adapter: SmartThings + Ring identifiers, initial seed restricted to external devices only
 - Keepalive: hourly for IR remotes with no DPS (updates last_seen, shows "Alive" status)
 - Scripts: `scripts/ha_api_patched.py` (HA adapter), `scripts/tuya_adapter_patched.py` (Tuya adapter)
+- **BSH/Home Connect** (Siemens appliances): `home_connect` adapter, 6 appliances (Dishwasher, Oven, Hob, Hood, Microwave, Washer). `RemainingProgramTime` displayed as minutes, `ProgramFinished` as event. DPS labels must be added per device for dashboard visibility.
 
 ### Hot Water Consumption Classification
 - Boiler agent detects drops → publishes to MQTT `mur/home/device/boiler/event`
