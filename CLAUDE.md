@@ -69,7 +69,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - `device_events` — device state changes from all protocols. Retention: 30 days.
 - `devices` — device registry with last_state, dps_labels, dps_config, channel_config. Retention: forever.
 - `rooms` — room definitions. Retention: forever.
-- `net_devices` — network devices. Populated by ARP scanner (LXC 104, every 5 min) + device agent IP writeback (LXC 103, every 5 min for local Tuya devices with active TCP connections). Used for MAC→IP resolution.
+- `net_devices` — network devices. Populated by ARP scanner (LXC 104, every 5 min, source: [scripts/arp_scan.py](scripts/arp_scan.py) → deployed to `/opt/network-agent/arp_scan.py`) + device agent IP writeback (LXC 103, every 5 min for local Tuya devices with active TCP connections). Used for MAC→IP resolution. Scanner injects its own host row (arp-scan can't see itself) with `name='LXC 104'`; `ON CONFLICT` preserves user-edited names/vendors on subsequent runs.
 
 ### Device Agent System
 - Runs on LXC 103 as `device-agent.service`
