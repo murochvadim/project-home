@@ -33,9 +33,25 @@ Generate a snake_case filename from the name (e.g., `kitchen_light_auto.py`).
 Ask which trigger type:
 - **Presence** — fires when presence sensor detects someone in a room
 - **Switch** — fires when a switch/light is operated in a room
-- **Any device** — wildcard, fires on every device event (for info/state rules)
+- **Any device** — wildcard (`"*"`), fires on every device event — for info/state rules
 - **State change** — fires when a specific shared state key changes
 - **Timer-based** — fires based on timer conditions (idle timeout, etc.)
+
+### Scaling guidance — prefer specific triggers when possible
+
+Wildcard (`"*"`) triggers run on EVERY device event (~1 event/sec at current home scale). That multiplies work per event by the number of wildcard rules. Prefer:
+
+- **Specific device_id triggers** (e.g., `triggers=["boiler"]` or `triggers=["bf123...","bf456..."]`) — the rule engine has a trigger index and only fires matching rules
+- **Early-return pattern** for wildcard rules — filter on the first 2 lines to exit fast when the event isn't relevant:
+  ```python
+  def evaluate(event, state):
+      dev_id = event.get("device_id", "")
+      if dev_id not in {MY_DEVICE_IDS}:  # short-circuit
+          return []
+      # ... rest only runs for matching events
+  ```
+
+At ≤ 50 rules this doesn't matter much. At 100+ wildcard rules it does. Default toward specific triggers; use wildcard only for true aggregator rules (Home Activity, People Home, generic handlers like Wallmote Handler).
 
 ## Step 3: Room/Device (if presence or switch)
 
@@ -154,6 +170,12 @@ If the rule only produces device commands (pixoo, on/off) and no derived state, 
 - Dedupe is automatic — emits only when `dps` differs from last emission. Still, emit sparingly.
 - Pick `virtual:<name>` matching the rule's owning concept, not the rule name verbatim (e.g., `virtual:guest_mode` not `virtual:guest_detection_rule`).
 - Existing virtual devices (as of 2026-04-14): `virtual:home_activity`, `virtual:people_home`, `virtual:boiler_status`.
+
+### Scaling guidance — emit virtual events sparingly
+- Each emission = 2-3 DB writes (~5-15ms on the main rule connection; isolated from heartbeat after the 2026-04-14 split-connection fix).
+- **Emit only if another rule, dashboard card, or retroactive analysis actually queries this state.** "Might be useful later" is YAGNI.
+- If the derived state flips many times per second, combine / debounce so emissions happen only on meaningful transitions. Example: Home Activity emits only when `active_rooms` list changes, not on every motion event.
+- If your rule just needs to remember its last output for its OWN internal use → use `state.shared[...]` (in-memory). Virtual events are specifically for SHARING state with other rules or for historical queries.
 
 ## Step 8: Generate & Review
 

@@ -41,8 +41,18 @@ class StateManager:
         self.shared = {}       # persistent shared state (home_mode, people_home, etc.)
         self._timers = {}      # timer_name -> timestamp (float)
         self._db_config = db_config
+        # Two independent DB connections to avoid blocking:
+        # * self.conn  — used by rule-driven ops (db_execute, db_query, get_device_state_at,
+        #   emit_virtual_event, get_events_between, get_last_transition_before).
+        #   Protected by _db_lock.
+        # * self._hb_conn — used only by the heartbeat thread (load_from_db, load_shared_state,
+        #   save_shared_state, _write_heartbeat). Protected by _hb_lock.
+        # Separation prevents heartbeat's ~250ms lock-hold (167-row upsert in save_shared_state)
+        # from blocking rule emissions (5-15ms each).
         self.conn = None
-        self._db_lock = threading.Lock()   # protects DB connection
+        self._hb_conn = None
+        self._db_lock = threading.Lock()   # protects self.conn
+        self._hb_lock = threading.Lock()   # protects self._hb_conn
         self.lock = threading.Lock()       # protects shared + _timers
         self._dev_lock = threading.Lock()  # protects devices + rooms
 
@@ -50,36 +60,59 @@ class StateManager:
     # DB connection helpers
     # ------------------------------------------------------------------
 
+    def _open_connection(self):
+        """Open a new psycopg2 connection with autocommit. Used by both _connect_db and _connect_hb_db."""
+        c = psycopg2.connect(**self._db_config)
+        c.autocommit = True
+        return c
+
     def _connect_db(self):
-        """Open DB connection with autocommit. Must hold _db_lock."""
+        """(Re)open the rule-ops connection. Must hold _db_lock."""
         try:
             if self.conn:
                 self.conn.close()
         except Exception:
             pass
-        self.conn = psycopg2.connect(**self._db_config)
-        self.conn.autocommit = True
+        self.conn = self._open_connection()
 
     def _ensure_conn(self):
-        """Reconnect if connection dropped. Must hold _db_lock."""
+        """Reconnect rule-ops connection if dropped. Must hold _db_lock."""
         try:
             if self.conn is None or self.conn.closed:
                 self._connect_db()
         except Exception:
             self._connect_db()
 
+    def _connect_hb_db(self):
+        """(Re)open the heartbeat connection. Must hold _hb_lock."""
+        try:
+            if self._hb_conn:
+                self._hb_conn.close()
+        except Exception:
+            pass
+        self._hb_conn = self._open_connection()
+
+    def _ensure_hb_conn(self):
+        """Reconnect heartbeat connection if dropped. Must hold _hb_lock."""
+        try:
+            if self._hb_conn is None or self._hb_conn.closed:
+                self._connect_hb_db()
+        except Exception:
+            self._connect_hb_db()
+
     # ------------------------------------------------------------------
     # Startup loaders
     # ------------------------------------------------------------------
 
     def load_from_db(self):
-        """Load devices + rooms from PostgreSQL. Called at startup and midnight."""
-        with self._db_lock:
-            self._ensure_conn()
+        """Load devices + rooms from PostgreSQL. Called at startup and midnight.
+        Uses the heartbeat-dedicated connection so it does not block rule emissions."""
+        with self._hb_lock:
+            self._ensure_hb_conn()
             devices = {}
             rooms = {}
 
-            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            with self._hb_conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     "SELECT id, name, room, device_type, protocol, last_state "
                     "FROM devices WHERE enabled = true"
@@ -131,10 +164,11 @@ class StateManager:
         _rule_overrides, _reload_request). Rule-computed keys are kept
         as-is in memory to avoid overwriting fresh values.
         """
-        with self._db_lock:
-            self._ensure_conn()
+        # Heartbeat-owned: runs on its own connection so it never blocks rule emissions.
+        with self._hb_lock:
+            self._ensure_hb_conn()
             try:
-                with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                with self._hb_conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("SELECT key, value FROM rule_engine_state")
                     with self.lock:
                         for row in cur.fetchall():
@@ -158,7 +192,7 @@ class StateManager:
                              len(self.shared), len(self._timers))
             except psycopg2.errors.UndefinedTable:
                 log.warning("rule_engine_state table does not exist — starting with empty state")
-                self.conn.rollback()
+                self._hb_conn.rollback()
 
     @staticmethod
     def _parse_value(raw):
@@ -171,14 +205,16 @@ class StateManager:
         return raw
 
     def save_shared_state(self):
-        """Persist shared state + timers to rule_engine_state table."""
+        """Persist shared state + timers to rule_engine_state table.
+        Runs on the heartbeat-dedicated connection so the ~167-row upsert
+        (200-300ms) does not block rule emissions on the main connection."""
         with self.lock:
             snapshot = copy.deepcopy(self.shared)
             timers = dict(self._timers)
-        with self._db_lock:
-            self._ensure_conn()
+        with self._hb_lock:
+            self._ensure_hb_conn()
             try:
-                with self.conn.cursor() as cur:
+                with self._hb_conn.cursor() as cur:
                     for key, value in snapshot.items():
                         # Skip keys owned by other services / dashboard
                         if (key.startswith('_pixoo_') or key in _DASHBOARD_KEYS
@@ -204,7 +240,7 @@ class StateManager:
                           len(self.shared), len(self._timers))
             except psycopg2.errors.UndefinedTable:
                 log.warning("rule_engine_state table does not exist — cannot persist state")
-                self.conn.rollback()
+                self._hb_conn.rollback()
 
     # ------------------------------------------------------------------
     # Real-time state updates (called from MQTT callbacks)

@@ -664,9 +664,12 @@ class RuleEngine:
             self.mqtt.publish_raw(f'hasp/{device_name}/command/{path}', str(value))
 
         elif protocol == 'zigbee':
-            z2m_payload = {k: v for k, v in cmd.items() if k not in _internal}
-            if action == 'turn_on': z2m_payload['state'] = 'ON'
-            elif action == 'turn_off': z2m_payload['state'] = 'OFF'
+            # For multi-gang zigbee switches, `channel` (e.g. 'state_l1') is the
+            # actual Z2M key for that gang. Single-gang devices: default to 'state'.
+            z2m_payload = {k: v for k, v in cmd.items() if k not in _internal and k != 'channel'}
+            state_key = cmd.get('channel') or 'state'
+            if action == 'turn_on':  z2m_payload[state_key] = 'ON'
+            elif action == 'turn_off': z2m_payload[state_key] = 'OFF'
             self.mqtt.publish_command(f'zigbee2mqtt/{device_name}/set', z2m_payload)
 
         elif protocol == 'awtrix':
@@ -1047,18 +1050,22 @@ class RuleEngine:
             self._stop.wait(30)
 
     def _write_heartbeat(self):
-        """Insert a heartbeat row into rule_engine_log."""
-        self.state._ensure_conn()
+        """Insert a heartbeat row into rule_engine_log.
+        Uses the heartbeat-dedicated connection (with its lock) — avoids contention
+        with rule emissions on the main connection and the previous latent
+        thread-safety smell where this method bypassed _db_lock."""
         decision = f"Running — {len(self.rules)} rules, {len(self._disabled_rules)} disabled"
         now = datetime.now(tz=TZ)
         next_ts = now + timedelta(minutes=5)
         try:
-            with self.state.conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO rule_engine_log (decision, error, next_ts) "
-                    "VALUES (%s, %s, %s)",
-                    (decision, 'NO ERROR', next_ts),
-                )
+            with self.state._hb_lock:
+                self.state._ensure_hb_conn()
+                with self.state._hb_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO rule_engine_log (decision, error, next_ts) "
+                        "VALUES (%s, %s, %s)",
+                        (decision, 'NO ERROR', next_ts),
+                    )
         except Exception:
             log.warning('Heartbeat write failed', exc_info=True)
 
