@@ -254,14 +254,20 @@ def get_time_since_last_open(conn):
     return (datetime.now(pytz.utc) - last_open_ts).total_seconds() / 60.0
 
 
-def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta):
+def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta, run_interval_min):
     """
     Scan recent raw_data for completed boiler temperature drop events.
     A drop event = boiler_temp falls >= consumption_temp_delta within consumption_time_delta minutes.
     Only records events that have already ended (not still dropping).
     Deduplicates by start_ts via UNIQUE constraint.
+
+    Lookback is padded by 2×run_interval_min so a drop that happens on the very
+    first tick of the window still has a prior baseline row to compare against
+    (otherwise a sudden 1-tick drop gets its start anchored to the post-drop
+    reading and the magnitude is undercounted).
     """
-    cutoff = datetime.now(pytz.utc) - timedelta(minutes=consumption_time_delta)
+    window_min = consumption_time_delta + 2 * run_interval_min
+    cutoff = datetime.now(pytz.utc) - timedelta(minutes=window_min)
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
@@ -724,7 +730,7 @@ def run_agent():
         consumption_temp_delta = float(ct) if ct is not None else 3.0
         cd = settings.get('consumption_time_delta')
         consumption_time_delta = int(cd) if cd is not None else 15
-        detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta)
+        detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta, run_interval_min)
 
         conn.commit()
         return run_interval_min
