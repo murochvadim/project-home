@@ -65,15 +65,17 @@ def main():
     conn.autocommit = True
     cur = conn.cursor()
 
-    # Collect freshness per group (24h lookback cap to keep query cheap)
+    # Collect freshness per group using devices.last_seen.
+    # Rationale: last_seen updates on every successful poll (for polled protocols)
+    # AND on every event arrival (for event-driven protocols). Using MAX(device_events.ts)
+    # instead caused false positives on rare-reporter devices (CO alarm, emerg light)
+    # that legitimately go hours between state changes while still being polled fine.
     cur.execute("""
         SELECT d.protocol, d.last_source,
-               COUNT(DISTINCT d.id) AS devices,
-               MAX(de.ts) AS freshest,
-               EXTRACT(EPOCH FROM (NOW() - MAX(de.ts))) / 60 AS age_min
+               COUNT(d.id) AS devices,
+               MAX(d.last_seen) AS freshest,
+               EXTRACT(EPOCH FROM (NOW() - MAX(d.last_seen))) / 60 AS age_min
         FROM devices d
-        LEFT JOIN device_events de
-          ON de.device_id = d.id AND de.ts > NOW() - INTERVAL '24 hours'
         WHERE d.enabled = TRUE AND d.protocol != 'virtual'
         GROUP BY d.protocol, d.last_source
     """)
