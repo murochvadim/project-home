@@ -302,14 +302,36 @@ Record in memory + CLAUDE.md so future rules follow convention. Skill does NOT c
 
 ## Step 10: Documentation
 
-Decide own-CLAUDE.md:
-- If Step 4 service layer = Persistent or Oneshot → **YES** — scaffold `<AGENT_DIR>/CLAUDE.md` (the `<AGENT_DIR>` = the user's choice, usually upper-case of slug, e.g., `LIVING_ROOM/` for `living-room`). Ask user to confirm directory name.
-- If Step 4 = None → **NO** — details stay in root `CLAUDE.md`
+**Every agent gets its own `<AGENT_DIR>/CLAUDE.md`**, regardless of service layer. The file is an index + purpose statement pointing to canonical artifact locations (which usually live in shared dirs like `BOILER/dashboard/public/` and `RULES/rules/`, since dashboard static files and rule files are forced into those paths by the server and rule engine).
 
-Always prepare row for root `CLAUDE.md` Dashboard Pages table:
-```
-| <Name> | `<slug>.html` | <short purpose> |
-```
+Ask user to confirm directory name (default = upper-case of slug with dashes → underscores, e.g., `LIVING_ROOM/` for `living-room`, `CORRIDOR/` for `corridor`).
+
+Content differs based on service layer:
+
+### If Step 4 service layer = None
+`<AGENT_DIR>/CLAUDE.md` is a **pointer document** — brief purpose + file location table mapping every artifact to its canonical path:
+- Dashboard page → `BOILER/dashboard/public/<slug>.html`
+- Dashboard JS → `BOILER/dashboard/public/js/<slug>.js`
+- Rules → `RULES/rules/<rule_name>.py` (group=`<slug>`)
+- Migration → `migrations/agent_<slug>_setup.sql`
+- Config storage → `dashboard_settings` keys prefixed `<slug>.*`
+- Memory → `memory/project_agent_<slug>.md`
+
+Plus: rule list (if any), storage key list, tab list, planned-future-features section.
+
+### If Step 4 service layer = Persistent or Oneshot
+`<AGENT_DIR>/CLAUDE.md` is a **full module doc** with sections (Purpose, System Overview, Data Source, Tables, Data Flow, Integration, App LXC) — same pattern as `BOILER/CLAUDE.md`, `MEDIA/CLAUDE.md`, `VOICE/CLAUDE.md`, `ORCHESTRATOR/CLAUDE.md`.
+
+### Root CLAUDE.md updates (always)
+
+1. Add row to Dashboard Pages table:
+   ```
+   | <Name> | `<slug>.html` | <short purpose> |
+   ```
+2. Add row to "Project Modules" table:
+   ```
+   | <Name> | `<AGENT_DIR>/` | `<AGENT_DIR>/CLAUDE.md` — <short note> |
+   ```
 
 Ask user for `<short purpose>` text.
 
@@ -331,11 +353,11 @@ Display to the user — a complete manifest of what will happen. NO file changes
 ```
 BOILER/dashboard/public/<slug>.html
 BOILER/dashboard/public/js/<slug>.js
+<AGENT_DIR>/CLAUDE.md                          # always (pointer index for dashboard-only, full module doc if service)
 memory/project_agent_<slug>.md
 migrations/agent_<slug>_setup.sql
 [if service]  <AGENT_DIR>/agent/<slug>-agent.service
 [if timer]    <AGENT_DIR>/agent/<slug>-agent.timer
-[if service]  <AGENT_DIR>/CLAUDE.md
 [if orphan]   <AGENT_DIR>/agent/kill-orphans.sh
 ```
 

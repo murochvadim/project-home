@@ -1,0 +1,73 @@
+# Living Room Agent
+
+Namespaced owner of all Living Room automations — wallmote button bindings, lights, scenes.
+
+Dashboard-only agent (no dedicated LXC service). All automation logic lives in the rule engine on LXC 105; UI is hosted by the Windows dashboard.
+
+## File Locations
+
+Everything scattered across canonical directories — this file is the index.
+
+| Artifact | Path |
+|----------|------|
+| Dashboard page | `BOILER/dashboard/public/living-room.html` |
+| Dashboard JS | `BOILER/dashboard/public/js/living-room.js` |
+| Rules | `RULES/rules/wallmote_handler.py` (group=`living-room`) |
+| DB setup migration | `migrations/agent_living-room_setup.sql` |
+| DB agent row | `agents` table, `name = 'living-room'` |
+| Config storage | `dashboard_settings` keys prefixed `living-room.*` |
+| Memory | `memory/project_agent_living-room.md` |
+
+## Storage Convention
+
+All living-room configs use `dashboard_settings` keys with prefix `living-room.`:
+
+| Key | Shape | Purpose |
+|-----|-------|---------|
+| `living-room.wallmote_bindings` | `{"<slug>:<button>:<event>": [{device_id, channel, action, name, label}, ...]}` | Wallmote button → device bindings |
+
+Saved via POST to `/api/dashboard-settings/living-room.wallmote_bindings` from the Living Room page.
+
+## Rules (group=`living-room`)
+
+| Rule | File | Trigger | Purpose |
+|------|------|---------|---------|
+| Wallmote Handler | `RULES/rules/wallmote_handler.py` | `*` (filters for wallmote device_ids early) | Reads bindings, dispatches per-device actions (turn_on / turn_off / toggle) on physical button presses |
+
+### Wallmote Handler details
+
+- Listens for device events where `device_id` matches Wallmote 1 (`e410cc7b-a734-4177-b941-2394dd7a5f7f`) or Wallmote 2 (`62f40d30-5c63-4d97-bf55-c602d1e2ee93`)
+- Parses `pushed:` / `held:` prefix from the button dps value
+- Reads bindings from `dashboard_settings.living-room.wallmote_bindings` with 30s TTL cache
+- `toggle` resolves against in-memory `state.devices[device_id].dps[channel]` — inverts current state
+- Handles zigbee multi-gang switches via `channel='state_lN'`
+- Handles Tuya multi-gang via numeric `channel='N'`
+
+## Dashboard Page
+
+Path: `/living-room.html` (served by the Windows dashboard). Sidebar link under "Agents" section, same row as Boiler / Media / Corridor / Device.
+
+### Tabs
+
+- **Wallmote** — binding editor for Wallmote 1 and Wallmote 2 (4 buttons × Pushed/Held = 8 slots per wallmote)
+
+### Wallmote Tab Features
+
+- Per-slot device multi-select popover with per-device action dropdown (Turn On / Turn Off / Toggle)
+- Zigbee multi-gang switches shown as separate rows per channel (state_l1 / state_l2 / state_l3)
+- Tuya multi-gang switches shown per `channel_config` entry
+- Search by name / room / protocol in the picker
+- **Test** button per slot — dispatches real commands via `/api/devices/:id/toggle` for instant verification without the physical button
+- **Save Bindings** — POSTs all 16 slots (2 wallmotes × 8 slots each) in one request to `/api/dashboard-settings/living-room.wallmote_bindings`
+
+## Planned Future Features
+
+- **Lights tab** — group-based lighting control (scenes, dim curves)
+- **Scenes tab** — named scenes (Movie Mode, Reading Mode, etc.) mapped to a button combo or schedule
+- **Presence tab** — auto-on-when-home rules specific to Living Room
+
+Each new feature = new tab in `living-room.html`, new rule(s) in `RULES/rules/` with `group="living-room"`, new keys under `living-room.*` in `dashboard_settings`.
+
+## Extending the Agent
+
+To add a new service (if ever needed): run `/create-agent Edit` → choose "add service layer". The skill generates `LIVING_ROOM/agent/living-room-agent.service` + env file + orphan guard, and updates the `agents` table row.

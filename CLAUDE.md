@@ -253,8 +253,12 @@ Each project has its own CLAUDE.md with full details:
 | Orchestrator | `ORCHESTRATOR/` | `ORCHESTRATOR/CLAUDE.md` |
 | Rule Engine | `RULES/` | see `docs/rule-engine/tech-design.md` |
 | Voice System | `VOICE/` | `VOICE/CLAUDE.md` |
+| Corridor Agent | `CORRIDOR/` | `CORRIDOR/CLAUDE.md` — dashboard-only (Pixoo editor); service runs on LXC 100 as `pixoo_service` |
+| Living Room Agent | `LIVING_ROOM/` | `LIVING_ROOM/CLAUDE.md` — dashboard-only; wallmote bindings + future scenes/lights |
 | Scripts (LXC 100) | `scripts/` | see `MEDIA/CLAUDE.md` |
 | Windows Backup (LXC 104) | `scripts/backup-script.sh` | see root `CLAUDE.md` LXC 104 section |
+
+**Convention**: every named agent has a top-level `<AGENT>/` directory with at least a `CLAUDE.md` index file, regardless of whether it has a dedicated LXC service. Dashboard-only agents (Corridor, Living Room) use their CLAUDE.md as the index pointing to canonical artifact locations (dashboard HTML/JS, rules, migrations, etc.) — because the codebase structure forces those files to live in shared directories like `BOILER/dashboard/public/` and `RULES/rules/`.
 
 ## System-Wide Dashboard Pages
 
