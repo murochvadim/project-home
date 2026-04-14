@@ -209,14 +209,20 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - **Z-Wave devices** (Aeotec sensors, Wallmotes) stay on SmartThings hub → HA WebSocket → device agent. Cannot go local without a Z-Wave USB dongle.
 - **Ring devices** (Doorbell, Chime) connected via HA Ring integration → HA WebSocket → device agent. Events (ding/motion), battery, chime control, volume work. Camera snapshots require Ring Protect subscription (not active). Auth token + python-ring-doorbell venv at `/opt/ring-snapshot/` on LXC 103 for future use.
 
-### LXC 104 (192.168.1.227) — Windows Backup Agent
-- **Script**: `/opt/backup-script.sh` — runs every 5 min via cron
-- **Local script**: `scripts/backup-script.sh`
-- **Cron**: `*/5 * * * * /opt/backup-script.sh >> /var/log/backup-script.log 2>&1`
+### LXC 104 (192.168.1.227) — Windows Backup Agent + Group Health Watchdog
+- **Backup script**: `/opt/backup-script.sh` — runs every 5 min via cron
+- **Group Health Watchdog**: `/opt/group_health_watchdog.py` — runs every 5 min via cron
+- **Local scripts**: `scripts/backup-script.sh`, `scripts/group_health_watchdog.py`
+- **Cron**:
+  ```
+  */5 * * * * /opt/backup-script.sh >> /var/log/backup-script.log 2>&1
+  */5 * * * * /usr/bin/python3 /opt/group_health_watchdog.py >> /var/log/group-health.log 2>&1
+  ```
 - **Mounts**: `/mnt/qnap-claude` (QNAP Claude_Data), `/mnt/qnap-windows` (QNAP Windows_Data) — pre-mounted CIFS, always available
-- **DB tables**: `backup_storages`, `backup_jobs`, `backup_log` on LXC 102
-- **Logic**: reads jobs from DB → SSH-checks laptop reachability → scp source → QNAP mount → logs result → rotates old copies
-- **Deploy**: `scp scripts/backup-script.sh root@192.168.1.227:/opt/backup-script.sh`
+- **DB tables**: `backup_storages`, `backup_jobs`, `backup_log`, `system_alerts` (watchdog writes here) on LXC 102
+- **Backup Logic**: reads jobs from DB → SSH-checks laptop reachability → scp source → QNAP mount → logs result → rotates old copies
+- **Watchdog Logic**: groups devices by (protocol, last_source), checks freshness of each group vs cadence threshold, alerts to `system_alerts` when a group is silent but others are fresh (catches HA sub-integration hangs like SmartThings/Ring stuck). Phase 1 = alert-only, no auto-recovery. Writes alert_type = `group_stale:<protocol>:<source>`; auto-resolves when group recovers.
+- **Deploy**: `scp scripts/backup-script.sh root@192.168.1.227:/opt/backup-script.sh` / `scp scripts/group_health_watchdog.py root@192.168.1.227:/opt/group_health_watchdog.py`
 
 ### LXC 105 (192.168.1.187) — Rule Engine
 - Runs on LXC 105 as `rule-engine.service` with orphan guard (`ExecStartPre=/opt/main-agent/kill-orphans.sh`)
