@@ -27,7 +27,9 @@
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
 ## Data Flow
-- **raw_data**: LXC 103 script `/usr/local/bin/ha_to_pg` runs every 5 min via cron, fetches from HA; after each insert it also writes a row to `sync_signals` (same transaction) to wake the boiler agent early
+- **raw_data**: LXC 103 script `/usr/local/bin/ha_to_pg` runs every 5 min via cron, fetches from HA; after each successful insert it also writes a row to `sync_signals` (same transaction) to wake the boiler agent early
+  - **Source of truth in repo**: `BOILER/agent/ha_to_pg_updated.py` — any change must be re-deployed to LXC 103 via `scp` + `sed -i 's/\r//g'` (strip Windows CRLF) + `chmod +x`
+  - **NULL guard (2026-04-14)**: if both `boiler_temp` AND `panel_temp` return None/unknown/unavailable from HA, the script skips both the `raw_data` insert AND the `sync_signals` write → no polluted row, no agent ERR, no cascade alert. If only ONE sensor is NULL, it inserts with a warning. Prevents transient HA flakiness from tripping `agent_hard_errors` system alerts.
 - **raw_weather + raw_weather_daily**: LXC 103 script `/opt/Agents-agent/project/BOILER/agent/collect_weather.py` runs every 60 min via cron (`0 * * * *`)
   - Hourly: fetches `weather.ims_weather` + balcony sensors (`sensor.balcony_motion_*`) from HA → inserts into `raw_weather`
   - Daily at 06:00: calls `weather.get_forecasts?return_response` → inserts 7-day forecast into `raw_weather_daily`
