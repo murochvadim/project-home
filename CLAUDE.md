@@ -138,6 +138,8 @@ Rules on LXC 105 query `device_events` at any historical timestamp to get accura
 - `get_events_between(device_ids, from_ts, to_ts)` — raw events for any list of devices in range
 - `db_execute()` returns rowcount; logs warning on 0-row UPDATE/DELETE (silent data-loss guard)
 
+**Split DB connection (2026-04-14):** state_manager holds two connections — `self.conn` (+ `_db_lock`) for rule-driven ops (db_execute, db_query, emit_virtual_event, get_* helpers), and `self._hb_conn` (+ `_hb_lock`) exclusively for the heartbeat thread (load_from_db, load_shared_state, save_shared_state, _write_heartbeat). Prevents `save_shared_state`'s 167-row upsert (~200ms) from blocking rule emissions. Max emission time dropped from 225-255ms to 2-6ms.
+
 **Virtual devices** — derived states from rules live in `device_events` too, using `virtual:<name>` id prefix. Registered in `devices` table (device_type='virtual', protocol='virtual') so they appear on dashboard. Rules emit via `state.emit_virtual_event(virtual_id, dps, source, ...)` which dedupes against prior state.
 
 Current virtual devices:
@@ -151,6 +153,12 @@ Current virtual devices:
 - Consume state → use the 3 helpers; never trust MQTT payload for historical state
 - Produce state → emit via `emit_virtual_event` on change; keep `state.shared` for live reads too
 - Writes that matter → check rowcount return from `db_execute`
+- Scaling → prefer specific `triggers=["device_id", ...]` over wildcard `["*"]`; for wildcard rules, filter + early-return in first 2 lines
+
+**Rule groups:**
+- `boiler` — Boiler Consumption Classify and future boiler rules
+- `info` — Home Activity, People Home (global aggregators)
+- `living-room` — Wallmote Handler and future Living Room automations (bindings stored in `dashboard_settings.living-room.*`)
 
 ---
 
