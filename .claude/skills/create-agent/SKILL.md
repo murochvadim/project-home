@@ -24,7 +24,7 @@ Ask what the user wants to do:
 If **Remove**:
   1. Query `SELECT name, description, lxc_id FROM agents ORDER BY name` — show list
   2. Confirm selection (explicit "yes delete <name>")
-  3. Delete local files: `BOILER/dashboard/public/<slug>.html`, `BOILER/dashboard/public/js/<slug>.js`, `memory/project_agent_<slug>.md`, `<AGENT_DIR>/` (if exists with service layer), `migrations/agent_<slug>_setup.sql`
+  3. Delete local files: `BOILER/dashboard/public/<slug>.html`, `BOILER/dashboard/public/js/<slug>.js`, `memory/project_agent_<slug>.md`, `<AGENT_DIR>/` (directory + CLAUDE.md are always present regardless of service layer), `migrations/agent_<slug>_setup.sql`
   4. Sed-remove sidebar link from 9 HTML files
   5. Remove row from root `CLAUDE.md` Dashboard Pages table
   6. Remove line from `memory/MEMORY.md`
@@ -78,7 +78,7 @@ For the chosen agent `<slug>`, gather:
 8. **Service files** (if `service_name` is set):
    - `<AGENT_DIR>/agent/<service>.service` exists locally?
    - `.timer` file exists if `service_oneshot=true`?
-9. **Own CLAUDE.md** (if service layer) — `<AGENT_DIR>/CLAUDE.md` exists?
+9. **Own CLAUDE.md** (required for every agent — pointer index if dashboard-only, full doc if service) — `<AGENT_DIR>/CLAUDE.md` exists?
 
 ### Audit Step C: Compare to standard — drift checklist
 
@@ -105,7 +105,7 @@ Memory layer
 
 Service layer  (service_name = '<slug>-agent')
   ✓ <AGENT_DIR>/agent/<slug>-agent.service exists
-  ✗ <AGENT_DIR>/CLAUDE.md missing (required because service layer is present)
+  ✗ <AGENT_DIR>/CLAUDE.md missing (required for every agent — pointer index or full doc)
 
 Tables owned (<table names>)
   ✓ <table_a> has retention_policy row (90d, auto_clean=true)
@@ -419,14 +419,18 @@ ssh root@192.168.1.227 "PGPASSWORD='' psql -h 192.168.1.219 -U postgres -d home_
 ```
 (LXC 104 works for this — backup-script.sh proves passwordless psql connection to 192.168.1.219.)
 
-### 14b. Auto — Dashboard files + sidebar + docs + memory
-- Write `<slug>.html` locally from template
-- Write `<slug>.js` locally from template
+### 14b. Auto — Dashboard files + sidebar + agent dir + docs + memory
+- Create directory `<AGENT_DIR>/` if it does not exist (always)
+- Write `<AGENT_DIR>/CLAUDE.md` from the appropriate template:
+  - If service layer = None → **pointer-index template** (see Templates section below)
+  - If service layer = Persistent/Oneshot → **full-module template** with Purpose/Data Flow/etc. sections
+- Write `<slug>.html` locally from template (`BOILER/dashboard/public/<slug>.html`)
+- Write `<slug>.js` locally from template (`BOILER/dashboard/public/js/<slug>.js`)
 - Sed-inject sidebar link into 9 HTML files
 - Write `memory/project_agent_<slug>.md`
-- Append row to root `CLAUDE.md` Dashboard Pages table
+- Append row to root `CLAUDE.md` Dashboard Pages table AND to Project Modules table
 - Append line to `memory/MEMORY.md`
-- If service layer: write service file, timer file, orphan guard, own CLAUDE.md
+- If service layer: also write `<AGENT_DIR>/agent/<slug>-agent.service` + timer + orphan guard + env file template
 
 ### 14c. Auto — Dashboard restart
 ```bash
@@ -557,7 +561,9 @@ exit 0
 ```
 Add `#!/bin/bash` shebang + `chmod +x` on target LXC.
 
-### Agent's own CLAUDE.md (`<AGENT_DIR>/CLAUDE.md`) — only if service layer
+### Agent's own CLAUDE.md — full-module template (when service layer = Persistent or Oneshot)
+
+`<AGENT_DIR>/CLAUDE.md`:
 ```markdown
 # <Name>
 
@@ -588,6 +594,51 @@ Add `#!/bin/bash` shebang + `chmod +x` on target LXC.
 - Service: `<slug>-agent.service`
 - Deploy path: <deploy_path>
 - Deploy: `ssh root@<ip> "cd <deploy_path> && git pull && systemctl restart <service>"`
+```
+
+### Agent's own CLAUDE.md — pointer-index template (when service layer = None)
+
+`<AGENT_DIR>/CLAUDE.md`:
+```markdown
+# <Name>
+
+<short purpose — from Step 10>
+
+Dashboard-only agent (no dedicated LXC service). All automation logic lives in the rule engine on LXC 105; UI is hosted by the Windows dashboard.
+
+## File Locations
+
+This file is the index — all artifacts live in shared canonical directories:
+
+| Artifact | Path |
+|----------|------|
+| Dashboard page | `BOILER/dashboard/public/<slug>.html` |
+| Dashboard JS | `BOILER/dashboard/public/js/<slug>.js` |
+| Rules | `RULES/rules/*.py` (group=`<rule_group>`) |
+| DB setup migration | `migrations/agent_<slug>_setup.sql` |
+| DB agent row | `agents` table, `name = '<slug>'` |
+| Config storage | `dashboard_settings` keys prefixed `<slug>.*` |
+| Memory | `memory/project_agent_<slug>.md` |
+
+## Rules (group=`<rule_group>`)
+
+<!-- Populated by /create-rule when rules are added -->
+
+## Storage Keys
+
+<!-- List keys under <slug>.* as features get added -->
+
+## Dashboard Tabs
+
+- <tab names from Step 3>
+
+## Planned Future Features
+
+<!-- User fills in as the agent grows -->
+
+## Extending the Agent
+
+To add a service layer later: run `/create-agent Edit` → select "add service layer". Skill generates `<AGENT_DIR>/agent/<slug>-agent.service` + env file + orphan guard, updates the `agents` table, and converts this pointer index into a full-module doc.
 ```
 
 ### Memory file (`memory/project_agent_<slug>.md`)
