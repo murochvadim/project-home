@@ -207,7 +207,7 @@
   version = current git commit hash.
 
 ## 7. Detect and save hot water consumption events:
-- Scan raw_data for the last `consumption_time_delta` minutes
+- Scan raw_data for the last `consumption_time_delta + 2 × run_interval_min` minutes — the padding guarantees at least one baseline row before the drop, so a sudden 1-tick fall anchors to the pre-drop temperature rather than the post-drop reading (fixed 2026-04-15)
 - Group consecutive drops (≥ 0.5°C per step) into events; only record completed events (drop has ended)
 - Record event if total drop ≥ `consumption_temp_delta`; insert into `boiler_consumptions` with ON CONFLICT DO NOTHING (deduplicated by start_ts)
 - On each genuinely new insert (rowcount=1), publish the event to MQTT topic `mur/home/device/boiler/event` (user `boiler_agent` on LXC 107) with payload `{dps: {event_type, drop_c, duration_min, start_ts, end_ts, start_temp, end_temp, valve_state, valve_on_min, valve_off_min}}`. Publish is fail-silent — broker downtime never breaks detection. The rule engine on LXC 105 subscribes via `mur/home/device/+/event`; the `Boiler Consumption Classify` rule uses presence + valve context for 5-category classification (human/panel/thermal/boiler/unknown) and writes back `cause` + `likely_rooms` to the same row asynchronously.
