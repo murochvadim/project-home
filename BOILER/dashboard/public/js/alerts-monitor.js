@@ -133,9 +133,45 @@
     } catch (e) {}
   }
 
+  // ── Integrations badge (device-group stall alerts) ───────────
+  const INTEG_STORE = '_integ_stale_count';
+
+  function applyIntegState(count, groups) {
+    const el = document.getElementById('integrations-indicator');
+    if (!el) return;
+    if (count > 0) {
+      el.textContent = count === 1
+        ? 'Device Integration ✗ 1 stuck'
+        : `Device Integration ✗ ${count} stuck`;
+      el.title = `${count} device integration${count > 1 ? 's' : ''} stalled:\n${(groups || []).join('\n')}\nClick to see Health page`;
+      el.style.background = '#5c0e0e';
+      el.style.color = '#fff';
+    } else {
+      el.textContent = 'Device Integration ✓';
+      el.title = 'All device integrations OK';
+      el.style.background = '#3a7d44';
+      el.style.color = '#fff';
+    }
+  }
+
+  try {
+    const saved = localStorage.getItem(INTEG_STORE);
+    if (saved !== null) applyIntegState(parseInt(saved, 10), []);
+  } catch (e) {}
+
+  async function checkIntegrations() {
+    try {
+      const r = await fetch('/api/health/integrations').then(r => r.json());
+      applyIntegState(r.count || 0, r.groups || []);
+      try { localStorage.setItem(INTEG_STORE, r.count || 0); } catch (e) {}
+    } catch (e) {}
+  }
+
   // First check after page settles, then every 60 s
   setTimeout(checkAlerts, 1500);
   setTimeout(checkBattery, 2000);
+  setTimeout(checkIntegrations, 2500);
   setInterval(checkAlerts, 60000);
   setInterval(checkBattery, 60000);
+  setInterval(checkIntegrations, 60000);
 })();

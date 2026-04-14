@@ -1203,6 +1203,18 @@ app.get('/api/health/alerts', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Integration health — count of active group_stale alerts (device-integration stalls)
+app.get('/api/health/integrations', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT COUNT(*) AS n, COALESCE(json_agg(alert_type), '[]'::json) AS groups
+      FROM system_alerts
+      WHERE resolved_at IS NULL AND alert_type LIKE 'group_stale:%'
+    `);
+    res.json({ count: parseInt(r.rows[0].n), groups: r.rows[0].groups });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete('/api/health/alerts/resolved', async (req, res) => {
   try {
     const r = await db.query('DELETE FROM system_alerts WHERE resolved_at IS NOT NULL');

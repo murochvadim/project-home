@@ -57,9 +57,10 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 | Voice | `voice.html` | Voice pipeline, intents, TTS |
 
 ### Sidebar (all pages)
-- **Status badge**: `✓ OK` (green) / `⚠ N issues` (red blink) — polls `/api/health/status` every 60s
-- **Battery badge**: `Batt ✓` (green) / `Batt Low - N` (dark red) — counts devices below low threshold + offline battery devices, polls every 60s
-- Both managed by `alerts-monitor.js` (loaded on all 9 pages)
+- **Status badge** (top-left): `✓ OK` (green) / `⚠ N issues` (red blink) — overall system health; polls `/api/health/status` every 60s
+- **Battery badge** (top-right): `Batt ✓` (green) / `Batt Low - N` (dark red) — counts devices below low threshold + offline battery devices, polls every 60s
+- **Device Integration badge** (full row below): `Device Integration ✓` (green) / `Device Integration ✗ N stuck` (dark red) — active `group_stale:*` alerts from the group health watchdog on LXC 104; polls `/api/health/integrations` every 60s
+- All three managed by `alerts-monitor.js` (loaded on all 9 pages); Device Integration badge wrapped in `.badges-wrap` (inline-flex column, align-self:flex-start) so its width matches the upper Status+Batt row
 - Battery thresholds stored in `dashboard_settings` table (key `battery_thresholds`, default `{good: 60, low: 20}`)
 
 ### Dashboard DB Tables (system-wide, not module-specific)
