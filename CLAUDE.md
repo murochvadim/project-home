@@ -55,6 +55,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 | Project Network | `network.html` | ARP scan, network devices |
 | Weather | `general.html` | Weather data, solar heating potential |
 | Voice | `voice.html` | Voice pipeline, intents, TTS |
+| Living Room Agent | `living-room.html` | Living Room automations — wallmote bindings, scenes, lights |
 
 ### Sidebar (all pages)
 - **Status badge** (top-left): `✓ OK` (green) / `⚠ N issues` (red blink) — overall system health; polls `/api/health/status` every 60s

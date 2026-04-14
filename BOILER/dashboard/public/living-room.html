@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Living Room Agent</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html" class="active">Living Room Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Living Room Agent</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshPage()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('wallmote', this)">Wallmote</button>
+  </div>
+
+  <!-- Tab panels -->
+  <div class="tab-panel active" id="tab-wallmote">
+    <div class="card">
+      <p style="color:#888;">Wallmote button → device bindings will be configured here. Placeholder until the feature is built.</p>
+    </div>
+  </div>
+
+</main>
+
+<script src="js/alerts-monitor.js"></script>
+<script src="js/living-room.js"></script>
+</body>
+</html>
