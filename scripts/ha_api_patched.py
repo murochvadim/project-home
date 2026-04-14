@@ -282,6 +282,17 @@ class HAApiAdapter(DeviceAdapter):
                     'type': 'subscribe_events',
                     'event_type': 'state_changed',
                 }))
+                # Rebuild entity map now that HA is confirmed responsive.
+                # The initial build in _run() may have run against a briefly-down
+                # HA (connection refused → empty map → silent event drops after
+                # HA comes back). Rebuilding post-auth catches that case.
+                if not self._entity_map:
+                    try:
+                        log.info('HA: entity map empty after auth — rebuilding')
+                        self._build_entity_map()
+                        self._fetch_all_states()
+                    except Exception as e:
+                        log.warning(f'HA: post-auth map rebuild failed: {e} (watchdog will retry)')
                 return
 
             # Auth rejected — close and reconnect
@@ -384,10 +395,12 @@ class HAApiAdapter(DeviceAdapter):
     def _watchdog_loop(self):
         """Auto-heal stuck WebSocket connections.
 
-        Runs every 60s in a separate daemon thread. Three overlapping checks:
+        Runs every 60s in a separate daemon thread. Four overlapping checks:
         1. Post-auth deadline — force close if auth_ok doesn't arrive within 60s
-        2. Event-idle backup — force close if no WS message for 15 min
-        3. Active ping — send HA ping; if 2 consecutive pings unanswered, force close
+        2. Empty-map detection — force close if entity_map stays empty >60s after auth
+           (handles: HA briefly down during initial _build_entity_map → map=0 → silent drops)
+        3. Event-idle backup — force close if no WS message for 15 min
+        4. Active ping — send HA ping; if 2 consecutive pings unanswered, force close
 
         ws.close() is thread-safe in websocket-client 1.9.0; it makes
         run_forever() return so the main reconnect loop can rebuild cleanly.
@@ -407,6 +420,16 @@ class HAApiAdapter(DeviceAdapter):
             if self._last_auth_ok_ts == 0.0 and self._ws_connect_ts > 0 \
                     and (now - self._ws_connect_ts) > 60:
                 log.warning('HA watchdog: no auth_ok within 60s of connect — forcing close')
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+                continue
+
+            # 2) Empty-map detection (only after auth_ok — grace period 60s for initial build)
+            if self._last_auth_ok_ts > 0 and (now - self._last_auth_ok_ts) > 60 \
+                    and not self._entity_map:
+                log.warning('HA watchdog: entity map empty >60s after auth — forcing close (map rebuild on next connect)')
                 try:
                     ws.close()
                 except Exception:
