@@ -126,6 +126,32 @@ When asked to **audit** or **clean** any LXC (e.g. "audit lxc 104"), always run 
 
 ---
 
+## Rules Time-Travel Architecture
+
+Rules on LXC 105 query `device_events` at any historical timestamp to get accurate state — they do NOT rely on MQTT payload context or in-memory timers for historical judgment.
+
+**Data access helpers in `RULES/state_manager.py`:**
+- `get_device_state_at(device_id, at_ts)` — latest dps for device at or before ts
+- `get_last_transition_before(device_id, dps_key, at_ts)` — most recent change
+- `get_events_between(device_ids, from_ts, to_ts)` — raw events for any list of devices in range
+- `db_execute()` returns rowcount; logs warning on 0-row UPDATE/DELETE (silent data-loss guard)
+
+**Virtual devices** — derived states from rules live in `device_events` too, using `virtual:<name>` id prefix. Registered in `devices` table (device_type='virtual', protocol='virtual') so they appear on dashboard. Rules emit via `state.emit_virtual_event(virtual_id, dps, source, ...)` which dedupes against prior state.
+
+Current virtual devices:
+- `virtual:home_activity` (owner: Home Activity rule) — `active_rooms`, `activity_level`, `active_room_count`, `last_motion_room`
+- `virtual:people_home` (owner: People Home rule) — `people_home`, `home_mode`, `someone_home`, `occupied_rooms`
+- `virtual:boiler_status` (owner: Boiler Consumption Classify) — `last_cause`, `last_drop_c`, `last_rooms`, `last_start_ts`
+
+**Scope:** real-time sync applies to **discrete state changes** (switches, motion, valve, door, presence, etc.) — these are already in `device_events` via device agent. Continuous analog (temps, weather, UV, illuminance) stay in their own time-series tables.
+
+**Pattern for future rules:**
+- Consume state → use the 3 helpers; never trust MQTT payload for historical state
+- Produce state → emit via `emit_virtual_event` on change; keep `state.shared` for live reads too
+- Writes that matter → check rowcount return from `db_execute`
+
+---
+
 ## Claude Hooks (`.claude/`)
 
 Hooks run automatically on tool use. Configured in `.claude/settings.json` and `.claude/settings.local.json`.

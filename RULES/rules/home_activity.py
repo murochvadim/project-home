@@ -98,4 +98,23 @@ def evaluate(event, state):
     state.shared["active_rooms"] = sorted(active_rooms)
     state.shared["active_room_count"] = count
 
+    # Emit virtual device event so other rules can time-travel query activity state
+    state.emit_virtual_event(
+        virtual_id='virtual:home_activity',
+        dps={
+            'activity_level': level,
+            'active_rooms': sorted(active_rooms),
+            'active_room_count': count,
+            'last_motion_room': state.shared.get('last_motion_room', ''),
+        },
+        source='rule:Home Activity',
+        name='Home Activity State',
+        dps_labels={
+            'activity_level': 'Activity Level',
+            'active_rooms': 'Active Rooms',
+            'active_room_count': 'Active Room Count',
+            'last_motion_room': 'Last Motion Room',
+        },
+    )
+
     return []

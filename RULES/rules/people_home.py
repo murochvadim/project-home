@@ -94,4 +94,23 @@ def evaluate(event, state):
     state.shared["occupied_rooms"] = occupied_rooms
     state.shared["home_mode"] = home_mode
 
+    # Emit virtual device event so other rules can time-travel query home state
+    state.emit_virtual_event(
+        virtual_id='virtual:people_home',
+        dps={
+            'people_home': people_count,
+            'home_mode': home_mode,
+            'someone_home': people_count > 0,
+            'occupied_rooms': occupied_rooms,
+        },
+        source='rule:People Home',
+        name='People Home State',
+        dps_labels={
+            'people_home': 'People Count',
+            'home_mode': 'Home Mode',
+            'someone_home': 'Someone Home',
+            'occupied_rooms': 'Occupied Rooms',
+        },
+    )
+
     return []

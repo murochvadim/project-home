@@ -293,17 +293,174 @@ class StateManager:
     # ------------------------------------------------------------------
 
     def db_execute(self, sql, params=None):
-        """Execute a DB statement with thread-safe connection. Single retry on failure."""
+        """Execute a DB statement with thread-safe connection. Single retry on failure.
+        Returns rowcount on success, -1 on complete failure.
+        Warns on 0-row UPDATE/DELETE to catch silent data loss."""
+        rowcount = -1
         with self._db_lock:
             self._ensure_conn()
             try:
                 with self.conn.cursor() as cur:
                     cur.execute(sql, params or ())
+                    rowcount = cur.rowcount
             except Exception:
                 log.warning("db_execute failed, retrying after reconnect", exc_info=True)
                 try:
                     self._connect_db()
                     with self.conn.cursor() as cur:
                         cur.execute(sql, params or ())
+                        rowcount = cur.rowcount
                 except Exception:
                     log.warning("db_execute retry also failed", exc_info=True)
+                    return -1
+
+        if rowcount == 0 and sql.strip()[:6].upper() in ('UPDATE', 'DELETE'):
+            log.warning("db_execute: 0 rows affected — sql=%s params=%s", sql[:120], params)
+        return rowcount
+
+    def db_query(self, sql, params=None):
+        """Execute a read-only SELECT with thread-safe connection. Single retry on failure.
+        Returns list of row tuples, or [] on failure."""
+        with self._db_lock:
+            self._ensure_conn()
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(sql, params or ())
+                    return cur.fetchall()
+            except Exception:
+                log.warning("db_query failed, retrying after reconnect", exc_info=True)
+                try:
+                    self._connect_db()
+                    with self.conn.cursor() as cur:
+                        cur.execute(sql, params or ())
+                        return cur.fetchall()
+                except Exception:
+                    log.warning("db_query retry also failed", exc_info=True)
+                    return []
+
+    # ------------------------------------------------------------------
+    # Historical state queries — for rules that need time-travel on device_events
+    # ------------------------------------------------------------------
+
+    def get_device_state_at(self, device_id, at_ts):
+        """Return latest dps dict for device at or before at_ts, or None.
+        Used by rules to query state at any historical moment."""
+        rows = self.db_query(
+            "SELECT dps FROM device_events WHERE device_id = %s AND ts <= %s "
+            "ORDER BY ts DESC LIMIT 1",
+            (device_id, at_ts),
+        )
+        if not rows:
+            return None
+        dps = rows[0][0]
+        if isinstance(dps, str):
+            try:
+                dps = json.loads(dps)
+            except Exception:
+                return None
+        return dps if isinstance(dps, dict) else None
+
+    def get_last_transition_before(self, device_id, dps_key, at_ts, lookback=500):
+        """Return (ts, prev_value, new_value) of the most recent change of dps[dps_key]
+        for device before at_ts. Returns None if no transition found in lookback rows."""
+        rows = self.db_query(
+            "SELECT ts, dps FROM device_events WHERE device_id = %s AND ts <= %s "
+            "ORDER BY ts DESC LIMIT %s",
+            (device_id, at_ts, lookback),
+        )
+        if not rows:
+            return None
+
+        # Walk rows newest→oldest; find the first pair where dps[dps_key] differs
+        prev_value = None
+        prev_ts = None
+        key = str(dps_key)
+        for ts, dps in rows:
+            if isinstance(dps, str):
+                try:
+                    dps = json.loads(dps)
+                except Exception:
+                    continue
+            if not isinstance(dps, dict):
+                continue
+            value = dps.get(key)
+            if prev_value is None and value is not None:
+                prev_value = value
+                prev_ts = ts
+                continue
+            if value is not None and value != prev_value:
+                # Transition: old row value -> newer row value (prev_value)
+                return (prev_ts, value, prev_value)
+        return None
+
+    def get_events_between(self, device_ids, from_ts, to_ts):
+        """Return raw events for any list of device_ids in a time range.
+        Returns list of (ts, device_id, dps) tuples, ordered ascending by ts."""
+        if not device_ids:
+            return []
+        rows = self.db_query(
+            "SELECT ts, device_id, dps FROM device_events "
+            "WHERE device_id = ANY(%s) AND ts >= %s AND ts <= %s "
+            "ORDER BY ts ASC",
+            (list(device_ids), from_ts, to_ts),
+        )
+        result = []
+        for ts, dev_id, dps in rows:
+            if isinstance(dps, str):
+                try:
+                    dps = json.loads(dps)
+                except Exception:
+                    dps = {}
+            result.append((ts, dev_id, dps if isinstance(dps, dict) else {}))
+        return result
+
+    # ------------------------------------------------------------------
+    # Virtual device emission — for rules that produce derived state
+    # ------------------------------------------------------------------
+
+    def emit_virtual_event(self, virtual_id, dps, source, name=None, dps_labels=None):
+        """Emit a virtual device event to device_events (only when dps changed vs last emission).
+        Also registers the virtual device in the devices table on first emission.
+
+        virtual_id: must start with 'virtual:' prefix
+        dps: dict of current derived state values
+        source: e.g. 'rule:Home Activity'
+        name: friendly name for devices table registration (first time only)
+        dps_labels: optional dict {key: label} for dashboard rendering
+        """
+        if not virtual_id.startswith('virtual:'):
+            log.warning("emit_virtual_event: device_id must start with 'virtual:' — got %s", virtual_id)
+            return
+
+        # Dedupe: fetch last emission for this virtual device
+        last_rows = self.db_query(
+            "SELECT dps FROM device_events WHERE device_id = %s ORDER BY ts DESC LIMIT 1",
+            (virtual_id,),
+        )
+        last_dps = None
+        if last_rows:
+            last_dps = last_rows[0][0]
+            if isinstance(last_dps, str):
+                try:
+                    last_dps = json.loads(last_dps)
+                except Exception:
+                    last_dps = None
+
+        # Emit only if changed (or first time)
+        if last_dps == dps:
+            return
+
+        # Ensure registered in devices table (idempotent)
+        self.db_execute(
+            "INSERT INTO devices (id, name, device_type, protocol, enabled, dps_labels, created_at, updated_at) "
+            "VALUES (%s, %s, 'virtual', 'virtual', true, %s, NOW(), NOW()) "
+            "ON CONFLICT (id) DO NOTHING",
+            (virtual_id, name or virtual_id, json.dumps(dps_labels or {})),
+        )
+
+        # Insert event row
+        self.db_execute(
+            "INSERT INTO device_events (device_id, ts, dps, source) "
+            "VALUES (%s, NOW(), %s, %s)",
+            (virtual_id, json.dumps(dps), source),
+        )

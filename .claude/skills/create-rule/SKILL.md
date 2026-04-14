@@ -101,6 +101,60 @@ Ask:
 - **Priority** — number (1=highest/critical, 10=normal, 50=low). Only matters within the same group.
 - **Depends on** — should this rule run after specific other rules? (e.g., "Home Activity", "People Home")
 
+## Step 7.5: Virtual Devices (consume + produce)
+
+Rules on LXC 105 query historical state from `device_events` — including state computed by other rules, published as "virtual devices" (prefix `virtual:*`, registered with `device_type='virtual'`). See root `CLAUDE.md` > "Rules Time-Travel Architecture".
+
+### 7.5a — Does this rule need historical state from an existing virtual device?
+
+Query what's already available:
+```sql
+SELECT id, name, dps_labels FROM devices WHERE protocol = 'virtual' ORDER BY id
+```
+
+Ask the user:
+- "Does this rule need to know state at a past moment — e.g., 'was anyone home 10 minutes ago', 'what was valve state when drop started', 'what was the home mode at event time'?"
+- If yes, show the list of virtual devices + their fields. Ask which to consume.
+- Generated code uses `state.get_device_state_at('virtual:<name>', ts)` or `state.get_events_between(...)` to query.
+
+If the rule only cares about live/current state, `state.shared[...]` or `state.devices[...]` is fine — skip this.
+
+### 7.5b — Does this rule compute derived state others might want later?
+
+If the rule produces a value that other rules (now or future) might want to query at a historical moment, it should **emit a virtual device event**.
+
+Ask the user:
+- "Does this rule compute a derived state (like 'area clean', 'guest mode', 'last alarm type') that could be useful to query later — by other rules, dashboards, or retroactive analysis?"
+- If yes:
+  - Propose a `virtual:<snake_case_owner>` id (e.g., `virtual:guest_mode`)
+  - Propose a dps schema — list of field names + human labels
+  - Add `state.emit_virtual_event(...)` call at the end of `evaluate()` — dedupe is automatic, `devices` table registration is idempotent
+
+Generated code pattern:
+```python
+state.emit_virtual_event(
+    virtual_id='virtual:<name>',
+    dps={
+        'field_a': value_a,
+        'field_b': value_b,
+    },
+    source='rule:<Rule Name>',
+    name='<Human Readable Name>',
+    dps_labels={
+        'field_a': 'Field A Label',
+        'field_b': 'Field B Label',
+    },
+)
+```
+
+If the rule only produces device commands (pixoo, on/off) and no derived state, skip this.
+
+### Naming & scope guidance
+- Virtual devices are for **discrete derived state** (mode flags, classifications, counts) — NOT continuous drifting values (temps, noise levels).
+- Dedupe is automatic — emits only when `dps` differs from last emission. Still, emit sparingly.
+- Pick `virtual:<name>` matching the rule's owning concept, not the rule name verbatim (e.g., `virtual:guest_mode` not `virtual:guest_detection_rule`).
+- Existing virtual devices (as of 2026-04-14): `virtual:home_activity`, `virtual:people_home`, `virtual:boiler_status`.
+
 ## Step 8: Generate & Review
 
 Generate the Python rule file using these templates:
