@@ -13,7 +13,7 @@ Everything scattered across canonical directories — this file is the index.
 | Dashboard page | `BOILER/dashboard/public/living-room.html` |
 | Dashboard JS | `BOILER/dashboard/public/js/living-room.js` |
 | Rules | `RULES/rules/wallmote_handler.py` (group=`living-room`) |
-| DB setup migration | `migrations/agent_living-room_setup.sql` |
+| DB setup migration | `LIVING_ROOM/migrations/setup.sql` |
 | DB agent row | `agents` table, `name = 'living-room'` |
 | Config storage | `dashboard_settings` keys prefixed `living-room.*` |
 | Memory | `memory/project_agent_living-room.md` |
