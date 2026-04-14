@@ -45,6 +45,17 @@ class HAApiAdapter(DeviceAdapter):
         # Known device IDs we care about
         self._known_ids = {d['id'] for d in devices}
         self._smartthings_ids = set()  # IDs sourced from SmartThings (for seed restriction)
+        # Watchdog state — auto-heal stuck WebSocket (websocket-client 1.9.0
+        # occasionally logs "ping/pong timed out - goodbye" without invoking
+        # on_close, so run_forever() never returns and our reconnect loop hangs).
+        self._ws = None                   # current WebSocketApp; set before run_forever()
+        self._last_event_ts = 0.0         # updated on every WS message
+        self._last_auth_ok_ts = 0.0       # updated on auth_ok; reset per connect
+        self._ws_connect_ts = 0.0         # when current run_forever() started
+        self._pending_pings: dict[int, float] = {}  # {msg_id: send_ts}
+        self._next_msg_id = 1000          # ping ids — disjoint from subscribe_events id=1
+        self._watchdog_thread = None
+        self._watchdog_stop = threading.Event()
 
     def _build_entity_map(self):
         """Query HA template API to build tuya_id → entity mapping."""
@@ -247,6 +258,16 @@ class HAApiAdapter(DeviceAdapter):
         try:
             msg = json.loads(message)
 
+            # Watchdog: update last-event timestamp on every incoming message
+            self._last_event_ts = time.time()
+
+            # Watchdog: correlate pong replies for active health check
+            if msg.get('type') == 'pong':
+                mid = msg.get('id')
+                if mid in self._pending_pings:
+                    del self._pending_pings[mid]
+                return
+
             # Auth required
             if msg.get('type') == 'auth_required':
                 ws.send(json.dumps({'type': 'auth', 'access_token': HA_TOKEN}))
@@ -255,6 +276,7 @@ class HAApiAdapter(DeviceAdapter):
             # Auth OK → subscribe to state changes
             if msg.get('type') == 'auth_ok':
                 log.info('HA WebSocket authenticated')
+                self._last_auth_ok_ts = time.time()
                 ws.send(json.dumps({
                     'id': 1,
                     'type': 'subscribe_events',
@@ -340,23 +362,104 @@ class HAApiAdapter(DeviceAdapter):
                     on_error=self._on_ws_error,
                     on_close=self._on_ws_close,
                 )
+                # Watchdog handshake: reset per-connection state, stash handle
+                self._ws = ws
+                self._ws_connect_ts = time.time()
+                self._last_event_ts = time.time()
+                self._last_auth_ok_ts = 0.0
+                self._pending_pings.clear()
                 # run_forever blocks until connection closes
                 ws.run_forever(ping_interval=30, ping_timeout=10)
+                self._ws = None
                 delay = RECONNECT_DELAY
             except Exception as e:
                 log.error(f'HA WebSocket connection failed: {e}')
+                self._ws = None
 
             if not self._stop_event.is_set():
                 log.info(f'HA WebSocket reconnecting in {delay}s')
                 self._stop_event.wait(delay)
                 delay = min(delay * 2, RECONNECT_MAX)
 
+    def _watchdog_loop(self):
+        """Auto-heal stuck WebSocket connections.
+
+        Runs every 60s in a separate daemon thread. Three overlapping checks:
+        1. Post-auth deadline — force close if auth_ok doesn't arrive within 60s
+        2. Event-idle backup — force close if no WS message for 15 min
+        3. Active ping — send HA ping; if 2 consecutive pings unanswered, force close
+
+        ws.close() is thread-safe in websocket-client 1.9.0; it makes
+        run_forever() return so the main reconnect loop can rebuild cleanly.
+        """
+        while not self._watchdog_stop.wait(60):
+            ws = self._ws
+            if ws is None:
+                continue  # not currently connected — nothing to monitor
+            # Skip if the underlying socket is already gone
+            sock = getattr(ws, 'sock', None)
+            if sock is None or not getattr(sock, 'connected', False):
+                continue
+
+            now = time.time()
+
+            # 1) Post-auth deadline
+            if self._last_auth_ok_ts == 0.0 and self._ws_connect_ts > 0 \
+                    and (now - self._ws_connect_ts) > 60:
+                log.warning('HA watchdog: no auth_ok within 60s of connect — forcing close')
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+                continue
+
+            # 2) Event-idle backup (only after auth_ok — pre-auth silence is normal)
+            if self._last_auth_ok_ts > 0 and (now - self._last_event_ts) > 900:
+                idle_min = (now - self._last_event_ts) / 60
+                log.warning('HA watchdog: no events for %.0f min — forcing close', idle_min)
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+                continue
+
+            # 3) Active ping (only after auth_ok)
+            if self._last_auth_ok_ts > 0:
+                # Drop stale pings older than 65s (overlap with next check window)
+                stale = [mid for mid, ts in self._pending_pings.items() if (now - ts) > 65]
+                for mid in stale:
+                    self._pending_pings.pop(mid, None)
+                if len(self._pending_pings) >= 2:
+                    log.warning('HA watchdog: %d pings unanswered — forcing close',
+                                len(self._pending_pings))
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    continue
+                # Send new ping
+                mid = self._next_msg_id
+                self._next_msg_id += 1
+                self._pending_pings[mid] = now
+                try:
+                    ws.send(json.dumps({'id': mid, 'type': 'ping'}))
+                except Exception as e:
+                    log.warning('HA watchdog: ping send failed: %s — forcing close', e)
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name='ha-api')
         self._thread.start()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, daemon=True, name='ha-api-watchdog')
+        self._watchdog_thread.start()
 
     def stop(self):
         self._stop_event.set()
+        self._watchdog_stop.set()
 
     def get_state(self, device_id: str) -> dict:
         return {}
