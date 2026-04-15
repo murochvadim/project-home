@@ -280,8 +280,23 @@
       const devs = await fetch('/api/devices').then(r => r.json());
       const d = devs.find(x => x.id === device_id);
       if (!d || !d.last_state) return null;
-      const k = channel || '1';
-      const v = d.last_state[k];
+
+      // Channel specified (multi-gang or explicit zigbee state_lN): direct lookup
+      let v;
+      if (channel) {
+        v = d.last_state[channel];
+      } else {
+        // Single-channel device — dps key varies by protocol/vendor:
+        //   Tuya local: '1'
+        //   Zigbee single-gang: 'state'
+        //   SmartThings/HA-mapped: custom name from dps_labels (e.g., 'spots')
+        const keys = Object.keys(d.last_state);
+        if ('1' in d.last_state) v = d.last_state['1'];
+        else if ('state' in d.last_state) v = d.last_state['state'];
+        else if ('power' in d.last_state) v = d.last_state['power'];
+        else if (keys.length === 1) v = d.last_state[keys[0]];  // only one key — use it
+      }
+
       if (v === true || v === 1 || v === 'on' || v === 'ON' || v === 'true') return true;
       if (v === false || v === 0 || v === 'off' || v === 'OFF' || v === 'false') return false;
       return null;

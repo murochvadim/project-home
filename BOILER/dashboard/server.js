@@ -2785,8 +2785,9 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
       return res.json({ ok: true, entity_id: `z2m:${devR.rows[0].name}`, service: state ? 'ON' : 'OFF' });
     }
 
-    // Look up HA entity for this Tuya device via template
-    const tpl = `{% for s in states %}{% set ids = device_attr(s.entity_id,"identifiers") %}{% if ids %}{% for i in ids %}{% if i[0] == "tuya" and i[1] == "${id}" %}{{ s.entity_id }}|{{ s.state }}\n{% endif %}{% endfor %}{% endif %}{% endfor %}`;
+    // Look up HA entity for this device via template.
+    // Matches both `tuya` (local-discovered) and `smartthings` (zwave via SmartThings hub) identifiers.
+    const tpl = `{% for s in states %}{% set ids = device_attr(s.entity_id,"identifiers") %}{% if ids %}{% for i in ids %}{% if (i[0] == "tuya" or i[0] == "smartthings") and i[1] == "${id}" %}{{ s.entity_id }}|{{ s.state }}\n{% endif %}{% endfor %}{% endif %}{% endfor %}`;
     const tplRes = await fetch(`${HA_URL}/api/template`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${getHaToken()}`, 'Content-Type': 'application/json' },
