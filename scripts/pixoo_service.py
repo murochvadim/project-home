@@ -106,6 +106,12 @@ class PixooService:
         self._paused = False
         self._sequence_stop = threading.Event()
         self._sequence_thread = None
+        # Live placeholder re-render — if a pushed preset contains {{time}}
+        # or {{date}} tokens, _render_preset starts this ticker so the values
+        # stay current without the caller having to re-push. Any new push,
+        # wipe, resume, or sequence stops the ticker first.
+        self._ticker_stop = None
+        self._ticker_thread = None
 
     # ------------------------------------------------------------------
     # MQTT callbacks
@@ -374,6 +380,7 @@ class PixooService:
                 self._play_sequence(payload.get('presets', []))
             elif action == 'resume':
                 self._stop_sequence()
+                self._stop_ticker()
                 self._paused = False
                 self._ensure_db()
                 if self.db:
@@ -388,6 +395,7 @@ class PixooService:
                 log.info("Pixoo rotation resumed")
             elif action == 'wipe':
                 self._stop_sequence()
+                self._stop_ticker()
                 import requests as _req
                 try:
                     self.pixoo.set_channel(4)
@@ -420,8 +428,209 @@ class PixooService:
         except Exception:
             log.exception("Pixoo command error: %s", action)
 
-    def _render_preset(self, preset_name, vars_dict=None):
-        """Load a preset by name, replace {{var}} placeholders, render to device."""
+    _LIVE_TOKENS = ('{{time}}', '{{date}}')
+
+    def _substitute_live_tokens(self, items, vars_dict=None):
+        """Substitute {{time}}, {{date}} (and caller vars_dict) into item text
+        in-place. Returns True if any live token was present before
+        substitution (so caller knows to schedule a re-render ticker).
+        Strips unreplaced {{...}} to keep output clean."""
+        has_live = any(
+            isinstance(it.get('t'), str) and any(tok in it['t'] for tok in self._LIVE_TOKENS)
+            for it in items
+        )
+        _now = datetime.now(TZ)
+        live_subs = {
+            'time': _now.strftime('%H:%M'),
+            'date': _now.strftime('%a %d %b'),
+        }
+        import re as _re
+        for item in items:
+            text = item.get('t', '')
+            if not isinstance(text, str):
+                continue
+            for key, val in live_subs.items():
+                text = text.replace('{{' + key + '}}', val)
+            if vars_dict:
+                for key, val in vars_dict.items():
+                    text = text.replace('{{' + key + '}}', str(val))
+            text = _re.sub(r'\{\{[^}]*\}\}', '', text)
+            item['t'] = text
+        return has_live
+
+    def _stop_ticker(self):
+        """Stop any running live-placeholder ticker thread."""
+        ev = self._ticker_stop
+        if ev is not None:
+            ev.set()
+        self._ticker_stop = None
+        self._ticker_thread = None
+
+    def _start_ticker(self, target, interval_sec):
+        """Spawn a daemon thread that re-runs `target` (a callable with no
+        args) every interval_sec seconds. Replaces any existing ticker."""
+        self._stop_ticker()
+        stop_ev = threading.Event()
+        self._ticker_stop = stop_ev
+
+        def run():
+            while not stop_ev.wait(interval_sec):
+                if stop_ev.is_set():
+                    return
+                try:
+                    target()
+                except Exception:
+                    log.exception("ticker re-render failed")
+                    return
+        t = threading.Thread(target=run, daemon=True, name='pixoo-ticker')
+        self._ticker_thread = t
+        t.start()
+        log.info("Live ticker started (every %ds)", interval_sec)
+
+    def _render_gif_with_overlay(self, items_original, image_b64, pixels, save_preview=True):
+        """Bake items + pixels overlay into each frame of an animated GIF and
+        push to the Pixoo. Used by the /push handler (initial render) and by
+        the ticker (re-render with fresh {{time}}/{{date}} every minute).
+        Returns True if a GIF was actually rendered, False if the image is
+        not a multi-frame GIF (caller should fall back to static path)."""
+        if not (image_b64 and ',' in image_b64):
+            return False
+        try:
+            from PIL import Image as _PILImage
+            import requests as _req
+            img_data = base64.b64decode(image_b64.split(',')[1])
+            img = _PILImage.open(io.BytesIO(img_data))
+            n_frames = getattr(img, 'n_frames', 1)
+            if n_frames <= 1:
+                return False  # not animated — caller handles static path
+
+            items = [dict(it) for it in items_original]
+            self._substitute_live_tokens(items)
+
+            duration = img.info.get('duration', 100)
+            step = max(1, n_frames // 15)
+            indices = list(range(0, n_frames, step))[:15]
+            use = len(indices)
+            speed = duration * step
+
+            try:
+                self.pixoo.set_channel(4)
+                _req.post(f'http://{PIXOO_IP}:80/post',
+                          json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+            except Exception:
+                pass
+
+            for i, fi in enumerate(indices):
+                img.seek(fi)
+                frame = img.convert('RGB').resize((64, 64))
+                self.pixoo.clear()
+                self.pixoo.draw_image(frame)
+                for pkey, pc in (pixels or {}).items():
+                    try:
+                        ppx, ppy = pkey.split(',')
+                        self.pixoo.draw_pixel_at_location_rgb(
+                            int(ppx), int(ppy),
+                            pc.get('r', 255), pc.get('g', 255), pc.get('b', 255))
+                    except Exception:
+                        pass
+                for item in items:
+                    self.pixoo.draw_text(
+                        str(item.get('t', '')),
+                        (item.get('x', 0), item.get('y', 0)),
+                        (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
+                fb64 = base64.b64encode(bytearray(self.pixoo._Pixoo__buffer)).decode()
+
+                if save_preview and i == 0:
+                    try:
+                        buf = io.BytesIO()
+                        frame.copy().save(buf, format='PNG')
+                        preview_b64 = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+                        self._screen_items = items
+                        self._publish_screen_info('animation')
+                        self._ensure_db()
+                        if self.db:
+                            with self.db.cursor() as _c:
+                                _c.execute(
+                                    "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                    "VALUES ('_pixoo_preview', %s::jsonb, NOW()) "
+                                    "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                                    (json.dumps(preview_b64), json.dumps(preview_b64)))
+                    except Exception:
+                        log.warning("GIF: preview save failed")
+
+                _req.post(f'http://{PIXOO_IP}:80/post', json={
+                    'Command': 'Draw/SendHttpGif',
+                    'PicNum': use, 'PicWidth': 64, 'PicOffset': i,
+                    'PicID': 1, 'PicSpeed': speed, 'PicData': fb64,
+                }, timeout=10)
+            log.info("ticker: GIF re-rendered (%d frames, items=%s)",
+                     use, [it.get('t', '') for it in items][:3])
+            return True
+        except Exception:
+            log.exception("GIF render failed")
+            return False
+
+    def _rerender_raw_push(self, items_original, pixels, image_b64):
+        """Re-draw a previously-pushed raw items+pixels+image set with fresh
+        live token values. Used by the ticker for the /push HTTP path. Mirrors
+        the same channel/reset/draw sequence as the /push handler so the
+        Pixoo accepts the new buffer."""
+        items = [dict(it) for it in items_original]
+        self._substitute_live_tokens(items)
+        try:
+            import requests as _req
+            try:
+                self.pixoo.set_channel(4)
+                _req.post(f'http://{PIXOO_IP}:80/post',
+                          json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                time.sleep(0.2)
+            except Exception:
+                pass
+
+            self.pixoo.clear()
+
+            # Redraw background image (static only — animated GIF tick isn't
+            # supported in this helper; GIF presets don't get a ticker).
+            if image_b64 and ',' in image_b64:
+                try:
+                    from PIL import Image as _PILImage
+                    img_data = base64.b64decode(image_b64.split(',')[1])
+                    img = _PILImage.open(io.BytesIO(img_data))
+                    if getattr(img, 'n_frames', 1) == 1:
+                        img = img.convert('RGB').resize((64, 64))
+                        self.pixoo.draw_image(img)
+                except Exception:
+                    log.exception("ticker: bg image redraw failed")
+
+            for key, c in (pixels or {}).items():
+                try:
+                    px, py = key.split(',')
+                    self.pixoo.draw_pixel_at_location_rgb(
+                        int(px), int(py),
+                        c.get('r', 255), c.get('g', 255), c.get('b', 255))
+                except Exception:
+                    pass
+            for item in items:
+                self.pixoo.draw_text(
+                    str(item.get('t', '')),
+                    (item.get('x', 0), item.get('y', 0)),
+                    (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
+            self.pixoo.push()
+            self._screen_items = items
+            _new_times = [it.get('t', '') for it in items]
+            log.info("ticker: re-rendered (%d items) — items=%s",
+                     len(items), _new_times[:3])
+        except Exception:
+            log.exception("raw push re-render failed")
+
+    def _render_preset(self, preset_name, vars_dict=None, _from_ticker=False):
+        """Load a preset by name, replace {{var}} placeholders, render to device.
+
+        Recognised live placeholders (substituted at render time — no caller
+        setup needed): {{time}} → HH:MM, {{date}} → e.g. "Mon 15 Apr".
+        If a preset contains any live placeholder it gets re-rendered every
+        60 seconds via an internal ticker thread (see _start_ticker).
+        """
         if not preset_name:
             log.warning("push_preset: no preset_name")
             return
@@ -443,16 +652,7 @@ class PixooService:
         items = list(content.get('items', []))
         pixels = content.get('pixels', {})
 
-        # Replace {{var}} placeholders in text items
-        if vars_dict:
-            import re as _re
-            for item in items:
-                text = item.get('t', '')
-                for key, val in vars_dict.items():
-                    text = text.replace('{{' + key + '}}', str(val))
-                # Remove any unreplaced vars
-                text = _re.sub(r'\{\{[^}]*\}\}', '', text)
-                item['t'] = text
+        has_live = self._substitute_live_tokens(items, vars_dict)
 
         # Stop any running sequence/GIF, then render
         import requests as _req
@@ -565,11 +765,25 @@ class PixooService:
         except Exception:
             log.warning("Failed to save preset preview")
 
-        log.info("Pushed preset '%s'", preset_name)
+        if not _from_ticker:
+            log.info("Pushed preset '%s'", preset_name)
+
+        # Schedule or cancel the live-placeholder re-render ticker. Only the
+        # user-initiated push paths (not the ticker itself) manage it — the
+        # ticker just re-renders and returns.
+        if not _from_ticker:
+            if has_live:
+                self._start_ticker(
+                    lambda: self._render_preset(preset_name, vars_dict, _from_ticker=True),
+                    60,
+                )
+            else:
+                self._stop_ticker()
 
     def _play_sequence(self, presets_list):
         """Play a sequence of presets with timing."""
         self._stop_sequence()
+        self._stop_ticker()
         self._sequence_stop.clear()
 
         def run():
@@ -631,8 +845,16 @@ class PixooService:
                         image = body.get('image')
                         wipe = body.get('wipe', False)
 
+                        # Keep a deep copy of the original items so the live
+                        # ticker (for {{time}}/{{date}}) can re-substitute
+                        # fresh values each cycle. Substitute now for the
+                        # immediate draw.
+                        items_original = [dict(it) for it in items] if items else []
+                        has_live = svc._substitute_live_tokens(items, body.get('vars')) if items else False
+
                         # Wipe: channel switch + reset + black frame (tested reliable)
                         if wipe:
+                            svc._stop_ticker()
                             import requests as _req
                             device_ok = True
                             try:
@@ -701,66 +923,26 @@ class PixooService:
 
                                 n_frames = getattr(img, 'n_frames', 1)
                                 if n_frames > 1:
-                                    # Animated GIF — Pixoo pixel font burned into frames
-                                    import requests as _req
-                                    duration = img.info.get('duration', 100)
-                                    step = max(1, n_frames // 15)
-                                    indices = list(range(0, n_frames, step))[:15]
-                                    use = len(indices)
-                                    speed = duration * step
-
-                                    _req.post(f'http://{PIXOO_IP}:80/post', json={
-                                        'Command': 'Draw/ResetHttpGifId'}, timeout=3)
-                                    for i, fi in enumerate(indices):
-                                        img.seek(fi)
-                                        frame = img.convert('RGB').resize((64, 64))
-                                        # Composite: image + text using Pixoo pixel font
-                                        svc.pixoo.clear()
-                                        svc.pixoo.draw_image(frame)
-                                        # Burn pixels into frame
-                                        for pkey, pc in body.get('pixels', {}).items():
-                                            try:
-                                                ppx, ppy = pkey.split(',')
-                                                svc.pixoo.draw_pixel_at_location_rgb(
-                                                    int(ppx), int(ppy), pc.get('r', 255), pc.get('g', 255), pc.get('b', 255))
-                                            except Exception:
-                                                pass
-                                        for item in items:
-                                            svc.pixoo.draw_text(
-                                                str(item.get('t', '')),
-                                                (item.get('x', 0), item.get('y', 0)),
-                                                (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
-                                        fb64 = base64.b64encode(bytearray(svc.pixoo._Pixoo__buffer)).decode()
-                                        # Save first frame as preview (image only, text drawn by dashboard JS)
-                                        if i == 0:
-                                            preview = frame.copy()
-                                            buf = io.BytesIO()
-                                            preview.save(buf, format='PNG')
-                                            preview_b64 = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
-                                            svc._screen_items = items
-                                            svc._publish_screen_info('animation')
-                                            # Store preview image
-                                            svc._ensure_db()
-                                            if svc.db:
-                                                try:
-                                                    with svc.db.cursor() as _c:
-                                                        _c.execute(
-                                                            "INSERT INTO rule_engine_state (key, value, updated_at) "
-                                                            "VALUES ('_pixoo_preview', %s::jsonb, NOW()) "
-                                                            "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
-                                                            (json.dumps(preview_b64), json.dumps(preview_b64)))
-                                                except Exception:
-                                                    pass
-                                        _req.post(f'http://{PIXOO_IP}:80/post', json={
-                                            'Command': 'Draw/SendHttpGif',
-                                            'PicNum': use,
-                                            'PicWidth': 64,
-                                            'PicOffset': i,
-                                            'PicID': 1,
-                                            'PicSpeed': speed,
-                                            'PicData': fb64,
-                                        }, timeout=10)
+                                    # Animated GIF — delegate to shared helper so
+                                    # the ticker can re-render with the same code.
+                                    # Note: items have already been substituted
+                                    # in-place above. Pass the ORIGINAL items so
+                                    # the helper's own substitution sees fresh
+                                    # placeholders on each tick.
+                                    svc._render_gif_with_overlay(
+                                        items_original, image, body.get('pixels', {}) or {})
                                     svc._paused = True
+                                    if has_live:
+                                        _items_cap = items_original
+                                        _img_cap = image
+                                        _pix_cap = body.get('pixels', {}) or {}
+                                        svc._start_ticker(
+                                            lambda i=_items_cap, im=_img_cap, p=_pix_cap:
+                                                svc._render_gif_with_overlay(i, im, p, save_preview=False),
+                                            60,
+                                        )
+                                    else:
+                                        svc._stop_ticker()
                                     self.send_response(200)
                                     self.send_header('Content-Type', 'application/json')
                                     self.send_header('Access-Control-Allow-Origin', '*')
@@ -815,6 +997,20 @@ class PixooService:
                                         (json.dumps(preview_b64), json.dumps(preview_b64)))
                         except Exception:
                             log.warning("Failed to save preview for text/static push")
+
+                        # Live ticker — keep {{time}}/{{date}} current by
+                        # re-rendering the item overlay every 60s until a
+                        # new push/wipe/resume/sequence displaces it.
+                        _pixels_captured = body.get('pixels', {}) or {}
+                        _image_captured = image
+                        if has_live:
+                            svc._start_ticker(
+                                lambda i=items_original, p=_pixels_captured, im=_image_captured:
+                                    svc._rerender_raw_push(i, p, im),
+                                60,
+                            )
+                        else:
+                            svc._stop_ticker()
 
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')

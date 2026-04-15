@@ -36,6 +36,7 @@ Path: `/corridor.html`. Sidebar link under "Agents".
 - Preset channels (Clock, Cloud, Sound, C1/C2/C3)
 - Screen heartbeat status
 - Preset save/load/delete
+- **Live placeholders in text items** (added 2026-04-15) — drop `{{time}}` (→ `HH:MM`) or `{{date}}` (→ e.g. `Mon 15 Apr`) into any text item at any X,Y; the pixoo service on LXC 100 re-renders the preset every 60 s so the values stay current. Editor has **⏰ Time** and **📅 Date** buttons that prefill the token. Ticker auto-stops on wipe/resume/new preset/sequence. Implemented in [scripts/pixoo_service.py](../scripts/pixoo_service.py) (`_start_ticker` / `_stop_ticker` + `_render_preset`).
 
 ## API Endpoints (in `BOILER/dashboard/server.js`)
 

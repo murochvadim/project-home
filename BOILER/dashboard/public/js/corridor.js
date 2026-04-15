@@ -316,6 +316,14 @@ function pixooRedrawEditor() {
   }
 }
 
+function pixooInsertToken(token) {
+  const el = document.getElementById('pixoo-ed-text');
+  if (!el) return;
+  el.value = (el.value ? el.value + ' ' : '') + token;
+  el.focus();
+}
+window.pixooInsertToken = pixooInsertToken;
+
 function pixooAddText() {
   const text = document.getElementById('pixoo-ed-text').value.trim();
   if (!text) return;
