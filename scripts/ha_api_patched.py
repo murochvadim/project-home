@@ -30,6 +30,15 @@ HA_WS    = HA_URL.replace('http://', 'ws://').replace('https://', 'wss://') + '/
 RECONNECT_DELAY = 5
 RECONNECT_MAX   = 60
 
+# Keepalive interval (seconds) — how often to touch `last_seen` for every
+# reachable HA-mapped device. HA sends `state_changed` only on actual state
+# changes, so wired switches with no secondary sensors (battery/illuminance/
+# temp) look stale for hours when nobody uses them even though they are fine.
+# 15 min stays comfortably under the group_health_watchdog's 30-min zwave
+# threshold. `unavailable`/`unknown` entities are skipped so genuinely broken
+# devices still stand out.
+KEEPALIVE_INTERVAL_SEC = 900
+
 
 class HAApiAdapter(DeviceAdapter):
     vendor = 'tuya'
@@ -56,6 +65,8 @@ class HAApiAdapter(DeviceAdapter):
         self._next_msg_id = 1000          # ping ids — disjoint from subscribe_events id=1
         self._watchdog_thread = None
         self._watchdog_stop = threading.Event()
+        self._keepalive_thread = None
+        self._keepalive_stop = threading.Event()
 
     def _build_entity_map(self):
         """Query HA template API to build tuya_id → entity mapping."""
@@ -473,16 +484,59 @@ class HAApiAdapter(DeviceAdapter):
                     except Exception:
                         pass
 
+    def _keepalive_loop(self):
+        """Touch `last_seen` for every reachable HA-mapped device every
+        KEEPALIVE_INTERVAL_SEC. Wired switches with no secondary sensors would
+        otherwise look stale for hours when idle, even though they are fine.
+
+        Empty dps + source='keepalive' triggers the device-agent's
+        last-seen-only path (see device_agent.py — does not overwrite
+        last_source, does not emit state_changed, does not touch MQTT).
+
+        `unavailable` / `unknown` entities are skipped so genuinely broken
+        devices still show stale and alert correctly.
+        """
+        while not self._keepalive_stop.wait(KEEPALIVE_INTERVAL_SEC):
+            if not self._entity_map or not self._reverse_map:
+                continue  # not ready yet — initial map build still in progress
+            try:
+                r = requests.get(
+                    f'{HA_URL}/api/states',
+                    headers={'Authorization': f'Bearer {HA_TOKEN}'},
+                    timeout=15,
+                )
+                r.raise_for_status()
+                touched = set()
+                for s in r.json():
+                    eid = s.get('entity_id', '')
+                    if eid not in self._reverse_map:
+                        continue
+                    state_val = s.get('state')
+                    if state_val in ('unavailable', 'unknown', None):
+                        continue
+                    dev_id = self._reverse_map[eid]
+                    if dev_id in touched:
+                        continue
+                    self.on_state_change(dev_id, {}, 'keepalive')
+                    touched.add(dev_id)
+                log.info(f'HA keepalive: touched {len(touched)} devices')
+            except Exception as e:
+                log.warning(f'HA keepalive failed: {e}')
+
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name='ha-api')
         self._thread.start()
         self._watchdog_thread = threading.Thread(
             target=self._watchdog_loop, daemon=True, name='ha-api-watchdog')
         self._watchdog_thread.start()
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop, daemon=True, name='ha-api-keepalive')
+        self._keepalive_thread.start()
 
     def stop(self):
         self._stop_event.set()
         self._watchdog_stop.set()
+        self._keepalive_stop.set()
 
     def get_state(self, device_id: str) -> dict:
         return {}
