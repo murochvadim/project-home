@@ -24,7 +24,11 @@ RULE = {
     "controls": [],
     "category": "display",
     "group": "pixoo",
-    "priority": 10,
+    # Low priority — Daily_Wellcome is the always-on default. Any future
+    # pixoo rule (alarms, notifications, status banners) should use a
+    # smaller number so it wins the group conflict and overrides the
+    # welcome temporarily. Lower number = higher priority in this engine.
+    "priority": 90,
     "depends_on": [],
     "conditions": {
         # Wraps midnight — rule engine handles after > before correctly.
