@@ -55,7 +55,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 | Project Network | `network.html` | ARP scan, network devices |
 | Weather | `general.html` | Weather data, solar heating potential |
 | Voice | `voice.html` | Voice pipeline, intents, TTS |
-| Living Room Agent | `living-room.html` | Living Room automations — wallmote bindings, scenes, lights |
+| Living Room Agent | `living-room.html` | Living Room automations — wallmote bindings, floor-plan layout (walls/windows/doors/sliding/dividers with shared-space support), scenes, lights |
 
 ### Sidebar (all pages)
 - **Status badge** (top-left): `✓ OK` (green) / `⚠ N issues` (red blink) — overall system health; polls `/api/health/status` every 60s
@@ -254,7 +254,7 @@ Each project has its own CLAUDE.md with full details:
 | Rule Engine | `RULES/` | see `docs/rule-engine/tech-design.md` |
 | Voice System | `VOICE/` | `VOICE/CLAUDE.md` |
 | Corridor Agent | `CORRIDOR/` | `CORRIDOR/CLAUDE.md` — dashboard-only (Pixoo editor); service runs on LXC 100 as `pixoo_service` |
-| Living Room Agent | `LIVING_ROOM/` | `LIVING_ROOM/CLAUDE.md` — dashboard-only; wallmote bindings + future scenes/lights |
+| Living Room Agent | `LIVING_ROOM/` | `LIVING_ROOM/CLAUDE.md` — dashboard-only; wallmote bindings + floor-plan layout editor (foundation for AI spatial investigations) + future scenes/lights |
 | Scripts (LXC 100) | `scripts/` | see `MEDIA/CLAUDE.md` |
 | Windows Backup (LXC 104) | `scripts/backup-script.sh` | see root `CLAUDE.md` LXC 104 section |
 

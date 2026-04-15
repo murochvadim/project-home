@@ -9,6 +9,8 @@ You are defining the physical bounds of a room: its outer boundary, real-world d
 
 This is the foundation of the spatial model. **Intentionally no zones, devices, or cross-room connections here** — those are separate skills that plug into the same `dashboard_settings` key once shapes exist.
 
+> **Visual editor now exists**: the Living Room Layout tab (`BOILER/dashboard/public/living-room.html`) is a click-and-draw SVG editor that writes to the same `room_layouts.<slug>` key — including walls, windows, doors, sliding doors, dividers, and `shared_with`. Prefer the visual editor for authoring new rooms. This skill remains the authority for: **List** (summary across all rooms), **Audit** (consistency checks), **Remove** (delete a layout cleanly), and chat-based authoring when you'd rather type coordinates than click.
+
 ## Storage
 
 All room data lives under `dashboard_settings` keys of the form `room_layouts.<slug>`. This skill writes ONLY the `shape`, `grid`, and `orientation` fields; future skills will add `zones`, `devices`, `doorways` without touching these.
