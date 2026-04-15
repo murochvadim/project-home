@@ -60,11 +60,34 @@ Path: `/living-room.html` (served by the Windows dashboard). Sidebar link under 
 - **Test** button per slot — dispatches real commands via `/api/devices/:id/toggle` for instant verification without the physical button
 - **Save Bindings** — POSTs all 16 slots (2 wallmotes × 8 slots each) in one request to `/api/dashboard-settings/living-room.wallmote_bindings`
 
+## Feature 2 — Layout Tab (added 2026-04-15, expanded 2026-04-16)
+
+SVG-based floor-plan editor for the room's walls, windows, doors, sliding glass doors, and internal dividers. Foundation of the spatial model whose primary consumer is AI investigations (see [project_spatial_model memory](../.claude/projects/c--Users-muroc-project-home/memory/project_spatial_model.md)).
+
+- **Storage**: `dashboard_settings.room_layouts.<slug>` — single JSON blob per room
+- **Fields this tab writes**: `shape`, `grid`, `walls[]`, `windows[]`, `doors[]`, `dividers[]`, `shared_with[]`. Future skills (`/room-zones`, `/room-devices`, `/room-scene`) add their own fields to the same key without collision.
+- **API**:
+  - `GET  /api/room-layouts/:slug` — direct hit, then falls back to any layout whose `shared_with` contains this slug (returns `_shared_from` for traceability)
+  - `POST /api/room-layouts/:slug` — merges patch into existing blob (whitelist: `shape, grid, orientation, walls, windows, doors, dividers, shared_with`)
+  - `GET  /api/room-slugs` — rooms + derived slug, feeds the `Leads to` dropdown
+- **Elements**:
+  - **Wall** — solid black line. Click-click, grid-snap (cell-size), Shift disables snap for free angles
+  - **Window** — dashed blue band with centerline, placed along a wall (2 clicks on the wall)
+  - **Door** (hinged) — wall gap + brown leaf at 90° + swing arc + hinge dot; `leads_to` field
+  - **Sliding** — teal glass band with 2 overlapping tracks + ↔ arrow; `leads_to` field
+  - **Divider** — dashed grey (open-plan boundary) or dashed blue with `→ slug` label (passage to another room)
+- **Placement snap**: opening placement (windows/doors/sliding) uses a separate 0.05m soft-snap so values like `0.25m from corner` are reachable regardless of the visual cell size. Shift disables.
+- **Edit panel**: Select tool → click any element → amber panel shows editable `Offset`, `Width`, and `Leads to` (dropdown populated from `/api/room-slugs`). Dividers show only `Leads to`.
+- **Live cursor readout**: hovering in opening-tool modes shows a green dot on the wall with `X.XXm from S/E` label so offsets are visible BEFORE clicking.
+- **Shared-space support**: `shared_with: [slug, ...]` at the top of the layout tells the GET fallback which slugs should return this same blob. Example: Living Room layout with `shared_with: ["kitchen"]` — requests for `/api/room-layouts/kitchen` return the Living Room blob, preserving AI investigation continuity for open-plan spaces.
+- **Client**: `BOILER/dashboard/public/js/living-room.js` — second IIFE at the bottom, scoped so symbols don't leak into the wallmote-tab code above.
+
 ## Planned Future Features
 
 - **Lights tab** — group-based lighting control (scenes, dim curves)
 - **Scenes tab** — named scenes (Movie Mode, Reading Mode, etc.) mapped to a button combo or schedule
 - **Presence tab** — auto-on-when-home rules specific to Living Room
+- **/room-zones**, **/room-devices**, **/room-doorways**, **/room-scene** skills — layer more data onto the same `room_layouts.<slug>` key the Layout tab already writes
 
 Each new feature = new tab in `living-room.html`, new rule(s) in `RULES/rules/` with `group="living-room"`, new keys under `living-room.*` in `dashboard_settings`.
 

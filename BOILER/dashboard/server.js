@@ -2841,6 +2841,77 @@ app.post('/api/dashboard-settings/:key', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Room list for layout picker ────────────────────────────────────────────
+app.get('/api/room-slugs', async (_req, res) => {
+  try {
+    // `rooms` table has only `name` — derive slug on the fly (same regex the
+    // /room-shape skill uses) so values stay consistent with future layouts.
+    const r = await db.query(
+      "SELECT name, regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g') AS slug FROM rooms ORDER BY name"
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Room Layouts (shape + walls + windows + doors per room) ────────────────
+// Stored under dashboard_settings.room_layouts.<slug> as a single JSON blob.
+// Read → returns the whole object (or empty); Write → merges with any other
+// keys (zones/devices/doorways) that future skills may have added.
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
+
+app.get('/api/room-layouts/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'Invalid slug' });
+    // Direct hit: the slug owns its own layout.
+    const direct = await db.query(
+      "SELECT value FROM dashboard_settings WHERE key = $1",
+      ['room_layouts.' + slug]
+    );
+    if (direct.rows.length) return res.json(direct.rows[0].value);
+    // Shared fallback: another room's layout lists this slug in shared_with.
+    // e.g. Living Room owns the open-plan layout and has shared_with:["kitchen"].
+    const shared = await db.query(
+      `SELECT key, value FROM dashboard_settings
+        WHERE key LIKE 'room_layouts.%'
+          AND value ? 'shared_with'
+          AND value->'shared_with' @> $1::jsonb`,
+      [JSON.stringify([slug])]
+    );
+    if (shared.rows.length) {
+      return res.json({ ...shared.rows[0].value, _shared_from: shared.rows[0].key.replace('room_layouts.', '') });
+    }
+    res.json({});
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/room-layouts/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'Invalid slug' });
+    const b = req.body || {};
+    // Accept only known fields; ignore anything else silently.
+    const patch = {};
+    for (const k of ['shape', 'grid', 'orientation', 'walls', 'windows', 'doors', 'dividers', 'shared_with']) {
+      if (b[k] !== undefined) patch[k] = b[k];
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: 'No known fields in body' });
+    }
+    // Merge with existing value so zones/devices/doorways from other tools are preserved.
+    await db.query(
+      `INSERT INTO dashboard_settings (key, value, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET
+         value      = dashboard_settings.value || $2::jsonb,
+         updated_at = NOW()`,
+      ['room_layouts.' + slug, JSON.stringify(patch)]
+    );
+    res.json({ ok: true, merged_keys: Object.keys(patch) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Rooms management ─────────────────────────────────────────────────────────
 
 app.get('/api/rooms', async (_req, res) => {
