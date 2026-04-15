@@ -43,6 +43,18 @@ WALLMOTE_IDS = {
 _bindings_cache = {"data": None, "ts": 0.0}
 _CACHE_TTL_SEC = 30
 
+# Aeotec wallmotes fire `pushed` on press-start and `held` on the ~2-3 sec
+# mark if still held, then another `held` every ~5 sec afterwards. A normal
+# human press triggers both pushed AND the first held within 3-5s, so any
+# binding that maps pushed=turn_on and held=turn_off ends in OFF on fast
+# (zigbee) devices. Suppress `held` events that arrive within this window
+# after the matching `pushed` on the same wallmote+button — so a quick tap
+# or normal press only fires `pushed`, while a deliberate long hold (>7s,
+# when the SECOND held arrives outside the window) still triggers the
+# held binding for explicit off.
+HELD_SUPPRESS_WITHIN_SEC = 5.0
+_last_pushed_ts: dict[str, float] = {}   # key = "wm_slug:button" → unix ts
+
 
 def _get_bindings(state):
     """Load wallmote bindings from dashboard_settings with TTL cache."""
@@ -94,6 +106,25 @@ def evaluate(event, state):
     if not button:
         return []
 
+    # Debounce: suppress `held` arriving shortly after a `pushed` on the
+    # same wallmote+button. Prevents the normal-press flash (pushed=on
+    # followed by held=off 3s later) on fast zigbee devices while still
+    # letting a long deliberate hold (7+ sec — second `held` fires outside
+    # the window) trigger the off binding.
+    tracker_key = f"{wm_slug}:{button}"
+    now = time.time()
+    if event_type == "pushed":
+        _last_pushed_ts[tracker_key] = now
+    elif event_type == "held":
+        last_push = _last_pushed_ts.get(tracker_key, 0.0)
+        since_push = now - last_push
+        if since_push < HELD_SUPPRESS_WITHIN_SEC:
+            log.info(
+                "Wallmote %s %s held suppressed (%.1fs after pushed)",
+                wm_slug, button, since_push,
+            )
+            return []
+
     bindings = _get_bindings(state)
     slot_key = f"{wm_slug}:{button}:{event_type}"
     slot = bindings.get(slot_key, [])
@@ -112,8 +143,22 @@ def evaluate(event, state):
         if action == "toggle":
             dev_state = state.devices.get(device_id, {}) or {}
             cur_dps = dev_state.get("dps", {}) or {}
-            key = channel or "1"
-            cur_val = cur_dps.get(key)
+            # Resolve current state — dps key varies by protocol/vendor:
+            #   Tuya local: "1"
+            #   Zigbee multi-gang: "state_l1", "state_l2", etc. (via channel)
+            #   SmartThings/HA-mapped: custom name (e.g., "spots", "state")
+            if channel:
+                cur_val = cur_dps.get(channel)
+            elif "1" in cur_dps:
+                cur_val = cur_dps["1"]
+            elif "state" in cur_dps:
+                cur_val = cur_dps["state"]
+            elif "power" in cur_dps:
+                cur_val = cur_dps["power"]
+            elif len(cur_dps) == 1:
+                cur_val = next(iter(cur_dps.values()))  # single key — use its value
+            else:
+                cur_val = None
             # Interpret various truthy/falsy shapes
             if cur_val in (True, 1, "on", "ON", "true", "True"):
                 target = "turn_off"
