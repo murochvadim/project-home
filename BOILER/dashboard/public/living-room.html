@@ -90,7 +90,6 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('wallmote', this)">Wallmote</button>
-    <button class="tab-btn" onclick="showTab('layout', this); if(window.layoutInit)layoutInit()">Layout</button>
   </div>
 
   <div class="tab-panel active" id="tab-wallmote">
@@ -247,90 +246,6 @@
       <button class="btn-save" onclick="saveBindings()">Save Bindings</button>
     </div>
 
-  </div>
-
-  <!-- ─── Layout Tab ─────────────────────────────────────────── -->
-  <div class="tab-panel" id="tab-layout">
-    <div class="card">
-      <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-        <label style="font-size:0.82rem;">Room:
-          <select id="layout-room-select" onchange="layoutLoadRoom()" style="padding:3px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-            <option value="living-room" selected>Living Room</option>
-          </select>
-        </label>
-        <label style="font-size:0.82rem;">Cell (m):
-          <select id="layout-cell-m" style="padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="layoutRedraw()">
-            <option value="1">1.0 (coarse)</option>
-            <option value="0.5" selected>0.5 (default)</option>
-            <option value="0.25">0.25 (fine)</option>
-            <option value="0.1">0.1 (very fine)</option>
-          </select>
-        </label>
-        <label style="font-size:0.82rem;">Width m:
-          <input type="number" id="layout-w-m" value="8" min="1" max="25" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="layoutRedraw()">
-        </label>
-        <label style="font-size:0.82rem;">Length m:
-          <input type="number" id="layout-l-m" value="6" min="1" max="25" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="layoutRedraw()">
-        </label>
-        <span style="font-size:0.72rem;color:#888;" id="layout-grid-info"></span>
-      </div>
-
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-        <label style="font-size:0.78rem;color:#666;">Shared with:
-          <input type="text" id="layout-shared-with" placeholder="kitchen, dining-room" style="width:220px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;margin-left:4px;">
-        </label>
-        <span style="font-size:0.68rem;color:#aaa;">(comma-separated room slugs that share this open-plan space)</span>
-      </div>
-
-      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
-        <button class="layout-tool" data-tool="wall" onclick="layoutSetTool('wall', this)" style="background:#333;color:#fff;padding:4px 10px;border:1px solid #333;border-radius:4px;font-size:0.78rem;cursor:pointer;">Wall</button>
-        <button class="layout-tool" data-tool="window" onclick="layoutSetTool('window', this)" style="background:#fff;color:#2c5aa0;padding:4px 10px;border:1px solid #2c5aa0;border-radius:4px;font-size:0.78rem;cursor:pointer;">Window</button>
-        <button class="layout-tool" data-tool="door" onclick="layoutSetTool('door', this)" style="background:#fff;color:#8b4513;padding:4px 10px;border:1px solid #8b4513;border-radius:4px;font-size:0.78rem;cursor:pointer;">Door</button>
-        <button class="layout-tool" data-tool="sliding" onclick="layoutSetTool('sliding', this)" style="background:#fff;color:#2e7d72;padding:4px 10px;border:1px solid #2e7d72;border-radius:4px;font-size:0.78rem;cursor:pointer;">Sliding</button>
-        <button class="layout-tool" data-tool="divider" onclick="layoutSetTool('divider', this)" style="background:#fff;color:#666;padding:4px 10px;border:1px dashed #888;border-radius:4px;font-size:0.78rem;cursor:pointer;">Divider</button>
-        <button class="layout-tool" data-tool="select" onclick="layoutSetTool('select', this)" style="background:#fff;color:#333;padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;cursor:pointer;">Select</button>
-        <span style="flex:1;"></span>
-        <button onclick="layoutUndo()" style="padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Undo</button>
-        <button onclick="layoutDeleteSelected()" style="padding:4px 10px;border:1px solid #c0392b;color:#c0392b;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Delete</button>
-        <button onclick="layoutClear()" style="padding:4px 10px;border:1px solid #c0392b;color:#c0392b;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Clear</button>
-        <button onclick="layoutSave()" style="padding:4px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:4px;font-size:0.78rem;cursor:pointer;">Save</button>
-      </div>
-
-      <div id="layout-status" style="font-size:0.72rem;color:#888;margin-bottom:6px;min-height:16px;">Select a tool to start drawing. Click-click for walls; hold Shift to disable 90° snap.</div>
-
-      <div id="layout-edit-panel" style="display:none;font-size:0.78rem;color:#333;background:#fff6d9;border:1px solid #e0c97a;border-radius:4px;padding:6px 10px;margin-bottom:6px;">
-        <span>Selected <b id="layout-edit-id">—</b>:</span>
-        <span id="layout-edit-offset-wrap">
-          Offset (m): <input type="number" id="layout-edit-offset" step="0.05" style="width:70px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
-        </span>
-        <span id="layout-edit-width-wrap">
-          Width (m): <input type="number" id="layout-edit-width" step="0.05" style="width:70px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
-        </span>
-        <span id="layout-edit-leads-wrap" style="display:none;">
-          Leads to: <select id="layout-edit-leads" style="padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;min-width:140px;">
-            <option value="">— none —</option>
-          </select>
-        </span>
-        <button onclick="layoutApplyEdit()" style="padding:2px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:3px;font-size:0.78rem;cursor:pointer;margin-left:6px;">Apply</button>
-      </div>
-
-      <div style="border:1px solid #d0cbc4;border-radius:4px;background:#fafaf7;overflow:auto;">
-        <svg id="layout-svg" width="800" height="600" style="display:block;background:#fafaf7;cursor:crosshair;"></svg>
-      </div>
-
-      <div style="margin-top:10px;font-size:0.75rem;color:#666;">
-        <strong>Legend:</strong>
-        <span style="display:inline-block;width:20px;height:3px;background:#111;vertical-align:middle;margin:0 4px;"></span> wall
-        &nbsp;
-        <span style="display:inline-block;width:20px;height:3px;background:#2c5aa0;vertical-align:middle;margin:0 4px;"></span> window
-        &nbsp;
-        <span style="display:inline-block;width:20px;height:3px;background:#8b4513;vertical-align:middle;margin:0 4px;"></span> door
-        &nbsp;
-        <span style="display:inline-block;width:20px;height:3px;background:#2e7d72;vertical-align:middle;margin:0 4px;"></span> sliding
-        &nbsp;
-        <span style="display:inline-block;width:20px;height:0;border-top:2px dashed #888;vertical-align:middle;margin:0 4px;"></span> divider (open-plan, no wall)
-      </div>
-    </div>
   </div>
 
 </main>

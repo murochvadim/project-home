@@ -47,19 +47,22 @@
       <label style="font-size:0.82rem;">Active room:
         <select id="apt-active-room" onchange="aptSetActiveRoom(this.value)" style="padding:3px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;"></select>
       </label>
-      <label style="font-size:0.82rem;">Canvas W:
-        <input type="number" id="apt-canvas-w" value="25" min="5" max="50" step="1" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="aptRedraw()">
+      <label style="font-size:0.82rem;">Width m:
+        <input type="number" id="apt-canvas-w" value="8" min="1" max="25" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="aptRedraw()">
       </label>
-      <label style="font-size:0.82rem;">Canvas H:
-        <input type="number" id="apt-canvas-h" value="18" min="5" max="50" step="1" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="aptRedraw()">
+      <label style="font-size:0.82rem;">Length m:
+        <input type="number" id="apt-canvas-h" value="6" min="1" max="25" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="aptRedraw()">
+      </label>
+      <label style="font-size:0.82rem;">Cell (m):
+        <select id="apt-cell-m" style="padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="aptCellChanged()">
+          <option value="1">1.0 (coarse)</option>
+          <option value="0.5" selected>0.5 (default)</option>
+          <option value="0.25">0.25 (fine)</option>
+          <option value="0.1">0.1 (very fine)</option>
+        </select>
       </label>
       <span style="flex:1;"></span>
-      <label style="font-size:0.82rem;">Origin X:
-        <input type="number" id="apt-origin-x" value="0" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-      </label>
-      <label style="font-size:0.82rem;">Origin Y:
-        <input type="number" id="apt-origin-y" value="0" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-      </label>
+      <span style="font-size:0.75rem;color:#888;" id="apt-origin-info">Origin: auto</span>
     </div>
 
     <!-- Controls row 2: drawing tools -->
@@ -68,6 +71,7 @@
       <button class="apt-tool" data-tool="window" onclick="aptSetTool('window')" style="background:#fff;color:#2c5aa0;padding:4px 10px;border:1px solid #2c5aa0;border-radius:4px;font-size:0.78rem;cursor:pointer;">Window</button>
       <button class="apt-tool" data-tool="door" onclick="aptSetTool('door')" style="background:#fff;color:#8b4513;padding:4px 10px;border:1px solid #8b4513;border-radius:4px;font-size:0.78rem;cursor:pointer;">Door</button>
       <button class="apt-tool" data-tool="sliding" onclick="aptSetTool('sliding')" style="background:#fff;color:#2e7d72;padding:4px 10px;border:1px solid #2e7d72;border-radius:4px;font-size:0.78rem;cursor:pointer;">Sliding</button>
+      <button class="apt-tool" data-tool="glass" onclick="aptSetTool('glass')" style="background:#fff;color:#5bb8d4;padding:4px 10px;border:1px solid #5bb8d4;border-radius:4px;font-size:0.78rem;cursor:pointer;">Glass</button>
       <button class="apt-tool" data-tool="divider" onclick="aptSetTool('divider')" style="background:#fff;color:#666;padding:4px 10px;border:1px dashed #888;border-radius:4px;font-size:0.78rem;cursor:pointer;">Divider</button>
       <button class="apt-tool" data-tool="select" onclick="aptSetTool('select')" style="background:#fff;color:#333;padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;cursor:pointer;">Select</button>
       <span style="flex:1;"></span>
@@ -113,6 +117,8 @@
       <span style="display:inline-block;width:20px;height:3px;background:#8b4513;vertical-align:middle;margin:0 4px;"></span> door
       &nbsp;
       <span style="display:inline-block;width:20px;height:3px;background:#2e7d72;vertical-align:middle;margin:0 4px;"></span> sliding
+      &nbsp;
+      <span style="display:inline-block;width:20px;height:2px;background:#5bb8d4;vertical-align:middle;margin:0 4px;"></span> glass barrier
       &nbsp;
       <span style="display:inline-block;width:20px;height:0;border-top:2px dashed #888;vertical-align:middle;margin:0 4px;"></span> divider
     </div>
