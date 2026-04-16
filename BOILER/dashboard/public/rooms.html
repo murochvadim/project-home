@@ -74,8 +74,25 @@
       <button class="apt-tool" data-tool="glass" onclick="aptSetTool('glass')" style="background:#fff;color:#5bb8d4;padding:4px 10px;border:1px solid #5bb8d4;border-radius:4px;font-size:0.78rem;cursor:pointer;">Glass</button>
       <button class="apt-tool" data-tool="divider" onclick="aptSetTool('divider')" style="background:#fff;color:#666;padding:4px 10px;border:1px dashed #888;border-radius:4px;font-size:0.78rem;cursor:pointer;">Divider</button>
       <button class="apt-tool" data-tool="select" onclick="aptSetTool('select')" style="background:#fff;color:#333;padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;cursor:pointer;">Select</button>
+      <select id="apt-furn-preset" style="padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;" onchange="if(this.value)aptSetTool('furniture')">
+        <option value="">Furniture...</option>
+        <option value="sofa">Sofa</option><option value="armchair">Armchair</option>
+        <option value="coffee-table">Coffee Table</option><option value="tv-unit">TV Unit</option>
+        <option value="dining-table">Dining Table</option><option value="chair">Chair</option>
+        <option value="bed">Bed</option><option value="nightstand">Nightstand</option>
+        <option value="wardrobe">Wardrobe</option><option value="desk">Desk</option>
+        <option value="counter">Counter</option><option value="fridge">Fridge</option>
+        <option value="stove">Stove</option><option value="sink">Sink</option>
+        <option value="bathtub">Bathtub</option><option value="toilet">Toilet</option>
+        <option value="shower">Shower</option><option value="washing-machine">Washer</option>
+        <option value="bookshelf">Bookshelf</option><option value="planter">Planter</option>
+      </select>
+      <label style="font-size:0.75rem;color:#888;display:inline-flex;align-items:center;gap:3px;margin-left:6px;">
+        <input type="checkbox" id="apt-show-furniture" checked onchange="aptRedraw()"> Furniture
+      </label>
       <span style="flex:1;"></span>
       <button onclick="aptUndo()" style="padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Undo</button>
+      <button onclick="aptCopySelected()" style="padding:4px 10px;border:1px solid #7a9ab8;color:#7a9ab8;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Copy</button>
       <button onclick="aptDeleteSelected()" style="padding:4px 10px;border:1px solid #c0392b;color:#c0392b;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Delete</button>
       <button onclick="aptSave()" style="padding:4px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:4px;font-size:0.78rem;cursor:pointer;">Save</button>
       <button onclick="aptCopyScene()" style="padding:4px 10px;border:1px solid #3a5a8a;background:#3a5a8a;color:#fff;border-radius:4px;font-size:0.78rem;cursor:pointer;">Copy Scene</button>
@@ -95,6 +112,14 @@
       <span id="apt-edit-leads-wrap" style="display:none;">
         Leads to: <select id="apt-edit-leads" style="padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;min-width:140px;">
           <option value="">— none —</option>
+        </select>
+      </span>
+      <span id="apt-edit-furn-wrap" style="display:none;">
+        Label: <input type="text" id="apt-edit-furn-label" placeholder="optional" style="width:90px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+        W(m): <input type="number" id="apt-edit-furn-w" step="0.1" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+        H(m): <input type="number" id="apt-edit-furn-h" step="0.1" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+        Rot: <select id="apt-edit-furn-rot" style="padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+          <option value="0">0°</option><option value="45">45°</option><option value="90">90°</option><option value="135">135°</option><option value="180">180°</option><option value="225">225°</option><option value="270">270°</option><option value="315">315°</option>
         </select>
       </span>
       <button onclick="aptApplyEdit()" style="padding:2px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:3px;font-size:0.78rem;cursor:pointer;margin-left:6px;">Apply</button>
@@ -121,11 +146,13 @@
       <span style="display:inline-block;width:20px;height:2px;background:#5bb8d4;vertical-align:middle;margin:0 4px;"></span> glass barrier
       &nbsp;
       <span style="display:inline-block;width:20px;height:0;border-top:2px dashed #888;vertical-align:middle;margin:0 4px;"></span> divider
+      &nbsp;
+      <span style="display:inline-block;width:16px;height:10px;background:#e8e4dc;border:1px solid #999;border-radius:2px;vertical-align:middle;margin:0 4px;"></span> furniture
     </div>
   </div>
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/rooms.js?v=19"></script>
+<script src="js/rooms.js?v=27"></script>
 </body>
 </html>

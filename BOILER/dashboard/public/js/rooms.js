@@ -22,6 +22,8 @@
   let pending      = null;
   let pendingWall  = null;
   let selectedId   = null;
+  let dragging      = null;   // { id, startX, startY, origX, origY } for furniture drag
+  let clipboard     = null;   // copied furniture item (for paste on next click)
   let undoStack    = [];
   let cellPx       = 30;
   let viewOriginX  = 0;
@@ -322,6 +324,289 @@
   // ── V2: Shared room renderer (full detail) ─────────────────────────────────
   // Renders all elements of a room into an SVG group. Used for both active and
   // non-active visible rooms so every checked room shows at full detail.
+  // ── V3: Furniture presets ────────────────────────────────────────────────────
+  const FURN_FILL     = '#f5f3ef';
+  const FURN_FILL_ALT = '#faf9f6';
+  const FURN_STROKE   = '#ccc';
+  const FURN_STROKE_SEL = '#27ae60';
+
+  // Default sizes (meters) per preset when user single-clicks without dragging
+  const FURN_DEFAULTS = {
+    'sofa': {w:2.2, h:0.85}, 'armchair': {w:0.85, h:0.85}, 'coffee-table': {w:1.2, h:0.6},
+    'tv-unit': {w:1.8, h:0.4}, 'dining-table': {w:1.4, h:0.9}, 'chair': {w:0.45, h:0.45},
+    'bed': {w:1.6, h:2.0}, 'nightstand': {w:0.5, h:0.4}, 'wardrobe': {w:1.5, h:0.6},
+    'desk': {w:1.2, h:0.6}, 'counter': {w:2.0, h:0.6}, 'fridge': {w:0.7, h:0.7},
+    'stove': {w:0.6, h:0.6}, 'sink': {w:0.6, h:0.5}, 'bathtub': {w:1.7, h:0.75},
+    'toilet': {w:0.4, h:0.65}, 'shower': {w:0.9, h:0.9}, 'washing-machine': {w:0.6, h:0.6},
+    'bookshelf': {w:1.0, h:0.35}, 'planter': {w:0.5, h:0.5},
+  };
+
+  function _svgRect(x, y, w, h, rx, fill, stroke, sw) {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', w); r.setAttribute('height', h);
+    if (rx) r.setAttribute('rx', rx);
+    r.setAttribute('fill', fill || FURN_FILL);
+    r.setAttribute('stroke', stroke || FURN_STROKE);
+    r.setAttribute('stroke-width', sw || 1);
+    return r;
+  }
+  function _svgCircle(cx, cy, r, fill, stroke) {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', r);
+    c.setAttribute('fill', fill || FURN_FILL);
+    c.setAttribute('stroke', stroke || FURN_STROKE);
+    c.setAttribute('stroke-width', 1);
+    return c;
+  }
+  function _svgLine(x1, y1, x2, y2, stroke, sw) {
+    const l = document.createElementNS(NS, 'line');
+    l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+    l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+    l.setAttribute('stroke', stroke || FURN_STROKE);
+    l.setAttribute('stroke-width', sw || 1);
+    return l;
+  }
+  function _svgEllipse(cx, cy, rx, ry, fill, stroke) {
+    const e = document.createElementNS(NS, 'ellipse');
+    e.setAttribute('cx', cx); e.setAttribute('cy', cy);
+    e.setAttribute('rx', rx); e.setAttribute('ry', ry);
+    e.setAttribute('fill', fill || FURN_FILL);
+    e.setAttribute('stroke', stroke || FURN_STROKE);
+    e.setAttribute('stroke-width', 1);
+    return e;
+  }
+
+  function _svgPath(d, fill, stroke, sw) {
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', d); p.setAttribute('fill', fill || 'none');
+    p.setAttribute('stroke', stroke || FURN_STROKE); p.setAttribute('stroke-width', sw || 1);
+    return p;
+  }
+
+  function drawFurniturePreset(g, type, x, y, w, h, sel) {
+    const sk = sel ? FURN_STROKE_SEL : FURN_STROKE;
+    const sw = sel ? 2 : 1;
+    switch (type) {
+      case 'sofa': {
+        // Outer frame with rounded back
+        const r = Math.min(w,h)*0.15;
+        g.appendChild(_svgPath(`M${x+r},${y} h${w-2*r} q${r},0 ${r},${r} v${h-2*r} q0,${r} -${r},${r} h-${w-2*r} q-${r},0 -${r},-${r} v-${h-2*r} q0,-${r} ${r},-${r}z`, FURN_FILL, sk, sw));
+        // Back cushion bumps (scalloped)
+        const seats = w > 40 ? 3 : 2;
+        const seatW = (w - 4) / seats;
+        const backH = h * 0.22;
+        for (let i = 0; i < seats; i++) {
+          const sx = x + 2 + i * seatW;
+          g.appendChild(_svgPath(`M${sx+1},${y+h-backH} q${seatW/2},-${backH*0.5} ${seatW-2},0`, 'none', sk, 0.5));
+        }
+        // Seat cushion lines
+        for (let i = 1; i < seats; i++) {
+          const lx = x + 2 + i * seatW;
+          g.appendChild(_svgLine(lx, y+3, lx, y+h-backH-2, '#ccc', 0.4));
+        }
+        // Armrests (rounded bumps)
+        const aw = Math.max(3, w*0.08);
+        g.appendChild(_svgPath(`M${x},${y+2} q-${aw*0.3},${h/2-2} 0,${h-4}`, 'none', sk, 0.8));
+        g.appendChild(_svgPath(`M${x+w},${y+2} q${aw*0.3},${h/2-2} 0,${h-4}`, 'none', sk, 0.8));
+        break;
+      }
+      case 'armchair': {
+        const r = Math.min(w,h)*0.18;
+        g.appendChild(_svgPath(`M${x+r},${y} h${w-2*r} q${r},0 ${r},${r} v${h-2*r} q0,${r} -${r},${r} h-${w-2*r} q-${r},0 -${r},-${r} v-${h-2*r} q0,-${r} ${r},-${r}z`, FURN_FILL, sk, sw));
+        // Seat
+        const pad = Math.min(w,h)*0.18;
+        g.appendChild(_svgRect(x+pad, y+2, w-pad*2, h*0.65, r*0.5, FURN_FILL_ALT, sk, 0.4));
+        // Armrest curves
+        g.appendChild(_svgPath(`M${x+1},${y+3} q-${pad*0.4},${h/2} 0,${h-6}`, 'none', sk, 0.8));
+        g.appendChild(_svgPath(`M${x+w-1},${y+3} q${pad*0.4},${h/2} 0,${h-6}`, 'none', sk, 0.8));
+        break;
+      }
+      case 'coffee-table': {
+        g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
+        const lr = Math.min(w, h) * 0.06;
+        g.appendChild(_svgCircle(x+lr*2.5, y+lr*2.5, lr, '#bbb', sk));
+        g.appendChild(_svgCircle(x+w-lr*2.5, y+lr*2.5, lr, '#bbb', sk));
+        g.appendChild(_svgCircle(x+lr*2.5, y+h-lr*2.5, lr, '#bbb', sk));
+        g.appendChild(_svgCircle(x+w-lr*2.5, y+h-lr*2.5, lr, '#bbb', sk));
+        break;
+      }
+      case 'dining-table': {
+        g.appendChild(_svgRect(x, y, w, h, 3, FURN_FILL, sk, sw));
+        g.appendChild(_svgRect(x+3, y+3, w-6, h-6, 2, FURN_FILL_ALT, '#ccc', 0.5));
+        break;
+      }
+      case 'tv-unit': {
+        g.appendChild(_svgRect(x, y, w, h, 1, FURN_FILL, sk, sw));
+        // Screen
+        g.appendChild(_svgRect(x+w*0.1, y+2, w*0.8, h*0.35, 1, '#555', sk, 0.5));
+        break;
+      }
+      case 'chair': {
+        // Seat
+        g.appendChild(_svgRect(x, y+h*0.22, w, h*0.78, 2, FURN_FILL, sk, sw));
+        // Backrest (thicker bar)
+        g.appendChild(_svgRect(x, y, w, h*0.22, 2, '#d0c8bc', sk, sw));
+        break;
+      }
+      case 'bed': {
+        // Mattress with rounded corners
+        g.appendChild(_svgRect(x, y, w, h, 3, FURN_FILL, sk, sw));
+        // Headboard (thick, darker)
+        g.appendChild(_svgRect(x-1, y-1, w+2, h*0.07, 2, '#a89888', sk, sw));
+        // Pillows (rounded, puffy)
+        const pw = w*0.42, ph = h*0.09, py = y+h*0.09, pr = Math.min(pw,ph)*0.4;
+        g.appendChild(_svgRect(x+w*0.04, py, pw, ph, pr, '#fff', '#ddd', 0.5));
+        g.appendChild(_svgRect(x+w*0.54, py, pw, ph, pr, '#fff', '#ddd', 0.5));
+        // Duvet outline (curved)
+        g.appendChild(_svgPath(`M${x+3},${y+h*0.55} q${w/2-3},-${h*0.04} ${w-6},0`, 'none', '#ddd', 0.6));
+        g.appendChild(_svgPath(`M${x+3},${y+h*0.9} q${w/2-3},${h*0.03} ${w-6},0`, 'none', '#ddd', 0.4));
+        break;
+      }
+      case 'nightstand': {
+        g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
+        g.appendChild(_svgLine(x+2, y+h*0.45, x+w-2, y+h*0.45, sk, 0.5));
+        // Handle dot
+        g.appendChild(_svgCircle(x+w*0.5, y+h*0.7, 1.5, sk, sk));
+        break;
+      }
+      case 'wardrobe': {
+        g.appendChild(_svgRect(x, y, w, h, 1, FURN_FILL, sk, sw));
+        // Double doors
+        g.appendChild(_svgLine(x+w*0.5, y+2, x+w*0.5, y+h-2, sk, 1));
+        // Handles
+        g.appendChild(_svgCircle(x+w*0.42, y+h*0.5, 1.5, sk, sk));
+        g.appendChild(_svgCircle(x+w*0.58, y+h*0.5, 1.5, sk, sk));
+        break;
+      }
+      case 'desk': {
+        g.appendChild(_svgRect(x, y, w, h, 1, FURN_FILL, sk, sw));
+        // Front panel (thicker edge)
+        g.appendChild(_svgRect(x, y+h*0.85, w, h*0.15, 0, '#ccc5b8', sk, sw));
+        // Drawer line
+        g.appendChild(_svgLine(x+w*0.6, y+2, x+w*0.6, y+h*0.83, '#ccc', 0.5));
+        break;
+      }
+      case 'counter': {
+        g.appendChild(_svgRect(x, y, w, h, 0, FURN_FILL, sk, sw));
+        // Surface edge
+        g.appendChild(_svgRect(x, y, w, h*0.12, 0, '#d0c8bc', sk, 0.5));
+        // Hatch pattern
+        const step = Math.max(8, w*0.08);
+        for (let i = step; i < w; i += step) {
+          g.appendChild(_svgLine(x+i, y+h*0.15, x+i, y+h-1, '#ddd', 0.3));
+        }
+        break;
+      }
+      case 'fridge': {
+        g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
+        // Two compartments
+        g.appendChild(_svgLine(x+2, y+h*0.35, x+w-2, y+h*0.35, sk, 0.5));
+        // Handle
+        g.appendChild(_svgLine(x+w*0.82, y+h*0.1, x+w*0.82, y+h*0.3, sk, 1.5));
+        g.appendChild(_svgLine(x+w*0.82, y+h*0.42, x+w*0.82, y+h*0.62, sk, 1.5));
+        break;
+      }
+      case 'stove': {
+        g.appendChild(_svgRect(x, y, w, h, 0, FURN_FILL, sk, sw));
+        // 4 burner rings (double circles)
+        const br = Math.min(w, h) * 0.14, bri = br * 0.6;
+        const positions = [[0.3,0.3],[0.7,0.3],[0.3,0.7],[0.7,0.7]];
+        for (const [px, py] of positions) {
+          g.appendChild(_svgCircle(x+w*px, y+h*py, br, 'none', sk));
+          g.appendChild(_svgCircle(x+w*px, y+h*py, bri, 'none', '#bbb'));
+        }
+        break;
+      }
+      case 'sink': {
+        g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
+        // Basin (inner rounded rect)
+        const pad = Math.min(w,h)*0.15;
+        g.appendChild(_svgRect(x+pad, y+pad, w-pad*2, h-pad*2, 4, '#f5f2ed', sk, 0.5));
+        // Faucet
+        g.appendChild(_svgCircle(x+w*0.5, y+pad*0.6, 2, sk, sk));
+        break;
+      }
+      case 'bathtub': {
+        // Outer tub wall (thick rounded)
+        const rx = Math.min(w,h)*0.35;
+        g.appendChild(_svgRect(x, y, w, h, rx, FURN_FILL, sk, sw));
+        // Inner basin (deeper inset, curved)
+        const p = Math.min(w,h)*0.14;
+        g.appendChild(_svgRect(x+p, y+p, w-p*2, h-p*2, rx*0.65, '#f8f6f2', '#ccc', 0.5));
+        // Water line shimmer
+        g.appendChild(_svgPath(`M${x+p+4},${y+h*0.5} q${(w-p*2)/4},-3 ${(w-p*2)/2},0 q${(w-p*2)/4},3 ${(w-p*2)/2-8},0`, 'none', '#d8e8f0', 0.6));
+        // Drain
+        g.appendChild(_svgCircle(x+w*0.5, y+h*0.82, 2.5, '#aaa', sk));
+        // Faucet (small rect + handles)
+        g.appendChild(_svgRect(x+w*0.43, y+p*0.3, w*0.14, p*0.6, 2, '#ccc', sk, 0.5));
+        break;
+      }
+      case 'toilet': {
+        // Tank (rounded rect)
+        g.appendChild(_svgRect(x+w*0.08, y, w*0.84, h*0.28, 3, FURN_FILL, sk, sw));
+        // Seat outline (oval path)
+        const cx0 = x+w*0.5, cy0 = y+h*0.64, rr = w*0.46, ry0 = h*0.34;
+        g.appendChild(_svgEllipse(cx0, cy0, rr, ry0, FURN_FILL, sk));
+        // Inner bowl (smaller oval)
+        g.appendChild(_svgEllipse(cx0, cy0+h*0.02, rr*0.65, ry0*0.65, '#f8f6f2', '#ccc'));
+        // Lid hinge
+        g.appendChild(_svgPath(`M${x+w*0.2},${y+h*0.32} q${w*0.3},-${h*0.04} ${w*0.6},0`, 'none', sk, 0.5));
+        // Flush button
+        g.appendChild(_svgCircle(x+w*0.5, y+h*0.12, Math.min(w,h)*0.06, '#ddd', sk));
+        break;
+      }
+      case 'shower': {
+        // Glass enclosure (dashed)
+        const r = _svgRect(x, y, w, h, 0, 'rgba(200,225,245,0.2)', sk, sw);
+        r.setAttribute('stroke-dasharray', '5,3');
+        g.appendChild(r);
+        // Shower tray (inner)
+        g.appendChild(_svgRect(x+3, y+3, w-6, h-6, 3, '#f0f0f0', '#ccc', 0.5));
+        // Shower head
+        g.appendChild(_svgCircle(x+w*0.5, y+h*0.25, Math.min(w,h)*0.1, '#ddd', sk));
+        // Drain
+        g.appendChild(_svgCircle(x+w*0.5, y+h*0.75, 2, sk, sk));
+        break;
+      }
+      case 'washing-machine': {
+        g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
+        // Control panel strip
+        g.appendChild(_svgRect(x+2, y+2, w-4, h*0.15, 1, '#d0d0d0', sk, 0.5));
+        // Drum door (circle)
+        const dr = Math.min(w,h)*0.3;
+        g.appendChild(_svgCircle(x+w*0.5, y+h*0.58, dr, FURN_FILL_ALT, sk));
+        g.appendChild(_svgCircle(x+w*0.5, y+h*0.58, dr*0.6, '#f5f2ed', '#ccc'));
+        break;
+      }
+      case 'bookshelf': {
+        g.appendChild(_svgRect(x, y, w, h, 0, FURN_FILL, sk, sw));
+        // Shelf lines (5 shelves)
+        const shelves = 5;
+        for (let i = 1; i < shelves; i++) {
+          const sy = y + (h / shelves) * i;
+          g.appendChild(_svgLine(x+1, sy, x+w-1, sy, sk, 0.7));
+        }
+        // Side panels
+        g.appendChild(_svgLine(x+1, y+1, x+1, y+h-1, sk, 0.5));
+        g.appendChild(_svgLine(x+w-1, y+1, x+w-1, y+h-1, sk, 0.5));
+        break;
+      }
+      case 'planter': {
+        // Pot (outer)
+        g.appendChild(_svgEllipse(x+w*0.5, y+h*0.55, w*0.48, h*0.45, '#c8b8a0', sk));
+        // Soil/plant (inner)
+        g.appendChild(_svgEllipse(x+w*0.5, y+h*0.45, w*0.38, h*0.35, '#8ab07a', '#6a9060'));
+        // Leaf highlight
+        g.appendChild(_svgCircle(x+w*0.4, y+h*0.35, Math.min(w,h)*0.1, '#a0c890', '#6a9060'));
+        break;
+      }
+      default: {
+        g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
+      }
+    }
+  }
+
   // multiView: true when multiple rooms visible — hides connection labels/dividers
   // between rooms that are both on screen (redundant when rooms touch physically)
   let _multiView = false;
@@ -362,7 +647,7 @@
         const lbl = document.createElementNS(NS, 'text');
         lbl.setAttribute('x', mToPx(mx) + 4); lbl.setAttribute('y', mToPx(my) - 4);
         lbl.setAttribute('font-size', '10'); lbl.setAttribute('font-weight', 'bold');
-        lbl.setAttribute('fill', color);
+        lbl.setAttribute('fill', FURN_STROKE);
         lbl.textContent = '→ ' + d.leads_to;
         g.appendChild(lbl);
       }
@@ -448,9 +733,22 @@
       }
     }
 
-    // Room name label
+    // Furniture — light grey architectural preset shapes (toggleable layer)
+    const showFurn = document.getElementById('apt-show-furniture');
+    if (showFurn && showFurn.checked) for (const f of (layout.furniture || [])) {
+      const fg = document.createElementNS(NS, 'g');
+      const cx = mToPx(f.x), cy = mToPx(f.y);
+      const fw = mToPx(f.w), fh = mToPx(f.h);
+      if (f.rotation) fg.setAttribute('transform', `rotate(${f.rotation}, ${cx}, ${cy})`);
+      drawFurniturePreset(fg, f.type, cx - fw/2, cy - fh/2, fw, fh, f.id === selId);
+      g.appendChild(fg);
+    }
+
+    // Room name label (supports optional label_offset {x,y} in room data)
     const bounds = getRoomBounds(layout);
-    const cx = (bounds.minX + bounds.maxX) / 2, cy = (bounds.minY + bounds.maxY) / 2;
+    const lo = layout.label_offset || {};
+    const cx = (bounds.minX + bounds.maxX) / 2 + (lo.x || 0);
+    const cy = (bounds.minY + bounds.maxY) / 2 + (lo.y || 0);
     const nameObj = roomSlugs.find(r => r.slug === slug);
     const lbl = document.createElementNS(NS, 'text');
     lbl.setAttribute('x', mToPx(cx)); lbl.setAttribute('y', mToPx(cy));
@@ -478,6 +776,7 @@
       door:    'Click start + end on a wall.',
       sliding: 'Sliding glass door — click start + end on a wall.',
       divider: 'Click two points for open-plan boundary.',
+      furniture: 'Click to place furniture. Click again to set size, or single-click for default size.',
       select:  'Click an element to select.',
     };
     setStatus(hints[t] || '');
@@ -556,7 +855,50 @@
         setStatus('Both points must be on the same wall.');
         pendingWall = null;
       }
+    } else if (tool === 'paste' && clipboard) {
+      pushUndo();
+      const data = activeData();
+      data.furniture = data.furniture || [];
+      data.furniture.push({
+        ...clipboard,
+        id: 'furn_' + (data.furniture.length + 1) + '_' + Date.now().toString(36),
+        x: +xM.toFixed(2),
+        y: +yM.toFixed(2),
+      });
+      setStatus(clipboard.type + ' pasted. Click again to paste another, or switch tool.');
+    } else if (tool === 'furniture') {
+      const preset = (document.getElementById('apt-furn-preset') || {}).value;
+      if (!preset) { setStatus('Select a furniture type from the dropdown first.'); return; }
+      if (!pending) {
+        pending = { x1: xM, y1: yM };
+        setStatus(`Click again to set size, or click same spot for default ${preset} size.`);
+      } else {
+        pushUndo();
+        const dx = Math.abs(xM - pending.x1), dy = Math.abs(yM - pending.y1);
+        const def = FURN_DEFAULTS[preset] || { w: 1, h: 1 };
+        const fw = dx > 0.2 ? dx : def.w;
+        const fh = dy > 0.2 ? dy : def.h;
+        const cx = dx > 0.2 ? (pending.x1 + xM) / 2 : pending.x1;
+        const cy = dy > 0.2 ? (pending.y1 + yM) / 2 : pending.y1;
+        data.furniture = data.furniture || [];
+        data.furniture.push({
+          id: 'furn_' + (data.furniture.length + 1) + '_' + Date.now().toString(36),
+          type: preset, x: +cx.toFixed(2), y: +cy.toFixed(2),
+          w: +fw.toFixed(2), h: +fh.toFixed(2), rotation: 0, label: '',
+        });
+        pending = null;
+        setStatus(`${preset} placed. Select another from dropdown or switch tool.`);
+      }
     } else if (tool === 'select') {
+      // Check furniture first (on top visually)
+      for (const f of (data.furniture || [])) {
+        if (Math.abs(xM - f.x) <= f.w/2 + 0.1 && Math.abs(yM - f.y) <= f.h/2 + 0.1) {
+          selectedId = f.id;
+          setStatus(`Selected ${f.type}${f.label ? ' "'+f.label+'"' : ''}. Edit below or Delete.`);
+          draw(); refreshEditPanel();
+          return;
+        }
+      }
       // Check doors/windows
       for (const arr of [data.doors || [], data.windows || []]) {
         for (const it of arr) {
@@ -626,23 +968,29 @@
     const win = (data.windows || []).find(x => x.id === selectedId);
     const dor = (data.doors || []).find(x => x.id === selectedId);
     const div = (data.dividers || []).find(x => x.id === selectedId);
-    const item = win || dor || div;
+    const furn = (data.furniture || []).find(x => x.id === selectedId);
+    const item = win || dor || div || furn;
     if (!item) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
-    document.getElementById('apt-edit-id').textContent = item.id;
+    document.getElementById('apt-edit-id').textContent = furn ? (furn.type + (furn.label ? ' "'+furn.label+'"' : '')) : item.id;
     const isDivider = !!div;
-    document.getElementById('apt-edit-offset-wrap').style.display = isDivider ? 'none' : 'inline';
-    document.getElementById('apt-edit-width-wrap').style.display = isDivider ? 'none' : 'inline';
-    if (!isDivider) {
+    const isFurn = !!furn;
+    document.getElementById('apt-edit-offset-wrap').style.display = (isDivider || isFurn) ? 'none' : 'inline';
+    document.getElementById('apt-edit-width-wrap').style.display = (isDivider || isFurn) ? 'none' : 'inline';
+    if (!isDivider && !isFurn) {
       document.getElementById('apt-edit-offset').value = item.offset_m;
       document.getElementById('apt-edit-width').value = item.width_m;
     }
     const leadsWrap = document.getElementById('apt-edit-leads-wrap');
-    if (dor || div) {
-      leadsWrap.style.display = 'inline';
-      document.getElementById('apt-edit-leads').value = item.leads_to || '';
-    } else {
-      leadsWrap.style.display = 'none';
+    leadsWrap.style.display = (dor || div) ? 'inline' : 'none';
+    if (dor || div) document.getElementById('apt-edit-leads').value = item.leads_to || '';
+    const furnWrap = document.getElementById('apt-edit-furn-wrap');
+    furnWrap.style.display = isFurn ? 'inline' : 'none';
+    if (isFurn) {
+      document.getElementById('apt-edit-furn-label').value = furn.label || '';
+      document.getElementById('apt-edit-furn-w').value = furn.w;
+      document.getElementById('apt-edit-furn-h').value = furn.h;
+      document.getElementById('apt-edit-furn-rot').value = furn.rotation || 0;
     }
   }
 
@@ -653,7 +1001,18 @@
     let kind = 'windows';
     if (!item) { item = (data.doors || []).find(x => x.id === selectedId); kind = 'doors'; }
     if (!item) { item = (data.dividers || []).find(x => x.id === selectedId); kind = 'dividers'; }
+    if (!item) { item = (data.furniture || []).find(x => x.id === selectedId); kind = 'furniture'; }
     if (!item) return;
+    if (kind === 'furniture') {
+      item.label = (document.getElementById('apt-edit-furn-label').value || '').trim();
+      const fw = parseFloat(document.getElementById('apt-edit-furn-w').value);
+      const fh = parseFloat(document.getElementById('apt-edit-furn-h').value);
+      if (!isNaN(fw) && fw > 0) item.w = +fw.toFixed(2);
+      if (!isNaN(fh) && fh > 0) item.h = +fh.toFixed(2);
+      item.rotation = parseInt(document.getElementById('apt-edit-furn-rot').value) || 0;
+      pushUndo(); draw(); setStatus('Updated ' + item.type);
+      return;
+    }
     if (kind !== 'dividers') {
       const off = parseFloat(document.getElementById('apt-edit-offset').value);
       const wid = parseFloat(document.getElementById('apt-edit-width').value);
@@ -677,6 +1036,16 @@
     draw();
   };
 
+  window.aptCopySelected = function () {
+    if (!selectedId) { setStatus('Select a furniture item first.'); return; }
+    const data = activeData();
+    const f = (data.furniture || []).find(ff => ff.id === selectedId);
+    if (!f) { setStatus('Copy works on furniture only.'); return; }
+    clipboard = JSON.parse(JSON.stringify(f));
+    tool = 'paste';
+    setStatus('Click to paste ' + f.type + '. Press Esc or switch tool to cancel.');
+  };
+
   window.aptDeleteSelected = function () {
     if (!selectedId) return;
     const data = activeData();
@@ -685,6 +1054,7 @@
     data.windows = (data.windows || []).filter(x => x.id !== selectedId && x.wall !== selectedId);
     data.doors = (data.doors || []).filter(x => x.id !== selectedId && x.wall !== selectedId);
     data.dividers = (data.dividers || []).filter(d => d.id !== selectedId);
+    data.furniture = (data.furniture || []).filter(f => f.id !== selectedId);
     selectedId = null;
     draw(); refreshEditPanel();
   };
@@ -1028,7 +1398,7 @@
       // Single room view
       if (!allRooms[slug]) {
         allRooms[slug] = {
-          walls: [], windows: [], doors: [], dividers: [],
+          walls: [], windows: [], doors: [], dividers: [], furniture: [],
           origin: { x_m: 0, y_m: 0 },
           shape: { type: 'rect', width_m: 8, length_m: 6 },
           grid: { cell_m: 0.5, cols: 16, rows: 12 },
@@ -1173,6 +1543,46 @@
   window.addEventListener('DOMContentLoaded', () => {
     svg().addEventListener('click', onSvgClick);
     svg().addEventListener('mousemove', onSvgMove);
+
+    // Furniture drag-to-move: mousedown starts, mousemove updates, mouseup finalizes
+    svg().addEventListener('mousedown', function (ev) {
+      if (tool !== 'select' || !activeSlug || activeSlug === '_apartment') return;
+      const rect = svg().getBoundingClientRect();
+      const co = getComputedOrigin(activeSlug);
+      const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
+      const yM = viewOriginY + pxToM(ev.clientY - rect.top) - co.y_m;
+      const data = activeData();
+      for (const f of (data.furniture || [])) {
+        if (Math.abs(xM - f.x) <= f.w/2 + 0.1 && Math.abs(yM - f.y) <= f.h/2 + 0.1) {
+          pushUndo();
+          dragging = { id: f.id, startX: xM, startY: yM, origX: f.x, origY: f.y };
+          selectedId = f.id;
+          refreshEditPanel();
+          ev.preventDefault();
+          return;
+        }
+      }
+    });
+    svg().addEventListener('mousemove', function (ev) {
+      if (!dragging) return;
+      const rect = svg().getBoundingClientRect();
+      const co = getComputedOrigin(activeSlug);
+      const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
+      const yM = viewOriginY + pxToM(ev.clientY - rect.top) - co.y_m;
+      const data = activeData();
+      const f = (data.furniture || []).find(ff => ff.id === dragging.id);
+      if (f) {
+        f.x = +snapM(xM, !!ev.shiftKey).toFixed(2);
+        f.y = +snapM(yM, !!ev.shiftKey).toFixed(2);
+        draw();
+      }
+    });
+    window.addEventListener('mouseup', function () {
+      if (dragging) {
+        dragging = null;
+        setStatus('Furniture moved.');
+      }
+    });
     let _resizeT;
     window.addEventListener('resize', () => { clearTimeout(_resizeT); _resizeT = setTimeout(draw, 100); });
     init();

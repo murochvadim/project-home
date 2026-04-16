@@ -2917,7 +2917,7 @@ app.post('/api/room-layouts/:slug', async (req, res) => {
     const b = req.body || {};
     // Accept only known fields; ignore anything else silently.
     const patch = {};
-    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with', 'view_w', 'view_h']) {
+    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with', 'view_w', 'view_h', 'furniture', 'label_offset']) {
       if (b[k] !== undefined) patch[k] = b[k];
     }
     if (Object.keys(patch).length === 0) {
@@ -3074,6 +3074,16 @@ async function buildApartmentScene() {
         return `${d.name} (${d.device_type})${state}${age}`;
       });
       text += `  Devices: ${summary.join('; ')}\n`;
+    }
+
+    // Furniture
+    const furnList = layout.furniture || [];
+    if (furnList.length) {
+      const furnDesc = furnList.map(f => {
+        const label = f.label ? `"${f.label}" ` : '';
+        return `${label}${f.type} (${f.w}m × ${f.h}m)`;
+      });
+      text += `  Furniture: ${furnDesc.join('; ')}\n`;
     }
 
     text += '\n';
