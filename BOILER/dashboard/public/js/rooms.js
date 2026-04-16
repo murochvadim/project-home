@@ -24,7 +24,7 @@
   let selectedId   = null;
   let undoStack    = [];
   let cellPx       = 30;
-  let viewOriginX  = 0;          // current viewBox origin in meters (for click offset)
+  let viewOriginX  = 0;
   let viewOriginY  = 0;
 
   function svg() { return document.getElementById('apt-svg'); }
@@ -487,7 +487,7 @@
 
   // ── Click handler ──────────────────────────────────────────────────────────
   function onSvgClick(ev) {
-    if (!activeSlug) return;
+    if (!activeSlug || activeSlug === '_apartment') return;
     const rect = svg().getBoundingClientRect();
     const co = getComputedOrigin(activeSlug);
     const skipSnap = !!ev.shiftKey || tool === 'window' || tool === 'door' || tool === 'sliding';
@@ -596,7 +596,7 @@
 
   // ── Hover ──────────────────────────────────────────────────────────────────
   function onSvgMove(ev) {
-    if (!activeSlug) return;
+    if (!activeSlug || activeSlug === '_apartment') return;
     const rect = svg().getBoundingClientRect();
     const co = getComputedOrigin(activeSlug);
     const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
@@ -696,6 +696,9 @@
     // Store computed origin (auto-positioned from adjacency graph)
     const co = getComputedOrigin(activeSlug);
     data.origin = { x_m: co.x_m, y_m: co.y_m };
+    // Store view W/L from inputs (persists per room in DB)
+    data.view_w = parseFloat(document.getElementById('apt-canvas-w').value) || null;
+    data.view_h = parseFloat(document.getElementById('apt-canvas-h').value) || null;
     // Compute shape from walls bounding box (accurate dimensions)
     const cm = (data.grid || {}).cell_m || 0.5;
     if ((data.walls || []).length) {
@@ -708,9 +711,6 @@
       const compH = +(maxY - minY).toFixed(1);
       data.shape = { type: 'rect', width_m: compW, length_m: compH };
       data.grid = { cell_m: cm, cols: Math.ceil(compW / cm), rows: Math.ceil(compH / cm) };
-      // Update inputs to show computed values
-      document.getElementById('apt-canvas-w').value = compW;
-      document.getElementById('apt-canvas-h').value = compH;
     } else {
       const saveW = parseFloat(document.getElementById('apt-canvas-w').value) || 8;
       const saveH = parseFloat(document.getElementById('apt-canvas-h').value) || 6;
@@ -732,7 +732,17 @@
           active_room: activeSlug,
         }),
       });
-      setStatus('Saved ' + activeSlug + '.');
+      // Also save view_w/view_h for ALL other rooms that have unsaved changes
+      for (const [sl, rd] of Object.entries(allRooms)) {
+        if (sl === activeSlug) continue;
+        if (rd.view_w != null || rd.view_h != null) {
+          await fetch('/api/room-layouts/' + sl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ view_w: rd.view_w, view_h: rd.view_h }),
+          }).catch(() => {});
+        }
+      }
+      setStatus('Saved all rooms.');
     } catch (e) {
       setStatus('Save failed: ' + e.message);
     }
@@ -773,18 +783,10 @@
       coInfo.textContent = `Origin: (${co.x_m}, ${co.y_m}) auto`;
     }
 
-    // ViewBox: single room → W/L inputs control view (like original editor).
-    // Multi-room → auto-compute from all visible rooms' wall bounds.
+    // ViewBox: compute from visible rooms' wall bounds, then expand to
+    // at least W/L (user's zoom preference). Works in both single + multi mode.
     let viewX = 0, viewY = 0, viewW = cW, viewH = cH;
-    if (visibleSlugs.length === 1) {
-      // Single room: use W/L inputs directly — user controls zoom
-      const o = getComputedOrigin(visibleSlugs[0]);
-      viewX = o.x_m;
-      viewY = o.y_m;
-      viewW = cW;
-      viewH = cH;
-    } else if (visibleSlugs.length > 1) {
-      // Multi-room: auto-fit bounding box of all visible rooms
+    if (visibleSlugs.length >= 1) {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const sl of visibleSlugs) {
         const lay = displayRooms[sl] || allRooms[sl];
@@ -806,7 +808,9 @@
       }
       const pad = 0.5;
       viewX = minX - pad; viewY = minY - pad;
-      viewW = (maxX - minX) + 2*pad; viewH = (maxY - minY) + 2*pad;
+      // W/L directly controls the view — user sets the zoom level
+      viewW = cW || (maxX - minX) + 2*pad;
+      viewH = cH || (maxY - minY) + 2*pad;
     }
     const pxPerM = Math.max(15, Math.floor(avail / viewW));
     cellPx = pxPerM;
@@ -991,33 +995,60 @@
 
   // ── Room switching ─────────────────────────────────────────────────────────
   window.aptSetActiveRoom = function (slug) {
+    // Save outgoing room's view W/L into memory
+    if (activeSlug && activeSlug !== slug && activeSlug !== '_apartment' && allRooms[activeSlug]) {
+      allRooms[activeSlug].view_w = parseFloat(document.getElementById('apt-canvas-w').value) || null;
+      allRooms[activeSlug].view_h = parseFloat(document.getElementById('apt-canvas-h').value) || null;
+    }
+
     activeSlug = slug;
     pending = null; pendingWall = null; selectedId = null;
     undoStack = [];
-    // Initialize empty room data so drawing tools work on new rooms
-    if (!allRooms[slug]) {
-      allRooms[slug] = {
-        walls: [], windows: [], doors: [], dividers: [],
-        origin: { x_m: 0, y_m: 0 },
-        shape: { type: 'rect', width_m: 8, length_m: 6 },
-        grid: { cell_m: 0.5, cols: 16, rows: 12 },
-      };
+
+    // Set visibility: Apartment = all rooms ON; single room = only that room ON
+    if (!aptConfig.layer_visibility) aptConfig.layer_visibility = {};
+    if (slug === '_apartment') {
+      for (const sl of Object.keys(allRooms)) aptConfig.layer_visibility[sl] = true;
+    } else {
+      for (const sl of Object.keys(allRooms)) aptConfig.layer_visibility[sl] = (sl === slug);
     }
-    const data = allRooms[slug];
-    const shape = data.shape || { width_m: 8, length_m: 6 };
-    // Restore user's W/L preference from localStorage; fall back to shape
-    const savedWL = JSON.parse(localStorage.getItem('apt_wl_' + slug) || 'null');
-    document.getElementById('apt-canvas-w').value = savedWL ? savedWL.w : (shape.width_m || 8);
-    document.getElementById('apt-canvas-h').value = savedWL ? savedWL.h : (shape.length_m || 6);
-    const cellSel = document.getElementById('apt-cell-m');
-    const roomCell = (data.grid || {}).cell_m || 0.5;
-    cellSel.value = roomCell;
-    if (cellSel.value !== String(roomCell)) cellSel.value = '0.5';
-    draw();
-    refreshEditPanel();
-    const name = roomSlugs.find(r => r.slug === slug);
-    setStatus('Active room: ' + (name ? name.name : slug) + ((data.walls || []).length ? '' : ' (empty — draw walls to start)'));
-    // Persist active room + visibility to localStorage so refresh remembers
+    try { localStorage.setItem('apt_layer_vis', JSON.stringify(aptConfig.layer_visibility)); } catch (e) {}
+    buildLayers();
+
+    if (slug === '_apartment') {
+      // Apartment view: all rooms visible, no editing
+      const saved = JSON.parse(localStorage.getItem('apt_wl__apartment') || 'null');
+      document.getElementById('apt-canvas-w').value = (saved && saved.w) || 20;
+      document.getElementById('apt-canvas-h').value = (saved && saved.h) || 15;
+      document.getElementById('apt-cell-m').value = '0.5';
+      draw();
+      refreshEditPanel();
+      setStatus('Apartment view — all rooms. Select a specific room to edit.');
+    } else {
+      // Single room view
+      if (!allRooms[slug]) {
+        allRooms[slug] = {
+          walls: [], windows: [], doors: [], dividers: [],
+          origin: { x_m: 0, y_m: 0 },
+          shape: { type: 'rect', width_m: 8, length_m: 6 },
+          grid: { cell_m: 0.5, cols: 16, rows: 12 },
+        };
+      }
+      const data = allRooms[slug];
+      const shape = data.shape || { width_m: 8, length_m: 6 };
+      const saved = JSON.parse(localStorage.getItem('apt_wl_' + slug) || 'null');
+      document.getElementById('apt-canvas-w').value = (saved && saved.w) || shape.width_m || 8;
+      document.getElementById('apt-canvas-h').value = (saved && saved.h) || shape.length_m || 6;
+      const cellSel = document.getElementById('apt-cell-m');
+      const roomCell = (data.grid || {}).cell_m || 0.5;
+      cellSel.value = roomCell;
+      if (cellSel.value !== String(roomCell)) cellSel.value = '0.5';
+      draw();
+      refreshEditPanel();
+      const name = roomSlugs.find(r => r.slug === slug);
+      setStatus('Active: ' + (name ? name.name : slug) + ((data.walls || []).length ? '' : ' (empty — draw walls to start)'));
+    }
+
     try {
       localStorage.setItem('apt_active_room', slug);
       localStorage.setItem('apt_layer_vis', JSON.stringify(aptConfig.layer_visibility || {}));
@@ -1063,9 +1094,13 @@
       allRooms = allR || {};
       aptConfig = aptR || {};
 
-      // Populate active room dropdown
+      // Populate active room dropdown — "Apartment" shows all rooms together
       const sel = document.getElementById('apt-active-room');
       sel.innerHTML = '';
+      const aptOpt = document.createElement('option');
+      aptOpt.value = '_apartment';
+      aptOpt.textContent = '— Apartment (all rooms) —';
+      sel.appendChild(aptOpt);
       for (const r of roomSlugs) {
         const opt = document.createElement('option');
         opt.value = r.slug;
@@ -1083,7 +1118,7 @@
         leadsSel.appendChild(opt);
       }
 
-      // Restore visibility from localStorage (survives refresh without Save)
+      // Restore state from localStorage
       try {
         const savedVis = JSON.parse(localStorage.getItem('apt_layer_vis') || '{}');
         if (Object.keys(savedVis).length) aptConfig.layer_visibility = savedVis;
@@ -1107,14 +1142,11 @@
   }
 
   window.aptRedraw = function () {
-    // Save W/L to localStorage so it persists per room
+    const w = parseFloat(document.getElementById('apt-canvas-w').value) || null;
+    const h = parseFloat(document.getElementById('apt-canvas-h').value) || null;
+    // Save W/L to its own localStorage key — separate per room, no cross-contamination
     if (activeSlug) {
-      try {
-        localStorage.setItem('apt_wl_' + activeSlug, JSON.stringify({
-          w: parseFloat(document.getElementById('apt-canvas-w').value) || 8,
-          h: parseFloat(document.getElementById('apt-canvas-h').value) || 6,
-        }));
-      } catch (e) {}
+      try { localStorage.setItem('apt_wl_' + activeSlug, JSON.stringify({w, h})); } catch (e) {}
     }
     draw();
   };
@@ -1145,4 +1177,22 @@
     window.addEventListener('resize', () => { clearTimeout(_resizeT); _resizeT = setTimeout(draw, 100); });
     init();
   });
+
+  // Handle bfcache: browser may restore page from memory without re-running
+  // scripts, so _vs would be stale. Re-read localStorage on pageshow.
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) {
+      const fresh = JSON.parse(localStorage.getItem('apt_view_sizes') || '{}');
+      for (const k of Object.keys(fresh)) _vs[k] = fresh[k];
+      if (activeSlug) {
+        const s = _vs[activeSlug] || {};
+        const data = allRooms[activeSlug] || {};
+        const shape = data.shape || {};
+        document.getElementById('apt-canvas-w').value = s.w || shape.width_m || 8;
+        document.getElementById('apt-canvas-h').value = s.h || shape.length_m || 6;
+        draw();
+      }
+    }
+  });
+
 })();

@@ -2917,7 +2917,7 @@ app.post('/api/room-layouts/:slug', async (req, res) => {
     const b = req.body || {};
     // Accept only known fields; ignore anything else silently.
     const patch = {};
-    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with']) {
+    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with', 'view_w', 'view_h']) {
       if (b[k] !== undefined) patch[k] = b[k];
     }
     if (Object.keys(patch).length === 0) {
