@@ -534,7 +534,7 @@ app.post('/api/ai-investigate', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) {
     return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set in ecosystem.config.js' });
   }
-  const { from_hour, to_hour, include_weather, include_outlook, include_agent_data } = req.body;
+  const { from_hour, to_hour, include_weather, include_outlook, include_agent_data, include_spatial } = req.body;
   const fh = parseInt(from_hour) || 7;
   const th = parseInt(to_hour)   || 14;
 
@@ -682,6 +682,18 @@ RESPONSE FORMAT — return ONLY valid JSON, no text outside:
       userContent += dailyR.rows.map(r =>
         `${r.forecast_date}: ${r.condition} high:${r.temp_high}°C low:${r.temp_low}°C rain:${r.precipitation_mm}mm`
       ).join('\n');
+    }
+
+    // Spatial context — apartment layout + live device state for room-aware reasoning
+    if (include_spatial !== false) {
+      try {
+        const sceneText = await buildApartmentScene();
+        if (sceneText && sceneText.length > 50) {
+          userContent += `\n\n${sceneText}`;
+        }
+      } catch (e) {
+        console.error('Failed to build apartment scene for AI:', e.message);
+      }
     }
 
     const message = await client.messages.create({
@@ -2860,6 +2872,18 @@ app.get('/api/room-slugs', async (_req, res) => {
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
+// IMPORTANT: /all must come before /:slug or Express will match 'all' as a slug.
+app.get('/api/room-layouts/all', async (_req, res) => {
+  try {
+    const r = await db.query(
+      "SELECT key, value FROM dashboard_settings WHERE key LIKE 'room_layouts.%' AND key != 'room_layouts._apartment' ORDER BY key"
+    );
+    const result = {};
+    for (const row of r.rows) result[row.key.replace('room_layouts.', '')] = row.value;
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/room-layouts/:slug', async (req, res) => {
   try {
     const { slug } = req.params;
@@ -2893,7 +2917,7 @@ app.post('/api/room-layouts/:slug', async (req, res) => {
     const b = req.body || {};
     // Accept only known fields; ignore anything else silently.
     const patch = {};
-    for (const k of ['shape', 'grid', 'orientation', 'walls', 'windows', 'doors', 'dividers', 'shared_with']) {
+    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with']) {
       if (b[k] !== undefined) patch[k] = b[k];
     }
     if (Object.keys(patch).length === 0) {
@@ -2909,6 +2933,196 @@ app.post('/api/room-layouts/:slug', async (req, res) => {
       ['room_layouts.' + slug, JSON.stringify(patch)]
     );
     res.json({ ok: true, merged_keys: Object.keys(patch) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Apartment-level coordination (canvas size, room order, visibility, active room).
+app.get('/api/apartment-layout', async (_req, res) => {
+  try {
+    const r = await db.query("SELECT value FROM dashboard_settings WHERE key = 'room_layouts._apartment'");
+    res.json(r.rows.length ? r.rows[0].value : {});
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/apartment-layout', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    for (const k of ['canvas', 'room_order', 'layer_visibility', 'active_room']) {
+      if (b[k] !== undefined) patch[k] = b[k];
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'No known fields' });
+    await db.query(
+      `INSERT INTO dashboard_settings (key, value, updated_at) VALUES ('room_layouts._apartment', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = dashboard_settings.value || $1::jsonb, updated_at = NOW()`,
+      [JSON.stringify(patch)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Apartment scene serializer (AI consumption) ─────────────────────────────
+// Reads all room layouts + live device state and returns structured text that
+// Claude can parse for spatial reasoning during investigations.
+async function buildApartmentScene() {
+  const layoutsR = await db.query(
+    "SELECT key, value FROM dashboard_settings WHERE key LIKE 'room_layouts.%' AND key != 'room_layouts._apartment' ORDER BY key"
+  );
+  const devicesR = await db.query(
+    "SELECT id, name, room, device_type, protocol, last_state, last_seen FROM devices WHERE enabled = true ORDER BY room, name"
+  );
+  const roomSlugsR = await db.query(
+    "SELECT name, regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g') AS slug FROM rooms ORDER BY name"
+  );
+
+  const layouts = {};
+  for (const row of layoutsR.rows) {
+    layouts[row.key.replace('room_layouts.', '')] = row.value;
+  }
+
+  const slugToName = {};
+  for (const r of roomSlugsR.rows) { slugToName[r.slug] = r.name; }
+
+  // Group devices by room name
+  const devicesByRoom = {};
+  for (const d of devicesR.rows) {
+    const room = d.room || 'Unassigned';
+    if (!devicesByRoom[room]) devicesByRoom[room] = [];
+    devicesByRoom[room].push(d);
+  }
+
+  // Build adjacency graph from doors + dividers leads_to
+  const edges = [];
+  for (const [slug, layout] of Object.entries(layouts)) {
+    const roomName = slugToName[slug] || slug;
+    for (const door of (layout.doors || [])) {
+      if (door.leads_to) {
+        const targetName = slugToName[door.leads_to] || door.leads_to;
+        const dtype = door.door_type === 'sliding' ? 'sliding' : 'hinged';
+        edges.push(`${roomName} ↔ ${targetName} (${dtype} ${door.width_m}m)`);
+      }
+    }
+    for (const div of (layout.dividers || [])) {
+      if (div.leads_to) {
+        const targetName = slugToName[div.leads_to] || div.leads_to;
+        const len = Math.hypot((div.x2 || 0) - (div.x1 || 0), (div.y2 || 0) - (div.y1 || 0)).toFixed(1);
+        edges.push(`${roomName} ↔ ${targetName} (passage ${len}m)`);
+      }
+    }
+  }
+
+  let text = '=== APARTMENT LAYOUT ===\n\n';
+
+  // Per-room descriptions
+  for (const [slug, layout] of Object.entries(layouts)) {
+    const roomName = slugToName[slug] || slug;
+    const shape = layout.shape || {};
+    const shared = layout.shared_with || [];
+    const sharedLabel = shared.length
+      ? ` + ${shared.map(s => slugToName[s] || s).join(' + ')} (open-plan)`
+      : '';
+    const dims = shape.width_m && shape.length_m
+      ? `${shape.width_m}m × ${shape.length_m}m`
+      : 'dimensions unknown';
+
+    text += `ROOM: ${roomName}${sharedLabel} (${dims})\n`;
+
+    // Walls summary
+    const walls = layout.walls || [];
+    const windows = layout.windows || [];
+    const doors = layout.doors || [];
+    const dividers = layout.dividers || [];
+
+    if (walls.length) text += `  Walls: ${walls.length} segments\n`;
+
+    // Windows
+    for (const w of windows) {
+      text += `  Window: ${w.width_m}m wide at offset ${w.offset_m}m\n`;
+    }
+
+    // Doors + sliding
+    for (const d of doors) {
+      const dtype = d.door_type === 'sliding' ? 'sliding glass door' : 'hinged door';
+      const target = d.leads_to ? ` → ${slugToName[d.leads_to] || d.leads_to}` : '';
+      text += `  ${dtype}: ${d.width_m}m wide at offset ${d.offset_m}m${target}\n`;
+    }
+
+    // Dividers with leads_to
+    for (const d of dividers) {
+      if (d.leads_to) {
+        const len = Math.hypot((d.x2 || 0) - (d.x1 || 0), (d.y2 || 0) - (d.y1 || 0)).toFixed(1);
+        text += `  Open passage (${len}m) → ${slugToName[d.leads_to] || d.leads_to}\n`;
+      } else {
+        text += `  Internal divider (open-plan boundary)\n`;
+      }
+    }
+
+    // Devices in this room
+    const roomDevices = devicesByRoom[roomName] || [];
+    if (roomDevices.length) {
+      const summary = roomDevices.map(d => {
+        let state = '';
+        if (d.last_state && typeof d.last_state === 'object') {
+          const keys = Object.keys(d.last_state).filter(k => k !== 'last_seen' && k !== 'linkquality');
+          if (keys.length <= 3) {
+            state = ' (' + keys.map(k => `${k}:${d.last_state[k]}`).join(', ') + ')';
+          }
+        }
+        const age = d.last_seen
+          ? ` [${Math.round((Date.now() - new Date(d.last_seen).getTime()) / 60000)}m ago]`
+          : '';
+        return `${d.name} (${d.device_type})${state}${age}`;
+      });
+      text += `  Devices: ${summary.join('; ')}\n`;
+    }
+
+    text += '\n';
+  }
+
+  // Rooms without layouts
+  for (const r of roomSlugsR.rows) {
+    if (!layouts[r.slug]) {
+      const devs = devicesByRoom[r.name] || [];
+      if (devs.length) {
+        text += `ROOM: ${r.name} (no layout drawn)\n`;
+        text += `  Devices: ${devs.map(d => `${d.name} (${d.device_type})`).join('; ')}\n\n`;
+      }
+    }
+  }
+
+  // Adjacency graph
+  if (edges.length) {
+    text += 'ADJACENCY GRAPH:\n';
+    // Deduplicate bidirectional edges
+    const seen = new Set();
+    for (const e of edges) {
+      const parts = e.split(' ↔ ');
+      const key = [parts[0], parts[1]].sort().join('|');
+      if (!seen.has(key)) { text += `  ${e}\n`; seen.add(key); }
+    }
+    text += '\n';
+  }
+
+  // Exterior exposure (rooms with windows)
+  const exposed = [];
+  for (const [slug, layout] of Object.entries(layouts)) {
+    const winCount = (layout.windows || []).length;
+    if (winCount > 0) {
+      exposed.push(`${slugToName[slug] || slug}: ${winCount} window(s)`);
+    }
+  }
+  if (exposed.length) {
+    text += 'EXTERIOR EXPOSURE:\n';
+    for (const e of exposed) text += `  ${e} — weather-exposed\n`;
+  }
+
+  return text;
+}
+
+app.get('/api/apartment-scene', async (_req, res) => {
+  try {
+    const text = await buildApartmentScene();
+    res.type('text/plain').send(text);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

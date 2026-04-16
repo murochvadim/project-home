@@ -55,7 +55,8 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 | Project Network | `network.html` | ARP scan, network devices |
 | Weather | `general.html` | Weather data, solar heating potential |
 | Voice | `voice.html` | Voice pipeline, intents, TTS |
-| Living Room Agent | `living-room.html` | Living Room automations — wallmote bindings, floor-plan layout (walls/windows/doors/sliding/dividers with shared-space support), scenes, lights |
+| Rooms | `rooms.html` | Apartment-wide multi-room layout editor — each room as a toggleable layer on one canvas; walls/windows/doors/sliding/dividers + origin positioning; scene serializer for AI (`GET /api/apartment-scene`); spatial context auto-injected into AI investigations |
+| Living Room Agent | `living-room.html` | Living Room automations — wallmote bindings, single-room floor-plan layout editor (quick edits), scenes, lights |
 
 ### Sidebar (all pages)
 - **Status badge** (top-left): `✓ OK` (green) / `⚠ N issues` (red blink) — overall system health; polls `/api/health/status` every 60s

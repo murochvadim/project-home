@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rooms — Apartment Layout</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="general.html">Weather</a>
+  <a href="rooms.html" class="active">Rooms</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Apartment Layout</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshPage()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <!-- Controls row 1: canvas + active room -->
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+      <label style="font-size:0.82rem;">Active room:
+        <select id="apt-active-room" onchange="aptSetActiveRoom(this.value)" style="padding:3px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;"></select>
+      </label>
+      <label style="font-size:0.82rem;">Canvas W:
+        <input type="number" id="apt-canvas-w" value="25" min="5" max="50" step="1" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="aptRedraw()">
+      </label>
+      <label style="font-size:0.82rem;">Canvas H:
+        <input type="number" id="apt-canvas-h" value="18" min="5" max="50" step="1" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;" onchange="aptRedraw()">
+      </label>
+      <span style="flex:1;"></span>
+      <label style="font-size:0.82rem;">Origin X:
+        <input type="number" id="apt-origin-x" value="0" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+      </label>
+      <label style="font-size:0.82rem;">Origin Y:
+        <input type="number" id="apt-origin-y" value="0" step="0.5" style="width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
+      </label>
+    </div>
+
+    <!-- Controls row 2: drawing tools -->
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+      <button class="apt-tool" data-tool="wall" onclick="aptSetTool('wall')" style="background:#333;color:#fff;padding:4px 10px;border:1px solid #333;border-radius:4px;font-size:0.78rem;cursor:pointer;">Wall</button>
+      <button class="apt-tool" data-tool="window" onclick="aptSetTool('window')" style="background:#fff;color:#2c5aa0;padding:4px 10px;border:1px solid #2c5aa0;border-radius:4px;font-size:0.78rem;cursor:pointer;">Window</button>
+      <button class="apt-tool" data-tool="door" onclick="aptSetTool('door')" style="background:#fff;color:#8b4513;padding:4px 10px;border:1px solid #8b4513;border-radius:4px;font-size:0.78rem;cursor:pointer;">Door</button>
+      <button class="apt-tool" data-tool="sliding" onclick="aptSetTool('sliding')" style="background:#fff;color:#2e7d72;padding:4px 10px;border:1px solid #2e7d72;border-radius:4px;font-size:0.78rem;cursor:pointer;">Sliding</button>
+      <button class="apt-tool" data-tool="divider" onclick="aptSetTool('divider')" style="background:#fff;color:#666;padding:4px 10px;border:1px dashed #888;border-radius:4px;font-size:0.78rem;cursor:pointer;">Divider</button>
+      <button class="apt-tool" data-tool="select" onclick="aptSetTool('select')" style="background:#fff;color:#333;padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;cursor:pointer;">Select</button>
+      <span style="flex:1;"></span>
+      <button onclick="aptUndo()" style="padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Undo</button>
+      <button onclick="aptDeleteSelected()" style="padding:4px 10px;border:1px solid #c0392b;color:#c0392b;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Delete</button>
+      <button onclick="aptSave()" style="padding:4px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:4px;font-size:0.78rem;cursor:pointer;">Save</button>
+      <button onclick="aptCopyScene()" style="padding:4px 10px;border:1px solid #3a5a8a;background:#3a5a8a;color:#fff;border-radius:4px;font-size:0.78rem;cursor:pointer;">Copy Scene</button>
+    </div>
+
+    <!-- Status + edit panel -->
+    <div id="apt-status" style="font-size:0.72rem;color:#888;margin-bottom:6px;min-height:16px;">Loading apartment layout...</div>
+
+    <div id="apt-edit-panel" style="display:none;font-size:0.78rem;color:#333;background:#fff6d9;border:1px solid #e0c97a;border-radius:4px;padding:6px 10px;margin-bottom:6px;">
+      <span>Selected <b id="apt-edit-id">—</b>:</span>
+      <span id="apt-edit-offset-wrap">
+        Offset (m): <input type="number" id="apt-edit-offset" step="0.05" style="width:70px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+      </span>
+      <span id="apt-edit-width-wrap">
+        Width (m): <input type="number" id="apt-edit-width" step="0.05" style="width:70px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+      </span>
+      <span id="apt-edit-leads-wrap" style="display:none;">
+        Leads to: <select id="apt-edit-leads" style="padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;min-width:140px;">
+          <option value="">— none —</option>
+        </select>
+      </span>
+      <button onclick="aptApplyEdit()" style="padding:2px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:3px;font-size:0.78rem;cursor:pointer;margin-left:6px;">Apply</button>
+    </div>
+
+    <!-- Room layers panel -->
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:0.78rem;" id="apt-layers"></div>
+
+    <!-- SVG canvas -->
+    <div style="border:1px solid #d0cbc4;border-radius:4px;background:#fafaf7;overflow:auto;">
+      <svg id="apt-svg" width="800" height="600" style="display:block;background:#fafaf7;cursor:crosshair;"></svg>
+    </div>
+
+    <div style="margin-top:10px;font-size:0.75rem;color:#666;">
+      <strong>Legend:</strong>
+      <span style="display:inline-block;width:20px;height:3px;background:#111;vertical-align:middle;margin:0 4px;"></span> wall
+      &nbsp;
+      <span style="display:inline-block;width:20px;height:3px;background:#2c5aa0;vertical-align:middle;margin:0 4px;"></span> window
+      &nbsp;
+      <span style="display:inline-block;width:20px;height:3px;background:#8b4513;vertical-align:middle;margin:0 4px;"></span> door
+      &nbsp;
+      <span style="display:inline-block;width:20px;height:3px;background:#2e7d72;vertical-align:middle;margin:0 4px;"></span> sliding
+      &nbsp;
+      <span style="display:inline-block;width:20px;height:0;border-top:2px dashed #888;vertical-align:middle;margin:0 4px;"></span> divider
+    </div>
+  </div>
+</main>
+
+<script src="js/alerts-monitor.js"></script>
+<script src="js/rooms.js"></script>
+</body>
+</html>
