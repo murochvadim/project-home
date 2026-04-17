@@ -23,11 +23,16 @@
   let pendingWall  = null;
   let selectedId   = null;
   let dragging      = null;   // { id, startX, startY, origX, origY } for furniture drag
+  let labelDrag     = null;   // { slug, startPx, startPy, origOx, origOy, moved } for room-name label drag
+  let suppressClick = false;  // set true after a drag ends to swallow the synthetic click
   let clipboard     = null;   // copied furniture item (for paste on next click)
   let undoStack    = [];
   let cellPx       = 30;
   let viewOriginX  = 0;
   let viewOriginY  = 0;
+  let _showHiddenLabels = false;
+  let roomDims     = {};            // { slug: {w, l, h} } — dims for undrawn rooms
+  let roomDevCounts = {};           // { roomName: count } — from /api/rooms
 
   function svg() { return document.getElementById('apt-svg'); }
   function activeData() { return allRooms[activeSlug] || { walls:[], windows:[], doors:[], dividers:[] }; }
@@ -339,6 +344,8 @@
     'stove': {w:0.6, h:0.6}, 'sink': {w:0.6, h:0.5}, 'bathtub': {w:1.7, h:0.75},
     'toilet': {w:0.4, h:0.65}, 'shower': {w:0.9, h:0.9}, 'washing-machine': {w:0.6, h:0.6},
     'bookshelf': {w:1.0, h:0.35}, 'planter': {w:0.5, h:0.5},
+    'microwave': {w:0.5, h:0.35}, 'hood': {w:0.9, h:0.55}, 'hob': {w:0.6, h:0.52},
+    'oven': {w:0.6, h:0.6}, 'fireplace': {w:1.2, h:0.3}, 'lamp': {w:0.4, h:0.4},
   };
 
   function _svgRect(x, y, w, h, rx, fill, stroke, sw) {
@@ -601,6 +608,75 @@
         g.appendChild(_svgCircle(x+w*0.4, y+h*0.35, Math.min(w,h)*0.1, '#a0c890', '#6a9060'));
         break;
       }
+      case 'microwave': {
+        g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
+        // Door window (left 70% of face)
+        g.appendChild(_svgRect(x+2, y+2, w*0.68, h-4, 1, '#555', sk, 0.5));
+        // Control panel strip (right 30%)
+        g.appendChild(_svgRect(x+w*0.72, y+2, w*0.26, h-4, 1, '#d0d0d0', sk, 0.5));
+        // A couple of tiny button dots on the panel
+        g.appendChild(_svgCircle(x+w*0.85, y+h*0.35, Math.min(w,h)*0.05, '#888', sk));
+        g.appendChild(_svgCircle(x+w*0.85, y+h*0.65, Math.min(w,h)*0.05, '#888', sk));
+        break;
+      }
+      case 'hood': {
+        // Trapezoidal-ish silhouette (wider top, narrower bottom slot)
+        const inset = w*0.12;
+        g.appendChild(_svgPath(`M${x},${y} L${x+w},${y} L${x+w-inset},${y+h} L${x+inset},${y+h} Z`, FURN_FILL, sk, sw));
+        // Vent grille lines on the bottom third
+        const ventY = y + h*0.55;
+        for (let i = 1; i <= 4; i++) {
+          g.appendChild(_svgLine(x+inset+i*2, ventY, x+w-inset-i*2, ventY, '#bbb', 0.4));
+        }
+        break;
+      }
+      case 'hob': {
+        // Flat cooktop (like stove but shallower rings, suggests induction/ceramic)
+        g.appendChild(_svgRect(x, y, w, h, 1, FURN_FILL, sk, sw));
+        const br = Math.min(w, h) * 0.13;
+        const positions = [[0.27,0.3],[0.73,0.3],[0.27,0.7],[0.73,0.7]];
+        for (const [px, py] of positions) {
+          g.appendChild(_svgCircle(x+w*px, y+h*py, br, 'none', sk));
+        }
+        // Control slider strip along bottom
+        g.appendChild(_svgRect(x+w*0.15, y+h*0.88, w*0.7, h*0.08, 1, '#d0d0d0', '#ccc', 0.3));
+        break;
+      }
+      case 'oven': {
+        g.appendChild(_svgRect(x, y, w, h, 1, FURN_FILL, sk, sw));
+        // Control panel strip on top
+        g.appendChild(_svgRect(x+2, y+2, w-4, h*0.18, 1, '#d0d0d0', sk, 0.5));
+        // Dial
+        g.appendChild(_svgCircle(x+w*0.85, y+h*0.11, Math.min(w,h)*0.06, '#888', sk));
+        // Oven door window
+        g.appendChild(_svgRect(x+4, y+h*0.28, w-8, h*0.55, 2, '#555', sk, 0.5));
+        // Door handle (horizontal bar)
+        g.appendChild(_svgRect(x+w*0.18, y+h*0.88, w*0.64, h*0.06, 1, '#aaa', sk, 0.3));
+        break;
+      }
+      case 'fireplace': {
+        // Mantel/frame
+        g.appendChild(_svgRect(x, y, w, h, 1, '#c9bfae', sk, sw));
+        // Inner firebox (dark cavity)
+        const p = Math.min(w, h) * 0.18;
+        g.appendChild(_svgRect(x+p, y+p, w-p*2, h-p*2, 2, '#3a2d24', '#6a5548', 0.5));
+        // Flames (stylised triangles)
+        const cx0 = x + w*0.5, by = y + h - p - 1;
+        const fh = (h - p*2) * 0.6;
+        g.appendChild(_svgPath(`M${cx0-w*0.12},${by} Q${cx0-w*0.04},${by-fh*0.7} ${cx0},${by-fh} Q${cx0+w*0.04},${by-fh*0.7} ${cx0+w*0.12},${by} Z`, '#e07a2a', '#c06020', 0.5));
+        break;
+      }
+      case 'lamp': {
+        // Top-down lamp: shade as circle with crosshair, small base dot
+        const r = Math.min(w, h) * 0.45;
+        const cx0 = x + w*0.5, cy0 = y + h*0.5;
+        g.appendChild(_svgCircle(cx0, cy0, r, '#f2e6b0', sk));
+        g.appendChild(_svgLine(cx0-r*0.7, cy0, cx0+r*0.7, cy0, sk, 0.4));
+        g.appendChild(_svgLine(cx0, cy0-r*0.7, cx0, cy0+r*0.7, sk, 0.4));
+        // Bulb/base centre
+        g.appendChild(_svgCircle(cx0, cy0, r*0.18, '#fff8d0', sk));
+        break;
+      }
       default: {
         g.appendChild(_svgRect(x, y, w, h, 2, FURN_FILL, sk, sw));
       }
@@ -643,13 +719,22 @@
       line.setAttribute('stroke-dasharray', '6,4');
       g.appendChild(line);
       if (hasLeads) {
-        const mx = (d.x1 + d.x2) / 2, my = (d.y1 + d.y2) / 2;
-        const lbl = document.createElementNS(NS, 'text');
-        lbl.setAttribute('x', mToPx(mx) + 4); lbl.setAttribute('y', mToPx(my) - 4);
-        lbl.setAttribute('font-size', '10'); lbl.setAttribute('font-weight', 'bold');
-        lbl.setAttribute('fill', FURN_STROKE);
-        lbl.textContent = '→ ' + d.leads_to;
-        g.appendChild(lbl);
+        const hiddenLbl = !!d.label_hidden;
+        if (!hiddenLbl || _showHiddenLabels) {
+          const mx = (d.x1 + d.x2) / 2, my = (d.y1 + d.y2) / 2;
+          const lo = d.label_offset || {};
+          const lbl = document.createElementNS(NS, 'text');
+          lbl.setAttribute('x', mToPx(mx + (lo.x || 0)) + 4);
+          lbl.setAttribute('y', mToPx(my + (lo.y || 0)) - 4);
+          lbl.setAttribute('font-size', '10'); lbl.setAttribute('font-weight', 'bold');
+          lbl.setAttribute('fill', FURN_STROKE);
+          lbl.setAttribute('opacity', hiddenLbl ? '0.3' : '1');
+          lbl.setAttribute('style', 'cursor:move;user-select:none;');
+          lbl.dataset.dividerLabelSlug = slug;
+          lbl.dataset.dividerLabelId = d.id;
+          lbl.textContent = '→ ' + d.leads_to;
+          g.appendChild(lbl);
+        }
       }
     }
 
@@ -691,6 +776,25 @@
         glass.setAttribute('stroke', COLOR_SLIDING);
         glass.setAttribute('stroke-width', item.id === selId ? 2 : 1);
         g.appendChild(glass);
+      } else if (item.door_type === 'opening') {
+        // Open archway — wall gap with no physical door. Erase the wall
+        // segment and overlay a brown dashed line (same style as dividers).
+        const t = 0.06;
+        const corners = [
+          [wg.sx - wg.nx*t, wg.sy - wg.ny*t], [wg.ex - wg.nx*t, wg.ey - wg.ny*t],
+          [wg.ex + wg.nx*t, wg.ey + wg.ny*t], [wg.sx + wg.nx*t, wg.sy + wg.ny*t],
+        ];
+        const erase = document.createElementNS(NS, 'polygon');
+        erase.setAttribute('points', corners.map(p => `${mToPx(p[0])},${mToPx(p[1])}`).join(' '));
+        erase.setAttribute('fill', '#fafaf7'); erase.setAttribute('stroke', 'none');
+        g.appendChild(erase);
+        const line = document.createElementNS(NS, 'line');
+        line.setAttribute('x1', mToPx(wg.sx)); line.setAttribute('y1', mToPx(wg.sy));
+        line.setAttribute('x2', mToPx(wg.ex)); line.setAttribute('y2', mToPx(wg.ey));
+        line.setAttribute('stroke', COLOR_DOOR);
+        line.setAttribute('stroke-width', item.id === selId ? 3 : 2);
+        line.setAttribute('stroke-dasharray', '6,4');
+        g.appendChild(line);
       } else {
         const t = 0.08;
         const corners = [
@@ -721,15 +825,24 @@
         g.appendChild(hinge);
       }
       if (item.leads_to && !(_multiView && _visibleSet.has(item.leads_to))) {
-        const midX = (wg.sx + wg.ex) / 2, midY = (wg.sy + wg.ey) / 2;
-        const color = item.door_type === 'sliding' ? COLOR_SLIDING : COLOR_DOOR;
-        const lbl = document.createElementNS(NS, 'text');
-        lbl.setAttribute('x', mToPx(midX + wg.nx * 0.25));
-        lbl.setAttribute('y', mToPx(midY + wg.ny * 0.25));
-        lbl.setAttribute('font-size', '10'); lbl.setAttribute('font-weight', 'bold');
-        lbl.setAttribute('fill', color); lbl.setAttribute('text-anchor', 'middle');
-        lbl.textContent = '→ ' + item.leads_to;
-        g.appendChild(lbl);
+        const hiddenLbl = !!item.label_hidden;
+        if (!hiddenLbl || _showHiddenLabels) {
+          const midX = (wg.sx + wg.ex) / 2, midY = (wg.sy + wg.ey) / 2;
+          const lo = item.label_offset || {};
+          // hinged + opening both brown; sliding teal
+          const color = item.door_type === 'sliding' ? COLOR_SLIDING : COLOR_DOOR;
+          const lbl = document.createElementNS(NS, 'text');
+          lbl.setAttribute('x', mToPx(midX + wg.nx * 0.25 + (lo.x || 0)));
+          lbl.setAttribute('y', mToPx(midY + wg.ny * 0.25 + (lo.y || 0)));
+          lbl.setAttribute('font-size', '10'); lbl.setAttribute('font-weight', 'bold');
+          lbl.setAttribute('fill', color); lbl.setAttribute('text-anchor', 'middle');
+          lbl.setAttribute('opacity', hiddenLbl ? '0.3' : '1');
+          lbl.setAttribute('style', 'cursor:move;user-select:none;');
+          lbl.dataset.doorLabelSlug = slug;
+          lbl.dataset.doorLabelId = item.id;
+          lbl.textContent = '→ ' + item.leads_to;
+          g.appendChild(lbl);
+        }
       }
     }
 
@@ -742,24 +855,50 @@
       if (f.rotation) fg.setAttribute('transform', `rotate(${f.rotation}, ${cx}, ${cy})`);
       drawFurniturePreset(fg, f.type, cx - fw/2, cy - fh/2, fw, fh, f.id === selId);
       g.appendChild(fg);
+
+      // Label (optional): shows f.label if set, otherwise the preset type
+      const labelText = (f.label && f.label.trim()) ? f.label.trim() : f.type;
+      const hiddenLbl = !!f.label_hidden;
+      if (labelText && (!hiddenLbl || _showHiddenLabels)) {
+        const lo = f.label_offset || {};
+        const lbl = document.createElementNS(NS, 'text');
+        lbl.setAttribute('x', mToPx(f.x + (lo.x || 0)));
+        lbl.setAttribute('y', mToPx(f.y + (lo.y || 0)));
+        lbl.setAttribute('font-size', '9');
+        lbl.setAttribute('fill', '#444');
+        lbl.setAttribute('text-anchor', 'middle');
+        lbl.setAttribute('dominant-baseline', 'middle');
+        lbl.setAttribute('opacity', hiddenLbl ? '0.3' : '0.75');
+        lbl.setAttribute('style', 'cursor:move;user-select:none;pointer-events:all;');
+        lbl.dataset.furnLabelSlug = slug;
+        lbl.dataset.furnLabelId = f.id;
+        lbl.textContent = labelText;
+        g.appendChild(lbl);
+      }
     }
 
     // Room name label (supports optional label_offset {x,y} in room data)
+    // Hidden if layout.label_hidden is true, unless "Show hidden labels" is on.
     const bounds = getRoomBounds(layout);
     const lo = layout.label_offset || {};
     const cx = (bounds.minX + bounds.maxX) / 2 + (lo.x || 0);
     const cy = (bounds.minY + bounds.maxY) / 2 + (lo.y || 0);
     const nameObj = roomSlugs.find(r => r.slug === slug);
-    const lbl = document.createElementNS(NS, 'text');
-    lbl.setAttribute('x', mToPx(cx)); lbl.setAttribute('y', mToPx(cy));
-    lbl.setAttribute('font-size', isActive ? '14' : '12');
-    lbl.setAttribute('font-weight', 'bold');
-    lbl.setAttribute('fill', isActive ? '#333' : '#666');
-    lbl.setAttribute('text-anchor', 'middle');
-    lbl.setAttribute('dominant-baseline', 'middle');
-    lbl.setAttribute('opacity', '0.4');
-    lbl.textContent = nameObj ? nameObj.name : slug;
-    g.appendChild(lbl);
+    const hidden = !!layout.label_hidden;
+    if (!hidden || _showHiddenLabels) {
+      const lbl = document.createElementNS(NS, 'text');
+      lbl.setAttribute('x', mToPx(cx)); lbl.setAttribute('y', mToPx(cy));
+      lbl.setAttribute('font-size', isActive ? '14' : '12');
+      lbl.setAttribute('font-weight', 'bold');
+      lbl.setAttribute('fill', isActive ? '#333' : '#666');
+      lbl.setAttribute('text-anchor', 'middle');
+      lbl.setAttribute('dominant-baseline', 'middle');
+      lbl.setAttribute('opacity', hidden ? '0.2' : '0.4');
+      lbl.setAttribute('style', 'cursor:move;user-select:none;');
+      lbl.dataset.labelSlug = slug;
+      lbl.textContent = nameObj ? nameObj.name : slug;
+      g.appendChild(lbl);
+    }
   }
 
   // ── Tool selection ─────────────────────────────────────────────────────────
@@ -775,6 +914,7 @@
       window:  'Click start + end on a wall.',
       door:    'Click start + end on a wall.',
       sliding: 'Sliding glass door — click start + end on a wall.',
+      opening: 'Open archway (no door) — click start + end on a wall. Target room becomes drawable.',
       divider: 'Click two points for open-plan boundary.',
       furniture: 'Click to place furniture. Click again to set size, or single-click for default size.',
       select:  'Click an element to select.',
@@ -786,10 +926,11 @@
 
   // ── Click handler ──────────────────────────────────────────────────────────
   function onSvgClick(ev) {
+    if (suppressClick) { suppressClick = false; return; }
     if (!activeSlug || activeSlug === '_apartment') return;
     const rect = svg().getBoundingClientRect();
     const co = getComputedOrigin(activeSlug);
-    const skipSnap = !!ev.shiftKey || tool === 'window' || tool === 'door' || tool === 'sliding';
+    const skipSnap = !!ev.shiftKey || tool === 'window' || tool === 'door' || tool === 'sliding' || tool === 'opening';
     // Convert click to active room's local coordinates:
     // pixel → meter (add viewBox origin offset) → subtract room's computed origin
     let xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
@@ -823,7 +964,7 @@
         pending = null;
         setStatus(`${tool} added.`);
       }
-    } else if (tool === 'window' || tool === 'door' || tool === 'sliding') {
+    } else if (tool === 'window' || tool === 'door' || tool === 'sliding' || tool === 'opening') {
       const hit = findWallAt(xM, yM, 0.3);
       if (!hit) { setStatus('Click on an existing wall.'); return; }
       const w = wallById(hit.wall.id);
@@ -840,14 +981,15 @@
         const t2 = Math.max(pendingWall.t1, snappedT);
         const offset = t1 * wallLen;
         const width = (t2 - t1) * wallLen;
-        const isDoor = (tool === 'door' || tool === 'sliding');
+        const isDoor = (tool === 'door' || tool === 'sliding' || tool === 'opening');
         const target = tool === 'window' ? (data.windows = data.windows || []) : (data.doors = data.doors || []);
+        const dtype = tool === 'sliding' ? 'sliding' : tool === 'opening' ? 'opening' : 'hinged';
         target.push({
           id: tool[0] + (target.length + 1) + '_' + Date.now().toString(36),
           wall: pendingWall.wallId,
           offset_m: +offset.toFixed(2),
           width_m: +width.toFixed(2),
-          ...(isDoor ? { leads_to: null, door_type: tool === 'sliding' ? 'sliding' : 'hinged' } : {}),
+          ...(isDoor ? { leads_to: null, door_type: dtype } : {}),
         });
         pendingWall = null;
         setStatus(`${tool} added (offset ${offset.toFixed(2)}m, width ${width.toFixed(2)}m).`);
@@ -944,7 +1086,7 @@
     const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
     const yM = viewOriginY + pxToM(ev.clientY - rect.top) - co.y_m;
     let msg = `cursor: ${xM.toFixed(2)}m, ${yM.toFixed(2)}m (room-local)`;
-    if (tool === 'window' || tool === 'door' || tool === 'sliding') {
+    if (tool === 'window' || tool === 'door' || tool === 'sliding' || tool === 'opening') {
       const hit = findWallAt(xM, yM, 0.3);
       if (hit) {
         const w = hit.wall;
@@ -1021,6 +1163,8 @@
     }
     if (kind === 'doors' || kind === 'dividers') {
       item.leads_to = (document.getElementById('apt-edit-leads').value || '').trim() || null;
+      rebuildActiveRoomDropdown();
+      renderPassageDimsTable();
     }
     pushUndo();
     draw();
@@ -1033,6 +1177,9 @@
     if (!prev) return;
     allRooms[activeSlug] = JSON.parse(prev);
     selectedId = null; pending = null; pendingWall = null;
+    // Undo may restore a divider/door whose leads_to changes the passage set.
+    rebuildActiveRoomDropdown();
+    renderPassageDimsTable();
     draw();
   };
 
@@ -1056,6 +1203,9 @@
     data.dividers = (data.dividers || []).filter(d => d.id !== selectedId);
     data.furniture = (data.furniture || []).filter(f => f.id !== selectedId);
     selectedId = null;
+    // Deleting a divider/door can change the passage set — refresh UI affordances.
+    rebuildActiveRoomDropdown();
+    renderPassageDimsTable();
     draw(); refreshEditPanel();
   };
 
@@ -1102,15 +1252,25 @@
           active_room: activeSlug,
         }),
       });
-      // Also save view_w/view_h for ALL other rooms that have unsaved changes
+      // Also save view_w/view_h + label + divider-label changes for other rooms
       for (const [sl, rd] of Object.entries(allRooms)) {
         if (sl === activeSlug) continue;
-        if (rd.view_w != null || rd.view_h != null) {
-          await fetch('/api/room-layouts/' + sl, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ view_w: rd.view_w, view_h: rd.view_h }),
-          }).catch(() => {});
-        }
+        const body = {};
+        if (rd.view_w != null) body.view_w = rd.view_w;
+        if (rd.view_h != null) body.view_h = rd.view_h;
+        if (rd.label_offset != null) body.label_offset = rd.label_offset;
+        if (rd.label_hidden != null) body.label_hidden = !!rd.label_hidden;
+        if (rd._divider_dirty) body.dividers = rd.dividers || [];
+        if (rd._door_dirty) body.doors = rd.doors || [];
+        if (rd._furn_dirty) body.furniture = rd.furniture || [];
+        if (Object.keys(body).length === 0) continue;
+        await fetch('/api/room-layouts/' + sl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }).catch(() => {});
+        delete rd._divider_dirty;
+        delete rd._door_dirty;
+        delete rd._furn_dirty;
       }
       setStatus('Saved all rooms.');
     } catch (e) {
@@ -1363,8 +1523,306 @@
     s.appendChild(connG);
   }
 
+  // Collect slugs referenced by any drawn room's door OR divider leads_to.
+  // Used to decide which rooms are "part of the apartment" at all.
+  function getReferencedSlugs() {
+    const s = new Set();
+    for (const layout of Object.values(allRooms)) {
+      for (const arr of [layout.doors || [], layout.dividers || []]) {
+        for (const it of arr) if (it.leads_to) s.add(it.leads_to);
+      }
+    }
+    return s;
+  }
+  // Collect slugs reached ONLY via a divider (true passage rooms — sub-zones
+  // of the parent's open-plan space, not drawn as separate rooms). Door
+  // targets are NOT passages — they're separate adjacent rooms that should
+  // be drawn independently (like Balcony, Corridor, etc.).
+  function getDividerTargetSlugs() {
+    const s = new Set();
+    for (const layout of Object.values(allRooms)) {
+      for (const it of (layout.dividers || [])) if (it.leads_to) s.add(it.leads_to);
+    }
+    return s;
+  }
+  function isPassageOnly(slug) {
+    const dts = getDividerTargetSlugs();
+    if (!dts.has(slug)) return false;
+    const layout = allRooms[slug];
+    return !layout || !((layout.walls || []).length > 0);
+  }
+
+  // Render the Passage Room Dimensions table. One row per passage-only slug
+  // (divider/door target without its own walls). Card hides when empty.
+  // Compute status label for a room: Drawn / Drawn, open-plan with X /
+  // Passage from X / Adjacent to X (door|archway) / Not in layout.
+  function roomStatusLabel(slug) {
+    const layout = allRooms[slug];
+    const hasWalls = !!(layout && (layout.walls || []).length > 0);
+    const passageFrom = [];
+    const doorFrom = {};
+    for (const [sl, lay] of Object.entries(allRooms)) {
+      if (sl === slug) continue;
+      for (const d of (lay.dividers || [])) if (d.leads_to === slug) passageFrom.push(sl);
+      for (const d of (lay.doors || [])) {
+        if (d.leads_to !== slug) continue;
+        const dtype = d.door_type === 'sliding' ? 'sliding'
+                    : d.door_type === 'opening' ? 'archway'
+                    : 'door';
+        (doorFrom[sl] ||= new Set()).add(dtype);
+      }
+    }
+    const parts = [];
+    if (hasWalls) {
+      const shared = (layout.shared_with || []).map(s => (roomSlugs.find(r => r.slug === s) || {}).name || s);
+      parts.push(shared.length ? `Drawn, open-plan with ${shared.join(' + ')}` : 'Drawn');
+    }
+    if (passageFrom.length) {
+      const names = [...new Set(passageFrom.map(s => (roomSlugs.find(r => r.slug === s) || {}).name || s))];
+      parts.push(`Passage from ${names.join(', ')}`);
+    }
+    if (Object.keys(doorFrom).length) {
+      const pieces = Object.entries(doorFrom).map(([sl, types]) => {
+        const name = (roomSlugs.find(r => r.slug === sl) || {}).name || sl;
+        return `${name} (${[...types].join('/')})`;
+      });
+      parts.push(`Adjacent to ${pieces.join(', ')}`);
+    }
+    if (!parts.length) parts.push('Not in layout');
+    return parts.join('; ');
+  }
+
+  // Shoelace tracer on walls — same logic as server's computeRoomAreaFromWalls.
+  function polygonAreaFromWalls(walls) {
+    if (!Array.isArray(walls) || walls.length < 3) return null;
+    const SNAP = 0.08;
+    const pts = [];
+    walls.forEach((w, i) => { pts.push({ x:+w.x1, y:+w.y1 }); pts.push({ x:+w.x2, y:+w.y2 }); });
+    const rep = pts.map((_, i) => i);
+    const find = (i) => { while (rep[i] !== i) { rep[i] = rep[rep[i]]; i = rep[i]; } return i; };
+    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+      if (Math.abs(pts[i].x - pts[j].x) < SNAP && Math.abs(pts[i].y - pts[j].y) < SNAP) {
+        const a = find(i), b = find(j); if (a !== b) rep[a] = b;
+      }
+    }
+    const groups = new Map(), groupXY = new Map();
+    for (let i = 0; i < pts.length; i++) { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(pts[i]); }
+    for (const [r, g] of groups) groupXY.set(r, { x: g.reduce((a,b)=>a+b.x,0)/g.length, y: g.reduce((a,b)=>a+b.y,0)/g.length });
+    const ptG = pts.map((_, i) => find(i));
+    const adj = new Map();
+    walls.forEach((w, i) => {
+      const a = ptG[i*2], b = ptG[i*2+1]; if (a === b) return;
+      if (!adj.has(a)) adj.set(a, []); if (!adj.has(b)) adj.set(b, []);
+      adj.get(a).push({ i, other: b }); adj.get(b).push({ i, other: a });
+    });
+    const singles = []; for (const [g, list] of adj) if (list.length === 1) singles.push(g);
+    while (singles.length >= 2) {
+      const a = singles.shift(), pa = groupXY.get(a);
+      let best = -1, bestD = Infinity;
+      for (let k = 0; k < singles.length; k++) { const pb = groupXY.get(singles[k]); const d = Math.hypot(pa.x-pb.x, pa.y-pb.y); if (d < bestD) { bestD = d; best = k; } }
+      if (best < 0) break;
+      const b = singles.splice(best, 1)[0], s = 'syn_'+a+'_'+b;
+      adj.get(a).push({ i:s, other:b }); adj.get(b).push({ i:s, other:a });
+    }
+    const startG = ptG[0]; const used = new Set(); const verts = [groupXY.get(startG)];
+    let cur = startG, prev = null;
+    for (let step = 0; step < walls.length + 10; step++) {
+      const ns = adj.get(cur) || [];
+      let next = ns.find(n => !used.has(n.i) && n.other !== prev) || ns.find(n => !used.has(n.i));
+      if (!next) return null; used.add(next.i); if (next.other === startG) break;
+      verts.push(groupXY.get(next.other)); prev = cur; cur = next.other;
+    }
+    if (verts.length < 3) return null;
+    let sum = 0;
+    for (let i = 0; i < verts.length; i++) { const a = verts[i], b = verts[(i+1) % verts.length]; sum += a.x*b.y - b.x*a.y; }
+    return Math.abs(sum) / 2;
+  }
+
+  function computeDrawnArea(slug) {
+    const layout = allRooms[slug];
+    if (!layout || !(layout.walls || []).length) return null;
+    const poly = polygonAreaFromWalls(layout.walls);
+    if (poly != null) return +poly.toFixed(1);
+    const s = layout.shape || {};
+    if (s.width_m && s.length_m) return +(s.width_m * s.length_m).toFixed(1);
+    return null;
+  }
+
+  function _fmtArea(a) { return (a > 0) ? `${(+a).toFixed(1)} m²` : '—'; }
+  function _fmtVolume(area, h) { return (area > 0 && h > 0) ? `${(area * h).toFixed(1)} m³` : '—'; }
+
+  // Render the full "Room Information" table — one row per DB room.
+  function renderRoomInfoTable() {
+    const card = document.getElementById('apt-passage-card');
+    const tbody = card && card.querySelector('tbody');
+    if (!card || !tbody) return;
+    if (!roomSlugs.length) { card.style.display = 'none'; tbody.innerHTML = ''; return; }
+    card.style.display = '';
+    tbody.innerHTML = '';
+    const disabledStyle = 'width:54px;padding:2px 4px;border:1px solid #e8e3d8;background:#f5f2ea;color:#999;border-radius:3px;font-size:0.78rem;text-align:right;';
+    const editStyle = 'width:54px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;text-align:right;';
+    for (const r of roomSlugs) {
+      const layout = allRooms[r.slug];
+      const hasWalls = !!(layout && (layout.walls || []).length > 0);
+      const drawnArea = hasWalls ? computeDrawnArea(r.slug) : null;
+      const drawnShape = hasWalls ? (layout.shape || {}) : null;
+      const dims = roomDims[r.slug] || {};
+      const w = hasWalls ? (drawnShape.width_m ?? '') : (dims.w != null ? dims.w : '');
+      const l = hasWalls ? (drawnShape.length_m ?? '') : (dims.l != null ? dims.l : '');
+      const h = hasWalls ? (layout.height_m ?? '') : (dims.h != null ? dims.h : '');
+      const status = roomStatusLabel(r.slug);
+      const devices = roomDevCounts[r.name] || 0;
+      const wAttrs = hasWalls
+        ? `disabled style="${disabledStyle}"`
+        : `data-rd-slug="${r.slug}" data-rd-axis="w" style="${editStyle}"`;
+      const lAttrs = hasWalls
+        ? `disabled style="${disabledStyle}"`
+        : `data-rd-slug="${r.slug}" data-rd-axis="l" style="${editStyle}"`;
+      const hAttrs = hasWalls
+        ? `data-rd-slug="${r.slug}" data-rd-axis="h" data-rd-target="layout" style="${editStyle}"`
+        : `data-rd-slug="${r.slug}" data-rd-axis="h" style="${editStyle}"`;
+      const areaDisplay = hasWalls ? _fmtArea(drawnArea) : _fmtArea(parseFloat(w) * parseFloat(l));
+      const volDisplay  = hasWalls ? _fmtVolume(drawnArea, parseFloat(h)) : _fmtVolume(parseFloat(w) * parseFloat(l), parseFloat(h));
+      const tr = document.createElement('tr');
+      tr.style.borderTop = '1px solid #e8e3d8';
+      tr.innerHTML = `
+        <td style="padding:3px 6px;">${r.name}</td>
+        <td style="padding:3px 6px;font-size:0.72rem;color:#666;">${status}</td>
+        <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${w}" ${wAttrs}></td>
+        <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${l}" ${lAttrs}></td>
+        <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${h}" ${hAttrs}></td>
+        <td style="padding:3px 6px;text-align:right;" data-rd-area="${r.slug}">${areaDisplay}</td>
+        <td style="padding:3px 6px;text-align:right;" data-rd-vol="${r.slug}">${volDisplay}</td>
+        <td style="padding:3px 6px;text-align:right;">${devices || '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+    tbody.querySelectorAll('input[data-rd-slug]').forEach(inp => {
+      inp.addEventListener('input', function () {
+        const slug = inp.dataset.rdSlug;
+        const axis = inp.dataset.rdAxis;
+        const isLayout = inp.dataset.rdTarget === 'layout';
+        const val = parseFloat(inp.value);
+        const num = isFinite(val) && val > 0 ? val : null;
+        if (isLayout) {
+          const lay = allRooms[slug];
+          if (lay) { if (num) lay.height_m = num; else delete lay.height_m; lay._height_dirty = true; }
+        } else {
+          (roomDims[slug] ||= {})[axis] = num;
+        }
+        const lay = allRooms[slug];
+        const hasWalls = !!(lay && (lay.walls || []).length > 0);
+        const rowInputs = tbody.querySelectorAll(`input[data-rd-slug="${slug}"]`);
+        const wVal = hasWalls ? (lay.shape || {}).width_m : parseFloat(rowInputs[0]?.value);
+        const lVal = hasWalls ? (lay.shape || {}).length_m : parseFloat(rowInputs[1]?.value);
+        const hVal = parseFloat(rowInputs[2]?.value);
+        const area = hasWalls ? computeDrawnArea(slug) : (wVal > 0 && lVal > 0 ? +(wVal * lVal).toFixed(1) : null);
+        const aCell = tbody.querySelector(`[data-rd-area="${slug}"]`);
+        const vCell = tbody.querySelector(`[data-rd-vol="${slug}"]`);
+        if (aCell) aCell.textContent = _fmtArea(area);
+        if (vCell) vCell.textContent = _fmtVolume(area, hVal);
+      });
+    });
+    _pdApplyCollapsed(localStorage.getItem('apt_passage_collapsed') === '1');
+  }
+
+  // Legacy alias for callers that still use the old name.
+  function renderPassageDimsTable() { return renderRoomInfoTable(); }
+
+  // Collapse/expand the Passage Room Dimensions card. Persists in localStorage.
+  function _pdApplyCollapsed(collapsed) {
+    const body = document.getElementById('apt-passage-body');
+    const btn  = document.getElementById('apt-passage-toggle');
+    if (body) body.style.display = collapsed ? 'none' : '';
+    if (btn) btn.textContent = collapsed ? '▸' : '▾';
+  }
+  window.aptTogglePassageCard = function () {
+    const cur = localStorage.getItem('apt_passage_collapsed') === '1';
+    const next = !cur;
+    try { localStorage.setItem('apt_passage_collapsed', next ? '1' : '0'); } catch (e) {}
+    _pdApplyCollapsed(next);
+  };
+
+  // Save room_dims for undrawn rooms + height_m for drawn rooms.
+  window.aptSavePassageDims = async function () {
+    // 1. Undrawn rooms → /api/room-dims
+    const body = {};
+    for (const [slug, d] of Object.entries(roomDims)) {
+      if (!d) continue;
+      const lay = allRooms[slug];
+      if (lay && (lay.walls || []).length > 0) continue; // drawn — height saved separately
+      const out = {};
+      if (d.w > 0) out.w = d.w;
+      if (d.l > 0) out.l = d.l;
+      if (d.h > 0) out.h = d.h;
+      if (Object.keys(out).length) body[slug] = out;
+    }
+    try {
+      const r = await fetch('/api/room-dims', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      // 2. Drawn rooms with changed height → per-layout POST
+      let heightSaves = 0;
+      const proms = [];
+      for (const [sl, lay] of Object.entries(allRooms)) {
+        if (!lay || !lay._height_dirty) continue;
+        heightSaves++;
+        proms.push(fetch('/api/room-layouts/' + sl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ height_m: lay.height_m ?? null }),
+        }).then(() => { delete lay._height_dirty; }).catch(() => {}));
+      }
+      await Promise.all(proms);
+      const total = (j.saved || 0) + heightSaves;
+      setStatus(`Saved room info (${total} update${total === 1 ? '' : 's'}).`);
+    } catch (e) {
+      setStatus('Save failed: ' + e.message);
+    }
+  };
+
+  // Rebuild the "Active room" dropdown. Passage rooms (divider/door targets
+  // without their own walls) appear disabled — they can't be drawn separately.
+  function rebuildActiveRoomDropdown() {
+    const sel = document.getElementById('apt-active-room');
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = '';
+    const aptOpt = document.createElement('option');
+    aptOpt.value = '_apartment';
+    aptOpt.textContent = '— Apartment (all rooms) —';
+    sel.appendChild(aptOpt);
+    const dts = getDividerTargetSlugs();
+    for (const r of roomSlugs) {
+      const opt = document.createElement('option');
+      opt.value = r.slug;
+      const layout = allRooms[r.slug];
+      const hasWalls = !!(layout && (layout.walls || []).length > 0);
+      const isPassage = dts.has(r.slug) && !hasWalls;
+      if (isPassage) {
+        opt.textContent = r.name + ' (passage)';
+        opt.disabled = true;
+      } else {
+        opt.textContent = r.name + (hasWalls ? '' : ' (empty)');
+      }
+      sel.appendChild(opt);
+    }
+    if (prev) sel.value = prev;
+  }
+
   // ── Room switching ─────────────────────────────────────────────────────────
   window.aptSetActiveRoom = function (slug) {
+    // Passage rooms (divider/door targets with no walls) are not drawable —
+    // they're part of their parent room's open-plan space.
+    if (slug !== '_apartment' && isPassageOnly(slug)) {
+      const nameObj = roomSlugs.find(r => r.slug === slug);
+      setStatus(`${nameObj ? nameObj.name : slug} is a passage room — drawn via the divider in its parent room. Not independently drawable.`);
+      const sel = document.getElementById('apt-active-room');
+      if (sel && activeSlug) sel.value = activeSlug;
+      return;
+    }
     // Save outgoing room's view W/L into memory
     if (activeSlug && activeSlug !== slug && activeSlug !== '_apartment' && allRooms[activeSlug]) {
       allRooms[activeSlug].view_w = parseFloat(document.getElementById('apt-canvas-w').value) || null;
@@ -1431,15 +1889,27 @@
     if (!panel) return;
     panel.innerHTML = '';
     const vis = aptConfig.layer_visibility || {};
+    // Collect slugs referenced by any drawn room's door/divider leads_to.
+    const referenced = new Set();
+    for (const layout of Object.values(allRooms)) {
+      for (const arr of [layout.doors || [], layout.dividers || []]) {
+        for (const it of arr) if (it.leads_to) referenced.add(it.leads_to);
+      }
+    }
     for (const r of roomSlugs) {
-      const hasLayout = !!allRooms[r.slug];
+      const layout = allRooms[r.slug];
+      const hasWalls = !!(layout && (layout.walls || []).length > 0);
+      // Show only rooms that are part of the apartment: walls drawn, or
+      // referenced as a leads_to target from a drawn room (passage rooms).
+      if (!hasWalls && !referenced.has(r.slug)) continue;
       const lbl = document.createElement('label');
       lbl.style.cssText = 'display:inline-flex;align-items:center;gap:3px;cursor:pointer;' +
-        (hasLayout ? '' : 'opacity:0.4;');
+        (hasWalls ? '' : 'opacity:0.4;');
+      if (!hasWalls) lbl.title = 'No walls drawn — open this room and add walls';
       const cb = document.createElement('input');
       cb.type = 'checkbox';
-      cb.checked = vis[r.slug] !== false && hasLayout;
-      cb.disabled = !hasLayout;
+      cb.checked = vis[r.slug] !== false && hasWalls;
+      cb.disabled = !hasWalls;
       cb.onchange = function () {
         if (!aptConfig.layer_visibility) aptConfig.layer_visibility = {};
         aptConfig.layer_visibility[r.slug] = cb.checked;
@@ -1455,28 +1925,21 @@
   // ── Init ───────────────────────────────────────────────────────────────────
   async function init() {
     try {
-      const [roomsR, allR, aptR] = await Promise.all([
+      const [roomsR, allR, aptR, rdR, devCountsR] = await Promise.all([
         fetch('/api/room-slugs').then(r => r.json()),
         fetch('/api/room-layouts/all').then(r => r.json()),
         fetch('/api/apartment-layout').then(r => r.json()),
+        fetch('/api/room-dims').then(r => r.json()).catch(() => ({})),
+        fetch('/api/rooms').then(r => r.json()).catch(() => []),
       ]);
       roomSlugs = roomsR || [];
       allRooms = allR || {};
       aptConfig = aptR || {};
+      roomDims = rdR || {};
+      roomDevCounts = {};
+      for (const row of (devCountsR || [])) roomDevCounts[row.room] = row.device_count;
 
-      // Populate active room dropdown — "Apartment" shows all rooms together
-      const sel = document.getElementById('apt-active-room');
-      sel.innerHTML = '';
-      const aptOpt = document.createElement('option');
-      aptOpt.value = '_apartment';
-      aptOpt.textContent = '— Apartment (all rooms) —';
-      sel.appendChild(aptOpt);
-      for (const r of roomSlugs) {
-        const opt = document.createElement('option');
-        opt.value = r.slug;
-        opt.textContent = r.name + (allRooms[r.slug] ? '' : ' (empty)');
-        sel.appendChild(opt);
-      }
+      rebuildActiveRoomDropdown();
 
       // Populate leads_to dropdown
       const leadsSel = document.getElementById('apt-edit-leads');
@@ -1498,11 +1961,13 @@
       const savedActive = localStorage.getItem('apt_active_room');
       activeSlug = savedActive || aptConfig.active_room || (roomSlugs[0] || {}).slug || '';
       if (activeSlug) {
-        sel.value = activeSlug;
+        const sel = document.getElementById('apt-active-room');
+        if (sel) sel.value = activeSlug;
         aptSetActiveRoom(activeSlug);
       }
 
       buildLayers();
+      renderPassageDimsTable();
       draw();
       aptSetTool('wall');
       setStatus(`Loaded: ${Object.keys(allRooms).length} room layout(s). Pick a room to edit.`);
@@ -1510,6 +1975,11 @@
       setStatus('Failed to load: ' + e.message);
     }
   }
+
+  window.aptSetShowHiddenLabels = function (v) {
+    _showHiddenLabels = !!v;
+    draw();
+  };
 
   window.aptRedraw = function () {
     const w = parseFloat(document.getElementById('apt-canvas-w').value) || null;
@@ -1544,8 +2014,161 @@
     svg().addEventListener('click', onSvgClick);
     svg().addEventListener('mousemove', onSvgMove);
 
+    // Label drag (any tool, any room): left-click on room-name OR divider label
+    // starts drag. Right-click toggles hide (label_hidden=true). "Show hidden
+    // labels" toggle in the toolbar reveals hidden ones so they can be restored.
+    svg().addEventListener('mousedown', function (ev) {
+      if (ev.button !== 0) return; // left-click only
+      const t = ev.target;
+      if (!(t && t.dataset)) return;
+      // Room-name label
+      if (t.dataset.labelSlug) {
+        const sl = t.dataset.labelSlug;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        pushUndo();
+        const lo = layout.label_offset || {};
+        labelDrag = {
+          kind: 'room',
+          slug: sl,
+          startPx: ev.clientX, startPy: ev.clientY,
+          origOx: +lo.x || 0, origOy: +lo.y || 0,
+          moved: false,
+        };
+        ev.preventDefault(); ev.stopPropagation();
+        return;
+      }
+      // Divider label
+      if (t.dataset.dividerLabelId) {
+        const sl = t.dataset.dividerLabelSlug;
+        const did = t.dataset.dividerLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const div = (layout.dividers || []).find(x => x.id === did);
+        if (!div) return;
+        pushUndo();
+        const lo = div.label_offset || {};
+        labelDrag = {
+          kind: 'divider',
+          slug: sl, divId: did,
+          startPx: ev.clientX, startPy: ev.clientY,
+          origOx: +lo.x || 0, origOy: +lo.y || 0,
+          moved: false,
+        };
+        ev.preventDefault(); ev.stopPropagation();
+        return;
+      }
+      // Door/archway label
+      if (t.dataset.doorLabelId) {
+        const sl = t.dataset.doorLabelSlug;
+        const did = t.dataset.doorLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const dor = (layout.doors || []).find(x => x.id === did);
+        if (!dor) return;
+        pushUndo();
+        const lo = dor.label_offset || {};
+        labelDrag = {
+          kind: 'door',
+          slug: sl, doorId: did,
+          startPx: ev.clientX, startPy: ev.clientY,
+          origOx: +lo.x || 0, origOy: +lo.y || 0,
+          moved: false,
+        };
+        ev.preventDefault(); ev.stopPropagation();
+        return;
+      }
+      // Furniture label
+      if (t.dataset.furnLabelId) {
+        const sl = t.dataset.furnLabelSlug;
+        const fid = t.dataset.furnLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const furn = (layout.furniture || []).find(x => x.id === fid);
+        if (!furn) return;
+        pushUndo();
+        const lo = furn.label_offset || {};
+        labelDrag = {
+          kind: 'furn',
+          slug: sl, furnId: fid,
+          startPx: ev.clientX, startPy: ev.clientY,
+          origOx: +lo.x || 0, origOy: +lo.y || 0,
+          moved: false,
+        };
+        ev.preventDefault(); ev.stopPropagation();
+      }
+    });
+    svg().addEventListener('contextmenu', function (ev) {
+      const t = ev.target;
+      if (!(t && t.dataset)) return;
+      if (t.dataset.labelSlug) {
+        ev.preventDefault();
+        const sl = t.dataset.labelSlug;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        pushUndo();
+        layout.label_hidden = !layout.label_hidden;
+        draw();
+        setStatus(layout.label_hidden
+          ? `Label hidden for ${sl}. Toggle "Hidden labels" to restore.`
+          : `Label shown for ${sl}.`);
+        return;
+      }
+      if (t.dataset.dividerLabelId) {
+        ev.preventDefault();
+        const sl = t.dataset.dividerLabelSlug;
+        const did = t.dataset.dividerLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const div = (layout.dividers || []).find(x => x.id === did);
+        if (!div) return;
+        pushUndo();
+        div.label_hidden = !div.label_hidden;
+        layout._divider_dirty = true;
+        draw();
+        setStatus(div.label_hidden
+          ? `Divider label hidden. Toggle "Hidden labels" to restore.`
+          : `Divider label shown.`);
+        return;
+      }
+      if (t.dataset.doorLabelId) {
+        ev.preventDefault();
+        const sl = t.dataset.doorLabelSlug;
+        const did = t.dataset.doorLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const dor = (layout.doors || []).find(x => x.id === did);
+        if (!dor) return;
+        pushUndo();
+        dor.label_hidden = !dor.label_hidden;
+        layout._door_dirty = true;
+        draw();
+        setStatus(dor.label_hidden
+          ? `Door label hidden. Toggle "Hidden labels" to restore.`
+          : `Door label shown.`);
+        return;
+      }
+      if (t.dataset.furnLabelId) {
+        ev.preventDefault();
+        const sl = t.dataset.furnLabelSlug;
+        const fid = t.dataset.furnLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const furn = (layout.furniture || []).find(x => x.id === fid);
+        if (!furn) return;
+        pushUndo();
+        furn.label_hidden = !furn.label_hidden;
+        layout._furn_dirty = true;
+        draw();
+        setStatus(furn.label_hidden
+          ? `Furniture label hidden. Toggle "Hidden labels" to restore.`
+          : `Furniture label shown.`);
+      }
+    });
+
     // Furniture drag-to-move: mousedown starts, mousemove updates, mouseup finalizes
     svg().addEventListener('mousedown', function (ev) {
+      if (labelDrag) return;
       if (tool !== 'select' || !activeSlug || activeSlug === '_apartment') return;
       const rect = svg().getBoundingClientRect();
       const co = getComputedOrigin(activeSlug);
@@ -1564,6 +2187,31 @@
       }
     });
     svg().addEventListener('mousemove', function (ev) {
+      if (labelDrag) {
+        const dx = pxToM(ev.clientX - labelDrag.startPx);
+        const dy = pxToM(ev.clientY - labelDrag.startPy);
+        if (!labelDrag.moved && Math.hypot(dx, dy) > 0.05) labelDrag.moved = true;
+        const layout = allRooms[labelDrag.slug];
+        if (!layout) return;
+        const newOff = {
+          x: +(labelDrag.origOx + dx).toFixed(2),
+          y: +(labelDrag.origOy + dy).toFixed(2),
+        };
+        if (labelDrag.kind === 'divider') {
+          const div = (layout.dividers || []).find(x => x.id === labelDrag.divId);
+          if (div) { div.label_offset = newOff; layout._divider_dirty = true; }
+        } else if (labelDrag.kind === 'door') {
+          const dor = (layout.doors || []).find(x => x.id === labelDrag.doorId);
+          if (dor) { dor.label_offset = newOff; layout._door_dirty = true; }
+        } else if (labelDrag.kind === 'furn') {
+          const furn = (layout.furniture || []).find(x => x.id === labelDrag.furnId);
+          if (furn) { furn.label_offset = newOff; layout._furn_dirty = true; }
+        } else {
+          layout.label_offset = newOff;
+        }
+        draw();
+        return;
+      }
       if (!dragging) return;
       const rect = svg().getBoundingClientRect();
       const co = getComputedOrigin(activeSlug);
@@ -1578,6 +2226,17 @@
       }
     });
     window.addEventListener('mouseup', function () {
+      if (labelDrag) {
+        if (labelDrag.moved) {
+          const what = labelDrag.kind === 'divider' ? 'Divider label'
+                     : labelDrag.kind === 'door' ? 'Door label'
+                     : labelDrag.kind === 'furn' ? 'Furniture label'
+                     : 'Label';
+          setStatus(`${what} moved for ${labelDrag.slug}. Hit Save to persist.`);
+          suppressClick = true;
+        }
+        labelDrag = null;
+      }
       if (dragging) {
         dragging = null;
         setStatus('Furniture moved.');

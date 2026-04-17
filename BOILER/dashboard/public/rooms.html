@@ -14,8 +14,8 @@
   <div class="section-label">General</div>
   <a href="health.html">Project Health</a>
   <a href="network.html">Project Network</a>
+  <a href="rooms.html" class="active">Project Rooms</a>
   <a href="general.html">Weather</a>
-  <a href="rooms.html" class="active">Rooms</a>
 
   <div class="section-label">Agents</div>
   <a href="main-agent.html">Main Agent</a>
@@ -71,6 +71,7 @@
       <button class="apt-tool" data-tool="window" onclick="aptSetTool('window')" style="background:#fff;color:#2c5aa0;padding:4px 10px;border:1px solid #2c5aa0;border-radius:4px;font-size:0.78rem;cursor:pointer;">Window</button>
       <button class="apt-tool" data-tool="door" onclick="aptSetTool('door')" style="background:#fff;color:#8b4513;padding:4px 10px;border:1px solid #8b4513;border-radius:4px;font-size:0.78rem;cursor:pointer;">Door</button>
       <button class="apt-tool" data-tool="sliding" onclick="aptSetTool('sliding')" style="background:#fff;color:#2e7d72;padding:4px 10px;border:1px solid #2e7d72;border-radius:4px;font-size:0.78rem;cursor:pointer;">Sliding</button>
+      <button class="apt-tool" data-tool="opening" onclick="aptSetTool('opening')" title="Open archway — no physical door" style="background:#fff;color:#8b4513;padding:4px 10px;border:1px dashed #8b4513;border-radius:4px;font-size:0.78rem;cursor:pointer;">Archway</button>
       <button class="apt-tool" data-tool="glass" onclick="aptSetTool('glass')" style="background:#fff;color:#5bb8d4;padding:4px 10px;border:1px solid #5bb8d4;border-radius:4px;font-size:0.78rem;cursor:pointer;">Glass</button>
       <button class="apt-tool" data-tool="divider" onclick="aptSetTool('divider')" style="background:#fff;color:#666;padding:4px 10px;border:1px dashed #888;border-radius:4px;font-size:0.78rem;cursor:pointer;">Divider</button>
       <button class="apt-tool" data-tool="select" onclick="aptSetTool('select')" style="background:#fff;color:#333;padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;cursor:pointer;">Select</button>
@@ -82,13 +83,19 @@
         <option value="bed">Bed</option><option value="nightstand">Nightstand</option>
         <option value="wardrobe">Wardrobe</option><option value="desk">Desk</option>
         <option value="counter">Counter</option><option value="fridge">Fridge</option>
-        <option value="stove">Stove</option><option value="sink">Sink</option>
+        <option value="stove">Stove</option><option value="hob">Hob</option>
+        <option value="oven">Oven</option><option value="microwave">Microwave</option>
+        <option value="hood">Hood</option><option value="sink">Sink</option>
         <option value="bathtub">Bathtub</option><option value="toilet">Toilet</option>
         <option value="shower">Shower</option><option value="washing-machine">Washer</option>
         <option value="bookshelf">Bookshelf</option><option value="planter">Planter</option>
+        <option value="fireplace">Fireplace</option><option value="lamp">Lamp</option>
       </select>
       <label style="font-size:0.75rem;color:#888;display:inline-flex;align-items:center;gap:3px;margin-left:6px;">
         <input type="checkbox" id="apt-show-furniture" checked onchange="aptRedraw()"> Furniture
+      </label>
+      <label style="font-size:0.75rem;color:#888;display:inline-flex;align-items:center;gap:3px;margin-left:6px;" title="Reveal room-name labels that were hidden via right-click">
+        <input type="checkbox" id="apt-show-hidden-labels" onchange="aptSetShowHiddenLabels(this.checked)"> Hidden labels
       </label>
       <span style="flex:1;"></span>
       <button onclick="aptUndo()" style="padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Undo</button>
@@ -128,6 +135,35 @@
     <!-- Room layers panel -->
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:0.78rem;" id="apt-layers"></div>
 
+    <!-- Room information (sent to AI scene) -->
+    <div id="apt-passage-card" style="display:none;border:1px solid #d0cbc4;border-radius:4px;padding:8px 10px;margin-bottom:8px;background:#fbfaf6;font-size:0.78rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button id="apt-passage-toggle" onclick="aptTogglePassageCard()" title="Collapse/expand" style="padding:1px 8px;border:1px solid #aaa;background:#fff;border-radius:3px;font-size:0.78rem;cursor:pointer;line-height:1;">▾</button>
+          <strong>Room Information</strong>
+        </div>
+        <button onclick="aptSavePassageDims()" style="padding:3px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:3px;font-size:0.75rem;cursor:pointer;">Save room info</button>
+      </div>
+      <div id="apt-passage-body">
+        <div style="color:#666;font-size:0.72rem;margin-bottom:6px;">W/L/H approximate dims for every room — drives AI reasoning about area, volume, motion, sensor coverage, and walking distances. Drawn rooms show their computed area and accept only a height.</div>
+        <table id="apt-passage-table" style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr style="background:#f0ece3;font-size:0.72rem;">
+              <th style="text-align:left;padding:3px 6px;">Room</th>
+              <th style="text-align:left;padding:3px 6px;">Status</th>
+              <th style="text-align:right;padding:3px 6px;width:60px;">W (m)</th>
+              <th style="text-align:right;padding:3px 6px;width:60px;">L (m)</th>
+              <th style="text-align:right;padding:3px 6px;width:60px;">H (m)</th>
+              <th style="text-align:right;padding:3px 6px;width:70px;">Area</th>
+              <th style="text-align:right;padding:3px 6px;width:80px;">Volume</th>
+              <th style="text-align:right;padding:3px 6px;width:60px;">Devices</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- SVG canvas -->
     <div style="border:1px solid #d0cbc4;border-radius:4px;background:#fafaf7;overflow:auto;">
       <svg id="apt-svg" width="800" height="600" style="display:block;background:#fafaf7;cursor:crosshair;"></svg>
@@ -143,6 +179,8 @@
       &nbsp;
       <span style="display:inline-block;width:20px;height:3px;background:#2e7d72;vertical-align:middle;margin:0 4px;"></span> sliding
       &nbsp;
+      <span style="display:inline-block;width:20px;height:0;border-top:2px dashed #8b4513;vertical-align:middle;margin:0 4px;"></span> archway
+      &nbsp;
       <span style="display:inline-block;width:20px;height:2px;background:#5bb8d4;vertical-align:middle;margin:0 4px;"></span> glass barrier
       &nbsp;
       <span style="display:inline-block;width:20px;height:0;border-top:2px dashed #888;vertical-align:middle;margin:0 4px;"></span> divider
@@ -153,6 +191,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/rooms.js?v=27"></script>
+<script src="js/rooms.js?v=43"></script>
 </body>
 </html>

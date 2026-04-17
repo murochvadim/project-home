@@ -2917,7 +2917,7 @@ app.post('/api/room-layouts/:slug', async (req, res) => {
     const b = req.body || {};
     // Accept only known fields; ignore anything else silently.
     const patch = {};
-    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with', 'view_w', 'view_h', 'furniture', 'label_offset']) {
+    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with', 'view_w', 'view_h', 'furniture', 'label_offset', 'label_hidden', 'height_m']) {
       if (b[k] !== undefined) patch[k] = b[k];
     }
     if (Object.keys(patch).length === 0) {
@@ -2961,6 +2961,157 @@ app.post('/api/apartment-layout', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Room dimensions (AI spatial reasoning) ──────────────────────────────────
+// Compact per-slug approximate W × L × H for rooms that aren't drawn with
+// walls (divider/door targets, plus devices-only rooms). Stored as a single
+// jsonb blob: { "<slug>": { "w": 4.0, "l": 3.0, "h": 2.5 } }.
+// Replaces the earlier passage_dims key — migrate-on-read from passage_dims
+// if room_dims is empty so existing entries carry over silently.
+async function getRoomDims() {
+  const r = await db.query("SELECT value FROM dashboard_settings WHERE key = 'room_dims'");
+  if (r.rows.length) return r.rows[0].value || {};
+  // First read after deploy — copy from legacy passage_dims if present.
+  const legacy = await db.query("SELECT value FROM dashboard_settings WHERE key = 'passage_dims'");
+  if (legacy.rows.length && legacy.rows[0].value && Object.keys(legacy.rows[0].value).length) {
+    await db.query(
+      `INSERT INTO dashboard_settings (key, value, updated_at) VALUES ('room_dims', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()`,
+      [JSON.stringify(legacy.rows[0].value)]
+    );
+    return legacy.rows[0].value;
+  }
+  return {};
+}
+
+app.get('/api/room-dims', async (_req, res) => {
+  try { res.json(await getRoomDims()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/room-dims', async (req, res) => {
+  try {
+    const b = req.body || {};
+    // Sanitize: keep only {slug: {w?, l?, h?}} with finite positive numbers.
+    const clean = {};
+    for (const [slug, dims] of Object.entries(b)) {
+      if (!SLUG_RE.test(slug) || !dims || typeof dims !== 'object') continue;
+      const out = {};
+      for (const k of ['w', 'l', 'h']) {
+        const v = parseFloat(dims[k]);
+        if (v > 0 && isFinite(v)) out[k] = +v.toFixed(2);
+      }
+      if (Object.keys(out).length) clean[slug] = out;
+    }
+    await db.query(
+      `INSERT INTO dashboard_settings (key, value, updated_at) VALUES ('room_dims', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()`,
+      [JSON.stringify(clean)]
+    );
+    res.json({ ok: true, saved: Object.keys(clean).length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Backward-compat alias — any code still hitting /api/passage-dims keeps working.
+app.get('/api/passage-dims', async (_req, res) => {
+  try { res.json(await getRoomDims()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Polygon area helper ─────────────────────────────────────────────────────
+// Traces the walls array as a connected graph and returns the area of the
+// outer polygon via the shoelace formula. Coordinates are canonicalized by
+// merging all endpoints within SNAP meters to a common representative. Any
+// dangling endpoints (degree 1) left after snapping are auto-joined to their
+// nearest neighbour (closes user-forgotten gaps at notches/openings). Returns
+// null only if no connected loop can be formed.
+function computeRoomAreaFromWalls(walls) {
+  if (!Array.isArray(walls) || walls.length < 3) return null;
+  const SNAP = 0.08; // 8cm tolerance for endpoint merging
+  // Collect raw endpoints
+  const pts = [];
+  walls.forEach((w, i) => {
+    pts.push({ x: +w.x1, y: +w.y1, wall: i, end: 'a' });
+    pts.push({ x: +w.x2, y: +w.y2, wall: i, end: 'b' });
+  });
+  // Union-find by proximity: merge endpoints within SNAP
+  const repOf = pts.map((_, i) => i);
+  const find = (i) => { while (repOf[i] !== i) { repOf[i] = repOf[repOf[i]]; i = repOf[i]; } return i; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) repOf[ra] = rb; };
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      if (Math.abs(pts[i].x - pts[j].x) < SNAP && Math.abs(pts[i].y - pts[j].y) < SNAP) union(i, j);
+    }
+  }
+  // Representative coord per group = average
+  const groups = new Map();
+  for (let i = 0; i < pts.length; i++) {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, { xs: [], ys: [], members: [] });
+    const g = groups.get(r);
+    g.xs.push(pts[i].x); g.ys.push(pts[i].y); g.members.push(i);
+  }
+  const ptGroup = pts.map((_, i) => find(i));
+  const groupXY = new Map();
+  for (const [r, g] of groups) {
+    groupXY.set(r, {
+      x: g.xs.reduce((a, b) => a + b, 0) / g.xs.length,
+      y: g.ys.reduce((a, b) => a + b, 0) / g.ys.length,
+    });
+  }
+  // Adjacency: groupId → [{ wallIdx, otherGroup }]
+  const adj = new Map();
+  walls.forEach((w, i) => {
+    const a = ptGroup[i * 2], b = ptGroup[i * 2 + 1];
+    if (a === b) return;
+    if (!adj.has(a)) adj.set(a, []);
+    if (!adj.has(b)) adj.set(b, []);
+    adj.get(a).push({ i, other: b });
+    adj.get(b).push({ i, other: a });
+  });
+  // Auto-close dangling endpoints (degree 1) by pairing nearest neighbours.
+  const singles = [];
+  for (const [g, list] of adj) if (list.length === 1) singles.push(g);
+  while (singles.length >= 2) {
+    const a = singles.shift();
+    const pa = groupXY.get(a);
+    let best = -1, bestD = Infinity;
+    for (let k = 0; k < singles.length; k++) {
+      const pb = groupXY.get(singles[k]);
+      const d = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    if (best < 0) break;
+    const b = singles.splice(best, 1)[0];
+    // Add a synthetic wall connecting a ↔ b to close the gap.
+    const syntheticIdx = 'syn_' + a + '_' + b;
+    adj.get(a).push({ i: syntheticIdx, other: b });
+    adj.get(b).push({ i: syntheticIdx, other: a });
+  }
+  // Walk: start at any vertex, traverse unused edges.
+  const startG = ptGroup[0];
+  const used = new Set();
+  const verts = [groupXY.get(startG)];
+  let cur = startG, prev = null;
+  for (let step = 0; step < (walls.length + 10); step++) {
+    const neighbors = adj.get(cur) || [];
+    let next = neighbors.find(n => !used.has(n.i) && n.other !== prev);
+    if (!next) next = neighbors.find(n => !used.has(n.i));
+    if (!next) return null;
+    used.add(next.i);
+    if (next.other === startG) break;
+    verts.push(groupXY.get(next.other));
+    prev = cur;
+    cur = next.other;
+  }
+  if (verts.length < 3) return null;
+  let sum = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i], b = verts[(i + 1) % verts.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum) / 2;
+}
+
 // ─── Apartment scene serializer (AI consumption) ─────────────────────────────
 // Reads all room layouts + live device state and returns structured text that
 // Claude can parse for spatial reasoning during investigations.
@@ -2974,6 +3125,8 @@ async function buildApartmentScene() {
   const roomSlugsR = await db.query(
     "SELECT name, regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g') AS slug FROM rooms ORDER BY name"
   );
+  // Generalized W × L × H blob for undrawn rooms (replaces passage_dims).
+  const roomDims = await getRoomDims();
 
   const layouts = {};
   for (const row of layoutsR.rows) {
@@ -2982,6 +3135,29 @@ async function buildApartmentScene() {
 
   const slugToName = {};
   for (const r of roomSlugsR.rows) { slugToName[r.slug] = r.name; }
+
+  // Split: divider leads_to = true passage (sub-zone of parent's open-plan);
+  // door leads_to = separate adjacent room reached via a door. These mean
+  // different things to an AI reasoning about motion/coverage, so label them
+  // distinctly in the scene text.
+  const passageConnections = {}; // targetSlug → [{ parent, length }]
+  const doorConnections    = {}; // targetSlug → [{ parent, length, dtype }]
+  for (const [slug, layout] of Object.entries(layouts)) {
+    const roomName = slugToName[slug] || slug;
+    for (const div of (layout.dividers || [])) {
+      if (!div.leads_to) continue;
+      const len = Math.hypot((div.x2 || 0) - (div.x1 || 0), (div.y2 || 0) - (div.y1 || 0));
+      (passageConnections[div.leads_to] ||= []).push({ parent: roomName, length: len });
+    }
+    for (const door of (layout.doors || [])) {
+      if (!door.leads_to) continue;
+      const len = Number(door.width_m) || 0;
+      const dtype = door.door_type === 'sliding' ? 'sliding'
+                  : door.door_type === 'opening' ? 'archway'
+                  : 'hinged';
+      (doorConnections[door.leads_to] ||= []).push({ parent: roomName, length: len, dtype });
+    }
+  }
 
   // Group devices by room name
   const devicesByRoom = {};
@@ -2998,7 +3174,9 @@ async function buildApartmentScene() {
     for (const door of (layout.doors || [])) {
       if (door.leads_to) {
         const targetName = slugToName[door.leads_to] || door.leads_to;
-        const dtype = door.door_type === 'sliding' ? 'sliding' : 'hinged';
+        const dtype = door.door_type === 'sliding' ? 'sliding'
+                    : door.door_type === 'opening' ? 'archway'
+                    : 'hinged';
         edges.push(`${roomName} ↔ ${targetName} (${dtype} ${door.width_m}m)`);
       }
     }
@@ -3021,11 +3199,35 @@ async function buildApartmentScene() {
     const sharedLabel = shared.length
       ? ` + ${shared.map(s => slugToName[s] || s).join(' + ')} (open-plan)`
       : '';
-    const dims = shape.width_m && shape.length_m
-      ? `${shape.width_m}m × ${shape.length_m}m`
-      : 'dimensions unknown';
+    // Prefer true polygon area (walls) for non-rectangular rooms; fall back
+    // to bounding-box dims from shape when walls don't form a closed loop.
+    const walls0 = layout.walls || [];
+    const polyArea = computeRoomAreaFromWalls(walls0);
+    const bboxArea = shape.width_m && shape.length_m
+      ? +(shape.width_m * shape.length_m).toFixed(1)
+      : null;
+    let effectiveArea = null;
+    let dims;
+    if (polyArea != null && bboxArea != null) {
+      const a = +polyArea.toFixed(1);
+      effectiveArea = a;
+      const nonRect = Math.abs(a - bboxArea) / bboxArea > 0.05;
+      dims = nonRect
+        ? `≈ ${a} m² non-rectangular, bbox ${shape.width_m}m × ${shape.length_m}m`
+        : `${shape.width_m}m × ${shape.length_m}m = ${a} m²`;
+    } else if (shape.width_m && shape.length_m) {
+      effectiveArea = +(shape.width_m * shape.length_m).toFixed(1);
+      dims = `${shape.width_m}m × ${shape.length_m}m (bbox only)`;
+    } else {
+      dims = 'dimensions unknown';
+    }
+    const heightM = Number(layout.height_m);
+    const volumeSuffix = (heightM > 0 && effectiveArea)
+      ? `, ${heightM}m H → ${+(effectiveArea * heightM).toFixed(1)} m³` : '';
+    const devCount = (devicesByRoom[roomName] || []).length;
+    const devSuffix = devCount ? `, ${devCount} device${devCount === 1 ? '' : 's'}` : '';
 
-    text += `ROOM: ${roomName}${sharedLabel} (${dims})\n`;
+    text += `ROOM: ${roomName}${sharedLabel} (${dims}${volumeSuffix}${devSuffix})\n`;
 
     // Walls summary
     const walls = layout.walls || [];
@@ -3040,9 +3242,11 @@ async function buildApartmentScene() {
       text += `  Window: ${w.width_m}m wide at offset ${w.offset_m}m\n`;
     }
 
-    // Doors + sliding
+    // Doors + sliding + archway
     for (const d of doors) {
-      const dtype = d.door_type === 'sliding' ? 'sliding glass door' : 'hinged door';
+      const dtype = d.door_type === 'sliding' ? 'sliding glass door'
+                  : d.door_type === 'opening' ? 'open archway'
+                  : 'hinged door';
       const target = d.leads_to ? ` → ${slugToName[d.leads_to] || d.leads_to}` : '';
       text += `  ${dtype}: ${d.width_m}m wide at offset ${d.offset_m}m${target}\n`;
     }
@@ -3089,15 +3293,71 @@ async function buildApartmentScene() {
     text += '\n';
   }
 
-  // Rooms without layouts
+  // Rooms without layouts — every such room gets a status label plus
+  // approximate W × L × H when set in room_dims.
   for (const r of roomSlugsR.rows) {
-    if (!layouts[r.slug]) {
-      const devs = devicesByRoom[r.name] || [];
-      if (devs.length) {
-        text += `ROOM: ${r.name} (no layout drawn)\n`;
-        text += `  Devices: ${devs.map(d => `${d.name} (${d.device_type})`).join('; ')}\n\n`;
-      }
+    if (layouts[r.slug]) continue;
+    const devs  = devicesByRoom[r.name] || [];
+    const pConns = passageConnections[r.slug] || [];
+    const dConns = doorConnections[r.slug]    || [];
+    if (!devs.length && !pConns.length && !dConns.length) continue;
+
+    // Status: Passage from X / Adjacent to X (door|archway) / Not in layout
+    const statusParts = [];
+    if (pConns.length) {
+      const parents = [...new Set(pConns.map(c => c.parent))];
+      statusParts.push(`Passage from ${parents.join(', ')}`);
     }
+    if (dConns.length) {
+      const viaByParent = {};
+      for (const c of dConns) (viaByParent[c.parent] ||= new Set()).add(c.dtype);
+      const parts = Object.entries(viaByParent).map(([p, types]) =>
+        `${p} (${[...types].join('/')})`);
+      statusParts.push(`Adjacent to ${parts.join(', ')}`);
+    }
+    if (!statusParts.length) statusParts.push('Not in layout');
+    const statusStr = statusParts.join('; ');
+
+    const dims = roomDims[r.slug] || {};
+    const hasWL = dims.w > 0 && dims.l > 0;
+    const h = dims.h > 0 ? dims.h : null;
+    let dimsStr;
+    if (hasWL) {
+      const area = +(dims.w * dims.l).toFixed(1);
+      const diag = +Math.hypot(dims.w, dims.l).toFixed(1);
+      const volPart = h ? `, ${h}m H → ${+(area * h).toFixed(1)} m³` : '';
+      dimsStr = `≈ ${dims.w}m × ${dims.l}m = ${area} m², diag ≈ ${diag}m${volPart}`;
+    } else {
+      dimsStr = 'dimensions not set';
+    }
+    const devSuffix = devs.length ? `, ${devs.length} device${devs.length === 1 ? '' : 's'}` : '';
+
+    text += `ROOM: ${r.name} (${statusStr}; ${dimsStr}${devSuffix})\n`;
+
+    if (pConns.length) {
+      const byParent = {};
+      for (const c of pConns) (byParent[c.parent] ||= []).push(c.length);
+      const parts = Object.entries(byParent).map(([p, lens]) =>
+        `${p} (passage${lens.length > 1 ? 's' : ''} ${lens.map(l => l.toFixed(1) + 'm').join(' + ')})`
+      );
+      text += `  Reached from: ${parts.join(', ')}\n`;
+    }
+    if (dConns.length) {
+      const byParent = {};
+      for (const c of dConns) (byParent[c.parent] ||= []).push(c);
+      const parts = Object.entries(byParent).map(([p, list]) => {
+        const descs = list.map(c => c.dtype === 'archway'
+          ? `archway ${Number(c.length).toFixed(1)}m`
+          : `${c.dtype} door ${Number(c.length).toFixed(1)}m`
+        ).join(' + ');
+        return `${p} (${descs})`;
+      });
+      text += `  Reached from: ${parts.join(', ')}\n`;
+    }
+    if (devs.length) {
+      text += `  Devices: ${devs.map(d => `${d.name} (${d.device_type})`).join('; ')}\n`;
+    }
+    text += '\n';
   }
 
   // Adjacency graph

@@ -55,7 +55,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 | Project Network | `network.html` | ARP scan, network devices |
 | Weather | `general.html` | Weather data, solar heating potential |
 | Voice | `voice.html` | Voice pipeline, intents, TTS |
-| Rooms | `rooms.html` | Apartment-wide multi-room layout editor — dropdown: "Apartment" (all rooms) or single room; auto-positioning via BFS door↔divider alignment; tools: wall/window/door/sliding/glass barrier/divider + 20 furniture presets (sofa, bed, table, etc. as architectural SVG shapes); furniture drag-to-move, copy/paste, 45° rotation, toggleable layer; per-room W/L zoom; scene serializer for AI (`GET /api/apartment-scene`) includes furniture; spatial context auto-injected into AI investigations |
+| Rooms | `rooms.html` | Apartment-wide multi-room layout editor — dropdown: "Apartment" (all rooms) or single room; auto-positioning via BFS door↔divider alignment; tools: wall/window/door/sliding/glass barrier/divider + 26 furniture presets (sofa, armchair, coffee-table, tv-unit, dining-table, chair, bed, nightstand, wardrobe, desk, counter, fridge, stove, hob, oven, microwave, hood, sink, bathtub, toilet, shower, washing-machine, bookshelf, planter, fireplace, lamp — architectural SVG shapes); furniture drag-to-move, copy/paste, 45° rotation, toggleable layer; per-room W/L zoom; scene serializer for AI (`GET /api/apartment-scene`) includes furniture; spatial context auto-injected into AI investigations |
 | Living Room Agent | `living-room.html` | Living Room automations — wallmote bindings (Layout tab moved to Rooms page), scenes, lights |
 
 ### Sidebar (all pages)
