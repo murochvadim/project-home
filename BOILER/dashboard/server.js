@@ -1720,6 +1720,28 @@ async function ensureSchema() {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  // V5 — device placements inside rooms. Each row = one physical device placed
+  // at (x, y) in a room's local meters, with type-specific params JSON.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS room_device_placements (
+      id            SERIAL PRIMARY KEY,
+      slug          TEXT NOT NULL,
+      device_id     TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      device_type   TEXT,
+      x             REAL NOT NULL,
+      y             REAL NOT NULL,
+      rotation      INTEGER NOT NULL DEFAULT 0,
+      params        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      label         TEXT,
+      label_offset  JSONB,
+      label_hidden  BOOLEAN NOT NULL DEFAULT false,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS room_device_placements_slug_idx      ON room_device_placements(slug)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS room_device_placements_device_id_idx ON room_device_placements(device_id)`);
   await db.query(`
     INSERT INTO dashboard_settings (key, value)
     VALUES ('battery_thresholds', '{"good": 60, "low": 20}'::jsonb)
@@ -3017,6 +3039,107 @@ app.get('/api/passage-dims', async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Device placements inside rooms (V5) ────────────────────────────────────
+// Each row represents a physical device placed at (x, y) in a specific room.
+// Params JSONB holds type-specific settings (for presence/motion:
+//   beam_angle_deg, beam_length_m, hold_s).
+app.get('/api/room-device-placements', async (req, res) => {
+  try {
+    const slug = req.query.slug;
+    const rows = slug
+      ? (await db.query(
+          `SELECT p.*, d.name AS device_name, d.last_state, d.last_seen, d.last_source
+             FROM room_device_placements p
+             JOIN devices d ON d.id = p.device_id
+             WHERE p.slug = $1
+             ORDER BY p.id`, [slug])).rows
+      : (await db.query(
+          `SELECT p.*, d.name AS device_name, d.last_state, d.last_seen, d.last_source
+             FROM room_device_placements p
+             JOIN devices d ON d.id = p.device_id
+             ORDER BY p.slug, p.id`)).rows;
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/room-device-placements', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.slug || !SLUG_RE.test(b.slug)) return res.status(400).json({ error: 'Invalid slug' });
+    if (!b.device_id || typeof b.device_id !== 'string') return res.status(400).json({ error: 'device_id required' });
+    const x = parseFloat(b.x), y = parseFloat(b.y);
+    if (!isFinite(x) || !isFinite(y)) return res.status(400).json({ error: 'x, y required' });
+    const rotation = Math.round(parseFloat(b.rotation) || 0) % 360;
+    const params = (b.params && typeof b.params === 'object') ? b.params : {};
+    // Ensure device exists and grab its type
+    const devR = await db.query(`SELECT id, device_type FROM devices WHERE id = $1`, [b.device_id]);
+    if (!devR.rows.length) return res.status(400).json({ error: 'Unknown device_id' });
+    // One placement per device — replace if exists
+    await db.query(`DELETE FROM room_device_placements WHERE device_id = $1`, [b.device_id]);
+    const r = await db.query(
+      `INSERT INTO room_device_placements
+         (slug, device_id, device_type, x, y, rotation, params, label, label_offset, label_hidden)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10)
+       RETURNING *`,
+      [b.slug, b.device_id, devR.rows[0].device_type, +x.toFixed(2), +y.toFixed(2),
+       rotation, JSON.stringify(params),
+       b.label || null,
+       b.label_offset ? JSON.stringify(b.label_offset) : null,
+       !!b.label_hidden]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/room-device-placements/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    const b = req.body || {};
+    const sets = []; const vals = []; let n = 1;
+    if (b.slug !== undefined) { if (!SLUG_RE.test(b.slug)) return res.status(400).json({ error: 'Invalid slug' }); sets.push(`slug = $${n++}`); vals.push(b.slug); }
+    if (b.x !== undefined)      { const v = parseFloat(b.x); if (!isFinite(v)) return res.status(400).json({ error: 'Invalid x' }); sets.push(`x = $${n++}`); vals.push(+v.toFixed(2)); }
+    if (b.y !== undefined)      { const v = parseFloat(b.y); if (!isFinite(v)) return res.status(400).json({ error: 'Invalid y' }); sets.push(`y = $${n++}`); vals.push(+v.toFixed(2)); }
+    if (b.rotation !== undefined) { sets.push(`rotation = $${n++}`); vals.push(((parseInt(b.rotation, 10) || 0) % 360 + 360) % 360); }
+    if (b.params !== undefined)    { sets.push(`params = $${n++}::jsonb`); vals.push(JSON.stringify(b.params || {})); }
+    if (b.label !== undefined)     { sets.push(`label = $${n++}`); vals.push(b.label || null); }
+    if (b.label_offset !== undefined) { sets.push(`label_offset = $${n++}::jsonb`); vals.push(b.label_offset ? JSON.stringify(b.label_offset) : null); }
+    if (b.label_hidden !== undefined) { sets.push(`label_hidden = $${n++}`); vals.push(!!b.label_hidden); }
+    if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
+    sets.push(`updated_at = NOW()`);
+    vals.push(id);
+    const r = await db.query(
+      `UPDATE room_device_placements SET ${sets.join(', ')} WHERE id = $${n} RETURNING *`,
+      vals
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/room-device-placements/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    const r = await db.query(`DELETE FROM room_device_placements WHERE id = $1 RETURNING id`, [id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Compact state snapshot for polling — only what the Rooms page needs.
+app.get('/api/devices/states', async (req, res) => {
+  try {
+    const ids = (req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!ids.length) return res.json([]);
+    const r = await db.query(
+      `SELECT id, device_type, last_state, last_seen, last_source
+         FROM devices WHERE id = ANY($1::text[])`, [ids]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Polygon area helper ─────────────────────────────────────────────────────
 // Traces the walls array as a connected graph and returns the area of the
 // outer polygon via the shoelace formula. Coordinates are canonicalized by
@@ -3112,6 +3235,35 @@ function computeRoomAreaFromWalls(walls) {
   return Math.abs(sum) / 2;
 }
 
+// Format one device-placement line for the scene text — type-aware.
+function describePlacement(p) {
+  const dt = p.device_type || 'device';
+  const name = p.label || p.device_name || p.device_id;
+  const rot = ((p.rotation || 0) % 360 + 360) % 360;
+  const AGE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold (device agent owns freshness)
+  const lastSeenMs = p.last_seen ? new Date(p.last_seen).getTime() : 0;
+  const age = lastSeenMs ? (Date.now() - lastSeenMs) : Infinity;
+  let state;
+  if (age > AGE_OFFLINE_MS) state = 'OFFLINE';
+  else {
+    const ls = p.last_state || {};
+    const active = ls.presence === true || ls.motion === true || ls.occupied === true;
+    state = active ? 'ACTIVE' : 'CLEAR';
+  }
+  let geom = '';
+  if ((dt === 'presence' || dt === 'motion') && p.params) {
+    const a = Number(p.params.beam_angle_deg) || 0;
+    const l = Number(p.params.beam_length_m) || 0;
+    if (a > 0 && l > 0) {
+      const coverage = +(Math.PI * l * l * (a / 360)).toFixed(1);
+      geom = `, cone ${a}°×${l}m (≈ ${coverage} m²`;
+      if (p.params.wall_barrier) geom += ', wall-clipped';
+      geom += ')';
+    }
+  }
+  return `    - ${name} (${dt}) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${geom}, state: ${state}`;
+}
+
 // ─── Apartment scene serializer (AI consumption) ─────────────────────────────
 // Reads all room layouts + live device state and returns structured text that
 // Claude can parse for spatial reasoning during investigations.
@@ -3127,6 +3279,16 @@ async function buildApartmentScene() {
   );
   // Generalized W × L × H blob for undrawn rooms (replaces passage_dims).
   const roomDims = await getRoomDims();
+
+  // V5 device placements + current state
+  const placementsR = await db.query(
+    `SELECT p.*, d.name AS device_name, d.last_state, d.last_seen, d.last_source
+       FROM room_device_placements p
+       JOIN devices d ON d.id = p.device_id
+       ORDER BY p.slug, p.id`
+  );
+  const placementsBySlug = {};
+  for (const p of placementsR.rows) (placementsBySlug[p.slug] ||= []).push(p);
 
   const layouts = {};
   for (const row of layoutsR.rows) {
@@ -3290,6 +3452,13 @@ async function buildApartmentScene() {
       text += `  Furniture: ${furnDesc.join('; ')}\n`;
     }
 
+    // Devices placed — position, rotation, cone, live state (V5)
+    const placements = placementsBySlug[slug] || [];
+    if (placements.length) {
+      text += `  Devices placed:\n`;
+      for (const p of placements) text += describePlacement(p) + '\n';
+    }
+
     text += '\n';
   }
 
@@ -3356,6 +3525,12 @@ async function buildApartmentScene() {
     }
     if (devs.length) {
       text += `  Devices: ${devs.map(d => `${d.name} (${d.device_type})`).join('; ')}\n`;
+    }
+    // V5 placements (e.g. presence cones in passage rooms)
+    const placements = placementsBySlug[r.slug] || [];
+    if (placements.length) {
+      text += `  Devices placed:\n`;
+      for (const p of placements) text += describePlacement(p) + '\n';
     }
     text += '\n';
   }

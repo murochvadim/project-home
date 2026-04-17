@@ -33,6 +33,10 @@
   let _showHiddenLabels = false;
   let roomDims     = {};            // { slug: {w, l, h} } — dims for undrawn rooms
   let roomDevCounts = {};           // { roomName: count } — from /api/rooms
+  let roomPlacements = [];          // V5: [{id, slug, device_id, device_type, x, y, rotation, params, label, label_offset, label_hidden, device_name, last_state, last_seen}]
+  let _allDevices = [];             // cached device list for picker
+  let _devicePicker = null;         // {x_m, y_m, slug, suggested_ids} while popover is open
+  let _pollTimer = null;            // state polling timer
 
   function svg() { return document.getElementById('apt-svg'); }
   function activeData() { return allRooms[activeSlug] || { walls:[], windows:[], doors:[], dividers:[] }; }
@@ -56,8 +60,21 @@
     if (el) el.textContent = msg;
   }
 
-  function pushUndo() {
-    undoStack.push(JSON.stringify(allRooms[activeSlug] || {}));
+  function pushUndo(entry, reason) {
+    // Legacy call pushUndo() — snapshot the active room's layout.
+    // Tagged call pushUndo({type:'dev_...', ...}) — server-side device action.
+    // Optional reason string logs a breadcrumb to the console for debugging
+    // when walls/devices go missing.
+    if (entry === undefined) {
+      const walls = ((allRooms[activeSlug] || {}).walls || []).length;
+      const doors = ((allRooms[activeSlug] || {}).doors || []).length;
+      console.debug('[undo-push]', reason || '(no-reason)', 'slug=', activeSlug,
+        'walls=', walls, 'doors=', doors, 'stack-depth=', undoStack.length + 1);
+      undoStack.push({ type: 'layout', slug: activeSlug, snapshot: JSON.stringify(allRooms[activeSlug] || {}) });
+    } else {
+      console.debug('[undo-push]', entry.type, reason || '', 'id=', entry.id ?? entry.row?.id, 'stack-depth=', undoStack.length + 1);
+      undoStack.push(entry);
+    }
     if (undoStack.length > 50) undoStack.shift();
   }
 
@@ -877,6 +894,9 @@
       }
     }
 
+    // V5 device placements (triangles, cones, labels)
+    renderPlacementsForRoom(g, slug, selId);
+
     // Room name label (supports optional label_offset {x,y} in room data)
     // Hidden if layout.label_hidden is true, unless "Show hidden labels" is on.
     const bounds = getRoomBounds(layout);
@@ -916,6 +936,7 @@
       sliding: 'Sliding glass door — click start + end on a wall.',
       opening: 'Open archway (no door) — click start + end on a wall. Target room becomes drawable.',
       divider: 'Click two points for open-plan boundary.',
+      device:  'Click inside a room to place a presence/motion device.',
       furniture: 'Click to place furniture. Click again to set size, or single-click for default size.',
       select:  'Click an element to select.',
     };
@@ -946,7 +967,7 @@
         setStatus(`${tool} start at ${xM.toFixed(1)}, ${yM.toFixed(1)} — click end point`);
       } else {
         if (pending.x1 === xM && pending.y1 === yM) { pending = null; return; }
-        pushUndo();
+        pushUndo(undefined, 'draw-' + tool);
         if (tool === 'wall' || tool === 'glass') {
           data.walls = data.walls || [];
           data.walls.push({
@@ -976,7 +997,7 @@
         pendingWall = { wallId: hit.wall.id, t1: snappedT };
         setStatus(`${tool} start at ${snappedOff.toFixed(2)}m — click end point on same wall`);
       } else if (pendingWall.wallId === hit.wall.id) {
-        pushUndo();
+        pushUndo(undefined, 'place-' + tool + '-on-wall');
         const t1 = Math.min(pendingWall.t1, snappedT);
         const t2 = Math.max(pendingWall.t1, snappedT);
         const offset = t1 * wallLen;
@@ -997,8 +1018,12 @@
         setStatus('Both points must be on the same wall.');
         pendingWall = null;
       }
+    } else if (tool === 'device') {
+      // Open the device picker popover at the click position inside the active room.
+      aptDevicePickerOpen(ev, xM, yM);
+      return;
     } else if (tool === 'paste' && clipboard) {
-      pushUndo();
+      pushUndo(undefined, 'paste-furniture');
       const data = activeData();
       data.furniture = data.furniture || [];
       data.furniture.push({
@@ -1015,7 +1040,7 @@
         pending = { x1: xM, y1: yM };
         setStatus(`Click again to set size, or click same spot for default ${preset} size.`);
       } else {
-        pushUndo();
+        pushUndo(undefined, 'furniture-sized');
         const dx = Math.abs(xM - pending.x1), dy = Math.abs(yM - pending.y1);
         const def = FURN_DEFAULTS[preset] || { w: 1, h: 1 };
         const fw = dx > 0.2 ? dx : def.w;
@@ -1053,6 +1078,16 @@
             draw(); refreshEditPanel();
             return;
           }
+        }
+      }
+      // Check device placements (triangles) — in this room
+      for (const p of roomPlacements) {
+        if (p.slug !== activeSlug) continue;
+        if (Math.hypot(xM - p.x, yM - p.y) < 0.25) {
+          selectedId = p.id;
+          setStatus(`Selected device ${p.device_name || p.device_id}.`);
+          draw(); refreshEditPanel();
+          return;
         }
       }
       // Check dividers
@@ -1111,15 +1146,19 @@
     const dor = (data.doors || []).find(x => x.id === selectedId);
     const div = (data.dividers || []).find(x => x.id === selectedId);
     const furn = (data.furniture || []).find(x => x.id === selectedId);
-    const item = win || dor || div || furn;
+    const placement = roomPlacements.find(p => p.id === selectedId);
+    const item = win || dor || div || furn || placement;
     if (!item) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
-    document.getElementById('apt-edit-id').textContent = furn ? (furn.type + (furn.label ? ' "'+furn.label+'"' : '')) : item.id;
     const isDivider = !!div;
     const isFurn = !!furn;
-    document.getElementById('apt-edit-offset-wrap').style.display = (isDivider || isFurn) ? 'none' : 'inline';
-    document.getElementById('apt-edit-width-wrap').style.display = (isDivider || isFurn) ? 'none' : 'inline';
-    if (!isDivider && !isFurn) {
+    const isDev = !!placement;
+    document.getElementById('apt-edit-id').textContent = isDev
+      ? (placement.device_name || placement.device_id)
+      : (furn ? (furn.type + (furn.label ? ' "'+furn.label+'"' : '')) : item.id);
+    document.getElementById('apt-edit-offset-wrap').style.display = (isDivider || isFurn || isDev) ? 'none' : 'inline';
+    document.getElementById('apt-edit-width-wrap').style.display  = (isDivider || isFurn || isDev) ? 'none' : 'inline';
+    if (!isDivider && !isFurn && !isDev) {
       document.getElementById('apt-edit-offset').value = item.offset_m;
       document.getElementById('apt-edit-width').value = item.width_m;
     }
@@ -1134,9 +1173,22 @@
       document.getElementById('apt-edit-furn-h').value = furn.h;
       document.getElementById('apt-edit-furn-rot').value = furn.rotation || 0;
     }
+    const devWrap = document.getElementById('apt-edit-dev-wrap');
+    devWrap.style.display = isDev ? 'inline' : 'none';
+    if (isDev) {
+      document.getElementById('apt-edit-dev-info').textContent =
+        `${placement.device_type || 'device'} · `;
+      document.getElementById('apt-edit-dev-rot').value = placement.rotation || 0;
+      const pr = placement.params || {};
+      document.getElementById('apt-edit-dev-angle').value = pr.beam_angle_deg ?? 90;
+      document.getElementById('apt-edit-dev-length').value = pr.beam_length_m ?? 4;
+      document.getElementById('apt-edit-dev-hold').value = pr.hold_s ?? 120;
+      document.getElementById('apt-edit-dev-wallbarrier').checked = !!pr.wall_barrier;
+      document.getElementById('apt-edit-dev-label').value = placement.label || '';
+    }
   }
 
-  window.aptApplyEdit = function () {
+  window.aptApplyEdit = async function () {
     if (!selectedId) return;
     const data = activeData();
     let item = (data.windows || []).find(x => x.id === selectedId);
@@ -1144,7 +1196,41 @@
     if (!item) { item = (data.doors || []).find(x => x.id === selectedId); kind = 'doors'; }
     if (!item) { item = (data.dividers || []).find(x => x.id === selectedId); kind = 'dividers'; }
     if (!item) { item = (data.furniture || []).find(x => x.id === selectedId); kind = 'furniture'; }
-    if (!item) return;
+    if (!item) {
+      const placement = roomPlacements.find(p => p.id === selectedId);
+      if (placement) {
+        const rot = parseInt(document.getElementById('apt-edit-dev-rot').value, 10) || 0;
+        const ang = parseFloat(document.getElementById('apt-edit-dev-angle').value);
+        const len = parseFloat(document.getElementById('apt-edit-dev-length').value);
+        const hold = parseFloat(document.getElementById('apt-edit-dev-hold').value);
+        const wallBarrier = !!document.getElementById('apt-edit-dev-wallbarrier').checked;
+        const lbl = (document.getElementById('apt-edit-dev-label').value || '').trim() || null;
+        const params = {
+          ...(placement.params || {}),
+          ...(isFinite(ang) && ang > 0 ? { beam_angle_deg: ang } : {}),
+          ...(isFinite(len) && len > 0 ? { beam_length_m: len } : {}),
+          ...(isFinite(hold) && hold >= 0 ? { hold_s: hold } : {}),
+          wall_barrier: wallBarrier,
+        };
+        const prev_fields = {
+          rotation: placement.rotation,
+          params: { ...(placement.params || {}) },
+          label: placement.label,
+        };
+        try {
+          const r = await fetch('/api/room-device-placements/' + placement.id, {
+            method: 'PATCH', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ rotation: rot, params, label: lbl }),
+          });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const updated = await r.json();
+          pushUndo({ type: 'dev_update', id: placement.id, prev_fields });
+          Object.assign(placement, updated);
+          draw(); setStatus('Device updated.');
+        } catch (e) { setStatus('Update failed: ' + e.message); }
+      }
+      return;
+    }
     if (kind === 'furniture') {
       item.label = (document.getElementById('apt-edit-furn-label').value || '').trim();
       const fw = parseFloat(document.getElementById('apt-edit-furn-w').value);
@@ -1152,7 +1238,7 @@
       if (!isNaN(fw) && fw > 0) item.w = +fw.toFixed(2);
       if (!isNaN(fh) && fh > 0) item.h = +fh.toFixed(2);
       item.rotation = parseInt(document.getElementById('apt-edit-furn-rot').value) || 0;
-      pushUndo(); draw(); setStatus('Updated ' + item.type);
+      pushUndo(undefined, 'edit-furniture'); draw(); setStatus('Updated ' + item.type);
       return;
     }
     if (kind !== 'dividers') {
@@ -1166,21 +1252,75 @@
       rebuildActiveRoomDropdown();
       renderPassageDimsTable();
     }
-    pushUndo();
+    pushUndo(undefined, 'edit-' + (kind || '?'));
     draw();
     setStatus('Updated ' + item.id);
   };
 
   // ── Undo / Delete ──────────────────────────────────────────────────────────
-  window.aptUndo = function () {
+  window.aptUndo = async function () {
     const prev = undoStack.pop();
     if (!prev) return;
-    allRooms[activeSlug] = JSON.parse(prev);
-    selectedId = null; pending = null; pendingWall = null;
-    // Undo may restore a divider/door whose leads_to changes the passage set.
-    rebuildActiveRoomDropdown();
-    renderPassageDimsTable();
-    draw();
+    // Legacy string entries (defensive — old stacks)
+    if (typeof prev === 'string') {
+      allRooms[activeSlug] = JSON.parse(prev);
+      selectedId = null; pending = null; pendingWall = null;
+      rebuildActiveRoomDropdown(); renderPassageDimsTable(); draw();
+      return;
+    }
+    if (prev.type === 'layout') {
+      allRooms[prev.slug || activeSlug] = JSON.parse(prev.snapshot);
+      selectedId = null; pending = null; pendingWall = null;
+      rebuildActiveRoomDropdown(); renderPassageDimsTable(); draw();
+      return;
+    }
+    if (prev.type === 'dev_create') {
+      try {
+        const r = await fetch('/api/room-device-placements/' + prev.row.id, { method: 'DELETE' });
+        if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
+        roomPlacements = roomPlacements.filter(p => p.id !== prev.row.id);
+        selectedId = null; draw(); refreshEditPanel();
+        setStatus('Undid device placement.');
+      } catch (e) { setStatus('Undo failed: ' + e.message); }
+      return;
+    }
+    if (prev.type === 'dev_delete') {
+      try {
+        const r = await fetch('/api/room-device-placements', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            slug: prev.row.slug, device_id: prev.row.device_id,
+            x: prev.row.x, y: prev.row.y, rotation: prev.row.rotation,
+            params: prev.row.params, label: prev.row.label,
+            label_offset: prev.row.label_offset, label_hidden: prev.row.label_hidden,
+          }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const row = await r.json();
+        row.device_name = prev.row.device_name;
+        row.last_state  = prev.row.last_state;
+        row.last_seen   = prev.row.last_seen;
+        roomPlacements.push(row);
+        draw();
+        setStatus('Undid device deletion.');
+      } catch (e) { setStatus('Undo failed: ' + e.message); }
+      return;
+    }
+    if (prev.type === 'dev_update') {
+      try {
+        const r = await fetch('/api/room-device-placements/' + prev.id, {
+          method: 'PATCH', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(prev.prev_fields),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const updated = await r.json();
+        const p = roomPlacements.find(x => x.id === prev.id);
+        if (p) Object.assign(p, updated);
+        draw(); refreshEditPanel();
+        setStatus('Undid device change.');
+      } catch (e) { setStatus('Undo failed: ' + e.message); }
+      return;
+    }
   };
 
   window.aptCopySelected = function () {
@@ -1193,10 +1333,24 @@
     setStatus('Click to paste ' + f.type + '. Press Esc or switch tool to cancel.');
   };
 
-  window.aptDeleteSelected = function () {
+  window.aptDeleteSelected = async function () {
     if (!selectedId) return;
+    // Device placement delete (server-side)
+    const placement = roomPlacements.find(p => p.id === selectedId);
+    if (placement) {
+      try {
+        const r = await fetch('/api/room-device-placements/' + placement.id, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        pushUndo({ type: 'dev_delete', row: { ...placement } });
+        roomPlacements = roomPlacements.filter(p => p.id !== placement.id);
+        selectedId = null;
+        draw(); refreshEditPanel();
+        setStatus(`Removed ${placement.device_name || placement.device_id}.`);
+      } catch (e) { setStatus('Delete failed: ' + e.message); }
+      return;
+    }
     const data = activeData();
-    pushUndo();
+    pushUndo(undefined, 'delete-selected:' + selectedId);
     data.walls = (data.walls || []).filter(w => w.id !== selectedId);
     data.windows = (data.windows || []).filter(x => x.id !== selectedId && x.wall !== selectedId);
     data.doors = (data.doors || []).filter(x => x.id !== selectedId && x.wall !== selectedId);
@@ -1238,6 +1392,47 @@
       data.grid = { cell_m: cm, cols: Math.ceil(saveW / cm), rows: Math.ceil(saveH / cm) };
     }
     try {
+      // Safety guard: before overwriting the room layout, compare the walls
+      // we're about to send with what's currently in the DB. If we'd shrink
+      // walls/doors/dividers/furniture counts, confirm with the user first so
+      // we don't silently destroy their design via a stale in-memory state
+      // (e.g. after undo/delete loops).
+      try {
+        const cur = await fetch('/api/room-layouts/' + activeSlug).then(r => r.ok ? r.json() : null);
+        if (cur) {
+          const before = {
+            walls: (cur.walls || []).length,
+            doors: (cur.doors || []).length,
+            dividers: (cur.dividers || []).length,
+            furniture: (cur.furniture || []).length,
+          };
+          const after = {
+            walls: (data.walls || []).length,
+            doors: (data.doors || []).length,
+            dividers: (data.dividers || []).length,
+            furniture: (data.furniture || []).length,
+          };
+          const shrunk = Object.keys(before).filter(k => after[k] < before[k]);
+          if (shrunk.length) {
+            const diffs = shrunk.map(k => `${k}: ${before[k]} → ${after[k]}`).join('\n  ');
+            const ok = confirm(
+              `Save will REDUCE ${activeSlug}:\n  ${diffs}\n\n` +
+              `This usually means an undo/delete happened. Continue save?\n\n` +
+              `(Cancel keeps the DB intact and refuses this save.)`
+            );
+            if (!ok) {
+              setStatus('Save cancelled. DB unchanged.');
+              return;
+            }
+          }
+        }
+      } catch (e) { /* non-fatal — proceed with save */ }
+
+      console.debug('[save] POST room-layouts/' + activeSlug,
+        'walls=', (data.walls || []).length,
+        'doors=', (data.doors || []).length,
+        'dividers=', (data.dividers || []).length,
+        'furniture=', (data.furniture || []).length);
       const r = await fetch(`/api/room-layouts/${activeSlug}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -1264,6 +1459,10 @@
         if (rd._door_dirty) body.doors = rd.doors || [];
         if (rd._furn_dirty) body.furniture = rd.furniture || [];
         if (Object.keys(body).length === 0) continue;
+        console.debug('[save-partial] POST room-layouts/' + sl, 'keys=', Object.keys(body),
+          'doors=', body.doors ? body.doors.length : '-',
+          'dividers=', body.dividers ? body.dividers.length : '-',
+          'furniture=', body.furniture ? body.furniture.length : '-');
         await fetch('/api/room-layouts/' + sl, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -1743,6 +1942,308 @@
     _pdApplyCollapsed(next);
   };
 
+  // ── V5 Device placements ───────────────────────────────────────────────────
+  const DEV_STATE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold
+  const DEV_COLORS = { active: '#d83030', clear: '#27ae60', offline: '#888' };
+  const DEV_PRESENCE_TYPES = new Set(['presence', 'motion']);
+
+  // Line-segment intersection in room-local meter coords. Returns true if
+  // segment (a,b) crosses segment (c,d). Ignores pure-touch endpoint cases.
+  function _segCross(a, b, c, d) {
+    const d1 = (d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x);
+    const d2 = (d.x - c.x) * (b.y - c.y) - (d.y - c.y) * (b.x - c.x);
+    const d3 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    const d4 = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+           ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  }
+
+  // Ray-cast from origin at angle (rad). Returns the shortest distance (m)
+  // to any wall segment hit, clamped to maxDist. Self-blocking on the mount
+  // wall is avoided by the caller pushing origin forward by a small epsilon.
+  // Solves origin + t*(dx,dy) = w.x1 + s*(wx,wy) via Cramer's rule where
+  // the 2x2 system is [[dx, -wx], [dy, -wy]] [t, s]^T = [ox, oy]^T.
+  function _raycastWall(origin, angleRad, maxDist, walls) {
+    let best = maxDist;
+    const dx = Math.cos(angleRad), dy = Math.sin(angleRad);
+    for (const w of walls) {
+      const wx = w.x2 - w.x1, wy = w.y2 - w.y1;
+      const denom = wx * dy - wy * dx;
+      if (Math.abs(denom) < 1e-9) continue; // parallel
+      const ox = w.x1 - origin.x, oy = w.y1 - origin.y;
+      const t = (wx * oy - wy * ox) / denom;  // distance along ray
+      const s = (dx * oy - dy * ox) / denom;  // parametric pos on wall [0..1]
+      if (t > 1e-6 && s >= -1e-6 && s <= 1 + 1e-6 && t < best) best = t;
+    }
+    return best;
+  }
+
+  function _devActiveHold(p) {
+    // true if live state indicates active, OR within hold_s of last known active.
+    // Protocol-aware: Tuya presence sensors report field "1" (bool/string);
+    // Aeotec/HA motion sensors report 'motion' (bool); Z2M occupancy sensors
+    // report 'occupancy' (bool). Fall back to any common truthy field name.
+    const ls = p.last_state || {};
+    let liveOn = false;
+    const v1 = ls['1'];
+    if (v1 === true || v1 === 1) liveOn = true;
+    else if (typeof v1 === 'string' && v1 && v1 !== 'none' && v1 !== 'None') liveOn = true;
+    if (!liveOn) {
+      liveOn = ls.motion === true || ls.presence === true
+            || ls.occupancy === true || ls.occupied === true
+            || ls.motion_detected === true;
+    }
+    if (liveOn) { p._last_active_ts = Date.now(); return true; }
+    const hold = Number((p.params || {}).hold_s) || 0;
+    if (hold > 0 && p._last_active_ts && (Date.now() - p._last_active_ts) < hold * 1000) return true;
+    return false;
+  }
+
+  function _devState(p) {
+    const lastSeen = p.last_seen ? new Date(p.last_seen).getTime() : 0;
+    if (!lastSeen || (Date.now() - lastSeen) > DEV_STATE_OFFLINE_MS) return 'offline';
+    return _devActiveHold(p) ? 'active' : 'clear';
+  }
+
+  // Render all placements for one room (called inside renderRoomElements after furniture)
+  function renderPlacementsForRoom(g, slug, selId) {
+    const list = roomPlacements.filter(p => p.slug === slug);
+    for (const p of list) {
+      const cx = mToPx(p.x), cy = mToPx(p.y);
+      const state = _devState(p);
+      const fill = DEV_COLORS[state];
+
+      // Cone + dot field — only for presence/motion when active
+      if (state === 'active' && DEV_PRESENCE_TYPES.has(p.device_type)) {
+        const angleDeg = Number((p.params || {}).beam_angle_deg) || 90;
+        const lengthM = Number((p.params || {}).beam_length_m) || 4;
+        const wallBarrier = !!(p.params || {}).wall_barrier;
+        const rotRad = (Math.PI / 180) * (p.rotation || 0);
+        const halfRad = (Math.PI / 180) * (angleDeg / 2);
+
+        // When wall_barrier is on, ray-cast each sampled angle to build a
+        // per-angle max-distance array; use it for BOTH outline polygon and
+        // dot placement so everything stops cleanly at walls.
+        const roomLayout = allRooms[slug] || {};
+        const walls = wallBarrier ? (roomLayout.walls || []) : null;
+        const apexM = wallBarrier
+          ? { x: p.x + 0.01 * Math.cos(rotRad), y: p.y + 0.01 * Math.sin(rotRad) }
+          : { x: p.x, y: p.y };
+        // Sample N angles across the cone; interpolate between them for dots.
+        const N_ANGLE_SAMPLES = Math.max(16, Math.ceil(angleDeg / 3));
+        const sampleAngles = [];
+        const sampleHits = [];
+        for (let k = 0; k <= N_ANGLE_SAMPLES; k++) {
+          const frac = (k / N_ANGLE_SAMPLES) - 0.5; // -0.5..0.5
+          const a = rotRad + frac * halfRad * 2;
+          sampleAngles.push(a);
+          const hit = wallBarrier ? _raycastWall(apexM, a, lengthM, walls) : lengthM;
+          sampleHits.push(hit);
+        }
+
+        // Outline polygon: apex + hit points at each sampled angle.
+        const pts = [`${cx},${cy}`];
+        for (let k = 0; k < sampleAngles.length; k++) {
+          const r = sampleHits[k], a = sampleAngles[k];
+          pts.push(`${mToPx(p.x + r * Math.cos(a))},${mToPx(p.y + r * Math.sin(a))}`);
+        }
+        const outline = document.createElementNS(NS, 'polygon');
+        outline.setAttribute('points', pts.join(' '));
+        outline.setAttribute('fill', 'rgba(216,48,48,0.08)');
+        outline.setAttribute('stroke', '#d83030');
+        outline.setAttribute('stroke-width', 0.7);
+        outline.setAttribute('stroke-dasharray', '4,3');
+        g.appendChild(outline);
+
+        // Dot field: for each (r, angle), find the nearest two angle samples
+        // and skip the dot if r exceeds the interpolated hit distance.
+        const stepM = 0.3;
+        for (let r = stepM; r < lengthM; r += stepM) {
+          const arcLen = r * angleDeg * Math.PI / 180;
+          const nSteps = Math.max(2, Math.round(arcLen / stepM));
+          for (let i = 0; i <= nSteps; i++) {
+            const frac = (i / nSteps) - 0.5;
+            const a = rotRad + frac * halfRad * 2;
+            if (wallBarrier) {
+              // Interpolate hitDist from sampleHits by frac position.
+              const idxF = (i / nSteps) * N_ANGLE_SAMPLES;
+              const i0 = Math.floor(idxF), i1 = Math.min(i0 + 1, N_ANGLE_SAMPLES);
+              const lerp = idxF - i0;
+              const hit = sampleHits[i0] * (1 - lerp) + sampleHits[i1] * lerp;
+              if (r > hit - 0.02) continue; // small margin so dots don't sit on wall
+            }
+            const dx = mToPx(p.x + r * Math.cos(a));
+            const dy = mToPx(p.y + r * Math.sin(a));
+            const d = document.createElementNS(NS, 'circle');
+            d.setAttribute('cx', dx); d.setAttribute('cy', dy);
+            d.setAttribute('r', 1.5);
+            d.setAttribute('fill', '#ff8080');
+            d.setAttribute('opacity', 0.65);
+            g.appendChild(d);
+          }
+        }
+      }
+
+      // Triangle icon — equilateral, 0.18 m side (half of prior 0.35 m), apex along rotation
+      const sideM = 0.18;
+      const altM = sideM * Math.sqrt(3) / 2;      // apex-to-base altitude
+      const backM = altM * 2 / 3;                  // centroid-to-base
+      const frontM = altM - backM;                 // centroid-to-apex
+      const halfBaseM = sideM / 2;
+      const rotRad = (Math.PI / 180) * (p.rotation || 0);
+      const rot = (ox, oy) => ({
+        x: cx + mToPx(ox) * Math.cos(rotRad) - mToPx(oy) * Math.sin(rotRad),
+        y: cy + mToPx(ox) * Math.sin(rotRad) + mToPx(oy) * Math.cos(rotRad),
+      });
+      const apex = rot( frontM, 0);
+      const bl   = rot(-backM, -halfBaseM);
+      const br   = rot(-backM,  halfBaseM);
+      const tri = document.createElementNS(NS, 'polygon');
+      tri.setAttribute('points', `${apex.x},${apex.y} ${bl.x},${bl.y} ${br.x},${br.y}`);
+      tri.setAttribute('fill', fill);
+      tri.setAttribute('stroke', '#222');
+      tri.setAttribute('stroke-width', p.id === selId ? 2 : 1);
+      tri.setAttribute('style', 'cursor:pointer;');
+      tri.dataset.devPlacementId = p.id;
+      g.appendChild(tri);
+      // Detection-direction indicator — short "nose" line extending from the
+      // apex outward, same color as the triangle, so the user knows which way
+      // the sensor is aimed when picking a rotation.
+      const noseTip = rot(frontM + 0.15, 0);
+      const nose = document.createElementNS(NS, 'line');
+      nose.setAttribute('x1', apex.x); nose.setAttribute('y1', apex.y);
+      nose.setAttribute('x2', noseTip.x); nose.setAttribute('y2', noseTip.y);
+      nose.setAttribute('stroke', fill);
+      nose.setAttribute('stroke-width', 1.5);
+      nose.setAttribute('stroke-linecap', 'round');
+      g.appendChild(nose);
+      // Tiny dot at the far tip of the nose for extra clarity
+      const noseDot = document.createElementNS(NS, 'circle');
+      noseDot.setAttribute('cx', noseTip.x); noseDot.setAttribute('cy', noseTip.y);
+      noseDot.setAttribute('r', 1.8);
+      noseDot.setAttribute('fill', fill);
+      noseDot.setAttribute('stroke', '#222');
+      noseDot.setAttribute('stroke-width', 0.5);
+      g.appendChild(noseDot);
+
+      // Label (drag + hide, same UX as furniture labels)
+      const lblText = (p.label && p.label.trim()) || p.device_name || p.device_id;
+      const hidden = !!p.label_hidden;
+      if (lblText && (!hidden || _showHiddenLabels)) {
+        const lo = p.label_offset || {};
+        const lbl = document.createElementNS(NS, 'text');
+        lbl.setAttribute('x', mToPx(p.x + (lo.x || 0)));
+        lbl.setAttribute('y', mToPx(p.y + (lo.y || 0)) - mToPx(0.28));
+        lbl.setAttribute('font-size', '9');
+        lbl.setAttribute('fill', '#333');
+        lbl.setAttribute('text-anchor', 'middle');
+        lbl.setAttribute('opacity', hidden ? '0.3' : '0.85');
+        lbl.setAttribute('style', 'cursor:move;user-select:none;pointer-events:all;');
+        lbl.dataset.devLabelId = p.id;
+        lbl.dataset.devLabelSlug = slug;
+        lbl.textContent = lblText;
+        g.appendChild(lbl);
+      }
+    }
+  }
+
+  // ── Device picker popover ──────────────────────────────────────────────────
+  function aptDevicePickerOpen(ev, xM, yM) {
+    if (!activeSlug || activeSlug === '_apartment') {
+      setStatus('Pick an active room first (not Apartment view).');
+      return;
+    }
+    const placedIds = new Set(roomPlacements.map(p => p.device_id));
+    const candidates = (_allDevices || []).filter(d =>
+      DEV_PRESENCE_TYPES.has(d.device_type) &&
+      d.enabled !== false &&
+      !placedIds.has(d.id)
+    );
+    if (!candidates.length) {
+      setStatus('No unplaced presence/motion devices available.');
+      return;
+    }
+    const pop = document.getElementById('apt-device-picker');
+    const sel = document.getElementById('apt-device-picker-sel');
+    sel.innerHTML = '';
+    for (const d of candidates) {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = `${d.name} (${d.device_type}${d.room ? ' · ' + d.room : ''})`;
+      sel.appendChild(opt);
+    }
+    const rect = svg().getBoundingClientRect();
+    pop.style.left = Math.min(rect.width - 230, Math.max(4, ev.clientX - rect.left)) + 'px';
+    pop.style.top  = Math.min(rect.height - 120, Math.max(4, ev.clientY - rect.top))  + 'px';
+    pop.style.display = '';
+    _devicePicker = { slug: activeSlug, x_m: xM, y_m: yM };
+  }
+  window.aptDevicePickerCancel = function () {
+    _devicePicker = null;
+    document.getElementById('apt-device-picker').style.display = 'none';
+    setStatus('');
+  };
+  window.aptDevicePickerConfirm = async function () {
+    if (!_devicePicker) return;
+    const { slug, x_m, y_m } = _devicePicker;
+    const sel = document.getElementById('apt-device-picker-sel');
+    const device_id = sel.value;
+    if (!device_id) return aptDevicePickerCancel();
+    const body = {
+      slug, device_id,
+      x: x_m, y: y_m,
+      rotation: 0,
+      params: { beam_angle_deg: 90, beam_length_m: 4.0, hold_s: 120 },
+    };
+    try {
+      const r = await fetch('/api/room-device-placements', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const row = await r.json();
+      // Merge in device name + state if available
+      const dev = (_allDevices || []).find(d => d.id === device_id) || {};
+      row.device_name = dev.name; row.last_state = dev.last_state; row.last_seen = dev.last_seen;
+      roomPlacements.push(row);
+      selectedId = row.id;
+      pushUndo({ type: 'dev_create', row: { ...row } });
+      aptDevicePickerCancel();
+      // Auto-switch to Select so the user can immediately grab / edit the new one.
+      if (window.aptSetTool) window.aptSetTool('select');
+      draw(); refreshEditPanel();
+      setStatus(`Placed ${row.device_name || row.device_id}.`);
+    } catch (e) {
+      setStatus('Place failed: ' + e.message);
+    }
+  };
+
+  // ── Device state polling (5s) ──────────────────────────────────────────────
+  function _startStatePolling() {
+    if (_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = setInterval(async () => {
+      if (!roomPlacements.length) return;
+      const ids = roomPlacements.map(p => p.device_id).join(',');
+      try {
+        const r = await fetch('/api/devices/states?ids=' + encodeURIComponent(ids));
+        const states = await r.json();
+        const byId = {};
+        for (const s of states) byId[s.id] = s;
+        let changed = false;
+        for (const p of roomPlacements) {
+          const s = byId[p.device_id];
+          if (!s) continue;
+          const prevState = _devState(p);
+          p.last_state = s.last_state;
+          p.last_seen = s.last_seen;
+          const nextState = _devState(p);
+          if (prevState !== nextState) changed = true;
+        }
+        if (changed) draw();
+      } catch (e) { /* silent */ }
+    }, 5000);
+  }
+
   // Save room_dims for undrawn rooms + height_m for drawn rooms.
   window.aptSavePassageDims = async function () {
     // 1. Undrawn rooms → /api/room-dims
@@ -1925,12 +2426,14 @@
   // ── Init ───────────────────────────────────────────────────────────────────
   async function init() {
     try {
-      const [roomsR, allR, aptR, rdR, devCountsR] = await Promise.all([
+      const [roomsR, allR, aptR, rdR, devCountsR, placementsR, devicesR] = await Promise.all([
         fetch('/api/room-slugs').then(r => r.json()),
         fetch('/api/room-layouts/all').then(r => r.json()),
         fetch('/api/apartment-layout').then(r => r.json()),
         fetch('/api/room-dims').then(r => r.json()).catch(() => ({})),
         fetch('/api/rooms').then(r => r.json()).catch(() => []),
+        fetch('/api/room-device-placements').then(r => r.json()).catch(() => []),
+        fetch('/api/devices').then(r => r.json()).catch(() => []),
       ]);
       roomSlugs = roomsR || [];
       allRooms = allR || {};
@@ -1938,6 +2441,9 @@
       roomDims = rdR || {};
       roomDevCounts = {};
       for (const row of (devCountsR || [])) roomDevCounts[row.room] = row.device_count;
+      roomPlacements = placementsR || [];
+      _allDevices = devicesR || [];
+      _startStatePolling();
 
       rebuildActiveRoomDropdown();
 
@@ -2096,6 +2602,23 @@
           moved: false,
         };
         ev.preventDefault(); ev.stopPropagation();
+        return;
+      }
+      // Device placement label
+      if (t.dataset.devLabelId) {
+        const pid = parseInt(t.dataset.devLabelId, 10);
+        const p = roomPlacements.find(x => x.id === pid);
+        if (!p) return;
+        const lo = p.label_offset || {};
+        labelDrag = {
+          kind: 'dev',
+          devId: pid,
+          startPx: ev.clientX, startPy: ev.clientY,
+          origOx: +lo.x || 0, origOy: +lo.y || 0,
+          origLabelOffset: p.label_offset ? { ...p.label_offset } : null,
+          moved: false,
+        };
+        ev.preventDefault(); ev.stopPropagation();
       }
     });
     svg().addEventListener('contextmenu', function (ev) {
@@ -2163,6 +2686,24 @@
         setStatus(furn.label_hidden
           ? `Furniture label hidden. Toggle "Hidden labels" to restore.`
           : `Furniture label shown.`);
+        return;
+      }
+      if (t.dataset.devLabelId) {
+        ev.preventDefault();
+        const pid = parseInt(t.dataset.devLabelId, 10);
+        const p = roomPlacements.find(x => x.id === pid);
+        if (!p) return;
+        const prev = !!p.label_hidden;
+        p.label_hidden = !prev;
+        pushUndo({ type: 'dev_update', id: p.id, prev_fields: { label_hidden: prev } });
+        draw();
+        fetch('/api/room-device-placements/' + p.id, {
+          method: 'PATCH', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ label_hidden: p.label_hidden }),
+        }).catch(() => {});
+        setStatus(p.label_hidden
+          ? `Device label hidden. Toggle "Hidden labels" to restore.`
+          : `Device label shown.`);
       }
     });
 
@@ -2175,6 +2716,18 @@
       const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
       const yM = viewOriginY + pxToM(ev.clientY - rect.top) - co.y_m;
       const data = activeData();
+      // Device placements first (small hit radius)
+      for (const p of roomPlacements) {
+        if (p.slug !== activeSlug) continue;
+        if (Math.hypot(xM - p.x, yM - p.y) < 0.25) {
+          dragging = { kind: 'dev', id: p.id, startX: xM, startY: yM, origX: p.x, origY: p.y, moved: false };
+          selectedId = p.id;
+          refreshEditPanel();
+          draw();
+          ev.preventDefault();
+          return;
+        }
+      }
       for (const f of (data.furniture || [])) {
         if (Math.abs(xM - f.x) <= f.w/2 + 0.1 && Math.abs(yM - f.y) <= f.h/2 + 0.1) {
           pushUndo();
@@ -2191,12 +2744,12 @@
         const dx = pxToM(ev.clientX - labelDrag.startPx);
         const dy = pxToM(ev.clientY - labelDrag.startPy);
         if (!labelDrag.moved && Math.hypot(dx, dy) > 0.05) labelDrag.moved = true;
-        const layout = allRooms[labelDrag.slug];
-        if (!layout) return;
         const newOff = {
           x: +(labelDrag.origOx + dx).toFixed(2),
           y: +(labelDrag.origOy + dy).toFixed(2),
         };
+        const layout = allRooms[labelDrag.slug];
+        if (labelDrag.kind !== 'dev' && !layout) return;
         if (labelDrag.kind === 'divider') {
           const div = (layout.dividers || []).find(x => x.id === labelDrag.divId);
           if (div) { div.label_offset = newOff; layout._divider_dirty = true; }
@@ -2206,6 +2759,9 @@
         } else if (labelDrag.kind === 'furn') {
           const furn = (layout.furniture || []).find(x => x.id === labelDrag.furnId);
           if (furn) { furn.label_offset = newOff; layout._furn_dirty = true; }
+        } else if (labelDrag.kind === 'dev') {
+          const p = roomPlacements.find(x => x.id === labelDrag.devId);
+          if (p) { p.label_offset = newOff; p._dirty = true; }
         } else {
           layout.label_offset = newOff;
         }
@@ -2217,6 +2773,17 @@
       const co = getComputedOrigin(activeSlug);
       const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
       const yM = viewOriginY + pxToM(ev.clientY - rect.top) - co.y_m;
+      if (dragging.kind === 'dev') {
+        const p = roomPlacements.find(pp => pp.id === dragging.id);
+        if (p) {
+          const nx = +snapM(xM, !!ev.shiftKey).toFixed(2);
+          const ny = +snapM(yM, !!ev.shiftKey).toFixed(2);
+          if (nx !== p.x || ny !== p.y) dragging.moved = true;
+          p.x = nx; p.y = ny;
+          draw();
+        }
+        return;
+      }
       const data = activeData();
       const f = (data.furniture || []).find(ff => ff.id === dragging.id);
       if (f) {
@@ -2231,15 +2798,42 @@
           const what = labelDrag.kind === 'divider' ? 'Divider label'
                      : labelDrag.kind === 'door' ? 'Door label'
                      : labelDrag.kind === 'furn' ? 'Furniture label'
+                     : labelDrag.kind === 'dev'  ? 'Device label'
                      : 'Label';
-          setStatus(`${what} moved for ${labelDrag.slug}. Hit Save to persist.`);
+          if (labelDrag.kind === 'dev') {
+            const p = roomPlacements.find(x => x.id === labelDrag.devId);
+            if (p) {
+              pushUndo({ type: 'dev_update', id: p.id, prev_fields: { label_offset: labelDrag.origLabelOffset } });
+              fetch('/api/room-device-placements/' + p.id, {
+                method: 'PATCH', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ label_offset: p.label_offset }),
+              }).catch(() => {});
+            }
+            setStatus('Device label moved.');
+          } else {
+            setStatus(`${what} moved for ${labelDrag.slug}. Hit Save to persist.`);
+          }
           suppressClick = true;
         }
         labelDrag = null;
       }
       if (dragging) {
+        if (dragging.kind === 'dev') {
+          if (dragging.moved) {
+            const p = roomPlacements.find(x => x.id === dragging.id);
+            if (p) {
+              pushUndo({ type: 'dev_update', id: p.id, prev_fields: { x: dragging.origX, y: dragging.origY } });
+              fetch('/api/room-device-placements/' + p.id, {
+                method: 'PATCH', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ x: p.x, y: p.y }),
+              }).catch(() => {});
+            }
+            setStatus('Device moved.');
+          }
+        } else {
+          setStatus('Furniture moved.');
+        }
         dragging = null;
-        setStatus('Furniture moved.');
       }
     });
     let _resizeT;
@@ -2247,21 +2841,13 @@
     init();
   });
 
-  // Handle bfcache: browser may restore page from memory without re-running
-  // scripts, so _vs would be stale. Re-read localStorage on pageshow.
+  // On bfcache restore, the page comes back alive but scripts don't re-run.
+  // Only redraw — NEVER overwrite in-memory state from the server, because
+  // in-memory may contain unsaved drawings that the user wants to keep.
+  // (A prior version here did an auto-resync that wiped unsaved edits —
+  // removed. Tab switch now keeps your in-memory state exactly as it was.)
   window.addEventListener('pageshow', (event) => {
-    if (event.persisted) {
-      const fresh = JSON.parse(localStorage.getItem('apt_view_sizes') || '{}');
-      for (const k of Object.keys(fresh)) _vs[k] = fresh[k];
-      if (activeSlug) {
-        const s = _vs[activeSlug] || {};
-        const data = allRooms[activeSlug] || {};
-        const shape = data.shape || {};
-        document.getElementById('apt-canvas-w').value = s.w || shape.width_m || 8;
-        document.getElementById('apt-canvas-h').value = s.h || shape.length_m || 6;
-        draw();
-      }
-    }
+    if (event.persisted) draw();
   });
 
 })();

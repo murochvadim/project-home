@@ -74,7 +74,6 @@
       <button class="apt-tool" data-tool="opening" onclick="aptSetTool('opening')" title="Open archway — no physical door" style="background:#fff;color:#8b4513;padding:4px 10px;border:1px dashed #8b4513;border-radius:4px;font-size:0.78rem;cursor:pointer;">Archway</button>
       <button class="apt-tool" data-tool="glass" onclick="aptSetTool('glass')" style="background:#fff;color:#5bb8d4;padding:4px 10px;border:1px solid #5bb8d4;border-radius:4px;font-size:0.78rem;cursor:pointer;">Glass</button>
       <button class="apt-tool" data-tool="divider" onclick="aptSetTool('divider')" style="background:#fff;color:#666;padding:4px 10px;border:1px dashed #888;border-radius:4px;font-size:0.78rem;cursor:pointer;">Divider</button>
-      <button class="apt-tool" data-tool="select" onclick="aptSetTool('select')" style="background:#fff;color:#333;padding:4px 10px;border:1px solid #aaa;border-radius:4px;font-size:0.78rem;cursor:pointer;">Select</button>
       <select id="apt-furn-preset" style="padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;" onchange="if(this.value)aptSetTool('furniture')">
         <option value="">Furniture...</option>
         <option value="sofa">Sofa</option><option value="armchair">Armchair</option>
@@ -102,6 +101,12 @@
       <button onclick="aptCopySelected()" style="padding:4px 10px;border:1px solid #7a9ab8;color:#7a9ab8;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Copy</button>
       <button onclick="aptDeleteSelected()" style="padding:4px 10px;border:1px solid #c0392b;color:#c0392b;border-radius:4px;font-size:0.78rem;background:#fff;cursor:pointer;">Delete</button>
       <button onclick="aptSave()" style="padding:4px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:4px;font-size:0.78rem;cursor:pointer;">Save</button>
+    </div>
+
+    <!-- Secondary actions row — Devices Set beneath Wall, Copy Scene on the right -->
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+      <button class="apt-tool" data-tool="device" onclick="aptSetTool('device')" title="Place a device (presence/motion) in the active room" style="padding:4px 10px;border:1px solid #6c4f9f;background:#fff;color:#6c4f9f;border-radius:4px;font-size:0.78rem;cursor:pointer;">Devices Set</button>
+      <span style="flex:1;"></span>
       <button onclick="aptCopyScene()" style="padding:4px 10px;border:1px solid #3a5a8a;background:#3a5a8a;color:#fff;border-radius:4px;font-size:0.78rem;cursor:pointer;">Copy Scene</button>
     </div>
 
@@ -129,6 +134,19 @@
           <option value="0">0°</option><option value="45">45°</option><option value="90">90°</option><option value="135">135°</option><option value="180">180°</option><option value="225">225°</option><option value="270">270°</option><option value="315">315°</option>
         </select>
       </span>
+      <span id="apt-edit-dev-wrap" style="display:none;">
+        <span id="apt-edit-dev-info" style="color:#555;"></span>
+        Rot: <select id="apt-edit-dev-rot" style="padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+          <option value="0">0°</option><option value="15">15°</option><option value="30">30°</option><option value="45">45°</option><option value="60">60°</option><option value="75">75°</option><option value="90">90°</option><option value="105">105°</option><option value="120">120°</option><option value="135">135°</option><option value="150">150°</option><option value="165">165°</option><option value="180">180°</option><option value="195">195°</option><option value="210">210°</option><option value="225">225°</option><option value="240">240°</option><option value="255">255°</option><option value="270">270°</option><option value="285">285°</option><option value="300">300°</option><option value="315">315°</option><option value="330">330°</option><option value="345">345°</option>
+        </select>
+        Angle: <input type="number" id="apt-edit-dev-angle" step="5" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">°
+        Length: <input type="number" id="apt-edit-dev-length" step="0.1" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">m
+        Hold: <input type="number" id="apt-edit-dev-hold" step="5" min="0" style="width:60px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">s
+        <label title="When on, the coverage dots stop at walls (line-of-sight clipping)" style="display:inline-flex;align-items:center;gap:3px;margin-left:6px;">
+          <input type="checkbox" id="apt-edit-dev-wallbarrier"> Wall barrier
+        </label>
+        Label: <input type="text" id="apt-edit-dev-label" placeholder="optional" style="width:90px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+      </span>
       <button onclick="aptApplyEdit()" style="padding:2px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:3px;font-size:0.78rem;cursor:pointer;margin-left:6px;">Apply</button>
     </div>
 
@@ -142,7 +160,10 @@
           <button id="apt-passage-toggle" onclick="aptTogglePassageCard()" title="Collapse/expand" style="padding:1px 8px;border:1px solid #aaa;background:#fff;border-radius:3px;font-size:0.78rem;cursor:pointer;line-height:1;">▾</button>
           <strong>Room Information</strong>
         </div>
-        <button onclick="aptSavePassageDims()" style="padding:3px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:3px;font-size:0.75rem;cursor:pointer;">Save room info</button>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button class="apt-tool" data-tool="select" onclick="aptSetTool('select')" style="padding:3px 10px;border:1px solid #aaa;background:#fff;color:#333;border-radius:3px;font-size:0.75rem;cursor:pointer;">Select</button>
+          <button onclick="aptSavePassageDims()" style="padding:3px 10px;border:1px solid #27ae60;background:#27ae60;color:#fff;border-radius:3px;font-size:0.75rem;cursor:pointer;">Save room info</button>
+        </div>
       </div>
       <div id="apt-passage-body">
         <div style="color:#666;font-size:0.72rem;margin-bottom:6px;">W/L/H approximate dims for every room — drives AI reasoning about area, volume, motion, sensor coverage, and walking distances. Drawn rooms show their computed area and accept only a height.</div>
@@ -165,8 +186,17 @@
     </div>
 
     <!-- SVG canvas -->
-    <div style="border:1px solid #d0cbc4;border-radius:4px;background:#fafaf7;overflow:auto;">
+    <div style="border:1px solid #d0cbc4;border-radius:4px;background:#fafaf7;overflow:auto;position:relative;">
       <svg id="apt-svg" width="800" height="600" style="display:block;background:#fafaf7;cursor:crosshair;"></svg>
+      <!-- Device-picker popover (shown after clicking canvas in 'device' tool) -->
+      <div id="apt-device-picker" style="display:none;position:absolute;z-index:10;background:#fff;border:1px solid #888;border-radius:5px;box-shadow:0 2px 8px rgba(0,0,0,0.15);padding:8px 10px;font-size:0.78rem;min-width:220px;">
+        <div style="margin-bottom:4px;"><strong>Place device</strong></div>
+        <select id="apt-device-picker-sel" style="width:100%;padding:3px 5px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;margin-bottom:6px;"></select>
+        <div style="display:flex;gap:6px;justify-content:flex-end;">
+          <button onclick="aptDevicePickerCancel()" style="padding:3px 8px;border:1px solid #aaa;background:#fff;border-radius:3px;font-size:0.75rem;cursor:pointer;">Cancel</button>
+          <button onclick="aptDevicePickerConfirm()" style="padding:3px 8px;border:1px solid #6c4f9f;background:#6c4f9f;color:#fff;border-radius:3px;font-size:0.75rem;cursor:pointer;">Place</button>
+        </div>
+      </div>
     </div>
 
     <div style="margin-top:10px;font-size:0.75rem;color:#666;">
@@ -186,11 +216,13 @@
       <span style="display:inline-block;width:20px;height:0;border-top:2px dashed #888;vertical-align:middle;margin:0 4px;"></span> divider
       &nbsp;
       <span style="display:inline-block;width:16px;height:10px;background:#e8e4dc;border:1px solid #999;border-radius:2px;vertical-align:middle;margin:0 4px;"></span> furniture
+      &nbsp;
+      <span style="display:inline-block;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:10px solid #27ae60;vertical-align:middle;margin:0 4px;"></span> device (green=clear / red=active / grey=offline)
     </div>
   </div>
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/rooms.js?v=43"></script>
+<script src="js/rooms.js?v=53"></script>
 </body>
 </html>
