@@ -3252,12 +3252,21 @@ function describePlacement(p) {
   }
   let geom = '';
   if ((dt === 'presence' || dt === 'motion') && p.params) {
-    const a = Number(p.params.beam_angle_deg) || 0;
-    const l = Number(p.params.beam_length_m) || 0;
-    if (a > 0 && l > 0) {
-      const coverage = +(Math.PI * l * l * (a / 360)).toFixed(1);
-      geom = `, cone ${a}°×${l}m (≈ ${coverage} m²`;
-      if (p.params.wall_barrier) geom += ', wall-clipped';
+    const pr = p.params;
+    const legacyAng = Number(pr.beam_angle_deg);
+    const legacyLen = Number(pr.beam_length_m);
+    const angL = pr.beam_angle_left_deg  != null ? Number(pr.beam_angle_left_deg)  : (isFinite(legacyAng) ? legacyAng / 2 : 0);
+    const angR = pr.beam_angle_right_deg != null ? Number(pr.beam_angle_right_deg) : (isFinite(legacyAng) ? legacyAng / 2 : 0);
+    const lenL = pr.beam_length_left_m   != null ? Number(pr.beam_length_left_m)   : (isFinite(legacyLen) ? legacyLen : 0);
+    const lenR = pr.beam_length_right_m  != null ? Number(pr.beam_length_right_m)  : (isFinite(legacyLen) ? legacyLen : 0);
+    if ((angL > 0 || angR > 0) && (lenL > 0 || lenR > 0)) {
+      // Each half = π·L²·(angle/360); sum both sides for total raw cone area.
+      const coverage = +((Math.PI * lenL * lenL * (angL / 360)) + (Math.PI * lenR * lenR * (angR / 360))).toFixed(1);
+      const symmetric = angL === angR && lenL === lenR;
+      geom = symmetric
+        ? `, cone ${angL + angR}°×${lenL}m (≈ ${coverage} m²`
+        : `, cone L ${angL}°×${lenL}m / R ${angR}°×${lenR}m (≈ ${coverage} m²`;
+      if (pr.wall_barrier) geom += ', wall-clipped';
       geom += ')';
     }
   }
@@ -3410,7 +3419,13 @@ async function buildApartmentScene() {
                   : d.door_type === 'opening' ? 'open archway'
                   : 'hinged door';
       const target = d.leads_to ? ` → ${slugToName[d.leads_to] || d.leads_to}` : '';
-      text += `  ${dtype}: ${d.width_m}m wide at offset ${d.offset_m}m${target}\n`;
+      let swingInfo = '';
+      if (!d.door_type || d.door_type === 'hinged') {
+        const hinge = d.hinge_side === 'end' ? 'right-hinge' : 'left-hinge';
+        const swing = d.swing_dir === 'outward' ? 'opens outward' : 'opens inward';
+        swingInfo = ` (${hinge}, ${swing})`;
+      }
+      text += `  ${dtype}: ${d.width_m}m wide at offset ${d.offset_m}m${target}${swingInfo}\n`;
     }
 
     // Dividers with leads_to

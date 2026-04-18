@@ -822,22 +822,34 @@
         erase.setAttribute('points', corners.map(p => `${mToPx(p[0])},${mToPx(p[1])}`).join(' '));
         erase.setAttribute('fill', '#fafaf7'); erase.setAttribute('stroke', 'none');
         g.appendChild(erase);
-        const lx = wg.nx, ly = wg.ny;
-        const leafEndX = wg.sx + lx*item.width_m, leafEndY = wg.sy + ly*item.width_m;
+        // Hinge position: 'start' → pivot at (sx,sy); 'end' → pivot at (ex,ey).
+        // Swing direction: 'inward' → default wall-normal; 'outward' → flipped normal.
+        const hingeSide = item.hinge_side === 'end' ? 'end' : 'start';
+        const swingDir  = item.swing_dir  === 'outward' ? 'outward' : 'inward';
+        const signN = swingDir === 'outward' ? -1 : 1;
+        const pivotX = hingeSide === 'end' ? wg.ex : wg.sx;
+        const pivotY = hingeSide === 'end' ? wg.ey : wg.sy;
+        const tipAnchorX = hingeSide === 'end' ? wg.sx : wg.ex;
+        const tipAnchorY = hingeSide === 'end' ? wg.sy : wg.ey;
+        const leafEndX = pivotX + wg.nx * signN * item.width_m;
+        const leafEndY = pivotY + wg.ny * signN * item.width_m;
         const leaf = document.createElementNS(NS, 'line');
-        leaf.setAttribute('x1', mToPx(wg.sx)); leaf.setAttribute('y1', mToPx(wg.sy));
+        leaf.setAttribute('x1', mToPx(pivotX)); leaf.setAttribute('y1', mToPx(pivotY));
         leaf.setAttribute('x2', mToPx(leafEndX)); leaf.setAttribute('y2', mToPx(leafEndY));
         leaf.setAttribute('stroke', COLOR_DOOR);
         leaf.setAttribute('stroke-width', item.id === selId ? 3 : 2);
         g.appendChild(leaf);
         const arc = document.createElementNS(NS, 'path');
         const rPx = mToPx(item.width_m);
-        arc.setAttribute('d', `M ${mToPx(leafEndX)} ${mToPx(leafEndY)} A ${rPx} ${rPx} 0 0 0 ${mToPx(wg.ex)} ${mToPx(wg.ey)}`);
+        // Arc sweep flag: end→leafEnd direction depends on hinge side × swing dir
+        // so the arc bows toward the swing half-space.
+        const sweep = (hingeSide === 'start') === (swingDir === 'inward') ? 0 : 1;
+        arc.setAttribute('d', `M ${mToPx(leafEndX)} ${mToPx(leafEndY)} A ${rPx} ${rPx} 0 0 ${sweep} ${mToPx(tipAnchorX)} ${mToPx(tipAnchorY)}`);
         arc.setAttribute('fill', 'none'); arc.setAttribute('stroke', COLOR_DOOR);
         arc.setAttribute('stroke-width', 1); arc.setAttribute('stroke-dasharray', '3,3');
         g.appendChild(arc);
         const hinge = document.createElementNS(NS, 'circle');
-        hinge.setAttribute('cx', mToPx(wg.sx)); hinge.setAttribute('cy', mToPx(wg.sy));
+        hinge.setAttribute('cx', mToPx(pivotX)); hinge.setAttribute('cy', mToPx(pivotY));
         hinge.setAttribute('r', 3); hinge.setAttribute('fill', COLOR_DOOR);
         g.appendChild(hinge);
       }
@@ -1005,12 +1017,17 @@
         const isDoor = (tool === 'door' || tool === 'sliding' || tool === 'opening');
         const target = tool === 'window' ? (data.windows = data.windows || []) : (data.doors = data.doors || []);
         const dtype = tool === 'sliding' ? 'sliding' : tool === 'opening' ? 'opening' : 'hinged';
+        const doorExtra = isDoor ? { leads_to: null, door_type: dtype } : {};
+        if (isDoor && dtype === 'hinged') {
+          doorExtra.hinge_side = 'start';
+          doorExtra.swing_dir  = 'inward';
+        }
         target.push({
           id: tool[0] + (target.length + 1) + '_' + Date.now().toString(36),
           wall: pendingWall.wallId,
           offset_m: +offset.toFixed(2),
           width_m: +width.toFixed(2),
-          ...(isDoor ? { leads_to: null, door_type: dtype } : {}),
+          ...doorExtra,
         });
         pendingWall = null;
         setStatus(`${tool} added (offset ${offset.toFixed(2)}m, width ${width.toFixed(2)}m).`);
@@ -1165,6 +1182,14 @@
     const leadsWrap = document.getElementById('apt-edit-leads-wrap');
     leadsWrap.style.display = (dor || div) ? 'inline' : 'none';
     if (dor || div) document.getElementById('apt-edit-leads').value = item.leads_to || '';
+    // Hinge side + swing direction — only for hinged doors
+    const hingeWrap = document.getElementById('apt-edit-hinge-wrap');
+    const isHinged = !!(dor && item.door_type !== 'sliding' && item.door_type !== 'opening');
+    hingeWrap.style.display = isHinged ? 'inline' : 'none';
+    if (isHinged) {
+      document.getElementById('apt-edit-hinge').value = (item.hinge_side === 'end') ? 'end' : 'start';
+      document.getElementById('apt-edit-swing').value = (item.swing_dir === 'outward') ? 'outward' : 'inward';
+    }
     const furnWrap = document.getElementById('apt-edit-furn-wrap');
     furnWrap.style.display = isFurn ? 'inline' : 'none';
     if (isFurn) {
@@ -1180,8 +1205,17 @@
         `${placement.device_type || 'device'} · `;
       document.getElementById('apt-edit-dev-rot').value = placement.rotation || 0;
       const pr = placement.params || {};
-      document.getElementById('apt-edit-dev-angle').value = pr.beam_angle_deg ?? 90;
-      document.getElementById('apt-edit-dev-length').value = pr.beam_length_m ?? 4;
+      // Backward-compat: fall back to legacy symmetric fields.
+      const legacyAng = Number(pr.beam_angle_deg);
+      const legacyLen = Number(pr.beam_length_m);
+      const angL = pr.beam_angle_left_deg  != null ? pr.beam_angle_left_deg  : (isFinite(legacyAng) ? +(legacyAng/2).toFixed(1) : 45);
+      const angR = pr.beam_angle_right_deg != null ? pr.beam_angle_right_deg : (isFinite(legacyAng) ? +(legacyAng/2).toFixed(1) : 45);
+      const lenL = pr.beam_length_left_m   != null ? pr.beam_length_left_m   : (isFinite(legacyLen) ? legacyLen : 4);
+      const lenR = pr.beam_length_right_m  != null ? pr.beam_length_right_m  : (isFinite(legacyLen) ? legacyLen : 4);
+      document.getElementById('apt-edit-dev-angle-l').value = angL;
+      document.getElementById('apt-edit-dev-angle-r').value = angR;
+      document.getElementById('apt-edit-dev-length-l').value = lenL;
+      document.getElementById('apt-edit-dev-length-r').value = lenR;
       document.getElementById('apt-edit-dev-hold').value = pr.hold_s ?? 120;
       document.getElementById('apt-edit-dev-wallbarrier').checked = !!pr.wall_barrier;
       document.getElementById('apt-edit-dev-label').value = placement.label || '';
@@ -1200,18 +1234,23 @@
       const placement = roomPlacements.find(p => p.id === selectedId);
       if (placement) {
         const rot = parseInt(document.getElementById('apt-edit-dev-rot').value, 10) || 0;
-        const ang = parseFloat(document.getElementById('apt-edit-dev-angle').value);
-        const len = parseFloat(document.getElementById('apt-edit-dev-length').value);
+        const angL = parseFloat(document.getElementById('apt-edit-dev-angle-l').value);
+        const angR = parseFloat(document.getElementById('apt-edit-dev-angle-r').value);
+        const lenL = parseFloat(document.getElementById('apt-edit-dev-length-l').value);
+        const lenR = parseFloat(document.getElementById('apt-edit-dev-length-r').value);
         const hold = parseFloat(document.getElementById('apt-edit-dev-hold').value);
         const wallBarrier = !!document.getElementById('apt-edit-dev-wallbarrier').checked;
         const lbl = (document.getElementById('apt-edit-dev-label').value || '').trim() || null;
-        const params = {
-          ...(placement.params || {}),
-          ...(isFinite(ang) && ang > 0 ? { beam_angle_deg: ang } : {}),
-          ...(isFinite(len) && len > 0 ? { beam_length_m: len } : {}),
-          ...(isFinite(hold) && hold >= 0 ? { hold_s: hold } : {}),
-          wall_barrier: wallBarrier,
-        };
+        // Build new params; drop legacy symmetric keys so they don't shadow.
+        const params = { ...(placement.params || {}) };
+        delete params.beam_angle_deg;
+        delete params.beam_length_m;
+        if (isFinite(angL) && angL >= 0) params.beam_angle_left_deg  = angL;
+        if (isFinite(angR) && angR >= 0) params.beam_angle_right_deg = angR;
+        if (isFinite(lenL) && lenL > 0)  params.beam_length_left_m   = lenL;
+        if (isFinite(lenR) && lenR > 0)  params.beam_length_right_m  = lenR;
+        if (isFinite(hold) && hold >= 0) params.hold_s = hold;
+        params.wall_barrier = wallBarrier;
         const prev_fields = {
           rotation: placement.rotation,
           params: { ...(placement.params || {}) },
@@ -1251,6 +1290,10 @@
       item.leads_to = (document.getElementById('apt-edit-leads').value || '').trim() || null;
       rebuildActiveRoomDropdown();
       renderPassageDimsTable();
+    }
+    if (kind === 'doors' && item.door_type !== 'sliding' && item.door_type !== 'opening') {
+      item.hinge_side = document.getElementById('apt-edit-hinge').value === 'end' ? 'end' : 'start';
+      item.swing_dir  = document.getElementById('apt-edit-swing').value === 'outward' ? 'outward' : 'inward';
     }
     pushUndo(undefined, 'edit-' + (kind || '?'));
     draw();
@@ -2013,40 +2056,51 @@
       const state = _devState(p);
       const fill = DEV_COLORS[state];
 
-      // Cone + dot field — only for presence/motion when active
+      // Cone + dot field — only for presence/motion when active.
+      // V5.1: support asymmetric left/right halves. Params resolved with
+      // backward-compat: legacy (beam_angle_deg, beam_length_m) splits into
+      // equal halves; new fields (beam_angle_left/right_deg, beam_length_
+      // left/right_m) override per side if set.
       if (state === 'active' && DEV_PRESENCE_TYPES.has(p.device_type)) {
-        const angleDeg = Number((p.params || {}).beam_angle_deg) || 90;
-        const lengthM = Number((p.params || {}).beam_length_m) || 4;
-        const wallBarrier = !!(p.params || {}).wall_barrier;
+        const pr = p.params || {};
+        const legacyAng = Number(pr.beam_angle_deg);
+        const legacyLen = Number(pr.beam_length_m);
+        const angL = (pr.beam_angle_left_deg  != null ? Number(pr.beam_angle_left_deg)  : (isFinite(legacyAng) ? legacyAng / 2 : 45));
+        const angR = (pr.beam_angle_right_deg != null ? Number(pr.beam_angle_right_deg) : (isFinite(legacyAng) ? legacyAng / 2 : 45));
+        const lenL = (pr.beam_length_left_m   != null ? Number(pr.beam_length_left_m)   : (isFinite(legacyLen) ? legacyLen : 4));
+        const lenR = (pr.beam_length_right_m  != null ? Number(pr.beam_length_right_m)  : (isFinite(legacyLen) ? legacyLen : 4));
+        const wallBarrier = !!pr.wall_barrier;
         const rotRad = (Math.PI / 180) * (p.rotation || 0);
-        const halfRad = (Math.PI / 180) * (angleDeg / 2);
+        const angLRad = (Math.PI / 180) * angL;
+        const angRRad = (Math.PI / 180) * angR;
 
-        // When wall_barrier is on, ray-cast each sampled angle to build a
-        // per-angle max-distance array; use it for BOTH outline polygon and
-        // dot placement so everything stops cleanly at walls.
         const roomLayout = allRooms[slug] || {};
         const walls = wallBarrier ? (roomLayout.walls || []) : null;
         const apexM = wallBarrier
           ? { x: p.x + 0.01 * Math.cos(rotRad), y: p.y + 0.01 * Math.sin(rotRad) }
           : { x: p.x, y: p.y };
-        // Sample N angles across the cone; interpolate between them for dots.
-        const N_ANGLE_SAMPLES = Math.max(16, Math.ceil(angleDeg / 3));
-        const sampleAngles = [];
-        const sampleHits = [];
-        for (let k = 0; k <= N_ANGLE_SAMPLES; k++) {
-          const frac = (k / N_ANGLE_SAMPLES) - 0.5; // -0.5..0.5
-          const a = rotRad + frac * halfRad * 2;
-          sampleAngles.push(a);
-          const hit = wallBarrier ? _raycastWall(apexM, a, lengthM, walls) : lengthM;
-          sampleHits.push(hit);
-        }
 
-        // Outline polygon: apex + hit points at each sampled angle.
-        const pts = [`${cx},${cy}`];
-        for (let k = 0; k < sampleAngles.length; k++) {
-          const r = sampleHits[k], a = sampleAngles[k];
-          pts.push(`${mToPx(p.x + r * Math.cos(a))},${mToPx(p.y + r * Math.sin(a))}`);
+        // Sample angles — LEFT side goes from (rot - angL) to rot; RIGHT side
+        // goes from rot to (rot + angR). Each side independently samples + hits.
+        function buildSide(angStart, angSpan, lenMax) {
+          const nSamp = Math.max(8, Math.ceil((angSpan * 180 / Math.PI) / 3));
+          const out = [];
+          for (let k = 0; k <= nSamp; k++) {
+            const frac = k / nSamp;
+            const a = angStart + frac * angSpan;
+            const hit = wallBarrier ? _raycastWall(apexM, a, lenMax, walls) : lenMax;
+            out.push({ a, r: hit, frac });
+          }
+          return out;
         }
+        const leftSide  = buildSide(rotRad - angLRad, angLRad, lenL);
+        const rightSide = buildSide(rotRad,           angRRad, lenR);
+
+        // Outline polygon: apex → left samples (aim-angL → aim) → right
+        // samples (aim → aim+angR) → apex (auto-closed).
+        const pts = [`${cx},${cy}`];
+        for (const s of leftSide)  pts.push(`${mToPx(p.x + s.r * Math.cos(s.a))},${mToPx(p.y + s.r * Math.sin(s.a))}`);
+        for (const s of rightSide) pts.push(`${mToPx(p.x + s.r * Math.cos(s.a))},${mToPx(p.y + s.r * Math.sin(s.a))}`);
         const outline = document.createElementNS(NS, 'polygon');
         outline.setAttribute('points', pts.join(' '));
         outline.setAttribute('fill', 'rgba(216,48,48,0.08)');
@@ -2055,33 +2109,36 @@
         outline.setAttribute('stroke-dasharray', '4,3');
         g.appendChild(outline);
 
-        // Dot field: for each (r, angle), find the nearest two angle samples
-        // and skip the dot if r exceeds the interpolated hit distance.
+        // Dot field — one pass per side, each using its own length + samples.
         const stepM = 0.3;
-        for (let r = stepM; r < lengthM; r += stepM) {
-          const arcLen = r * angleDeg * Math.PI / 180;
-          const nSteps = Math.max(2, Math.round(arcLen / stepM));
-          for (let i = 0; i <= nSteps; i++) {
-            const frac = (i / nSteps) - 0.5;
-            const a = rotRad + frac * halfRad * 2;
-            if (wallBarrier) {
-              // Interpolate hitDist from sampleHits by frac position.
-              const idxF = (i / nSteps) * N_ANGLE_SAMPLES;
-              const i0 = Math.floor(idxF), i1 = Math.min(i0 + 1, N_ANGLE_SAMPLES);
-              const lerp = idxF - i0;
-              const hit = sampleHits[i0] * (1 - lerp) + sampleHits[i1] * lerp;
-              if (r > hit - 0.02) continue; // small margin so dots don't sit on wall
+        function drawDots(angStart, angSpan, lenMax, sideSamples) {
+          const nSamp = sideSamples.length - 1;
+          for (let r = stepM; r < lenMax; r += stepM) {
+            const arcLen = r * (angSpan);
+            const nSteps = Math.max(2, Math.round(arcLen / stepM));
+            for (let i = 0; i <= nSteps; i++) {
+              const frac = i / nSteps;
+              const a = angStart + frac * angSpan;
+              if (wallBarrier) {
+                const idxF = frac * nSamp;
+                const i0 = Math.floor(idxF), i1 = Math.min(i0 + 1, nSamp);
+                const lerp = idxF - i0;
+                const hit = sideSamples[i0].r * (1 - lerp) + sideSamples[i1].r * lerp;
+                if (r > hit - 0.02) continue;
+              }
+              const dx = mToPx(p.x + r * Math.cos(a));
+              const dy = mToPx(p.y + r * Math.sin(a));
+              const d = document.createElementNS(NS, 'circle');
+              d.setAttribute('cx', dx); d.setAttribute('cy', dy);
+              d.setAttribute('r', 1.5);
+              d.setAttribute('fill', '#ff8080');
+              d.setAttribute('opacity', 0.65);
+              g.appendChild(d);
             }
-            const dx = mToPx(p.x + r * Math.cos(a));
-            const dy = mToPx(p.y + r * Math.sin(a));
-            const d = document.createElementNS(NS, 'circle');
-            d.setAttribute('cx', dx); d.setAttribute('cy', dy);
-            d.setAttribute('r', 1.5);
-            d.setAttribute('fill', '#ff8080');
-            d.setAttribute('opacity', 0.65);
-            g.appendChild(d);
           }
         }
+        drawDots(rotRad - angLRad, angLRad, lenL, leftSide);
+        drawDots(rotRad,           angRRad, lenR, rightSide);
       }
 
       // Triangle icon — equilateral, 0.18 m side (half of prior 0.35 m), apex along rotation
