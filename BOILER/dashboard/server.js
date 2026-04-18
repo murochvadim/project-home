@@ -2939,7 +2939,7 @@ app.post('/api/room-layouts/:slug', async (req, res) => {
     const b = req.body || {};
     // Accept only known fields; ignore anything else silently.
     const patch = {};
-    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with', 'view_w', 'view_h', 'furniture', 'label_offset', 'label_hidden', 'height_m']) {
+    for (const k of ['shape', 'grid', 'orientation', 'origin', 'walls', 'windows', 'doors', 'dividers', 'shared_with', 'view_w', 'view_h', 'furniture', 'label_offset', 'label_hidden', 'height_m', 'zones']) {
       if (b[k] !== undefined) patch[k] = b[k];
     }
     if (Object.keys(patch).length === 0) {
@@ -3235,15 +3235,55 @@ function computeRoomAreaFromWalls(walls) {
   return Math.abs(sum) / 2;
 }
 
+// V6 Zones — 1m grid helpers for the scene serializer.
+// Mirrors the client logic in rooms.js (cellIdForPoint). Used to append a
+// "(in zone <name>)" / "(cell N)" suffix on every placed device so AI context
+// gains a stable spatial anchor.
+function zoneGridBoundsSrv(layout) {
+  const walls = (layout && layout.walls) || [];
+  if (!walls.length) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const w of walls) {
+    minX = Math.min(minX, +w.x1, +w.x2); minY = Math.min(minY, +w.y1, +w.y2);
+    maxX = Math.max(maxX, +w.x1, +w.x2); maxY = Math.max(maxY, +w.y1, +w.y2);
+  }
+  if (!isFinite(minX)) return null;
+  return { minX, minY, cols: Math.max(1, Math.ceil(maxX - minX)), rows: Math.max(1, Math.ceil(maxY - minY)) };
+}
+function cellIdForPointSrv(layout, x, y) {
+  const g = zoneGridBoundsSrv(layout);
+  if (!g) return null;
+  const col = Math.floor(+x - g.minX);
+  const row = Math.floor(+y - g.minY);
+  if (col < 0 || col >= g.cols || row < 0 || row >= g.rows) return null;
+  return row * g.cols + col + 1;
+}
+function resolveCellSrv(layout, x, y) {
+  const cellId = cellIdForPointSrv(layout, x, y);
+  if (cellId == null) return null;
+  for (const z of (layout.zones || [])) {
+    if ((z.cells || []).includes(cellId)) return { cellId, zoneName: z.name };
+  }
+  return { cellId, zoneName: null };
+}
+
 // Format one device-placement line for the scene text — type-aware.
-function describePlacement(p) {
+// When a layout is supplied, the line is suffixed with the V6 zone/cell this
+// device lands in (retroactively enriches AI context).
+function describePlacement(p, layout) {
   const dt = p.device_type || 'device';
   const name = p.label || p.device_name || p.device_id;
   const rot = ((p.rotation || 0) % 360 + 360) % 360;
   const isEnabled = (p.params || {}).enabled !== false;
+  // V6 Zones suffix — present only when a layout with the 1m grid is supplied.
+  let zoneSuffix = '';
+  if (layout) {
+    const r = resolveCellSrv(layout, p.x, p.y);
+    if (r) zoneSuffix = r.zoneName ? ` (in zone ${r.zoneName})` : ` (cell ${r.cellId})`;
+  }
   // Disabled placements: AI should exclude them from coverage/active reasoning.
   if (!isEnabled) {
-    return `    - ${name} (${dt}, DISABLED) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°, state: n/a`;
+    return `    - ${name} (${dt}, DISABLED) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${zoneSuffix}, state: n/a`;
   }
   const AGE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold (device agent owns freshness)
   const lastSeenMs = p.last_seen ? new Date(p.last_seen).getTime() : 0;
@@ -3275,7 +3315,7 @@ function describePlacement(p) {
       geom += ')';
     }
   }
-  return `    - ${name} (${dt}) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${geom}, state: ${state}`;
+  return `    - ${name} (${dt}) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${geom}${zoneSuffix}, state: ${state}`;
 }
 
 // ─── Apartment scene serializer (AI consumption) ─────────────────────────────
@@ -3472,11 +3512,24 @@ async function buildApartmentScene() {
       text += `  Furniture: ${furnDesc.join('; ')}\n`;
     }
 
-    // Devices placed — position, rotation, cone, live state (V5)
+    // V6 Zones — named 1m-grid regions for AI spatial anchors.
+    const zones = layout.zones || [];
+    const zGrid = zoneGridBoundsSrv(layout);
+    if (zones.length && zGrid) {
+      text += `  Zones (1m grid, ${zGrid.cols}×${zGrid.rows}):\n`;
+      for (const z of zones) {
+        const cells = (z.cells || []).slice().sort((a, b) => a - b);
+        const area = cells.length;
+        const desc = z.description ? `, "${z.description}"` : '';
+        text += `    - ${z.name}: cells ${cells.join(',')} (≈ ${area} m²${desc})\n`;
+      }
+    }
+
+    // Devices placed — position, rotation, cone, live state (V5), zone suffix (V6)
     const placements = placementsBySlug[slug] || [];
     if (placements.length) {
       text += `  Devices placed:\n`;
-      for (const p of placements) text += describePlacement(p) + '\n';
+      for (const p of placements) text += describePlacement(p, layout) + '\n';
     }
 
     text += '\n';

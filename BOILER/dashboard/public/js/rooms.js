@@ -31,12 +31,15 @@
   let viewOriginX  = 0;
   let viewOriginY  = 0;
   let _showHiddenLabels = false;
+  let _showZones        = (localStorage.getItem('apt_show_zones') !== '0'); // V6 — default ON
   let roomDims     = {};            // { slug: {w, l, h} } — dims for undrawn rooms
   let roomDevCounts = {};           // { roomName: count } — from /api/rooms
   let roomPlacements = [];          // V5: [{id, slug, device_id, device_type, x, y, rotation, params, label, label_offset, label_hidden, device_name, last_state, last_seen}]
   let _allDevices = [];             // cached device list for picker
   let _devicePicker = null;         // {x_m, y_m, slug, suggested_ids} while popover is open
   let _pollTimer = null;            // state polling timer
+  let _zoneSel    = [];             // V6 Zones: list of cellIds currently selected (unsaved)
+  let _zoneEditId = null;           // id of existing zone being edited (null = creating new)
 
   function svg() { return document.getElementById('apt-svg'); }
   function activeData() { return allRooms[activeSlug] || { walls:[], windows:[], doors:[], dividers:[] }; }
@@ -112,6 +115,44 @@
     }
     if (!isFinite(minX)) return { minX: 0, minY: 0, maxX: 8, maxY: 6 };
     return { minX, minY, maxX, maxY };
+  }
+
+  // ── V6 Zones: 1m grid helpers ──────────────────────────────────────────────
+  // Zones are a numbered 1m grid overlay. Each cell is 1.0m × 1.0m, row-major,
+  // 1-based. cellIdForPoint() snaps a point to its cell id; cellIdToRect()
+  // returns the cell's bbox in room-local meters.
+  const ZONE_CELL_M = 1.0;
+  function zoneGridSize(layout) {
+    const b = getRoomBounds(layout);
+    const cols = Math.max(1, Math.ceil(b.maxX - b.minX));
+    const rows = Math.max(1, Math.ceil(b.maxY - b.minY));
+    return { cols, rows, minX: b.minX, minY: b.minY };
+  }
+  function cellIdForPoint(layout, x, y) {
+    const g = zoneGridSize(layout);
+    const col = Math.floor(x - g.minX);
+    const row = Math.floor(y - g.minY);
+    if (col < 0 || col >= g.cols || row < 0 || row >= g.rows) return null;
+    return row * g.cols + col + 1;
+  }
+  function cellIdToRect(layout, cellId) {
+    const g = zoneGridSize(layout);
+    const col = (cellId - 1) % g.cols;
+    const row = Math.floor((cellId - 1) / g.cols);
+    return {
+      col, row,
+      minXm: g.minX + col, minYm: g.minY + row,
+      maxXm: g.minX + col + 1, maxYm: g.minY + row + 1,
+    };
+  }
+  // Returns { cellId, zoneName, zoneId } — zoneName/zoneId are null for unnamed cells.
+  function resolveCellForPoint(layout, x, y) {
+    const cellId = cellIdForPoint(layout, x, y);
+    if (cellId == null) return null;
+    for (const z of (layout.zones || [])) {
+      if ((z.cells || []).includes(cellId)) return { cellId, zoneName: z.name, zoneId: z.id };
+    }
+    return { cellId, zoneName: null, zoneId: null };
   }
 
   // Determine which side of the room a wall is on (north/south/east/west).
@@ -913,6 +954,16 @@
       }
     }
 
+    // V6 Zones: 1m grid overlay + cell numbers shown while the Zones tool is
+    // active (on the active room only). Named-zone labels render always so the
+    // spatial anchors for AI stay visible. Rendered between furniture and
+    // devices so devices sit on top. Gated by the "Zones" toolbar checkbox;
+    // also suppressed by _showHiddenLabels (clean-screenshot mode). While the
+    // Zones tool is active, we always render so the user can keep editing.
+    if (tool === 'zone' || (_showZones && !_showHiddenLabels)) {
+      renderZoneOverlay(g, layout, slug, isActive);
+    }
+
     // V5 device placements (triangles, cones, labels)
     renderPlacementsForRoom(g, slug, selId);
 
@@ -944,6 +995,9 @@
   window.aptSetTool = function (t) {
     tool = t;
     pending = null; pendingWall = null; selectedId = null;
+    // V6: leaving the zone tool clears any unsaved cell selection. Editing an
+    // existing zone is exited cleanly.
+    if (t !== 'zone') { _zoneSel = []; _zoneEditId = null; }
     document.querySelectorAll('.apt-tool').forEach(b => {
       b.style.outline = b.dataset.tool === t ? '2px solid #27ae60' : 'none';
     });
@@ -957,6 +1011,7 @@
       divider: 'Click two points for open-plan boundary.',
       device:  'Click inside a room to place a presence/motion device.',
       furniture: 'Click to place furniture. Click again to set size, or single-click for default size.',
+      zone:    'Click cells to toggle selection. Then type a name in the edit panel + Apply to save. Click a named zone to edit it.',
       select:  'Click an element to select.',
     };
     setStatus(hints[t] || '');
@@ -1070,6 +1125,36 @@
       // Open the device picker popover at the click position inside the active room.
       aptDevicePickerOpen(ev, xM, yM);
       return;
+    } else if (tool === 'zone') {
+      // V6 Zones: click a cell to toggle selection. Clicking a cell inside an
+      // existing named zone loads that zone into the edit panel (its cells +
+      // name), allowing rename / add cells / delete. Saving is done via Apply.
+      const layout = allRooms[activeSlug];
+      if (!layout) return;
+      const hit = resolveCellForPoint(layout, xM, yM);
+      if (!hit) { setStatus('Click inside the room bounds.'); return; }
+      const cellId = hit.cellId;
+      if (hit.zoneId && hit.zoneId !== _zoneEditId) {
+        // Load existing zone for editing
+        const z = (layout.zones || []).find(zz => zz.id === hit.zoneId);
+        if (z) {
+          _zoneEditId = z.id;
+          _zoneSel = [...(z.cells || [])];
+          selectedId = null;
+          setStatus(`Editing zone "${z.name}" (${_zoneSel.length} cells). Shift-click or plain-click cells to add/remove. Apply saves.`);
+          draw(); refreshEditPanel();
+          return;
+        }
+      }
+      // Plain toggle (whether creating new or editing current)
+      const idx = _zoneSel.indexOf(cellId);
+      if (idx >= 0) _zoneSel.splice(idx, 1);
+      else _zoneSel.push(cellId);
+      // If toggling cells for a new zone (not editing existing), ensure edit panel is open
+      if (!_zoneEditId) selectedId = null;
+      setStatus(`${_zoneSel.length} cell${_zoneSel.length === 1 ? '' : 's'} selected — type a name in the edit panel + Apply.`);
+      draw(); refreshEditPanel();
+      return;
     } else if (tool === 'paste' && clipboard) {
       pushUndo(undefined, 'paste-furniture');
       const data = activeData();
@@ -1105,8 +1190,10 @@
         setStatus(`${preset} placed. Select another from dropdown or switch tool.`);
       }
     } else if (tool === 'select') {
-      // Check furniture first (on top visually)
-      for (const f of (data.furniture || [])) {
+      // Respect visibility toggles: Select should not hit elements that aren't drawn.
+      const showFurn = !!(document.getElementById('apt-show-furniture') || {}).checked;
+      // Check furniture first (on top visually) — skip if Furniture checkbox is off.
+      if (showFurn) for (const f of (data.furniture || [])) {
         if (Math.abs(xM - f.x) <= f.w/2 + 0.1 && Math.abs(yM - f.y) <= f.h/2 + 0.1) {
           selectedId = f.id;
           setStatus(`Selected ${f.type}${f.label ? ' "'+f.label+'"' : ''}. Edit below or Delete.`);
@@ -1148,6 +1235,19 @@
         if (Math.hypot(xM - px, yM - py) < 0.4) {
           selectedId = d.id;
           setStatus(`Selected divider ${d.id}.`);
+          draw(); refreshEditPanel();
+          return;
+        }
+      }
+      // V6: Check zones — click inside a named zone's cells to select it for
+      // editing. Skip if the Zones checkbox is off (hidden elements must not
+      // be selectable).
+      if (_showZones) {
+        const zHit = resolveCellForPoint(data, xM, yM);
+        if (zHit && zHit.zoneId) {
+          selectedId = zHit.zoneId;
+          const z = (data.zones || []).find(zz => zz.id === zHit.zoneId);
+          setStatus(`Selected zone "${z ? z.name : zHit.zoneId}". Rename + Apply, or Delete.`);
           draw(); refreshEditPanel();
           return;
         }
@@ -1240,6 +1340,32 @@
   function refreshEditPanel() {
     const panel = document.getElementById('apt-edit-panel');
     if (!panel) return;
+    // V6 Zones: special case — zone-edit mode doesn't use selectedId. Show the
+    // zone wrap whenever we have cells selected OR are editing an existing zone.
+    const zoneMode = (tool === 'zone') && (_zoneSel.length > 0 || _zoneEditId);
+    if (zoneMode) {
+      const layout = allRooms[activeSlug] || {};
+      const z = _zoneEditId ? (layout.zones || []).find(zz => zz.id === _zoneEditId) : null;
+      panel.style.display = 'block';
+      document.getElementById('apt-edit-id').textContent = z ? ('zone "' + z.name + '"') : 'new zone';
+      document.getElementById('apt-edit-offset-wrap').style.display  = 'none';
+      document.getElementById('apt-edit-width-wrap').style.display   = 'none';
+      document.getElementById('apt-edit-leads-wrap').style.display   = 'none';
+      document.getElementById('apt-edit-hinge-wrap').style.display   = 'none';
+      document.getElementById('apt-edit-furn-wrap').style.display    = 'none';
+      document.getElementById('apt-edit-dev-wrap').style.display     = 'none';
+      const zw = document.getElementById('apt-edit-zone-wrap');
+      zw.style.display = 'inline';
+      const cellList = _zoneSel.slice().sort((a, b) => a - b).join(',');
+      document.getElementById('apt-edit-zone-info').textContent =
+        `cells: ${cellList || '(none — click cells to select)'} · `;
+      document.getElementById('apt-edit-zone-name').value = z ? (z.name || '') : '';
+      document.getElementById('apt-edit-zone-desc').value = z ? (z.description || '') : '';
+      return;
+    }
+    // Hide zone wrap when leaving zone tool
+    const zw = document.getElementById('apt-edit-zone-wrap');
+    if (zw) zw.style.display = 'none';
     if (!selectedId) { panel.style.display = 'none'; return; }
     const data = activeData();
     const win = (data.windows || []).find(x => x.id === selectedId);
@@ -1247,6 +1373,25 @@
     const div = (data.dividers || []).find(x => x.id === selectedId);
     const furn = (data.furniture || []).find(x => x.id === selectedId);
     const placement = roomPlacements.find(p => p.id === selectedId);
+    const zone = (data.zones || []).find(z => z.id === selectedId);
+    // V6 zone selected via Select tool: show zone wrap with name/desc (no cell editing).
+    if (zone) {
+      panel.style.display = 'block';
+      document.getElementById('apt-edit-id').textContent = `zone "${zone.name}" · ${(zone.cells || []).length} cells`;
+      document.getElementById('apt-edit-offset-wrap').style.display = 'none';
+      document.getElementById('apt-edit-width-wrap').style.display  = 'none';
+      document.getElementById('apt-edit-leads-wrap').style.display  = 'none';
+      document.getElementById('apt-edit-hinge-wrap').style.display  = 'none';
+      document.getElementById('apt-edit-furn-wrap').style.display   = 'none';
+      document.getElementById('apt-edit-dev-wrap').style.display    = 'none';
+      const zw = document.getElementById('apt-edit-zone-wrap');
+      zw.style.display = 'inline';
+      const cellList = (zone.cells || []).slice().sort((a, b) => a - b).join(',');
+      document.getElementById('apt-edit-zone-info').textContent = `cells: ${cellList} · `;
+      document.getElementById('apt-edit-zone-name').value = zone.name || '';
+      document.getElementById('apt-edit-zone-desc').value = zone.description || '';
+      return;
+    }
     const item = win || dor || div || furn || placement;
     if (!item) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
@@ -1308,8 +1453,71 @@
   }
 
   window.aptApplyEdit = async function () {
+    // V6 Zones: if we're in zone-edit mode, Apply saves the zone (create / edit /
+    // delete) into the active room's layout, then snapshots the room for undo.
+    if (tool === 'zone' && (_zoneSel.length > 0 || _zoneEditId)) {
+      const layout = allRooms[activeSlug];
+      if (!layout) { setStatus('No active room.'); return; }
+      const name = (document.getElementById('apt-edit-zone-name').value || '').trim();
+      const desc = (document.getElementById('apt-edit-zone-desc').value || '').trim();
+      pushUndo(undefined, 'zone-apply');
+      layout.zones = layout.zones || [];
+      if (_zoneEditId) {
+        const idx = layout.zones.findIndex(z => z.id === _zoneEditId);
+        if (idx < 0) {
+          // Stale id — zone was deleted elsewhere. Clear state so purple outlines vanish.
+          _zoneSel = []; _zoneEditId = null;
+          setStatus('Zone was already removed. Cleared editor.');
+          draw(); refreshEditPanel(); renderZoneInformationTable();
+          return;
+        }
+        if (!name) {
+          // Empty name on an existing zone → delete it. Clear editing state.
+          layout.zones.splice(idx, 1);
+          _zoneSel = []; _zoneEditId = null;
+          setStatus('Zone deleted.');
+        } else {
+          if (!_zoneSel.length) {
+            setStatus('At least one cell required. Click cells first, or leave the name blank to delete the zone.');
+            return;
+          }
+          // Update existing: cells = current selection (allows adding/removing), rename
+          layout.zones[idx].cells = _zoneSel.slice().sort((a, b) => a - b);
+          layout.zones[idx].name = name;
+          layout.zones[idx].description = desc;
+          setStatus(`Zone "${name}" updated (${_zoneSel.length} cells). Hit Save to persist.`);
+        }
+      } else {
+        if (!name) { setStatus('Type a name to create a zone (or empty name on an existing zone to delete).'); return; }
+        if (!_zoneSel.length) { setStatus('Click at least one cell first.'); return; }
+        const id = 'z_' + activeSlug + '_' + Date.now().toString(36);
+        layout.zones.push({
+          id, name, description: desc,
+          cells: _zoneSel.slice().sort((a, b) => a - b),
+        });
+        _zoneEditId = id;
+        setStatus(`Zone "${name}" created (${_zoneSel.length} cells). Save to persist.`);
+      }
+      draw();
+      refreshEditPanel();
+      renderZoneInformationTable();
+      return;
+    }
     if (!selectedId) return;
     const data = activeData();
+    // V6: zone selected via Select — Apply renames / updates description.
+    const zoneSel = (data.zones || []).find(z => z.id === selectedId);
+    if (zoneSel) {
+      const name = (document.getElementById('apt-edit-zone-name').value || '').trim();
+      const desc = (document.getElementById('apt-edit-zone-desc').value || '').trim();
+      if (!name) { setStatus('Name required. Use Delete to remove the zone.'); return; }
+      pushUndo(undefined, 'zone-rename');
+      zoneSel.name = name;
+      zoneSel.description = desc;
+      draw(); refreshEditPanel(); renderZoneInformationTable();
+      setStatus(`Zone renamed to "${name}".`);
+      return;
+    }
     let item = (data.windows || []).find(x => x.id === selectedId);
     let kind = 'windows';
     if (!item) { item = (data.doors || []).find(x => x.id === selectedId); kind = 'doors'; }
@@ -1401,6 +1609,7 @@
     if (prev.type === 'layout') {
       allRooms[prev.slug || activeSlug] = JSON.parse(prev.snapshot);
       selectedId = null; pending = null; pendingWall = null;
+      _zoneSel = []; _zoneEditId = null; // V6: undo also clears zone editor state
       rebuildActiveRoomDropdown(); renderPassageDimsTable(); draw();
       return;
     }
@@ -1486,6 +1695,7 @@
     data.doors = (data.doors || []).filter(x => x.id !== selectedId && x.wall !== selectedId);
     data.dividers = (data.dividers || []).filter(d => d.id !== selectedId);
     data.furniture = (data.furniture || []).filter(f => f.id !== selectedId);
+    data.zones = (data.zones || []).filter(z => z.id !== selectedId); // V6 zone delete via Select
     selectedId = null;
     // Deleting a divider/door can change the passage set — refresh UI affordances.
     rebuildActiveRoomDropdown();
@@ -1601,6 +1811,13 @@
         delete rd._door_dirty;
         delete rd._furn_dirty;
       }
+      renderZoneInformationTable();
+      // V6: clear zone editing state so the purple cell-selection outline
+      // vanishes after commit. Zone name + faint grey cell borders stay.
+      _zoneSel = [];
+      _zoneEditId = null;
+      refreshEditPanel();
+      draw();
       setStatus('Saved all rooms.');
     } catch (e) {
       setStatus('Save failed: ' + e.message);
@@ -2055,8 +2272,12 @@
     _pdApplyCollapsed(localStorage.getItem('apt_passage_collapsed') === '1');
   }
 
-  // Legacy alias for callers that still use the old name.
-  function renderPassageDimsTable() { return renderRoomInfoTable(); }
+  // Legacy alias for callers that still use the old name. Also refreshes the
+  // V6 Zone Information card so every room-info refresh keeps zones in sync.
+  function renderPassageDimsTable() {
+    renderRoomInfoTable();
+    renderZoneInformationTable();
+  }
 
   // Collapse/expand the Passage Room Dimensions card. Persists in localStorage.
   function _pdApplyCollapsed(collapsed) {
@@ -2070,6 +2291,66 @@
     const next = !cur;
     try { localStorage.setItem('apt_passage_collapsed', next ? '1' : '0'); } catch (e) {}
     _pdApplyCollapsed(next);
+  };
+
+  // ── V6 Zone Information card ───────────────────────────────────────────────
+  // One table summarising every room's zones: zone name, cell list, area, and
+  // the devices placed inside. Rooms without zones show one "(no zones)" row.
+  function renderZoneInformationTable() {
+    const card = document.getElementById('apt-zone-card');
+    const tbody = card && card.querySelector('tbody');
+    if (!card || !tbody) return;
+    if (!roomSlugs.length) { card.style.display = 'none'; tbody.innerHTML = ''; return; }
+    card.style.display = '';
+    tbody.innerHTML = '';
+    for (const r of roomSlugs) {
+      const layout = allRooms[r.slug];
+      if (!layout || !(layout.walls || []).length) continue; // only drawn rooms have a grid
+      const zones = layout.zones || [];
+      const placements = roomPlacements.filter(p => p.slug === r.slug);
+      if (!zones.length) {
+        const tr = document.createElement('tr');
+        tr.style.borderTop = '1px solid #e8e3d8';
+        tr.innerHTML = `
+          <td style="padding:3px 6px;">${r.name}</td>
+          <td colspan="4" style="padding:3px 6px;color:#999;font-style:italic;">(no zones)</td>`;
+        tbody.appendChild(tr);
+        continue;
+      }
+      for (let i = 0; i < zones.length; i++) {
+        const z = zones[i];
+        const cellCount = (z.cells || []).length;
+        const area = cellCount; // 1m² per cell
+        // Devices whose (x,y) lands in this zone's cells
+        const devsInZone = placements
+          .filter(p => (z.cells || []).includes(cellIdForPoint(layout, p.x, p.y)))
+          .map(p => p.device_name || p.label || p.device_id)
+          .filter(Boolean);
+        const cellList = (z.cells || []).slice().sort((a, b) => a - b).join(', ');
+        const tr = document.createElement('tr');
+        tr.style.borderTop = '1px solid #e8e3d8';
+        tr.innerHTML = `
+          <td style="padding:3px 6px;">${i === 0 ? r.name : ''}</td>
+          <td style="padding:3px 6px;color:#6c4f9f;font-weight:600;">${z.name}</td>
+          <td style="padding:3px 6px;font-size:0.72rem;color:#555;">${cellList}</td>
+          <td style="padding:3px 6px;text-align:right;">${area} m²</td>
+          <td style="padding:3px 6px;font-size:0.72rem;color:#555;">${devsInZone.length ? devsInZone.join(', ') : '—'}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+    _zcApplyCollapsed(localStorage.getItem('apt_zone_collapsed') === '1');
+  }
+  function _zcApplyCollapsed(collapsed) {
+    const body = document.getElementById('apt-zone-body');
+    const btn  = document.getElementById('apt-zone-toggle');
+    if (body) body.style.display = collapsed ? 'none' : '';
+    if (btn) btn.textContent = collapsed ? '▸' : '▾';
+  }
+  window.aptToggleZoneCard = function () {
+    const cur = localStorage.getItem('apt_zone_collapsed') === '1';
+    const next = !cur;
+    try { localStorage.setItem('apt_zone_collapsed', next ? '1' : '0'); } catch (e) {}
+    _zcApplyCollapsed(next);
   };
 
   // ── V5 Device placements ───────────────────────────────────────────────────
@@ -2133,6 +2414,145 @@
     const lastSeen = p.last_seen ? new Date(p.last_seen).getTime() : 0;
     if (!lastSeen || (Date.now() - lastSeen) > DEV_STATE_OFFLINE_MS) return 'offline';
     return _devActiveHold(p) ? 'active' : 'clear';
+  }
+
+  // V6 Zones — 1m grid overlay on a single room's <g>.
+  //   Active room (single-room focus):    grid borders + cell numbers (Zones tool)
+  //                                       + selection highlight + named zone labels.
+  //   Non-active rooms (multi-room view): only the named zone labels.
+  // This keeps the apartment view clean: zones are visible as anchors but
+  // the per-cell grid stays in the room the user is actually editing.
+  function renderZoneOverlay(g, layout, slug, isActive) {
+    const zGrid = zoneGridSize(layout);
+    if (!zGrid.cols || !zGrid.rows) return;
+    const zones = layout.zones || [];
+
+    if (isActive) {
+      const showNumbers = tool === 'zone';
+      const selSet = new Set(_zoneSel);
+      const cellToZone = {};
+      for (const z of zones) {
+        for (const c of (z.cells || [])) cellToZone[c] = z.id;
+      }
+      // Faint cell borders
+      const borderG = document.createElementNS(NS, 'g');
+      borderG.setAttribute('stroke', 'rgba(40,40,40,0.09)');
+      borderG.setAttribute('stroke-width', '0.5');
+      borderG.setAttribute('fill', 'none');
+      borderG.setAttribute('pointer-events', 'none');
+      for (let r = 0; r < zGrid.rows; r++) {
+        for (let c = 0; c < zGrid.cols; c++) {
+          const x0 = zGrid.minX + c, y0 = zGrid.minY + r;
+          const rect = document.createElementNS(NS, 'rect');
+          rect.setAttribute('x', mToPx(x0));
+          rect.setAttribute('y', mToPx(y0));
+          rect.setAttribute('width', mToPx(1));
+          rect.setAttribute('height', mToPx(1));
+          borderG.appendChild(rect);
+        }
+      }
+      g.appendChild(borderG);
+      // Cell numbers (only in Zones tool; named-zone cells show the zone name instead)
+      if (showNumbers) {
+        for (let r = 0; r < zGrid.rows; r++) {
+          for (let c = 0; c < zGrid.cols; c++) {
+            const cellId = r * zGrid.cols + c + 1;
+            if (cellToZone[cellId]) continue;
+            const x0 = zGrid.minX + c, y0 = zGrid.minY + r;
+            const t = document.createElementNS(NS, 'text');
+            t.setAttribute('x', mToPx(x0) + 3);
+            t.setAttribute('y', mToPx(y0) + 11);
+            t.setAttribute('font-size', '9');
+            t.setAttribute('fill', 'rgba(80,80,80,0.45)');
+            t.setAttribute('pointer-events', 'none');
+            t.setAttribute('style', 'user-select:none;');
+            t.textContent = String(cellId);
+            g.appendChild(t);
+          }
+        }
+        // Highlight currently-selected cells (Zones Set edit mode)
+        if (selSet.size) {
+          for (const cellId of selSet) {
+            const rect = cellIdToRect(layout, cellId);
+            if (!rect) continue;
+            const hl = document.createElementNS(NS, 'rect');
+            hl.setAttribute('x', mToPx(rect.minXm));
+            hl.setAttribute('y', mToPx(rect.minYm));
+            hl.setAttribute('width', mToPx(1));
+            hl.setAttribute('height', mToPx(1));
+            hl.setAttribute('fill', 'none');
+            hl.setAttribute('stroke', '#6c4f9f');
+            hl.setAttribute('stroke-width', '2');
+            hl.setAttribute('pointer-events', 'none');
+            g.appendChild(hl);
+          }
+        }
+      }
+      // Highlight the cells of a zone currently selected via Select tool (any tool active)
+      if (selectedId) {
+        const selZone = zones.find(z => z.id === selectedId);
+        if (selZone) {
+          for (const cellId of (selZone.cells || [])) {
+            const rect = cellIdToRect(layout, cellId);
+            if (!rect) continue;
+            const hl = document.createElementNS(NS, 'rect');
+            hl.setAttribute('x', mToPx(rect.minXm));
+            hl.setAttribute('y', mToPx(rect.minYm));
+            hl.setAttribute('width', mToPx(1));
+            hl.setAttribute('height', mToPx(1));
+            hl.setAttribute('fill', 'rgba(108,79,159,0.12)');
+            hl.setAttribute('stroke', '#6c4f9f');
+            hl.setAttribute('stroke-width', '2');
+            hl.setAttribute('pointer-events', 'none');
+            g.appendChild(hl);
+          }
+        }
+      }
+    }
+    // Named-zone labels — one text node at the group's centroid (cells average)
+    for (const z of zones) {
+      if (!(z.cells || []).length) continue;
+      let sx = 0, sy = 0, n = 0;
+      for (const cellId of z.cells) {
+        const rect = cellIdToRect(layout, cellId);
+        if (!rect) continue;
+        sx += (rect.minXm + rect.maxXm) / 2;
+        sy += (rect.minYm + rect.maxYm) / 2;
+        n++;
+      }
+      if (!n) continue;
+      const lo = z.label_offset || {};
+      const cxm = sx / n + (lo.x || 0);
+      const cym = sy / n + (lo.y || 0);
+      const hiddenLbl = !!z.label_hidden;
+      if (!hiddenLbl || _showHiddenLabels) {
+        const lbl = document.createElementNS(NS, 'text');
+        lbl.setAttribute('x', mToPx(cxm));
+        lbl.setAttribute('y', mToPx(cym));
+        // Non-active rooms: larger, bolder, darker purple so zones pop as
+        // anchors in the apartment view. Active room keeps the gentler tone.
+        lbl.setAttribute('font-size', isActive ? '11' : '13');
+        lbl.setAttribute('font-weight', isActive ? '600' : '800');
+        lbl.setAttribute('fill', isActive ? '#6c4f9f' : '#3d2a5c');
+        lbl.setAttribute('text-anchor', 'middle');
+        lbl.setAttribute('dominant-baseline', 'middle');
+        lbl.setAttribute('opacity', hiddenLbl ? '0.3' : '1');
+        // Interactivity gated on tool: only Select and Zones Set want the
+        // label to be clickable (drag / right-click / pick-for-edit). In all
+        // other tools (Furniture, Wall, Door, Window, Device…) the label is
+        // pointer-transparent so clicks pass through to whatever is beneath —
+        // fixes furniture placement being swallowed by a zone label overlay.
+        const labelInteractive = (tool === 'zone' || tool === 'select');
+        lbl.setAttribute('pointer-events', labelInteractive ? 'all' : 'none');
+        lbl.setAttribute('style', labelInteractive
+          ? 'cursor:move;user-select:none;'
+          : 'user-select:none;');
+        lbl.dataset.zoneLabelSlug = slug;
+        lbl.dataset.zoneLabelId = z.id;
+        lbl.textContent = z.name;
+        g.appendChild(lbl);
+      }
+    }
   }
 
   // Render all placements for one room (called inside renderRoomElements after furniture)
@@ -2479,6 +2899,8 @@
 
     activeSlug = slug;
     pending = null; pendingWall = null; selectedId = null;
+    // V6: clear zone-editing state — different room has its own grid + zones.
+    _zoneSel = []; _zoneEditId = null;
     undoStack = [];
 
     // Set visibility: Apartment = all rooms ON; single room = only that room ON
@@ -2634,6 +3056,12 @@
     draw();
   };
 
+  window.aptSetShowZones = function (v) {
+    _showZones = !!v;
+    try { localStorage.setItem('apt_show_zones', _showZones ? '1' : '0'); } catch (e) {}
+    draw();
+  };
+
   window.aptRedraw = function () {
     const w = parseFloat(document.getElementById('apt-canvas-w').value) || null;
     const h = parseFloat(document.getElementById('apt-canvas-h').value) || null;
@@ -2666,6 +3094,9 @@
   window.addEventListener('DOMContentLoaded', () => {
     svg().addEventListener('click', onSvgClick);
     svg().addEventListener('mousemove', onSvgMove);
+    // V6: sync Zones checkbox with persisted localStorage state
+    const zonesCb = document.getElementById('apt-show-zones');
+    if (zonesCb) zonesCb.checked = _showZones;
 
     // Label drag (any tool, any room): left-click on room-name OR divider label
     // starts drag. Right-click toggles hide (label_hidden=true). "Show hidden
@@ -2744,6 +3175,26 @@
         labelDrag = {
           kind: 'furn',
           slug: sl, furnId: fid,
+          startPx: ev.clientX, startPy: ev.clientY,
+          origOx: +lo.x || 0, origOy: +lo.y || 0,
+          moved: false,
+        };
+        ev.preventDefault(); ev.stopPropagation();
+        return;
+      }
+      // V6 Zone label — drag to reposition, right-click (handled elsewhere) to hide
+      if (t.dataset.zoneLabelId) {
+        const sl = t.dataset.zoneLabelSlug;
+        const zid = t.dataset.zoneLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const zone = (layout.zones || []).find(x => x.id === zid);
+        if (!zone) return;
+        pushUndo();
+        const lo = zone.label_offset || {};
+        labelDrag = {
+          kind: 'zone',
+          slug: sl, zoneId: zid,
           startPx: ev.clientX, startPy: ev.clientY,
           origOx: +lo.x || 0, origOy: +lo.y || 0,
           moved: false,
@@ -2835,6 +3286,22 @@
           : `Furniture label shown.`);
         return;
       }
+      if (t.dataset.zoneLabelId) {
+        ev.preventDefault();
+        const sl = t.dataset.zoneLabelSlug;
+        const zid = t.dataset.zoneLabelId;
+        const layout = allRooms[sl];
+        if (!layout) return;
+        const z = (layout.zones || []).find(x => x.id === zid);
+        if (!z) return;
+        pushUndo();
+        z.label_hidden = !z.label_hidden;
+        draw();
+        setStatus(z.label_hidden
+          ? `Zone label "${z.name}" hidden. Toggle "Hidden labels" to restore.`
+          : `Zone label shown.`);
+        return;
+      }
       if (t.dataset.devLabelId) {
         ev.preventDefault();
         const pid = parseInt(t.dataset.devLabelId, 10);
@@ -2906,6 +3373,9 @@
         } else if (labelDrag.kind === 'furn') {
           const furn = (layout.furniture || []).find(x => x.id === labelDrag.furnId);
           if (furn) { furn.label_offset = newOff; layout._furn_dirty = true; }
+        } else if (labelDrag.kind === 'zone') {
+          const z = (layout.zones || []).find(x => x.id === labelDrag.zoneId);
+          if (z) { z.label_offset = newOff; }
         } else if (labelDrag.kind === 'dev') {
           const p = roomPlacements.find(x => x.id === labelDrag.devId);
           if (p) { p.label_offset = newOff; p._dirty = true; }
@@ -2945,6 +3415,7 @@
           const what = labelDrag.kind === 'divider' ? 'Divider label'
                      : labelDrag.kind === 'door' ? 'Door label'
                      : labelDrag.kind === 'furn' ? 'Furniture label'
+                     : labelDrag.kind === 'zone' ? 'Zone label'
                      : labelDrag.kind === 'dev'  ? 'Device label'
                      : 'Label';
           if (labelDrag.kind === 'dev') {
