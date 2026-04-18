@@ -256,7 +256,7 @@
   - Solar Heating Potential: score (1–10) centered, colored (green/amber/brown), label below (e.g. "Poor — minimal heating today"); no icon; fetched from `/api/weather/scores`
   - Connections: PostgreSQL ⬤ and Home Assistant ⬤ (green/red live status)
 - **Last Report card:** boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, report timestamp; Boiler Trend / Panel Trend / Report Time columns are `text-align:center`
-- **Hot Water Usage — Today card** (below Last Report): event count, classification chips (`Human` / `Thermal` / `Unknown`), largest drop, avg drop, last event time; fetched from `/api/consumptions/today` which returns split counts per cause
+- **Hot Water Usage — Today card** (below Last Report): event count, classification chips (all 5 causes: `Human` / `Panel` / `Thermal` / `Boiler` / `Unknown`), largest drop, avg drop, last event time; fetched from `/api/consumptions/today` which returns split counts per cause. **Classification color palette** (used by chips, graph triangles, and consumption-events table in Data page — always keep these 3 places in sync): Human `#1565c0` (dark blue), Panel `#e67e22` (orange, matches Panel Temp line on graph), Thermal `#2e7d32` (green), Boiler `#4a9eff` (blue, matches Boiler Temp line on graph), Unknown `#b8860b` (goldenrod). The 3 places are: `index.html` span IDs `usage-*`, `graph.js` const `CAUSE_COLORS`, `data.js` const `causeColor`.
   - Uses same 7-column grid as Last Report (`0.7fr 2fr 1.3fr 1.3fr 0.7fr 1fr 1fr`) with `status-grid-divided` vertical lines
   - Items placed at specific columns to align dividers with Last Report: Events=col1, Largest Drop=col3, Avg Drop=col4, Last Event=col5
   - Largest Drop has `border-left` + `margin-left:-16px` so its left divider aligns exactly with Valve State's left divider in Last Report
@@ -278,7 +278,7 @@
 ### Temperature Graph
 - Boiler and Panel Temperatures as line chart (y-axis: 1 decimal place)
 - Valve state as stepped line (ON/OFF) on secondary axis
-- Consumption events as red downward triangles on boiler temp line (at start_temp height); tooltip shows drop °C + duration
+- Consumption events as downward triangles on boiler temp line (at start_temp height), **colored by classification cause** (Human dark blue / Panel orange / Thermal green / Boiler blue / Unknown goldenrod — see Hot Water Usage card for palette); tooltip shows drop °C + duration
 - Resolution: selectable — 5min, 15min, 1h, 6h, 1day
 - Time range: last 1h, 6h, 24h
 - `/api/consumptions?from=ISO` used to fetch events for current time range

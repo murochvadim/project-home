@@ -59,6 +59,7 @@
           <option value="0.5" selected>0.5 (default)</option>
           <option value="0.25">0.25 (fine)</option>
           <option value="0.1">0.1 (very fine)</option>
+          <option value="0.05">0.05 (ultra fine)</option>
         </select>
       </label>
       <span style="flex:1;"></span>
@@ -136,8 +137,8 @@
       </span>
       <span id="apt-edit-furn-wrap" style="display:none;">
         Label: <input type="text" id="apt-edit-furn-label" placeholder="optional" style="width:90px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
-        W(m): <input type="number" id="apt-edit-furn-w" step="0.1" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
-        H(m): <input type="number" id="apt-edit-furn-h" step="0.1" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+        W(m): <input type="number" id="apt-edit-furn-w" step="0.05" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
+        H(m): <input type="number" id="apt-edit-furn-h" step="0.05" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
         Rot: <select id="apt-edit-furn-rot" style="padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">
           <option value="0">0°</option><option value="45">45°</option><option value="90">90°</option><option value="135">135°</option><option value="180">180°</option><option value="225">225°</option><option value="270">270°</option><option value="315">315°</option>
         </select>
@@ -152,6 +153,9 @@
         R ang: <input type="number" id="apt-edit-dev-angle-r" step="5" min="0" title="Right half-angle from aim direction (degrees CW)" style="width:48px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">°
         R len: <input type="number" id="apt-edit-dev-length-r" step="0.1" min="0" title="Detection range on the right side (meters)" style="width:48px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">m
         Hold: <input type="number" id="apt-edit-dev-hold" step="5" min="0" style="width:55px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;">s
+        <label title="Turn sensor off for coverage planning: triangle shows yellow, cone hidden, AI excludes from coverage" style="display:inline-flex;align-items:center;gap:3px;margin-left:6px;">
+          <input type="checkbox" id="apt-edit-dev-enabled" checked> Enabled
+        </label>
         <label title="When on, the coverage dots stop at walls (line-of-sight clipping)" style="display:inline-flex;align-items:center;gap:3px;margin-left:6px;">
           <input type="checkbox" id="apt-edit-dev-wallbarrier"> Wall barrier
         </label>
@@ -233,6 +237,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/rooms.js?v=55"></script>
+<script src="js/rooms.js?v=58"></script>
 </body>
 </html>

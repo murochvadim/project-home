@@ -3240,6 +3240,11 @@ function describePlacement(p) {
   const dt = p.device_type || 'device';
   const name = p.label || p.device_name || p.device_id;
   const rot = ((p.rotation || 0) % 360 + 360) % 360;
+  const isEnabled = (p.params || {}).enabled !== false;
+  // Disabled placements: AI should exclude them from coverage/active reasoning.
+  if (!isEnabled) {
+    return `    - ${name} (${dt}, DISABLED) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°, state: n/a`;
+  }
   const AGE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold (device agent owns freshness)
   const lastSeenMs = p.last_seen ? new Date(p.last_seen).getTime() : 0;
   const age = lastSeenMs ? (Date.now() - lastSeenMs) : Infinity;

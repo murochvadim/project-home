@@ -4,6 +4,17 @@ let syncEnabled = true;
 
 const DAY_MS = 86400000;
 
+// Consumption classification colors — aligned with graph line colors
+// (Panel Temp = orange, Boiler Temp = blue) and with the Hot Water Usage
+// chips on the main Boiler Agent page. Same hex values in both places.
+const CAUSE_COLORS = {
+  human:   '#1565c0',  // dark blue  — shower / dishwasher / human use
+  panel:   '#e67e22',  // orange     — solar panel cycle (matches Panel Temp line)
+  thermal: '#2e7d32',  // green      — thermal losses (away/overnight)
+  boiler:  '#4a9eff',  // blue       — natural boiler cooldown (matches Boiler Temp line)
+  unknown: '#b8860b',  // goldenrod  — not yet classified by rule engine
+};
+
 // ── Shared chart builder ───────────────────────────────────────
 function buildChartData(rows, consumptions) {
   const labels      = rows.map(r => new Date(r.t).toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' }));
@@ -14,6 +25,7 @@ function buildChartData(rows, consumptions) {
   const rowTimes         = rows.map(r => new Date(r.t).getTime());
   const spikeData        = new Array(rows.length).fill(null);
   const spikeRadii       = new Array(rows.length).fill(0);
+  const spikeColors      = new Array(rows.length).fill('transparent');
   const spikeConsumption = {};
 
   consumptions.forEach(c => {
@@ -25,13 +37,14 @@ function buildChartData(rows, consumptions) {
     });
     spikeData[nearest]        = parseFloat(c.start_temp);
     spikeRadii[nearest]       = 9;
+    spikeColors[nearest]      = CAUSE_COLORS[c.cause] || CAUSE_COLORS.unknown;
     spikeConsumption[nearest] = c;
   });
 
-  return { labels, boilerTemps, panelTemps, valveOn, spikeData, spikeRadii, spikeConsumption };
+  return { labels, boilerTemps, panelTemps, valveOn, spikeData, spikeRadii, spikeColors, spikeConsumption };
 }
 
-function createTempChart(canvasId, { labels, boilerTemps, panelTemps, valveOn, spikeData, spikeRadii, spikeConsumption }) {
+function createTempChart(canvasId, { labels, boilerTemps, panelTemps, valveOn, spikeData, spikeRadii, spikeColors, spikeConsumption }) {
   return new Chart(document.getElementById(canvasId), {
     type: 'line',
     data: {
@@ -74,8 +87,9 @@ function createTempChart(canvasId, { labels, boilerTemps, panelTemps, valveOn, s
           pointRotation: 180,
           pointRadius: spikeRadii,
           pointHoverRadius: 11,
-          backgroundColor: '#e74c3c',
-          borderColor: '#e74c3c',
+          // Per-point colors by classification cause
+          backgroundColor: spikeColors,
+          borderColor: spikeColors,
           yAxisID: 'yTemp',
         },
       ],

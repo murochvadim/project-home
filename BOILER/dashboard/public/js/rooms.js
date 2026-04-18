@@ -83,7 +83,12 @@
     return (activeData().walls || []).find(w => w.id === id);
   }
 
+  // Returns the NEAREST wall within tolerance, not the first one. Critical
+  // near corners where multiple walls overlap in the hit radius — picking the
+  // closest one is what the user actually aimed at.
   function findWallAt(xLocal, yLocal, tol) {
+    let best = null;
+    let bestD = Infinity;
     for (const w of (activeData().walls || [])) {
       const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
       const len2 = dx*dx + dy*dy;
@@ -91,9 +96,9 @@
       const t = Math.max(0, Math.min(1, ((xLocal - w.x1)*dx + (yLocal - w.y1)*dy) / len2));
       const px = w.x1 + t*dx, py = w.y1 + t*dy;
       const d = Math.hypot(xLocal - px, yLocal - py);
-      if (d <= tol) return { wall: w, t };
+      if (d <= tol && d < bestD) { best = { wall: w, t, d }; bestD = d; }
     }
-    return null;
+    return best;
   }
 
   // ── V2: Auto-positioning helpers ─────────────────────────────────────────
@@ -117,9 +122,11 @@
     if (isVert && Math.abs(wall.x1 - bounds.maxX) < 0.3) return 'east';
     if (isHoriz && Math.abs(wall.y1 - bounds.minY) < 0.3) return 'north';
     if (isHoriz && Math.abs(wall.y1 - bounds.maxY) < 0.3) return 'south';
-    // Not on a boundary wall — infer from position relative to center
+    // Interior wall — respect orientation: horizontal → north/south, vertical → east/west.
     const cx = (bounds.minX + bounds.maxX) / 2, cy = (bounds.minY + bounds.maxY) / 2;
     const mx = (wall.x1 + wall.x2) / 2, my = (wall.y1 + wall.y2) / 2;
+    if (isHoriz) return my < cy ? 'north' : 'south';
+    if (isVert)  return mx < cx ? 'west'  : 'east';
     const dx = Math.abs(mx - cx), dy = Math.abs(my - cy);
     if (dx > dy) return mx < cx ? 'west' : 'east';
     return my < cy ? 'north' : 'south';
@@ -998,7 +1005,31 @@
         setStatus(`${tool} added.`);
       }
     } else if (tool === 'window' || tool === 'door' || tool === 'sliding' || tool === 'opening') {
-      const hit = findWallAt(xM, yM, 0.3);
+      // Two-tier hit: prefer nearest wall within 0.3m. Once pendingWall is set,
+      // additionally accept clicks up to 0.6m of the pendingWall's wall — this
+      // forgives small misses on the second click near corners instead of
+      // cancelling the whole placement with "Both points must be on the same
+      // wall". Clicks far from pendingWall still fall through to the normal
+      // nearest-wall logic (which acts as cancel if wall differs).
+      let hit = findWallAt(xM, yM, 0.3);
+      if (pendingWall) {
+        const lockWall = (activeData().walls || []).find(ww => ww.id === pendingWall.wallId);
+        if (lockWall) {
+          const dx = lockWall.x2 - lockWall.x1, dy = lockWall.y2 - lockWall.y1;
+          const len2 = dx*dx + dy*dy;
+          if (len2 > 1e-6) {
+            const t = Math.max(0, Math.min(1, ((xM - lockWall.x1)*dx + (yM - lockWall.y1)*dy) / len2));
+            const px = lockWall.x1 + t*dx, py = lockWall.y1 + t*dy;
+            const dLock = Math.hypot(xM - px, yM - py);
+            // If nearest-hit is a DIFFERENT wall but we're still within 0.6m of
+            // pendingWall, lock to pendingWall. Keeps user on the same wall
+            // instead of losing the placement to a corner neighbor.
+            if (dLock <= 0.6 && (!hit || hit.wall.id !== pendingWall.wallId)) {
+              hit = { wall: lockWall, t, d: dLock };
+            }
+          }
+        }
+      }
       if (!hit) { setStatus('Click on an existing wall.'); return; }
       const w = wallById(hit.wall.id);
       const wallLen = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
@@ -1131,15 +1162,37 @@
   }
 
   // ── Hover ──────────────────────────────────────────────────────────────────
+  // Highlight the wall under the cursor in door/window/sliding/archway tools.
+  // Uses a dedicated persistent SVG layer — does NOT call draw() per mouse
+  // event, keeping hover cheap (no full canvas rebuild at 60fps).
+  function _hoverLayer() {
+    const s = svg();
+    if (!s) return null;
+    let g = document.getElementById('apt-hover-hint');
+    if (!g) {
+      g = document.createElementNS(NS, 'g');
+      g.setAttribute('id', 'apt-hover-hint');
+      g.setAttribute('pointer-events', 'none');
+      s.appendChild(g);
+    }
+    return g;
+  }
+  function _clearHover() {
+    const g = document.getElementById('apt-hover-hint');
+    if (g) g.innerHTML = '';
+  }
   function onSvgMove(ev) {
-    if (!activeSlug || activeSlug === '_apartment') return;
+    if (!activeSlug || activeSlug === '_apartment') { _clearHover(); return; }
     const rect = svg().getBoundingClientRect();
     const co = getComputedOrigin(activeSlug);
     const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
     const yM = viewOriginY + pxToM(ev.clientY - rect.top) - co.y_m;
     let msg = `cursor: ${xM.toFixed(2)}m, ${yM.toFixed(2)}m (room-local)`;
-    if (tool === 'window' || tool === 'door' || tool === 'sliding' || tool === 'opening') {
+    const isWallTool = (tool === 'window' || tool === 'door' || tool === 'sliding' || tool === 'opening');
+    if (isWallTool) {
       const hit = findWallAt(xM, yM, 0.3);
+      const g = _hoverLayer();
+      if (g) g.innerHTML = '';
       if (hit) {
         const w = hit.wall;
         const wallLen = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
@@ -1148,7 +1201,37 @@
         const fromEnd = wallLen - snapped;
         const nearer = snapped <= fromEnd ? { d: snapped, from: 'S' } : { d: fromEnd, from: 'E' };
         msg += `  ·  ${nearer.d.toFixed(2)}m from ${nearer.from}`;
+        // Render highlight: thick orange translucent line along the wall +
+        // small dot at the snapped click point so user sees exactly where
+        // the opening will be placed.
+        if (g) {
+          const coNow = getComputedOrigin(activeSlug);
+          const ox = coNow.x_m, oy = coNow.y_m;
+          const highlight = document.createElementNS(NS, 'line');
+          highlight.setAttribute('x1', mToPx(ox + w.x1));
+          highlight.setAttribute('y1', mToPx(oy + w.y1));
+          highlight.setAttribute('x2', mToPx(ox + w.x2));
+          highlight.setAttribute('y2', mToPx(oy + w.y2));
+          highlight.setAttribute('stroke', '#e67e22');
+          highlight.setAttribute('stroke-width', 5);
+          highlight.setAttribute('stroke-opacity', 0.35);
+          highlight.setAttribute('stroke-linecap', 'round');
+          g.appendChild(highlight);
+          const snappedT = Math.max(0, Math.min(1, snapped / wallLen));
+          const spx = w.x1 + snappedT * (w.x2 - w.x1);
+          const spy = w.y1 + snappedT * (w.y2 - w.y1);
+          const dot = document.createElementNS(NS, 'circle');
+          dot.setAttribute('cx', mToPx(ox + spx));
+          dot.setAttribute('cy', mToPx(oy + spy));
+          dot.setAttribute('r', 4);
+          dot.setAttribute('fill', '#e67e22');
+          dot.setAttribute('stroke', '#fff');
+          dot.setAttribute('stroke-width', 1);
+          g.appendChild(dot);
+        }
       }
+    } else {
+      _clearHover();
     }
     setStatus(msg);
   }
@@ -1218,6 +1301,8 @@
       document.getElementById('apt-edit-dev-length-r').value = lenR;
       document.getElementById('apt-edit-dev-hold').value = pr.hold_s ?? 120;
       document.getElementById('apt-edit-dev-wallbarrier').checked = !!pr.wall_barrier;
+      // 'enabled' defaults to true when absent — only false if explicitly set.
+      document.getElementById('apt-edit-dev-enabled').checked = pr.enabled !== false;
       document.getElementById('apt-edit-dev-label').value = placement.label || '';
     }
   }
@@ -1240,6 +1325,7 @@
         const lenR = parseFloat(document.getElementById('apt-edit-dev-length-r').value);
         const hold = parseFloat(document.getElementById('apt-edit-dev-hold').value);
         const wallBarrier = !!document.getElementById('apt-edit-dev-wallbarrier').checked;
+        const enabled = !!document.getElementById('apt-edit-dev-enabled').checked;
         const lbl = (document.getElementById('apt-edit-dev-label').value || '').trim() || null;
         // Build new params; drop legacy symmetric keys so they don't shadow.
         const params = { ...(placement.params || {}) };
@@ -1251,6 +1337,7 @@
         if (isFinite(lenR) && lenR > 0)  params.beam_length_right_m  = lenR;
         if (isFinite(hold) && hold >= 0) params.hold_s = hold;
         params.wall_barrier = wallBarrier;
+        params.enabled = enabled;
         const prev_fields = {
           rotation: placement.rotation,
           params: { ...(placement.params || {}) },
@@ -1987,7 +2074,7 @@
 
   // ── V5 Device placements ───────────────────────────────────────────────────
   const DEV_STATE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold
-  const DEV_COLORS = { active: '#d83030', clear: '#27ae60', offline: '#888' };
+  const DEV_COLORS = { active: '#d83030', clear: '#27ae60', offline: '#888', disabled: '#e8b43a' };
   const DEV_PRESENCE_TYPES = new Set(['presence', 'motion']);
 
   // Line-segment intersection in room-local meter coords. Returns true if
@@ -2053,15 +2140,18 @@
     const list = roomPlacements.filter(p => p.slug === slug);
     for (const p of list) {
       const cx = mToPx(p.x), cy = mToPx(p.y);
-      const state = _devState(p);
+      // 'enabled' defaults to true when absent. Disabled placements: yellow
+      // triangle, no cone, no dots, dim label — AI also sees DISABLED in scene.
+      const isEnabled = (p.params || {}).enabled !== false;
+      const state = isEnabled ? _devState(p) : 'disabled';
       const fill = DEV_COLORS[state];
 
-      // Cone + dot field — only for presence/motion when active.
+      // Cone + dot field — only for presence/motion when active AND enabled.
       // V5.1: support asymmetric left/right halves. Params resolved with
       // backward-compat: legacy (beam_angle_deg, beam_length_m) splits into
       // equal halves; new fields (beam_angle_left/right_deg, beam_length_
       // left/right_m) override per side if set.
-      if (state === 'active' && DEV_PRESENCE_TYPES.has(p.device_type)) {
+      if (isEnabled && state === 'active' && DEV_PRESENCE_TYPES.has(p.device_type)) {
         const pr = p.params || {};
         const legacyAng = Number(pr.beam_angle_deg);
         const legacyLen = Number(pr.beam_length_m);
@@ -2194,7 +2284,7 @@
         lbl.setAttribute('font-size', '9');
         lbl.setAttribute('fill', '#333');
         lbl.setAttribute('text-anchor', 'middle');
-        lbl.setAttribute('opacity', hidden ? '0.3' : '0.85');
+        lbl.setAttribute('opacity', hidden ? '0.3' : (isEnabled ? '0.85' : '0.5'));
         lbl.setAttribute('style', 'cursor:move;user-select:none;pointer-events:all;');
         lbl.dataset.devLabelId = p.id;
         lbl.dataset.devLabelSlug = slug;

@@ -96,7 +96,8 @@ async function loadConsumptions() {
       return;
     }
     empty.style.display = 'none';
-    const causeColor = { human: '#2e7d32', panel: '#e67e22', thermal: '#1565c0', boiler: '#8e44ad', unknown: '#b8860b' };
+    // Aligned with graph.js CAUSE_COLORS + index.html Hot Water Usage chips.
+    const causeColor = { human: '#1565c0', panel: '#e67e22', thermal: '#2e7d32', boiler: '#4a9eff', unknown: '#b8860b' };
     const causeChip = c => {
       if (!c) return '<span style="color:#999;">—</span>';
       const col = causeColor[c] || '#666';
