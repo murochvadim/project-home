@@ -102,7 +102,8 @@ app.post('/api/settings', async (req, res) => {
   const { run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
           trend_runs, temp_debounce, probe_interval_min,
           consumption_temp_delta, consumption_time_delta,
-          probe_max_boiler_temp, probe_max_delta } = req.body;
+          probe_max_boiler_temp, probe_max_delta,
+          glitch_drop_threshold_c, glitch_bounce_recovery_c } = req.body;
   try {
     await db.query(`
       UPDATE agent_settings SET
@@ -115,11 +116,14 @@ app.post('/api/settings', async (req, res) => {
         consumption_temp_delta     = $7,
         consumption_time_delta     = $8,
         probe_max_boiler_temp      = $9,
-        probe_max_delta            = $10
+        probe_max_delta            = $10,
+        glitch_drop_threshold_c    = $11,
+        glitch_bounce_recovery_c   = $12
     `, [run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
         trend_runs, temp_debounce, probe_interval_min,
         consumption_temp_delta, consumption_time_delta,
-        probe_max_boiler_temp, probe_max_delta]);
+        probe_max_boiler_temp, probe_max_delta,
+        glitch_drop_threshold_c, glitch_bounce_recovery_c]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1677,6 +1681,8 @@ async function ensureSchema() {
   `);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_temp_delta NUMERIC(4,1) DEFAULT 3.0`);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_time_delta INTEGER DEFAULT 15`);
+  await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS glitch_drop_threshold_c NUMERIC DEFAULT 10.0`);
+  await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS glitch_bounce_recovery_c NUMERIC DEFAULT 8.0`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS retention_policies (

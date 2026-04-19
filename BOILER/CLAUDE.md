@@ -121,6 +121,8 @@
   - `probe_max_delta`            (default: 20) — probe is skipped if (boiler_temp − panel_temp) > this value; large delta means pipe water is very cold relative to boiler, so opening the valve causes significant heat loss; probe retries next run when delta shrinks
   - `consumption_temp_delta`     (default: 3.0) — minimum boiler temperature drop (°C) to qualify as a hot water consumption event
   - `consumption_time_delta`     (default: 15) — time window (minutes) over which the drop is scanned; agent looks back this many minutes in raw_data each run
+  - `glitch_drop_threshold_c`    (default: 10.0) — sensor-dropout guard: drops ≥ this °C must pass the bounce test before being recorded; set to 0 to disable guard entirely
+  - `glitch_bounce_recovery_c`   (default: 8.0) — if boiler recovers to within this many °C of the pre-drop temperature within 2 polls after the event ends, treat the drop as a sensor fault and discard (real showers cannot refill the boiler that fast)
 
 
 # Agent Prompt
@@ -210,7 +212,8 @@
 - Scan raw_data for the last `consumption_time_delta + 2 × run_interval_min` minutes — the padding guarantees at least one baseline row before the drop, so a sudden 1-tick fall anchors to the pre-drop temperature rather than the post-drop reading (fixed 2026-04-15)
 - Group consecutive drops (≥ 0.5°C per step) into events; only record completed events (drop has ended)
 - Record event if total drop ≥ `consumption_temp_delta`; insert into `boiler_consumptions` with ON CONFLICT DO NOTHING (deduplicated by start_ts)
-- On each genuinely new insert (rowcount=1), publish the event to MQTT topic `mur/home/device/boiler/event` (user `boiler_agent` on LXC 107) with payload `{dps: {event_type, drop_c, duration_min, start_ts, end_ts, start_temp, end_temp, valve_state, valve_on_min, valve_off_min}}`. Publish is fail-silent — broker downtime never breaks detection. The rule engine on LXC 105 subscribes via `mur/home/device/+/event`; the `Boiler Consumption Classify` rule uses presence + valve context for 5-category classification (human/panel/thermal/boiler/unknown) and writes back `cause` + `likely_rooms` to the same row asynchronously.
+- **Sensor-dropout guard** (added 2026-04-19): any candidate drop ≥ `glitch_drop_threshold_c` is checked for implausible recovery — if the boiler temperature bounces back to within `glitch_bounce_recovery_c` of the pre-drop reading within 2 polls after the event ends, the drop is discarded as a sensor / HA dropout. Real consumption cannot refill the boiler that fast. Logged as `WARN: Glitch skipped:` for forensics. Set `glitch_drop_threshold_c = 0` to disable the guard entirely
+- On each genuinely new insert (rowcount=1), publish the event to MQTT topic `mur/home/device/boiler/event` (user `boiler_agent` on LXC 107) with payload `{dps: {event_type, drop_c, duration_min, start_ts, end_ts, start_temp, end_temp, valve_state, valve_on_min, valve_off_min}}`. Publish is fail-silent — broker downtime never breaks detection. The rule engine on LXC 105 subscribes via `mur/home/device/+/event`; the `Boiler Consumption Classify` rule uses presence + valve context for 5-category classification (human/panel/thermal/boiler/unknown) and writes back `cause` + `likely_rooms` to the same row asynchronously. **Sensor-coverage safety net** (added 2026-04-19): the `boiler` fallback branch refuses to confidently classify as "natural cooling" if any of the water rooms (Bathroom, Kitchen, My BathRoom) has no presence sensor registered — a human shower there would be invisible to the rule, so the row is labeled `unknown` instead. The consumption row is still recorded; only the `cause` is conservative. Once every water room has a presence sensor, this path dissolves automatically.
 
 ## 8. Return report:
   boiler_temp, panel_temp, valve_state,
@@ -261,7 +264,7 @@
   - Items placed at specific columns to align dividers with Last Report: Events=col1, Largest Drop=col3, Avg Drop=col4, Last Event=col5
   - Largest Drop has `border-left` + `margin-left:-16px` so its left divider aligns exactly with Valve State's left divider in Last Report
   - Largest Drop, Avg Drop, Last Event are `text-align:center`
-- **Settings:** run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta; **Probe Temperature Constraints** section: probe_max_boiler_temp, probe_max_delta
+- **Settings:** run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta; **Probe Temperature Constraints** section: probe_max_boiler_temp, probe_max_delta; **Sensor Glitch Guard** section (labels rendered in light red `#d96c6c` to signal these are safety/correctness knobs, not tuning): glitch_drop_threshold_c, glitch_bounce_recovery_c
 - **Deploy card:** "Deploy to Production" button → git pull on LXC 103 + restart agent service; output shown inline
 - When countdown reaches 0 → shows "running…" → auto-refreshes after 15s to pick up new next_ts
 

@@ -419,50 +419,61 @@
       <form id="settings-form" onsubmit="saveSettings(event)">
         <div class="settings-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr))">
           <div class="form-group">
-            <label>Run Interval (min)</label>
+            <label title="How often the agent wakes up to evaluate the valve. Shorter = more reactive, noisier logs; longer = smoother cycles. Default 10.">Run Interval (min)</label>
             <input type="number" id="s-run-interval" min="1" max="60">
           </div>
           <div class="form-group">
-            <label>Temp Panel Valid After ON (min)</label>
+            <label title="After the valve turns ON, ignore panel_temp readings for this many minutes — water is circulating and the sensor is unreliable until flow stabilizes.">Temp Panel Valid After ON (min)</label>
             <input type="number" id="s-valid-after-on" min="0">
           </div>
           <div class="form-group">
-            <label>Temp Panel Valid After OFF (min)</label>
+            <label title="After the valve turns OFF, panel_temp stays meaningful for this many minutes. Past that, the sensor shows static pipe water, not the actual panel.">Temp Panel Valid After OFF (min)</label>
             <input type="number" id="s-valid-after-off" min="0">
           </div>
           <div class="form-group">
-            <label>Num Trend Runs</label>
+            <label title="Number of recent raw_data rows used to compute boiler + panel trend. Also the number of runs the agent waits after turn_on before making its next decision.">Num Trend Runs</label>
             <input type="number" id="s-trend-runs" min="1">
           </div>
           <div class="form-group">
-            <label>Temp Debounce (°C)</label>
+            <label title="Symmetric dead-band (°C) around panel vs boiler. Valve only toggles when |panel−boiler| exceeds this. Prevents chatter near equality.">Temp Debounce (°C)</label>
             <input type="number" id="s-debounce" min="0" step="0.5">
           </div>
           <div class="form-group">
-            <label>Probe Interval (min)</label>
+            <label title="When panel_temp is invalid and the valve is OFF, how long to wait before firing a probe. Prevents constant probing on cloudy days.">Probe Interval (min)</label>
             <input type="number" id="s-probe-interval" min="1">
           </div>
           <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-top:6px; padding-top:10px; border-top:1px solid #e8e2db;">
             Hot Water Consumption
           </div>
           <div class="form-group">
-            <label>Consumption Temp Delta (°C)</label>
+            <label title="Minimum boiler temperature drop (°C) in a single event to qualify as a hot water consumption. Smaller drops are treated as natural cooling.">Consumption Temp Delta (°C)</label>
             <input type="number" id="s-consumption-temp" min="0.5" step="0.5">
           </div>
           <div class="form-group">
-            <label>Consumption Time Delta (min)</label>
+            <label title="Time window (minutes) scanned per agent run for drops. The actual lookback is this value + 2 × run_interval to guarantee a baseline sample before any drop.">Consumption Time Delta (min)</label>
             <input type="number" id="s-consumption-time" min="1">
           </div>
           <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-top:6px; padding-top:10px; border-top:1px solid #e8e2db;">
             Probe Temperature Constraints
           </div>
           <div class="form-group" style="grid-column:span 1; min-width:240px;">
-            <label>Skip Probe If Boiler Above (°C)</label>
+            <label title="Probe is skipped if the boiler is already hotter than this. At high temperature, the cold-pipe-water entry loss from opening the valve outweighs any solar gain.">Skip Probe If Boiler Above (°C)</label>
             <input type="number" id="s-probe-max-boiler" min="0">
           </div>
           <div class="form-group" style="grid-column:span 1; min-width:240px;">
-            <label>Skip Probe If (Boiler−Panel) Delta Above (°C)</label>
+            <label title="Probe is skipped when (boiler_temp − panel_temp) is greater than this. Large delta means the pipe water is much colder than the boiler; opening the valve just loses heat.">Skip Probe If (Boiler−Panel) Delta Above (°C)</label>
             <input type="number" id="s-probe-max-delta" min="0">
+          </div>
+          <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-top:6px; padding-top:10px; border-top:1px solid #e8e2db;">
+            Sensor Glitch Guard
+          </div>
+          <div class="form-group" style="grid-column:span 1; min-width:240px;">
+            <label style="color:#d96c6c;" title="Drops this large or bigger must pass the bounce test. Below this, drops are trusted. 0 disables the guard entirely.">Glitch Drop Threshold (°C)</label>
+            <input type="number" id="s-glitch-drop" min="0" step="0.5">
+          </div>
+          <div class="form-group" style="grid-column:span 1; min-width:240px;">
+            <label style="color:#d96c6c;" title="If the boiler recovers within this many °C of pre-drop within 2 polls, the whole drop is treated as a sensor dropout and discarded.">Glitch Bounce Recovery (°C)</label>
+            <input type="number" id="s-glitch-bounce" min="0" step="0.5">
           </div>
         </div>
         <div style="margin-top:14px;">

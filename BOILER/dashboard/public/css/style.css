@@ -353,6 +353,11 @@ body {
   color: #666;
   margin-bottom: 4px;
 }
+.form-group label[title] {
+  cursor: help;
+  border-bottom: 1px dotted #bbb;
+  display: inline-block;
+}
 
 .form-group input {
   width: 100%;

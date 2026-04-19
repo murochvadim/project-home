@@ -148,6 +148,12 @@ def evaluate(event, state):
         any_events = state.get_events_between(all_presence_sensors, from_ts, to_ts)
         any_room_hit = any(_truthy_presence(ev_dps.get('1')) for _t, _d, ev_dps in any_events)
 
+    # Water rooms that have no presence sensor registered — we cannot see
+    # human activity in them. Relevant when falling back to non-human causes.
+    water_rooms_without_sensors = sorted(
+        r for r, ids in water_room_sensors.items() if not ids
+    )
+
     # ── 5-category priority classification ──
     if water_rooms_hit:
         cause = "human"
@@ -159,8 +165,20 @@ def evaluate(event, state):
         cause = "thermal"
         likely = []
     elif valve_state is False and valve_off_min is not None and valve_off_min >= PANEL_VALID_OFF:
-        cause = "boiler"
-        likely = []
+        # Would normally be "boiler" (slow cooling with someone home elsewhere).
+        # But if a water room has no presence sensor, we might have missed a
+        # real human shower there — prefer "unknown" over a confidently wrong
+        # label. Consumption row is still recorded.
+        if water_rooms_without_sensors:
+            cause = "unknown"
+            likely = []
+            log.info(
+                "Classify: would be 'boiler' but water room(s) %s lack presence sensors — fallback to 'unknown' to avoid misattribution",
+                water_rooms_without_sensors,
+            )
+        else:
+            cause = "boiler"
+            likely = []
     else:
         cause = "unknown"
         likely = []

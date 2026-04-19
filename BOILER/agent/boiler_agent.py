@@ -254,7 +254,10 @@ def get_time_since_last_open(conn):
     return (datetime.now(pytz.utc) - last_open_ts).total_seconds() / 60.0
 
 
-def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta, run_interval_min):
+def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta,
+                                 run_interval_min,
+                                 glitch_drop_threshold_c=10.0,
+                                 glitch_bounce_recovery_c=8.0):
     """
     Scan recent raw_data for completed boiler temperature drop events.
     A drop event = boiler_temp falls >= consumption_temp_delta within consumption_time_delta minutes.
@@ -265,6 +268,11 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
     first tick of the window still has a prior baseline row to compare against
     (otherwise a sudden 1-tick drop gets its start anchored to the post-drop
     reading and the magnitude is undercounted).
+
+    Sensor-dropout guard (settings-driven): any drop >= glitch_drop_threshold_c
+    that bounces back within glitch_bounce_recovery_c of the pre-drop
+    temperature within 2 polls is discarded — real showers can't refill the
+    boiler that fast. Set glitch_drop_threshold_c to 0 to disable.
     """
     window_min = consumption_time_delta + 2 * run_interval_min
     cutoff = datetime.now(pytz.utc) - timedelta(minutes=window_min)
@@ -313,13 +321,29 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
             if min_idx < len(rows) - 1:
                 drop = round(start_temp - min_temp, 1)
                 if drop >= consumption_temp_delta:
-                    start_ts     = ensure_utc(rows[start_idx]['ts'])
-                    end_ts       = ensure_utc(rows[min_idx]['ts'])
-                    duration_min = max(1, int((end_ts - start_ts).total_seconds() / 60))
-                    events.append((start_ts, end_ts, round(start_temp, 1),
-                                   round(min_temp, 1), drop, duration_min))
-                    log.info(f'Consumption detected: {start_temp}→{min_temp}°C '
-                             f'({drop}°C drop, {duration_min} min) at {start_ts}')
+                    # Sensor-dropout guard: big drops must not bounce back instantly.
+                    # Real showers can't refill the boiler 8°C+ in a single 5-min poll.
+                    GLITCH_LOOKAHEAD_TICKS = 2
+                    is_glitch = False
+                    if glitch_drop_threshold_c and drop >= glitch_drop_threshold_c:
+                        look_end = min(len(rows), min_idx + 1 + GLITCH_LOOKAHEAD_TICKS)
+                        for k in range(min_idx + 1, look_end):
+                            if float(rows[k]['boiler_temp']) >= start_temp - glitch_bounce_recovery_c:
+                                is_glitch = True
+                                log.warning(
+                                    f'Glitch skipped: {start_temp}→{min_temp}°C ({drop}°C drop) '
+                                    f'bounced back to {rows[k]["boiler_temp"]}°C at {rows[k]["ts"]} — '
+                                    f'threshold={glitch_drop_threshold_c}, recovery={glitch_bounce_recovery_c}'
+                                )
+                                break
+                    if not is_glitch:
+                        start_ts     = ensure_utc(rows[start_idx]['ts'])
+                        end_ts       = ensure_utc(rows[min_idx]['ts'])
+                        duration_min = max(1, int((end_ts - start_ts).total_seconds() / 60))
+                        events.append((start_ts, end_ts, round(start_temp, 1),
+                                       round(min_temp, 1), drop, duration_min))
+                        log.info(f'Consumption detected: {start_temp}→{min_temp}°C '
+                                 f'({drop}°C drop, {duration_min} min) at {start_ts}')
 
             i = min_idx  # skip past this event regardless
         else:
@@ -730,7 +754,14 @@ def run_agent():
         consumption_temp_delta = float(ct) if ct is not None else 3.0
         cd = settings.get('consumption_time_delta')
         consumption_time_delta = int(cd) if cd is not None else 15
-        detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta, run_interval_min)
+        gt = settings.get('glitch_drop_threshold_c')
+        glitch_drop_threshold_c = float(gt) if gt is not None else 10.0
+        gb = settings.get('glitch_bounce_recovery_c')
+        glitch_bounce_recovery_c = float(gb) if gb is not None else 8.0
+        detect_and_save_consumptions(
+            conn, consumption_temp_delta, consumption_time_delta, run_interval_min,
+            glitch_drop_threshold_c, glitch_bounce_recovery_c,
+        )
 
         conn.commit()
         return run_interval_min

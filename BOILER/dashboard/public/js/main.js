@@ -246,6 +246,8 @@ async function loadSettings() {
     document.getElementById('s-consumption-time').value   = cfg.consumption_time_delta ?? '';
     document.getElementById('s-probe-max-boiler').value   = cfg.probe_max_boiler_temp ?? '';
     document.getElementById('s-probe-max-delta').value    = cfg.probe_max_delta ?? '';
+    document.getElementById('s-glitch-drop').value        = cfg.glitch_drop_threshold_c ?? '';
+    document.getElementById('s-glitch-bounce').value      = cfg.glitch_bounce_recovery_c ?? '';
     runIntervalMin = cfg.run_interval_min || 5;
   } catch (e) {
     console.error('loadSettings error:', e);
@@ -265,6 +267,8 @@ async function saveSettings(e) {
     consumption_time_delta:     parseInt(document.getElementById('s-consumption-time').value),
     probe_max_boiler_temp:      parseInt(document.getElementById('s-probe-max-boiler').value),
     probe_max_delta:            parseInt(document.getElementById('s-probe-max-delta').value),
+    glitch_drop_threshold_c:    parseFloat(document.getElementById('s-glitch-drop').value),
+    glitch_bounce_recovery_c:   parseFloat(document.getElementById('s-glitch-bounce').value),
   };
   try {
     const r = await fetch('/api/settings', {
