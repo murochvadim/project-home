@@ -3080,14 +3080,22 @@ app.post('/api/room-device-placements', async (req, res) => {
     // Ensure device exists and grab its type
     const devR = await db.query(`SELECT id, device_type FROM devices WHERE id = $1`, [b.device_id]);
     if (!devR.rows.length) return res.status(400).json({ error: 'Unknown device_id' });
-    // One placement per device — replace if exists
-    await db.query(`DELETE FROM room_device_placements WHERE device_id = $1`, [b.device_id]);
+    // V7: placement device_type may override the devices row (e.g. a switch
+    // placed as a light controller stores device_type='light' on the row).
+    // Sensors keep the "one placement per device_id" invariant; lights are
+    // allowed multiple placements per controller (multi-gang / cross-room).
+    const placementType = (typeof b.device_type === 'string' && b.device_type)
+      ? b.device_type
+      : devR.rows[0].device_type;
+    if (placementType !== 'light') {
+      await db.query(`DELETE FROM room_device_placements WHERE device_id = $1`, [b.device_id]);
+    }
     const r = await db.query(
       `INSERT INTO room_device_placements
          (slug, device_id, device_type, x, y, rotation, params, label, label_offset, label_hidden)
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10)
        RETURNING *`,
-      [b.slug, b.device_id, devR.rows[0].device_type, +x.toFixed(2), +y.toFixed(2),
+      [b.slug, b.device_id, placementType, +x.toFixed(2), +y.toFixed(2),
        rotation, JSON.stringify(params),
        b.label || null,
        b.label_offset ? JSON.stringify(b.label_offset) : null,
@@ -3104,6 +3112,13 @@ app.patch('/api/room-device-placements/:id', async (req, res) => {
     const b = req.body || {};
     const sets = []; const vals = []; let n = 1;
     if (b.slug !== undefined) { if (!SLUG_RE.test(b.slug)) return res.status(400).json({ error: 'Invalid slug' }); sets.push(`slug = $${n++}`); vals.push(b.slug); }
+    if (b.device_id !== undefined) {
+      // V7: allow retargeting the placement to a different controller device.
+      // Validate the device exists so FK doesn't blow up the UPDATE.
+      const d = await db.query(`SELECT id FROM devices WHERE id = $1`, [b.device_id]);
+      if (!d.rows.length) return res.status(400).json({ error: 'Unknown device_id' });
+      sets.push(`device_id = $${n++}`); vals.push(b.device_id);
+    }
     if (b.x !== undefined)      { const v = parseFloat(b.x); if (!isFinite(v)) return res.status(400).json({ error: 'Invalid x' }); sets.push(`x = $${n++}`); vals.push(+v.toFixed(2)); }
     if (b.y !== undefined)      { const v = parseFloat(b.y); if (!isFinite(v)) return res.status(400).json({ error: 'Invalid y' }); sets.push(`y = $${n++}`); vals.push(+v.toFixed(2)); }
     if (b.rotation !== undefined) { sets.push(`rotation = $${n++}`); vals.push(((parseInt(b.rotation, 10) || 0) % 360 + 360) % 360); }
@@ -3273,10 +3288,28 @@ function resolveCellSrv(layout, x, y) {
   return { cellId, zoneName: null };
 }
 
+// Pick a reasonable on/off value from a device's last_state for a given dps_key.
+// Returns 'ON' | 'OFF' | 'unknown'. Handles booleans, numeric 0/1, and the
+// common Tuya string flag on channel '20' (power) for direct lights.
+function readControllerChannelState(lastState, dpsKey) {
+  if (!lastState || typeof lastState !== 'object') return 'unknown';
+  const raw = (dpsKey != null) ? lastState[String(dpsKey)] : undefined;
+  if (raw === true || raw === 1 || raw === '1' || raw === 'on' || raw === 'ON' || raw === 'true' || raw === 'True') return 'ON';
+  if (raw === false || raw === 0 || raw === '0' || raw === 'off' || raw === 'OFF' || raw === 'false' || raw === 'False') return 'OFF';
+  // Fallback for direct light entities: some lights don't use dps_key and store on at top-level
+  if (dpsKey == null) {
+    if (lastState.on === true || lastState['20'] === true) return 'ON';
+    if (lastState.on === false || lastState['20'] === false) return 'OFF';
+  }
+  return 'unknown';
+}
+
 // Format one device-placement line for the scene text — type-aware.
 // When a layout is supplied, the line is suffixed with the V6 zone/cell this
-// device lands in (retroactively enriches AI context).
-function describePlacement(p, layout) {
+// device lands in (retroactively enriches AI context). `devicesById` is an
+// optional map used to resolve light controller names / dps_labels — passed in
+// by buildApartmentScene so describePlacement doesn't need its own DB round-trip.
+function describePlacement(p, layout, devicesById) {
   const dt = p.device_type || 'device';
   const name = p.label || p.device_name || p.device_id;
   const rot = ((p.rotation || 0) % 360 + 360) % 360;
@@ -3290,6 +3323,44 @@ function describePlacement(p, layout) {
   // Disabled placements: AI should exclude them from coverage/active reasoning.
   if (!isEnabled) {
     return `    - ${name} (${dt}, DISABLED) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${zoneSuffix}, state: n/a`;
+  }
+  // V7 Lights — fixture_type / intensity / spread + controller lookup + state.
+  if (dt === 'light') {
+    const pr = p.params || {};
+    const intensity = pr.intensity || 'mid';
+    const fixture = pr.fixture_type || 'lamp';
+    // Spread is fixture-driven (spot = cone, strip = 180° half-rect, other = radius).
+    let spread = '';
+    if (fixture === 'spot') {
+      const ang = pr.beam_angle_deg != null ? Number(pr.beam_angle_deg) : 30;
+      const len = pr.beam_length_m  != null ? Number(pr.beam_length_m)  : 2.5;
+      spread = `cone ${ang}°×${len}m`;
+    } else if (fixture === 'strip') {
+      const stripLen = pr.strip_length_m != null ? Number(pr.strip_length_m) : 2.0;
+      const width    = pr.strip_width_m  != null ? Number(pr.strip_width_m)
+                       : (pr.radius_m != null ? Number(pr.radius_m) : 1.5);
+      spread = `strip ${stripLen}m × ${width}m 180°`;
+    } else {
+      const defaultR = intensity === 'high' ? 4.0 : (intensity === 'ambient' ? 3.0 : 1.5);
+      const radius = pr.radius_m != null ? Number(pr.radius_m) : defaultR;
+      spread = `radius ${radius}m`;
+    }
+    let via = '';
+    let lightState = 'unknown';
+    const ctrlId = pr.controller_device_id || p.device_id;
+    const dpsKey = pr.controller_dps_key != null ? String(pr.controller_dps_key) : null;
+    const ctrl = devicesById ? devicesById[ctrlId] : null;
+    if (ctrl) {
+      const labels = ctrl.dps_labels || {};
+      const channelLabel = (dpsKey != null && labels[dpsKey]) ? labels[dpsKey] : null;
+      via = channelLabel
+        ? `, via ${ctrl.name}:${dpsKey} (${channelLabel})`
+        : `, via ${ctrl.name}${dpsKey != null ? ':' + dpsKey : ''}`;
+      lightState = readControllerChannelState(ctrl.last_state, dpsKey);
+    } else if (ctrlId) {
+      via = `, via ${ctrlId}${dpsKey != null ? ':' + dpsKey : ''}`;
+    }
+    return `    - ${name} (light:${fixture}, intensity=${intensity}, ${spread}) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${via}${zoneSuffix}, state: ${lightState}`;
   }
   const AGE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold (device agent owns freshness)
   const lastSeenMs = p.last_seen ? new Date(p.last_seen).getTime() : 0;
@@ -3332,8 +3403,11 @@ async function buildApartmentScene() {
     "SELECT key, value FROM dashboard_settings WHERE key LIKE 'room_layouts.%' AND key != 'room_layouts._apartment' ORDER BY key"
   );
   const devicesR = await db.query(
-    "SELECT id, name, room, device_type, protocol, last_state, last_seen FROM devices WHERE enabled = true ORDER BY room, name"
+    "SELECT id, name, room, device_type, protocol, last_state, last_seen, dps_labels FROM devices WHERE enabled = true ORDER BY room, name"
   );
+  // V7: lookup for light-controller resolution in describePlacement (name + dps_labels + last_state).
+  const devicesById = {};
+  for (const d of devicesR.rows) devicesById[d.id] = d;
   const roomSlugsR = await db.query(
     "SELECT name, regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g') AS slug FROM rooms ORDER BY name"
   );
@@ -3519,8 +3593,24 @@ async function buildApartmentScene() {
     }
 
     // V6 Zones — named 1m-grid regions for AI spatial anchors.
+    // V7: zones also own a Lights sub-block listing the lights placed inside
+    // each named zone (by point-in-cell lookup). Sensors + un-zoned lights
+    // stay in the flat "Devices placed:" block below with a (cell N) suffix.
     const zones = layout.zones || [];
     const zGrid = zoneGridBoundsSrv(layout);
+    const allRoomPlacements = placementsBySlug[slug] || [];
+    const lightsInRoom = allRoomPlacements.filter(p => p.device_type === 'light');
+    // Group lights by the named zone they fall into (null = un-zoned).
+    const lightsByZoneName = {};
+    const unzonedLights = [];
+    for (const lp of lightsInRoom) {
+      const rc = resolveCellSrv(layout, lp.x, lp.y);
+      if (rc && rc.zoneName) {
+        (lightsByZoneName[rc.zoneName] ||= []).push(lp);
+      } else {
+        unzonedLights.push(lp);
+      }
+    }
     if (zones.length && zGrid) {
       text += `  Zones (1m grid, ${zGrid.cols}×${zGrid.rows}):\n`;
       for (const z of zones) {
@@ -3528,14 +3618,27 @@ async function buildApartmentScene() {
         const area = cells.length;
         const desc = z.description ? `, "${z.description}"` : '';
         text += `    - ${z.name}: cells ${cells.join(',')} (≈ ${area} m²${desc})\n`;
+        const zoneLights = lightsByZoneName[z.name] || [];
+        if (zoneLights.length) {
+          text += `      Lights:\n`;
+          for (const lp of zoneLights) text += '  ' + describePlacement(lp, layout, devicesById) + '\n';
+        }
       }
     }
 
-    // Devices placed — position, rotation, cone, live state (V5), zone suffix (V6)
-    const placements = placementsBySlug[slug] || [];
-    if (placements.length) {
+    // Un-zoned lights (not inside any named zone) — list separately so AI
+    // can still see them with a (cell N) suffix.
+    if (unzonedLights.length) {
+      text += `  Lights (un-zoned):\n`;
+      for (const lp of unzonedLights) text += describePlacement(lp, layout, devicesById) + '\n';
+    }
+
+    // Devices placed — non-light placements (presence/motion sensors, etc.).
+    // Lights are listed in the Zones block or under "Lights (un-zoned)" above.
+    const nonLightPlacements = allRoomPlacements.filter(p => p.device_type !== 'light');
+    if (nonLightPlacements.length) {
       text += `  Devices placed:\n`;
-      for (const p of placements) text += describePlacement(p, layout) + '\n';
+      for (const p of nonLightPlacements) text += describePlacement(p, layout, devicesById) + '\n';
     }
 
     text += '\n';

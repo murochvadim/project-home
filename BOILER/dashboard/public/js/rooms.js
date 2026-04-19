@@ -37,9 +37,11 @@
   let roomPlacements = [];          // V5: [{id, slug, device_id, device_type, x, y, rotation, params, label, label_offset, label_hidden, device_name, last_state, last_seen}]
   let _allDevices = [];             // cached device list for picker
   let _devicePicker = null;         // {x_m, y_m, slug, suggested_ids} while popover is open
+  let _lightPicker  = null;         // V7 Lights: {x_m, y_m, slug} while the light picker is open
   let _pollTimer = null;            // state polling timer
   let _zoneSel    = [];             // V6 Zones: list of cellIds currently selected (unsaved)
   let _zoneEditId = null;           // id of existing zone being edited (null = creating new)
+  let _showLights = (localStorage.getItem('apt_show_lights') !== '0'); // V7 — default ON
 
   function svg() { return document.getElementById('apt-svg'); }
   function activeData() { return allRooms[activeSlug] || { walls:[], windows:[], doors:[], dividers:[] }; }
@@ -203,6 +205,8 @@
   }
 
   const OPPOSITE = { north: 'south', south: 'north', east: 'west', west: 'east' };
+  // 90° CW cycle: each step advances one index.
+  const SIDE_IDX = { north: 0, east: 1, south: 2, west: 3 };
 
   // Rotate all coordinates in a layout 90° clockwise around the room center.
   // Returns a deep copy with transformed coordinates — original untouched.
@@ -225,6 +229,46 @@
     // Recompute shape from rotated walls
     const nb = getRoomBounds(out);
     out.shape = { type: 'rect', width_m: +(nb.maxX - nb.minX).toFixed(1), length_m: +(nb.maxY - nb.minY).toFixed(1) };
+    return out;
+  }
+
+  // Rotate N × 90° CW (N ∈ {0, 1, 2, 3}). Used for perpendicular door-side
+  // mismatches (e.g. parent.south → target.east). N=0 returns the original.
+  function rotateLayoutN90CW(layout, n) {
+    const steps = ((n | 0) % 4 + 4) % 4;
+    let out = layout;
+    for (let i = 0; i < steps; i++) out = rotateLayout90CW(out);
+    return out;
+  }
+
+  // Reflect a layout across its centre. Used for PARALLEL door-side mismatches
+  // (e.g. parent.south ↔ target.south), where a 180° rotation would also
+  // mirror the perpendicular axis, destroying the room's left/right handedness
+  // for asymmetric layouts (partial walls, L-shapes, notches).
+  //   axis: 'x' → mirror across the horizontal centre line (flip y).
+  //             → fixes north↔north and south↔south mismatches.
+  //   axis: 'y' → mirror across the vertical centre line (flip x).
+  //             → fixes east↔east and west↔west mismatches.
+  // Door offset_m is preserved because reflection flips the wall's endpoint
+  // labels in lock-step, keeping the door at the same physical location.
+  function reflectLayout(layout, axis) {
+    const bounds = getRoomBounds(layout);
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+    function ref(x, y) {
+      if (axis === 'x') return { x: +x.toFixed(3),          y: +(2*cy - y).toFixed(3) };
+      return                   { x: +(2*cx - x).toFixed(3), y: +y.toFixed(3) };
+    }
+    const out = JSON.parse(JSON.stringify(layout));
+    for (const w of (out.walls || [])) {
+      const r1 = ref(w.x1, w.y1), r2 = ref(w.x2, w.y2);
+      w.x1 = r1.x; w.y1 = r1.y; w.x2 = r2.x; w.y2 = r2.y;
+    }
+    for (const d of (out.dividers || [])) {
+      const r1 = ref(d.x1, d.y1), r2 = ref(d.x2, d.y2);
+      d.x1 = r1.x; d.y1 = r1.y; d.x2 = r2.x; d.y2 = r2.y;
+    }
+    // Shape dimensions unchanged by reflection
     return out;
   }
 
@@ -306,12 +350,24 @@
           }
         }
 
-        // If target's matching connection isn't on the expected side,
-        // try rotating the target 90° CW to align it.
+        // If target's matching connection isn't on the expected side, pick
+        // the transform that aligns it:
+        //   parallel mismatch (target.side === parent.side)       → reflect
+        //   perpendicular mismatch (90° off)                      → rotate
+        // Reflection preserves left/right handedness for asymmetric rooms;
+        // rotation handles the remaining perpendicular cases. Combined, this
+        // covers every side combination with no room-specific logic.
         if (targetSide && targetSide !== expectedSide) {
-          usedLayout = rotateLayout90CW(targetLayout);
+          const parallelMismatch = (targetSide === conn.side);
+          if (parallelMismatch) {
+            const axis = (conn.side === 'north' || conn.side === 'south') ? 'x' : 'y';
+            usedLayout = reflectLayout(targetLayout, axis);
+          } else {
+            const steps = (SIDE_IDX[expectedSide] - SIDE_IDX[targetSide] + 4) % 4;
+            usedLayout = rotateLayoutN90CW(targetLayout, steps);
+          }
           targetBounds = getRoomBounds(usedLayout);
-          // Re-find matching connection in rotated layout
+          // Re-find matching connection in transformed layout
           targetMid = null;
           for (const td of (usedLayout.doors || [])) {
             if (td.leads_to !== curSlug) continue;
@@ -998,6 +1054,12 @@
     // V6: leaving the zone tool clears any unsaved cell selection. Editing an
     // existing zone is exited cleanly.
     if (t !== 'zone') { _zoneSel = []; _zoneEditId = null; }
+    // V7: leaving the light tool closes any open light-picker popover.
+    if (t !== 'light') {
+      _lightPicker = null;
+      const lp = document.getElementById('apt-light-picker');
+      if (lp) lp.style.display = 'none';
+    }
     document.querySelectorAll('.apt-tool').forEach(b => {
       b.style.outline = b.dataset.tool === t ? '2px solid #27ae60' : 'none';
     });
@@ -1012,6 +1074,7 @@
       device:  'Click inside a room to place a presence/motion device.',
       furniture: 'Click to place furniture. Click again to set size, or single-click for default size.',
       zone:    'Click cells to toggle selection. Then type a name in the edit panel + Apply to save. Click a named zone to edit it.',
+      light:   'Click inside a room to place a light. Pick its controller (switch/light entity) + channel + fixture type + intensity.',
       select:  'Click an element to select.',
     };
     setStatus(hints[t] || '');
@@ -1125,6 +1188,10 @@
       // Open the device picker popover at the click position inside the active room.
       aptDevicePickerOpen(ev, xM, yM);
       return;
+    } else if (tool === 'light') {
+      // V7: open light picker — user picks controller (switch/light entity) + channel.
+      aptLightPickerOpen(ev, xM, yM);
+      return;
     } else if (tool === 'zone') {
       // V6 Zones: click a cell to toggle selection. Clicking a cell inside an
       // existing named zone loads that zone into the edit panel (its cells +
@@ -1156,16 +1223,44 @@
       draw(); refreshEditPanel();
       return;
     } else if (tool === 'paste' && clipboard) {
+      // V7: clipboard is {kind: 'furniture'|'light', data: ...}.
+      if (clipboard.kind === 'light') {
+        const src = clipboard.data;
+        const body = {
+          slug: activeSlug,
+          device_id: src.device_id,
+          device_type: 'light',
+          x: +xM.toFixed(2), y: +yM.toFixed(2),
+          rotation: src.rotation || 0,
+          params: { ...(src.params || {}) },
+          label: src.label || null,
+        };
+        fetch('/api/room-device-placements', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(body),
+        }).then(r => r.ok ? r.json() : r.json().then(err => Promise.reject(err))).then(row => {
+          const dev = (_allDevices || []).find(d => d.id === src.device_id) || {};
+          row.device_name = dev.name; row.last_state = dev.last_state; row.last_seen = dev.last_seen;
+          roomPlacements.push(row);
+          pushUndo({ type: 'dev_create', row: { ...row } });
+          draw();
+          renderZoneInformationTable();
+          setStatus('Light pasted. Click again to paste another, or switch tool.');
+        }).catch(e => setStatus('Paste failed: ' + (e && e.error ? e.error : e.message || e)));
+        return;
+      }
+      // Furniture paste (kind === 'furniture')
+      const furnSrc = clipboard.data || clipboard;
       pushUndo(undefined, 'paste-furniture');
-      const data = activeData();
-      data.furniture = data.furniture || [];
-      data.furniture.push({
-        ...clipboard,
-        id: 'furn_' + (data.furniture.length + 1) + '_' + Date.now().toString(36),
+      const dataF = activeData();
+      dataF.furniture = dataF.furniture || [];
+      dataF.furniture.push({
+        ...furnSrc,
+        id: 'furn_' + (dataF.furniture.length + 1) + '_' + Date.now().toString(36),
         x: +xM.toFixed(2),
         y: +yM.toFixed(2),
       });
-      setStatus(clipboard.type + ' pasted. Click again to paste another, or switch tool.');
+      setStatus((furnSrc.type || 'item') + ' pasted. Click again to paste another, or switch tool.');
     } else if (tool === 'furniture') {
       const preset = (document.getElementById('apt-furn-preset') || {}).value;
       if (!preset) { setStatus('Select a furniture type from the dropdown first.'); return; }
@@ -1190,6 +1285,21 @@
         setStatus(`${preset} placed. Select another from dropdown or switch tool.`);
       }
     } else if (tool === 'select') {
+      // Dataset-first hit test — if the user actually clicked a placement icon
+      // (any fixture glyph part, sensor triangle, etc.), use dataset.devPlacementId.
+      // Fixes off-centre fixture glyphs (lamp base, strip axis, sconce arc)
+      // falling outside the 0.25m geometric hit radius below.
+      const tgt = ev.target;
+      if (tgt && tgt.dataset && tgt.dataset.devPlacementId) {
+        const pid = parseInt(tgt.dataset.devPlacementId, 10);
+        const hit = roomPlacements.find(pp => pp.id === pid);
+        if (hit) {
+          selectedId = hit.id;
+          setStatus(`Selected ${hit.device_type === 'light' ? 'light' : 'device'} ${hit.device_name || hit.device_id}.`);
+          draw(); refreshEditPanel();
+          return;
+        }
+      }
       // Respect visibility toggles: Select should not hit elements that aren't drawn.
       const showFurn = !!(document.getElementById('apt-show-furniture') || {}).checked;
       // Check furniture first (on top visually) — skip if Furniture checkbox is off.
@@ -1215,12 +1325,17 @@
           }
         }
       }
-      // Check device placements (triangles) — in this room
+      // Check device placements (triangles + light glyphs) — in this room.
+      // Lights get a slightly larger hit radius to accommodate fixture glyphs
+      // like lamp base / strip / sconce that extend beyond the centre point.
+      // Respect the Lights visibility checkbox: hidden lights are not selectable.
       for (const p of roomPlacements) {
         if (p.slug !== activeSlug) continue;
-        if (Math.hypot(xM - p.x, yM - p.y) < 0.25) {
+        if (p.device_type === 'light' && !_showLights) continue;
+        const hitR = p.device_type === 'light' ? 0.4 : 0.25;
+        if (Math.hypot(xM - p.x, yM - p.y) < hitR) {
           selectedId = p.id;
-          setStatus(`Selected device ${p.device_name || p.device_id}.`);
+          setStatus(`Selected ${p.device_type === 'light' ? 'light' : 'device'} ${p.device_name || p.device_id}.`);
           draw(); refreshEditPanel();
           return;
         }
@@ -1397,12 +1512,13 @@
     panel.style.display = 'block';
     const isDivider = !!div;
     const isFurn = !!furn;
-    const isDev = !!placement;
-    document.getElementById('apt-edit-id').textContent = isDev
+    const isDev   = !!(placement && placement.device_type !== 'light');
+    const isLight = !!(placement && placement.device_type === 'light');
+    document.getElementById('apt-edit-id').textContent = (isDev || isLight)
       ? (placement.device_name || placement.device_id)
       : (furn ? (furn.type + (furn.label ? ' "'+furn.label+'"' : '')) : item.id);
-    document.getElementById('apt-edit-offset-wrap').style.display = (isDivider || isFurn || isDev) ? 'none' : 'inline';
-    document.getElementById('apt-edit-width-wrap').style.display  = (isDivider || isFurn || isDev) ? 'none' : 'inline';
+    document.getElementById('apt-edit-offset-wrap').style.display = (isDivider || isFurn || isDev || isLight) ? 'none' : 'inline';
+    document.getElementById('apt-edit-width-wrap').style.display  = (isDivider || isFurn || isDev || isLight) ? 'none' : 'inline';
     if (!isDivider && !isFurn && !isDev) {
       document.getElementById('apt-edit-offset').value = item.offset_m;
       document.getElementById('apt-edit-width').value = item.width_m;
@@ -1449,6 +1565,51 @@
       // 'enabled' defaults to true when absent — only false if explicitly set.
       document.getElementById('apt-edit-dev-enabled').checked = pr.enabled !== false;
       document.getElementById('apt-edit-dev-label').value = placement.label || '';
+    }
+    // V7 Light edit wrap
+    const lightWrap = document.getElementById('apt-edit-light-wrap');
+    if (lightWrap) lightWrap.style.display = isLight ? 'inline' : 'none';
+    if (isLight) {
+      const pr = placement.params || {};
+      const intensity = pr.intensity || 'mid';
+      const fixture = pr.fixture_type || 'lamp';
+      const ctrlId = pr.controller_device_id || placement.device_id;
+      document.getElementById('apt-edit-light-fixture').value = fixture;
+      document.getElementById('apt-edit-light-intensity').value = intensity;
+      const ctrlSel = document.getElementById('apt-edit-light-controller');
+      _populateLightControllerDropdown(ctrlSel, ctrlId);
+      const dpsSel = document.getElementById('apt-edit-light-dps');
+      _populateLightDpsDropdown(dpsSel, ctrlId, pr.controller_dps_key);
+      // Spread fields — FIXTURE drives the shape, so inputs follow fixture:
+      //   spot   → angle (°) + length (m)  — cone
+      //   strip  → length (m) + width (m)  — half-rect along strip axis
+      //   other  → radius (m)              — omni circle (sa disabled)
+      const sa = document.getElementById('apt-edit-light-spread-a');
+      const sb = document.getElementById('apt-edit-light-spread-b');
+      if (fixture === 'spot') {
+        sa.value = pr.beam_angle_deg != null ? pr.beam_angle_deg : 30;
+        sb.value = pr.beam_length_m  != null ? pr.beam_length_m  : 2.5;
+        sa.disabled = false;
+        sa.title = 'Cone half-angle (degrees)';
+        sb.title = 'Cone length (m)';
+      } else if (fixture === 'strip') {
+        sa.value = pr.strip_length_m != null ? pr.strip_length_m : 2.0;
+        sb.value = pr.strip_width_m  != null ? pr.strip_width_m
+                   : (pr.radius_m != null ? pr.radius_m : 1.5);
+        sa.disabled = false;
+        sa.title = 'Strip length along orientation (m)';
+        sb.title = 'Emission width outward from strip (m) — 180° one-sided';
+      } else {
+        sa.value = '';
+        sa.disabled = true;
+        sa.title = 'Only used for spot or strip fixtures';
+        const defaultR = intensity === 'high' ? 4.0 : (intensity === 'ambient' ? 3.0 : 1.5);
+        sb.value = pr.radius_m != null ? pr.radius_m : defaultR;
+        sb.title = 'Illuminated radius (m) — omni';
+      }
+      document.getElementById('apt-edit-light-rot').value = placement.rotation || 0;
+      document.getElementById('apt-edit-light-enabled').checked = pr.enabled !== false;
+      document.getElementById('apt-edit-light-label').value = placement.label || '';
     }
   }
 
@@ -1525,6 +1686,70 @@
     if (!item) { item = (data.furniture || []).find(x => x.id === selectedId); kind = 'furniture'; }
     if (!item) {
       const placement = roomPlacements.find(p => p.id === selectedId);
+      // V7 Light branch — distinct from the sensor device branch below.
+      if (placement && placement.device_type === 'light') {
+        const fixture   = document.getElementById('apt-edit-light-fixture').value;
+        const intensity = document.getElementById('apt-edit-light-intensity').value;
+        const ctrlId    = document.getElementById('apt-edit-light-controller').value;
+        const rawDps    = document.getElementById('apt-edit-light-dps').value;
+        const dpsKey    = rawDps === '' ? null : rawDps;
+        const rot       = parseInt(document.getElementById('apt-edit-light-rot').value, 10) || 0;
+        const enabled   = !!document.getElementById('apt-edit-light-enabled').checked;
+        const lbl       = (document.getElementById('apt-edit-light-label').value || '').trim() || null;
+        const sa        = parseFloat(document.getElementById('apt-edit-light-spread-a').value);
+        const sb        = parseFloat(document.getElementById('apt-edit-light-spread-b').value);
+        const params = { ...(placement.params || {}) };
+        // Drop stale spread keys so fixture switch doesn't leak cone/strip/radius values into each other.
+        delete params.beam_angle_deg; delete params.beam_length_m;
+        delete params.radius_m;
+        delete params.strip_length_m; delete params.strip_width_m;
+        params.fixture_type = fixture;
+        params.intensity    = intensity;
+        params.controller_device_id = ctrlId;
+        params.controller_dps_key   = dpsKey;
+        params.enabled = enabled;
+        // Fixture-specific spread — sa / sb labels change accordingly (see refreshEditPanel).
+        if (fixture === 'spot') {
+          if (isFinite(sa) && sa > 0) params.beam_angle_deg = sa;
+          if (isFinite(sb) && sb > 0) params.beam_length_m  = sb;
+        } else if (fixture === 'strip') {
+          if (isFinite(sa) && sa > 0) params.strip_length_m = sa;
+          if (isFinite(sb) && sb > 0) params.strip_width_m  = sb;
+        } else {
+          if (isFinite(sb) && sb > 0) params.radius_m = sb;
+        }
+        const prev_fields = {
+          device_id: placement.device_id,
+          rotation: placement.rotation,
+          params: { ...(placement.params || {}) },
+          label: placement.label,
+        };
+        // Retarget device_id when controller changed so state polling + FK CASCADE
+        // point at the real controller. Server validates the device exists.
+        const controllerChanged = placement.device_id !== ctrlId;
+        const patchBody = controllerChanged
+          ? { device_id: ctrlId, rotation: rot, params, label: lbl }
+          : { rotation: rot, params, label: lbl };
+        try {
+          const r = await fetch('/api/room-device-placements/' + placement.id, {
+            method: 'PATCH', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(patchBody),
+          });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const updated = await r.json();
+          pushUndo({ type: 'dev_update', id: placement.id, prev_fields });
+          Object.assign(placement, updated);
+          if (controllerChanged) {
+            const dev = (_allDevices || []).find(d => d.id === ctrlId) || {};
+            placement.device_name = dev.name;
+            placement.last_state  = dev.last_state;
+            placement.last_seen   = dev.last_seen;
+          }
+          draw(); setStatus('Light updated.');
+          renderZoneInformationTable();
+        } catch (e) { setStatus('Update failed: ' + e.message); }
+        return;
+      }
       if (placement) {
         const rot = parseInt(document.getElementById('apt-edit-dev-rot').value, 10) || 0;
         const angL = parseFloat(document.getElementById('apt-edit-dev-angle-l').value);
@@ -1629,6 +1854,7 @@
           method: 'POST', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             slug: prev.row.slug, device_id: prev.row.device_id,
+            device_type: prev.row.device_type,  // V7: preserve device_type on undo (light vs sensor)
             x: prev.row.x, y: prev.row.y, rotation: prev.row.rotation,
             params: prev.row.params, label: prev.row.label,
             label_offset: prev.row.label_offset, label_hidden: prev.row.label_hidden,
@@ -1663,13 +1889,24 @@
   };
 
   window.aptCopySelected = function () {
-    if (!selectedId) { setStatus('Select a furniture item first.'); return; }
+    if (!selectedId) { setStatus('Select a furniture item or light first.'); return; }
     const data = activeData();
     const f = (data.furniture || []).find(ff => ff.id === selectedId);
-    if (!f) { setStatus('Copy works on furniture only.'); return; }
-    clipboard = JSON.parse(JSON.stringify(f));
-    tool = 'paste';
-    setStatus('Click to paste ' + f.type + '. Press Esc or switch tool to cancel.');
+    if (f) {
+      clipboard = { kind: 'furniture', data: JSON.parse(JSON.stringify(f)) };
+      tool = 'paste';
+      setStatus('Click to paste ' + f.type + '. Press Esc or switch tool to cancel.');
+      return;
+    }
+    const placement = roomPlacements.find(p => p.id === selectedId);
+    if (placement && placement.device_type === 'light') {
+      clipboard = { kind: 'light', data: JSON.parse(JSON.stringify(placement)) };
+      tool = 'paste';
+      const name = placement.device_name || placement.device_id;
+      setStatus('Click to paste light (' + name + '). Press Esc or switch tool to cancel.');
+      return;
+    }
+    setStatus('Copy works on furniture or lights only.');
   };
 
   window.aptDeleteSelected = async function () {
@@ -2313,7 +2550,7 @@
         tr.style.borderTop = '1px solid #e8e3d8';
         tr.innerHTML = `
           <td style="padding:3px 6px;">${r.name}</td>
-          <td colspan="4" style="padding:3px 6px;color:#999;font-style:italic;">(no zones)</td>`;
+          <td colspan="5" style="padding:3px 6px;color:#999;font-style:italic;">(no zones)</td>`;
         tbody.appendChild(tr);
         continue;
       }
@@ -2321,11 +2558,16 @@
         const z = zones[i];
         const cellCount = (z.cells || []).length;
         const area = cellCount; // 1m² per cell
-        // Devices whose (x,y) lands in this zone's cells
-        const devsInZone = placements
-          .filter(p => (z.cells || []).includes(cellIdForPoint(layout, p.x, p.y)))
-          .map(p => p.device_name || p.label || p.device_id)
-          .filter(Boolean);
+        // Split placements inside this zone into lights vs non-lights (V7).
+        const inZone = placements.filter(p => (z.cells || []).includes(cellIdForPoint(layout, p.x, p.y)));
+        const lightsInZone = inZone.filter(p => p.device_type === 'light');
+        const devsInZone   = inZone.filter(p => p.device_type !== 'light');
+        const lightNames = lightsInZone.map(p => {
+          const name = p.label || p.device_name || p.device_id;
+          const intensity = (p.params || {}).intensity || 'mid';
+          return `${name} (${intensity})`;
+        });
+        const devNames = devsInZone.map(p => p.device_name || p.label || p.device_id).filter(Boolean);
         const cellList = (z.cells || []).slice().sort((a, b) => a - b).join(', ');
         const tr = document.createElement('tr');
         tr.style.borderTop = '1px solid #e8e3d8';
@@ -2334,7 +2576,8 @@
           <td style="padding:3px 6px;color:#6c4f9f;font-weight:600;">${z.name}</td>
           <td style="padding:3px 6px;font-size:0.72rem;color:#555;">${cellList}</td>
           <td style="padding:3px 6px;text-align:right;">${area} m²</td>
-          <td style="padding:3px 6px;font-size:0.72rem;color:#555;">${devsInZone.length ? devsInZone.join(', ') : '—'}</td>`;
+          <td style="padding:3px 6px;font-size:0.72rem;color:#a67a14;">${lightNames.length ? lightNames.join(', ') : '—'}</td>
+          <td style="padding:3px 6px;font-size:0.72rem;color:#555;">${devNames.length ? devNames.join(', ') : '—'}</td>`;
         tbody.appendChild(tr);
       }
     }
@@ -2556,10 +2799,33 @@
   }
 
   // Render all placements for one room (called inside renderRoomElements after furniture)
+  // V7: map controller's last_state (by dps_key) → ON / OFF / unknown for lights.
+  function _lightState(p) {
+    const pr = p.params || {};
+    if (pr.enabled === false) return 'disabled';
+    const ls = p.last_state || {};
+    const key = pr.controller_dps_key != null ? String(pr.controller_dps_key) : null;
+    const raw = key != null ? ls[key] : (ls.on !== undefined ? ls.on : ls['20']);
+    if (raw === true || raw === 1 || raw === '1' || raw === 'on' || raw === 'ON' || raw === 'true' || raw === 'True') return 'on';
+    if (raw === false || raw === 0 || raw === '0' || raw === 'off' || raw === 'OFF' || raw === 'false' || raw === 'False') return 'off';
+    return 'unknown';
+  }
+
+  // V7 Light colour palette — ON = warm yellow, OFF = grey, DISABLED = muted yellow, UNKNOWN = pale grey.
+  const LIGHT_COLORS = { on: '#f4b400', off: '#888', disabled: '#e8b43a', unknown: '#bbb' };
+
   function renderPlacementsForRoom(g, slug, selId) {
     const list = roomPlacements.filter(p => p.slug === slug);
     for (const p of list) {
       const cx = mToPx(p.x), cy = mToPx(p.y);
+
+      // V7 Lights — distinct render branch. Gated by the Lights checkbox.
+      if (p.device_type === 'light') {
+        if (!_showLights) continue;
+        _renderLight(g, p, cx, cy, slug, selId);
+        continue;
+      }
+
       // 'enabled' defaults to true when absent. Disabled placements: yellow
       // triangle, no cone, no dots, dim label — AI also sees DISABLED in scene.
       const isEnabled = (p.params || {}).enabled !== false;
@@ -2785,12 +3051,456 @@
     }
   };
 
+  // ── V7 Fixture-specific light icons ────────────────────────────────────────
+  // Each icon is a compact glyph (~12–14 px) distinct enough to tell fixture
+  // types apart at a glance. `placementId` goes on the primary pointer-
+  // receiving element so Select / drag hit-tests work regardless of fixture.
+  function _drawLightIcon(g, cx, cy, fixture, bodyFill, strokeFill, strokeW, rotDeg, rotRad, placementId) {
+    const hit = (el) => { el.dataset.devPlacementId = placementId; el.setAttribute('style', 'cursor:pointer;'); return el; };
+    const mk = (tag) => document.createElementNS(NS, tag);
+    const common = (el, extras = {}) => {
+      el.setAttribute('fill', bodyFill);
+      el.setAttribute('stroke', strokeFill);
+      el.setAttribute('stroke-width', strokeW);
+      for (const [k, v] of Object.entries(extras)) el.setAttribute(k, v);
+      return el;
+    };
+    switch (fixture) {
+      case 'spot': {
+        // Triangle pointing along rotation (aim = downlight beam direction).
+        // Apex forward, base behind, small equilateral footprint.
+        const frontPx = 7, backPx = 5, halfBase = 5;
+        const rot = (ox, oy) => ({
+          x: cx + ox * Math.cos(rotRad) - oy * Math.sin(rotRad),
+          y: cy + ox * Math.sin(rotRad) + oy * Math.cos(rotRad),
+        });
+        const apex = rot(frontPx, 0);
+        const bl = rot(-backPx, -halfBase), br = rot(-backPx, halfBase);
+        const tri = common(mk('polygon'));
+        tri.setAttribute('points', `${apex.x},${apex.y} ${bl.x},${bl.y} ${br.x},${br.y}`);
+        g.appendChild(hit(tri));
+        break;
+      }
+      case 'ceiling': {
+        // Filled disc, no stem — recessed ceiling light.
+        const disc = common(mk('circle'), { cx, cy, r: 6 });
+        g.appendChild(hit(disc));
+        // Inner ring for visual distinction from a bare bulb
+        const inner = mk('circle');
+        inner.setAttribute('cx', cx); inner.setAttribute('cy', cy); inner.setAttribute('r', 2.5);
+        inner.setAttribute('fill', 'none');
+        inner.setAttribute('stroke', strokeFill);
+        inner.setAttribute('stroke-width', 0.8);
+        inner.setAttribute('pointer-events', 'none');
+        g.appendChild(inner);
+        break;
+      }
+      case 'pendant': {
+        // Hanging disc + short cord going up.
+        const cord = mk('line');
+        cord.setAttribute('x1', cx); cord.setAttribute('y1', cy - 10);
+        cord.setAttribute('x2', cx); cord.setAttribute('y2', cy - 5);
+        cord.setAttribute('stroke', strokeFill);
+        cord.setAttribute('stroke-width', 1);
+        cord.setAttribute('pointer-events', 'none');
+        g.appendChild(cord);
+        const disc = common(mk('circle'), { cx, cy, r: 5.5 });
+        g.appendChild(hit(disc));
+        break;
+      }
+      case 'chandelier': {
+        // Central disc + 3 satellite dots (branched).
+        const main = common(mk('circle'), { cx, cy, r: 4 });
+        g.appendChild(hit(main));
+        const satR = 2, d = 7;
+        const sats = [
+          { x: cx,          y: cy - d },        // top
+          { x: cx - d * 0.87, y: cy + d * 0.5 }, // bottom-left
+          { x: cx + d * 0.87, y: cy + d * 0.5 }, // bottom-right
+        ];
+        for (const s of sats) {
+          const arm = mk('line');
+          arm.setAttribute('x1', cx); arm.setAttribute('y1', cy);
+          arm.setAttribute('x2', s.x); arm.setAttribute('y2', s.y);
+          arm.setAttribute('stroke', strokeFill);
+          arm.setAttribute('stroke-width', 0.8);
+          arm.setAttribute('pointer-events', 'none');
+          g.appendChild(arm);
+          const dot = common(mk('circle'), { cx: s.x, cy: s.y, r: satR });
+          dot.setAttribute('stroke-width', 1);
+          dot.setAttribute('pointer-events', 'none');
+          g.appendChild(dot);
+        }
+        break;
+      }
+      case 'lamp': {
+        // Disc on top of a trapezoidal base (table-lamp silhouette).
+        const shade = mk('polygon');
+        // Base trapezoid with top narrower than bottom
+        const baseTop = cy + 4, baseBot = cy + 9;
+        shade.setAttribute('points', `${cx - 4},${baseTop} ${cx + 4},${baseTop} ${cx + 6},${baseBot} ${cx - 6},${baseBot}`);
+        shade.setAttribute('fill', bodyFill);
+        shade.setAttribute('stroke', strokeFill);
+        shade.setAttribute('stroke-width', strokeW);
+        g.appendChild(hit(shade));
+        const bulb = common(mk('circle'), { cx, cy: cy - 2, r: 4 });
+        g.appendChild(bulb);
+        break;
+      }
+      case 'sconce': {
+        // Half-disc attached to a short wall bar, oriented so the half-disc
+        // faces the rotation direction and the bar is behind it.
+        const dirX = Math.cos(rotRad), dirY = Math.sin(rotRad);
+        const nX = -dirY, nY = dirX;
+        const baseX = cx - dirX * 2, baseY = cy - dirY * 2;
+        // Wall bar perpendicular to aim, short
+        const bar = mk('line');
+        bar.setAttribute('x1', baseX + nX * 6); bar.setAttribute('y1', baseY + nY * 6);
+        bar.setAttribute('x2', baseX - nX * 6); bar.setAttribute('y2', baseY - nY * 6);
+        bar.setAttribute('stroke', strokeFill);
+        bar.setAttribute('stroke-width', 1.5);
+        bar.setAttribute('stroke-linecap', 'round');
+        bar.setAttribute('pointer-events', 'none');
+        g.appendChild(bar);
+        // Half-disc (semicircle) via SVG path with arc
+        const r = 5;
+        const p1x = baseX + nX * r, p1y = baseY + nY * r;
+        const p2x = baseX - nX * r, p2y = baseY - nY * r;
+        // Move to p1, arc to p2 forward (bulge in rotation direction), close
+        const half = mk('path');
+        const sweep = 1; // arc outward (into aim direction)
+        half.setAttribute('d', `M ${p1x} ${p1y} A ${r} ${r} 0 0 ${sweep} ${p2x} ${p2y} Z`);
+        half.setAttribute('fill', bodyFill);
+        half.setAttribute('stroke', strokeFill);
+        half.setAttribute('stroke-width', strokeW);
+        g.appendChild(hit(half));
+        break;
+      }
+      case 'strip': {
+        // Long thin pill oriented along rotation.
+        const lenPx = 18, wPx = 4, hPx = wPx / 2;
+        const dirX = Math.cos(rotRad), dirY = Math.sin(rotRad);
+        const nX = -dirY, nY = dirX;
+        const half = lenPx / 2;
+        const a = { x: cx - dirX * half, y: cy - dirY * half };
+        const b = { x: cx + dirX * half, y: cy + dirY * half };
+        // Two side-corner pairs via normal offset = hPx
+        const p1 = { x: a.x + nX * hPx, y: a.y + nY * hPx };
+        const p2 = { x: b.x + nX * hPx, y: b.y + nY * hPx };
+        const p3 = { x: b.x - nX * hPx, y: b.y - nY * hPx };
+        const p4 = { x: a.x - nX * hPx, y: a.y - nY * hPx };
+        const poly = mk('polygon');
+        poly.setAttribute('points', `${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y} ${p4.x},${p4.y}`);
+        poly.setAttribute('fill', bodyFill);
+        poly.setAttribute('stroke', strokeFill);
+        poly.setAttribute('stroke-width', strokeW);
+        poly.setAttribute('stroke-linejoin', 'round');
+        g.appendChild(hit(poly));
+        break;
+      }
+      default: {
+        // Fallback = bulb with stem (legacy).
+        const bulb = common(mk('circle'), { cx, cy, r: 6 });
+        g.appendChild(hit(bulb));
+        const stem = mk('line');
+        stem.setAttribute('x1', cx - 2.5); stem.setAttribute('y1', cy + 6.5);
+        stem.setAttribute('x2', cx + 2.5); stem.setAttribute('y2', cy + 6.5);
+        stem.setAttribute('stroke', strokeFill);
+        stem.setAttribute('stroke-width', 1.5);
+        stem.setAttribute('stroke-linecap', 'round');
+        stem.setAttribute('pointer-events', 'none');
+        g.appendChild(stem);
+      }
+    }
+  }
+
+  // ── V7 Light renderer ──────────────────────────────────────────────────────
+  // Icon = small bulb (circle with a stem). Spread shape:
+  //   spot      → cone (like sensor, but yellow)
+  //   mid/high/ambient → soft radius circle; ambient stroke dashed.
+  // Active room renders icon + spread + label. Non-active rooms render
+  // icon + label only (parity with V6 zone non-active treatment).
+  function _renderLight(g, p, cx, cy, slug, selId) {
+    const isActive = slug === activeSlug;
+    const pr = p.params || {};
+    const intensity = pr.intensity || 'mid';
+    const fixture = pr.fixture_type || 'lamp';
+    const state = _lightState(p);
+    const fill = LIGHT_COLORS[state];
+    // Hoist rotation values to the top — the strip spread branch references
+    // rotRad before the later icon-drawing block re-declared it, producing a
+    // TDZ crash on strip fixtures.
+    const rotDeg = (p.rotation || 0);
+    const rotRad = (Math.PI / 180) * rotDeg;
+
+    // Spread — only visible when the light is ON and we're on the active room.
+    // No stroke / border (user wants only yellow glow). Opacity scales by
+    // intensity class so at-a-glance the user can tell how bright each light
+    // is: high > mid > ambient. Spot uses its cone (with its own opacity).
+    // Strip fixtures emit along their length — rendered as a rotated rounded
+    // rectangle rather than a point-sourced circle.
+    const YELLOW_BY_INTENSITY = {
+      high:    0.28,
+      mid:     0.16,
+      ambient: 0.08,
+      spot:    0.22,  // used by cone fill
+    };
+    // Spread is visible in every room (not just active) so the ON/OFF state
+    // can be read at a glance in the apartment view.
+    if (state === 'on') {
+      const alpha = YELLOW_BY_INTENSITY[intensity] ?? 0.16;
+      const yellow = `rgba(244,180,0,${alpha})`;
+      // Spread shape is FIXTURE-driven (not intensity-driven). Intensity only
+      // controls the yellow opacity. spot = cone. strip = 180° half-rect along
+      // the strip axis, emitted on the forward-normal side only (real LED
+      // strips emit outward, not through the wall behind them). All other
+      // fixtures = omni radius circle.
+      if (fixture === 'spot') {
+        const ang = (pr.beam_angle_deg != null ? Number(pr.beam_angle_deg) : 30);
+        const len = (pr.beam_length_m  != null ? Number(pr.beam_length_m)  : 2.5);
+        if (ang > 0 && len > 0) {
+          const halfRad = (Math.PI / 180) * (ang / 2);
+          const nSamp = Math.max(8, Math.ceil(ang / 3));
+          const pts = [`${cx},${cy}`];
+          for (let k = 0; k <= nSamp; k++) {
+            const a = (rotRad - halfRad) + (k / nSamp) * (halfRad * 2);
+            pts.push(`${mToPx(p.x + len * Math.cos(a))},${mToPx(p.y + len * Math.sin(a))}`);
+          }
+          const poly = document.createElementNS(NS, 'polygon');
+          poly.setAttribute('points', pts.join(' '));
+          poly.setAttribute('fill', yellow);
+          poly.setAttribute('stroke', 'none');
+          poly.setAttribute('pointer-events', 'none');
+          g.appendChild(poly);
+        }
+      } else if (fixture === 'strip') {
+        // 180° emission: rectangle from strip axis outward on the forward-
+        // normal side only (length along rotation, width = strip_width_m).
+        const width = (pr.strip_width_m != null ? Number(pr.strip_width_m)
+                        : (pr.radius_m != null ? Number(pr.radius_m) : 1.5));
+        const stripLen = (pr.strip_length_m != null ? Number(pr.strip_length_m) : 2.0);
+        if (width > 0 && stripLen > 0) {
+          const dirX = Math.cos(rotRad), dirY = Math.sin(rotRad);
+          const nX = -dirY, nY = dirX;
+          const halfL = stripLen / 2;
+          // 4 corners: a and b are on the strip axis; a' and b' are projected
+          // outward on the positive-normal side only (one-sided emission).
+          const a  = { x: p.x - dirX * halfL,          y: p.y - dirY * halfL };
+          const b  = { x: p.x + dirX * halfL,          y: p.y + dirY * halfL };
+          const ap = { x: a.x + nX * width,            y: a.y + nY * width };
+          const bp = { x: b.x + nX * width,            y: b.y + nY * width };
+          const poly = document.createElementNS(NS, 'polygon');
+          poly.setAttribute('points', [a, b, bp, ap].map(c => `${mToPx(c.x)},${mToPx(c.y)}`).join(' '));
+          poly.setAttribute('fill', yellow);
+          poly.setAttribute('stroke', 'none');
+          poly.setAttribute('stroke-linejoin', 'round');
+          poly.setAttribute('pointer-events', 'none');
+          g.appendChild(poly);
+        }
+      } else {
+        const defaultR = intensity === 'high' ? 4.0 : (intensity === 'ambient' ? 3.0 : 1.5);
+        const radius = (pr.radius_m != null ? Number(pr.radius_m) : defaultR);
+        if (radius > 0) {
+          const circ = document.createElementNS(NS, 'circle');
+          circ.setAttribute('cx', cx); circ.setAttribute('cy', cy);
+          circ.setAttribute('r', mToPx(radius));
+          circ.setAttribute('fill', yellow);
+          circ.setAttribute('stroke', 'none');
+          circ.setAttribute('pointer-events', 'none');
+          g.appendChild(circ);
+        }
+      }
+    }
+
+    // V7 fixture-specific icons. Each has a distinct glyph so the user can
+    // tell at a glance what kind of light is there. One element per icon
+    // carries dataset.devPlacementId for click/select hit-testing.
+    const sw = p.id === selId ? 2.5 : 1.5;
+    const on = (state === 'on');
+    const body = on ? fill : '#fff';
+    _drawLightIcon(g, cx, cy, fixture, body, fill, sw, rotDeg, rotRad, p.id);
+
+    // Label — placed below bulb, same drag/hide UX as sensors.
+    const lblText = (p.label && p.label.trim()) || p.device_name || fixture;
+    const hidden = !!p.label_hidden;
+    if (lblText && (!hidden || _showHiddenLabels)) {
+      const lo = p.label_offset || {};
+      const lbl = document.createElementNS(NS, 'text');
+      lbl.setAttribute('x', mToPx(p.x + (lo.x || 0)));
+      lbl.setAttribute('y', mToPx(p.y + (lo.y || 0)) + mToPx(0.28));
+      lbl.setAttribute('font-size', '9');
+      lbl.setAttribute('fill', '#555');
+      lbl.setAttribute('text-anchor', 'middle');
+      lbl.setAttribute('opacity', hidden ? '0.3' : (state === 'on' ? '0.9' : '0.7'));
+      lbl.setAttribute('style', 'cursor:move;user-select:none;pointer-events:all;');
+      lbl.dataset.devLabelId = p.id;
+      lbl.dataset.devLabelSlug = slug;
+      lbl.textContent = lblText;
+      g.appendChild(lbl);
+    }
+  }
+
+  // ── V7 Light picker ────────────────────────────────────────────────────────
+  // Controller candidates: every enabled switch / circuit_breaker / light — from
+  // ANY room (cross-room supported, e.g. Bedroom Balcony Switch DPS 2 lights My
+  // Bathroom). Controller's dps_labels populates the channel sub-dropdown.
+  const LIGHT_CONTROLLER_TYPES = new Set(['switch', 'circuit_breaker', 'light']);
+  const LIGHT_INTENSITY_DEFAULTS = {
+    spot:    { beam_angle_deg: 30, beam_length_m: 2.5 },
+    mid:     { radius_m: 1.5 },
+    high:    { radius_m: 4.0 },
+    ambient: { radius_m: 3.0 },
+  };
+
+  function _lightControllerCandidates() {
+    return (_allDevices || [])
+      .filter(d => LIGHT_CONTROLLER_TYPES.has(d.device_type) && d.enabled !== false)
+      .slice()
+      .sort((a, b) => (a.room || '').localeCompare(b.room || '') || a.name.localeCompare(b.name));
+  }
+
+  function _populateLightControllerDropdown(selectEl, preselectDeviceId) {
+    selectEl.innerHTML = '';
+    const grouped = {};
+    for (const d of _lightControllerCandidates()) {
+      const room = d.room || '—';
+      (grouped[room] ||= []).push(d);
+    }
+    for (const room of Object.keys(grouped).sort()) {
+      const og = document.createElement('optgroup');
+      og.label = room;
+      for (const d of grouped[room]) {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = `${d.name} (${d.device_type})`;
+        if (d.id === preselectDeviceId) opt.selected = true;
+        og.appendChild(opt);
+      }
+      selectEl.appendChild(og);
+    }
+  }
+
+  function _populateLightDpsDropdown(dpsSelect, deviceId, preselectKey) {
+    dpsSelect.innerHTML = '';
+    const dev = (_allDevices || []).find(d => d.id === deviceId);
+    const labels = (dev && dev.dps_labels) || {};
+    const keys = Object.keys(labels);
+    if (!keys.length) {
+      // Direct light entity or switch without labelled channels — single "direct" option
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = dev && dev.device_type === 'light' ? 'direct (no channel)' : 'channel 1 (default)';
+      dpsSelect.appendChild(opt);
+      return;
+    }
+    for (const k of keys) {
+      const opt = document.createElement('option');
+      opt.value = k;
+      opt.textContent = `${k}: ${labels[k]}`;
+      if (k === preselectKey) opt.selected = true;
+      dpsSelect.appendChild(opt);
+    }
+  }
+
+  function aptLightPickerOpen(ev, xM, yM) {
+    if (!activeSlug || activeSlug === '_apartment') {
+      setStatus('Pick an active room first (not Apartment view).');
+      return;
+    }
+    if (!_lightControllerCandidates().length) {
+      setStatus('No switch / light devices found to use as controller.');
+      return;
+    }
+    const pop = document.getElementById('apt-light-picker');
+    const ctrl = document.getElementById('apt-light-picker-controller');
+    const dps  = document.getElementById('apt-light-picker-dps');
+    _populateLightControllerDropdown(ctrl);
+    _populateLightDpsDropdown(dps, ctrl.value);
+    document.getElementById('apt-light-picker-fixture').value = 'ceiling';
+    document.getElementById('apt-light-picker-intensity').value = 'high';
+    const rect = svg().getBoundingClientRect();
+    pop.style.left = Math.min(rect.width - 280, Math.max(4, ev.clientX - rect.left)) + 'px';
+    pop.style.top  = Math.min(rect.height - 220, Math.max(4, ev.clientY - rect.top))  + 'px';
+    pop.style.display = '';
+    _lightPicker = { slug: activeSlug, x_m: xM, y_m: yM };
+  }
+  window.aptLightPickerCancel = function () {
+    _lightPicker = null;
+    const p = document.getElementById('apt-light-picker');
+    if (p) p.style.display = 'none';
+    setStatus('');
+  };
+  window.aptLightPickerControllerChanged = function () {
+    const ctrl = document.getElementById('apt-light-picker-controller');
+    const dps  = document.getElementById('apt-light-picker-dps');
+    if (ctrl && dps) _populateLightDpsDropdown(dps, ctrl.value);
+  };
+  window.aptLightPickerConfirm = async function () {
+    if (!_lightPicker) return;
+    const { slug, x_m, y_m } = _lightPicker;
+    const controller_device_id = document.getElementById('apt-light-picker-controller').value;
+    const rawDps = document.getElementById('apt-light-picker-dps').value;
+    const controller_dps_key = rawDps === '' ? null : rawDps;
+    const fixture_type = document.getElementById('apt-light-picker-fixture').value;
+    const intensity    = document.getElementById('apt-light-picker-intensity').value;
+    if (!controller_device_id) { aptLightPickerCancel(); return; }
+    const defaults = LIGHT_INTENSITY_DEFAULTS[intensity] || {};
+    const params = {
+      fixture_type,
+      intensity,
+      controller_device_id,
+      controller_dps_key,
+      enabled: true,
+      ...defaults,
+    };
+    const body = {
+      slug,
+      device_id: controller_device_id,    // poll path: controller's last_state
+      device_type: 'light',               // overrides devices.device_type on the placement row
+      x: x_m, y: y_m,
+      rotation: 0,
+      params,
+    };
+    try {
+      const r = await fetch('/api/room-device-placements', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const row = await r.json();
+      const dev = (_allDevices || []).find(d => d.id === controller_device_id) || {};
+      row.device_name = dev.name; row.last_state = dev.last_state; row.last_seen = dev.last_seen;
+      roomPlacements.push(row);
+      selectedId = row.id;
+      pushUndo({ type: 'dev_create', row: { ...row } });
+      aptLightPickerCancel();
+      if (window.aptSetTool) window.aptSetTool('select');
+      draw(); refreshEditPanel();
+      renderZoneInformationTable();
+      setStatus(`Placed light via ${dev.name || controller_device_id}${controller_dps_key != null ? ':' + controller_dps_key : ''}.`);
+    } catch (e) {
+      setStatus('Place failed: ' + e.message);
+    }
+  };
+
   // ── Device state polling (5s) ──────────────────────────────────────────────
+  // For lights the controller may be a different device than `device_id`
+  // (e.g., a switch drives multiple light placements). Use
+  // `params.controller_device_id` when present — falls back to device_id.
+  function _pollSourceId(p) {
+    if (p.device_type === 'light') {
+      const cid = (p.params || {}).controller_device_id;
+      return cid || p.device_id;
+    }
+    return p.device_id;
+  }
+
   function _startStatePolling() {
     if (_pollTimer) clearInterval(_pollTimer);
     _pollTimer = setInterval(async () => {
       if (!roomPlacements.length) return;
-      const ids = roomPlacements.map(p => p.device_id).join(',');
+      const idSet = new Set(roomPlacements.map(_pollSourceId).filter(Boolean));
+      const ids = [...idSet].join(',');
       try {
         const r = await fetch('/api/devices/states?ids=' + encodeURIComponent(ids));
         const states = await r.json();
@@ -2798,12 +3508,12 @@
         for (const s of states) byId[s.id] = s;
         let changed = false;
         for (const p of roomPlacements) {
-          const s = byId[p.device_id];
+          const s = byId[_pollSourceId(p)];
           if (!s) continue;
-          const prevState = _devState(p);
+          const prevState = p.device_type === 'light' ? _lightState(p) : _devState(p);
           p.last_state = s.last_state;
           p.last_seen = s.last_seen;
-          const nextState = _devState(p);
+          const nextState = p.device_type === 'light' ? _lightState(p) : _devState(p);
           if (prevState !== nextState) changed = true;
         }
         if (changed) draw();
@@ -3012,6 +3722,21 @@
       for (const row of (devCountsR || [])) roomDevCounts[row.room] = row.device_count;
       roomPlacements = placementsR || [];
       _allDevices = devicesR || [];
+      // V7: for lights, server's JOIN uses placement.device_id. When
+      // controller_device_id differs (e.g. historical mismatch or just-changed),
+      // hydrate last_state from the real controller so the initial render
+      // reflects reality immediately (without waiting for the 5-s poll).
+      for (const p of roomPlacements) {
+        if (p.device_type !== 'light') continue;
+        const cid = (p.params || {}).controller_device_id;
+        if (!cid || cid === p.device_id) continue;
+        const ctrl = _allDevices.find(d => d.id === cid);
+        if (ctrl) {
+          p.device_name = ctrl.name;
+          p.last_state  = ctrl.last_state;
+          p.last_seen   = ctrl.last_seen;
+        }
+      }
       _startStatePolling();
 
       rebuildActiveRoomDropdown();
@@ -3032,9 +3757,13 @@
         if (Object.keys(savedVis).length) aptConfig.layer_visibility = savedVis;
       } catch (e) {}
 
-      // Set active room (localStorage > DB > first room)
+      // Set active room. localStorage = current session state (zero-latency,
+      // always up-to-date from the last click). DB = cold-start fallback (a
+      // different browser, after a storage clear). Auto-sync to DB happens
+      // in aptSetActiveRoom so both stay aligned.
       const savedActive = localStorage.getItem('apt_active_room');
       activeSlug = savedActive || aptConfig.active_room || (roomSlugs[0] || {}).slug || '';
+      console.log('[init] active_room resolved:', { localActive: savedActive, dbActive: aptConfig.active_room, final: activeSlug });
       if (activeSlug) {
         const sel = document.getElementById('apt-active-room');
         if (sel) sel.value = activeSlug;
@@ -3059,6 +3788,12 @@
   window.aptSetShowZones = function (v) {
     _showZones = !!v;
     try { localStorage.setItem('apt_show_zones', _showZones ? '1' : '0'); } catch (e) {}
+    draw();
+  };
+
+  window.aptSetShowLights = function (v) {
+    _showLights = !!v;
+    try { localStorage.setItem('apt_show_lights', _showLights ? '1' : '0'); } catch (e) {}
     draw();
   };
 
@@ -3097,6 +3832,9 @@
     // V6: sync Zones checkbox with persisted localStorage state
     const zonesCb = document.getElementById('apt-show-zones');
     if (zonesCb) zonesCb.checked = _showZones;
+    // V7: sync Lights checkbox
+    const lightsCb = document.getElementById('apt-show-lights');
+    if (lightsCb) lightsCb.checked = _showLights;
 
     // Label drag (any tool, any room): left-click on room-name OR divider label
     // starts drag. Right-click toggles hide (label_hidden=true). "Show hidden
@@ -3330,10 +4068,27 @@
       const xM = viewOriginX + pxToM(ev.clientX - rect.left) - co.x_m;
       const yM = viewOriginY + pxToM(ev.clientY - rect.top) - co.y_m;
       const data = activeData();
-      // Device placements first (small hit radius)
+      // Device placements first. Dataset-first hit test lets drag-start work
+      // on any part of a fixture glyph (lamp base, strip body, sconce arc)
+      // regardless of geometric offset from the centre point.
+      const tgt = ev.target;
+      if (tgt && tgt.dataset && tgt.dataset.devPlacementId) {
+        const pid = parseInt(tgt.dataset.devPlacementId, 10);
+        const p = roomPlacements.find(pp => pp.id === pid && pp.slug === activeSlug);
+        if (p) {
+          dragging = { kind: 'dev', id: p.id, startX: xM, startY: yM, origX: p.x, origY: p.y, moved: false };
+          selectedId = p.id;
+          refreshEditPanel();
+          draw();
+          ev.preventDefault();
+          return;
+        }
+      }
+      // Geometric fallback. Lights get a slightly larger radius for offset glyphs.
       for (const p of roomPlacements) {
         if (p.slug !== activeSlug) continue;
-        if (Math.hypot(xM - p.x, yM - p.y) < 0.25) {
+        const hitR = p.device_type === 'light' ? 0.4 : 0.25;
+        if (Math.hypot(xM - p.x, yM - p.y) < hitR) {
           dragging = { kind: 'dev', id: p.id, startX: xM, startY: yM, origX: p.x, origY: p.y, moved: false };
           selectedId = p.id;
           refreshEditPanel();
