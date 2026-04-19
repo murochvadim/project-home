@@ -32,9 +32,15 @@ const db = new Pool({
   port: 5432,
 });
 
-// MQTT client for rule engine commands (test, reload)
+// MQTT client for rule engine commands (test, reload).
+// MQTT_RULE_PASS MUST be set in .env — no hardcoded fallback so a
+// misconfigured env fails loudly instead of silently using a compromised
+// default credential that would otherwise be committed to the repo.
+if (!process.env.MQTT_RULE_PASS) {
+  console.error('FATAL: MQTT_RULE_PASS not set in .env — rule-engine test/reload requires it');
+}
 const mqttClient = mqtt.connect('mqtt://192.168.1.189:1883', {
-  username: 'rule_engine', password: process.env.MQTT_RULE_PASS || 'rule_engine_2024',
+  username: 'rule_engine', password: process.env.MQTT_RULE_PASS,
   clientId: 'dashboard-' + process.pid, reconnectPeriod: 5000,
 });
 mqttClient.on('error', (e) => console.error('MQTT error:', e.message));
@@ -148,7 +154,7 @@ app.get('/api/last-report', async (req, res) => {
 
 // ─── Raw data table ───────────────────────────────────────────
 app.get('/api/raw-data', async (req, res) => {
-  const limit = parseInt(req.query.limit) || 10;
+  const limit = Math.min(parseInt(req.query.limit) || 10, 500);
   try {
     const r = await db.query('SELECT * FROM raw_data ORDER BY ts DESC LIMIT $1', [limit]);
     res.json(r.rows);
@@ -157,7 +163,7 @@ app.get('/api/raw-data', async (req, res) => {
 
 // ─── Agent data table ─────────────────────────────────────────
 app.get('/api/agent-data', async (req, res) => {
-  const limit = parseInt(req.query.limit) || 10;
+  const limit = Math.min(parseInt(req.query.limit) || 10, 500);
   try {
     const r = await db.query('SELECT * FROM agent_boiler_data ORDER BY ts DESC LIMIT $1', [limit]);
     res.json(r.rows);

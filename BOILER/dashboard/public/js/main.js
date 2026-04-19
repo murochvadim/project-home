@@ -270,6 +270,17 @@ async function saveSettings(e) {
     glitch_drop_threshold_c:    parseFloat(document.getElementById('s-glitch-drop').value),
     glitch_bounce_recovery_c:   parseFloat(document.getElementById('s-glitch-bounce').value),
   };
+  // Refuse to POST if any field is empty / non-numeric. An empty input
+  // becomes NaN → JSON.stringify → null, which would corrupt NOT NULL
+  // numeric columns in agent_settings and crash the boiler agent next run.
+  const invalid = Object.entries(body).filter(([, v]) => !Number.isFinite(v));
+  if (invalid.length) {
+    const msgEl = document.getElementById('settings-msg');
+    msgEl.style.color = '#e74c3c';
+    msgEl.textContent = 'Missing / invalid fields: ' + invalid.map(([k]) => k).join(', ');
+    setTimeout(() => { msgEl.textContent = ''; }, 5000);
+    return;
+  }
   try {
     const r = await fetch('/api/settings', {
       method: 'POST',
