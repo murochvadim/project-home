@@ -50,6 +50,7 @@ class RuleEngine:
         self.trigger_index = {}         # device_id -> [rule_module, ...]
         self._disabled_rules = set()    # set of rule names
         self._command_log = {}          # device_id -> [(ts, action), ...]
+        self._command_log_lock = threading.Lock()  # guards _command_log read + list-slice-assignment (paho thread races)
         self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms, last_fired}
         self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
         self._rule_originals = {}       # rule_name -> {priority, group, conditions} from file
@@ -685,12 +686,13 @@ class RuleEngine:
     def _check_loop(self, device_id, action, rule_name):
         """Detect command loops. Returns True if loop detected (rule auto-disabled)."""
         now = time.time()
-        entries = self._command_log.setdefault(device_id, [])
-
-        entries[:] = [(ts, a) for ts, a in entries if now - ts < 10]
-        entries.append((now, action))
-
-        same_action_count = sum(1 for _, a in entries if a == action)
+        # Lock guards the setdefault + slice-assign + append sequence against
+        # concurrent paho-thread callbacks that could corrupt the list.
+        with self._command_log_lock:
+            entries = self._command_log.setdefault(device_id, [])
+            entries[:] = [(ts, a) for ts, a in entries if now - ts < 10]
+            entries.append((now, action))
+            same_action_count = sum(1 for _, a in entries if a == action)
         if same_action_count >= 4:
             log.error(
                 "Loop detected: rule '%s' sent '%s' to %s %d times in 10s — auto-disabling",
@@ -803,17 +805,17 @@ class RuleEngine:
             # Force mode: fake all conditions so rule fires, dispatch for real
             log.info("Force-running rule '%s'", rule_name)
 
-            # Save state
-            saved_shared = copy.deepcopy(self.state.shared)
+            # Save state (hold state.lock across snapshot + timer reset + fake-conditions write
+            # so the heartbeat thread can't observe a torn state mid-save).
             with self.state.lock:
+                saved_shared = copy.deepcopy(self.state.shared)
                 saved_timers = dict(self.state._timers)
                 # Reset ALL timers to ancient time (all cooldowns expired)
                 for k in list(self.state._timers):
                     self.state._timers[k] = 0
-
-            # Fake favorable conditions for the main trigger path
-            self.state.shared['activity_level'] = 'active'
-            self.state.shared['_pixoo_resumed'] = 'yes'
+                # Fake favorable conditions for the main trigger path
+                self.state.shared['activity_level'] = 'active'
+                self.state.shared['_pixoo_resumed'] = 'yes'
 
             # Build event — honor RULE["test_event"] if rule declares one,
             # otherwise fall back to corridor/entrance presence with dps 1=true
@@ -829,10 +831,14 @@ class RuleEngine:
                 }
             else:
                 force_device_id = ''
-                for did, dev in self.state.devices.items():
-                    if dev.get('device_type') == 'presence' and dev.get('room', '').lower() in ('corridor', 'entrance'):
-                        force_device_id = did
-                        break
+                # Hold _dev_lock across iteration — midnight refresh thread
+                # swaps self.devices via load_from_db() which would invalidate
+                # the iterator or return a stale list.
+                with self.state._dev_lock:
+                    for did, dev in self.state.devices.items():
+                        if dev.get('device_type') == 'presence' and dev.get('room', '').lower() in ('corridor', 'entrance'):
+                            force_device_id = did
+                            break
                 if not force_device_id:
                     force_device_id = test_device_id
                 force_event = {
@@ -858,9 +864,10 @@ class RuleEngine:
             for cmd in commands:
                 self._dispatch_command(cmd, rule_name)
 
-            # Restore state + timers
-            self.state.shared = saved_shared
+            # Restore state + timers (hold the lock across both assignments so
+            # the heartbeat thread can't snapshot a half-restored state).
             with self.state.lock:
+                self.state.shared = saved_shared
                 self.state._timers = saved_timers
 
             if commands:

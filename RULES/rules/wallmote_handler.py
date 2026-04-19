@@ -14,6 +14,7 @@ Bindings are cached 30 seconds to avoid hitting the DB on every event.
 
 import json
 import logging
+import threading
 import time
 
 log = logging.getLogger("rule.wallmote_handler")
@@ -54,6 +55,7 @@ _CACHE_TTL_SEC = 30
 # held binding for explicit off.
 HELD_SUPPRESS_WITHIN_SEC = 5.0
 _last_pushed_ts: dict[str, float] = {}   # key = "wm_slug:button" → unix ts
+_last_pushed_lock = threading.Lock()     # guards _last_pushed_ts read+write (paho thread races)
 
 
 def _get_bindings(state):
@@ -113,17 +115,27 @@ def evaluate(event, state):
     # the window) trigger the off binding.
     tracker_key = f"{wm_slug}:{button}"
     now = time.time()
-    if event_type == "pushed":
-        _last_pushed_ts[tracker_key] = now
-    elif event_type == "held":
-        last_push = _last_pushed_ts.get(tracker_key, 0.0)
-        since_push = now - last_push
-        if since_push < HELD_SUPPRESS_WITHIN_SEC:
-            log.info(
-                "Wallmote %s %s held suppressed (%.1fs after pushed)",
-                wm_slug, button, since_push,
-            )
-            return []
+    # Lock the whole read-decide-write so two concurrent wallmote events on
+    # the same button can't both pass the "outside window" check, or race the
+    # pushed write vs the held read.
+    with _last_pushed_lock:
+        if event_type == "pushed":
+            _last_pushed_ts[tracker_key] = now
+            suppress = False
+            since_push = 0.0
+        elif event_type == "held":
+            last_push = _last_pushed_ts.get(tracker_key, 0.0)
+            since_push = now - last_push
+            suppress = since_push < HELD_SUPPRESS_WITHIN_SEC
+        else:
+            suppress = False
+            since_push = 0.0
+    if event_type == "held" and suppress:
+        log.info(
+            "Wallmote %s %s held suppressed (%.1fs after pushed)",
+            wm_slug, button, since_push,
+        )
+        return []
 
     bindings = _get_bindings(state)
     slot_key = f"{wm_slug}:{button}:{event_type}"
