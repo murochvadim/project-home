@@ -2444,7 +2444,20 @@
     tbody.innerHTML = '';
     const disabledStyle = 'width:54px;padding:2px 4px;border:1px solid #e8e3d8;background:#f5f2ea;color:#999;border-radius:3px;font-size:0.78rem;text-align:right;';
     const editStyle = 'width:54px;padding:2px 4px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;text-align:right;';
-    for (const r of roomSlugs) {
+    // Sort by physical position in apartment (top-to-bottom via y, then left-to-right via x).
+    // Rooms without layout fall to the end, alphabetical.
+    const sortedRooms = roomSlugs.slice().sort((a, b) => {
+      const aHas = !!(allRooms[a.slug] && (allRooms[a.slug].walls || []).length);
+      const bHas = !!(allRooms[b.slug] && (allRooms[b.slug].walls || []).length);
+      if (aHas !== bHas) return aHas ? -1 : 1;        // drawn rooms first
+      if (!aHas && !bHas) return a.name.localeCompare(b.name);
+      const ao = getComputedOrigin(a.slug);
+      const bo = getComputedOrigin(b.slug);
+      if (ao.y_m !== bo.y_m) return ao.y_m - bo.y_m;   // top to bottom
+      if (ao.x_m !== bo.x_m) return ao.x_m - bo.x_m;   // left to right
+      return a.name.localeCompare(b.name);
+    });
+    for (const r of sortedRooms) {
       const layout = allRooms[r.slug];
       const hasWalls = !!(layout && (layout.walls || []).length > 0);
       const drawnArea = hasWalls ? computeDrawnArea(r.slug) : null;
@@ -2468,9 +2481,12 @@
       const volDisplay  = hasWalls ? _fmtVolume(drawnArea, parseFloat(h)) : _fmtVolume(parseFloat(w) * parseFloat(l), parseFloat(h));
       const tr = document.createElement('tr');
       tr.style.borderTop = '1px solid #e8e3d8';
+      // Score cells — filled by aptApplyScoresToRoomInfoTable after fetch.
       tr.innerHTML = `
         <td style="padding:3px 6px;">${r.name}</td>
-        <td style="padding:3px 6px;font-size:0.72rem;color:#666;">${status}</td>
+        <td style="padding:3px 4px;text-align:right;color:#aaa;" data-rd-score-new="${r.name}">—</td>
+        <td style="padding:3px 4px;text-align:right;color:#aaa;border-right:2px solid #e8e3d8;" data-rd-score-old="${r.name}">—</td>
+        <td style="padding:3px 6px 3px 14px;font-size:0.72rem;color:#666;">${status}</td>
         <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${w}" ${wAttrs}></td>
         <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${l}" ${lAttrs}></td>
         <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${h}" ${hAttrs}></td>
@@ -2480,6 +2496,8 @@
       `;
       tbody.appendChild(tr);
     }
+    // Fire-and-forget fetch to populate score columns; also keeps _scoreboardData fresh for the modal.
+    aptApplyScoresToRoomInfoTable();
     tbody.querySelectorAll('input[data-rd-slug]').forEach(inp => {
       inp.addEventListener('input', function () {
         const slug = inp.dataset.rdSlug;
@@ -2594,6 +2612,198 @@
     const next = !cur;
     try { localStorage.setItem('apt_zone_collapsed', next ? '1' : '0'); } catch (e) {}
     _zcApplyCollapsed(next);
+  };
+
+  // ── Rooms Scoreboard — AI observability score per room ────────────────────
+  // Baseline (ai_score_old) is written once (2026-04-20 Phase 1). Future
+  // ai_score_new comes from the /review-rooms-score skill. Inline table here
+  // shows compact scores per room; the 📊 Scoreboard button opens a detail
+  // modal with reason text explaining why each room isn't at 10.
+  let _scoreboardData = [];
+
+  function _fmtDdMmYy(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(-2);
+    return `${dd}-${mm}-${yy}`;
+  }
+
+  function _scoreColor(s) {
+    if (s == null) return '#aaa';
+    if (s >= 8) return '#2e7d32';
+    if (s >= 6) return '#e67e22';
+    if (s >= 1) return '#c0392b';
+    return '#888';
+  }
+
+  // Fetch scoreboard + populate the two score columns in the Room Information
+  // table. Also updates the two header labels with the most recent date.
+  async function aptApplyScoresToRoomInfoTable() {
+    try {
+      const r = await fetch('/api/rooms/scoreboard');
+      _scoreboardData = await r.json();
+    } catch (e) {
+      console.warn('[score] fetch failed', e);
+      return;
+    }
+    if (!Array.isArray(_scoreboardData)) { _scoreboardData = []; return; }
+
+    // Update header dates
+    const mostRecentOld = _scoreboardData.map(x => x.ai_score_old_at).filter(Boolean).sort().reverse()[0];
+    const mostRecentNew = _scoreboardData.map(x => x.ai_score_new_at).filter(Boolean).sort().reverse()[0];
+    const thOld = document.getElementById('apt-passage-th-score-old');
+    const thNew = document.getElementById('apt-passage-th-score-new');
+    if (thOld) thOld.textContent = `Score ${_fmtDdMmYy(mostRecentOld)}`;
+    if (thNew) thNew.textContent = `Score ${_fmtDdMmYy(mostRecentNew)}`;
+
+    // Scoreboard button label: date = whichever score was most recently written.
+    const btn = document.getElementById('apt-scoreboard-btn');
+    if (btn) {
+      const latest = mostRecentNew || mostRecentOld;
+      btn.textContent = `📊 Scoreboard ${_fmtDdMmYy(latest)}`;
+    }
+
+    // Fill per-room cells (match by name)
+    for (const row of _scoreboardData) {
+      const oldCell = document.querySelector(`[data-rd-score-old="${CSS.escape(row.name)}"]`);
+      const newCell = document.querySelector(`[data-rd-score-new="${CSS.escape(row.name)}"]`);
+      if (oldCell) {
+        if (row.ai_score_old != null) {
+          oldCell.innerHTML = `<span style="color:${_scoreColor(row.ai_score_old)};font-weight:600;">${row.ai_score_old}</span>`;
+        } else {
+          oldCell.textContent = '—';
+          oldCell.style.color = '#aaa';
+        }
+      }
+      if (newCell) {
+        if (row.ai_score_new != null) {
+          newCell.innerHTML = `<span style="color:${_scoreColor(row.ai_score_new)};font-weight:600;">${row.ai_score_new}</span>`;
+        } else {
+          newCell.textContent = '—';
+          newCell.style.color = '#aaa';
+        }
+      }
+    }
+  }
+
+  // Compute per-room capability ratings (0–10) from live placement/device data.
+  // Diagnostic only — NOT used to compute the overall score. Shown in the
+  // modal so the user sees which observability dimensions are weak.
+  function _computeRoomCapabilities(roomName) {
+    // Derive the slug from name (rooms table keys by name; placements by slug).
+    const slug = roomName.toLowerCase().replace(/\s+/g, '-');
+    const placements = roomPlacements.filter(p => p.slug === slug);
+    const sensors = placements.filter(p => p.device_type === 'presence' || p.device_type === 'motion');
+    const lights = placements.filter(p => p.device_type === 'light');
+    const hasMmWave = sensors.some(p => {
+      const d = _allDevices.find(d => d.id === p.device_id) || {};
+      // MTD086 / Human presence sensor / LD2410 family / FP2 — all mmWave
+      return /MTD086|Human presence|LD241|LD245|FP2/i.test(d.product_name || '');
+    });
+    const hasMultiTargetTracker = sensors.some(p => {
+      const d = _allDevices.find(d => d.id === p.device_id) || {};
+      return /LD2450|FP2/i.test(d.product_name || '');
+    });
+    const hasIndividualId = false; // no BLE tags / camera in house today
+    const zones = (allRooms[slug] || {}).zones || [];
+    const zoneCount = zones.length;
+    const sensorCount = sensors.length;
+
+    const cap = [];
+    // 1. Presence yes/no
+    let presence = sensorCount === 0 ? 0 : sensorCount === 1 ? 6 : sensorCount === 2 ? 8 : 9;
+    if (hasMmWave) presence = Math.min(10, presence + 1);
+    cap.push({ name: 'Presence yes/no', rating: presence,
+               note: sensorCount === 0 ? 'no sensors' : `${sensorCount} sensor${sensorCount>1?'s':''}${hasMmWave?' incl. mmWave (stationary)':''}` });
+    // 2. Which zone
+    let zone = zoneCount === 0 ? 0 : zoneCount <= 2 ? 4 : 6;
+    if (sensorCount >= 3 && zoneCount >= 3) zone = Math.min(10, zone + 2);
+    cap.push({ name: 'Which zone', rating: zone,
+               note: zoneCount === 0 ? 'no zones defined' : `${zoneCount} zones${sensorCount>=3?' + multi-sensor overlap':''}` });
+    // 3. People count
+    let count = sensorCount === 0 ? 0 : hasMultiTargetTracker ? 9 : 5;
+    cap.push({ name: 'People count', rating: count,
+               note: hasMultiTargetTracker ? 'multi-target tracker present' : 'binary sensors cannot count reliably' });
+    // 4. 2D position
+    let pos2d = sensorCount === 0 ? 0 : hasMultiTargetTracker ? 9 : (sensorCount >= 2 && hasMmWave ? 6 : 3);
+    cap.push({ name: '2D position', rating: pos2d,
+               note: hasMultiTargetTracker ? 'LD2450/FP2 gives native XY' : (sensorCount >= 2 && hasMmWave ? '1D distance per mmWave, partial triangulation' : 'single sensor / PIR only') });
+    // 5. Individual ID
+    cap.push({ name: 'Individual ID', rating: hasIndividualId ? 7 : 0,
+               note: 'no BLE tags, no camera' });
+    // 6. Activity classification
+    let activity = sensorCount === 0 ? 0 : hasMmWave ? 3 : 1;
+    cap.push({ name: 'Activity classification', rating: activity,
+               note: hasMmWave ? 'mmWave binary — stillness vs motion only' : 'PIR motion only — cannot detect stillness' });
+    // 7. Light state control
+    let lightState = lights.length === 0 ? 0 : 9;
+    cap.push({ name: 'Light state control', rating: lightState,
+               note: lights.length === 0 ? 'no lights placed' : `${lights.length} light placement${lights.length>1?'s':''} with controller` });
+    return cap;
+  }
+
+  window.aptOpenScoreboard = function () {
+    const modal = document.getElementById('apt-score-modal');
+    const body  = document.getElementById('apt-score-modal-body');
+    if (!modal || !body) return;
+    if (!_scoreboardData.length) {
+      body.innerHTML = '<div style="color:#888;">No scoreboard data loaded yet.</div>';
+    } else {
+      const blocks = _scoreboardData.map(r => {
+        const scoreColor = (s) => s == null ? '#aaa' : (s >= 8 ? '#2e7d32' : s >= 6 ? '#e67e22' : s >= 1 ? '#c0392b' : '#888');
+        const capColor = (s) => s >= 8 ? '#2e7d32' : s >= 5 ? '#e67e22' : s >= 1 ? '#c0392b' : '#888';
+        const oldScore = r.ai_score_old != null
+          ? `<span style="color:${scoreColor(r.ai_score_old)};font-weight:600;">${r.ai_score_old}</span>`
+          : '<span style="color:#aaa;">—</span>';
+        const newScore = r.ai_score_new != null
+          ? `<span style="color:${scoreColor(r.ai_score_new)};font-weight:600;">${r.ai_score_new}</span>`
+          : '<span style="color:#aaa;">— (not yet rescored)</span>';
+        const oldReason = r.ai_score_old_reason ? r.ai_score_old_reason.replace(/</g, '&lt;') : '';
+        const newReason = r.ai_score_new_reason ? r.ai_score_new_reason.replace(/</g, '&lt;') : '';
+        // Per-room capability diagnostic table (rubric v2.1).
+        const caps = _computeRoomCapabilities(r.name);
+        const capRows = caps.map(c => `
+          <tr>
+            <td style="padding:2px 6px;font-size:0.72rem;">${c.name}</td>
+            <td style="padding:2px 6px;font-size:0.72rem;text-align:right;color:${capColor(c.rating)};font-weight:600;">${c.rating}</td>
+            <td style="padding:2px 6px;font-size:0.72rem;color:#666;">${c.note}</td>
+          </tr>`).join('');
+        return `
+          <div style="border-top:1px solid #e8e3d8;padding:8px 0;">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:4px;">
+              <strong>${r.name}</strong>
+              <div style="font-size:0.82rem;">
+                <span style="color:#666;">New:</span> ${newScore}
+                <span style="color:#666;margin-left:10px;">${r.ai_score_new_at ? 'from ' + _fmtDdMmYy(r.ai_score_new_at) : ''}</span>
+                <span style="color:#666;margin-left:16px;">Old:</span> ${oldScore}
+                <span style="color:#666;margin-left:10px;">${r.ai_score_old_at ? 'from ' + _fmtDdMmYy(r.ai_score_old_at) : ''}</span>
+              </div>
+            </div>
+            ${oldReason ? `<div style="font-size:0.78rem;color:#555;padding-left:8px;"><em>Old:</em> ${oldReason}</div>` : ''}
+            ${newReason ? `<div style="font-size:0.78rem;color:#333;padding-left:8px;"><em>New:</em> ${newReason}</div>` : ''}
+            <table style="margin-top:6px;margin-left:8px;border-collapse:collapse;font-size:0.72rem;">
+              <thead>
+                <tr style="background:#f0ece3;">
+                  <th style="text-align:left;padding:2px 6px;">Capability</th>
+                  <th style="text-align:right;padding:2px 6px;width:42px;">Rating</th>
+                  <th style="text-align:left;padding:2px 6px;">Why</th>
+                </tr>
+              </thead>
+              <tbody>${capRows}</tbody>
+            </table>
+          </div>`;
+      }).join('');
+      body.innerHTML = blocks;
+    }
+    modal.style.display = 'flex';
+  };
+
+  window.aptCloseScoreboard = function () {
+    const modal = document.getElementById('apt-score-modal');
+    if (modal) modal.style.display = 'none';
   };
 
   // ── V5 Device placements ───────────────────────────────────────────────────
@@ -2780,16 +2990,13 @@
         lbl.setAttribute('text-anchor', 'middle');
         lbl.setAttribute('dominant-baseline', 'middle');
         lbl.setAttribute('opacity', hiddenLbl ? '0.3' : '1');
-        // Interactivity gated on tool: only Select and Zones Set want the
-        // label to be clickable (drag / right-click / pick-for-edit). In all
-        // other tools (Furniture, Wall, Door, Window, Device…) the label is
-        // pointer-transparent so clicks pass through to whatever is beneath —
-        // fixes furniture placement being swallowed by a zone label overlay.
-        const labelInteractive = (tool === 'zone' || tool === 'select');
-        lbl.setAttribute('pointer-events', labelInteractive ? 'all' : 'none');
-        lbl.setAttribute('style', labelInteractive
-          ? 'cursor:move;user-select:none;'
-          : 'user-select:none;');
+        // Zone labels are always interactive — drag to move, right-click to
+        // hide — matching furniture/divider/door label UX regardless of the
+        // active tool. Clicks on the label still propagate to onSvgClick so
+        // tool actions (furniture placement etc.) keep working; only dragging
+        // the label itself intercepts a mousedown+drag gesture.
+        lbl.setAttribute('pointer-events', 'all');
+        lbl.setAttribute('style', 'cursor:move;user-select:none;');
         lbl.dataset.zoneLabelSlug = slug;
         lbl.dataset.zoneLabelId = z.id;
         lbl.textContent = z.name;

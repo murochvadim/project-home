@@ -3398,7 +3398,25 @@ function describePlacement(p, layout, devicesById) {
       geom += ')';
     }
   }
-  return `    - ${name} (${dt}) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${geom}${zoneSuffix}, state: ${state}`;
+  // Live DPS telemetry — emit every labeled DPS key with a fresh value. Stale
+  // (OFFLINE) sensors emit no telemetry so AI isn't misled by old readings.
+  let telemetry = '';
+  if ((dt === 'presence' || dt === 'motion') && state !== 'OFFLINE') {
+    const dev = devicesById ? devicesById[p.device_id] : null;
+    const labels = dev?.dps_labels || {};
+    const last   = dev?.last_state || {};
+    const pairs = [];
+    for (const [k, label] of Object.entries(labels)) {
+      if (!label) continue;
+      if (!(k in last)) continue;
+      const v = last[k];
+      if (v == null) continue;
+      pairs.push(`${label}=${v}`);
+    }
+    pairs.sort();
+    if (pairs.length) telemetry = `\n      telemetry: ${pairs.join(', ')}`;
+  }
+  return `    - ${name} (${dt}) @ (${(+p.x).toFixed(1)}, ${(+p.y).toFixed(1)}), rot ${rot}°${geom}${zoneSuffix}, state: ${state}${telemetry}`;
 }
 
 // ─── Apartment scene serializer (AI consumption) ─────────────────────────────
@@ -3788,6 +3806,56 @@ app.post('/api/rooms', async (req, res) => {
     const name = (req.body.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name required' });
     await db.query(`INSERT INTO rooms (name) VALUES ($1) ON CONFLICT DO NOTHING`, [name]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Rooms scoreboard — observability scores (old baseline + new rolling)
+app.get('/api/rooms/scoreboard', async (_req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT name,
+             ai_score_old, ai_score_old_at, ai_score_old_reason,
+             ai_score_new, ai_score_new_at, ai_score_new_reason
+      FROM rooms
+      ORDER BY COALESCE(ai_score_new, ai_score_old, 0) DESC, name
+    `);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Rotate new → old (called by skill at start of re-run). Only rotates rows
+// where ai_score_new IS NOT NULL — preserves original baseline on first run.
+app.post('/api/rooms/scoreboard/rotate', async (_req, res) => {
+  try {
+    const r = await db.query(`
+      UPDATE rooms SET
+        ai_score_old = ai_score_new,
+        ai_score_old_at = ai_score_new_at,
+        ai_score_old_reason = ai_score_new_reason
+      WHERE ai_score_new IS NOT NULL
+    `);
+    res.json({ ok: true, rotated: r.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Write a fresh score for one room (called by skill per room).
+app.patch('/api/rooms/:name/score', async (req, res) => {
+  try {
+    const name = req.params.name;
+    const score = parseInt(req.body.score, 10);
+    const reason = (req.body.reason || '').trim();
+    if (isNaN(score) || score < 0 || score > 10) {
+      return res.status(400).json({ error: 'score must be 0..10' });
+    }
+    const r = await db.query(`
+      UPDATE rooms SET
+        ai_score_new = $1,
+        ai_score_new_at = now(),
+        ai_score_new_reason = $2
+      WHERE name = $3
+    `, [score, reason, name]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'room not found' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

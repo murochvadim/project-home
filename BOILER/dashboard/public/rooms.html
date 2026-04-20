@@ -216,6 +216,7 @@
         <div style="display:flex;align-items:center;gap:8px;">
           <button id="apt-passage-toggle" onclick="aptTogglePassageCard()" title="Collapse/expand" style="padding:1px 8px;border:1px solid #aaa;background:#fff;border-radius:3px;font-size:0.78rem;cursor:pointer;line-height:1;">▾</button>
           <strong>Room Information</strong>
+          <button id="apt-scoreboard-btn" onclick="aptOpenScoreboard()" title="Open scoreboard detail window with full reasons per room" style="padding:3px 8px;border:1px solid #7a9ab8;background:#fff;color:#3a6a9a;border-radius:3px;font-size:0.75rem;cursor:pointer;">📊 Scoreboard —</button>
         </div>
         <div style="display:flex;gap:6px;align-items:center;">
           <button class="apt-tool" data-tool="select" onclick="aptSetTool('select')" style="padding:3px 10px;border:1px solid #aaa;background:#fff;color:#333;border-radius:3px;font-size:0.75rem;cursor:pointer;">Select</button>
@@ -228,7 +229,9 @@
           <thead>
             <tr style="background:#f0ece3;font-size:0.72rem;">
               <th style="text-align:left;padding:3px 6px;">Room</th>
-              <th style="text-align:left;padding:3px 6px;">Status</th>
+              <th style="text-align:right;padding:3px 4px;width:85px;white-space:nowrap;" id="apt-passage-th-score-new">Score —</th>
+              <th style="text-align:right;padding:3px 4px;width:85px;white-space:nowrap;border-right:2px solid #d0cbc4;" id="apt-passage-th-score-old">Score —</th>
+              <th style="text-align:left;padding:3px 6px 3px 14px;">Status</th>
               <th style="text-align:right;padding:3px 6px;width:60px;">W (m)</th>
               <th style="text-align:right;padding:3px 6px;width:60px;">L (m)</th>
               <th style="text-align:right;padding:3px 6px;width:60px;">H (m)</th>
@@ -239,6 +242,17 @@
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- Scoreboard detail modal (triggered from Room Information header button) -->
+    <div id="apt-score-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:6px;max-width:780px;width:92%;max-height:86vh;overflow:auto;padding:18px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <h3 style="margin:0;font-size:1.05rem;">Rooms Scoreboard — Observability Details</h3>
+          <button onclick="aptCloseScoreboard()" style="padding:3px 10px;border:1px solid #aaa;background:#fff;border-radius:4px;cursor:pointer;">Close</button>
+        </div>
+        <div id="apt-score-modal-body" style="font-size:0.82rem;"></div>
       </div>
     </div>
 
@@ -343,6 +357,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/rooms.js?v=81"></script>
+<script src="js/rooms.js?v=92"></script>
 </body>
 </html>
