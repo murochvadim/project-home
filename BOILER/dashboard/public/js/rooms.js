@@ -158,16 +158,90 @@
   }
 
   // Determine which side of the room a wall is on (north/south/east/west).
-  function getWallSide(wall, bounds) {
+  // Walk the wall segments end-to-end to build a closed polygon (ordered
+  // vertices). Returns null if walls don't form a single closed loop — caller
+  // should fall back to bbox polygon.
+  function buildRoomPolygon(walls) {
+    if (!walls || walls.length < 3) return null;
+    const TOL = 1e-3;
+    const match = (a, b) => Math.abs(a.x - b.x) < TOL && Math.abs(a.y - b.y) < TOL;
+    const used = new Set();
+    const first = walls[0];
+    const start = { x: first.x1, y: first.y1 };
+    const poly = [start];
+    let cur = { x: first.x2, y: first.y2 };
+    used.add(first.id || 0);
+    while (!match(cur, start)) {
+      poly.push(cur);
+      let nxt = null;
+      for (const w of walls) {
+        const id = w.id || walls.indexOf(w);
+        if (used.has(id)) continue;
+        if (match({ x: w.x1, y: w.y1 }, cur)) { nxt = { x: w.x2, y: w.y2 }; used.add(id); break; }
+        if (match({ x: w.x2, y: w.y2 }, cur)) { nxt = { x: w.x1, y: w.y1 }; used.add(id); break; }
+      }
+      if (!nxt) return null;        // walls don't form a closed loop
+      cur = nxt;
+      if (poly.length > walls.length + 2) return null;  // safety — something went wrong
+    }
+    return poly;
+  }
+
+  // Standard east-ray point-in-polygon test (odd-crossing rule). Poly is an
+  // array of {x, y} vertices in traversal order, with the closing edge implicit.
+  function pointInPolygon(p, poly) {
+    if (!poly || poly.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y;
+      const xj = poly[j].x, yj = poly[j].y;
+      const intersect = ((yi > p.y) !== (yj > p.y)) &&
+        (p.x < (xj - xi) * (p.y - yi) / (yj - yi + 1e-12) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function getWallSide(wall, bounds, walls) {
     const isVert  = Math.abs(wall.x1 - wall.x2) < 0.2;
     const isHoriz = Math.abs(wall.y1 - wall.y2) < 0.2;
+    // Boundary fast-path — cheap and correct when wall sits on the bbox edge.
     if (isVert && Math.abs(wall.x1 - bounds.minX) < 0.3) return 'west';
     if (isVert && Math.abs(wall.x1 - bounds.maxX) < 0.3) return 'east';
     if (isHoriz && Math.abs(wall.y1 - bounds.minY) < 0.3) return 'north';
     if (isHoriz && Math.abs(wall.y1 - bounds.maxY) < 0.3) return 'south';
-    // Interior wall — respect orientation: horizontal → north/south, vertical → east/west.
-    const cx = (bounds.minX + bounds.maxX) / 2, cy = (bounds.minY + bounds.maxY) / 2;
+    // Interior wall — probe 0.3 m perpendicular to each side; the side that
+    // lands OUTSIDE the room polygon is the wall's "outward" face. Needed for
+    // non-rectangular rooms (L-shapes, notches) where the bbox-center rule
+    // gives the wrong side (see rooms.js plan 2026-04-20 — Bedroom flip fix).
     const mx = (wall.x1 + wall.x2) / 2, my = (wall.y1 + wall.y2) / 2;
+    if (walls) {
+      const len = Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
+      if (len > 1e-6) {
+        const dx = (wall.x2 - wall.x1) / len, dy = (wall.y2 - wall.y1) / len;
+        const nx = -dy, ny = dx;              // perpendicular unit vector
+        const probe = 0.3;
+        const pA = { x: mx + probe * nx, y: my + probe * ny };
+        const pB = { x: mx - probe * nx, y: my - probe * ny };
+        const poly = buildRoomPolygon(walls);
+        if (poly) {
+          const inA = pointInPolygon(pA, poly);
+          const inB = pointInPolygon(pB, poly);
+          if (inA !== inB) {
+            // Exactly one probe is outside → that's the outward face.
+            const outside = inA ? pB : pA;
+            if (isHoriz) return outside.y < my ? 'north' : 'south';
+            if (isVert)  return outside.x < mx ? 'west'  : 'east';
+            // Diagonal wall — pick the dominant component.
+            return Math.abs(outside.y - my) > Math.abs(outside.x - mx)
+              ? (outside.y < my ? 'north' : 'south')
+              : (outside.x < mx ? 'west'  : 'east');
+          }
+        }
+      }
+    }
+    // Fallback: bbox-center rule (legacy behaviour).
+    const cx = (bounds.minX + bounds.maxX) / 2, cy = (bounds.minY + bounds.maxY) / 2;
     if (isHoriz) return my < cy ? 'north' : 'south';
     if (isVert)  return mx < cx ? 'west'  : 'east';
     const dx = Math.abs(mx - cx), dy = Math.abs(my - cy);
@@ -296,7 +370,9 @@
 
     while (queue.length > 0) {
       const curSlug = queue.shift();
-      const curLayout = allRooms[curSlug];
+      // Use rotated/reflected layout if parent placed it with a transform —
+      // otherwise its children get classified against stale original geometry.
+      const curLayout = displayRooms[curSlug] || allRooms[curSlug];
       if (!curLayout) continue;
       const curBounds = getRoomBounds(curLayout);
       const curOrigin = computedOrigins[curSlug];
@@ -308,7 +384,7 @@
         const mid = getDoorMidpoint(door, curLayout.walls);
         if (!mid) continue;
         const wall = mid.wall;
-        const side = getWallSide(wall, curBounds);
+        const side = getWallSide(wall, curBounds, curLayout.walls);
         connections.push({ target: door.leads_to, side, mid, type: 'door', width: door.width_m });
       }
       for (const div of (curLayout.dividers || [])) {
@@ -338,7 +414,7 @@
         for (const td of (targetLayout.doors || [])) {
           if (td.leads_to !== curSlug) continue;
           targetMid = getDoorMidpoint(td, targetLayout.walls);
-          if (targetMid) targetSide = getWallSide(targetMid.wall, targetBounds);
+          if (targetMid) targetSide = getWallSide(targetMid.wall, targetBounds, targetLayout.walls);
           break;
         }
         if (!targetMid) {
@@ -372,7 +448,7 @@
           for (const td of (usedLayout.doors || [])) {
             if (td.leads_to !== curSlug) continue;
             targetMid = getDoorMidpoint(td, usedLayout.walls);
-            if (targetMid) targetSide = getWallSide(targetMid.wall, targetBounds);
+            if (targetMid) targetSide = getWallSide(targetMid.wall, targetBounds, usedLayout.walls);
             break;
           }
           if (!targetMid) {
