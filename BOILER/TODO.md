@@ -84,7 +84,7 @@ like Project folder ,like Laptop Image Backup
 
 ## Rules System — per-room sentence editor → auto-generated rules
 
-See dedicated file: **[TODO_RULES.md](TODO_RULES.md)** — all phases, agreements, sizing guidance, approach score (8/10), DB schema, and design notes for the sentence-based rule authoring pipeline.
+See dedicated file: **[../RULES/TODO_RULES.md](../RULES/TODO_RULES.md)** — all phases, agreements, sizing guidance, approach score (8/10), DB schema, and design notes for the sentence-based rule authoring pipeline.
 
 
 ## Dashboard
