@@ -82,6 +82,43 @@ like Project folder ,like Laptop Image Backup
 **Why:** HA token invalidation took multiple sessions to fully diagnose (5 token locations discovered one by one). A diagnostic agent would surface all of them immediately.
 
 
+## Rules System — per-room sentence editor → auto-generated rules
+
+**Goal:** Each room gets a "Rule Settings" tab where user writes natural-language
+sentences (e.g. "at sunset turn on TV spots", "after 22:00 turn off main light").
+Claude reads sentences + apartment spatial model + device list and generates
+Python rule files in `RULES/rules/` automatically. Long-term: rules become
+structured JSON that compiles to Python, so /create-rule and any future rule
+source all use the same schema.
+
+### Phase 1 — Living Room MVP
+- [x] DB schema: `living-room.rule_sentences` = JSONB array of rule containers: `[{id, name, active, sentences:[{id, text, active, added_at, updated_at}], added_at, updated_at}]`. **Rules are numbered 1..N by array position** so user can say in chat "generate rule 2".
+- [x] Rule Settings tab on Living Room Agent page (`living-room.html`): named rule containers, each with Add / Delete / Enable-toggle per sentence. **No "Generate" button.** User triggers rule generation from Claude chat.
+- [x] Server endpoints: reused existing generic `/api/dashboard-settings/:key` (same pattern as wallmote_bindings). No new code needed.
+- [ ] Claude sentence→rule pipeline (triggered in chat): Claude reads rules+sentences via MCP on `dashboard_settings`, combines with `/api/apartment-scene` + devices, and produces Python rule files.
+
+### Agreements on rule generation flow (2026-04-21)
+- **One Python file per rule container** (user's choice — logical cohesion). Both sentences of Rule 1 "Light" land in one `lr_light.py` with clearly-commented branches inside `evaluate()`. Metadata fields `rule_group`, `source_rule_id`, `source_sentence_ids` preserve the link to DB sentences.
+- **Files written to laptop only** during generation (`c:\Users\muroc\project_home\RULES\rules\`). **No scp, no direct LXC 105 writes from Claude.**
+- **Deployment is separate**: user commits + clicks "Deploy to Production" on Project Health page → existing `/api/deploy` endpoint SSHs into LXC 105, does `git pull` + restart.
+- **No Python preview in chat**: user writes sentences, Claude validates everything (devices exist, DPS channels valid, no logic conflicts, sensors online, no rule-name collisions, zones exist), produces the file, reports ONLY a human-readable English summary + validation result. If validation fails, Claude flags the problem before writing.
+- **Claude decides ambiguous references** using apartment metadata (zones, placements, dps_labels) — no asking user piecewise questions like "which sensor?" or "which light is spot?". Only flags if truly un-resolvable.
+
+### Phase 2 — Standard JSON rule schema
+- [ ] Define canonical JSON rule schema (triggers, conditions, actions, priority, group)
+- [ ] Update `/create-rule` skill to emit standard JSON + compile to Python (JSON becomes source-of-truth, Python is compiled artifact)
+
+### Phase 3 — Advanced
+- [ ] Cross-room and apartment-wide rules (e.g. "when leaving kitchen turn off all lights")
+- [ ] Sentence edit-later flow: decide regenerate-whole-rule vs append when user adds sentence #N later
+
+### Design notes
+- Per-room scope keeps AI's translation task tractable (small device set, clear zones)
+- Apartment spatial model (zones, placements, controller links) resolves "lights x,y,z" → concrete device_id + dps_key
+- Sentences stored as source-of-truth so user can audit / disable / rewrite without losing the natural-language version
+- Conflict detection: if two sentences both trigger on same event, priority/order matters — encode in JSON schema
+
+
 ## Dashboard
 
 

@@ -395,5 +395,199 @@
     if (e.target && e.target.id === 'picker-overlay' && activePicker) closePicker(false);
   });
 
+  // ── Rule Settings tab ─────────────────────────────────────────────────────
+  // Rules (named, ordered) containing sentences describing behaviour.
+  // Stored in `dashboard_settings.living-room.rule_sentences` as a JSONB array:
+  //   [{id, name, active, sentences: [{id, text, active, added_at, updated_at}], added_at, updated_at}, ...]
+  // Rules numbered 1..N by array position (1-based) so user can say
+  // "generate rule 2" in chat. Sentences also numbered 1..M per rule.
+  // Reuses the generic /api/dashboard-settings/:key endpoint (same pattern as wallmote).
+  const RS_STORAGE_KEY = 'living-room.rule_sentences';
+  let rsRules = [];
+
+  function rsNewId(prefix) {
+    return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  }
+
+  function rsFmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${dd}-${mm} ${hh}:${mi}`;
+  }
+
+  function rsEsc(s) { return (s || '').replace(/"/g, '&quot;'); }
+
+  function rsRender() {
+    const container = document.getElementById('rs-rules-container');
+    if (!container) return;
+    if (!rsRules.length) {
+      container.innerHTML = '<div style="padding:18px;text-align:center;color:#999;border:1px dashed #d0cbc4;border-radius:4px;">No rules yet — click <b>+ Add rule</b> to start.</div>';
+      return;
+    }
+    container.innerHTML = '';
+    rsRules.forEach((rule, idx) => {
+      const ruleNum = idx + 1;
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid #d0cbc4;border-radius:5px;padding:10px 12px;margin-bottom:10px;background:#fbfaf6;';
+      const sentencesHtml = (rule.sentences || []).map((s, sIdx) => `
+        <tr style="border-top:1px solid #e8e3d8;">
+          <td style="padding:3px 6px;text-align:center;width:36px;color:#888;font-size:0.72rem;">${sIdx + 1}.</td>
+          <td style="padding:3px 6px;text-align:center;width:40px;">
+            <input type="checkbox" ${s.active ? 'checked' : ''} data-rs-rule="${rule.id}" data-rs-sent="${s.id}" data-rs-field="active" />
+          </td>
+          <td style="padding:3px 6px;">
+            <input type="text" value="${rsEsc(s.text)}" data-rs-rule="${rule.id}" data-rs-sent="${s.id}" data-rs-field="text"
+                   placeholder="e.g. at sunset turn on TV spots"
+                   style="width:100%;padding:3px 6px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.82rem;" />
+          </td>
+          <td style="padding:3px 6px;text-align:right;font-size:0.7rem;color:#999;width:100px;">${rsFmtDate(s.updated_at || s.added_at)}</td>
+          <td style="padding:3px 6px;text-align:center;width:40px;">
+            <button onclick="rsDeleteSentence('${rule.id}','${s.id}')" title="Delete sentence"
+                    style="background:#fff;color:#c0392b;border:1px solid #c0392b;border-radius:3px;padding:1px 6px;font-size:0.72rem;cursor:pointer;">×</button>
+          </td>
+        </tr>`).join('');
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <strong style="color:#6c4f9f;min-width:50px;">Rule ${ruleNum}</strong>
+          <input type="checkbox" ${rule.active ? 'checked' : ''} data-rs-rule="${rule.id}" data-rs-field="active" title="Enable rule" />
+          <input type="text" value="${rsEsc(rule.name)}" data-rs-rule="${rule.id}" data-rs-field="name"
+                 placeholder="Rule name (e.g. Evening Lights)"
+                 style="flex:1;padding:4px 8px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.88rem;font-weight:600;" />
+          <button onclick="rsAddSentence('${rule.id}')" style="background:#6c4f9f;color:#fff;border:none;border-radius:3px;padding:3px 10px;font-size:0.78rem;cursor:pointer;">+ Sentence</button>
+          <button onclick="rsDeleteRule('${rule.id}')" title="Delete rule"
+                  style="background:#fff;color:#c0392b;border:1px solid #c0392b;border-radius:3px;padding:3px 8px;font-size:0.78rem;cursor:pointer;">× Rule</button>
+        </div>
+        ${rule.sentences && rule.sentences.length ? `
+          <table style="width:100%;border-collapse:collapse;margin-left:4px;">
+            <thead>
+              <tr style="background:#f0ece3;font-size:0.7rem;color:#666;">
+                <th style="padding:3px 6px;text-align:center;width:36px;">#</th>
+                <th style="padding:3px 6px;text-align:center;width:40px;">Active</th>
+                <th style="padding:3px 6px;text-align:left;">Sentence</th>
+                <th style="padding:3px 6px;text-align:right;width:100px;">Updated</th>
+                <th style="padding:3px 6px;width:40px;"></th>
+              </tr>
+            </thead>
+            <tbody>${sentencesHtml}</tbody>
+          </table>` : '<div style="padding:8px 4px;color:#999;font-size:0.78rem;font-style:italic;">No sentences — click <b>+ Sentence</b> to add one.</div>'}
+      `;
+      container.appendChild(card);
+    });
+    // Wire inline edits (both rule-level and sentence-level)
+    container.querySelectorAll('[data-rs-rule]').forEach(el => {
+      el.addEventListener('change', () => rsHandleEdit(el));
+      if (el.type === 'text') el.addEventListener('blur', () => rsHandleEdit(el));
+    });
+  }
+
+  function rsHandleEdit(el) {
+    const ruleId = el.dataset.rsRule;
+    const sentId = el.dataset.rsSent;
+    const field  = el.dataset.rsField;
+    const rule = rsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    const newVal = el.type === 'checkbox' ? el.checked : el.value;
+    const now = new Date().toISOString();
+    if (sentId) {
+      const s = (rule.sentences || []).find(x => x.id === sentId);
+      if (!s || s[field] === newVal) return;
+      s[field] = newVal;
+      s.updated_at = now;
+      rule.updated_at = now;
+    } else {
+      if (rule[field] === newVal) return;
+      rule[field] = newVal;
+      rule.updated_at = now;
+    }
+  }
+
+  window.rsAddRule = function () {
+    const now = new Date().toISOString();
+    rsRules.push({
+      id: rsNewId('r'),
+      name: '',
+      active: true,
+      sentences: [],
+      added_at: now,
+      updated_at: now,
+    });
+    rsRender();
+    // Focus the new rule's name input
+    const inputs = document.querySelectorAll('#rs-rules-container input[data-rs-field="name"]');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  };
+
+  window.rsDeleteRule = function (ruleId) {
+    const rule = rsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    if (!confirm(`Delete rule "${rule.name || '(unnamed)'}" and its ${rule.sentences ? rule.sentences.length : 0} sentence(s)?`)) return;
+    rsRules = rsRules.filter(r => r.id !== ruleId);
+    rsRender();
+  };
+
+  window.rsAddSentence = function (ruleId) {
+    const rule = rsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    if (!rule.sentences) rule.sentences = [];
+    const now = new Date().toISOString();
+    rule.sentences.push({
+      id: rsNewId('s'),
+      text: '',
+      active: true,
+      added_at: now,
+      updated_at: now,
+    });
+    rule.updated_at = now;
+    rsRender();
+    // Focus the new sentence's text input (last one in this rule)
+    const inputs = document.querySelectorAll(`#rs-rules-container input[data-rs-rule="${ruleId}"][data-rs-field="text"]`);
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  };
+
+  window.rsDeleteSentence = function (ruleId, sentId) {
+    const rule = rsRules.find(r => r.id === ruleId);
+    if (!rule || !rule.sentences) return;
+    rule.sentences = rule.sentences.filter(s => s.id !== sentId);
+    rule.updated_at = new Date().toISOString();
+    rsRender();
+  };
+
+  window.rsSave = async function () {
+    try {
+      const r = await fetch(`/api/dashboard-settings/${encodeURIComponent(RS_STORAGE_KEY)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: rsRules }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const sentCount = rsRules.reduce((acc, r) => acc + (r.sentences ? r.sentences.length : 0), 0);
+      alert(`Saved ${rsRules.length} rule(s), ${sentCount} sentence(s).`);
+    } catch (e) {
+      alert('Save failed: ' + (e.message || e));
+    }
+  };
+
+  async function rsLoad() {
+    try {
+      const r = await fetch(`/api/dashboard-settings/${encodeURIComponent(RS_STORAGE_KEY)}`);
+      if (!r.ok) { rsRules = []; rsRender(); return; }
+      const j = await r.json();
+      rsRules = Array.isArray(j.value) ? j.value : [];
+      // Ensure every rule has a sentences array (defensive — older data may lack it)
+      for (const r of rsRules) if (!Array.isArray(r.sentences)) r.sentences = [];
+      rsRender();
+    } catch (e) {
+      rsRules = [];
+      rsRender();
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', rsLoad);
+
   window.addEventListener('DOMContentLoaded', refreshPage);
 })();

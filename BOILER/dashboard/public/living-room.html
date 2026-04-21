@@ -90,6 +90,7 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('wallmote', this)">Wallmote</button>
+    <button class="tab-btn" onclick="showTab('rules', this)">Rule Settings</button>
   </div>
 
   <div class="tab-panel active" id="tab-wallmote">
@@ -246,6 +247,26 @@
       <button class="btn-save" onclick="saveBindings()">Save Bindings</button>
     </div>
 
+  </div>
+
+  <!-- Rule Settings tab — rules (named containers) each with sentences describing behaviour.
+       No Generate button: user asks Claude in chat to turn rules+sentences into Python rules. -->
+  <div class="tab-panel" id="tab-rules">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <h2 style="margin:0;">Rule Settings — Living Room</h2>
+        <button onclick="rsAddRule()" style="background:#6c4f9f;color:#fff;border:none;border-radius:4px;padding:5px 14px;font-size:0.82rem;cursor:pointer;">+ Add rule</button>
+      </div>
+      <div style="font-size:0.78rem;color:#666;margin-bottom:12px;">
+        Each <b>rule</b> is a named behaviour with one or more sentences describing when/what it does. Example rule <em>"Evening Lights"</em>:
+        sentence 1 <em>"at sunset turn on TV spots"</em>; sentence 2 <em>"at sunset turn on main light at 60% brightness"</em>.
+        When ready, ask Claude in chat to generate Python rules from these.
+      </div>
+      <div id="rs-rules-container"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px;">
+        <button class="btn-save" onclick="rsSave()" style="padding:5px 16px;">Save All</button>
+      </div>
+    </div>
   </div>
 
 </main>
