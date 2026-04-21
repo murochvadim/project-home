@@ -4455,6 +4455,7 @@
                      : labelDrag.kind === 'furn' ? 'Furniture label'
                      : labelDrag.kind === 'zone' ? 'Zone label'
                      : labelDrag.kind === 'dev'  ? 'Device label'
+                     : labelDrag.kind === 'room' ? 'Room label'
                      : 'Label';
           if (labelDrag.kind === 'dev') {
             const p = roomPlacements.find(x => x.id === labelDrag.devId);
@@ -4466,8 +4467,28 @@
               }).catch(() => {});
             }
             setStatus('Device label moved.');
+          } else if (labelDrag.slug) {
+            // Auto-save label_offset for room/divider/door/furn/zone to the
+            // affected room's layout. Partial POST — only the changed field's
+            // array/object, never touches walls. Works in apartment view
+            // (no activeSlug required).
+            const sl = labelDrag.slug;
+            const layout = allRooms[sl];
+            if (layout) {
+              const body = {};
+              if (labelDrag.kind === 'room')    body.label_offset = layout.label_offset;
+              if (labelDrag.kind === 'divider') body.dividers  = layout.dividers  || [];
+              if (labelDrag.kind === 'door')    body.doors     = layout.doors     || [];
+              if (labelDrag.kind === 'furn')    body.furniture = layout.furniture || [];
+              if (labelDrag.kind === 'zone')    body.zones     = layout.zones     || [];
+              fetch('/api/room-layouts/' + sl, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(body),
+              }).catch(() => {});
+            }
+            setStatus(`${what} moved for ${sl} — saved.`);
           } else {
-            setStatus(`${what} moved for ${labelDrag.slug}. Hit Save to persist.`);
+            setStatus(`${what} moved.`);
           }
           suppressClick = true;
         }
