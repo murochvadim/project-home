@@ -19,12 +19,74 @@ Long-term vision: an LLM loop that refines rules based on sentences + apartment 
 
 ## Phases
 
-### Phase 1 — Living Room MVP
+### Phase 1 — Living Room MVP + Base Rules (apartment-wide)
 
-- [x] DB schema: `living-room.rule_sentences` = JSONB array of rule containers: `[{id, name, active, sentences:[{id, text, active, added_at, updated_at}], added_at, updated_at}]`. **Rules numbered 1..N by array position** so user can say in chat "generate rule 2".
-- [x] Rule Settings tab on Living Room Agent page (`living-room.html`): named rule containers, each with Add / Delete / Enable-toggle per sentence. No "Generate" button — triggered via chat.
-- [x] Server endpoints: reused existing `/api/dashboard-settings/:key` (same pattern as wallmote_bindings). Zero new server code.
-- [ ] Claude sentence→rule pipeline (triggered in chat): reads sentences via MCP on `dashboard_settings`, combines with `/api/apartment-scene` + `/api/devices`, produces Python rule files on laptop only, reports English summary + validation result.
+#### Living Room (Layer 3 actions)
+- [x] DB schema: `living-room.rule_sentences` = JSONB array of rule containers: `[{id, name, active, sentences:[{id, text, active, added_at, updated_at}], added_at, updated_at}]`. Rules numbered 1..N by array position so user can say "generate rule 2" in chat.
+- [x] Rule Settings tab on Living Room Agent page.
+- [x] Server endpoints: reused existing `/api/dashboard-settings/:key`.
+- [ ] Claude sentence→Python pipeline for Layer 3 action rules (triggered in chat).
+
+#### Base Rules — 4-layer architecture (apartment-wide)
+
+**Layered architecture agreed (2026-04-22):**
+
+```
+Layer 0: Home State aggregator    → virtual:home_state
+         (time, home/away, voice, guest_mode, sleep_mode, ...)
+                    │
+                    ▼
+Layer 1: Domain Policies           → virtual:light_policy
+                                     virtual:hvac_policy (future)
+                                     virtual:security_policy (future)
+                    │
+                    ▼
+Layer 2: Room Policies             → virtual:living_room_light_policy
+                                     virtual:bedroom_light_policy
+                    │
+                    ▼
+Layer 3: Action Rules (per sentence) → turn_on / turn_off commands
+```
+
+**Storage:** NO new DB tables. Reuses existing `devices` (snapshots) + `device_events` (history) + `dashboard_settings` (sentences). Mode enum lives as Python dict inside each Layer 0/1 rule file.
+
+**File-per-layer convention:**
+- Layer 0: ONE file `home_state.py` (all Layer 0 containers merged — they all emit to `virtual:home_state`)
+- Layer 1: ONE file per domain (`light_policy.py`, future `hvac_policy.py`)
+- Layer 2: ONE file per (room × domain) (`living_room_light_policy.py`)
+- Layer 3: ONE file per action sentence (`lr_kitchen_spots_evening.py`)
+
+**Phase 1 tasks:**
+
+- [ ] **Add 'Base Rule Settings' tab to Main Agent page** (`main-agent.html`) — apartment-wide rule containers for Layer 0 + Layer 1 sentences. Same UI pattern as Living Room Rule Settings. Storage key: `dashboard_settings.apartment.rule_sentences`.
+- [ ] **Heartbeat trigger** for minute-resolution time boundaries. Wildcard trigger `["*"]` misses transitions during quiet periods (e.g. nobody home at 3am). Options: (a) rule engine minor change to emit a `heartbeat` event every 60s, (b) external cron on LXC 104 MQTT-publishing to `mur/home/heartbeat` every minute. Recommend (a) long-term.
+- [ ] **Sentence-routing keyword table** (see section below) — AI uses to detect which layer a sentence belongs to during generation.
+- [ ] **Semantic conflict validator** in AI generation — detect contradictions within a container (two different boundaries for "evening") and across containers (e.g. "at 22:30 turn on spots" + "at 22:30 turn off all lights"). Flag before writing files.
+- [ ] **Mode enum governance**: `home_state.py` owns the authoritative `MODES` dict (Python variable at the top of the file). Consumers (Layer 1 domain policies) treat `mode` as an opaque string and read the DERIVED fields (`allow_auto_on`, `allow_on_types`, etc.) that Layer 0 already projected. When user introduces a new mode via sentences, AI adds to `MODES` dict + regenerates `home_state.py`.
+- [ ] **First base rule to implement** (Layer 0, Time Mode dimension):
+
+  **Rule 1: "Time Mode"** (5 sentences — hardcoded boundaries for MVP, move to dashboard_settings later)
+  1. "between 06:00 and 10:00 time_mode is morning"
+  2. "between 10:00 and 17:00 time_mode is day"
+  3. "between 17:00 and 22:30 time_mode is evening"
+  4. "between 22:30 and 01:00 time_mode is night"
+  5. "between 01:00 and 06:00 time_mode is late_night"
+
+- [ ] Claude sentence→Python pipeline for Layer 0/1 base rules: reads `dashboard_settings.apartment.rule_sentences`, routes each sentence via keyword table, merges all Layer 0 sentences into `home_state.py`, merges Layer 1 sentences per-domain into one file per domain.
+
+### Sentence-routing keyword table (Phase 1)
+
+AI uses these heuristics to detect target layer per sentence. Used during generation — if sentence is ambiguous, AI may split it across layers.
+
+| Keyword / Pattern | Target Layer | Why |
+|---|---|---|
+| `time_mode`, `home_mode`, `voice_scene`, `sleep_mode`, `guest_mode`, `between … and …`, `when voice says …` | Layer 0 — `home_state.py` | Defines apartment-wide state dimensions |
+| `allow on/off`, `forbid`, `preferred types`, `light types`, `mode is <name>` with derived fields | Layer 1 — domain policy | Defines what's allowed in a domain given home state |
+| room-name + device-type + no explicit action | Layer 2 — room policy | Refines Layer 1 with room-specific context |
+| explicit `turn on`, `turn off`, `dim to X`, `set brightness`, + trigger (`when motion`, `at 22:30`, `on entering zone`) | Layer 3 — action rule | The concrete command |
+
+**Edge case — sentence spans layers:**
+Example: *"at 22:30 turn off all lights"* — this has BOTH a time-boundary (Layer 0 `scheduled_off_at = 22:30`) AND an action (Layer 3 turn off all lights at heartbeat check). AI splits it — definition goes to Layer 0, action goes to Layer 3 consuming the Layer 0 value.
 
 ### Phase 2 — Standard JSON rule schema
 
