@@ -1625,6 +1625,20 @@ app.post('/api/rule-engine/reload', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Flip `_spatial_reload_request='pending'` so the rule-engine heartbeat picks
+// up apartment-layout / placement changes within ≤60s. Non-fatal: if this
+// fails the next midnight refresh still catches the change.
+async function signalSpatialReload() {
+  try {
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at) VALUES ('_spatial_reload_request', '"pending"'::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = '"pending"'::jsonb, updated_at = NOW()`
+    );
+  } catch (e) {
+    console.warn('[spatial reload signal failed]', e.message);
+  }
+}
+
 app.post('/api/rule-engine/test', async (req, res) => {
   try {
     const { rule_name, force } = req.body;
@@ -2966,6 +2980,7 @@ app.post('/api/room-layouts/:slug', async (req, res) => {
          updated_at = NOW()`,
       ['room_layouts.' + slug, JSON.stringify(patch)]
     );
+    await signalSpatialReload();
     res.json({ ok: true, merged_keys: Object.keys(patch) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3107,6 +3122,7 @@ app.post('/api/room-device-placements', async (req, res) => {
        b.label_offset ? JSON.stringify(b.label_offset) : null,
        !!b.label_hidden]
     );
+    await signalSpatialReload();
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3140,6 +3156,7 @@ app.patch('/api/room-device-placements/:id', async (req, res) => {
       vals
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    await signalSpatialReload();
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3150,6 +3167,7 @@ app.delete('/api/room-device-placements/:id', async (req, res) => {
     if (!id) return res.status(400).json({ error: 'Invalid id' });
     const r = await db.query(`DELETE FROM room_device_placements WHERE id = $1 RETURNING id`, [id]);
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    await signalSpatialReload();
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

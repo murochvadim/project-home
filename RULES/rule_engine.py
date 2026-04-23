@@ -13,6 +13,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -30,6 +31,110 @@ from mqtt_client import MqttClient
 from state_manager import DB_CONFIG, StateManager
 
 TZ = ZoneInfo('Asia/Jerusalem')
+
+# ======================================================================
+# Rule-knob sentence parser
+# ----------------------------------------------------------------------
+# Rules keep their logic shape in Python but expose tunable constants as
+# `state.shared.get('<key>', <default>)`. Every 60s the heartbeat calls
+# _parse_rule_knobs() which rescans `dashboard_settings.apartment.rule_sentences`,
+# matches each sentence against a pattern below, and pushes the parsed
+# numeric value (normalised to the target unit) into state.shared.
+#
+# User-facing: they can write sentences like
+#   "Home Activity: hold a room active for 15 seconds"
+#   "Home Activity: hold a room active for 0.5 minutes"   (same knob, different unit)
+# Both resolve to `home_activity.hold_off_sec = 15` (or 30).
+#
+# Each entry: (compiled regex, state.shared key, target_unit)
+#   regex: group(1)=number, group(2)=unit word (optional; missing → 'count')
+#   target_unit: 'sec' | 'min' | 'count' — what the rule reads as
+#
+# To add a new knob: append to KNOB_PATTERNS + read the same key in the
+# rule's evaluate(). Nothing else to change.
+# ======================================================================
+
+_NUM_UNIT = r'(\d+(?:\.\d+)?)\s*(second|minute|hour|sec|min|hr|s|m|h)s?'
+
+KNOB_PATTERNS = [
+    # Home Activity knobs
+    (re.compile(r'home activity:.*hold.*?' + _NUM_UNIT, re.I),
+     'home_activity.hold_off_sec', 'sec'),
+    (re.compile(r'home activity:.*active.*?' + _NUM_UNIT + r'.*switch', re.I),
+     'home_activity.interact_window_sec', 'sec'),
+    (re.compile(r"home activity:.*low.*?1\s*(?:to|-)?\s*(\d+)\s*room", re.I),
+     'home_activity.level_low_max', 'count'),
+    # People Home knobs
+    (re.compile(r'people home:.*two rooms.*?' + _NUM_UNIT + r'.*same person', re.I),
+     'people_home.corridor_sec', 'sec'),
+    (re.compile(r'people home:.*adjacent rooms.*?' + _NUM_UNIT, re.I),
+     'people_home.adjacency_dedupe_sec', 'sec'),
+    (re.compile(r'people home:.*away.*?' + _NUM_UNIT + r'.*no motion', re.I),
+     'people_home.away_after_no_motion_min', 'min'),
+    (re.compile(r'people home:.*door.*?presence.*?' + _NUM_UNIT + r'.*entry', re.I),
+     'people_home.door_transit_window_sec', 'sec'),
+    (re.compile(r'people home:.*door.*?no motion.*?' + _NUM_UNIT + r'.*exit', re.I),
+     'people_home.exit_quiet_window_sec', 'sec'),
+    # People Home — Main Door floor knobs
+    (re.compile(r'people home:.*cap.*?people.*?(\d+)', re.I),
+     'people_home.max_household_size', 'count'),
+    (re.compile(r'people home:.*confirm.*?(\d+)\s*(?:consecutive|tick|cycle)', re.I),
+     'people_home.mark_sustain_ticks', 'count'),
+    (re.compile(r'people home:.*transit.*?sequence.*?' + _NUM_UNIT, re.I),
+     'people_home.transit_sequence_window_sec', 'sec'),
+]
+
+_UNIT_TO_SEC = {
+    'second': 1, 'sec': 1, 's': 1,
+    'minute': 60, 'min': 60, 'm': 60,
+    'hour': 3600, 'hr': 3600, 'h': 3600,
+}
+
+
+def _flatten_sentence(s):
+    """Turn a sentence record into plain text — prefers `segments`, falls back to `text`."""
+    segs = s.get('segments')
+    if isinstance(segs, list) and segs:
+        return ''.join((seg or {}).get('v', '') for seg in segs).strip()
+    return (s.get('text') or '').strip()
+
+
+def _parse_knob_sentences(containers):
+    """Scan the apartment rule_sentences array. Returns dict of {state_key: int_value}."""
+    knobs = {}
+    for container in (containers or []):
+        if container.get('active') is False:
+            continue
+        for s in (container.get('sentences') or []):
+            if s.get('active') is False:
+                continue
+            text = _flatten_sentence(s)
+            if not text:
+                continue
+            for regex, key, target_unit in KNOB_PATTERNS:
+                m = regex.search(text)
+                if not m:
+                    continue
+                try:
+                    n = float(m.group(1))
+                except (TypeError, ValueError):
+                    break
+                if target_unit == 'count':
+                    knobs[key] = int(n)
+                else:
+                    unit_word = ''
+                    try:
+                        unit_word = (m.group(2) or '').lower()
+                    except (IndexError, AttributeError):
+                        pass
+                    sec_per_unit = _UNIT_TO_SEC.get(unit_word, 1)
+                    seconds = n * sec_per_unit
+                    if target_unit == 'sec':
+                        knobs[key] = int(round(seconds))
+                    elif target_unit == 'min':
+                        knobs[key] = int(round(seconds / 60))
+                break  # first match wins; skip remaining patterns for this sentence
+    return knobs
 
 log = logging.getLogger('rule_engine')
 logging.basicConfig(
@@ -1060,6 +1165,29 @@ class RuleEngine:
                             )
                         except Exception:
                             log.warning('Failed to clear _reload_request flag', exc_info=True)
+                    # Parse rule-knob sentences from apartment.rule_sentences
+                    # → push values into state.shared so rules pick them up at
+                    # their next fire. Cheap (~10 ms regex scan); runs every 60 s.
+                    try:
+                        self._sync_rule_knobs()
+                    except Exception:
+                        log.warning('Knob parsing failed', exc_info=True)
+                    # Spatial reload — flipped by dashboard on any room-layout /
+                    # placement save. Rebuilds devices + rooms + spatial index
+                    # atomically; same lock + atomic swap as startup.
+                    if self.state.shared.get('_spatial_reload_request') == 'pending':
+                        try:
+                            self.state.load_from_db()
+                            log.info('Spatial index reloaded (dashboard save)')
+                        except Exception:
+                            log.warning('Spatial reload failed', exc_info=True)
+                        self.state.shared['_spatial_reload_request'] = 'done'
+                        try:
+                            self.state.db_execute(
+                                "DELETE FROM rule_engine_state WHERE key = '_spatial_reload_request'"
+                            )
+                        except Exception:
+                            log.warning('Failed to clear _spatial_reload_request flag', exc_info=True)
                     # Count rule files on disk for dashboard "new rule" badge
                     rules_dir = os.path.join(os.path.dirname(__file__), 'rules')
                     disk_count = len([f for f in os.listdir(rules_dir)
@@ -1095,6 +1223,35 @@ class RuleEngine:
                 last_heartbeat = now
 
             self._stop.wait(30)
+
+    def _sync_rule_knobs(self):
+        """Parse `apartment.rule_sentences` + write matched knob values into
+        state.shared. Called once per heartbeat tick (~60 s). Idempotent — if
+        nothing changed, no state mutation happens, no log noise."""
+        with self.state._hb_lock:
+            self.state._ensure_hb_conn()
+            with self.state._hb_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT value FROM dashboard_settings WHERE key = 'apartment.rule_sentences'"
+                )
+                row = cur.fetchone()
+        if not row or row[0] is None:
+            return
+        raw = row[0]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return
+        if not isinstance(raw, list):
+            return
+        parsed = _parse_knob_sentences(raw)
+        if not parsed:
+            return
+        for key, val in parsed.items():
+            if self.state.shared.get(key) != val:
+                self.state.shared[key] = val
+                log.info("Rule knob updated from sentence: %s = %s", key, val)
 
     def _write_heartbeat(self):
         """Insert a heartbeat row into rule_engine_log.
