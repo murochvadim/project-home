@@ -81,6 +81,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('rules',this)">Rules</button>
     <button class="tab-btn" onclick="showTab('activity',this)">Home Activity</button>
+    <button class="tab-btn" onclick="showTab('base-rules',this)">Base Rule Settings</button>
   </div>
 
   <!-- TAB: Rules -->
@@ -180,10 +181,35 @@
 
   </div>
 
+  <!-- TAB: Base Rule Settings — apartment-wide Layer 0 (home state) + Layer 1 (domain policies)
+       natural-language sentences. No 'Generate' button; user triggers via Claude chat. -->
+  <div class="tab-panel" id="tab-base-rules">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <h2 style="margin:0;">Base Rule Settings — Apartment</h2>
+        <button onclick="brsAddRule()" style="background:#6c4f9f;color:#fff;border:none;border-radius:4px;padding:5px 14px;font-size:0.82rem;cursor:pointer;">+ Add rule</button>
+      </div>
+      <div style="font-size:0.78rem;color:#666;margin-bottom:12px;">
+        Base rules that compute the apartment's <b>home state</b> (time_mode, home_mode, voice_scene, sleep_mode)
+        and <b>domain policies</b> (light, HVAC, security — what's allowed given current state). Each rule container
+        covers one dimension (Time, Home/Away, Voice, Sleep, Light Policy, ...). When ready, ask Claude in chat
+        to generate base rules — Claude routes each sentence to the right layer and produces
+        <code>home_state.py</code> (Layer 0) and per-domain policy files (Layer 1).
+      </div>
+      <div id="brs-rules-container"></div>
+      <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px;">
+        <span id="brs-dirty-badge" style="display:none;color:#c0392b;font-size:0.78rem;">● Unsaved changes</span>
+        <button class="btn-save" onclick="brsSave()" style="padding:5px 16px;">Save All</button>
+        <button onclick="brsDiscard()" title="Discard all unsaved changes and reload from DB" style="padding:5px 12px;background:#fff;color:#666;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.82rem;">Discard</button>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js"></script>
-<script src="js/main-agent.js?v=14"></script>
+<script src="js/device-picker.js?v=4"></script>
+<script src="js/main-agent.js?v=30"></script>
 </body>
 </html>

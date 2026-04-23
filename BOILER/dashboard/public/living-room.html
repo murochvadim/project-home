@@ -263,8 +263,10 @@
         When ready, ask Claude in chat to generate Python rules from these.
       </div>
       <div id="rs-rules-container"></div>
-      <div style="display:flex;justify-content:flex-end;margin-top:10px;">
+      <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px;">
+        <span id="rs-dirty-badge" style="display:none;color:#c0392b;font-size:0.78rem;">● Unsaved changes</span>
         <button class="btn-save" onclick="rsSave()" style="padding:5px 16px;">Save All</button>
+        <button onclick="rsDiscard()" title="Discard all unsaved changes and reload from DB" style="padding:5px 12px;background:#fff;color:#666;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.82rem;">Discard</button>
       </div>
     </div>
   </div>
@@ -293,6 +295,7 @@
 </div>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/living-room.js"></script>
+<script src="js/device-picker.js?v=4"></script>
+<script src="js/living-room.js?v=16"></script>
 </body>
 </html>

@@ -22,7 +22,7 @@ Long-term vision: an LLM loop that refines rules based on sentences + apartment 
 ### Phase 1 — Living Room MVP + Base Rules (apartment-wide)
 
 #### Living Room (Layer 3 actions)
-- [x] DB schema: `living-room.rule_sentences` = JSONB array of rule containers: `[{id, name, active, sentences:[{id, text, active, added_at, updated_at}], added_at, updated_at}]`. Rules numbered 1..N by array position so user can say "generate rule 2" in chat.
+- [x] DB schema: `living-room.rule_sentences` = JSONB array of rule containers: `[{id, name, active, sentences:[{id, segments:[{t,v}], active, added_at, updated_at}], added_at, updated_at}]`. Rules numbered 1..N by array position so user can say "generate rule 2" in chat. See [Sentence wire format](#sentence-wire-format-segments-model) below.
 - [x] Rule Settings tab on Living Room Agent page.
 - [x] Server endpoints: reused existing `/api/dashboard-settings/:key`.
 - [ ] Claude sentence→Python pipeline for Layer 3 action rules (triggered in chat).
@@ -87,6 +87,51 @@ AI uses these heuristics to detect target layer per sentence. Used during genera
 
 **Edge case — sentence spans layers:**
 Example: *"at 22:30 turn off all lights"* — this has BOTH a time-boundary (Layer 0 `scheduled_off_at = 22:30`) AND an action (Layer 3 turn off all lights at heartbeat check). AI splits it — definition goes to Layer 0, action goes to Layer 3 consuming the Layer 0 value.
+
+### Sentence wire format (segments model)
+
+Since 2026-04-22, each sentence is stored as an ordered list of segments rather than a flat string. Device references can ONLY be inserted via the shared device picker (`js/device-picker.js`) — the user cannot type `@` tokens as prose.
+
+**On-disk shape** (inside `dashboard_settings.{living-room,apartment}.rule_sentences`):
+
+```json
+{
+  "id": "s_mo917x10qiv",
+  "active": true,
+  "added_at": "2026-04-22T06:31:31Z",
+  "updated_at": "2026-04-22T07:43:15Z",
+  "segments": [
+    {"t": "text", "v": "if "},
+    {"t": "dev",  "v": "@8 Gang Switch Ch1"},
+    {"t": "text", "v": " is on then "},
+    {"t": "dev",  "v": "@8 Gang Switch Ch2"},
+    {"t": "text", "v": " is off"}
+  ]
+}
+```
+
+**Invariants** (enforced by `_rsNormalize` / `_brsNormalize`):
+- Segments alternate: always starts AND ends with a `text` segment.
+- A `text` segment may be empty (`v: ""`); never two `text` segments adjacent.
+- A `dev` segment's `v` is always `@<device_name>` or `@<device_name> <dps_label>` (label from `devices.dps_labels[dps_key]`, falling back to `Ch{dps_key}` if unlabeled).
+- Legacy sentences still holding a flat `text` field are segmented on first load via regex; legacy `@Name:dps_key` chips are rewritten on load to `@Name dps_label` (migration is silent — does NOT flag dirty).
+
+**AI parsing contract** (what Claude must do to consume sentences):
+
+1. Flatten a sentence by concatenating `segments[].v` in order. That string IS the sentence.
+2. For every `{t:"dev"}` segment, resolve `v` back to a real device:
+   - Strip leading `@`.
+   - Match the remainder against `devices.name` (case-sensitive first, then `.lower()`).
+   - If the remainder has extra tokens after the name, the tail is the DPS label. Map `label → dps_key` via `devices.dps_labels`.
+   - If no label tail → no channel; the device itself is the referent.
+   - **Pixoo special case:** `@Pixoo <PresetName>` resolves to `device_id="pixoo", protocol="pixoo", action="push_preset", preset_name=<PresetName>` (see [daily_wellcome.py](rules/daily_wellcome.py) for the canonical command shape). The picker sources preset names from `pixoo_presets.name` via `GET /api/pixoo/presets`. `devices` has a row `id='pixoo', device_type='display', protocol='pixoo'` so the picker can surface it alongside other controllable devices; the pre-existing `virtual:pixoo` row is a state mirror only.
+3. Treat the segment array as an ordered token stream — don't re-parse the flat text for `@` patterns. That leads to ambiguity with multi-word device names.
+
+**Why this shape (vs. plain text with @tokens):**
+- Device identity never depends on regex heuristics. No false positives on text that happens to start with `@`.
+- AI can enumerate referenced devices with one list comprehension (`[seg.v for seg in s.segments if seg.t == "dev"]`).
+- The UI can offer click-to-replace and ×-remove on each chip without text-position arithmetic.
+- Renames propagate: on load, the dashboard re-derives labels from `devices.dps_labels` — if the DB label is renamed, the chip updates on next page load.
 
 ### Phase 2 — Standard JSON rule schema
 

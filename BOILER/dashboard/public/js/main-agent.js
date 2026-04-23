@@ -547,4 +547,417 @@
 
   loadState();
   refreshTimer = setInterval(loadState, 10000);
+
+  // ── Base Rule Settings tab ─────────────────────────────────────────────────
+  // Apartment-wide rule containers holding sentences for Layer 0 (home state
+  // dimensions: time_mode, home_mode, voice_scene, sleep_mode) and Layer 1
+  // (domain policies: light, HVAC, security). Same data shape as Living Room's
+  // rule_sentences: array of {id, name, active, sentences:[...], added_at, updated_at}.
+  // Rules numbered 1..N by array position so user says "generate base rule 2"
+  // in chat. Stored under dashboard_settings.apartment.rule_sentences.
+  // Reuses generic /api/dashboard-settings/:key endpoint.
+  const BRS_STORAGE_KEY = 'apartment.rule_sentences';
+  let brsRules = [];
+  let brsDirty = false;
+
+  function brsMarkDirty() {
+    brsDirty = true;
+    const b = document.getElementById('brs-dirty-badge');
+    if (b) b.style.display = 'inline';
+  }
+  function brsClearDirty() {
+    brsDirty = false;
+    const b = document.getElementById('brs-dirty-badge');
+    if (b) b.style.display = 'none';
+  }
+  window.addEventListener('beforeunload', (e) => {
+    if (brsDirty) { e.preventDefault(); e.returnValue = ''; return ''; }
+  });
+
+  function brsNewId(prefix) {
+    return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  }
+
+  function brsFmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${dd}-${mm} ${hh}:${mi}`;
+  }
+
+  function brsEsc(s) { return (s || '').replace(/"/g, '&quot;'); }
+
+  function brsRender() {
+    const container = document.getElementById('brs-rules-container');
+    if (!container) return;
+    if (!brsRules.length) {
+      container.innerHTML = '<div style="padding:18px;text-align:center;color:#999;border:1px dashed #d0cbc4;border-radius:4px;">No base rules yet — click <b>+ Add rule</b> to start. Suggested first rule: <em>Time Mode</em> with 5 sentences for morning/day/evening/night/late_night windows.</div>';
+      return;
+    }
+    container.innerHTML = '';
+    brsRules.forEach((rule, idx) => {
+      const ruleNum = idx + 1;
+      const card = document.createElement('div');
+      card.draggable = true;
+      card.dataset.brsRuleCard = rule.id;
+      card.style.cssText = 'border:1px solid #d0cbc4;border-radius:5px;padding:10px 12px;margin-bottom:10px;background:#fbfaf6;cursor:default;';
+      for (const s of (rule.sentences || [])) { _brsEnsureSegments(s); s.segments = _brsNormalize(s.segments); }
+      const maxSegs = (rule.sentences || []).reduce((m, s) => Math.max(m, (s.segments || []).length), 0) || 1;
+      const segHeaderRow = Array.from({length: maxSegs}, (_, i) => {
+        const lbl = (i % 2 === 0) ? 'text' : 'device';
+        return `<th style="padding:3px 6px;text-align:left;font-weight:normal;color:#aaa;">${lbl}</th>`;
+      }).join('');
+      const sentencesHtml = (rule.sentences || []).map((s, sIdx) => {
+        const segCells = Array.from({length: maxSegs}, (_, segIdx) => {
+          const seg = s.segments[segIdx];
+          return _brsRenderSegmentCell(rule.id, s, segIdx, seg);
+        }).join('');
+        return `
+        <tr style="border-top:1px solid #e8e3d8;">
+          <td style="padding:4px 6px;text-align:center;width:36px;color:#888;font-size:0.78rem;vertical-align:middle;">${sIdx + 1}.</td>
+          <td style="padding:4px 6px;text-align:center;width:40px;vertical-align:middle;">
+            <input type="checkbox" ${s.active ? 'checked' : ''} data-brs-rule="${rule.id}" data-brs-sent="${s.id}" data-brs-field="active" style="margin:0;" />
+          </td>
+          ${segCells}
+          <td style="padding:4px 6px;width:60px;vertical-align:middle;text-align:center;">
+            <button onclick="brsAppendDevice('${rule.id}','${s.id}')" title="Insert a device" style="height:26px;box-sizing:border-box;background:#fff;color:#6c4f9f;border:1px dashed #6c4f9f;border-radius:3px;padding:0 10px;font-size:0.78rem;cursor:pointer;line-height:1;">+Dev</button>
+          </td>
+          <td style="padding:4px 6px;text-align:right;font-size:0.7rem;color:#999;width:100px;vertical-align:middle;">${brsFmtDate(s.updated_at || s.added_at)}</td>
+          <td style="padding:4px 6px;text-align:center;width:40px;vertical-align:middle;">
+            <button onclick="brsDeleteSentence('${rule.id}','${s.id}')" title="Delete sentence"
+                    style="height:26px;box-sizing:border-box;background:#fff;color:#c0392b;border:1px solid #c0392b;border-radius:3px;padding:0 8px;font-size:0.78rem;cursor:pointer;line-height:1;">×</button>
+          </td>
+        </tr>`;
+      }).join('');
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;height:28px;">
+          <span title="Drag to reorder" style="cursor:grab;color:#aaa;font-size:1rem;user-select:none;line-height:28px;">⋮⋮</span>
+          <strong style="color:#6c4f9f;min-width:70px;line-height:28px;">Base ${ruleNum}</strong>
+          <input type="checkbox" ${rule.active ? 'checked' : ''} data-brs-rule="${rule.id}" data-brs-field="active" title="Enable rule" style="margin:0;" />
+          <input type="text" value="${brsEsc(rule.name)}" data-brs-rule="${rule.id}" data-brs-field="name"
+                 placeholder="Rule name (e.g. Time Mode, Home/Away, Voice Scene, Light Policy)"
+                 style="flex:1;height:28px;box-sizing:border-box;padding:0 8px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.88rem;font-weight:600;" />
+          <button onclick="brsAddSentence('${rule.id}')" style="height:28px;box-sizing:border-box;background:#6c4f9f;color:#fff;border:none;border-radius:3px;padding:0 12px;font-size:0.78rem;cursor:pointer;line-height:1;">+ Sentence</button>
+          <button onclick="brsDeleteRule('${rule.id}')" title="Delete rule"
+                  style="height:28px;box-sizing:border-box;background:#fff;color:#c0392b;border:1px solid #c0392b;border-radius:3px;padding:0 10px;font-size:0.78rem;cursor:pointer;line-height:1;">× Rule</button>
+        </div>
+        ${rule.sentences && rule.sentences.length ? `
+          <div style="overflow-x:auto;margin-left:4px;">
+            <table style="border-collapse:collapse;table-layout:auto;">
+              <thead>
+                <tr style="background:#f0ece3;font-size:0.7rem;color:#666;">
+                  <th style="padding:3px 6px;text-align:center;width:36px;">#</th>
+                  <th style="padding:3px 6px;text-align:center;width:40px;">Active</th>
+                  ${segHeaderRow}
+                  <th style="padding:3px 6px;width:60px;"></th>
+                  <th style="padding:3px 6px;text-align:right;width:100px;">Updated</th>
+                  <th style="padding:3px 6px;width:40px;"></th>
+                </tr>
+              </thead>
+              <tbody>${sentencesHtml}</tbody>
+            </table>
+          </div>` : '<div style="padding:8px 4px;color:#999;font-size:0.78rem;font-style:italic;">No sentences — click <b>+ Sentence</b> to add one.</div>'}
+      `;
+      container.appendChild(card);
+    });
+    container.querySelectorAll('[data-brs-rule]').forEach(el => {
+      el.addEventListener('change', () => brsHandleEdit(el));
+      if (el.type === 'text') el.addEventListener('blur', () => brsHandleEdit(el));
+    });
+    // Drag-and-drop reordering
+    let _dragId = null;
+    container.querySelectorAll('[data-brs-rule-card]').forEach(card => {
+      card.addEventListener('dragstart', (e) => {
+        _dragId = card.dataset.brsRuleCard;
+        card.style.opacity = '0.4';
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      card.addEventListener('dragend', () => { card.style.opacity = ''; _dragId = null; });
+      card.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const over = card.dataset.brsRuleCard;
+        if (!_dragId || over === _dragId) return;
+        card.style.borderTop = '3px solid #6c4f9f';
+      });
+      card.addEventListener('dragleave', () => { card.style.borderTop = '1px solid #d0cbc4'; });
+      card.addEventListener('drop', (e) => {
+        e.preventDefault();
+        card.style.borderTop = '1px solid #d0cbc4';
+        const targetId = card.dataset.brsRuleCard;
+        if (!_dragId || _dragId === targetId) return;
+        const fromIdx = brsRules.findIndex(r => r.id === _dragId);
+        const toIdx   = brsRules.findIndex(r => r.id === targetId);
+        if (fromIdx < 0 || toIdx < 0) return;
+        const [moved] = brsRules.splice(fromIdx, 1);
+        brsRules.splice(toIdx, 0, moved);
+        brsMarkDirty();
+        brsRender();
+      });
+    });
+  }
+
+  // Segment-based sentence model. Each sentence holds an array of segments:
+  //   {t:'text', v:'free prose'} OR {t:'dev', v:'@Device Name:channel'}
+  // Invariant: starts + ends with a text segment; alternates text-dev-text-...
+  const _BRS_LEGACY_DEV_RE = /@[A-Za-z0-9_\-][A-Za-z0-9_\-]*(?:\s+[A-Z0-9][A-Za-z0-9_\-]*){0,4}(?::[A-Za-z0-9_]+)?/g;
+
+  function _brsEnsureSegments(s) {
+    if (Array.isArray(s.segments) && s.segments.length) return;
+    const text = s.text || '';
+    const re = new RegExp(_BRS_LEGACY_DEV_RE.source, 'g');
+    const segs = [];
+    let last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      segs.push({t:'text', v: text.slice(last, m.index)});
+      segs.push({t:'dev',  v: m[0]});
+      last = m.index + m[0].length;
+    }
+    segs.push({t:'text', v: text.slice(last)});
+    s.segments = segs;
+  }
+
+  function _brsNormalize(segs) {
+    const out = [];
+    for (const seg of segs || []) {
+      if (!seg) continue;
+      if (seg.t === 'text') {
+        if (out.length && out[out.length-1].t === 'text') out[out.length-1].v += seg.v || '';
+        else out.push({t:'text', v: seg.v || ''});
+      } else if (seg.t === 'dev') {
+        if (!out.length || out[out.length-1].t !== 'text') out.push({t:'text', v:''});
+        out.push({t:'dev', v: seg.v});
+      }
+    }
+    if (!out.length || out[0].t !== 'text') out.unshift({t:'text', v:''});
+    if (out[out.length-1].t !== 'text') out.push({t:'text', v:''});
+    return out;
+  }
+
+  const _BRS_CELL_W = 150;
+  const _BRS_CELL_H = 26;
+  function _brsRenderSegmentCell(ruleId, s, segIdx, seg) {
+    const tdBase = 'padding:4px 4px;vertical-align:middle;';
+    if (!seg) return `<td style="${tdBase}"></td>`;
+    if (seg.t === 'text') {
+      const v = seg.v || '';
+      const isFirstEmpty = (segIdx === 0 && s.segments.length === 1 && !v);
+      const placeholder = isFirstEmpty ? 'e.g. between 17:00 and 22:30' : '';
+      const size = Math.max(v.length + 2, 15);
+      return `<td style="${tdBase}">
+        <input type="text" value="${brsEsc(v)}" size="${size}"
+               data-brs-rule="${ruleId}" data-brs-sent="${s.id}" data-brs-seg="${segIdx}"
+               oninput="brsUpdateSegText(this)"
+               placeholder="${placeholder}"
+               style="min-width:${_BRS_CELL_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:1px solid #e8e3d8;border-radius:3px;padding:0 6px;font-size:0.82rem;background:#fff;line-height:${_BRS_CELL_H - 2}px;" />
+      </td>`;
+    }
+    return `<td style="${tdBase}">
+      <span title="${brsEsc(seg.v)}" style="width:${_BRS_CELL_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;background:#6c4f9f14;color:#6c4f9f;border:1px solid #6c4f9f55;border-radius:4px;padding:0 4px 0 8px;font-size:0.82rem;display:flex;align-items:center;justify-content:space-between;white-space:nowrap;line-height:1;gap:4px;overflow:hidden;">
+        <span onclick="brsReplaceDevice('${ruleId}','${s.id}',${segIdx})" style="cursor:pointer;overflow:hidden;text-overflow:ellipsis;flex:1;">${brsEsc(seg.v)}</span>
+        <button onclick="brsRemoveDevice('${ruleId}','${s.id}',${segIdx})" title="Remove device"
+                style="background:none;border:none;color:#c0392b;cursor:pointer;padding:0 2px;font-weight:bold;font-size:0.95rem;line-height:1;flex-shrink:0;">×</button>
+      </span>
+    </td>`;
+  }
+
+  window.brsUpdateSegText = function (el) {
+    const ruleId = el.dataset.brsRule;
+    const sentId = el.dataset.brsSent;
+    const segIdx = Number(el.dataset.brsSeg);
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    const s = (rule.sentences || []).find(x => x.id === sentId);
+    if (!s || !s.segments || !s.segments[segIdx]) return;
+    s.segments[segIdx].v = el.value;
+    s.updated_at = new Date().toISOString();
+    rule.updated_at = s.updated_at;
+    brsMarkDirty();
+    el.size = Math.max(el.value.length + 2, 15);
+  };
+
+  window.brsAppendDevice = function (ruleId, sentId) {
+    if (typeof window.openDevicePicker !== 'function') { alert('Device picker not loaded'); return; }
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    const s = (rule.sentences || []).find(x => x.id === sentId);
+    if (!s) return;
+    _brsEnsureSegments(s);
+    window.openDevicePicker((token) => {
+      s.segments.push({t:'dev', v: token});
+      s.segments.push({t:'text', v: ' '});
+      s.segments = _brsNormalize(s.segments);
+      s.updated_at = new Date().toISOString();
+      rule.updated_at = s.updated_at;
+      brsMarkDirty();
+      brsRender();
+    });
+  };
+
+  window.brsRemoveDevice = function (ruleId, sentId, segIdx) {
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    const s = (rule.sentences || []).find(x => x.id === sentId);
+    if (!s || !s.segments || !s.segments[segIdx] || s.segments[segIdx].t !== 'dev') return;
+    s.segments.splice(segIdx, 1);
+    s.segments = _brsNormalize(s.segments);
+    s.updated_at = new Date().toISOString();
+    rule.updated_at = s.updated_at;
+    brsMarkDirty();
+    brsRender();
+  };
+
+  window.brsReplaceDevice = function (ruleId, sentId, segIdx) {
+    if (typeof window.openDevicePicker !== 'function') { alert('Device picker not loaded'); return; }
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    const s = (rule.sentences || []).find(x => x.id === sentId);
+    if (!s || !s.segments || !s.segments[segIdx] || s.segments[segIdx].t !== 'dev') return;
+    window.openDevicePicker((newToken) => {
+      s.segments[segIdx].v = newToken;
+      s.updated_at = new Date().toISOString();
+      rule.updated_at = s.updated_at;
+      brsMarkDirty();
+      brsRender();
+    });
+  };
+
+  function brsHandleEdit(el) {
+    const ruleId = el.dataset.brsRule;
+    const sentId = el.dataset.brsSent;
+    const field  = el.dataset.brsField;
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    const newVal = el.type === 'checkbox' ? el.checked : el.value;
+    const now = new Date().toISOString();
+    if (sentId) {
+      const s = (rule.sentences || []).find(x => x.id === sentId);
+      if (!s || s[field] === newVal) return;
+      s[field] = newVal;
+      s.updated_at = now;
+      rule.updated_at = now;
+      brsMarkDirty();
+    } else {
+      if (rule[field] === newVal) return;
+      rule[field] = newVal;
+      rule.updated_at = now;
+      brsMarkDirty();
+    }
+  }
+
+  window.brsAddRule = function () {
+    const now = new Date().toISOString();
+    brsRules.push({
+      id: brsNewId('r'),
+      name: '',
+      active: true,
+      sentences: [],
+      added_at: now,
+      updated_at: now,
+    });
+    brsMarkDirty();
+    brsRender();
+    const inputs = document.querySelectorAll('#brs-rules-container input[data-brs-field="name"]');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  };
+
+  window.brsDeleteRule = function (ruleId) {
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    if (!confirm(`Delete rule "${rule.name || '(unnamed)'}" and its ${rule.sentences ? rule.sentences.length : 0} sentence(s)?`)) return;
+    brsRules = brsRules.filter(r => r.id !== ruleId);
+    brsMarkDirty();
+    brsRender();
+  };
+
+  window.brsAddSentence = function (ruleId) {
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    if (!rule.sentences) rule.sentences = [];
+    const now = new Date().toISOString();
+    rule.sentences.push({
+      id: brsNewId('s'),
+      segments: [{t:'text', v:''}],
+      active: true,
+      added_at: now,
+      updated_at: now,
+    });
+    rule.updated_at = now;
+    brsMarkDirty();
+    brsRender();
+    const inputs = document.querySelectorAll(`#brs-rules-container input[data-brs-rule="${ruleId}"][data-brs-seg="0"]`);
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  };
+
+  window.brsDeleteSentence = function (ruleId, sentId) {
+    const rule = brsRules.find(r => r.id === ruleId);
+    if (!rule || !rule.sentences) return;
+    rule.sentences = rule.sentences.filter(s => s.id !== sentId);
+    rule.updated_at = new Date().toISOString();
+    brsMarkDirty();
+    brsRender();
+  };
+
+  window.brsSave = async function () {
+    try {
+      const r = await fetch(`/api/dashboard-settings/${encodeURIComponent(BRS_STORAGE_KEY)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: brsRules }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const sentCount = brsRules.reduce((acc, r) => acc + (r.sentences ? r.sentences.length : 0), 0);
+      brsClearDirty();
+      alert(`Saved ${brsRules.length} base rule(s), ${sentCount} sentence(s).`);
+    } catch (e) {
+      alert('Save failed: ' + (e.message || e));
+    }
+  };
+
+  window.brsDiscard = async function () {
+    if (brsDirty && !confirm('Discard all unsaved changes and reload from server?')) return;
+    await brsLoad();
+  };
+
+  async function _brsMigrateTokens() {
+    if (typeof window._dpFetchDevices !== 'function' || typeof window._dpMigrateToken !== 'function') return false;
+    const devMap = await window._dpFetchDevices();
+    if (!devMap || !devMap.size) return false;
+    let changed = false;
+    for (const rule of brsRules) {
+      for (const s of (rule.sentences || [])) {
+        _brsEnsureSegments(s);
+        for (const seg of (s.segments || [])) {
+          if (seg.t !== 'dev') continue;
+          const nv = window._dpMigrateToken(seg.v, devMap);
+          if (nv !== seg.v) { seg.v = nv; changed = true; }
+        }
+      }
+    }
+    return changed;
+  }
+
+  async function brsLoad() {
+    try {
+      const r = await fetch(`/api/dashboard-settings/${encodeURIComponent(BRS_STORAGE_KEY)}`);
+      if (!r.ok) { brsRules = []; brsClearDirty(); brsRender(); return; }
+      const j = await r.json();
+      brsRules = Array.isArray(j.value) ? j.value : [];
+      for (const r of brsRules) if (!Array.isArray(r.sentences)) r.sentences = [];
+      await _brsMigrateTokens();
+      // Migration is cosmetic — don't flag dirty. The rewrite piggy-backs on the
+      // next real save the user performs.
+      brsClearDirty();
+      brsRender();
+    } catch (e) {
+      brsRules = [];
+      brsClearDirty();
+      brsRender();
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', brsLoad);
 })();
