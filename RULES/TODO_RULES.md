@@ -58,21 +58,23 @@ Layer 3: Action Rules (per sentence) → turn_on / turn_off commands
 
 **Phase 1 tasks:**
 
-- [ ] **Add 'Base Rule Settings' tab to Main Agent page** (`main-agent.html`) — apartment-wide rule containers for Layer 0 + Layer 1 sentences. Same UI pattern as Living Room Rule Settings. Storage key: `dashboard_settings.apartment.rule_sentences`.
-- [ ] **Heartbeat trigger** for minute-resolution time boundaries. Wildcard trigger `["*"]` misses transitions during quiet periods (e.g. nobody home at 3am). Options: (a) rule engine minor change to emit a `heartbeat` event every 60s, (b) external cron on LXC 104 MQTT-publishing to `mur/home/heartbeat` every minute. Recommend (a) long-term.
+- [x] **Add 'Base Rule Settings' tab to Main Agent page** (`main-agent.html`) — apartment-wide rule containers for Layer 0 + Layer 1 sentences. Same UI pattern as Living Room Rule Settings. Storage key: `dashboard_settings.apartment.rule_sentences`. (shipped 2026-04-22)
+- [x] **Heartbeat trigger** for minute-resolution time boundaries. Shipped 2026-04-23 — `RuleEngine._heartbeat_loop` now synthesizes a `{device_id:'heartbeat', source:'tick'}` event every 60s and dispatches it through the same path as real MQTT events. Rules that want to fire on the tick declare `triggers=["heartbeat"]` (cheap — indexed). A new `_dispatch_lock` serializes rule-firing between the paho callback thread and the heartbeat thread so group-active tracking and shared state stay consistent.
 - [ ] **Sentence-routing keyword table** (see section below) — AI uses to detect which layer a sentence belongs to during generation.
 - [ ] **Semantic conflict validator** in AI generation — detect contradictions within a container (two different boundaries for "evening") and across containers (e.g. "at 22:30 turn on spots" + "at 22:30 turn off all lights"). Flag before writing files.
 - [ ] **Mode enum governance**: `home_state.py` owns the authoritative `MODES` dict (Python variable at the top of the file). Consumers (Layer 1 domain policies) treat `mode` as an opaque string and read the DERIVED fields (`allow_auto_on`, `allow_on_types`, etc.) that Layer 0 already projected. When user introduces a new mode via sentences, AI adds to `MODES` dict + regenerates `home_state.py`.
 - [ ] **First base rule to implement** (Layer 0, Time Mode dimension):
 
-  **Rule 1: "Time Mode"** (5 sentences — hardcoded boundaries for MVP, move to dashboard_settings later)
+  **Rule 1: "Time Mode"** (5 sentences — pre-populated in `dashboard_settings.apartment.rule_sentences` on 2026-04-22)
   1. "between 06:00 and 10:00 time_mode is morning"
   2. "between 10:00 and 17:00 time_mode is day"
   3. "between 17:00 and 22:30 time_mode is evening"
   4. "between 22:30 and 01:00 time_mode is night"
   5. "between 01:00 and 06:00 time_mode is late_night"
 
-- [ ] Claude sentence→Python pipeline for Layer 0/1 base rules: reads `dashboard_settings.apartment.rule_sentences`, routes each sentence via keyword table, merges all Layer 0 sentences into `home_state.py`, merges Layer 1 sentences per-domain into one file per domain.
+  **Decision (2026-04-23): skip the hand-written interim.** A hand-written `home_state.py` (listens on `triggers=["heartbeat"]`, regex-parses sentences at runtime) was drafted but not committed. It relied on matching the container name `"Time Mode"` and a specific sentence regex — too brittle. Instead, **`home_state.py` will be produced by the sentence→Python generator** (next task), with Time Mode windows baked in as Python tuples at generation time. Waiting on the generator before Layer 0 goes live.
+
+- [ ] **Claude sentence→Python pipeline for Layer 0/1 base rules** — NEXT STEP. Reads `dashboard_settings.apartment.rule_sentences`, routes each sentence via the keyword table below, generates one file per layer / domain: `home_state.py` (all Layer 0 sentences merged), one per domain for Layer 1. Output: the generated `home_state.py` uses `triggers=["heartbeat"]` and has the parsed time windows baked in; the generated Layer 1 domain files use `triggers=["virtual:home_state"]` and react to mode changes. No runtime sentence parsing — all decisions frozen at generation time. See the Layer 0 draft left uncommitted in local `RULES/rules/home_state.py` for the file shape + runtime contract the generator must reproduce.
 
 ### Sentence-routing keyword table (Phase 1)
 

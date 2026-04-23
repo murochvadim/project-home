@@ -241,6 +241,7 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - Test button: honors RULE["test_event"], state_updated status for info rules
 - Current rules: Home Activity, People Home, Boiler Consumption Classify
 - External converter: `/opt/zigbee2mqtt/data/external_converters/tuya_scene_switch.js` (DPs 24/25/26)
+- **Heartbeat tick (2026-04-23):** `RuleEngine._heartbeat_loop` emits a synthetic `{device_id:'heartbeat', source:'tick'}` event once per 60s and dispatches it through the normal rule-firing path. Rules declare `triggers=["heartbeat"]` to fire on the tick — used by time-based rules (e.g. Layer 0 `home_state.py` time-mode derivation) to re-evaluate boundaries during quiet periods when no real device events fire. A `_dispatch_lock` serializes rule-firing between the paho callback thread and the heartbeat thread to keep group-active tracking + shared-state mutations consistent.
 
 ---
 

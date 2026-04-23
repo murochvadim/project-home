@@ -51,6 +51,7 @@ class RuleEngine:
         self._disabled_rules = set()    # set of rule names
         self._command_log = {}          # device_id -> [(ts, action), ...]
         self._command_log_lock = threading.Lock()  # guards _command_log read + list-slice-assignment (paho thread races)
+        self._dispatch_lock = threading.Lock()     # serializes rule-firing across paho + heartbeat threads
         self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms, last_fired}
         self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
         self._rule_originals = {}       # rule_name -> {priority, group, conditions} from file
@@ -365,81 +366,93 @@ class RuleEngine:
         if isinstance(dps, dict):
             self.state.update_device(device_id, dps, source=source)
 
-        # Find matching rules (device-specific + wildcard)
-        matching_set = set(self.trigger_index.get(device_id, []) + self.trigger_index.get('*', []))
-
         event = {
             'device_id': device_id,
             'dps': dps if isinstance(dps, dict) else {},
             'source': source,
             'ts': datetime.now(tz=TZ).isoformat(),
         }
+        self._fire_rules_for_event(event)
 
-        shared_before = self.state.shared.copy()
+    def _fire_rules_for_event(self, event):
+        """Dispatch an event (real MQTT or synthetic tick) to all matching rules.
 
-        # Clear group-active tracking for this event cycle
-        self._group_active.clear()
+        Called from the paho callback thread via on_mqtt_event(), and from the
+        heartbeat thread for synthetic ``heartbeat`` ticks. The dispatch_lock
+        serializes the two so rule evaluation, group-active tracking, and
+        shared-state mutations stay consistent."""
+        with self._dispatch_lock:
+            device_id = event['device_id']
+            source = event.get('source', '')
 
-        # Filter from pre-sorted global list so depends_on is respected even
-        # across rule subsets (a rule may depend on a rule that isn't triggered
-        # by this event — the dependency order from load time still applies).
-        sorted_matching = [r for r in self._sorted_rules if r in matching_set]
+            # Find matching rules (device-specific + wildcard)
+            matching_set = set(self.trigger_index.get(device_id, []) + self.trigger_index.get('*', []))
 
-        for rule in sorted_matching:
-            rule_name = rule.RULE['name']
-            if rule_name in self._disabled_rules:
-                continue
+            shared_before = self.state.shared.copy()
 
-            # Check conditions (time, state)
-            ok, reason = self._check_conditions(rule)
-            if not ok:
-                log.debug("Rule '%s' skipped: %s", rule_name, reason)
-                continue
+            # Clear group-active tracking for this event cycle
+            self._group_active.clear()
 
-            # Check group conflict — skip if higher priority rule in same group already acted
-            group = rule.RULE.get('group')
-            if group and group in self._group_active:
-                active = self._group_active[group]
-                log.debug("Rule '%s' skipped: group '%s' already served by '%s'",
-                          rule_name, group, active['rule'])
-                continue
+            # Filter from pre-sorted global list so depends_on is respected even
+            # across rule subsets (a rule may depend on a rule that isn't triggered
+            # by this event — the dependency order from load time still applies).
+            sorted_matching = [r for r in self._sorted_rules if r in matching_set]
 
-            rule_shared_before = self.state.shared.copy()
+            for rule in sorted_matching:
+                rule_name = rule.RULE['name']
+                if rule_name in self._disabled_rules:
+                    continue
 
-            commands = self._evaluate_rule(rule, event)
-            for cmd in commands:
-                self._dispatch_command(cmd, rule_name)
+                # Check conditions (time, state)
+                ok, reason = self._check_conditions(rule)
+                if not ok:
+                    log.debug("Rule '%s' skipped: %s", rule_name, reason)
+                    continue
 
-            # Detect what changed
-            elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0)
-            changed_keys = [k for k in self.state.shared
-                           if self.state.shared.get(k) != rule_shared_before.get(k)
-                           and not k.startswith('_')]
+                # Check group conflict — skip if higher priority rule in same group already acted
+                group = rule.RULE.get('group')
+                if group and group in self._group_active:
+                    active = self._group_active[group]
+                    log.debug("Rule '%s' skipped: group '%s' already served by '%s'",
+                              rule_name, group, active['rule'])
+                    continue
 
-            if commands:
-                result = '; '.join(f'cmd:{c.get("action","?")}:{c.get("preset_name", c.get("device_id",""))}' for c in commands)
-                self._log_rule_event(rule_name, device_id, source, 'command', result, elapsed)
-                if group:
-                    self._group_active[group] = {
-                        'rule': rule_name,
-                        'action': commands[0].get('action', ''),
-                        'ts': time.time(),
-                    }
-                stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
-                stats['last_fired'] = datetime.now(tz=TZ).isoformat()
-                self._rule_stats[rule_name] = stats
-            elif changed_keys:
-                result = '; '.join(f'{k}={self.state.shared[k]}' for k in changed_keys[:5])
-                self._log_rule_event(rule_name, device_id, source, 'state_changed', result, elapsed)
-                stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
-                stats['last_fired'] = datetime.now(tz=TZ).isoformat()
-                self._rule_stats[rule_name] = stats
+                rule_shared_before = self.state.shared.copy()
 
-        self._maybe_publish_computed()
+                commands = self._evaluate_rule(rule, event)
+                for cmd in commands:
+                    self._dispatch_command(cmd, rule_name)
 
-        # Immediate DB save if shared state changed (responsive presence updates)
-        if self.state.shared != shared_before:
-            self._save_state_tracked()
+                # Detect what changed
+                elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0)
+                changed_keys = [k for k in self.state.shared
+                               if self.state.shared.get(k) != rule_shared_before.get(k)
+                               and not k.startswith('_')]
+
+                if commands:
+                    result = '; '.join(f'cmd:{c.get("action","?")}:{c.get("preset_name", c.get("device_id",""))}' for c in commands)
+                    self._log_rule_event(rule_name, device_id, source, 'command', result, elapsed)
+                    if group:
+                        self._group_active[group] = {
+                            'rule': rule_name,
+                            'action': commands[0].get('action', ''),
+                            'ts': time.time(),
+                        }
+                    stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+                    stats['last_fired'] = datetime.now(tz=TZ).isoformat()
+                    self._rule_stats[rule_name] = stats
+                elif changed_keys:
+                    result = '; '.join(f'{k}={self.state.shared[k]}' for k in changed_keys[:5])
+                    self._log_rule_event(rule_name, device_id, source, 'state_changed', result, elapsed)
+                    stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+                    stats['last_fired'] = datetime.now(tz=TZ).isoformat()
+                    self._rule_stats[rule_name] = stats
+
+            self._maybe_publish_computed()
+
+            # Immediate DB save if shared state changed (responsive presence updates)
+            if self.state.shared != shared_before:
+                self._save_state_tracked()
 
     def _save_state_tracked(self):
         """Wrap save_shared_state with consecutive-failure tracking + alerting."""
@@ -1046,12 +1059,26 @@ class RuleEngine:
                     log.warning('Failed to sync shared state', exc_info=True)
                 last_save = now
 
-            # Write heartbeat every 60s
+            # Write heartbeat + dispatch synthetic tick event every 60s.
+            # Tick gives time-based rules (e.g. home_state.py Layer 0) a
+            # reliable re-evaluation pulse independent of real device events,
+            # so boundaries like "22:30 turn off lights" still fire when nobody
+            # is home to generate MQTT traffic.
             if now - last_heartbeat >= 60:
                 try:
                     self._write_heartbeat()
                 except Exception:
                     log.warning('Failed to write heartbeat', exc_info=True)
+                try:
+                    tick = {
+                        'device_id': 'heartbeat',
+                        'dps': {'ts': datetime.now(tz=TZ).isoformat()},
+                        'source': 'tick',
+                        'ts': datetime.now(tz=TZ).isoformat(),
+                    }
+                    self._fire_rules_for_event(tick)
+                except Exception:
+                    log.warning('Failed to dispatch heartbeat tick', exc_info=True)
                 last_heartbeat = now
 
             self._stop.wait(30)
