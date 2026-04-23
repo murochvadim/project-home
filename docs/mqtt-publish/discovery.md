@@ -101,7 +101,7 @@ Room assignments and config changes (name, room, enabled, channel_config, dps_la
                                              PATCH /api/devices/:id → DB
 ```
 
-- **Boiler Agent** (LXC 103): Does NOT read from `devices` table. Reads `raw_data` (fed by ha_to_pg cron from HA sensors). Independent data pipeline.
+- **Boiler Agent** (LXC 103): Does NOT read from `devices` table. Reads `raw_data` (fed since 2026-04-23 by `boiler-mqtt-ingest.service` subscribing directly to the WF96C controller's MQTT events; previously fed by the `ha_to_pg` cron that polled HA). Independent data pipeline.
 - **Orchestrator** (LXC 105): Reads `device_agent_log` for schedule/error checks. Does not read device state.
 - **Dashboard**: Reads `devices` and `device_events` tables directly via PostgreSQL. Writes config changes (room, name, enabled) via `PATCH /api/devices/:id`.
 

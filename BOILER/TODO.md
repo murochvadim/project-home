@@ -177,7 +177,7 @@ on observed data. The boiler agent becomes the reference implementation.
 
 ### ⏳ Still to do — remaining low-priority code issues
 
-- [ ] `ha_to_pg_updated.py` — uses `dbname` key; all other files use `database` (cosmetic inconsistency, both valid in psycopg2)
+- [x] `ha_to_pg_updated.py` — superseded 2026-04-23 by `boiler-mqtt-ingest.service` + `BOILER/agent/wf96c_ingest.py`, which subscribes to the WF96C controller's MQTT events (DPS 103/104 ÷ 10) and writes `raw_data` + `sync_signals` directly. Valve_state still polled from HA with a 30-second cache. `ha_to_pg_updated.py` kept on disk for fast rollback; cron line removed from LXC 103 crontab. The `dbname` / `database` psycopg2 inconsistency is now moot — the new script uses `dbname`.
 - [ ] `boiler_agent.py` — valve transition that happened just before the trend window opens is not captured (minor edge case, affects trend filtering only)
 - [ ] `boiler_agent.py` — `ts` column uses DB `NOW()`, `next_ts` uses agent clock — clock skew between LXC and DB host could skew overdue detection
 - [ ] `server.js` — `pm2.cmd` is Windows-only; will fail silently if dashboard is ever deployed to Linux

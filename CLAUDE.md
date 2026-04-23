@@ -207,7 +207,8 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - SSH → Windows laptop: `ssh muroc@192.168.1.128` (key auth, no password)
 - SMB → QNAP: `smbclient //192.168.1.155/<share> -U claude%<pass>` (`smbclient` installed)
 - NFS → QNAP: `/mnt/qnap-laptop` (bind-mounted from Proxmox host, always available)
-- HA token locations: `/etc/environment` (cron scripts) + `/etc/boiler-agent.env` (systemd service) — both must be updated together when token changes
+- HA token locations: `/etc/environment` (collect_weather cron) + `/etc/boiler-agent.env` (consumed by both `boiler-agent.service` AND `boiler-mqtt-ingest.service`) — both must be updated together when the token rotates, and both services restarted after updating the env file
+- **systemd services**: `device-agent` (Tuya + HA + Z2M bridge, publishes to `mur/home/device/#`), `boiler-agent` (boiler decision loop, cron-driven internally), `boiler-mqtt-ingest` (since 2026-04-23 — subscribes to WF96C MQTT events, writes raw_data; replaces the old `ha_to_pg` cron), `zigbee2mqtt`
 - **Zigbee2MQTT**: `/opt/zigbee2mqtt`, systemd service `zigbee2mqtt`, frontend on port 8080, USB dongle EFR32 (ember adapter) at `/dev/ttyUSB0`
 - Z2M connects to Mosquitto on LXC 107 (`mqtt://192.168.1.189:1883`), user `zigbee` / password in Z2M config
 
@@ -216,7 +217,7 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - Config: `/etc/mosquitto/conf.d/*.conf` — listener 1883, auth required, password file `/etc/mosquitto/passwd`, ACL file `/etc/mosquitto/acl`
 - Persistence: `/var/lib/mosquitto/mosquitto.db`
 - Log: `/var/log/mosquitto/mosquitto.log` (logrotate daily, 7 rotations)
-- **Users (ACL)**: `zigbee` (zigbee2mqtt/#), `device_agent` (mur/home/device/#), `hasp` (hasp/#), `awtrix` (awtrix/#), `rule_engine` (read all + write commands + rule-engine topics + zigbee2mqtt/+/set), `pixoo_service` (pixoo topics), `boiler_agent` (write `mur/home/device/boiler/#` — publishes consumption events from LXC 103)
+- **Users (ACL)**: `zigbee` (zigbee2mqtt/#), `device_agent` (mur/home/device/#), `hasp` (hasp/#), `awtrix` (awtrix/#), `rule_engine` (read all + write commands + rule-engine topics + zigbee2mqtt/+/set), `pixoo_service` (pixoo topics), `boiler_agent` (write `mur/home/device/boiler/#` for consumption events AND read `mur/home/device/116508838cce4eef9273/#` so `boiler-mqtt-ingest.service` on LXC 103 can consume WF96C temperature events — added 2026-04-23)
 - **Z-Wave devices** (Aeotec sensors, Wallmotes) stay on SmartThings hub → HA WebSocket → device agent. Cannot go local without a Z-Wave USB dongle.
 - **Ring devices** (Doorbell, Chime) connected via HA Ring integration → HA WebSocket → device agent. Events (ding/motion), battery, chime control, volume work. Camera snapshots require Ring Protect subscription (not active). Auth token + python-ring-doorbell venv at `/opt/ring-snapshot/` on LXC 103 for future use.
 

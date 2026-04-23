@@ -165,7 +165,7 @@ Every agent in the `agents` table must follow:
 | `agent_boiler_data` | 365 | ✓ | 24 | Agent decision log |
 | `raw_weather` | 60 | ✓ | 24 | Hourly weather readings |
 | `raw_weather_daily` | 60 | ✓ | 24 | Daily weather forecasts |
-| `sync_signals` | 7 | ✓ | 24 | ha_to_pg signals |
+| `sync_signals` | 7 | ✓ | 24 | raw_data producer signals for boiler agent wake-up (written by `wf96c_ingest` since 2026-04-23) |
 | `orchestrator_log` | 30 | ✓ | 24 | Main agent run logs |
 | `system_alerts` | 90 | ✓ | 24 | Cross-agent alerts |
 | `analyzer_log` | 30 | ✓ | 24 | Analyzer run log |
@@ -222,16 +222,16 @@ ssh root@192.168.1.187 "systemctl daemon-reload && systemctl enable main-agent.t
 
 ## Known Incidents & Runbooks
 
-### HA token invalidated (2026-04-06)
-**Symptom:** `weather_stale` + `data_stale` alerts raised; `collect_weather` and `ha_to_pg` both fail with HTTP 401 from 192.168.1.110:8123.
+### HA token invalidated (2026-04-06; runbook refreshed 2026-04-23)
+**Symptom:** `weather_stale` alert raised; `collect_weather` cron fails with HTTP 401 from 192.168.1.110:8123. `boiler-mqtt-ingest` logs `HA valve fetch failed: 401` (temps keep flowing from MQTT, but valve_state becomes stale after 30s cache expiry). Boiler decisions can drift if the cached valve state no longer matches reality.
 **Cause:** HA (LXC 101) restarted with a wiped token database (crash/restore from backup). Long-lived tokens are stored in HA's database — a DB reset invalidates all of them.
 **Fix:**
 1. **Test old token first**: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <old>" http://192.168.1.110:8123/api/` — if `200`, token still valid, just restart the failing service. If `401`, proceed.
 2. HA UI → profile → Long-Lived Access Tokens → create new token → **save to password manager immediately**
 3. Update `BOILER/dashboard/.env` → `HA_TOKEN=<new>` — restart: `cd /c/Users/muroc/project_home/BOILER/dashboard && pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
 4. Update `/etc/environment` on LXC 100 → `HA_TOKEN=<new>` — restart tv_control.py
-5. Update `/etc/environment` on LXC 103 → `HA_TOKEN=<new>` — no restart needed
-6. Update `/etc/boiler-agent.env` on LXC 103 → `HA_TOKEN=<new>` — restart: `systemctl restart boiler-agent.service`
+5. Update `/etc/environment` on LXC 103 → `HA_TOKEN=<new>` — used only by `collect_weather` cron (no restart needed; picks up the new value on next 60-min tick)
+6. Update `/etc/boiler-agent.env` on LXC 103 → `HA_TOKEN=<new>` — restart **both** services that consume this env file: `systemctl restart boiler-agent.service boiler-mqtt-ingest.service`
 7. Update MCP config → `cline_mcp_settings.json` → `HA_TOKEN` env var — reload VS Code
 8. Run collect_weather manually on LXC 103
 9. Trigger orchestrator: `ssh root@192.168.1.187 "systemctl start main-agent-quick.service"`
@@ -239,7 +239,7 @@ ssh root@192.168.1.187 "systemctl daemon-reload && systemctl enable main-agent.t
 **All 5 token locations:**
 - `BOILER/dashboard/.env` — restart: `cd /c/Users/muroc/project_home/BOILER/dashboard && pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
 - `/etc/environment` on LXC 100 (tv_control.py) — restart: kill + nohup tv_control.py
-- `/etc/environment` on LXC 103 (collect_weather, ha_to_pg) — no restart needed
-- `/etc/boiler-agent.env` on LXC 103 (boiler agent systemd) — restart: `systemctl restart boiler-agent.service`
+- `/etc/environment` on LXC 103 (collect_weather only — `ha_to_pg` cron was retired 2026-04-23 in favor of `boiler-mqtt-ingest`) — no restart needed
+- `/etc/boiler-agent.env` on LXC 103 (read by `boiler-agent.service` AND `boiler-mqtt-ingest.service`) — restart **both**: `systemctl restart boiler-agent.service boiler-mqtt-ingest.service`
 - `cline_mcp_settings.json` (MCP HA server) — restart: VS Code reload window
 **Prevention:** A dedicated `ha_down` TCP check on 192.168.1.110:8123 would give a clearer alert than waiting for `data_stale`/`weather_stale` — not yet implemented.

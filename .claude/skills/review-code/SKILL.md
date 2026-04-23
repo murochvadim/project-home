@@ -13,7 +13,7 @@ If argument contains a LXC number or name, find all related code files in the lo
 
 LXC → local code mapping:
 - LXC 100 / media → BOILER/dashboard/server.js media endpoints + any scripts/media* files
-- LXC 103 / agents → agent scripts in the repo (boiler agent, ha_to_pg, collect_weather, ha_api_patched, tuya_adapter_patched)
+- LXC 103 / agents → agent scripts in the repo (boiler agent, wf96c_ingest, collect_weather, ha_api_patched, tuya_adapter_patched). Note: `ha_to_pg_updated.py` still on disk but cron removed 2026-04-23 — only review if user explicitly asks about the legacy fallback path.
 - LXC 104 / timers → any cron/timer/scheduler scripts
 - LXC 105 / orchestrator → orchestrator scripts + RULES/
 - dashboard → BOILER/dashboard/server.js + public/js/*.js + public/*.html

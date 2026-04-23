@@ -1711,7 +1711,7 @@ async function ensureSchema() {
       ('boiler_consumptions', NULL, false, 24, 'Hot water consumption events — keep forever'),
       ('orchestrator_log',   30,   true,  24, 'Main agent run logs and alerts'),
       ('system_alerts',      90,   true,  24, 'Cross-agent system alerts from orchestrator'),
-      ('sync_signals',        7,   true,  24, 'ha_to_pg data-ready signals for boiler agent wake-up'),
+      ('sync_signals',        7,   true,  24, 'raw_data producer wake-up signals for boiler agent (source=wf96c_ingest since 2026-04-23; was ha_to_pg)'),
       ('voice_token_log',    365,  true,  24, 'Voice pipeline Claude API token usage and cost'),
       ('backup_log',          90,  true,  24, 'Windows backup run history'),
       ('backup_jobs',        NULL, false, 24, 'Backup job definitions — keep forever'),
