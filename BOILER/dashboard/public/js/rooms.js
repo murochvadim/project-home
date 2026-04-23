@@ -1621,23 +1621,32 @@
     const devWrap = document.getElementById('apt-edit-dev-wrap');
     devWrap.style.display = isDev ? 'inline' : 'none';
     if (isDev) {
+      const isDoor = placement && DEV_DOOR_TYPES.has(placement.device_type);
       document.getElementById('apt-edit-dev-info').textContent =
         `${placement.device_type || 'device'} · `;
-      document.getElementById('apt-edit-dev-rot').value = placement.rotation || 0;
+      // Cone geometry + rotation + wall-barrier only meaningful for
+      // presence/motion sensors. Door sensors show only Enabled + Label.
+      const coneWrap = document.getElementById('apt-edit-dev-cone-wrap');
+      const wbWrap   = document.getElementById('apt-edit-dev-wb-wrap');
+      if (coneWrap) coneWrap.style.display = isDoor ? 'none' : '';
+      if (wbWrap)   wbWrap.style.display   = isDoor ? 'none' : 'inline-flex';
       const pr = placement.params || {};
-      // Backward-compat: fall back to legacy symmetric fields.
-      const legacyAng = Number(pr.beam_angle_deg);
-      const legacyLen = Number(pr.beam_length_m);
-      const angL = pr.beam_angle_left_deg  != null ? pr.beam_angle_left_deg  : (isFinite(legacyAng) ? +(legacyAng/2).toFixed(1) : 45);
-      const angR = pr.beam_angle_right_deg != null ? pr.beam_angle_right_deg : (isFinite(legacyAng) ? +(legacyAng/2).toFixed(1) : 45);
-      const lenL = pr.beam_length_left_m   != null ? pr.beam_length_left_m   : (isFinite(legacyLen) ? legacyLen : 4);
-      const lenR = pr.beam_length_right_m  != null ? pr.beam_length_right_m  : (isFinite(legacyLen) ? legacyLen : 4);
-      document.getElementById('apt-edit-dev-angle-l').value = angL;
-      document.getElementById('apt-edit-dev-angle-r').value = angR;
-      document.getElementById('apt-edit-dev-length-l').value = lenL;
-      document.getElementById('apt-edit-dev-length-r').value = lenR;
-      document.getElementById('apt-edit-dev-hold').value = pr.hold_s ?? 120;
-      document.getElementById('apt-edit-dev-wallbarrier').checked = !!pr.wall_barrier;
+      if (!isDoor) {
+        document.getElementById('apt-edit-dev-rot').value = placement.rotation || 0;
+        // Backward-compat: fall back to legacy symmetric fields.
+        const legacyAng = Number(pr.beam_angle_deg);
+        const legacyLen = Number(pr.beam_length_m);
+        const angL = pr.beam_angle_left_deg  != null ? pr.beam_angle_left_deg  : (isFinite(legacyAng) ? +(legacyAng/2).toFixed(1) : 45);
+        const angR = pr.beam_angle_right_deg != null ? pr.beam_angle_right_deg : (isFinite(legacyAng) ? +(legacyAng/2).toFixed(1) : 45);
+        const lenL = pr.beam_length_left_m   != null ? pr.beam_length_left_m   : (isFinite(legacyLen) ? legacyLen : 4);
+        const lenR = pr.beam_length_right_m  != null ? pr.beam_length_right_m  : (isFinite(legacyLen) ? legacyLen : 4);
+        document.getElementById('apt-edit-dev-angle-l').value = angL;
+        document.getElementById('apt-edit-dev-angle-r').value = angR;
+        document.getElementById('apt-edit-dev-length-l').value = lenL;
+        document.getElementById('apt-edit-dev-length-r').value = lenR;
+        document.getElementById('apt-edit-dev-hold').value = pr.hold_s ?? 120;
+        document.getElementById('apt-edit-dev-wallbarrier').checked = !!pr.wall_barrier;
+      }
       // 'enabled' defaults to true when absent — only false if explicitly set.
       document.getElementById('apt-edit-dev-enabled').checked = pr.enabled !== false;
       document.getElementById('apt-edit-dev-label').value = placement.label || '';
@@ -1827,26 +1836,38 @@
         return;
       }
       if (placement) {
-        const rot = parseInt(document.getElementById('apt-edit-dev-rot').value, 10) || 0;
-        const angL = parseFloat(document.getElementById('apt-edit-dev-angle-l').value);
-        const angR = parseFloat(document.getElementById('apt-edit-dev-angle-r').value);
-        const lenL = parseFloat(document.getElementById('apt-edit-dev-length-l').value);
-        const lenR = parseFloat(document.getElementById('apt-edit-dev-length-r').value);
-        const hold = parseFloat(document.getElementById('apt-edit-dev-hold').value);
-        const wallBarrier = !!document.getElementById('apt-edit-dev-wallbarrier').checked;
+        const isDoor = DEV_DOOR_TYPES.has(placement.device_type);
         const enabled = !!document.getElementById('apt-edit-dev-enabled').checked;
         const lbl = (document.getElementById('apt-edit-dev-label').value || '').trim() || null;
-        // Build new params; drop legacy symmetric keys so they don't shadow.
-        const params = { ...(placement.params || {}) };
-        delete params.beam_angle_deg;
-        delete params.beam_length_m;
-        if (isFinite(angL) && angL >= 0) params.beam_angle_left_deg  = angL;
-        if (isFinite(angR) && angR >= 0) params.beam_angle_right_deg = angR;
-        if (isFinite(lenL) && lenL > 0)  params.beam_length_left_m   = lenL;
-        if (isFinite(lenR) && lenR > 0)  params.beam_length_right_m  = lenR;
-        if (isFinite(hold) && hold >= 0) params.hold_s = hold;
-        params.wall_barrier = wallBarrier;
-        params.enabled = enabled;
+        // Door sensors: only label + enabled are meaningful. Don't pollute
+        // params with cone geometry that the render path ignores anyway.
+        // Rotation preserved from the existing placement (drag-to-rotate still
+        // works via pointer handlers; the hidden Rot dropdown isn't read).
+        let params, rot;
+        if (isDoor) {
+          params = { ...(placement.params || {}) };
+          params.enabled = enabled;
+          rot = placement.rotation || 0;
+        } else {
+          rot = parseInt(document.getElementById('apt-edit-dev-rot').value, 10) || 0;
+          const angL = parseFloat(document.getElementById('apt-edit-dev-angle-l').value);
+          const angR = parseFloat(document.getElementById('apt-edit-dev-angle-r').value);
+          const lenL = parseFloat(document.getElementById('apt-edit-dev-length-l').value);
+          const lenR = parseFloat(document.getElementById('apt-edit-dev-length-r').value);
+          const hold = parseFloat(document.getElementById('apt-edit-dev-hold').value);
+          const wallBarrier = !!document.getElementById('apt-edit-dev-wallbarrier').checked;
+          // Build new params; drop legacy symmetric keys so they don't shadow.
+          params = { ...(placement.params || {}) };
+          delete params.beam_angle_deg;
+          delete params.beam_length_m;
+          if (isFinite(angL) && angL >= 0) params.beam_angle_left_deg  = angL;
+          if (isFinite(angR) && angR >= 0) params.beam_angle_right_deg = angR;
+          if (isFinite(lenL) && lenL > 0)  params.beam_length_left_m   = lenL;
+          if (isFinite(lenR) && lenR > 0)  params.beam_length_right_m  = lenR;
+          if (isFinite(hold) && hold >= 0) params.hold_s = hold;
+          params.wall_barrier = wallBarrier;
+          params.enabled = enabled;
+        }
         const prev_fields = {
           rotation: placement.rotation,
           params: { ...(placement.params || {}) },
@@ -2886,6 +2907,24 @@
   const DEV_STATE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold
   const DEV_COLORS = { active: '#d83030', clear: '#27ae60', offline: '#888', disabled: '#e8b43a' };
   const DEV_PRESENCE_TYPES = new Set(['presence', 'motion']);
+  // V9 — door sensors are placeable alongside presence/motion. They render as
+  // a small square on the wall (no cone), red when open, grey when closed.
+  const DEV_DOOR_TYPES = new Set(['door_sensor']);
+  const DEV_PLACEABLE_TYPES = new Set([...DEV_PRESENCE_TYPES, ...DEV_DOOR_TYPES]);
+
+  // true = open, false = closed, null = unknown (offline or odd payload).
+  // Aeotec Z-wave door sensors report `door: true/false` (true = open).
+  // Z2M uses `contact: true/false` (false = open). Tuya uses `"1": bool`.
+  function _doorSensorIsOpen(p) {
+    const ls = p.last_state || {};
+    if (ls.door === true) return true;
+    if (ls.door === false) return false;
+    if (ls.contact === false) return true;
+    if (ls.contact === true) return false;
+    if (ls['1'] === true) return true;
+    if (ls['1'] === false) return false;
+    return null;
+  }
 
   // Line-segment intersection in room-local meter coords. Returns true if
   // segment (a,b) crosses segment (c,d). Ignores pure-touch endpoint cases.
@@ -3109,6 +3148,54 @@
         continue;
       }
 
+      // V9 Door sensors — small square icon, red when open, grey when closed.
+      // Same drag/select/edit handles as other placements.
+      if (DEV_DOOR_TYPES.has(p.device_type)) {
+        const isEnabled = (p.params || {}).enabled !== false;
+        const open = _doorSensorIsOpen(p);
+        const fill = !isEnabled ? DEV_COLORS.disabled
+                   : open === true  ? DEV_COLORS.active   // red
+                   : open === false ? DEV_COLORS.offline  // grey
+                                    : DEV_COLORS.offline; // unknown → grey
+        const sideM = 0.18;
+        const half = sideM / 2;
+        const rotRad = (Math.PI / 180) * (p.rotation || 0);
+        const rot = (ox, oy) => ({
+          x: cx + mToPx(ox) * Math.cos(rotRad) - mToPx(oy) * Math.sin(rotRad),
+          y: cy + mToPx(ox) * Math.sin(rotRad) + mToPx(oy) * Math.cos(rotRad),
+        });
+        const a = rot(-half, -half), b = rot( half, -half);
+        const c = rot( half,  half), d = rot(-half,  half);
+        const sq = document.createElementNS(NS, 'polygon');
+        sq.setAttribute('points', `${a.x},${a.y} ${b.x},${b.y} ${c.x},${c.y} ${d.x},${d.y}`);
+        sq.setAttribute('fill', fill);
+        sq.setAttribute('stroke', '#222');
+        sq.setAttribute('stroke-width', p.id === selId ? 2 : 1);
+        sq.setAttribute('style', 'cursor:pointer;');
+        sq.dataset.devPlacementId = p.id;
+        g.appendChild(sq);
+
+        // Label — same UX as presence sensors (drag to move, right-click hide).
+        const lblText = (p.label && p.label.trim()) || p.device_name || p.device_id;
+        const hidden = !!p.label_hidden;
+        if (lblText && (!hidden || _showHiddenLabels)) {
+          const lo = p.label_offset || {};
+          const lbl = document.createElementNS(NS, 'text');
+          lbl.setAttribute('x', mToPx(p.x + (lo.x || 0)));
+          lbl.setAttribute('y', mToPx(p.y + (lo.y || 0)) - mToPx(0.28));
+          lbl.setAttribute('font-size', '9');
+          lbl.setAttribute('fill', '#333');
+          lbl.setAttribute('text-anchor', 'middle');
+          lbl.setAttribute('opacity', hidden ? '0.3' : (isEnabled ? '0.85' : '0.5'));
+          lbl.setAttribute('style', 'cursor:move;user-select:none;pointer-events:all;');
+          lbl.dataset.devLabelId = p.id;
+          lbl.dataset.devLabelSlug = slug;
+          lbl.textContent = lblText;
+          g.appendChild(lbl);
+        }
+        continue;
+      }
+
       // 'enabled' defaults to true when absent. Disabled placements: yellow
       // triangle, no cone, no dots, dim label — AI also sees DISABLED in scene.
       const isEnabled = (p.params || {}).enabled !== false;
@@ -3271,12 +3358,12 @@
     }
     const placedIds = new Set(roomPlacements.map(p => p.device_id));
     const candidates = (_allDevices || []).filter(d =>
-      DEV_PRESENCE_TYPES.has(d.device_type) &&
+      DEV_PLACEABLE_TYPES.has(d.device_type) &&
       d.enabled !== false &&
       !placedIds.has(d.id)
     );
     if (!candidates.length) {
-      setStatus('No unplaced presence/motion devices available.');
+      setStatus('No unplaced presence / motion / door sensors available.');
       return;
     }
     const pop = document.getElementById('apt-device-picker');
@@ -3305,11 +3392,16 @@
     const sel = document.getElementById('apt-device-picker-sel');
     const device_id = sel.value;
     if (!device_id) return aptDevicePickerCancel();
+    // Default params depend on device type. Presence/motion get the cone
+    // geometry; door sensors have no cone — empty params + `enabled:true`
+    // (implicit) so the render branch picks the square form.
+    const pickedDev = (_allDevices || []).find(d => d.id === device_id) || {};
+    const isDoor = DEV_DOOR_TYPES.has(pickedDev.device_type);
     const body = {
       slug, device_id,
       x: x_m, y: y_m,
       rotation: 0,
-      params: { beam_angle_deg: 90, beam_length_m: 4.0, hold_s: 120 },
+      params: isDoor ? {} : { beam_angle_deg: 90, beam_length_m: 4.0, hold_s: 120 },
     };
     try {
       const r = await fetch('/api/room-device-placements', {
