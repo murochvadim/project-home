@@ -51,7 +51,11 @@ class RuleEngine:
         self._disabled_rules = set()    # set of rule names
         self._command_log = {}          # device_id -> [(ts, action), ...]
         self._command_log_lock = threading.Lock()  # guards _command_log read + list-slice-assignment (paho thread races)
-        self._dispatch_lock = threading.Lock()     # serializes rule-firing across paho + heartbeat threads
+        # Serializes rule-firing, disable/enable commands, hot-reload, and test
+        # runs across the paho callback thread and the heartbeat thread. RLock
+        # (reentrant) so a nested acquire from the same thread is safe — cheap
+        # insurance against future refactors.
+        self._dispatch_lock = threading.RLock()
         self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms, last_fired}
         self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
         self._rule_originals = {}       # rule_name -> {priority, group, conditions} from file
@@ -720,45 +724,54 @@ class RuleEngine:
     # ------------------------------------------------------------------
 
     def _disable_rule(self, rule_name):
-        """Disable a rule by name."""
-        self._disabled_rules.add(rule_name)
-        self.state.shared['_disabled_rules'] = list(self._disabled_rules)
-        log.info("Rule '%s' DISABLED", rule_name)
+        """Disable a rule by name. Locked so it can't race with rule dispatch."""
+        with self._dispatch_lock:
+            self._disabled_rules.add(rule_name)
+            self.state.shared['_disabled_rules'] = list(self._disabled_rules)
+            log.info("Rule '%s' DISABLED", rule_name)
 
     def _enable_rule(self, rule_name):
-        """Enable a previously disabled rule."""
-        self._disabled_rules.discard(rule_name)
-        self.state.shared['_disabled_rules'] = list(self._disabled_rules)
-        log.info("Rule '%s' ENABLED", rule_name)
+        """Enable a previously disabled rule. Locked so it can't race with dispatch."""
+        with self._dispatch_lock:
+            self._disabled_rules.discard(rule_name)
+            self.state.shared['_disabled_rules'] = list(self._disabled_rules)
+            log.info("Rule '%s' ENABLED", rule_name)
 
     def _reload_rules(self):
         """Hot-reload rules from disk without restarting.
-        Preserves stats for rules that still exist. Atomic index swap."""
-        old_count = len(self.rules)
-        old_stats = dict(self._rule_stats)
-        existing_names = {m.RULE['name'] for m in self.rules}
+        Preserves stats for rules that still exist. Locked so the heartbeat
+        thread can't iterate self._sorted_rules mid-rebuild."""
+        with self._dispatch_lock:
+            old_count = len(self.rules)
+            old_stats = dict(self._rule_stats)
+            existing_names = {m.RULE['name'] for m in self.rules}
 
-        # Load into temporary list
-        self.rules = []
-        self.load_rules()
-        new_names = {m.RULE['name'] for m in self.rules}
+            # Load into temporary list
+            self.rules = []
+            self.load_rules()
+            new_names = {m.RULE['name'] for m in self.rules}
 
-        # Restore stats for rules that still exist
-        for name, stats in old_stats.items():
-            if name in new_names and name not in self._rule_stats:
-                self._rule_stats[name] = stats
+            # Restore stats for rules that still exist
+            for name, stats in old_stats.items():
+                if name in new_names and name not in self._rule_stats:
+                    self._rule_stats[name] = stats
 
-        # Atomic index rebuild
-        self._index_rules()
+            # Atomic index rebuild
+            self._index_rules()
 
-        added = new_names - existing_names
-        removed = existing_names - new_names
-        log.info("Rules reloaded: %d -> %d (added: %s, removed: %s)",
-                 old_count, len(self.rules),
-                 list(added) if added else 'none',
-                 list(removed) if removed else 'none')
+            added = new_names - existing_names
+            removed = existing_names - new_names
+            log.info("Rules reloaded: %d -> %d (added: %s, removed: %s)",
+                     old_count, len(self.rules),
+                     list(added) if added else 'none',
+                     list(removed) if removed else 'none')
 
     def _test_rule(self, payload):
+        """Locked wrapper so Test/Force runs can't race with dispatch / reload."""
+        with self._dispatch_lock:
+            self._test_rule_impl(payload)
+
+    def _test_rule_impl(self, payload):
         """Test a rule. Two modes:
         - force=false (default): dry-run, shows what state looks like, no side effects
         - force=true: resets cooldown timers, runs evaluate, dispatches commands for real
