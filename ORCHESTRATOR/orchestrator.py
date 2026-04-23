@@ -5,7 +5,7 @@ Runs hourly. For each registered agent:
   1. Checks if the agent is running on schedule (next_ts overdue?)
   2. Checks for recent hard errors (ERR: in error column)
   3. Checks systemd service status via SSH
-  4. Checks ha_to_pg data freshness (raw_data age)
+  4. Checks boiler temperature data freshness (raw_data age — written by wf96c_ingest since 2026-04-23)
   5. Runs retention cleanup if due
 Writes problems to system_alerts (and resolves them when fixed).
 Logs all activity to orchestrator_log.
@@ -29,7 +29,7 @@ DB_PASS     = os.environ.get('DB_PASS', '')
 
 OVERDUE_GRACE_MIN    = 5
 ERROR_LOOKBACK_ROWS  = 10
-DATA_STALE_MIN       = 15   # ha_to_pg: raw_data older than this = stale (ha_to_pg runs every 5 min, 15 min gives 2 full cycles of margin)
+DATA_STALE_MIN       = 15   # raw_data older than this = stale. Written by wf96c_ingest (LXC 103) which is event-driven from the WF96C MQTT publisher — expect a fresh row every few seconds. 15 min threshold catches genuine outages (WF96C offline, MQTT broker down, LXC 103 down) without false-positiving on brief temp-stable gaps.
 WEATHER_STALE_MIN    = 65   # collect_weather: raw_weather older than this = stale (runs every 60 min, 65 min gives margin)
 
 # Table/column names allowed in dynamic SQL — prevents injection if DB is compromised
@@ -244,21 +244,21 @@ def check_weather_freshness(cur):
 
 
 def check_data_freshness(cur):
-    """Check ha_to_pg: is raw_data recent enough?"""
+    """Check boiler temperature data: is raw_data recent enough?"""
     try:
         cur.execute("SELECT MAX(ts) AS last_ts FROM raw_data")
         row = cur.fetchone()
         last_ts = row['last_ts'] if row else None
         if not last_ts:
             raise_alert(cur, 'data_stale', 'boiler', 'critical',
-                        'raw_data table is empty — ha_to_pg may never have run')
+                        'raw_data table is empty — boiler temperature ingest (wf96c_ingest) may have never run')
             return
         if last_ts.tzinfo is None:
             last_ts = last_ts.replace(tzinfo=timezone.utc)
         age_min = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60.0
         if age_min > DATA_STALE_MIN:
             raise_alert(cur, 'data_stale', 'boiler', 'error',
-                        f"raw_data is {age_min:.0f} min old — ha_to_pg may be failing (threshold: {DATA_STALE_MIN} min)")
+                        f"raw_data is {age_min:.0f} min old — wf96c_ingest (LXC 103) may be failing, or WF96C / MQTT broker may be down (threshold: {DATA_STALE_MIN} min)")
         else:
             resolve_alert(cur, 'data_stale', 'boiler')
     except Exception as e:

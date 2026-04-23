@@ -22,14 +22,17 @@
 - `agent_boiler_data`: ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision, error, next_ts, version
 - `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, probe_max_boiler_temp, probe_max_delta, consumption_temp_delta, consumption_time_delta
 - `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms — hot water drop events detected by agent each run; `cause` and `likely_rooms` filled asynchronously by rule engine using presence + valve context; `cause` ∈ {`human`,`panel`,`thermal`,`boiler`,`unknown`}; deduplicated by start_ts
-- `sync_signals`: id, ts, source — written by ha_to_pg after each raw_data insert; boiler agent polls every 30s and wakes immediately on new row
+- `sync_signals`: id, ts, source — written by the raw_data producer after each insert (`source='wf96c_ingest'` since 2026-04-23, previously `'ha_to_pg'`); boiler agent polls every 30s and wakes immediately on new row
 - `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 60 min
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
 ## Data Flow
-- **raw_data**: LXC 103 script `/usr/local/bin/ha_to_pg` runs every 5 min via cron, fetches from HA; after each successful insert it also writes a row to `sync_signals` (same transaction) to wake the boiler agent early
-  - **Source of truth in repo**: `BOILER/agent/ha_to_pg_updated.py` — any change must be re-deployed to LXC 103 via `scp` + `sed -i 's/\r//g'` (strip Windows CRLF) + `chmod +x`
-  - **NULL guard (2026-04-14)**: if both `boiler_temp` AND `panel_temp` return None/unknown/unavailable from HA, the script skips both the `raw_data` insert AND the `sync_signals` write → no polluted row, no agent ERR, no cascade alert. If only ONE sensor is NULL, it inserts with a warning. Prevents transient HA flakiness from tripping `agent_hard_errors` system alerts.
+- **raw_data** (since 2026-04-23): event-driven from WF96C controller. LXC 103 systemd service `boiler-mqtt-ingest.service` runs `/opt/boiler-mqtt-ingest/wf96c_ingest.py`, which subscribes to MQTT topic `mur/home/device/116508838cce4eef9273/event` on LXC 107 as user `boiler_agent`. On each event it decodes DPS 103 ÷ 10 → `boiler_temp` (°C) and DPS 104 ÷ 10 → `panel_temp` (°C), reads `valve_state` from HA entity `switch.boiler_valve_switch_switch_1` with a 30-second cache, and inserts one row into `raw_data` + one row into `sync_signals (source='wf96c_ingest')` in a single transaction. Cadence: every few seconds (~1 row/15s at steady temps, faster during transitions — ~7,600 raw_data rows/day).
+  - **Source of truth in repo**: `BOILER/agent/wf96c_ingest.py`
+  - **Systemd unit in repo**: `scripts/boiler-mqtt-ingest.service` (uses `/etc/boiler-agent.env` for `HA_TOKEN` + `MQTT_USER` + `MQTT_PASS`; `DB_PASS` not needed — Postgres on LXC 102 trusts the `192.168.1.0/24` subnet per `pg_hba.conf`).
+  - **MQTT ACL note**: `boiler_agent` user on LXC 107 has `topic read mur/home/device/116508838cce4eef9273/#` in addition to its existing publish rights on `mur/home/device/boiler/#`.
+  - **NULL guard**: if both `boiler_temp` AND `panel_temp` are still `None` (no WF96C reading yet at startup), skip both inserts — same rule as the old `ha_to_pg`.
+  - **Legacy (≤ 2026-04-23)**: previously LXC 103 cron `/usr/local/bin/ha_to_pg` (repo `BOILER/agent/ha_to_pg_updated.py`) polled HA every 5 min for boiler_temp + panel_temp + valve_state. The cron line was removed 2026-04-23; script kept on disk for fast rollback. Valve commands still flow through HA; only the *reading* path changed.
 - **raw_weather + raw_weather_daily**: LXC 103 script `/opt/Agents-agent/project/BOILER/agent/collect_weather.py` runs every 60 min via cron (`0 * * * *`)
   - Hourly: fetches `weather.ims_weather` + balcony sensors (`sensor.balcony_motion_*`) from HA → inserts into `raw_weather`
   - Daily at 06:00: calls `weather.get_forecasts?return_response` → inserts 7-day forecast into `raw_weather_daily`
@@ -88,7 +91,7 @@
 # Agent Operational Inputs
 
 ## 1. Agent will run every XX min according to what is set in Boiler Agent settings in UI.
-- Between runs the agent polls `sync_signals` every 30 seconds and wakes immediately when ha_to_pg writes a new row (ensuring each decision uses the freshest possible data).
+- Between runs the agent polls `sync_signals` every 30 seconds and wakes immediately when the raw_data producer (`wf96c_ingest` since 2026-04-23) writes a new row (ensuring each decision uses the freshest possible data).
 - Maximum sleep is still `run_interval_min` — `sync_signals` only shortens the wait, never extends it.
 
 ## 2. Every Run of Agent will ended with decision to on/off the valve or no action.

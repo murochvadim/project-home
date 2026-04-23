@@ -1,0 +1,21 @@
+[Unit]
+Description=WF96C → raw_data MQTT ingest (replaces ha_to_pg for temps)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Reuse the existing boiler-agent env file (HA_TOKEN + MQTT_USER=boiler_agent
+# + MQTT_PASS). DB_PASS is not required — postgres on LXC 102 trusts the
+# 192.168.1.0/24 subnet per pg_hba.conf. MQTT_HOST / MQTT_PORT / HA_URL
+# default inside wf96c_ingest.py.
+EnvironmentFile=/etc/boiler-agent.env
+ExecStart=/opt/Agents-agent/venv/bin/python3 /opt/boiler-mqtt-ingest/wf96c_ingest.py
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

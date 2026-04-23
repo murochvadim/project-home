@@ -273,8 +273,8 @@ Each project has its own CLAUDE.md with full details:
     - `boiler_agent` — boiler service on LXC 103 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
     - `media_agents` — analyzer, player, ingest on LXC 100 (via `system_alerts`: shown as 3 inline dots)
     - `voice_agent` — whisper-http on LXC 106 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
-  - **Scripts — Cron** (direct SSH checks):
-    - `ha_to_pg` — age of last `raw_data` row ≤ 15 min (DB query)
+  - **Scripts / Ingest** (direct DB/SSH checks):
+    - `wf96c_ingest` (dashboard key still `ha_to_pg` for back-compat) — age of last `raw_data` row ≤ 15 min (DB query). Source switched from HA-polling cron to event-driven MQTT consumer on 2026-04-23; see [BOILER/CLAUDE.md](BOILER/CLAUDE.md#data-flow).
     - `collect_weather` — age of last `raw_weather` row ≤ 65 min (DB query)
     - `auto_scan` — age of `/var/log/auto_scan.log` on LXC 100 ≤ 120 s (SSH)
   - **Data freshness** (DB queries):
