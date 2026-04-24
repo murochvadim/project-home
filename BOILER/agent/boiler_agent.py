@@ -825,6 +825,12 @@ def wait_for_next_run(interval_min: int) -> int:
     poll_sec = 300
     try:
         conn = psycopg2.connect(**DB_CONFIG)
+        # Autocommit so SELECTs during the wait loop never hold an open
+        # transaction. Without this, each SELECT implicitly starts a
+        # transaction that stays open for the full interval (up to 5 min),
+        # holding a lock on sync_signals/agent_settings and blocking any
+        # concurrent DDL (e.g., dashboard ensureSchema ALTER TABLE calls).
+        conn.autocommit = True
         with conn.cursor() as cur:
             try:
                 cur.execute('SELECT sync_poll_interval_sec FROM agent_settings LIMIT 1')
