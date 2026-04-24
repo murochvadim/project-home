@@ -47,10 +47,27 @@ If no argument given, ask which LXC or component to review.
    - "consecutive_failures never resets" — check if reset is inside the try block on success path
    - "inserts incomplete data" — check if this is intentional with explicit logging
    - "no token validation" — check if validation happens at a different point in the file
-   
+
+   **Benign patterns — DO NOT report even if theoretically unsafe:**
+   - **Dict / list mutations under CPython GIL** where every single op is atomic AND the write is idempotent (multiple writers produce identical data). Example: cache `{"data": None, "ts": 0}` updated from multiple threads, each fetching the same DB row. The race exists but is benign.
+   - **"Security concern" that doesn't match the deployment threat model.** If the code runs on a home LAN behind NAT and the attacker would need local network access, that's not a high-severity finding. State the threat model explicitly and match severity to realistic risk.
+   - **State machines that self-heal within 1-2 evaluation ticks** after an edge case. E.g., a rule that mis-counts once after an engine restart but corrects on the next event. Note it in comments but don't flag as a bug.
+   - **"Defense-in-depth suggestions"** — the code could be more robust but the current behavior is correct. These belong in documentation, not a bug report.
+
    **If you're not 100% sure the bug is real after reading the surrounding code, DO NOT report it.**
 
+4b. **Second pass — drop anything without an observable failure.**
+    For each surviving candidate, write a one-sentence scenario describing what the user would actually notice. If the sentence is "nothing observable" or "only theoretically under rare conditions" — drop the finding. The goal is a report the user can act on, not a catalog of hypotheticals.
+
 5. Report ONLY verified findings as a markdown table:
-   File | Line | Issue | Severity (critical/high/medium/low) | Suggested Fix
+   File | Line | Issue | Severity | Concrete failure scenario | Suggested Fix
+
+   **Severity calibration (be strict):**
+   - **critical** — data loss, silent data corruption, service unavailability, or security breach reachable under the deployment's real threat model.
+   - **high** — reproducible incorrect user-visible behavior; violates a documented invariant; data inconsistency that requires manual repair.
+   - **medium** — happens occasionally under realistic conditions, has observable bad behavior but the system recovers without intervention.
+   - **low** — observable behavior IS affected but rarely and briefly (e.g., one spurious timer fire per restart). If the user would never notice in practice, DON'T REPORT IT.
+
+   Every row MUST include a "Concrete failure scenario" cell — one sentence describing what the user would observe. If you can't write one, the finding isn't real enough to report.
 
 6. After the table, state how many initial candidates were found vs how many survived verification. Example: "Found 12 candidates, 3 verified as real issues (9 were false positives after reading surrounding code)."
