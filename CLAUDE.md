@@ -165,7 +165,9 @@ Current virtual devices:
 | `recounting` | Main Door just closed → inside the `door_close_stabilize_sec` window | `**` (amber italic) | `recalculating` |
 | `stable` | window elapsed → `people_home` = live_count snapshot | integer | `high` / `medium` / `low` |
 
-Flow: Main Door open → state=`transit`, `people_home` stays at previous lock; Main Door close → state=`recounting`, `_post_door_stabilize` timer starts (default 15 s, tunable via `people_home.door_close_stabilize_sec`); when timer elapses → snapshot `live_count` → new lock → state=`stable`. Inferred Tier-1↔Tier-3 transit (exterior Corridor / Ring Doorbell ↔ interior Entrance presence, within `transit_sequence_window_sec`) triggers the same recount path — handles a dead Main Door sensor. Initial boot seeds the lock from the first live reading.
+Flow: Main Door open → state=`transit`, `people_home` stays at previous lock; Main Door close → state=`recounting`, `_post_door_stabilize` timer starts; when timer elapses → snapshot `live_count` → new lock → state=`stable`. Inferred Tier-1↔Tier-3 transit (exterior Corridor / Ring Doorbell ↔ interior Entrance presence, within `transit_sequence_window_sec`) triggers the same recount path — handles a dead Main Door sensor. Initial boot seeds the lock from the first live reading.
+
+**Stabilize window is auto-sized (2026-04-24 hold-aware):** each placement carries `hold_s` in `room_device_placements.params` (5 s radar, 15 s motion). The rule reads `hold_s` per counted-room sensor via `state.spatial['device_to_zones']` and computes `auto_stabilize = max(hold_s) + 5 s margin`. `people_home.door_close_stabilize_sec` (Settings knob, default 15 s) is now a **floor** — effective window = `max(knob, auto_stabilize)`. So if a motion sensor has 15 s hold, the recount waits 20 s; user can bump the knob higher if they want, but can't go below the auto-computed minimum. Prevents stale-hold over-counts at recount time.
 
 Emitted People Home diagnostic fields (in addition to legacy fields):
 - `people_home` — **locked** count (what the dashboard reads)

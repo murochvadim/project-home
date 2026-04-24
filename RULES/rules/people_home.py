@@ -361,12 +361,28 @@ def evaluate(event, state):
     # that moves the lock. Period.
     live_count = people_count
 
+    # Auto-size the stabilize window to outlive the slowest sensor's hardware
+    # hold (stored per-placement as hold_s). Without this, a fast (15 s)
+    # recount snapshots while PIR sensors still report stale "presence" →
+    # over-count. User's knob (door_close_stabilize_sec) becomes a FLOOR —
+    # effective = max(knob, auto). If all placements have hold_s ≤ 15 s, the
+    # auto value is 20 s (15 + 5 s margin), so the knob is effectively the
+    # minimum recount wait.
+    HOLD_MARGIN_SEC = 5
+    counted_holds = [
+        info.get('hold_s', 15)
+        for info in (spatial.get('device_to_zones') or {}).values()
+        if info.get('room_slug')  # has a resolvable room (not orphan)
+    ]
+    auto_stabilize_sec   = (max(counted_holds) if counted_holds else 15) + HOLD_MARGIN_SEC
+    effective_stabilize  = max(door_close_stabilize_sec, auto_stabilize_sec)
+
     if main_door_closed_now or inferred_transit:
         state.set_timer('_post_door_stabilize')
         state.shared['_recalc_pending'] = True
 
     recalc_pending = bool(state.shared.get('_recalc_pending'))
-    if recalc_pending and state.get_timer('_post_door_stabilize') >= door_close_stabilize_sec:
+    if recalc_pending and state.get_timer('_post_door_stabilize') >= effective_stabilize:
         state.shared['_people_locked_count'] = live_count
         state.shared['_people_last_lock_ts'] = _now_iso()
         state.shared['_recalc_pending']      = False

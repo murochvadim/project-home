@@ -453,10 +453,22 @@ class StateManager:
                     primary_zone = resolve_zone(layout, mid_x, mid_y)
                 except (KeyError, TypeError, ValueError):
                     pass
+                # hold_s = sensor's hardware hold time in seconds (how long the
+                # device keeps reporting "presence" after true absence). Stored
+                # per-placement in room_device_placements.params. Consumed by
+                # People Home to auto-size the post-door-close stabilize window.
+                hold_s = 15
+                try:
+                    hold_raw = (p.get('params') or {}).get('hold_s')
+                    if hold_raw is not None:
+                        hold_s = max(0, int(hold_raw))
+                except (TypeError, ValueError):
+                    pass
                 spatial['device_to_zones'][dev_id] = {
                     'room_slug': slug,
                     'zones': sorted(zones_covered),
                     'primary_zone': primary_zone,  # None if midpoint falls outside any named zone
+                    'hold_s': hold_s,              # sensor hardware hold (seconds)
                 }
             elif dtype == 'door_sensor':
                 room['door_sensors'].append(dev_id)
