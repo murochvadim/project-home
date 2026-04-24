@@ -22,7 +22,7 @@
 - `agent_boiler_data`: ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision, error, next_ts, version
 - `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, probe_max_boiler_temp, probe_max_delta, consumption_temp_delta, consumption_time_delta
 - `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms — hot water drop events detected by agent each run; `cause` and `likely_rooms` filled asynchronously by rule engine using presence + valve context; `cause` ∈ {`human`,`panel`,`thermal`,`boiler`,`unknown`}; deduplicated by start_ts
-- `sync_signals`: id, ts, source — written by the raw_data producer after each insert (`source='wf96c_ingest'` since 2026-04-23, previously `'ha_to_pg'`); boiler agent polls every 30s and wakes immediately on new row
+- `sync_signals`: id, ts, source — written by the raw_data producer after each insert (`source='wf96c_ingest'` since 2026-04-23, previously `'ha_to_pg'`); boiler agent polls every `agent_settings.sync_poll_interval_sec` (default 300 s) and wakes immediately on new row
 - `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 60 min
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
@@ -91,8 +91,8 @@
 # Agent Operational Inputs
 
 ## 1. Agent will run every XX min according to what is set in Boiler Agent settings in UI.
-- Between runs the agent polls `sync_signals` every 30 seconds and wakes immediately when the raw_data producer (`wf96c_ingest` since 2026-04-23) writes a new row (ensuring each decision uses the freshest possible data).
-- Maximum sleep is still `run_interval_min` — `sync_signals` only shortens the wait, never extends it.
+- Between runs the agent polls `sync_signals` at `agent_settings.sync_poll_interval_sec` cadence (default 300 s / 5 min, tunable via the Settings card since 2026-04-24) and wakes immediately when the raw_data producer (`wf96c_ingest` since 2026-04-23) writes a new row. At steady WF96C emission rate this effectively sets the agent's run cadence.
+- Maximum sleep is still `run_interval_min` — it's the failsafe ceiling used when WF96C is silent (no sync_signals arriving). `sync_signals` only shortens the wait, never extends it.
 
 ## 2. Every Run of Agent will ended with decision to on/off the valve or no action.
 
@@ -114,7 +114,8 @@
 
 - `agent_settings`:
   - `agent_enabled`              — enables or disables the agent; if false, agent writes decision = "disabled" and waits for next scheduled run
-  - `run_interval_min`           — how often the agent runs, in minutes
+  - `run_interval_min`           — **max sleep ceiling** (minutes); agent always wakes at least this often, even with no sync_signal activity. Failsafe, not the primary cadence knob
+  - `sync_poll_interval_sec`     (default: 300) — how often the agent polls `sync_signals` during sleep. **This is the effective run cadence during normal WF96C operation** since events arrive faster than the poll interval. Added 2026-04-24 (replaces a hardcoded 30 s)
   - `panel_temp_valid_after_on`  (default: 4)  — minutes to wait after valve turns ON before panel_temp readings are valid (invalid during this period while water is circulating)
   - `panel_temp_valid_after_off` (default: 10) — minutes after valve turns OFF during which panel_temp readings remain valid; invalid after this window (water decouples from actual panel conditions)
   - `trend_runs`                 (default: 3)  — number of recent readings used to calculate boiler and panel temperature trends; also the number of runs to wait after valve ON before making a final decision
@@ -267,7 +268,12 @@
   - Items placed at specific columns to align dividers with Last Report: Events=col1, Largest Drop=col3, Avg Drop=col4, Last Event=col5
   - Largest Drop has `border-left` + `margin-left:-16px` so its left divider aligns exactly with Valve State's left divider in Last Report
   - Largest Drop, Avg Drop, Last Event are `text-align:center`
-- **Settings:** run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, consumption_temp_delta, consumption_time_delta; **Probe Temperature Constraints** section: probe_max_boiler_temp, probe_max_delta; **Sensor Glitch Guard** section (labels rendered in light red `#d96c6c` to signal these are safety/correctness knobs, not tuning): glitch_drop_threshold_c, glitch_bounce_recovery_c
+- **Settings card** (sectioned with uppercase headers since 2026-04-24 for easier navigation):
+  - **Data Update**: `run_interval_min` (max sleep ceiling), `sync_poll_interval_sec` (actual run cadence)
+  - **Decision Tuning**: `panel_temp_valid_after_on`, `panel_temp_valid_after_off`, `trend_runs`, `temp_debounce`, `probe_interval_min`
+  - **Hot Water Consumption**: `consumption_temp_delta`, `consumption_time_delta`
+  - **Probe Temperature Constraints**: `probe_max_boiler_temp`, `probe_max_delta`
+  - **Sensor Glitch Guard** (labels rendered in light red `#d96c6c` to signal these are safety/correctness knobs, not tuning): `glitch_drop_threshold_c`, `glitch_bounce_recovery_c`
 - **Deploy card:** "Deploy to Production" button → git pull on LXC 103 + restart agent service; output shown inline
 - When countdown reaches 0 → shows "running…" → auto-refreshes after 15s to pick up new next_ts
 
