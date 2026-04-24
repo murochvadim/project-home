@@ -105,7 +105,8 @@ app.get('/api/settings', async (req, res) => {
 });
 
 app.post('/api/settings', async (req, res) => {
-  const { run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
+  const { run_interval_min, sync_poll_interval_sec,
+          panel_temp_valid_after_on, panel_temp_valid_after_off,
           trend_runs, temp_debounce, probe_interval_min,
           consumption_temp_delta, consumption_time_delta,
           probe_max_boiler_temp, probe_max_delta,
@@ -114,18 +115,20 @@ app.post('/api/settings', async (req, res) => {
     await db.query(`
       UPDATE agent_settings SET
         run_interval_min           = $1,
-        panel_temp_valid_after_on  = $2,
-        panel_temp_valid_after_off = $3,
-        trend_runs                 = $4,
-        temp_debounce              = $5,
-        probe_interval_min         = $6,
-        consumption_temp_delta     = $7,
-        consumption_time_delta     = $8,
-        probe_max_boiler_temp      = $9,
-        probe_max_delta            = $10,
-        glitch_drop_threshold_c    = $11,
-        glitch_bounce_recovery_c   = $12
-    `, [run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off,
+        sync_poll_interval_sec     = $2,
+        panel_temp_valid_after_on  = $3,
+        panel_temp_valid_after_off = $4,
+        trend_runs                 = $5,
+        temp_debounce              = $6,
+        probe_interval_min         = $7,
+        consumption_temp_delta     = $8,
+        consumption_time_delta     = $9,
+        probe_max_boiler_temp      = $10,
+        probe_max_delta            = $11,
+        glitch_drop_threshold_c    = $12,
+        glitch_bounce_recovery_c   = $13
+    `, [run_interval_min, sync_poll_interval_sec,
+        panel_temp_valid_after_on, panel_temp_valid_after_off,
         trend_runs, temp_debounce, probe_interval_min,
         consumption_temp_delta, consumption_time_delta,
         probe_max_boiler_temp, probe_max_delta,

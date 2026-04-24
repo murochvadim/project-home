@@ -419,6 +419,10 @@
             <input type="number" id="s-run-interval" min="1" max="60">
           </div>
           <div class="form-group">
+            <label for="s-sync-poll" title="How often the agent checks sync_signals to wake early on a new WF96C reading. Default 300 s (5 min). Lower = faster reaction to valve toggles, more DB load; higher = calmer, logs a row every X s at steady temps.">Sync Poll Interval (sec)</label>
+            <input type="number" id="s-sync-poll" min="5" max="600">
+          </div>
+          <div class="form-group">
             <label for="s-valid-after-on" title="After the valve turns ON, ignore panel_temp readings for this many minutes — water is circulating and the sensor is unreliable until flow stabilizes.">Temp Panel Valid After ON (min)</label>
             <input type="number" id="s-valid-after-on" min="0">
           </div>

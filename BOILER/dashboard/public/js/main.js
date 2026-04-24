@@ -226,6 +226,7 @@ async function loadSettings() {
   try {
     const cfg = await fetch('/api/settings').then(r => r.json());
     document.getElementById('s-run-interval').value      = cfg.run_interval_min ?? '';
+    document.getElementById('s-sync-poll').value         = cfg.sync_poll_interval_sec ?? '';
     document.getElementById('s-valid-after-on').value    = cfg.panel_temp_valid_after_on ?? '';
     document.getElementById('s-valid-after-off').value   = cfg.panel_temp_valid_after_off ?? '';
     document.getElementById('s-trend-runs').value        = cfg.trend_runs ?? '';
@@ -247,6 +248,7 @@ async function saveSettings(e) {
   e.preventDefault();
   const body = {
     run_interval_min:           parseInt(document.getElementById('s-run-interval').value),
+    sync_poll_interval_sec:     parseInt(document.getElementById('s-sync-poll').value),
     panel_temp_valid_after_on:  parseInt(document.getElementById('s-valid-after-on').value),
     panel_temp_valid_after_off: parseInt(document.getElementById('s-valid-after-off').value),
     trend_runs:                 parseInt(document.getElementById('s-trend-runs').value),

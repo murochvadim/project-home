@@ -812,39 +812,49 @@ def run_agent():
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 
-def wait_for_next_run(interval_min: int) -> None:
+def wait_for_next_run(interval_min: int) -> int:
     """
     Sleep until either:
     - a new sync_signal row appears (id > last seen) → wake immediately, or
     - interval_min minutes have elapsed → fallback wake.
-    Polls every 30 s using a single reusable connection.
+    Poll cadence comes from agent_settings.sync_poll_interval_sec (default 300).
+    Returns the poll interval used so the caller can log it.
     """
     deadline = time.monotonic() + interval_min * 60
     conn = None
+    poll_sec = 300
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         with conn.cursor() as cur:
+            try:
+                cur.execute('SELECT sync_poll_interval_sec FROM agent_settings LIMIT 1')
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    poll_sec = max(5, int(row[0]))  # floor at 5s to avoid runaway polling
+            except psycopg2.errors.UndefinedColumn:
+                conn.rollback()  # pre-migration DB — fall back to default
             cur.execute('SELECT COALESCE(MAX(id), 0) FROM sync_signals')
             last_id = cur.fetchone()[0]
 
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return
-            time.sleep(min(30, remaining))
+                return poll_sec
+            time.sleep(min(poll_sec, remaining))
             try:
                 with conn.cursor() as cur:
                     cur.execute('SELECT COALESCE(MAX(id), 0) FROM sync_signals')
                     new_id = cur.fetchone()[0]
                 if new_id > last_id:
                     log.info('sync_signal detected — waking up early')
-                    return
+                    return poll_sec
             except Exception:
                 # Connection went bad — just wait for deadline
-                return
+                return poll_sec
     except Exception:
         # Can't connect — just sleep the full interval
         time.sleep(interval_min * 60)
+        return poll_sec
     finally:
         if conn:
             try: conn.close()
@@ -860,7 +870,8 @@ def main():
         interval = run_agent()
         if not interval:
             interval = 5
-        log.info(f'Sleeping up to {interval} minutes (polling sync_signals every 30s)')
+        # Peek the current poll_sec (wait_for_next_run re-reads it each cycle)
+        log.info(f'Sleeping up to {interval} minutes')
         wait_for_next_run(interval)
 
 
