@@ -148,7 +148,24 @@ Current virtual devices:
 - `virtual:people_home` (owner: People Home rule) — legacy: `people_home`, `home_mode`, `someone_home`, `occupied_rooms`; **apartment-vision (2026-04-24):** `people_confidence` (high|medium|low|**floored**), `last_entered_via`, `last_exited_via`, `last_transition_ts`, `people_count_floored`, `people_count_high_water`, `last_transition_source` (`door_sensor` | `inferred_entry` | `inferred_exit`)
 - `virtual:boiler_status` (owner: Boiler Consumption Classify) — `last_cause`, `last_drop_c`, `last_rooms`, `last_start_ts`
 
-**Apartment-vision upgrade (2026-04-24):** Home Activity + People Home now consume `state.spatial` — a zone/adjacency/sub-rooms index built by `state_manager.load_from_db()` from `dashboard_settings.room_layouts.*` + `room_device_placements`. Cone-to-zone geometry (point-in-polygon, 1m cells) ported from `buildApartmentScene` in server.js. Each sensor placement gets `zones` (full cone coverage) + `primary_zone` (zone at beam midpoint) — activity uses primary_zone to avoid edge-overlap false activations. **Sub-room folding:** People Home collapses sub-rooms into their parent before counting (auto for rooms the heuristic catches like Kitchen → Living Room; manual overrides in `DEFAULT_MANUAL_SUBROOM_MERGE` for Dining Room and Entrance which share the Living Room open-plan space). **Main-Door floor:** people_count can only decrease on an authoritative Main Door open event OR an inferred Tier-1↔Tier-3 transit (exterior Corridor/Ring Doorbell → interior Entrance presence, within `transit_sequence_window_sec`) — otherwise a high-water mark holds the count up with `confidence='floored'`. Mark builds with sustain counter + cap at `max_household_size`.
+**Apartment-vision upgrade (2026-04-24):** Home Activity + People Home now consume `state.spatial` — a zone/adjacency/sub-rooms index built by `state_manager.load_from_db()` from `dashboard_settings.room_layouts.*` + `room_device_placements`. Cone-to-zone geometry (point-in-polygon, 1m cells) ported from `buildApartmentScene` in server.js. Each sensor placement gets `zones` (full cone coverage) + `primary_zone` (zone at beam midpoint) — activity uses primary_zone to avoid edge-overlap false activations.
+
+**Room classification in People Home counting (2026-04-24):**
+- **Sub-room folding**: Kitchen auto-folded via zone-name heuristic; Dining Room + Entrance manually folded via `DEFAULT_MANUAL_SUBROOM_MERGE` (their parent zones named "Dining Table" / separate layout don't match the auto heuristic). All fold to Living Room — the open-plan living area counts as 1 room, not 4.
+- **Transit-only rooms (`DEFAULT_TRANSIT_ROOMS`)**: Hallway. Walked through but not counted. Still shows in `active_rooms` / `occupied_rooms` (so the dashboard lights up Hallway when someone walks through) but excluded from `presence_rooms` / `people_count`.
+- **Exterior (`DEFAULT_EXTERIOR_ROOMS`)**: Corridor (building hallway outside flat). Excluded entirely from count; used as Tier-1 signal for inferred transit.
+- **Exterior motion**: Ring Doorbell (camera at Main Door). Same treatment — Tier-1 signal, not counted.
+- **Counted rooms**: Living Room (open-plan parent), Balcony (separate room via sliding door), Bedroom, My BathRoom, Guy Room, DressRoom, Bathroom, Laundry, BedRoom Balcony.
+
+**Main-Door-locked count (2026-04-24 strict v2):** `people_home` changes ONLY on a Main Door close event (real or inferred). Between door events the count is **locked** — sensor noise, transits, hold-off leakage, ghost fires all ignored. Flow: Main Door open → flag transit; Main Door close → start `people_home.door_close_stabilize_sec` timer (default 15 s); when it elapses → recompute from live sensors → set new locked count. Inferred transit (Tier-1 = Corridor Presence / Ring Doorbell exterior, ↔ Tier-3 = Entrance presence, within `transit_sequence_window_sec`) triggers the same recalc path — handles the case where the Main Door sensor dies. Initial boot seeds the lock from the first live reading; converges to reality after the first real door event.
+
+Emitted People Home diagnostic fields (in addition to legacy fields):
+- `people_home` — **locked** count (what the dashboard reads)
+- `people_count_high_water` — locked count (alias retained for continuity)
+- `people_count_live` — what sensors currently say, pre-lock (dashboard can render "live: 3 / locked: 2" during transit)
+- `people_count_floored` — `true` when `live != locked` (the lock is holding because sensors disagree)
+- `people_confidence` ∈ {`high`, `medium`, `low`, `recalculating` (during stabilize window), `locked` (sensors disagree but lock holds)}
+- `last_transition_source` — `door_sensor` | `inferred_entry` | `inferred_exit`
 
 **Auto-reload on spatial changes:** dashboard writes `_spatial_reload_request='pending'` to `rule_engine_state` on any `POST /api/room-layouts/:slug`, `POST/PATCH/DELETE /api/room-device-placements/...`. The rule-engine heartbeat detects the flag within ≤60s, calls `state.load_from_db()` (rebuilds spatial + devices), and clears the flag. No manual Reload needed after layout edits.
 

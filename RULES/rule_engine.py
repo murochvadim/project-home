@@ -82,6 +82,8 @@ KNOB_PATTERNS = [
      'people_home.mark_sustain_ticks', 'count'),
     (re.compile(r'people home:.*transit.*?sequence.*?' + _NUM_UNIT, re.I),
      'people_home.transit_sequence_window_sec', 'sec'),
+    (re.compile(r'people home:.*recount.*?' + _NUM_UNIT + r'.*main door', re.I),
+     'people_home.door_close_stabilize_sec', 'sec'),
 ]
 
 _UNIT_TO_SEC = {

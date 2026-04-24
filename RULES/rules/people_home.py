@@ -44,6 +44,10 @@ DOOR_TYPES     = {'door_sensor'}
 # These can be overridden via knobs if the house layout changes.
 DEFAULT_EXTERIOR_ROOMS  = ('Corridor',)    # Tier-1 (exterior approach)
 DEFAULT_THRESHOLD_ROOMS = ('Entrance',)     # Tier-3 (interior side of the door)
+# Transit-only rooms — people walk through them but don't "live" there. Their
+# presence fires shouldn't add to people_count (otherwise walking from room A
+# to room B briefly inflates the count when the transit sensor overlaps).
+DEFAULT_TRANSIT_ROOMS   = ('Hallway',)
 # Ring Doorbell = camera at the front door, fires `motion:<iso-ts>` events —
 # also Tier-1 (exterior), identified by name match since its device_type='motion'
 # is shared with other indoor motion sensors.
@@ -152,19 +156,19 @@ def evaluate(event, state):
         away_after_min       = int(state.shared.get('people_home.away_after_no_motion_min', 30))
         door_transit_window  = int(state.shared.get('people_home.door_transit_window_sec',  10))
         exit_quiet_window    = int(state.shared.get('people_home.exit_quiet_window_sec',    30))
-        # Main Door floor + inferred transit knobs
-        require_door_floor   = bool(state.shared.get('people_home.require_door_for_decrement', True))
-        max_household        = int(state.shared.get('people_home.max_household_size',         6))
-        mark_sustain_ticks   = int(state.shared.get('people_home.mark_sustain_ticks',         2))
-        transit_seq_window   = int(state.shared.get('people_home.transit_sequence_window_sec', 15))
+        # Main-Door-locked count knobs — the count only changes on Main Door events
+        # (real or inferred). Stabilize window runs after door closes so sensors
+        # settle before the recount is snapshotted.
+        transit_seq_window       = int(state.shared.get('people_home.transit_sequence_window_sec', 15))
+        door_close_stabilize_sec = int(state.shared.get('people_home.door_close_stabilize_sec',    15))
     except (TypeError, ValueError):
         corridor_sec, adjacency_dedupe_sec, away_after_min = 15, 30, 30
         door_transit_window, exit_quiet_window = 10, 30
-        require_door_floor, max_household, mark_sustain_ticks = True, 6, 2
-        transit_seq_window = 15
+        transit_seq_window, door_close_stabilize_sec = 15, 15
 
-    exterior_rooms = set(DEFAULT_EXTERIOR_ROOMS)
+    exterior_rooms  = set(DEFAULT_EXTERIOR_ROOMS)
     threshold_rooms = set(DEFAULT_THRESHOLD_ROOMS)
+    transit_rooms   = set(DEFAULT_TRANSIT_ROOMS)
 
     spatial  = state.spatial or {}
     door_map = spatial.get('door_sensor_to_adjacency') or {}
@@ -193,18 +197,19 @@ def evaluate(event, state):
             state.set_timer(f'door_just_opened:{door_name}')
             state.shared['_last_door_opened'] = door_name
 
-    # ── 2a. Main Door closed→open transition (authoritative floor reset) ──
+    # ── 2a. Main Door transitions (authoritative reset signal for the lock) ──
+    # open = person is crossing threshold; count stays on the previous lock.
+    # close = transit complete; start stabilize window, recompute count after it elapses.
     main_door_id, main_door_now = _find_main_door(state)
     prev_main_door = state.shared.get('_prev_main_door_state')
-    main_door_opened_now = False
-    if main_door_now == 'open' and prev_main_door == 'closed':
-        main_door_opened_now = True
+    main_door_opened_now = (main_door_now == 'open'   and prev_main_door == 'closed')
+    main_door_closed_now = (main_door_now == 'closed' and prev_main_door == 'open')
     if main_door_now is not None:
         state.shared['_prev_main_door_state'] = main_door_now
 
-    # NOTE: both the Main Door sensor event (§2a) and the inferred Tier-1↔Tier-3
-    # sequence (§2b + §5a) reset the same high-water mark, so a dead door sensor
-    # is handled transparently — we don't need an explicit health check.
+    # Both the Main Door event (§2a) and the inferred Tier-1↔Tier-3 sequence
+    # (§2b + §5a) drive the same lock reset in §7a — if the door sensor dies,
+    # inferred transit covers it.
 
     # ── 2b. Tier-1 / Tier-3 transit signals (inferred-transit fallback) ──
     # Tier-1 = exterior approach (Corridor Presence, Ring Doorbell camera).
@@ -247,6 +252,8 @@ def evaluate(event, state):
         if not r or r in seen_rooms:
             continue
         if r in exterior_rooms:
+            continue
+        if r in transit_rooms:
             continue
         if _is_exterior_motion(dev, EXTERIOR_MOTION_NAME_HINTS):
             continue
@@ -343,37 +350,39 @@ def evaluate(event, state):
     if people_count == 0 and (active_rooms or someone_home):
         people_count = 1
 
-    # ── 7a. Main Door floor: people count can only decrease when Main Door
-    # opened (authoritative) or a Tier-1↔Tier-3 transit was inferred. Any
-    # apparent drop in the meantime is sensor dropout, not a real exit. ──
-    high_water = int(state.shared.get('_people_high_water_mark', 0) or 0)
-    sustain_count = int(state.shared.get('_people_sustain_count', 0) or 0)
+    # ── 7a. Main-Door-locked count ──
+    # Strict semantics: the emitted `people_home` count changes ONLY when a
+    # door event (real Main Door close OR inferred Tier-1↔Tier-3 transit) has
+    # finished and the sensors had `door_close_stabilize_sec` to settle. Between
+    # door events the count is locked; sensor noise, transits, hold-off leakage
+    # do not move it. Initial boot seeds the lock from the first live reading.
+    live_count = people_count
 
-    if main_door_opened_now or inferred_transit:
-        high_water = 0
-        sustain_count = 0
+    if main_door_closed_now or inferred_transit:
+        state.set_timer('_post_door_stabilize')
+        state.shared['_recalc_pending'] = True
 
-    # Update the mark only when we have real, sustained presence-sensor evidence
-    # (confidence='high'). Single ghost fires are ignored via the sustain counter.
-    if confidence == 'high' and people_count > high_water:
-        sustain_count += 1
-        if sustain_count >= mark_sustain_ticks:
-            high_water = min(people_count, max_household)
-            state.shared['_people_mark_ts'] = _now_iso()
-    elif confidence == 'high' and people_count <= high_water:
-        sustain_count = 0  # matching or below — no new peak to confirm
+    recalc_pending = bool(state.shared.get('_recalc_pending'))
+    if recalc_pending and state.get_timer('_post_door_stabilize') >= door_close_stabilize_sec:
+        state.shared['_people_locked_count'] = live_count
+        state.shared['_people_last_lock_ts'] = _now_iso()
+        state.shared['_recalc_pending']      = False
+        locked_count   = live_count
+        recalc_pending = False
+    elif state.shared.get('_people_locked_count') is not None:
+        locked_count = int(state.shared['_people_locked_count'])
+    else:
+        # First evaluation after boot — seed from the current live count.
+        locked_count = live_count
+        state.shared['_people_locked_count'] = locked_count
+        state.shared['_people_last_lock_ts'] = _now_iso()
 
-    state.shared['_people_high_water_mark'] = high_water
-    state.shared['_people_sustain_count'] = sustain_count
-
-    # Apply the floor — unless the user disabled it via the knob. When the floor
-    # raises the count above what sensors alone would give, tag confidence as
-    # 'floored' so downstream consumers know the number is door-logic-held.
-    floored = False
-    if require_door_floor and high_water > people_count:
-        people_count = high_water
-        floored = True
-        confidence = 'floored'
+    people_count = locked_count
+    floored = (live_count != locked_count)
+    if recalc_pending:
+        confidence = 'recalculating'
+    elif floored:
+        confidence = 'locked'
 
     # ── 8. Occupied rooms = union ──
     occupied_rooms = sorted(set(presence_rooms) | set(active_rooms))
@@ -423,9 +432,10 @@ def evaluate(event, state):
             'last_entered_via':   state.shared.get('last_entered_via', ''),
             'last_exited_via':    state.shared.get('last_exited_via', ''),
             'last_transition_ts': state.shared.get('last_transition_ts', ''),
-            # Main Door floor diagnostics
-            'people_count_floored':    floored,
-            'people_count_high_water': high_water,
+            # Main-Door-locked count diagnostics
+            'people_count_floored':    floored,        # True when live != locked (lock is holding)
+            'people_count_high_water': locked_count,   # emitted count (locked value)
+            'people_count_live':       live_count,     # what sensors say right now, pre-lock
             'last_transition_source':  transition_source,
         },
         source='rule:People Home',
@@ -439,8 +449,9 @@ def evaluate(event, state):
             'last_entered_via':        'Last Entered Via',
             'last_exited_via':         'Last Exited Via',
             'last_transition_ts':      'Last Transition',
-            'people_count_floored':    'Count Floored (door-held)',
-            'people_count_high_water': 'High-Water Mark',
+            'people_count_floored':    'Lock Engaged (sensors disagree)',
+            'people_count_high_water': 'Locked Count',
+            'people_count_live':       'Live Sensor Count',
             'last_transition_source':  'Transition Source',
         },
     )
