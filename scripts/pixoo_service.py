@@ -112,6 +112,11 @@ class PixooService:
         # wipe, resume, or sequence stops the ticker first.
         self._ticker_stop = None
         self._ticker_thread = None
+        # Mutable ticker cadence in seconds. The ticker thread re-reads this
+        # on every iteration so a mid-life downshift (e.g. countdown just
+        # expired — drop from 1s to 60s) happens automatically on the next
+        # tick, without needing a restart or a re-push from the rule.
+        self._ticker_interval = 60
 
     # ------------------------------------------------------------------
     # MQTT callbacks
@@ -428,13 +433,19 @@ class PixooService:
         except Exception:
             log.exception("Pixoo command error: %s", action)
 
-    _LIVE_TOKENS = ('{{time}}', '{{date}}')
+    _LIVE_TOKENS = ('{{time}}', '{{date}}', '{{countdown}}')
 
     def _substitute_live_tokens(self, items, vars_dict=None):
-        """Substitute {{time}}, {{date}} (and caller vars_dict) into item text
-        in-place. Returns True if any live token was present before
-        substitution (so caller knows to schedule a re-render ticker).
-        Strips unreplaced {{...}} to keep output clean."""
+        """Substitute {{time}}, {{date}}, {{countdown}} (and caller vars_dict)
+        into item text in-place. Returns True if any live token was present
+        before substitution (so caller knows to schedule a re-render ticker).
+        Strips unreplaced {{...}} to keep output clean.
+
+        {{countdown}} renders as MM:SS of `max(0, end_ts - now)` where end_ts
+        is `vars_dict['countdown_end_ts']` (unix epoch seconds). Missing or
+        non-numeric → empty string. Once expired the token renders as
+        '00:00'; the caller's ticker-cadence picker downshifts from 1s to
+        60s at that point so the service doesn't spin."""
         has_live = any(
             isinstance(it.get('t'), str) and any(tok in it['t'] for tok in self._LIVE_TOKENS)
             for it in items
@@ -444,6 +455,17 @@ class PixooService:
             'time': _now.strftime('%H:%M'),
             'date': _now.strftime('%a %d %b'),
         }
+        # Resolve {{countdown}} from vars_dict['countdown_end_ts'] if present.
+        countdown_str = ''
+        if vars_dict:
+            end_ts_raw = vars_dict.get('countdown_end_ts')
+            if end_ts_raw is not None:
+                try:
+                    end_ts = float(end_ts_raw)
+                    remaining = max(0, int(end_ts - time.time()))
+                    countdown_str = '{:02d}:{:02d}'.format(remaining // 60, remaining % 60)
+                except (TypeError, ValueError):
+                    countdown_str = ''
         import re as _re
         for item in items:
             text = item.get('t', '')
@@ -451,12 +473,54 @@ class PixooService:
                 continue
             for key, val in live_subs.items():
                 text = text.replace('{{' + key + '}}', val)
+            text = text.replace('{{countdown}}', countdown_str)
             if vars_dict:
                 for key, val in vars_dict.items():
+                    # Skip countdown_end_ts — already consumed above, and
+                    # substituting its raw epoch value into text would look
+                    # nonsense if the author also wrote {{countdown_end_ts}}.
+                    if key == 'countdown_end_ts':
+                        continue
                     text = text.replace('{{' + key + '}}', str(val))
             text = _re.sub(r'\{\{[^}]*\}\}', '', text)
             item['t'] = text
+
+        # Dynamic cadence update — if a ticker is already running, downshift
+        # to 60s the moment the countdown hits 00:00 (or was never active).
+        # This works uniformly for both the MQTT push_preset path and the
+        # HTTP /push path because both routes funnel through here on every
+        # re-render. Skip when no ticker is active (nothing to update).
+        if self._ticker_stop is not None:
+            if countdown_str and countdown_str != '00:00':
+                desired = 1
+            else:
+                desired = 60
+            if self._ticker_interval != desired:
+                log.info("pixoo: ticker cadence %ds -> %ds",
+                         self._ticker_interval, desired)
+                self._ticker_interval = desired
         return has_live
+
+    def _pick_ticker_cadence(self, items, vars_dict):
+        """1-second cadence while an active (unfired) {{countdown}} is on
+        screen; 60 seconds otherwise. Used by each _start_ticker call-site
+        so only countdown presets pay the per-second render cost."""
+        if not vars_dict:
+            return 60
+        end_ts_raw = vars_dict.get('countdown_end_ts')
+        if end_ts_raw is None:
+            return 60
+        try:
+            end_ts = float(end_ts_raw)
+        except (TypeError, ValueError):
+            return 60
+        if end_ts <= time.time():
+            return 60
+        has_countdown_token = any(
+            isinstance(it.get('t'), str) and '{{countdown}}' in it['t']
+            for it in items
+        )
+        return 1 if has_countdown_token else 60
 
     def _stop_ticker(self):
         """Stop any running live-placeholder ticker thread."""
@@ -468,13 +532,17 @@ class PixooService:
 
     def _start_ticker(self, target, interval_sec):
         """Spawn a daemon thread that re-runs `target` (a callable with no
-        args) every interval_sec seconds. Replaces any existing ticker."""
+        args). The thread re-reads `self._ticker_interval` on every iteration,
+        so substitution code can downshift the cadence mid-life (e.g. from
+        1s to 60s when a countdown expires) without restarting the thread.
+        Replaces any existing ticker."""
         self._stop_ticker()
         stop_ev = threading.Event()
         self._ticker_stop = stop_ev
+        self._ticker_interval = interval_sec
 
         def run():
-            while not stop_ev.wait(interval_sec):
+            while not stop_ev.wait(self._ticker_interval):
                 if stop_ev.is_set():
                     return
                 try:
@@ -487,10 +555,11 @@ class PixooService:
         t.start()
         log.info("Live ticker started (every %ds)", interval_sec)
 
-    def _render_gif_with_overlay(self, items_original, image_b64, pixels, save_preview=True):
+    def _render_gif_with_overlay(self, items_original, image_b64, pixels, save_preview=True, vars_dict=None):
         """Bake items + pixels overlay into each frame of an animated GIF and
         push to the Pixoo. Used by the /push handler (initial render) and by
-        the ticker (re-render with fresh {{time}}/{{date}} every minute).
+        the ticker (re-render with fresh {{time}}/{{date}}/{{countdown}} on
+        every tick). `vars_dict` carries caller-supplied tokens across ticks.
         Returns True if a GIF was actually rendered, False if the image is
         not a multi-frame GIF (caller should fall back to static path)."""
         if not (image_b64 and ',' in image_b64):
@@ -505,7 +574,7 @@ class PixooService:
                 return False  # not animated — caller handles static path
 
             items = [dict(it) for it in items_original]
-            self._substitute_live_tokens(items)
+            self._substitute_live_tokens(items, vars_dict)
 
             duration = img.info.get('duration', 100)
             step = max(1, n_frames // 15)
@@ -570,13 +639,15 @@ class PixooService:
             log.exception("GIF render failed")
             return False
 
-    def _rerender_raw_push(self, items_original, pixels, image_b64):
+    def _rerender_raw_push(self, items_original, pixels, image_b64, vars_dict=None):
         """Re-draw a previously-pushed raw items+pixels+image set with fresh
         live token values. Used by the ticker for the /push HTTP path. Mirrors
         the same channel/reset/draw sequence as the /push handler so the
-        Pixoo accepts the new buffer."""
+        Pixoo accepts the new buffer. `vars_dict` is the same dict passed on
+        the initial push so caller tokens (e.g. {{countdown}}) keep resolving
+        on every tick."""
         items = [dict(it) for it in items_original]
-        self._substitute_live_tokens(items)
+        self._substitute_live_tokens(items, vars_dict)
         try:
             import requests as _req
             try:
@@ -617,6 +688,11 @@ class PixooService:
                     (item.get('r', 255), item.get('g', 255), item.get('b', 255)))
             self.pixoo.push()
             self._screen_items = items
+            # Publish updated screen so the dashboard's Pixoo preview (which
+            # polls _pixoo_screen every 5s via /api/pixoo/status) reflects the
+            # latest ticker values — otherwise it stays frozen on whatever
+            # the initial push substituted, which makes countdown look stuck.
+            self._publish_screen_info('custom')
             _new_times = [it.get('t', '') for it in items]
             log.info("ticker: re-rendered (%d items) — items=%s",
                      len(items), _new_times[:3])
@@ -652,6 +728,10 @@ class PixooService:
         items = list(content.get('items', []))
         pixels = content.get('pixels', {})
 
+        # Snapshot unsubstituted items for the cadence picker — _substitute
+        # mutates `items` in place, so after the call the literal {{countdown}}
+        # token is gone and we can't detect it any more.
+        items_pre_subst = [dict(it) for it in items]
         has_live = self._substitute_live_tokens(items, vars_dict)
 
         # Stop any running sequence/GIF, then render
@@ -773,9 +853,13 @@ class PixooService:
         # ticker just re-renders and returns.
         if not _from_ticker:
             if has_live:
+                # Fresh push — start the ticker at the initial desired cadence.
+                # The thread re-reads self._ticker_interval each tick, so mid-
+                # life downshifts (countdown expiry) happen automatically
+                # without restarting the thread.
                 self._start_ticker(
                     lambda: self._render_preset(preset_name, vars_dict, _from_ticker=True),
-                    60,
+                    self._pick_ticker_cadence(items_pre_subst, vars_dict),
                 )
             else:
                 self._stop_ticker()
@@ -936,10 +1020,11 @@ class PixooService:
                                         _items_cap = items_original
                                         _img_cap = image
                                         _pix_cap = body.get('pixels', {}) or {}
+                                        _vars_cap = body.get('vars') or None
                                         svc._start_ticker(
-                                            lambda i=_items_cap, im=_img_cap, p=_pix_cap:
-                                                svc._render_gif_with_overlay(i, im, p, save_preview=False),
-                                            60,
+                                            lambda i=_items_cap, im=_img_cap, p=_pix_cap, v=_vars_cap:
+                                                svc._render_gif_with_overlay(i, im, p, save_preview=False, vars_dict=v),
+                                            svc._pick_ticker_cadence(_items_cap, _vars_cap),
                                         )
                                     else:
                                         svc._stop_ticker()
@@ -1004,10 +1089,11 @@ class PixooService:
                         _pixels_captured = body.get('pixels', {}) or {}
                         _image_captured = image
                         if has_live:
+                            _vars_captured = body.get('vars') or None
                             svc._start_ticker(
-                                lambda i=items_original, p=_pixels_captured, im=_image_captured:
-                                    svc._rerender_raw_push(i, p, im),
-                                60,
+                                lambda i=items_original, p=_pixels_captured, im=_image_captured, v=_vars_captured:
+                                    svc._rerender_raw_push(i, p, im, vars_dict=v),
+                                svc._pick_ticker_cadence(items_original, _vars_captured),
                             )
                         else:
                             svc._stop_ticker()

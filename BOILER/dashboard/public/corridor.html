@@ -116,6 +116,7 @@
               <input type="text" id="pixoo-ed-text" placeholder="Text or {{var}}..." style="flex:1;min-width:60px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
               <button class="btn btn-secondary btn-sm" onclick="pixooInsertToken('{{time}}')" title="Insert live clock HH:MM — updates every minute" style="font-size:0.68rem;padding:3px 6px;">⏰ Time</button>
               <button class="btn btn-secondary btn-sm" onclick="pixooInsertToken('{{date}}')" title="Insert current date — updates daily" style="font-size:0.68rem;padding:3px 6px;">📅 Date</button>
+              <button class="btn btn-secondary btn-sm" onclick="pixooInsertToken('{{countdown}}')" title="Insert live MM:SS countdown — caller must pass countdown_end_ts (unix epoch) in vars" style="font-size:0.68rem;padding:3px 6px;">⏱ Countdown</button>
             </div>
             <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px;">
               <span style="font-size:0.72rem;color:#888;">X:</span>

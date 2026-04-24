@@ -28,8 +28,9 @@ document.addEventListener('DOMContentLoaded', () => {
   c.addEventListener('mousemove', (e) => { if (_pixooDrawing) pixooDrawPixelAt(e); });
   c.addEventListener('mouseup', () => { _pixooDrawing = false; });
   c.addEventListener('mouseleave', () => { _pixooDrawing = false; });
-  // Auto-load on page open
-  loadPixoo();
+  // Auto-load on page open + start the 5s poll so live tokens
+  // ({{time}}/{{countdown}}) visibly tick on the preview canvas.
+  pixooPlay();
   loadPixooPresets();
   loadSimPresets();
 });

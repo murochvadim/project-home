@@ -36,7 +36,13 @@ Path: `/corridor.html`. Sidebar link under "Agents".
 - Preset channels (Clock, Cloud, Sound, C1/C2/C3)
 - Screen heartbeat status
 - Preset save/load/delete
-- **Live placeholders in text items** (added 2026-04-15) — drop `{{time}}` (→ `HH:MM`) or `{{date}}` (→ e.g. `Mon 15 Apr`) into any text item at any X,Y; the pixoo service on LXC 100 re-renders the preset every 60 s so the values stay current. Editor has **⏰ Time** and **📅 Date** buttons that prefill the token. Ticker auto-stops on wipe/resume/new preset/sequence. Implemented in [scripts/pixoo_service.py](../scripts/pixoo_service.py) (`_start_ticker` / `_stop_ticker` + `_render_preset`).
+- **Live placeholders in text items** (added 2026-04-15; `{{countdown}}` added 2026-04-25) — drop `{{time}}` (→ `HH:MM`), `{{date}}` (→ e.g. `Mon 15 Apr`), or `{{countdown}}` (→ live `MM:SS` remaining) into any text item at any X,Y. Editor has **⏰ Time**, **📅 Date**, and **⏱ Countdown** buttons that prefill the token.
+  - `{{time}}` / `{{date}}` resolve from the service clock (no caller setup needed).
+  - `{{countdown}}` requires the pusher to supply `vars = {"countdown_end_ts": <unix_epoch>}` — renders as `max(0, end_ts − now)` formatted `MM:SS`. When the value is missing/invalid the token is stripped to an empty string.
+  - **Ticker cadence is dynamic.** A preset with a non-expired `{{countdown}}` re-renders **every 1 second** so the count is smooth; once the countdown reaches `00:00` the service logs `ticker cadence 1s -> 60s` and downshifts so the device isn't hammered for nothing. Presets with only `{{time}}`/`{{date}}` keep the original 60 s cadence.
+  - Ticker auto-stops on wipe/resume/new preset/sequence. Implemented in [scripts/pixoo_service.py](../scripts/pixoo_service.py) (`_substitute_live_tokens`, `_pick_ticker_cadence`, `_start_ticker` / `_stop_ticker`, `_render_preset`, `_rerender_raw_push`, `_render_gif_with_overlay`).
+  - **Dashboard preview auto-polls** (added 2026-04-25) — `corridor.js` now calls `pixooPlay()` on page load so `/api/pixoo/status` polls every 5 s. The preview canvas updates automatically (countdown jumps in ~5-second steps on the web page; the physical Pixoo ticks smoothly at 1 s). Previously only a hard refresh showed new values.
+  - HTTP `/push` ticker now re-publishes `_pixoo_screen` on every tick (not just initial push), so dashboard preview reflects ticker-driven token values even for ad-hoc pushes bypassing the preset library.
 
 ## API Endpoints (in `BOILER/dashboard/server.js`)
 
