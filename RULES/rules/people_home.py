@@ -12,11 +12,13 @@ Reads state.spatial for adjacency + door roles. Falls back to today's
 flat-room corridor dedupe if the spatial index is empty (startup race).
 
 Tuning knobs (state.shared — populated by the heartbeat sentence parser):
-- people_home.corridor_sec              — default 15  (A→B within X = same person)
-- people_home.adjacency_dedupe_sec      — default 30  (wider window for adjacent rooms)
-- people_home.away_after_no_motion_min  — default 30  (idle → away after X min)
-- people_home.door_transit_window_sec   — default 10  (door open then presence = entry)
-- people_home.exit_quiet_window_sec     — default 30  (door open then no motion = exit)
+- people_home.corridor_sec                  — default 15  (A→B within X = same person)
+- people_home.adjacency_dedupe_sec          — default 30  (wider window for adjacent rooms)
+- people_home.away_after_no_motion_min      — default 30  (idle → away after X min)
+- people_home.door_transit_window_sec       — default 10  (door open then presence = entry)
+- people_home.exit_quiet_window_sec         — default 30  (door open then no motion = exit)
+- people_home.transit_sequence_window_sec   — default 15  (Tier-1↔Tier-3 inferred transit window)
+- people_home.door_close_stabilize_sec      — default 15  (seconds after Main Door close before recount)
 """
 
 from datetime import datetime, timezone
@@ -207,9 +209,10 @@ def evaluate(event, state):
     if main_door_now is not None:
         state.shared['_prev_main_door_state'] = main_door_now
 
-    # Both the Main Door event (§2a) and the inferred Tier-1↔Tier-3 sequence
-    # (§2b + §5a) drive the same lock reset in §7a — if the door sensor dies,
-    # inferred transit covers it.
+    # Main Door CLOSE (§2a) and the inferred Tier-1↔Tier-3 sequence (§2b + §5a)
+    # both trigger the recount in §7a. The OPEN edge is intentionally not a
+    # reset — it only flags the `transit` visual state. If the door sensor dies,
+    # inferred transit covers the recount signal.
 
     # ── 2b. Tier-1 / Tier-3 transit signals (inferred-transit fallback) ──
     # Tier-1 = exterior approach (Corridor Presence, Ring Doorbell camera).
@@ -313,7 +316,6 @@ def evaluate(event, state):
     t1_age = state.get_timer('transit_tier1')
     t3_age = state.get_timer('transit_tier3')
     inferred_transit = None  # 'entry' | 'exit' | None
-    inferred_via = ''
     if t1_age < transit_seq_window and t3_age < transit_seq_window:
         # Debounce: only process once per sequence — re-trigger only if at least
         # transit_seq_window has elapsed since the last inferred fire.
@@ -344,10 +346,9 @@ def evaluate(event, state):
         else:
             confidence = 'low'
 
-    # ── 7. Fallback count: if no presence but activity/appliance exists, at least 1 ──
+    # ── 7. Fallback count: if no presence but Home Activity saw activity, at least 1 ──
     active_rooms = state.shared.get('active_rooms', []) or []
-    someone_home = state.shared.get('someone_home', False)
-    if people_count == 0 and (active_rooms or someone_home):
+    if people_count == 0 and active_rooms:
         people_count = 1
 
     # ── 7a. Door-event-driven lock with explicit transit/recount states ──
