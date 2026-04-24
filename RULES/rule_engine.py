@@ -75,11 +75,7 @@ KNOB_PATTERNS = [
      'people_home.door_transit_window_sec', 'sec'),
     (re.compile(r'people home:.*door.*?no motion.*?' + _NUM_UNIT + r'.*exit', re.I),
      'people_home.exit_quiet_window_sec', 'sec'),
-    # People Home — Main Door floor knobs
-    (re.compile(r'people home:.*cap.*?people.*?(\d+)', re.I),
-     'people_home.max_household_size', 'count'),
-    (re.compile(r'people home:.*confirm.*?(\d+)\s*(?:consecutive|tick|cycle)', re.I),
-     'people_home.mark_sustain_ticks', 'count'),
+    # People Home — inferred transit + Main Door recount knobs
     (re.compile(r'people home:.*transit.*?sequence.*?' + _NUM_UNIT, re.I),
      'people_home.transit_sequence_window_sec', 'sec'),
     (re.compile(r'people home:.*recount.*?' + _NUM_UNIT + r'.*main door', re.I),
