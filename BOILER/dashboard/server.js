@@ -475,19 +475,6 @@ app.get('/api/status', async (req, res) => {
   res.json(result);
 });
 
-// ─── Boiler timer ─────────────────────────────────────────────
-app.get('/api/timer', async (req, res) => {
-  try {
-    const r = await fetch(`${HA_URL}/api/states/timer.boiler_temp_update_timer`, {
-      headers: { Authorization: `Bearer ${getHaToken()}` },
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!r.ok) return res.status(502).json({ error: 'HA error' });
-    const data = await r.json();
-    res.json({ state: data.state, remaining: data.attributes.remaining, duration: data.attributes.duration, finishes_at: data.attributes.finishes_at });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // ─── Consumptions ─────────────────────────────────────────────
 app.get('/api/consumptions', async (req, res) => {
   const limit = parseInt(req.query.limit) || 20;

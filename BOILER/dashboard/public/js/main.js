@@ -96,19 +96,8 @@ async function loadUsageToday() {
   } catch (e) { console.error('loadUsageToday error:', e); }
 }
 
-async function loadTimer() {
-  try {
-    const t = await fetch('/api/timer').then(r => r.json());
-    const dot   = document.getElementById('timer-state-dot');
-    const state = document.getElementById('timer-state');
-    const colors = { active: '#2ecc71', idle: '#e74c3c', paused: '#e67e22' };
-    dot.style.color   = colors[t.state] || '#e74c3c';
-    state.textContent = t.state || '—';
-  } catch (e) { console.error('loadTimer error:', e); }
-}
-
 async function refreshAll() {
-  await Promise.all([loadReport(), loadSettings(), loadStatus(), loadSolarScore(), loadUsageToday(), loadTimer()]);
+  await Promise.all([loadReport(), loadSettings(), loadStatus(), loadSolarScore(), loadUsageToday()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
   scheduleAutoRefresh();
