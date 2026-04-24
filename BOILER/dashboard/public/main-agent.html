@@ -17,6 +17,13 @@
        recounting ("**") during the post-close stabilize window. Amber
        italic so it reads as "the system knows something's happening". */
     #stat-people.pending { color:#d96c20; font-style:italic; }
+    /* Dynamic People — Constant + discoveries (monotonic up between door events).
+       Italic to signal "derived value"; same color scale as Constant. */
+    #stat-people-dynamic { font-style: italic; }
+    #stat-people-dynamic.p0 { color:#95a5a6; }
+    #stat-people-dynamic.p1 { color:var(--info); }
+    #stat-people-dynamic.pm { color:#1a7a3a; }
+    #stat-people-dynamic.pending { color:#d96c20; }
     #stat-active-rooms { color:var(--info); }
     #stat-last-room { color:#b7770d; }
     #stat-motion-ago { color:#8e44ad; }
@@ -168,7 +175,8 @@
       <h2>Overview</h2>
       <div class="device-stats">
         <div class="stat-chip"><span class="stat-val" id="stat-mode-val">—</span><span class="stat-lbl">Home</span></div>
-        <div class="stat-chip"><span class="stat-val" id="stat-people">—</span><span class="stat-lbl">People</span></div>
+        <div class="stat-chip"><span class="stat-val" id="stat-people">—</span><span class="stat-lbl">Constant People</span></div>
+        <div class="stat-chip"><span class="stat-val" id="stat-people-dynamic">—</span><span class="stat-lbl">Dynamic People</span></div>
         <div class="stat-chip"><span class="stat-val" id="stat-active-rooms">—</span><span class="stat-lbl">Active Rooms</span></div>
         <div class="stat-chip"><span class="stat-val" id="stat-last-room">—</span><span class="stat-lbl">Last Motion</span></div>
         <div class="stat-chip"><span class="stat-val" id="stat-motion-ago">—</span><span class="stat-lbl">Ago</span></div>
@@ -214,6 +222,6 @@
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js"></script>
 <script src="js/device-picker.js?v=4"></script>
-<script src="js/main-agent.js?v=31"></script>
+<script src="js/main-agent.js?v=32"></script>
 </body>
 </html>

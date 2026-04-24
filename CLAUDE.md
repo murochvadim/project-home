@@ -169,6 +169,15 @@ Flow: Main Door open → state=`transit`, `people_home` stays at previous lock; 
 
 **Stabilize window is auto-sized (2026-04-24 hold-aware):** each placement carries `hold_s` in `room_device_placements.params` (5 s radar, 15 s motion). The rule reads `hold_s` per counted-room sensor via `state.spatial['device_to_zones']` and computes `auto_stabilize = max(hold_s) + 5 s margin`. `people_home.door_close_stabilize_sec` (Settings knob, default 15 s) is now a **floor** — effective window = `max(knob, auto_stabilize)`. So if a motion sensor has 15 s hold, the recount waits 20 s; user can bump the knob higher if they want, but can't go below the auto-computed minimum. Prevents stale-hold over-counts at recount time.
 
+**Constant vs Dynamic People count (2026-04-24):** People Home now emits two counts side-by-side for the Main Agent dashboard:
+
+- **Constant** (`people_home`) — the locked count. Only changes on Main Door events (real or inferred). Conservative, audit-trustworthy.
+- **Dynamic** (`people_home_dynamic`) — Constant + `discovered_count`. Can ONLY go up between door events; snaps back to Constant at every door event.
+
+`discovered_count` climbs when a 4-signal test passes: (1) room NOT in lock-time snapshot (`_people_lock_rooms`), (2) room NOT already accounted via a recent corridor transit (`_people_accounted_rooms` populated when `corridor:A>B` timer fires), (3) room continuously active for ≥ 2 × max(hold_s) for its sensors (rising-edge timer `room_first_active:<room>`), (4) same room was a candidate last tick AND this tick (2-tick sustain filters single-tick glitches). All 4 must pass. Catches slow-wake sleepers / mmWave blind-spot reveals without bumping on same-person walk-in-and-stay.
+
+Dashboard (`main-agent.html` + `main-agent.js`) renders both chips — "Constant People" + "Dynamic People" — both honoring the transit ("--") / recounting ("**") / integer states. Dynamic chip italic to signal "derived."
+
 Emitted People Home diagnostic fields (in addition to legacy fields):
 - `people_home` — **locked** count (what the dashboard reads)
 - `people_count_state` — `stable` | `transit` | `recounting` (drives dashboard `--` / `**` / N rendering, read from `state.shared` by dashboard main-agent.js at polling cadence 5 s)

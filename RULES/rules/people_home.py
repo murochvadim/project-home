@@ -189,6 +189,13 @@ def evaluate(event, state):
         state.set_timer('_prev_presence_time')
         if prev_room and prev_room != room and prev_timer < corridor_sec:
             state.set_timer(f'corridor:{prev_room}>{room}')
+            # Discovery-layer: a corridor transit into `room` is evidence that
+            # an already-counted person walked there. Mark `room` as accounted
+            # so the discovery loop never flags it as "new hidden person."
+            # Cleared when the lock resets on the next door event.
+            accounted = set(state.shared.get('_people_accounted_rooms') or [])
+            accounted.add(room)
+            state.shared['_people_accounted_rooms'] = sorted(accounted)
 
     # ── 2. Door open → record for entry/exit decision ──
     if dtype in DOOR_TYPES:
@@ -289,6 +296,17 @@ def evaluate(event, state):
             folded_seen.add(eff)
     presence_rooms = folded
 
+    # ── 4b. Rising-edge tracking for the sustain signal (Dynamic People discovery). ──
+    # When a room newly appears in presence_rooms, stamp `room_first_active:<room>`
+    # so its age = "continuously active for this long." Used in §7b signal 3.
+    current_active_set = set(presence_rooms)
+    last_active_set    = set(state.shared.get('_people_last_active_rooms') or [])
+    for newly_active in current_active_set - last_active_set:
+        state.set_timer(f'room_first_active:{newly_active}')
+    # Rooms that dropped out: timer ages out naturally; we only check it for
+    # rooms currently in presence_rooms.
+    state.shared['_people_last_active_rooms'] = sorted(current_active_set)
+
     # ── 5. Adjacency-aware dedupe: merge pairs that are adjacent AND had a recent corridor fire ──
     people_count = len(presence_rooms)
     if people_count > 1:
@@ -383,9 +401,16 @@ def evaluate(event, state):
 
     recalc_pending = bool(state.shared.get('_recalc_pending'))
     if recalc_pending and state.get_timer('_post_door_stabilize') >= effective_stabilize:
-        state.shared['_people_locked_count'] = live_count
-        state.shared['_people_last_lock_ts'] = _now_iso()
-        state.shared['_recalc_pending']      = False
+        state.shared['_people_locked_count']     = live_count
+        state.shared['_people_last_lock_ts']     = _now_iso()
+        state.shared['_recalc_pending']          = False
+        # Snapshot the rooms that were active at lock time (signal 1 reference)
+        # + wipe discovery state so Dynamic snaps back to Constant on every
+        # door event.
+        state.shared['_people_lock_rooms']         = sorted(set(presence_rooms))
+        state.shared['_people_discovered_count']   = 0
+        state.shared['_people_accounted_rooms']    = []
+        state.shared['_people_discovery_candidates'] = []
         locked_count   = live_count
         recalc_pending = False
     elif state.shared.get('_people_locked_count') is not None:
@@ -393,8 +418,12 @@ def evaluate(event, state):
     else:
         # First evaluation after boot — seed from the current live count.
         locked_count = live_count
-        state.shared['_people_locked_count'] = locked_count
-        state.shared['_people_last_lock_ts'] = _now_iso()
+        state.shared['_people_locked_count']     = locked_count
+        state.shared['_people_last_lock_ts']     = _now_iso()
+        state.shared['_people_lock_rooms']       = sorted(set(presence_rooms))
+        state.shared['_people_discovered_count'] = 0
+        state.shared['_people_accounted_rooms']  = []
+        state.shared['_people_discovery_candidates'] = []
 
     people_count = locked_count
     floored = (live_count != locked_count)
@@ -410,6 +439,50 @@ def evaluate(event, state):
     else:
         people_count_state = 'stable'
         # confidence keeps 'high' / 'medium' / 'low' from §6
+
+    # ── 7b. Dynamic People — discovery of previously-hidden occupants ──
+    # Adds (never subtracts) between door events. Four signals must all pass
+    # for a room to be a "discovery candidate":
+    #   1. Room NOT in the lock-time snapshot (_people_lock_rooms)
+    #   2. Room NOT already accounted via a corridor transit (§1 populates this)
+    #   3. Continuously active ≥ 2 × max(hold_s) for its sensors (§4b tracks)
+    #   4. (2-tick sustain) Candidate last tick AND this tick
+    # Only when all 4 pass → bump discovered_count + add room to lock_rooms.
+    # Reset on every door-event recount (§7a).
+    lock_rooms = set(state.shared.get('_people_lock_rooms') or [])
+    accounted_rooms = set(state.shared.get('_people_accounted_rooms') or [])
+    discovered_count = int(state.shared.get('_people_discovered_count') or 0)
+    prev_candidates = set(state.shared.get('_people_discovery_candidates') or [])
+
+    candidates_this_tick = set()
+    d2z = spatial.get('device_to_zones') or {}
+    for room in presence_rooms:
+        if room in lock_rooms:
+            continue                       # Signal 1
+        if room in accounted_rooms:
+            continue                       # Signal 2
+        slug = _slug_for_room(spatial, room)
+        room_holds = [info.get('hold_s', 15)
+                      for info in d2z.values()
+                      if info.get('room_slug') == slug]
+        hold_s = max(room_holds) if room_holds else 15
+        if state.get_timer(f'room_first_active:{room}') < 2 * hold_s:
+            continue                       # Signal 3 — not yet sustained
+        candidates_this_tick.add(room)
+
+    # Signal 4 — 2-tick sustain: only bump on rooms that were candidates last
+    # tick too. Filters single-tick sensor glitches.
+    for room in candidates_this_tick & prev_candidates:
+        discovered_count += 1
+        lock_rooms.add(room)           # prevents re-discovery of same room
+        accounted_rooms.add(room)
+
+    state.shared['_people_discovered_count']     = discovered_count
+    state.shared['_people_lock_rooms']           = sorted(lock_rooms)
+    state.shared['_people_accounted_rooms']      = sorted(accounted_rooms)
+    state.shared['_people_discovery_candidates'] = sorted(candidates_this_tick)
+
+    dynamic_count = locked_count + discovered_count
 
     # ── 8. Occupied rooms = union ──
     occupied_rooms = sorted(set(presence_rooms) | set(active_rooms))
@@ -432,10 +505,11 @@ def evaluate(event, state):
             state.shared['_last_door_opened']  = ''  # consume
 
     # ── 11. Publish + emit ──
-    state.shared['people_home']         = people_count
-    state.shared['occupied_rooms']      = occupied_rooms
-    state.shared['home_mode']           = home_mode
-    state.shared['people_count_state']  = people_count_state
+    state.shared['people_home']          = people_count         # Constant (door-locked)
+    state.shared['people_home_dynamic']  = dynamic_count        # Constant + discoveries
+    state.shared['occupied_rooms']       = occupied_rooms
+    state.shared['home_mode']            = home_mode
+    state.shared['people_count_state']   = people_count_state
 
     # Pick the authoritative transition source for this tick
     if main_door_opened_now:
@@ -466,11 +540,14 @@ def evaluate(event, state):
             'people_count_high_water': locked_count,        # emitted count (locked value)
             'people_count_live':       live_count,          # what sensors say right now, pre-lock
             'last_transition_source':  transition_source,
+            # Dynamic People — Constant + discovered_count (§7b)
+            'people_home_dynamic':     dynamic_count,
+            'people_discovered_count': discovered_count,    # bumps since last door event
         },
         source='rule:People Home',
         name='People Home State',
         dps_labels={
-            'people_home':             'People Count',
+            'people_home':             'People Count (Constant, door-locked)',
             'home_mode':               'Home Mode',
             'someone_home':            'Someone Home',
             'occupied_rooms':          'Occupied Rooms',
@@ -483,6 +560,8 @@ def evaluate(event, state):
             'people_count_high_water': 'Locked Count',
             'people_count_live':       'Live Sensor Count',
             'last_transition_source':  'Transition Source',
+            'people_home_dynamic':     'People Count (Dynamic, +discoveries)',
+            'people_discovered_count': 'Discoveries Since Last Door Event',
         },
     )
 
