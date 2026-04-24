@@ -205,6 +205,7 @@ Emitted People Home diagnostic fields (in addition to legacy fields):
 - `boiler` — Boiler Consumption Classify and future boiler rules
 - `info` — Home Activity, People Home (global aggregators)
 - `living-room` — Wallmote Handler and future Living Room automations (bindings stored in `dashboard_settings.living-room.*`)
+- `pixoo` — Daily_Wellcome (always-on default, priority 90) and future Pixoo64 display rules (alarms, notifications, status banners — use a smaller priority number so they override the welcome screen)
 
 ---
 
@@ -285,7 +286,8 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - Runs on LXC 105 as `rule-engine.service` with orphan guard (`ExecStartPre=/opt/main-agent/kill-orphans.sh`)
 - Global DAG sort for depends_on, load-error alerts, stats persistence, save-failure alerts, db_execute single retry on failure
 - Test button: honors RULE["test_event"], state_updated status for info rules
-- Current rules: Home Activity, People Home, Boiler Consumption Classify
+- Current rules: Home Activity, People Home, Boiler Consumption Classify, Wallmote Handler, Daily_Wellcome (pixoo)
+- **Live RULE dict pattern:** the engine mutates each rule's `module.RULE['conditions']` in place when applying dashboard DB overrides (`_rule_overrides` key in `rule_engine_state`) — so reading e.g. `RULE.get('conditions',{}).get('time',{}).get('before')` at eval time automatically reflects the current override. Use this instead of redefining the value as a second constant. `Daily_Wellcome` derives its end-of-day wipe time from the live window `before` so the dashboard's time-window editor moves the wipe too (single source of truth).
 - External converter: `/opt/zigbee2mqtt/data/external_converters/tuya_scene_switch.js` (DPs 24/25/26)
 - **Heartbeat tick (2026-04-23):** `RuleEngine._heartbeat_loop` emits a synthetic `{device_id:'heartbeat', source:'tick'}` event once per 60s and dispatches it through the normal rule-firing path. Rules declare `triggers=["heartbeat"]` to fire on the tick — used by time-based rules (e.g. Layer 0 `home_state.py` time-mode derivation) to re-evaluate boundaries during quiet periods when no real device events fire. A `_dispatch_lock` serializes rule-firing between the paho callback thread and the heartbeat thread to keep group-active tracking + shared-state mutations consistent.
 
