@@ -54,8 +54,17 @@ _CACHE_TTL_SEC = 30
 # when the SECOND held arrives outside the window) still triggers the
 # held binding for explicit off.
 HELD_SUPPRESS_WITHIN_SEC = 5.0
+# Aeotec wallmotes re-fire `held` every ~5 sec while the button is still
+# depressed. Each repeat causes a fresh dispatch — for a multi-channel off
+# binding (3 commands × 3+ repeats) this overshoots the rule_engine loop
+# guard (4 same-target commands / 10s), auto-disabling the rule for ~6 min
+# and making subsequent button presses appear to do nothing. Allow one held
+# per physical press; silently drop repeats that arrive within this window
+# after the last FIRING held on the same wm_slug+button.
+HELD_REPEAT_SUPPRESS_SEC = 12.0
 _last_pushed_ts: dict[str, float] = {}   # key = "wm_slug:button" → unix ts
-_last_pushed_lock = threading.Lock()     # guards _last_pushed_ts read+write (paho thread races)
+_last_held_ts: dict[str, float] = {}     # key = "wm_slug:button" → unix ts of last FIRED held
+_last_pushed_lock = threading.Lock()     # guards both dicts' read+write (paho thread races)
 
 
 def _get_bindings(state):
@@ -115,26 +124,31 @@ def evaluate(event, state):
     # the window) trigger the off binding.
     tracker_key = f"{wm_slug}:{button}"
     now = time.time()
+    suppress_reason = None
     # Lock the whole read-decide-write so two concurrent wallmote events on
     # the same button can't both pass the "outside window" check, or race the
-    # pushed write vs the held read.
+    # pushed/held writes vs the held reads.
     with _last_pushed_lock:
         if event_type == "pushed":
             _last_pushed_ts[tracker_key] = now
-            suppress = False
-            since_push = 0.0
+            # New press ends the previous held-repeat window so a fresh
+            # long-hold on the same button can fire again.
+            _last_held_ts.pop(tracker_key, None)
         elif event_type == "held":
             last_push = _last_pushed_ts.get(tracker_key, 0.0)
             since_push = now - last_push
-            suppress = since_push < HELD_SUPPRESS_WITHIN_SEC
-        else:
-            suppress = False
-            since_push = 0.0
-    if event_type == "held" and suppress:
-        log.info(
-            "Wallmote %s %s held suppressed (%.1fs after pushed)",
-            wm_slug, button, since_push,
-        )
+            last_held = _last_held_ts.get(tracker_key, 0.0)
+            since_held = (now - last_held) if last_held else float("inf")
+            if since_push < HELD_SUPPRESS_WITHIN_SEC:
+                suppress_reason = f"{since_push:.1f}s after pushed"
+            elif since_held < HELD_REPEAT_SUPPRESS_SEC:
+                suppress_reason = f"{since_held:.1f}s after previous held (repeat)"
+            else:
+                # About to fire — record as the last firing held so the
+                # next wallmote-repeat within the window gets suppressed.
+                _last_held_ts[tracker_key] = now
+    if event_type == "held" and suppress_reason:
+        log.info("Wallmote %s %s held suppressed (%s)", wm_slug, button, suppress_reason)
         return []
 
     bindings = _get_bindings(state)
