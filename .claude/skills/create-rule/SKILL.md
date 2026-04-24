@@ -370,9 +370,18 @@ After the user approves the generated code:
 
 ## Audit Procedure (when action = Audit)
 
-Read-only scan of every `RULES/rules/*.py` (excluding `_template.py` and `__init__.py`) against the Cost Checklist from Step 8. No file is modified. Produce a report.
+Read-only static analysis of rule files against the Cost Checklist from Step 8. No file is modified. Produce a report.
 
-### Checks (run each across all rule files)
+### Step A0: Ask which rules to audit
+
+Use `AskUserQuestion` to pick the scope:
+
+- **All rules** — sweep every `RULES/rules/*.py` (except `_template.py` and `__init__.py`). Use for monthly health check or when the user says "audit rules" without specifying.
+- **One specific rule** — if chosen, list the rule files (excluding templates) and ask which one. Run the checks against that single file only. Use when the user suspects a specific rule is slow or misbehaving.
+
+The check set is the same in both modes; only the file scope differs.
+
+### Checks
 
 | # | Check | Detection | Severity if hit |
 |---|---|---|---|
@@ -386,12 +395,14 @@ Read-only scan of every `RULES/rules/*.py` (excluding `_template.py` and `__init
 
 ### Process
 
-1. List all candidate files: `ls RULES/rules/*.py` → filter out `_template.py`, `__init__.py`.
-2. Read each file.
+1. Resolve the target file list based on Step A0's answer:
+   - **All rules**: `ls RULES/rules/*.py` → filter out `_template.py`, `__init__.py`.
+   - **One specific rule**: just that one file.
+2. Read each target file.
 3. Run each check. For each hit, record the file, line (if applicable), check number, and severity.
-4. Print the wildcard count summary first (check 1 context).
+4. Print the wildcard count summary first (check 1 context — always computed across ALL rules, even in single-file mode, so the user sees the global ceiling).
 5. Print a per-rule table: `Rule | Issue | Severity | Suggestion`. Group by rule file so the user can scan one rule at a time.
-6. End with a summary line: `Audited N rules, M issues found across K rules (L rules clean).`
+6. End with a summary line: `Audited N rules, M issues found across K rules (L rules clean).` — N matches the scope (1 in single-file mode, all in full-sweep mode).
 
 ### What the report does NOT do
 
