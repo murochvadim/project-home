@@ -1,5 +1,5 @@
 ---
-description: Create, edit, or remove a rule engine automation rule
+description: Create, edit, remove, or audit a rule engine automation rule
 user-invocable: true
 ---
 
@@ -13,10 +13,13 @@ Ask the user what they want to do:
 - **Create** — build a new rule from scratch
 - **Edit** — modify an existing rule (list rules from `RULES/rules/*.py`, excluding `_template.py` and `__init__.py`)
 - **Remove** — delete a rule (list, confirm, delete from local + deploy)
+- **Audit** — scan ALL existing rules for design smells (wildcard overuse, heavy loops, missing cooldowns, unguarded DB queries, noisy emits). Read-only — produces a report, makes no changes.
 
 If **Remove**: list existing rules, confirm selection, delete the `.py` file locally and on LXC 105 (`/opt/main-agent/project/RULES/rules/`), then tell the user to click Reload on the dashboard. Done.
 
 If **Edit**: list existing rules, ask which one, read the file, ask what to change (trigger, action, conditions, group/priority, or full rewrite), make changes, show modified code, get approval, deploy.
+
+If **Audit**: jump to the **Audit Procedure** section at the end of this file. Do NOT continue to Step 1.
 
 If **Create**: continue with the steps below.
 
@@ -362,3 +365,43 @@ After the user approves the generated code:
 - Activity: `state.shared.get("activity_level", "idle")` — values: "idle", "low", "active"
 - **Scaling ceiling on current hardware:** 30-50 mixed rules comfortable; 15-20 wildcard rules is a soft cap; 20+ heavy wildcard rules (iterating `state.devices`, O(n²) scans) is a design smell — consolidate into aggregator rules before crossing.
 - **First rule of performance:** prefer specific triggers. **Second rule:** consume `virtual:*` events rather than scanning raw state. **Third rule:** cache DB queries with TTL. If you're doing none of those, your rule is probably too heavy.
+
+---
+
+## Audit Procedure (when action = Audit)
+
+Read-only scan of every `RULES/rules/*.py` (excluding `_template.py` and `__init__.py`) against the Cost Checklist from Step 8. No file is modified. Produce a report.
+
+### Checks (run each across all rule files)
+
+| # | Check | Detection | Severity if hit |
+|---|---|---|---|
+| 1 | **Wildcard count exceeds soft cap** | Count files with `"triggers": ["*"]`; if total > 15, flag every wildcard rule with a note "consider specific trigger or virtual:* consumer" | medium if count > 15, low if count 10-15 |
+| 2 | **Heavy `state.devices` iteration** in `evaluate()` | `grep -E "for\s+\w+,?\s*\w*\s+in\s+state\.devices\.(items\|values\|keys)\(" INSIDE the evaluate function` | medium (iterates ~115 devices per fire) |
+| 3 | **Unguarded `state.db_query` in `evaluate()`** | `state.db_query(` inside the evaluate function, with no nearby `_cache_ts`/`_cache_ttl_sec`/`time.time()` TTL pattern (check ±30 lines around the call) | high (DB roundtrip per event) |
+| 4 | **Command emission without cooldown** | File has `commands.append(` AND no matching `state.set_timer(.+cooldown` + `state.get_timer(.+cooldown` pair | high (MQTT flood risk on noisy trigger) |
+| 5 | **O(n²) loop on presence/active rooms** | Nested `for` loops where both iterate `presence_rooms`, `active_rooms`, or similar collections | low-medium depending on collection size |
+| 6 | **Noisy `emit_virtual_event` dps** | `emit_virtual_event(` call where the `dps={}` dict includes fields with names matching `distance`, `amplitude`, `raw_value`, `timestamp`, `ts`, `linkquality`, `rssi` (these drift and defeat dedupe, filling the events table with near-duplicates) | medium |
+| 7 | **Rule file length** | File > 300 lines (`wc -l`) | low (suggest split into smaller rules or helper module) |
+
+### Process
+
+1. List all candidate files: `ls RULES/rules/*.py` → filter out `_template.py`, `__init__.py`.
+2. Read each file.
+3. Run each check. For each hit, record the file, line (if applicable), check number, and severity.
+4. Print the wildcard count summary first (check 1 context).
+5. Print a per-rule table: `Rule | Issue | Severity | Suggestion`. Group by rule file so the user can scan one rule at a time.
+6. End with a summary line: `Audited N rules, M issues found across K rules (L rules clean).`
+
+### What the report does NOT do
+
+- No changes to any file.
+- No deploy.
+- No severity escalation based on runtime metrics — this is a static-analysis pass. Runtime profiling is a separate `/review-code lxc 105` step.
+
+### When the user should run Audit
+
+- Periodically (e.g., monthly) as a health check
+- Before adding a new wildcard rule — confirm you're not close to the ceiling
+- After a performance issue on LXC 105 — narrow down which rule grew teeth
+- After a rule refactor — confirm no regressions on the cost checklist
