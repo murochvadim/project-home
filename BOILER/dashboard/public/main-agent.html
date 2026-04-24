@@ -13,6 +13,10 @@
     #stat-people.p0 { color:#95a5a6; }
     #stat-people.p1 { color:var(--info); }
     #stat-people.pm { color:#1a7a3a; }
+    /* Rule-engine lock states: transit ("--") during Main Door open,
+       recounting ("**") during the post-close stabilize window. Amber
+       italic so it reads as "the system knows something's happening". */
+    #stat-people.pending { color:#d96c20; font-style:italic; }
     #stat-active-rooms { color:var(--info); }
     #stat-last-room { color:#b7770d; }
     #stat-motion-ago { color:#8e44ad; }
@@ -210,6 +214,6 @@
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js"></script>
 <script src="js/device-picker.js?v=4"></script>
-<script src="js/main-agent.js?v=30"></script>
+<script src="js/main-agent.js?v=31"></script>
 </body>
 </html>

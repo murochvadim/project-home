@@ -350,12 +350,14 @@ def evaluate(event, state):
     if people_count == 0 and (active_rooms or someone_home):
         people_count = 1
 
-    # ── 7a. Main-Door-locked count ──
-    # Strict semantics: the emitted `people_home` count changes ONLY when a
-    # door event (real Main Door close OR inferred Tier-1↔Tier-3 transit) has
-    # finished and the sensors had `door_close_stabilize_sec` to settle. Between
-    # door events the count is locked; sensor noise, transits, hold-off leakage
-    # do not move it. Initial boot seeds the lock from the first live reading.
+    # ── 7a. Door-event-driven lock with explicit transit/recount states ──
+    # Simple, unambiguous semantics:
+    #   - Main Door is 'open'  → people_count_state = 'transit'    (dashboard: --)
+    #   - Main Door just closed (or inferred transit) → 'recounting' (dashboard: **)
+    #   - Stabilize window elapsed → snapshot live_count → 'stable'  (dashboard: N)
+    #   - Between door events → count is frozen regardless of sensor noise
+    # No asymmetric UP, no sustain counters — door events are the ONLY thing
+    # that moves the lock. Period.
     live_count = people_count
 
     if main_door_closed_now or inferred_transit:
@@ -379,10 +381,18 @@ def evaluate(event, state):
 
     people_count = locked_count
     floored = (live_count != locked_count)
-    if recalc_pending:
-        confidence = 'recalculating'
-    elif floored:
-        confidence = 'locked'
+
+    # Derive state from door + recount flags. Dashboard reads this to decide
+    # whether to render "--" (transit) / "**" (recounting) / the integer.
+    if main_door_now == 'open':
+        people_count_state = 'transit'
+        confidence         = 'transit'
+    elif recalc_pending:
+        people_count_state = 'recounting'
+        confidence         = 'recalculating'
+    else:
+        people_count_state = 'stable'
+        # confidence keeps 'high' / 'medium' / 'low' from §6
 
     # ── 8. Occupied rooms = union ──
     occupied_rooms = sorted(set(presence_rooms) | set(active_rooms))
@@ -405,9 +415,10 @@ def evaluate(event, state):
             state.shared['_last_door_opened']  = ''  # consume
 
     # ── 11. Publish + emit ──
-    state.shared['people_home']    = people_count
-    state.shared['occupied_rooms'] = occupied_rooms
-    state.shared['home_mode']      = home_mode
+    state.shared['people_home']         = people_count
+    state.shared['occupied_rooms']      = occupied_rooms
+    state.shared['home_mode']           = home_mode
+    state.shared['people_count_state']  = people_count_state
 
     # Pick the authoritative transition source for this tick
     if main_door_opened_now:
@@ -433,9 +444,10 @@ def evaluate(event, state):
             'last_exited_via':    state.shared.get('last_exited_via', ''),
             'last_transition_ts': state.shared.get('last_transition_ts', ''),
             # Main-Door-locked count diagnostics
-            'people_count_floored':    floored,        # True when live != locked (lock is holding)
-            'people_count_high_water': locked_count,   # emitted count (locked value)
-            'people_count_live':       live_count,     # what sensors say right now, pre-lock
+            'people_count_state':      people_count_state,  # 'stable' | 'transit' | 'recounting'
+            'people_count_floored':    floored,             # True when live != locked (lock is holding)
+            'people_count_high_water': locked_count,        # emitted count (locked value)
+            'people_count_live':       live_count,          # what sensors say right now, pre-lock
             'last_transition_source':  transition_source,
         },
         source='rule:People Home',
@@ -449,6 +461,7 @@ def evaluate(event, state):
             'last_entered_via':        'Last Entered Via',
             'last_exited_via':         'Last Exited Via',
             'last_transition_ts':      'Last Transition',
+            'people_count_state':      'Count State (transit / recounting / stable)',
             'people_count_floored':    'Lock Engaged (sensors disagree)',
             'people_count_high_water': 'Locked Count',
             'people_count_live':       'Live Sensor Count',

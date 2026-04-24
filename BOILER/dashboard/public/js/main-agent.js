@@ -388,10 +388,22 @@
       modeEl.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
       modeEl.className = 'stat-val ' + mode;
 
+      // People count — the rule engine locks this on Main Door close events.
+      // During transit (door open) we show "--"; during recount (stabilize
+      // window after door close) we show "**". Otherwise the locked integer.
+      const pstate = s.people_count_state || 'stable';
       const people = parseInt(s.people_home) || 0;
       const peopleEl = document.getElementById('stat-people');
-      peopleEl.textContent = people;
-      peopleEl.className = 'stat-val ' + (people === 0 ? 'p0' : people === 1 ? 'p1' : 'pm');
+      if (pstate === 'transit') {
+        peopleEl.textContent = '--';
+        peopleEl.className = 'stat-val pending';
+      } else if (pstate === 'recounting') {
+        peopleEl.textContent = '**';
+        peopleEl.className = 'stat-val pending';
+      } else {
+        peopleEl.textContent = people;
+        peopleEl.className = 'stat-val ' + (people === 0 ? 'p0' : people === 1 ? 'p1' : 'pm');
+      }
 
       const activeCount = parseInt(s.active_room_count) || 0;
       document.getElementById('stat-active-rooms').textContent = activeCount;

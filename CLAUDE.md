@@ -145,7 +145,7 @@ Rules on LXC 105 query `device_events` at any historical timestamp to get accura
 
 Current virtual devices:
 - `virtual:home_activity` (owner: Home Activity rule) — legacy: `active_rooms`, `activity_level`, `active_room_count`, `last_motion_room`; **apartment-vision (2026-04-24):** `active_zones`, `active_zone_count`, `last_motion_zone`, `door_state` (map of door-name → 'open'|'closed')
-- `virtual:people_home` (owner: People Home rule) — legacy: `people_home`, `home_mode`, `someone_home`, `occupied_rooms`; **apartment-vision (2026-04-24):** `people_confidence` (high|medium|low|**floored**), `last_entered_via`, `last_exited_via`, `last_transition_ts`, `people_count_floored`, `people_count_high_water`, `last_transition_source` (`door_sensor` | `inferred_entry` | `inferred_exit`)
+- `virtual:people_home` (owner: People Home rule) — legacy: `people_home`, `home_mode`, `someone_home`, `occupied_rooms`; **apartment-vision (2026-04-24):** `people_confidence` (high|medium|low|**transit**|**recalculating**), `last_entered_via`, `last_exited_via`, `last_transition_ts`, `people_count_state` (**stable**|**transit**|**recounting**), `people_count_floored`, `people_count_high_water`, `people_count_live`, `last_transition_source` (`door_sensor` | `inferred_entry` | `inferred_exit`)
 - `virtual:boiler_status` (owner: Boiler Consumption Classify) — `last_cause`, `last_drop_c`, `last_rooms`, `last_start_ts`
 
 **Apartment-vision upgrade (2026-04-24):** Home Activity + People Home now consume `state.spatial` — a zone/adjacency/sub-rooms index built by `state_manager.load_from_db()` from `dashboard_settings.room_layouts.*` + `room_device_placements`. Cone-to-zone geometry (point-in-polygon, 1m cells) ported from `buildApartmentScene` in server.js. Each sensor placement gets `zones` (full cone coverage) + `primary_zone` (zone at beam midpoint) — activity uses primary_zone to avoid edge-overlap false activations.
@@ -157,14 +157,23 @@ Current virtual devices:
 - **Exterior motion**: Ring Doorbell (camera at Main Door). Same treatment — Tier-1 signal, not counted.
 - **Counted rooms**: Living Room (open-plan parent), Balcony (separate room via sliding door), Bedroom, My BathRoom, Guy Room, DressRoom, Bathroom, Laundry, BedRoom Balcony.
 
-**Main-Door-locked count (2026-04-24 strict v2):** `people_home` changes ONLY on a Main Door close event (real or inferred). Between door events the count is **locked** — sensor noise, transits, hold-off leakage, ghost fires all ignored. Flow: Main Door open → flag transit; Main Door close → start `people_home.door_close_stabilize_sec` timer (default 15 s); when it elapses → recompute from live sensors → set new locked count. Inferred transit (Tier-1 = Corridor Presence / Ring Doorbell exterior, ↔ Tier-3 = Entrance presence, within `transit_sequence_window_sec`) triggers the same recalc path — handles the case where the Main Door sensor dies. Initial boot seeds the lock from the first live reading; converges to reality after the first real door event.
+**Main-Door-locked count (2026-04-24 strict v3 — door-event-driven only):** `people_home` changes ONLY on Main Door close events (real or inferred). Between door events the count is locked. No asymmetric UP, no sustain counters, no high-water mark — only door events move it. Three explicit visual states published via `people_count_state`:
+
+| state | trigger | dashboard | confidence |
+|---|---|---|---|
+| `transit` | Main Door `open` | `--` (amber italic) | `transit` |
+| `recounting` | Main Door just closed → inside the `door_close_stabilize_sec` window | `**` (amber italic) | `recalculating` |
+| `stable` | window elapsed → `people_home` = live_count snapshot | integer | `high` / `medium` / `low` |
+
+Flow: Main Door open → state=`transit`, `people_home` stays at previous lock; Main Door close → state=`recounting`, `_post_door_stabilize` timer starts (default 15 s, tunable via `people_home.door_close_stabilize_sec`); when timer elapses → snapshot `live_count` → new lock → state=`stable`. Inferred Tier-1↔Tier-3 transit (exterior Corridor / Ring Doorbell ↔ interior Entrance presence, within `transit_sequence_window_sec`) triggers the same recount path — handles a dead Main Door sensor. Initial boot seeds the lock from the first live reading.
 
 Emitted People Home diagnostic fields (in addition to legacy fields):
 - `people_home` — **locked** count (what the dashboard reads)
+- `people_count_state` — `stable` | `transit` | `recounting` (drives dashboard `--` / `**` / N rendering, read from `state.shared` by dashboard main-agent.js at polling cadence 5 s)
 - `people_count_high_water` — locked count (alias retained for continuity)
-- `people_count_live` — what sensors currently say, pre-lock (dashboard can render "live: 3 / locked: 2" during transit)
-- `people_count_floored` — `true` when `live != locked` (the lock is holding because sensors disagree)
-- `people_confidence` ∈ {`high`, `medium`, `low`, `recalculating` (during stabilize window), `locked` (sensors disagree but lock holds)}
+- `people_count_live` — what sensors currently say, pre-lock (diagnostic)
+- `people_count_floored` — `true` when `live != locked` (lock is holding)
+- `people_confidence` ∈ {`high`, `medium`, `low`, `transit`, `recalculating`}
 - `last_transition_source` — `door_sensor` | `inferred_entry` | `inferred_exit`
 
 **Auto-reload on spatial changes:** dashboard writes `_spatial_reload_request='pending'` to `rule_engine_state` on any `POST /api/room-layouts/:slug`, `POST/PATCH/DELETE /api/room-device-placements/...`. The rule-engine heartbeat detects the flag within ≤60s, calls `state.load_from_db()` (rebuilds spatial + devices), and clears the flag. No manual Reload needed after layout edits.
