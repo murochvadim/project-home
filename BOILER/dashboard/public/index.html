@@ -417,15 +417,18 @@
           <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">
             Data Update
           </div>
-          <div class="form-group" style="grid-column:1/-1;">
-            <label for="s-run-interval" title="Max sleep ceiling — the agent will always wake at least this often, even if no new sync_signals arrive. Acts as a failsafe when WF96C is silent.">Run Interval (min) — max sleep ceiling</label>
+          <div class="form-group" style="grid-column:span 1; min-width:240px;">
+            <label for="s-run-interval" title="Max sleep ceiling — the agent will always wake at least this often, even if no new sync_signals arrive. Acts as a failsafe when WF96C is silent.">Run Interval (min)</label>
             <input type="number" id="s-run-interval" min="1" max="60">
           </div>
-          <div class="form-group" style="grid-column:1/-1;">
-            <label for="s-sync-poll" title="Actual agent run cadence during normal operation. Agent polls sync_signals at this rate to wake early on new WF96C readings. Lower = faster reaction + more DB load; higher = calmer. Default 300 s (5 min).">Sync Poll Interval (sec) — actual run cadence</label>
+          <div class="form-group" style="grid-column:span 1; min-width:240px;">
+            <label for="s-sync-poll" title="Actual agent run cadence during normal operation. Agent polls sync_signals at this rate to wake early on new WF96C readings. Lower = faster reaction + more DB load; higher = calmer. Default 300 s (5 min).">Sync Poll Interval (sec)</label>
             <input type="number" id="s-sync-poll" min="5" max="600">
           </div>
-          <div class="form-group">
+          <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-top:6px; padding-top:10px; border-top:1px solid #e8e2db;">
+            Decision Tuning
+          </div>
+          <div class="form-group" style="grid-column:span 1; min-width:240px;">
             <label for="s-valid-after-on" title="After the valve turns ON, ignore panel_temp readings for this many minutes — water is circulating and the sensor is unreliable until flow stabilizes.">Temp Panel Valid After ON (min)</label>
             <input type="number" id="s-valid-after-on" min="0">
           </div>
