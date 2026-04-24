@@ -381,17 +381,30 @@ Use `AskUserQuestion` to pick the scope:
 
 The check set is the same in both modes; only the file scope differs.
 
+### Severity calibration by trigger type (IMPORTANT)
+
+Cost-per-event and cost-per-fire are different numbers. A `state.devices` iteration that costs 0.1 ms per call:
+- **Wildcard (`"*"`)** — fires ~1×/sec → ~360 ms/hour → **medium severity** (the baseline in the table below)
+- **Specific device_id(s)** — fires only on matching events (maybe 5-100×/day) → negligible CPU → **severity downgraded to low**, often ignorable
+- **Heartbeat (`["heartbeat"]`)** — fires every 60 s → noticeable but bounded → **severity low-medium**
+- **Virtual device trigger (`["virtual:X"]`)** — fires as often as the producing rule emits → usually low
+- **Event-specific (`["boiler"]`, `["<device-id>"]`)** — fires only on real events of that type → **low**
+
+When applying checks 2, 3, and 5 (heavy loops + DB queries), **look at the RULE dict's `triggers` field first** and calibrate the reported severity accordingly. A check 2 hit in a wildcard rule is medium; the same pattern in a specific-triggered rule is low and often a false alarm not worth reporting.
+
+Checks 4 (cooldown) and 6 (noisy dps) are severity-invariant — cooldown matters regardless of fire rate, and noisy dps defeats dedupe regardless.
+
 ### Checks
 
-| # | Check | Detection | Severity if hit |
-|---|---|---|---|
-| 1 | **Wildcard count exceeds soft cap** | Count files with `"triggers": ["*"]`; if total > 15, flag every wildcard rule with a note "consider specific trigger or virtual:* consumer" | medium if count > 15, low if count 10-15 |
-| 2 | **Heavy `state.devices` iteration** in `evaluate()` | `grep -E "for\s+\w+,?\s*\w*\s+in\s+state\.devices\.(items\|values\|keys)\(" INSIDE the evaluate function` | medium (iterates ~115 devices per fire) |
-| 3 | **Unguarded `state.db_query` in `evaluate()`** | `state.db_query(` inside the evaluate function, with no nearby `_cache_ts`/`_cache_ttl_sec`/`time.time()` TTL pattern (check ±30 lines around the call) | high (DB roundtrip per event) |
-| 4 | **Command emission without cooldown** | File has `commands.append(` AND no matching `state.set_timer(.+cooldown` + `state.get_timer(.+cooldown` pair | high (MQTT flood risk on noisy trigger) |
-| 5 | **O(n²) loop on presence/active rooms** | Nested `for` loops where both iterate `presence_rooms`, `active_rooms`, or similar collections | low-medium depending on collection size |
-| 6 | **Noisy `emit_virtual_event` dps** | `emit_virtual_event(` call where the `dps={}` dict includes fields with names matching `distance`, `amplitude`, `raw_value`, `timestamp`, `ts`, `linkquality`, `rssi` (these drift and defeat dedupe, filling the events table with near-duplicates) | medium |
-| 7 | **Rule file length** | File > 300 lines (`wc -l`) | low (suggest split into smaller rules or helper module) |
+| # | Check | Detection | Default severity | Downgrade for specific triggers? |
+|---|---|---|---|---|
+| 1 | **Wildcard count exceeds soft cap** | Count files with `"triggers": ["*"]`; if total > 15, flag every wildcard rule with a note "consider specific trigger or virtual:* consumer" | medium if count > 15, low if count 10-15 | N/A — check 1 only applies to wildcard rules |
+| 2 | **Heavy `state.devices` iteration** in `evaluate()` | `grep -E "for\s+\w+,?\s*\w*\s+in\s+state\.devices\.(items\|values\|keys)\(" INSIDE the evaluate function` | **medium** (wildcard — iterates ~115 devices per event) | **low** for heartbeat / specific triggers. Often not worth reporting at all if the rule fires <100×/day. |
+| 3 | **Unguarded `state.db_query` / `state.get_*` historical helpers in `evaluate()`** | `state.db_query(`, `state.get_device_state_at(`, `state.get_last_transition_before(`, `state.get_events_between(` inside the evaluate function, with no nearby `_cache_ts`/`_cache_ttl_sec`/`time.time()` TTL pattern (check ±30 lines around the call) | **high** (wildcard — DB roundtrip per event) | **low** for specific / event-triggered rules that fire rarely. The boiler consumption classifier is the canonical example — multiple `get_events_between` calls per fire, but fires ~20×/day → 60 queries/day, negligible. |
+| 4 | **Command emission without cooldown** | File has `commands.append(` AND no matching `state.set_timer(.+cooldown` + `state.get_timer(.+cooldown` pair (or equivalent debounce like `_last_fired_ts` tracking) | **high** — severity-invariant | No — a noisy trigger floods the command bus regardless of trigger type |
+| 5 | **O(n²) loop on presence/active rooms** | Nested `for` loops where both iterate `presence_rooms`, `active_rooms`, or similar collections | **low-medium** depending on collection size | Downgrade to low for specific/heartbeat triggers. People Home's §5 adjacency dedupe is O(n²) but n ≤ 5 — not worth reporting even for wildcard. |
+| 6 | **Noisy `emit_virtual_event` dps** | `emit_virtual_event(` call where the `dps={}` dict includes fields with names matching `distance`, `amplitude`, `raw_value`, `timestamp`, `ts`, `linkquality`, `rssi` (these drift and defeat dedupe, filling the events table with near-duplicates) | **medium** — severity-invariant | No — but check whether the timestamp field is the natural unique key of the event (like `last_start_ts` for consumption events, which SHOULD change per emission). If so, drop the finding. |
+| 7 | **Rule file length** | File > 300 lines (`wc -l`) | low (suggest split into smaller rules or helper module) | N/A — file size doesn't depend on trigger |
 
 ### Process
 
