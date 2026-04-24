@@ -306,13 +306,21 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
             min_temp   = next_temp
             min_idx    = i + 1
 
+            # Extension: keep chaining while the next reading is at or below the
+            # running minimum (with a small jitter tolerance). Replaces the old
+            # "each consecutive row must drop ≥0.3°C" check, which broke once
+            # raw_data switched from 5-min cron (2026-04-23) to ~2-3s MQTT
+            # ingest — consecutive rows during a real drop only differ by
+            # 0.1–0.2°C even when the overall trend is steep, so the old loop
+            # bailed almost immediately and big drops got fragmented or missed.
+            JITTER_TOL_C = 0.2
             j = i + 1
             while j < len(rows) - 1:
                 nxt = float(rows[j + 1]['boiler_temp'])
-                if nxt <= float(rows[j]['boiler_temp']) - 0.3:
+                if nxt <= min_temp + JITTER_TOL_C:
                     j += 1
-                    if float(rows[j]['boiler_temp']) < min_temp:
-                        min_temp = float(rows[j]['boiler_temp'])
+                    if nxt < min_temp:
+                        min_temp = nxt
                         min_idx  = j
                 else:
                     break
