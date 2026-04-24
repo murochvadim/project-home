@@ -177,7 +177,44 @@ If the rule only produces device commands (pixoo, on/off) and no derived state, 
 - If the derived state flips many times per second, combine / debounce so emissions happen only on meaningful transitions. Example: Home Activity emits only when `active_rooms` list changes, not on every motion event.
 - If your rule just needs to remember its last output for its OWN internal use → use `state.shared[...]` (in-memory). Virtual events are specifically for SHARING state with other rules or for historical queries.
 
+## Step 7.75: Resource budget check
+
+Before generating code, count current wildcard rules on-disk:
+```bash
+grep -l '"triggers": \["\*"\]' RULES/rules/*.py | grep -v '_template\|__init__'
+```
+
+Comfortable ceiling on LXC 105: **~15 wildcard rules** with light logic, or **~10** with heavy logic (O(n) `state.devices` scans, O(n²) loops). Past that, event dispatch latency rises from ms → 10s of ms during motion bursts.
+
+If the new rule would bring wildcard count above these thresholds, offer these alternatives in order:
+
+1. **Can this rule consume a `virtual:*` device instead of scanning raw events?**
+   Query: `SELECT id FROM devices WHERE protocol='virtual'`
+   If yes, change trigger from `"*"` to the specific virtual device id.
+   Example: "notify when someone just arrived" → trigger on `virtual:people_home` changes rather than scanning everything.
+
+2. **Can the logic live inside an existing aggregator rule?**
+   If 3 small wildcard rules each do `if people_home > 1 and time_mode == 'night': ...`, consolidating them into one that branches on conditions is cheaper than 3 separate wildcard passes.
+
+3. **If it must stay wildcard, early-return FAST.** The first 2 lines of `evaluate()`:
+   ```python
+   def evaluate(event, state):
+       if event.get('device_id') not in MY_DEVICE_IDS:
+           return []
+       # ... rest only runs for matching events
+   ```
+
+Warn the user if the ceiling is approached. They can still proceed — the warning is a design-smell flag, not a block.
+
 ## Step 8: Generate & Review
+
+### Cost checklist — run through before finalizing `evaluate()`
+
+- [ ] No `for did, dev in state.devices.items():` loop inside `evaluate()` — that's ~115 iterations per event. Consume `state.shared['active_rooms']` (already computed by Home Activity) or another virtual-device-derived key instead.
+- [ ] No `state.db_query(...)` inside `evaluate()` without TTL caching. See `wallmote_handler.py` lines 61-83 for the 30 s cache pattern. DB queries per event saturate the pool.
+- [ ] No O(n²) loops on `presence_rooms`. If you need adjacency checks, reuse the corridor timers + `_are_adjacent` helper that already exist in `people_home.py`.
+- [ ] `emit_virtual_event` only when dps actually differs from last emission. Dedupe is automatic, but if your dps includes noisy fields (timestamps, distance readings), dedupe won't catch them — exclude those from the emitted dps or the table will fill with near-duplicate rows.
+- [ ] Cooldown timer **mandatory** for rules that emit device commands (pixoo, turn_on/off, MQTT pushes). Without cooldown, a noisy trigger floods the command bus. Minimum 1 s; typically 30-300 s.
 
 Generate the Python rule file using these templates:
 
@@ -315,7 +352,7 @@ After the user approves the generated code:
 
 ## Important Notes
 
-- Always use `triggers: ["*"]` unless the rule should only fire on specific device IDs
+- **Default to SPECIFIC triggers** (list of device_ids). Wildcard `"*"` is ONLY for true aggregator rules (Home Activity, People Home, Wallmote Handler) that genuinely need to see every event. Each wildcard rule is a tax on every event the system sees.
 - Category options: "info" (state only), "display" (pixoo), "control" (device commands), "safety" (critical)
 - The `evaluate(event, state)` function receives every matching event and must return a list of command dicts (or empty list)
 - State is shared between rules — use `state.shared` for persistent data, `state.set_timer`/`state.get_timer` for cooldowns
@@ -323,3 +360,5 @@ After the user approves the generated code:
 - `state.devices[id]` has: dps, online, name, room, device_type, protocol
 - People count: `int(state.shared.get("people_home", 0))`
 - Activity: `state.shared.get("activity_level", "idle")` — values: "idle", "low", "active"
+- **Scaling ceiling on current hardware:** 30-50 mixed rules comfortable; 15-20 wildcard rules is a soft cap; 20+ heavy wildcard rules (iterating `state.devices`, O(n²) scans) is a design smell — consolidate into aggregator rules before crossing.
+- **First rule of performance:** prefer specific triggers. **Second rule:** consume `virtual:*` events rather than scanning raw state. **Third rule:** cache DB queries with TTL. If you're doing none of those, your rule is probably too heavy.
