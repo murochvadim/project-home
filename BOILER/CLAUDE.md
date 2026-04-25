@@ -20,14 +20,14 @@
 ## Tables
 - `raw_data`: ts, boiler_temp, panel_temp, valve_state
 - `agent_boiler_data`: ts, boiler_temp, panel_temp, valve_state, boiler_trend, panel_trend, decision, why_decision, error, next_ts, version
-- `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, probe_max_boiler_temp, probe_max_delta, consumption_temp_delta, consumption_time_delta
+- `agent_settings`: agent_enabled, run_interval_min, panel_temp_valid_after_on, panel_temp_valid_after_off, trend_runs, temp_debounce, probe_interval_min, probe_max_boiler_temp, probe_max_delta, consumption_temp_delta, consumption_time_delta, glitch_drop_threshold_c, glitch_bounce_recovery_c, sync_poll_interval_sec, wf96c_temp_delta_c, wf96c_heartbeat_sec
 - `boiler_consumptions`: id, start_ts, end_ts, start_temp, end_temp, drop_c, duration_min, detected_at, cause, likely_rooms — hot water drop events detected by agent each run; `cause` and `likely_rooms` filled asynchronously by rule engine using presence + valve context; `cause` ∈ {`human`,`panel`,`thermal`,`boiler`,`unknown`}; deduplicated by start_ts
 - `sync_signals`: id, ts, source — written by the raw_data producer after each insert (`source='wf96c_ingest'` since 2026-04-23, previously `'ha_to_pg'`); boiler agent polls every `agent_settings.sync_poll_interval_sec` (default 300 s) and wakes immediately on new row
 - `raw_weather`: ts, condition, temp_ims, humidity_ims, uv_index_ims, wind_speed, uv_index_balcony, temp_balcony, illuminance_balcony, humidity_balcony — collected every 60 min
 - `raw_weather_daily`: ts, forecast_date, condition, temp_high, temp_low, precipitation_mm — collected once at 06:00 daily (7-day forecast from IMS)
 
 ## Data Flow
-- **raw_data** (since 2026-04-23): event-driven from WF96C controller. LXC 103 systemd service `boiler-mqtt-ingest.service` runs `/opt/boiler-mqtt-ingest/wf96c_ingest.py`, which subscribes to MQTT topic `mur/home/device/116508838cce4eef9273/event` on LXC 107 as user `boiler_agent`. On each event it decodes DPS 103 ÷ 10 → `boiler_temp` (°C) and DPS 104 ÷ 10 → `panel_temp` (°C), reads `valve_state` from HA entity `switch.boiler_valve_switch_switch_1` with a 30-second cache, and inserts one row into `raw_data` + one row into `sync_signals (source='wf96c_ingest')` in a single transaction. Cadence: every few seconds (~1 row/15s at steady temps, faster during transitions — ~7,600 raw_data rows/day).
+- **raw_data** (since 2026-04-23): event-driven from WF96C controller. LXC 103 systemd service `boiler-mqtt-ingest.service` runs `/opt/boiler-mqtt-ingest/wf96c_ingest.py`, which subscribes to MQTT topic `mur/home/device/116508838cce4eef9273/event` on LXC 107 as user `boiler_agent`. On each event it decodes DPS 103 ÷ 10 → `boiler_temp` (°C) and DPS 104 ÷ 10 → `panel_temp` (°C), reads `valve_state` from HA entity `switch.boiler_valve_switch_switch_1` with a 30-second cache, and inserts one row into `raw_data` + one row into `sync_signals (source='wf96c_ingest')` in a single transaction. **Dedupe (added 2026-04-25):** a row is written only when (a) first ever event, (b) `valve_state` flipped, (c) NULL↔value transition on either temp, (d) |Δ| ≥ `agent_settings.wf96c_temp_delta_c` (default 0.3 °C) on either temp, or (e) `agent_settings.wf96c_heartbeat_sec` (default 60 s) elapsed since the last write. Both knobs are reloaded from the DB every 60 s by `_maybe_reload_settings()` and exposed in the dashboard Settings card under the "WF96C Ingest" section — no service restart needed when tuning. Steady-state rate drops from ~7,600 rows/day (uncapped) to ~1,500-2,500 rows/day at the defaults; tightening to 0.1 °C / 30 s captures more detail at higher write cost; loosening to 0.5 °C / 120 s further reduces volume but risks fragmenting consumption events at the boundary.
   - **Source of truth in repo**: `BOILER/agent/wf96c_ingest.py`
   - **Systemd unit in repo**: `scripts/boiler-mqtt-ingest.service` (uses `/etc/boiler-agent.env` for `HA_TOKEN` + `MQTT_USER` + `MQTT_PASS`; `DB_PASS` not needed — Postgres on LXC 102 trusts the `192.168.1.0/24` subnet per `pg_hba.conf`).
   - **MQTT ACL note**: `boiler_agent` user on LXC 107 has `topic read mur/home/device/116508838cce4eef9273/#` in addition to its existing publish rights on `mur/home/device/boiler/#`.
@@ -127,6 +127,8 @@
   - `consumption_time_delta`     (default: 15) — time window (minutes) over which the drop is scanned; agent looks back this many minutes in raw_data each run
   - `glitch_drop_threshold_c`    (default: 10.0) — sensor-dropout guard: drops ≥ this °C must pass the bounce test before being recorded; set to 0 to disable guard entirely
   - `glitch_bounce_recovery_c`   (default: 8.0) — if boiler recovers to within this many °C of the pre-drop temperature within 2 polls after the event ends, treat the drop as a sensor fault and discard (real showers cannot refill the boiler that fast)
+  - `wf96c_temp_delta_c`         (default: 0.3) — minimum °C change in boiler_temp or panel_temp required for `boiler-mqtt-ingest.service` (LXC 103) to write a new `raw_data` row. Hot-reloaded by the ingest service every 60 s (no restart). Lower = finer detail + more rows; higher = fewer rows + risk of slow drift being missed
+  - `wf96c_heartbeat_sec`        (default: 60) — maximum seconds between `raw_data` writes when nothing has changed; keeps freshness signals + sync_signals flowing during steady-state. Hot-reloaded same as above
 
 
 # Agent Prompt
@@ -184,7 +186,7 @@
   4. `time_since_close >= probe_interval_min` → fire: "Probe: panel reading invalid, opening valve to evaluate solar heating"
   5. else → "Probe: panel reading invalid, probe timer not elapsed (X/Y min)"
 - `probe_cost_min = panel_valid_after_on + (trend_runs + 1) × run_interval_min` — minimum minutes needed to complete probe + waiting phase
-- Time since last valve close determined by finding the most recent row in `raw_data` where `valve_state` changed ON→OFF; if no such transition exists, panel reading is treated as **valid** → falls through to Normal Turn ON check
+- Time since last valve close determined by finding the most recent row in `raw_data` where `valve_state` changed ON→OFF; if no such transition exists, panel reading is treated as **valid** → falls through to Normal Turn ON check. **Look-back window is time-based** (`now() − interval '3 days'`) since 2026-04-25 — previously `LIMIT 500` rows, which silently broke when the WF96C MQTT ingest cutover on 2026-04-23 multiplied row cadence ~20× and shrank the 500-row window from ~41 hours to ~2 hours. Same fix applied to `get_time_since_last_open` for symmetry. See `_VALVE_TRANSITION_LOOKBACK` in `boiler_agent.py`.
 - **Probe timer resets on every valve close** — whether by normal decision, early waiting-phase abort, or Safety Rule
 - Guards 2 and 3 do NOT reset the probe timer — probe retries next run automatically when boiler cools or delta shrinks
 - → Enter Waiting Phase (same as Normal Turn ON)
@@ -274,6 +276,7 @@
   - **Hot Water Consumption**: `consumption_temp_delta`, `consumption_time_delta`
   - **Probe Temperature Constraints**: `probe_max_boiler_temp`, `probe_max_delta`
   - **Sensor Glitch Guard** (labels rendered in light red `#d96c6c` to signal these are safety/correctness knobs, not tuning): `glitch_drop_threshold_c`, `glitch_bounce_recovery_c`
+  - **WF96C Ingest** (raw_data dedupe — see Data Flow above): `wf96c_temp_delta_c`, `wf96c_heartbeat_sec`. Values hot-reloaded by `boiler-mqtt-ingest.service` on LXC 103 every 60 s, no restart required.
 - **Deploy card:** "Deploy to Production" button → git pull on LXC 103 + restart agent service; output shown inline
 - When countdown reaches 0 → shows "running…" → auto-refreshes after 15s to pick up new next_ts
 

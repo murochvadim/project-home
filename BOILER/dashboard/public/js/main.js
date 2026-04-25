@@ -238,6 +238,8 @@ async function loadSettings() {
     document.getElementById('s-probe-max-delta').value    = cfg.probe_max_delta ?? '';
     document.getElementById('s-glitch-drop').value        = cfg.glitch_drop_threshold_c ?? '';
     document.getElementById('s-glitch-bounce').value      = cfg.glitch_bounce_recovery_c ?? '';
+    document.getElementById('s-wf96c-temp-delta').value   = cfg.wf96c_temp_delta_c ?? '';
+    document.getElementById('s-wf96c-heartbeat').value    = cfg.wf96c_heartbeat_sec ?? '';
     runIntervalMin = cfg.run_interval_min || 5;
   } catch (e) {
     console.error('loadSettings error:', e);
@@ -260,6 +262,8 @@ async function saveSettings(e) {
     probe_max_delta:            parseInt(document.getElementById('s-probe-max-delta').value),
     glitch_drop_threshold_c:    parseFloat(document.getElementById('s-glitch-drop').value),
     glitch_bounce_recovery_c:   parseFloat(document.getElementById('s-glitch-bounce').value),
+    wf96c_temp_delta_c:         parseFloat(document.getElementById('s-wf96c-temp-delta').value),
+    wf96c_heartbeat_sec:        parseInt(document.getElementById('s-wf96c-heartbeat').value),
   };
   // Refuse to POST if any field is empty / non-numeric. An empty input
   // becomes NaN → JSON.stringify → null, which would corrupt NOT NULL

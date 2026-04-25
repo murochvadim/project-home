@@ -224,6 +224,8 @@ def evaluate(event, state):
     state.shared['activity_level']    = level
     state.shared['active_rooms']      = active_rooms_list
     state.shared['active_room_count'] = count
+    state.shared['active_zones']      = active_zones_list
+    state.shared['active_zone_count'] = len(active_zones_list)
 
     state.emit_virtual_event(
         virtual_id='virtual:home_activity',

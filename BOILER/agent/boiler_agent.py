@@ -194,18 +194,25 @@ def get_waiting_run_number(conn, trend_runs):
     return None  # turn_on not found within search window
 
 
+# Look-back window for valve transition queries. Time-based (not row-count
+# based) so cadence changes in the raw_data producer (e.g. WF96C MQTT vs
+# legacy 5-min cron) cannot silently shrink coverage. 3 days covers any
+# plausible idle gap (overnight, weekend, multi-day cloud cover).
+_VALVE_TRANSITION_LOOKBACK = "interval '3 days'"
+
+
 def get_time_since_last_close(conn):
     """
     Returns minutes since the last ON→OFF valve transition in raw_data.
     Returns None if no such transition found (valve never been ON — first morning run).
     """
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             WITH recent AS (
                 SELECT ts, valve_state
                 FROM raw_data
-                ORDER BY ts DESC
-                LIMIT 500
+                WHERE ts >= now() - {_VALVE_TRANSITION_LOOKBACK}
+                ORDER BY ts ASC
             )
             SELECT ts FROM (
                 SELECT ts, valve_state,
@@ -229,12 +236,12 @@ def get_time_since_last_open(conn):
     """Returns minutes since the last OFF→ON valve transition in raw_data.
     Returns None if no such transition found."""
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             WITH recent AS (
                 SELECT ts, valve_state
                 FROM raw_data
-                ORDER BY ts DESC
-                LIMIT 500
+                WHERE ts >= now() - {_VALVE_TRANSITION_LOOKBACK}
+                ORDER BY ts ASC
             )
             SELECT ts FROM (
                 SELECT ts, valve_state,

@@ -110,7 +110,8 @@ app.post('/api/settings', async (req, res) => {
           trend_runs, temp_debounce, probe_interval_min,
           consumption_temp_delta, consumption_time_delta,
           probe_max_boiler_temp, probe_max_delta,
-          glitch_drop_threshold_c, glitch_bounce_recovery_c } = req.body;
+          glitch_drop_threshold_c, glitch_bounce_recovery_c,
+          wf96c_temp_delta_c, wf96c_heartbeat_sec } = req.body;
   try {
     await db.query(`
       UPDATE agent_settings SET
@@ -126,13 +127,16 @@ app.post('/api/settings', async (req, res) => {
         probe_max_boiler_temp      = $10,
         probe_max_delta            = $11,
         glitch_drop_threshold_c    = $12,
-        glitch_bounce_recovery_c   = $13
+        glitch_bounce_recovery_c   = $13,
+        wf96c_temp_delta_c         = $14,
+        wf96c_heartbeat_sec        = $15
     `, [run_interval_min, sync_poll_interval_sec,
         panel_temp_valid_after_on, panel_temp_valid_after_off,
         trend_runs, temp_debounce, probe_interval_min,
         consumption_temp_delta, consumption_time_delta,
         probe_max_boiler_temp, probe_max_delta,
-        glitch_drop_threshold_c, glitch_bounce_recovery_c]);
+        glitch_drop_threshold_c, glitch_bounce_recovery_c,
+        wf96c_temp_delta_c, wf96c_heartbeat_sec]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1693,6 +1697,8 @@ async function ensureSchema() {
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_time_delta INTEGER DEFAULT 15`);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS glitch_drop_threshold_c NUMERIC DEFAULT 10.0`);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS glitch_bounce_recovery_c NUMERIC DEFAULT 8.0`);
+  await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS wf96c_temp_delta_c NUMERIC DEFAULT 0.3`);
+  await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS wf96c_heartbeat_sec INTEGER DEFAULT 60`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS retention_policies (

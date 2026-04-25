@@ -240,7 +240,7 @@ class StateManager:
 
             with self._hb_conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, name, room, device_type, protocol, last_state "
+                    "SELECT id, name, room, device_type, protocol, last_state, dps_labels "
                     "FROM devices WHERE enabled = true"
                 )
                 for row in cur.fetchall():
@@ -256,6 +256,20 @@ class StateManager:
                     else:
                         dps = dict(last_state)
 
+                    # dps_labels is a JSONB column — psycopg2 returns it as a
+                    # dict already; default to {} when NULL or unparseable so
+                    # callers can do `dev.get('dps_labels', {}).get(key)` safely.
+                    raw_labels = row.get('dps_labels')
+                    if isinstance(raw_labels, dict):
+                        dps_labels = raw_labels
+                    elif isinstance(raw_labels, str):
+                        try:
+                            dps_labels = json.loads(raw_labels) or {}
+                        except (json.JSONDecodeError, TypeError):
+                            dps_labels = {}
+                    else:
+                        dps_labels = {}
+
                     devices[dev_id] = {
                         'dps': dps,
                         'online': True,
@@ -263,6 +277,7 @@ class StateManager:
                         'room': row['room'] or '',
                         'device_type': row['device_type'] or '',
                         'protocol': row['protocol'] or '',
+                        'dps_labels': dps_labels,
                     }
 
                 cur.execute("SELECT name FROM rooms")
@@ -656,12 +671,18 @@ class StateManager:
             if not dev_id:
                 continue
 
-            # Preserve existing DPS if we already track this device
+            # Preserve existing DPS + dps_labels if we already track this device.
+            # dps_labels comes from `devices.dps_labels` (loaded by load_from_db);
+            # the inventory broadcast doesn't carry it, so we'd lose it on refresh
+            # without this preserve step. Rules that map @dev chips to DPS keys
+            # (mode_buttons, evening_lights) depend on it.
             existing_dps = {}
             existing_online = True
+            existing_dps_labels = {}
             if dev_id in old_devices:
                 existing_dps = old_devices[dev_id].get('dps', {})
                 existing_online = old_devices[dev_id].get('online', True)
+                existing_dps_labels = old_devices[dev_id].get('dps_labels', {})
 
             new_devices[dev_id] = {
                 'dps': existing_dps,
@@ -670,6 +691,7 @@ class StateManager:
                 'room': item.get('room', ''),
                 'device_type': item.get('device_type', ''),
                 'protocol': item.get('protocol', ''),
+                'dps_labels': existing_dps_labels,
             }
 
             room = item.get('room', '')

@@ -423,6 +423,24 @@
       const motionAgo = lastMotionTs ? formatTimeAgo(lastMotionTs).replace(' ago', '') : '—';
       document.getElementById('stat-motion-ago').textContent = motionAgo;
 
+      // ── Tab-bar live display: time_mode + next sunrise/sunset ──
+      const fmtSunHM = iso => {
+        if (!iso) return '—';
+        try {
+          const d = new Date(iso);
+          if (isNaN(d.getTime())) return '—';
+          return d.toLocaleTimeString('en-IL', {
+            timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hour12: false,
+          });
+        } catch (e) { return '—'; }
+      };
+      const tmEl = document.getElementById('tmb-time-mode');
+      const srEl = document.getElementById('tmb-next-sunrise');
+      const ssEl = document.getElementById('tmb-next-sunset');
+      if (tmEl) tmEl.textContent = s.time_mode || '—';
+      if (srEl) srEl.textContent = fmtSunHM(s.next_sunrise);
+      if (ssEl) ssEl.textContent = fmtSunHM(s.next_sunset);
+
       // ── Engine status row ──
       const heartbeatAge = hb.ts ? (Date.now() - new Date(hb.ts).getTime()) / 1000 : Infinity;
       const isOnline = heartbeatAge < 120;

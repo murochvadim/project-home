@@ -314,6 +314,27 @@ body {
   gap: 8px;
   margin-bottom: 20px;
   flex-wrap: wrap;
+  align-items: center;
+}
+.time-mode-bar {
+  margin-left: auto;
+  margin-right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #666;
+  white-space: nowrap;
+}
+.time-mode-bar .tmb-label {
+  color: #888;
+}
+.time-mode-bar .tmb-value {
+  color: #2d4a66;
+  font-weight: 600;
+}
+.time-mode-bar .tmb-sep {
+  color: #ccc;
 }
 .tab-btn {
   padding: 7px 20px;

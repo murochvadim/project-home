@@ -104,43 +104,54 @@ async function loadPixoo() {
     document.getElementById('pixoo-screen').textContent = screenName;
     document.getElementById('pixoo-screen-label').textContent = screenName;
 
-    // Draw canvas
-    const preview = r.preview;
-    const screenId = screen.screen || '';
-    const isAnimation = screenId === 'animation';
-    if (screenId === 'wiped' || (!preview && (!screen.items || screen.items.length === 0))) {
-      const canvas = document.getElementById('pixoo-canvas');
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-    } else if (screen.items && screen.items.length > 0 && !isAnimation) {
-      // Text/pixel/preset screens — draw with browser font (clean)
-      drawPixooCanvas(screen.items);
-    } else if (preview) {
-      // Animation or rotation — use preview image
-      const img = new Image();
-      img.onload = function() {
+    // Skip canvas redraw while the user is editing — live device state
+    // would otherwise overwrite the in-progress preset every 5 s. Resumes
+    // automatically once the editor is empty (Clear/New).
+    const editorActive =
+      _pixooLoadedPresetId !== null ||
+      (_pixooEditorItems && _pixooEditorItems.length > 0) ||
+      (_pixooPixels && Object.keys(_pixooPixels).length > 0) ||
+      !!_pixooBgBase64;
+
+    if (!editorActive) {
+      // Draw canvas
+      const preview = r.preview;
+      const screenId = screen.screen || '';
+      const isAnimation = screenId === 'animation';
+      if (screenId === 'wiped' || (!preview && (!screen.items || screen.items.length === 0))) {
         const canvas = document.getElementById('pixoo-canvas');
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        // For animations, draw text items on top with browser font
-        if (isAnimation && screen.items && screen.items.length > 0) {
-          const s = canvas.width / 64;
-          ctx.textBaseline = 'top';
-          for (const item of screen.items) {
-            ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
-            ctx.font = `${5 * s}px monospace`;
-            ctx.fillText(item.t, item.x * s, item.y * s);
-          }
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
-      };
-      img.src = preview;
-    } else if (screen.items) {
-      drawPixooCanvas(screen.items);
+      } else if (screen.items && screen.items.length > 0 && !isAnimation) {
+        // Text/pixel/preset screens — draw with browser font (clean)
+        drawPixooCanvas(screen.items);
+      } else if (preview) {
+        // Animation or rotation — use preview image
+        const img = new Image();
+        img.onload = function() {
+          const canvas = document.getElementById('pixoo-canvas');
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          // For animations, draw text items on top with browser font
+          if (isAnimation && screen.items && screen.items.length > 0) {
+            const s = canvas.width / 64;
+            ctx.textBaseline = 'top';
+            for (const item of screen.items) {
+              ctx.fillStyle = `rgb(${item.r},${item.g},${item.b})`;
+              ctx.font = `${5 * s}px monospace`;
+              ctx.fillText(item.t, item.x * s, item.y * s);
+            }
+          }
+        };
+        img.src = preview;
+      } else if (screen.items) {
+        drawPixooCanvas(screen.items);
+      }
     }
 
     // Heartbeat time

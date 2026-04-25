@@ -41,6 +41,17 @@ WF96C_TOPIC = f'mur/home/device/{WF96C_DEVICE_ID}/event'
 VALVE_ENTITY = 'switch.boiler_valve_switch_switch_1'
 VALVE_CACHE_TTL = 30.0  # seconds
 
+# Dedupe: write a raw_data row only when something meaningful changed, OR
+# the heartbeat has elapsed (so freshness signals + sync_signals keep
+# flowing even during long steady-state periods). Without dedupe WF96C
+# emits ~7,600 rows/day; with the defaults below the steady-state rate is
+# ~1 row/min, climbing during real transitions. Tunable from the
+# dashboard Settings card via agent_settings.wf96c_temp_delta_c and
+# agent_settings.wf96c_heartbeat_sec; reloaded every SETTINGS_RELOAD_SEC.
+DEFAULT_TEMP_DELTA_C  = 0.3   # °C — minimum temp change to trigger a write
+DEFAULT_HEARTBEAT_SEC = 60.0  # write at least once per minute
+SETTINGS_RELOAD_SEC   = 60.0  # how often to re-read agent_settings
+
 PG_CONF = {
     'host': '192.168.1.219',
     'port': 5432,
@@ -56,6 +67,19 @@ _last_boiler_temp = None  # °C
 _last_panel_temp  = None  # °C
 _valve_cache = None       # (value, wall_clock_ts)
 _event_count = 0
+_skipped_count = 0
+
+# Last values actually persisted to raw_data (drives the dedupe decision).
+_last_written_boiler = None
+_last_written_panel  = None
+_last_written_valve  = None
+_last_written_mono   = 0.0  # time.monotonic() at last write; 0 = never
+
+# Dedupe parameters loaded from agent_settings; refreshed every
+# SETTINGS_RELOAD_SEC by _maybe_reload_settings().
+_temp_delta_c     = DEFAULT_TEMP_DELTA_C
+_heartbeat_sec    = DEFAULT_HEARTBEAT_SEC
+_settings_loaded  = 0.0  # time.monotonic() at last successful load; 0 = never
 
 
 # ── HA valve read with 30s cache ─────────────────────────────────────────
@@ -115,6 +139,65 @@ def _write_row(boiler_temp, panel_temp, valve_state):
         log.error(f'DB insert failed: {e}')
 
 
+# ── Settings reload ──────────────────────────────────────────────────────
+
+def _maybe_reload_settings():
+    """Refresh dedupe params from agent_settings every SETTINGS_RELOAD_SEC.
+
+    Fail-silent: on any error, keep the current values. Prevents broker /
+    DB blips from changing dedupe behavior unexpectedly.
+    """
+    global _temp_delta_c, _heartbeat_sec, _settings_loaded
+    now = time.monotonic()
+    if _settings_loaded != 0.0 and (now - _settings_loaded) < SETTINGS_RELOAD_SEC:
+        return
+    try:
+        with psycopg2.connect(connect_timeout=3, **PG_CONF) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    'SELECT wf96c_temp_delta_c, wf96c_heartbeat_sec '
+                    'FROM agent_settings LIMIT 1'
+                )
+                row = cur.fetchone()
+        if row is not None:
+            new_delta, new_hb = row
+            if new_delta is not None:
+                _temp_delta_c = float(new_delta)
+            if new_hb is not None:
+                _heartbeat_sec = float(new_hb)
+        _settings_loaded = now
+    except Exception as e:
+        log.warning(f'agent_settings reload failed (keeping current values): {e}')
+
+
+# ── Dedupe ───────────────────────────────────────────────────────────────
+
+def _should_write(boiler, panel, valve):
+    """Decide whether to persist a new raw_data row.
+
+    Writes when any of: first ever event, valve flipped, NULL↔value
+    transition on either temp, |Δ| ≥ TEMP_DELTA_C on either temp, or
+    HEARTBEAT_SEC has elapsed since the last write.
+    """
+    if _last_written_mono == 0.0:
+        return True
+    if (time.monotonic() - _last_written_mono) >= _heartbeat_sec:
+        return True
+    if valve != _last_written_valve:
+        return True
+    if (boiler is None) != (_last_written_boiler is None):
+        return True
+    if (panel is None) != (_last_written_panel is None):
+        return True
+    if (boiler is not None and _last_written_boiler is not None
+            and abs(boiler - _last_written_boiler) >= _temp_delta_c):
+        return True
+    if (panel is not None and _last_written_panel is not None
+            and abs(panel - _last_written_panel) >= _temp_delta_c):
+        return True
+    return False
+
+
 # ── MQTT callbacks ───────────────────────────────────────────────────────
 
 def _on_connect(client, userdata, flags, rc, properties=None):
@@ -130,7 +213,9 @@ def _on_disconnect(client, userdata, rc, properties=None, reason_code=None):
 
 
 def _on_message(client, userdata, msg):
-    global _last_boiler_temp, _last_panel_temp, _event_count
+    global _last_boiler_temp, _last_panel_temp, _event_count, _skipped_count
+    global _last_written_boiler, _last_written_panel, _last_written_valve, _last_written_mono
+    _maybe_reload_settings()
     try:
         payload = json.loads(msg.payload.decode('utf-8'))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -163,12 +248,21 @@ def _on_message(client, userdata, msg):
         return
 
     valve_state = _get_cached_valve_state()
+
+    if not _should_write(_last_boiler_temp, _last_panel_temp, valve_state):
+        _skipped_count += 1
+        return
+
     _write_row(_last_boiler_temp, _last_panel_temp, valve_state)
+    _last_written_boiler = _last_boiler_temp
+    _last_written_panel  = _last_panel_temp
+    _last_written_valve  = valve_state
+    _last_written_mono   = time.monotonic()
 
     _event_count += 1
     if _event_count % 50 == 0:
         log.info(
-            f'Ingested {_event_count} rows — '
+            f'Ingested {_event_count} rows ({_skipped_count} skipped) — '
             f'latest boiler={_last_boiler_temp}°C panel={_last_panel_temp}°C valve={valve_state}'
         )
 
@@ -211,6 +305,14 @@ def main():
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
+
+    # Prime dedupe params from DB so the very first event uses the live
+    # tuning, not the defaults baked into this file.
+    _maybe_reload_settings()
+    log.info(
+        f'Dedupe params: temp_delta_c={_temp_delta_c}°C, '
+        f'heartbeat_sec={_heartbeat_sec}s'
+    )
 
     log.info(f'Connecting to MQTT {MQTT_HOST}:{MQTT_PORT} as {MQTT_USER}')
     client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
