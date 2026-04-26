@@ -2234,11 +2234,11 @@ function keywordIntent(rawText) {
   if (hasBoiler && hasOff)           return 'boiler_off';
 
   // Media search: "find X", "search X", "show X"
-  const mediaSearch = t.match(/^(?:find|search|show|look for)s+(.+)$/);
+  const mediaSearch = t.match(/^(?:find|search|show|look for)\s+(.+)$/);
   if (mediaSearch) return { intent: 'media_search', params: { query: mediaSearch[1].trim() } };
 
   // Media play by number: "play 1", "play number 2", just a digit 1-15
-  const playNum = t.match(/^(?:plays+(?:numbers+)?|watchs+)(d+)$/) || t.match(/^(d+)$/);
+  const playNum = t.match(/^(?:play\s+(?:number\s+)?|watch\s+)(\d+)$/) || t.match(/^(\d+)$/);
   if (playNum) {
     const n = parseInt(playNum[1]);
     if (n >= 1 && n <= 15) return { intent: 'media_play_number', params: { number: n } };
