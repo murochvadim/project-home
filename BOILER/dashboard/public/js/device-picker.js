@@ -186,7 +186,7 @@
 
   // Public API — call from sentence rows.
   //   openDevicePicker(callback)
-  // callback receives a string token like "@Main Switch Ch1" or "@Pixoo Daily_Wellcome".
+  // callback receives a string token like "@Main Switch Ch1" or "@Pixoo Daily_Welcome".
   window.openDevicePicker = async function (callback) {
     _ensureModal();
     _onPick = callback;

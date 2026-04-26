@@ -173,30 +173,71 @@
 
       // Collect all unique keys, filter redundant ones
       const redundantKeys = new Set(['active_room_count']); // always same as active_rooms
+      // Per-rule whitelist — when set, only these keys are shown in the trace.
+      // Other rules show every key they emit (default behaviour).
+      const ruleKeyWhitelist = {
+        'People Home': ['people_home', 'people_home_dynamic'],
+      };
+      const whitelist = ruleKeyWhitelist[_traceRuleName] || null;
       const allKeys = [];
       const keySet = new Set();
       sorted.forEach(e => {
         if (e.event_type === 'state_changed') {
           _extractKeys(e.result).forEach(k => {
-            if (!keySet.has(k) && !redundantKeys.has(k)) { keySet.add(k); allKeys.push(k); }
+            if (keySet.has(k) || redundantKeys.has(k)) return;
+            if (whitelist && !whitelist.includes(k)) return;
+            keySet.add(k); allKeys.push(k);
           });
         } else {
           const k = e.event_type;
-          if (!keySet.has(k) && k !== 'skipped') { keySet.add(k); allKeys.push(k); }
+          if (keySet.has(k) || k === 'skipped') return;
+          if (whitelist && !whitelist.includes(k)) return;
+          keySet.add(k); allKeys.push(k);
         }
       });
 
-      // Build time buckets with counts per key
+      // Whitelisted rules render real VALUES (e.g. people_home=2 → cell shows "2"),
+      // and we only keep buckets that contain at least one whitelisted change.
+      // Non-whitelisted rules keep the legacy count-of-changes behaviour.
+      const valueMode = whitelist !== null;
+
+      // Parse "key=value; key=value" → [{k, v}, ...]
+      const _extractPairs = (result) => {
+        if (!result) return [];
+        return result.split(';').map(s => s.trim()).filter(Boolean).map(p => {
+          const i = p.indexOf('=');
+          return i === -1 ? { k: p, v: '' } : { k: p.slice(0, i).trim(), v: p.slice(i + 1).trim() };
+        });
+      };
+
+      // Build time buckets — values in valueMode, counts otherwise
       const bucketMap = {};
       sorted.forEach(e => {
         const ts = new Date(e.ts).getTime();
         const bucket = Math.floor(ts / resMs) * resMs;
-        if (!bucketMap[bucket]) bucketMap[bucket] = {};
-        const keys = e.event_type === 'state_changed' ? _extractKeys(e.result) : [e.event_type];
-        keys.forEach(k => { bucketMap[bucket][k] = (bucketMap[bucket][k] || 0) + 1; });
+        if (e.event_type === 'state_changed') {
+          if (valueMode) {
+            _extractPairs(e.result).forEach(({k, v}) => {
+              if (!whitelist.includes(k)) return;
+              if (!bucketMap[bucket]) bucketMap[bucket] = {};
+              bucketMap[bucket][k] = v; // overwrite — last wins within bucket
+            });
+          } else {
+            if (!bucketMap[bucket]) bucketMap[bucket] = {};
+            _extractKeys(e.result).forEach(k => {
+              bucketMap[bucket][k] = (bucketMap[bucket][k] || 0) + 1;
+            });
+          }
+        } else {
+          const k = e.event_type;
+          if (valueMode && !whitelist.includes(k)) return;
+          if (!bucketMap[bucket]) bucketMap[bucket] = {};
+          bucketMap[bucket][k] = (bucketMap[bucket][k] || 0) + 1;
+        }
       });
 
-      // Sort buckets chronologically
+      // Sort buckets chronologically (in valueMode bucketMap only contains
+      // buckets that had a whitelisted change, so empty buckets are already filtered).
       const bucketTimes = Object.keys(bucketMap).map(Number).sort((a, b) => a - b);
 
       const shortKey = (k) => k;
@@ -232,19 +273,29 @@
       bucketTimes.forEach(ts => {
         const d = new Date(ts);
         const time = d.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
-        const counts = bucketMap[ts];
+        const cells = bucketMap[ts];
         html += '<tr style="border-bottom:1px solid #f0ebe3;">';
         html += `<td style="padding:3px 8px;color:#888;font-size:0.72rem;white-space:nowrap;">${time}</td>`;
         allKeys.forEach(k => {
-          const count = counts[k] || 0;
-          const val = count === 0 ? '—' : count;
-          html += `<td style="text-align:center;padding:3px 6px;font-size:0.75rem;border-radius:3px;${cellStyle(count)}">${val}</td>`;
+          const raw = cells[k];
+          if (valueMode) {
+            const display = (raw === undefined || raw === '') ? '—' : escHtml(String(raw));
+            const style = (raw === undefined) ? 'color:#ccc;' : 'color:#2e2e2e;font-weight:600;';
+            html += `<td style="text-align:center;padding:3px 6px;font-size:0.75rem;border-radius:3px;${style}">${display}</td>`;
+          } else {
+            const count = raw || 0;
+            const val = count === 0 ? '—' : count;
+            html += `<td style="text-align:center;padding:3px 6px;font-size:0.75rem;border-radius:3px;${cellStyle(count)}">${val}</td>`;
+          }
         });
         html += '</tr>';
       });
 
       html += '</tbody></table>';
-      html += `<div style="font-size:0.68rem;color:#aaa;margin-top:6px;padding:0 8px;">Number = how many times this state key changed in the time bucket. Bold = 3+ changes. — = no change.</div>`;
+      const footer = valueMode
+        ? 'Cell = value at the moment of change. Rows shown only when a tracked field changed in the bucket. — = no change in that field this bucket.'
+        : 'Number = how many times this state key changed in the time bucket. Bold = 3+ changes. — = no change.';
+      html += `<div style="font-size:0.68rem;color:#aaa;margin-top:6px;padding:0 8px;">${footer}</div>`;
       if (container) container.innerHTML = html;
     } catch (err) {
       if (container) container.innerHTML = '<span style="color:#e74c3c;">Failed to load events</span>';
@@ -776,22 +827,26 @@
     return out;
   }
 
-  const _BRS_CELL_W = 150;
+  const _BRS_CELL_W = 150;        // device chip width (long device names)
+  const _BRS_TEXT_MIN_W = 30;     // text input minimum — collapses tight between chips
   const _BRS_CELL_H = 26;
   function _brsRenderSegmentCell(ruleId, s, segIdx, seg) {
-    const tdBase = 'padding:4px 4px;vertical-align:middle;';
+    const tdBase = 'padding:4px 2px;vertical-align:middle;';
     if (!seg) return `<td style="${tdBase}"></td>`;
     if (seg.t === 'text') {
       const v = seg.v || '';
       const isFirstEmpty = (segIdx === 0 && s.segments.length === 1 && !v);
       const placeholder = isFirstEmpty ? 'e.g. between 17:00 and 22:30' : '';
-      const size = Math.max(v.length + 2, 15);
+      // Use a longer minimum size only for the very first sentence-leading
+      // text (so the placeholder is readable). Mid-sentence separators are
+      // typically just a space/comma — let them shrink.
+      const size = Math.max(v.length + 2, isFirstEmpty ? 15 : 4);
       return `<td style="${tdBase}">
         <input type="text" value="${brsEsc(v)}" size="${size}"
                data-brs-rule="${ruleId}" data-brs-sent="${s.id}" data-brs-seg="${segIdx}"
                oninput="brsUpdateSegText(this)"
                placeholder="${placeholder}"
-               style="min-width:${_BRS_CELL_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:1px solid #e8e3d8;border-radius:3px;padding:0 6px;font-size:0.82rem;background:#fff;line-height:${_BRS_CELL_H - 2}px;" />
+               style="min-width:${_BRS_TEXT_MIN_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:1px solid #e8e3d8;border-radius:3px;padding:0 6px;font-size:0.82rem;background:#fff;line-height:${_BRS_CELL_H - 2}px;" />
       </td>`;
     }
     return `<td style="${tdBase}">

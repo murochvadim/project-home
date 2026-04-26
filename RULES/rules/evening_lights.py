@@ -1,15 +1,16 @@
-"""Evening Lights — turn ON a sentence-declared list of lights when the
-apartment is in home mode AND time mode is in the active set.
+"""Evening Lights — turn ON a sentence-declared list of lights.
 
-Two firing scenarios (both via sentence-driven knobs):
+Two firing scenarios:
 
-  A) Evening kick-in: time_mode just transitioned to 'evening' AND
-     home_mode is 'home'. Lights come on automatically when evening starts.
+  A) Sun-anchor kick-in: wall-clock minute equals any sun-event anchor
+     declared in s_el2 (e.g. `sunset+10`) AND home_mode is 'home'.
+     Decoupled from time_mode — fires at the perceptual "low light"
+     moment regardless of which time_mode window we're in.
 
-  B) Late arrival: home_mode just transitioned from 'away' or 'abroad' to
-     'home' AND current time_mode is in the active list (e.g. evening,
-     night, late_night). Lights come on when you arrive home in those
-     time windows.
+  B) Late arrival: home_mode just transitioned 'away'|'abroad' → 'home'
+     AND current time_mode is in the time_mode names declared in s_el2
+     (e.g. night, late_night). Lights come on when you arrive home
+     during those windows.
 
 Latched per "home period" — once fired, the rule won't refire until
 home_mode leaves 'home' (i.e. you press AWAY or ABROAD), then comes back.
@@ -20,28 +21,44 @@ Sentences (authored in the dashboard "Evening Lights" container):
   s_el1: evening lights are @<Device 1> <Channel>, @<Device 2>, ...
          (the device list — chips resolved via longest-prefix match)
 
-  s_el2: Evening Lights: active time modes are evening, night, late_night
-         (the time modes during which the rule may fire)
+  s_el2: Evening Lights: active time modes are sunset+10, night, late_night
+         The list mixes sun-event anchors (`<event>[±N]` where event is
+         dawn|sunrise|noon|sunset|dusk and ±N is minutes) with plain
+         time_mode names. Anchors drive Scenario A; names drive Scenario B.
 
-If either sentence is missing, the rule is a safe no-op.
+If either sentence is missing or yields no anchors and no modes, the rule
+is a safe no-op.
 
-Companion rules / patches:
-- home_state.py writes state.shared['time_mode']
-- mode_buttons.py writes state.shared['home_mode']
+Companion rules:
+- home_time_periods.py writes state.shared['time_mode'] + sun event ISO
+  strings for each event in {dawn, sunrise, noon, sunset, dusk}; this rule
+  reads those for the anchor resolver.
+- mode_buttons.py writes state.shared['home_mode'].
 - Both happen on the same heartbeat tick, so the rule sees a consistent
-  pair of values.
+  set of values.
 """
 
 import json
 import logging
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger('rule.evening_lights')
+
+_TZ = ZoneInfo('Asia/Jerusalem')
 
 # Sentence regex anchors — case-insensitive, tolerant of surrounding text.
 _DEVICES_TRIGGER_RE = re.compile(r'evening\s+lights\s+are', re.IGNORECASE)
 _ACTIVE_MODES_RE    = re.compile(
     r'evening\s+lights:\s*active\s+time\s+modes?\s+are\s+(.+)',
+    re.IGNORECASE,
+)
+# Items in s_el2 that match this regex are sun-event anchors with optional
+# ±N minute offset (e.g. `sunset+10`, `dusk-5`). Anything else in the list
+# is treated as a time_mode name (drives Scenario B late-arrival only).
+_SUN_ANCHOR_RE = re.compile(
+    r'^(dawn|sunrise|noon|sunset|dusk)([+-]\d+)?$',
     re.IGNORECASE,
 )
 
@@ -167,14 +184,19 @@ def _load_evening_light_targets(state, container):
     return targets
 
 
-def _load_active_time_modes(container):
-    """Extract the list of active time modes from the s_el2 sentence.
+def _load_active_triggers(container):
+    """Parse the s_el2 sentence into (active_modes, sun_anchors).
 
-    Sentence: "Evening Lights: active time modes are evening, night, late_night"
-    Returns a set of mode names (lowercase) or empty set if no sentence.
+    Sentence: "Evening Lights: active time modes are sunset+10, night, late_night"
+    Each comma-separated item is classified:
+      - sun-event token with optional ±N offset → sun_anchors list of (base, offset)
+      - any plain word (a-z, _) → active_modes set
+    Returns (active_modes:set, sun_anchors:list[tuple[str,int]]).
     """
+    active_modes = set()
+    sun_anchors = []
     if not container:
-        return set()
+        return active_modes, sun_anchors
     for s in (container.get('sentences') or []):
         if not s.get('active'):
             continue
@@ -183,14 +205,38 @@ def _load_active_time_modes(container):
         if not m:
             continue
         rest = m.group(1).strip()
-        # Split on commas + "or" + "and", strip whitespace, lowercase.
-        # Tolerant of "evening, night, or late_night" or "evening night late_night".
+        # Split on commas/semicolons + "or"/"and" + whitespace.
         parts = re.split(r'[,;]\s*|\s+(?:or|and)\s+|\s+', rest, flags=re.IGNORECASE)
-        modes = {p.strip().lower() for p in parts if p.strip()}
-        # Drop noise tokens that aren't real time_mode names.
-        modes = {m for m in modes if re.match(r'^[a-z_]+$', m)}
-        return modes
-    return set()
+        for p in (p.strip().lower() for p in parts if p.strip()):
+            ma = _SUN_ANCHOR_RE.match(p)
+            if ma:
+                base = ma.group(1).lower()
+                offset = int(ma.group(2)) if ma.group(2) else 0
+                sun_anchors.append((base, offset))
+            elif re.match(r'^[a-z_]+$', p):
+                active_modes.add(p)
+        return active_modes, sun_anchors
+    return active_modes, sun_anchors
+
+
+def _anchor_minutes(sun_anchors, state):
+    """Resolve [(base, offset_min)] to a set of minute-of-day ints.
+
+    Uses state.shared['<base>'] (ISO datetime string published every heartbeat
+    by the Home Time Periods rule). Skips anchors whose base sun event isn't
+    in state.shared yet (e.g. before the first Home Time Periods tick).
+    """
+    out = set()
+    for base, offset in sun_anchors:
+        iso = state.shared.get(base)
+        if not iso:
+            continue
+        try:
+            dt = datetime.fromisoformat(iso).astimezone(_TZ)
+        except (ValueError, TypeError):
+            continue
+        out.add((dt.hour * 60 + dt.minute + offset) % 1440)
+    return out
 
 
 # ─────────────────────────── Rule ───────────────────────────
@@ -205,9 +251,9 @@ def evaluate(event, state):
         # Container not authored yet — no-op.
         return []
 
-    active_modes = _load_active_time_modes(container)
-    if not active_modes:
-        # s_el2 missing — no-op.
+    active_modes, sun_anchors = _load_active_triggers(container)
+    if not active_modes and not sun_anchors:
+        # s_el2 missing or empty — no-op.
         log.debug("evening_lights: active time modes sentence missing — skipping")
         return []
 
@@ -215,7 +261,6 @@ def evaluate(event, state):
     time_mode = state.shared.get('time_mode', '')
 
     prev_home = state.shared.get('_evening_lights_prev_home_mode', '')
-    prev_time = state.shared.get('_evening_lights_prev_time_mode', '')
     fired     = bool(state.shared.get('_evening_lights_fired_this_period', False))
 
     # Reset latch when leaving home (away/abroad). Next time we come back,
@@ -224,22 +269,24 @@ def evaluate(event, state):
     if home_just_left:
         fired = False
 
-    # Detect the two trigger transitions.
-    home_just_arrived  = (prev_home in ('away', 'abroad') and home_mode == 'home')
-    time_entered_evening = (prev_time != 'evening' and time_mode == 'evening')
+    # Now-minute-of-day in local tz — used for sun-anchor matching.
+    now = datetime.now(_TZ)
+    now_min = now.hour * 60 + now.minute
 
-    fire = False
-    if (not fired) and home_mode == 'home' and time_mode in active_modes:
-        # Scenario A — evening kick-in
-        if time_entered_evening:
-            fire = True
-        # Scenario B — late arrival
-        elif home_just_arrived:
-            fire = True
+    # Scenario A — kick-in: current minute matches any configured sun-event
+    # anchor. Heartbeat is 60 s, so equality on minute-of-day catches it.
+    anchor_minutes = _anchor_minutes(sun_anchors, state)
+    sun_anchor_hit = (now_min in anchor_minutes)
+
+    # Scenario B — late arrival: home_mode just transitioned to 'home' AND
+    # current time_mode is one of the declared time_mode names.
+    home_just_arrived = (prev_home in ('away', 'abroad') and home_mode == 'home')
+    late_arrival_hit  = home_just_arrived and time_mode in active_modes
+
+    fire = (not fired) and home_mode == 'home' and (sun_anchor_hit or late_arrival_hit)
 
     # Persist transitions for next tick (always — even if we're not firing).
     state.shared['_evening_lights_prev_home_mode']      = home_mode
-    state.shared['_evening_lights_prev_time_mode']      = time_mode
     state.shared['_evening_lights_fired_this_period']   = fired or fire
 
     if not fire:
@@ -262,9 +309,9 @@ def evaluate(event, state):
             cmd['channel'] = dps_key
         commands.append(cmd)
 
-    scenario = 'A:evening_kickin' if time_entered_evening else 'B:home_arrival'
+    scenario = 'A:sun_anchor' if sun_anchor_hit else 'B:home_arrival'
     log.info(
-        "evening_lights: fired %d turn_on commands (scenario=%s time_mode=%s home_mode=%s)",
-        len(commands), scenario, time_mode, home_mode,
+        "evening_lights: fired %d turn_on commands (scenario=%s time_mode=%s home_mode=%s now_min=%d anchors=%s)",
+        len(commands), scenario, time_mode, home_mode, now_min, sorted(anchor_minutes),
     )
     return commands

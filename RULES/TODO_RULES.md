@@ -126,7 +126,7 @@ Since 2026-04-22, each sentence is stored as an ordered list of segments rather 
    - Match the remainder against `devices.name` (case-sensitive first, then `.lower()`).
    - If the remainder has extra tokens after the name, the tail is the DPS label. Map `label → dps_key` via `devices.dps_labels`.
    - If no label tail → no channel; the device itself is the referent.
-   - **Pixoo special case:** `@Pixoo <PresetName>` resolves to `device_id="pixoo", protocol="pixoo", action="push_preset", preset_name=<PresetName>` (see [daily_wellcome.py](rules/daily_wellcome.py) for the canonical command shape). The picker sources preset names from `pixoo_presets.name` via `GET /api/pixoo/presets`. `devices` has a row `id='pixoo', device_type='display', protocol='pixoo'` so the picker can surface it alongside other controllable devices; the pre-existing `virtual:pixoo` row is a state mirror only.
+   - **Pixoo special case:** `@Pixoo <PresetName>` resolves to `device_id="pixoo", protocol="pixoo", action="push_preset", preset_name=<PresetName>` (see [daily_welcome.py](rules/daily_welcome.py) for the canonical command shape). The picker sources preset names from `pixoo_presets.name` via `GET /api/pixoo/presets`. `devices` has a row `id='pixoo', device_type='display', protocol='pixoo'` so the picker can surface it alongside other controllable devices; the pre-existing `virtual:pixoo` row is a state mirror only.
 3. Treat the segment array as an ordered token stream — don't re-parse the flat text for `@` patterns. That leads to ambiguity with multi-word device names.
 
 **Why this shape (vs. plain text with @tokens):**

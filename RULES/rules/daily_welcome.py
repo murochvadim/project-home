@@ -1,8 +1,8 @@
-"""Daily Welcome — keep the Daily_Wellcome Pixoo preset on screen all day
+"""Daily Welcome — keep the Daily_Welcome Pixoo preset on screen all day
 and wipe the display at the end of the operational window.
 
 During the window (default 08:00→23:59 local) this rule re-pushes the
-Daily_Wellcome preset every 30 minutes and emits `virtual:pixoo` so
+Daily_Welcome preset every 30 minutes and emits `virtual:pixoo` so
 other Pixoo rules + dashboards see the current owner. At the exact
 minute of the window's `before` time it issues a single wipe (clears
 the display + the virtual ownership) so the Pixoo sits dark overnight
@@ -28,13 +28,13 @@ WIPE_COOLDOWN_SEC  = 60 * 60        # at most one wipe per hour (safety)
 
 
 RULE = {
-    "name": "Daily_Wellcome",
-    "description": "Push Daily_Wellcome preset every 30 min during the window; wipe at window end",
+    "name": "Daily_Welcome",
+    "description": "Push Daily_Welcome preset every 30 min during the window; wipe at window end",
     "triggers": ["heartbeat"],
     "controls": [],
     "category": "display",
     "group": "pixoo",
-    # Low priority — Daily_Wellcome is the always-on default. Any future
+    # Low priority — Daily_Welcome is the always-on default. Any future
     # pixoo rule (alarms, notifications, status banners) should use a
     # smaller number so it wins the group conflict and overrides the
     # welcome temporarily. Lower number = higher priority in this engine.
@@ -72,8 +72,8 @@ def evaluate(event, state):
     # the boundary. One-hour cooldown prevents double-fire across the 60s
     # heartbeats inside the boundary minute.
     if now_hhmm == wipe_hhmm:
-        if state.get_timer("daily_wellcome_wipe_cooldown") >= WIPE_COOLDOWN_SEC:
-            state.set_timer("daily_wellcome_wipe_cooldown")
+        if state.get_timer("daily_welcome_wipe_cooldown") >= WIPE_COOLDOWN_SEC:
+            state.set_timer("daily_welcome_wipe_cooldown")
             state.emit_virtual_event(
                 virtual_id="virtual:pixoo",
                 dps={
@@ -81,7 +81,7 @@ def evaluate(event, state):
                     "current_owner":  None,
                     "last_push_ts":   datetime.now(timezone.utc).isoformat(),
                 },
-                source="rule:Daily_Wellcome",
+                source="rule:Daily_Welcome",
                 name="Pixoo State",
                 dps_labels={
                     "current_preset": "Current Preset",
@@ -93,26 +93,26 @@ def evaluate(event, state):
                 "device_id": "pixoo",
                 "protocol":  "pixoo",
                 "action":    "wipe",
-                "rule":      "Daily_Wellcome",
+                "rule":      "Daily_Welcome",
             }]
         return []
 
     # Cooldown short-circuit — the vast majority of heartbeats return here.
-    if state.get_timer("daily_wellcome_cooldown") < COOLDOWN_SEC:
+    if state.get_timer("daily_welcome_cooldown") < COOLDOWN_SEC:
         return []
 
-    state.set_timer("daily_wellcome_cooldown")
+    state.set_timer("daily_welcome_cooldown")
 
     # Update the shared Pixoo state so other Pixoo rules + dashboards know
     # what's currently on the screen and which rule put it there.
     state.emit_virtual_event(
         virtual_id="virtual:pixoo",
         dps={
-            "current_preset": "Daily_Wellcome",
-            "current_owner":  "Daily_Wellcome",
+            "current_preset": "Daily_Welcome",
+            "current_owner":  "Daily_Welcome",
             "last_push_ts":   datetime.now(timezone.utc).isoformat(),
         },
-        source="rule:Daily_Wellcome",
+        source="rule:Daily_Welcome",
         name="Pixoo State",
         dps_labels={
             "current_preset": "Current Preset",
@@ -125,6 +125,6 @@ def evaluate(event, state):
         "device_id":   "pixoo",
         "protocol":    "pixoo",
         "action":      "push_preset",
-        "preset_name": "Daily_Wellcome",
-        "rule":        "Daily_Wellcome",
+        "preset_name": "Daily_Welcome",
+        "rule":        "Daily_Welcome",
     }]
