@@ -696,23 +696,39 @@
       card.dataset.brsRuleCard = rule.id;
       card.style.cssText = 'border:1px solid #d0cbc4;border-radius:5px;padding:10px 12px;margin-bottom:10px;background:#fbfaf6;cursor:default;';
       for (const s of (rule.sentences || [])) { _brsEnsureSegments(s); s.segments = _brsNormalize(s.segments); }
-      const maxSegs = (rule.sentences || []).reduce((m, s) => Math.max(m, (s.segments || []).length), 0) || 1;
+      // maxSegs is computed only across sentences that ACTUALLY use chips
+      // (segment count > 1). A pure-text sentence with one long segment must
+      // not inflate column 0 — those sentences render with colspan and skip
+      // the shared-column structure.
+      const chipSentences = (rule.sentences || []).filter(s => (s.segments || []).length > 1);
+      const maxSegs = chipSentences.reduce((m, s) => Math.max(m, (s.segments || []).length), 0) || 1;
       const segHeaderRow = Array.from({length: maxSegs}, (_, i) => {
         const lbl = (i % 2 === 0) ? 'text' : 'device';
         return `<th style="padding:3px 6px;text-align:left;font-weight:normal;color:#aaa;">${lbl}</th>`;
       }).join('');
       const sentencesHtml = (rule.sentences || []).map((s, sIdx) => {
-        const segCells = Array.from({length: maxSegs}, (_, segIdx) => {
-          const seg = s.segments[segIdx];
-          return _brsRenderSegmentCell(rule.id, s, segIdx, seg);
-        }).join('');
+        const isPureText = (s.segments || []).length <= 1;
+        let segPart;
+        if (isPureText) {
+          // Single-segment text sentence — colspan across all segment columns
+          // so its width doesn't push the chip-column widths around.
+          const seg = s.segments[0] || { t: 'text', v: '' };
+          const inner = _brsRenderSegmentInline(rule.id, s, 0, seg);
+          segPart = `<td colspan="${maxSegs}" style="padding:4px 6px;vertical-align:middle;">${inner}</td>`;
+        } else {
+          const segCells = Array.from({length: maxSegs}, (_, segIdx) => {
+            const seg = s.segments[segIdx];
+            return _brsRenderSegmentCell(rule.id, s, segIdx, seg);
+          }).join('');
+          segPart = segCells;
+        }
         return `
         <tr style="border-top:1px solid #e8e3d8;">
           <td style="padding:4px 6px;text-align:center;width:36px;color:#888;font-size:0.78rem;vertical-align:middle;">${sIdx + 1}.</td>
           <td style="padding:4px 6px;text-align:center;width:40px;vertical-align:middle;">
             <input type="checkbox" ${s.active ? 'checked' : ''} data-brs-rule="${rule.id}" data-brs-sent="${s.id}" data-brs-field="active" style="margin:0;" />
           </td>
-          ${segCells}
+          ${segPart}
           <td style="padding:4px 6px;width:60px;vertical-align:middle;text-align:center;">
             <button onclick="brsAppendDevice('${rule.id}','${s.id}')" title="Insert a device" style="height:26px;box-sizing:border-box;background:#fff;color:#6c4f9f;border:1px dashed #6c4f9f;border-radius:3px;padding:0 10px;font-size:0.78rem;cursor:pointer;line-height:1;">+Dev</button>
           </td>
@@ -828,30 +844,64 @@
   }
 
   const _BRS_CELL_W = 150;        // device chip width (long device names)
-  const _BRS_TEXT_MIN_W = 30;     // text input minimum — collapses tight between chips
+  const _BRS_TEXT_MIN_W = 12;     // text input minimum — collapses tight between chips
   const _BRS_CELL_H = 26;
+
+  // Inline (flex-strip) renderer — used when sentences live in a single
+  // shared cell so each sentence's segments size independently of others.
+  function _brsRenderSegmentInline(ruleId, s, segIdx, seg) {
+    if (!seg) return '';
+    if (seg.t === 'text') {
+      const v = seg.v || '';
+      const isFirstEmpty = (segIdx === 0 && s.segments.length === 1 && !v);
+      const placeholder = isFirstEmpty ? 'e.g. between 17:00 and 22:30' : '';
+      const isSeparator = !!v && /^\s*$/.test(v) && !isFirstEmpty;
+      const visibleLen = v.replace(/^\s+|\s+$/g, '').length;
+      const size = isSeparator ? 1 : Math.max(visibleLen + 1, isFirstEmpty ? 15 : 1);
+      const inputStyle = isSeparator
+        ? `width:6px;min-width:6px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:none;background:transparent;padding:0;font-size:0.82rem;line-height:${_BRS_CELL_H - 2}px;`
+        : `min-width:${_BRS_TEXT_MIN_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:1px solid #e8e3d8;border-radius:3px;padding:0 2px;font-size:0.82rem;background:#fff;line-height:${_BRS_CELL_H - 2}px;`;
+      return `<input type="text" value="${brsEsc(v)}" size="${size}"
+               data-brs-rule="${ruleId}" data-brs-sent="${s.id}" data-brs-seg="${segIdx}"
+               oninput="brsUpdateSegText(this)"
+               placeholder="${placeholder}"
+               style="${inputStyle}" />`;
+    }
+    return `<span title="${brsEsc(seg.v)}" style="max-width:${_BRS_CELL_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;background:#6c4f9f14;color:#6c4f9f;border:1px solid #6c4f9f55;border-radius:4px;padding:0 2px;font-size:0.82rem;display:inline-flex;align-items:center;white-space:nowrap;line-height:1;gap:2px;overflow:hidden;">
+        <span onclick="brsReplaceDevice('${ruleId}','${s.id}',${segIdx})" style="cursor:pointer;overflow:hidden;text-overflow:ellipsis;">${brsEsc(seg.v)}</span>
+        <button onclick="brsRemoveDevice('${ruleId}','${s.id}',${segIdx})" title="Remove device"
+                style="background:none;border:none;color:#c0392b;cursor:pointer;padding:0 2px;font-weight:bold;font-size:0.95rem;line-height:1;flex-shrink:0;">×</button>
+      </span>`;
+  }
+
   function _brsRenderSegmentCell(ruleId, s, segIdx, seg) {
-    const tdBase = 'padding:4px 2px;vertical-align:middle;';
+    const tdBase = 'padding:4px 0;vertical-align:middle;';
     if (!seg) return `<td style="${tdBase}"></td>`;
     if (seg.t === 'text') {
       const v = seg.v || '';
       const isFirstEmpty = (segIdx === 0 && s.segments.length === 1 && !v);
       const placeholder = isFirstEmpty ? 'e.g. between 17:00 and 22:30' : '';
-      // Use a longer minimum size only for the very first sentence-leading
-      // text (so the placeholder is readable). Mid-sentence separators are
-      // typically just a space/comma — let them shrink.
-      const size = Math.max(v.length + 2, isFirstEmpty ? 15 : 4);
+      // Whitespace-only segments are auto-inserted separators between chips.
+      // Render them as nearly-invisible thin clickable spacers — they keep
+      // the text segment in place (so chip ↔ text ↔ chip structure is valid)
+      // but take ~4 px of visual width instead of full input chrome.
+      const isSeparator = !!v && /^\s*$/.test(v) && !isFirstEmpty;
+      const visibleLen = v.replace(/^\s+|\s+$/g, '').length;
+      const size = isSeparator ? 1 : Math.max(visibleLen + 1, isFirstEmpty ? 15 : 1);
+      const inputStyle = isSeparator
+        ? `width:6px;min-width:6px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:none;background:transparent;padding:0;font-size:0.82rem;line-height:${_BRS_CELL_H - 2}px;`
+        : `min-width:${_BRS_TEXT_MIN_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:1px solid #e8e3d8;border-radius:3px;padding:0 2px;font-size:0.82rem;background:#fff;line-height:${_BRS_CELL_H - 2}px;`;
       return `<td style="${tdBase}">
         <input type="text" value="${brsEsc(v)}" size="${size}"
                data-brs-rule="${ruleId}" data-brs-sent="${s.id}" data-brs-seg="${segIdx}"
                oninput="brsUpdateSegText(this)"
                placeholder="${placeholder}"
-               style="min-width:${_BRS_TEXT_MIN_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;border:1px solid #e8e3d8;border-radius:3px;padding:0 6px;font-size:0.82rem;background:#fff;line-height:${_BRS_CELL_H - 2}px;" />
+               style="${inputStyle}" />
       </td>`;
     }
     return `<td style="${tdBase}">
-      <span title="${brsEsc(seg.v)}" style="width:${_BRS_CELL_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;background:#6c4f9f14;color:#6c4f9f;border:1px solid #6c4f9f55;border-radius:4px;padding:0 4px 0 8px;font-size:0.82rem;display:flex;align-items:center;justify-content:space-between;white-space:nowrap;line-height:1;gap:4px;overflow:hidden;">
-        <span onclick="brsReplaceDevice('${ruleId}','${s.id}',${segIdx})" style="cursor:pointer;overflow:hidden;text-overflow:ellipsis;flex:1;">${brsEsc(seg.v)}</span>
+      <span title="${brsEsc(seg.v)}" style="max-width:${_BRS_CELL_W}px;height:${_BRS_CELL_H}px;box-sizing:border-box;background:#6c4f9f14;color:#6c4f9f;border:1px solid #6c4f9f55;border-radius:4px;padding:0 2px;font-size:0.82rem;display:inline-flex;align-items:center;white-space:nowrap;line-height:1;gap:2px;overflow:hidden;">
+        <span onclick="brsReplaceDevice('${ruleId}','${s.id}',${segIdx})" style="cursor:pointer;overflow:hidden;text-overflow:ellipsis;">${brsEsc(seg.v)}</span>
         <button onclick="brsRemoveDevice('${ruleId}','${s.id}',${segIdx})" title="Remove device"
                 style="background:none;border:none;color:#c0392b;cursor:pointer;padding:0 2px;font-weight:bold;font-size:0.95rem;line-height:1;flex-shrink:0;">×</button>
       </span>
