@@ -303,7 +303,7 @@ async function loadVolumes() {
         <td style="font-size:0.78rem; color:#666;">${fmtTs(r.newest)}</td>
         <td style="text-align:right; font-size:0.82rem;" id="vol-dead-${r.table_name}">${r.dead_tup.toLocaleString()}</td>
         <td style="text-align:right; font-weight:600; color:${fragColor};" id="vol-frag-${r.table_name}">${r.frag_pct}%</td>
-        <td style="font-size:0.78rem; color:${r.last_vacuumed ? '#888' : '#c0392b'};">${r.last_vacuumed ? fmtTs(r.last_vacuumed) : '— never'}</td>
+        <td style="font-size:0.78rem; color:${r.last_vacuumed ? '#888' : (r.dead_tup > 50 ? '#c0392b' : '#aaa')};">${r.last_vacuumed ? fmtTs(r.last_vacuumed) : (r.dead_tup > 50 ? '— never' : '— not needed')}</td>
         <td style="text-align:center;">
           <button class="btn btn-secondary btn-sm" style="font-size:0.72rem;" onclick="vacuumTable('${r.table_name}', this)">Vacuum</button>
         </td>
