@@ -317,6 +317,7 @@ async function loadVolumes() {
 
 async function vacuumTable(tableName, btn) {
   const origText = btn.textContent;
+  btn.blur(); // drop focus before disabling — prevents browser auto-scrolling to the next focusable element (which is in Retention Policies)
   btn.disabled = true;
   btn.textContent = '…';
   try {
@@ -744,6 +745,7 @@ async function loadWinStorages() {
 
 async function deleteWinStorage(id, btn) {
   if (!confirm('Delete this storage? Jobs using it will lose their storage reference.')) return;
+  btn.blur();
   btn.disabled = true;
   try {
     const r = await fetch(`/api/backup/storages/${id}`, { method: 'DELETE' }).then(r => r.json());
@@ -844,6 +846,7 @@ async function loadWinJobs() {
 }
 
 async function toggleWinJob(id, currentEnabled, btn) {
+  btn.blur();
   btn.disabled = true;
   try {
     const r = await fetch(`/api/backup/jobs/${id}`, {
@@ -857,6 +860,7 @@ async function toggleWinJob(id, currentEnabled, btn) {
 }
 
 async function winJobRunNow(id, btn) {
+  btn.blur();
   btn.disabled = true;
   btn.textContent = '…';
   try {
@@ -873,6 +877,7 @@ async function winJobRunNow(id, btn) {
 
 async function deleteWinJob(id, btn) {
   if (!confirm('Delete this backup job and its log history?')) return;
+  btn.blur();
   btn.disabled = true;
   try {
     const r = await fetch(`/api/backup/jobs/${id}`, { method: 'DELETE' }).then(r => r.json());
