@@ -209,23 +209,23 @@ def _last_change_age(state, dev_id, dps_key):
     """
     if not dps_key:
         return float('inf')
-    import time
-    now = time.time()
+    from datetime import datetime, timezone
+    now_dt = datetime.now(timezone.utc)
     try:
-        ts = state.get_last_transition_before(dev_id, dps_key, now)
+        ts = state.get_last_transition_before(dev_id, dps_key, now_dt)
     except Exception:
         return float('inf')
     if ts is None:
         return float('inf')
-    # ts may be a unix float or a datetime — handle both defensively.
+    # ts may be a unix float or a datetime — normalise to datetime.
     try:
         if hasattr(ts, 'timestamp'):
-            ts_unix = ts.timestamp()
+            ts_dt = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
         else:
-            ts_unix = float(ts)
+            ts_dt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
     except (TypeError, ValueError):
         return float('inf')
-    return max(0.0, now - ts_unix)
+    return max(0.0, (now_dt - ts_dt).total_seconds())
 
 
 # ─────────────────────────── Rule ───────────────────────────
@@ -303,8 +303,30 @@ def evaluate(event, state):
         )
         return [cmd]
 
-    # ── Exactly one ON → that mode wins ──
-    if len(on_modes) == 1:
+    # ── Direct event check (race-safe) ──
+    # The current event's payload is the freshest source of truth — it hasn't
+    # been written to device_events yet at the moment evaluate() runs, so
+    # querying the table for "last transition" misses this very event. If THIS
+    # event is from the button device and contains exactly one mode-button
+    # going TRUE, that mode wins immediately.
+    fresh_mode = None
+    event_dps = event.get('dps') or {}
+    if event.get('device_id', '') in {bindings[m][0] for m in ('home', 'away', 'abroad')}:
+        truthy_modes = []
+        for mode in ('home', 'away', 'abroad'):
+            b_dev, b_dps = bindings[mode]
+            if event.get('device_id') != b_dev:
+                continue
+            v = event_dps.get(b_dps) if b_dps is not None else event_dps.get('1')
+            if v in _TRUTHY_BUTTON_VALUES:
+                truthy_modes.append(mode)
+        if len(truthy_modes) == 1:
+            fresh_mode = truthy_modes[0]
+
+    if fresh_mode:
+        active_mode = fresh_mode
+    elif len(on_modes) == 1:
+        # ── Exactly one ON → that mode wins ──
         active_mode = on_modes[0]
     else:
         # ── Multiple ON → most-recent transition wins ──
@@ -327,4 +349,29 @@ def evaluate(event, state):
         state.shared['home_mode'] = active_mode
         log.info("mode_buttons: home_mode %s -> %s", prev or '(unset)', active_mode)
 
-    return []
+    # ── Mutual exclusivity (s_mb2/3/4 sentences) ──
+    # Whenever a button is currently ON that is NOT the active mode, turn it
+    # off. Runs on every event so any drift between panel state and the rule's
+    # decision converges within a tick or two. Idempotent — if the OFF command
+    # is already reflected in state.devices, _is_button_on returns False and
+    # we skip emitting.
+    commands = []
+    for mode in ('home', 'away', 'abroad'):
+        if mode == active_mode:
+            continue
+        b_dev, b_dps = bindings[mode]
+        if _is_button_on(state, b_dev, b_dps):
+            cmd = {
+                'device_id': b_dev,
+                'action':    'turn_off',
+                'rule':      'Mode Buttons',
+            }
+            if b_dps is not None:
+                cmd['channel'] = b_dps
+            commands.append(cmd)
+    if commands:
+        log.info(
+            "mode_buttons: enforcing mutual-exclusivity — turning off %d non-active buttons (active=%s)",
+            len(commands), active_mode,
+        )
+    return commands
