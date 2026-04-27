@@ -919,7 +919,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'rooms', 'net_devices', 'net_ports', 'net_scans',
       'rule_events', 'rule_engine_state', 'rule_engine_log',
       'pixoo_presets', 'pixoo_log', 'analyzer_settings', 'analyzer_log',
-      'retention_policies',
+      'retention_policies', 'dashboard_settings', 'room_device_placements',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -938,6 +938,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       analyzer_settings: null, analyzer_log: 'ts',
       face_crops: null, person_embeddings: null, documents: null,
       retention_policies: null,
+      dashboard_settings: 'updated_at', room_device_placements: 'updated_at',
     };
 
     const sizes = await db.query(`
