@@ -42,6 +42,8 @@
   let _zoneSel    = [];             // V6 Zones: list of cellIds currently selected (unsaved)
   let _zoneEditId = null;           // id of existing zone being edited (null = creating new)
   let _showLights = (localStorage.getItem('apt_show_lights') !== '0'); // V7 — default ON
+  let _showParameters = (localStorage.getItem('apt_show_parameters') !== '0'); // V10 — default ON
+  let _paramPicker  = null;         // V10 Parameters: {x_m, y_m, slug} while the parameter picker is open
 
   function svg() { return document.getElementById('apt-svg'); }
   function activeData() { return allRooms[activeSlug] || { walls:[], windows:[], doors:[], dividers:[] }; }
@@ -1136,6 +1138,12 @@
       const lp = document.getElementById('apt-light-picker');
       if (lp) lp.style.display = 'none';
     }
+    // V10: leaving the parameter tool closes any open parameter-picker popover.
+    if (t !== 'parameter') {
+      _paramPicker = null;
+      const pp = document.getElementById('apt-param-picker');
+      if (pp) pp.style.display = 'none';
+    }
     document.querySelectorAll('.apt-tool').forEach(b => {
       b.style.outline = b.dataset.tool === t ? '2px solid #27ae60' : 'none';
     });
@@ -1151,6 +1159,7 @@
       furniture: 'Click to place furniture. Click again to set size, or single-click for default size.',
       zone:    'Click cells to toggle selection. Then type a name in the edit panel + Apply to save. Click a named zone to edit it.',
       light:   'Click inside a room to place a light. Pick its controller (switch/light entity) + channel + fixture type + intensity.',
+      parameter: 'Click inside a room to place a sensor parameter label (temperature / humidity / illuminance). Pick the parameter type, source sensor(s), font size, and color.',
       select:  'Click an element to select.',
     };
     setStatus(hints[t] || '');
@@ -1267,6 +1276,11 @@
     } else if (tool === 'light') {
       // V7: open light picker — user picks controller (switch/light entity) + channel.
       aptLightPickerOpen(ev, xM, yM);
+      return;
+    } else if (tool === 'parameter') {
+      // V10: open parameter picker — user picks parameter type (temp/humidity/illuminance),
+      // source sensor(s), font size, and color.
+      aptParamPickerOpen(ev, xM, yM);
       return;
     } else if (tool === 'zone') {
       // V6 Zones: click a cell to toggle selection. Clicking a cell inside an
@@ -1588,13 +1602,14 @@
     panel.style.display = 'block';
     const isDivider = !!div;
     const isFurn = !!furn;
-    const isDev   = !!(placement && placement.device_type !== 'light');
+    const isParam = !!(placement && placement.device_type === 'parameter_label');
+    const isDev   = !!(placement && placement.device_type !== 'light' && !isParam);
     const isLight = !!(placement && placement.device_type === 'light');
     document.getElementById('apt-edit-id').textContent = (isDev || isLight)
       ? (placement.device_name || placement.device_id)
-      : (furn ? (furn.type + (furn.label ? ' "'+furn.label+'"' : '')) : item.id);
-    document.getElementById('apt-edit-offset-wrap').style.display = (isDivider || isFurn || isDev || isLight) ? 'none' : 'inline';
-    document.getElementById('apt-edit-width-wrap').style.display  = (isDivider || isFurn || isDev || isLight) ? 'none' : 'inline';
+      : (isParam ? (((placement.params || {}).dps_field || 'parameter') + ' label') : (furn ? (furn.type + (furn.label ? ' "'+furn.label+'"' : '')) : item.id));
+    document.getElementById('apt-edit-offset-wrap').style.display = (isDivider || isFurn || isDev || isLight || isParam) ? 'none' : 'inline';
+    document.getElementById('apt-edit-width-wrap').style.display  = (isDivider || isFurn || isDev || isLight || isParam) ? 'none' : 'inline';
     if (!isDivider && !isFurn && !isDev) {
       document.getElementById('apt-edit-offset').value = item.offset_m;
       document.getElementById('apt-edit-width').value = item.width_m;
@@ -1695,6 +1710,38 @@
       document.getElementById('apt-edit-light-rot').value = placement.rotation || 0;
       document.getElementById('apt-edit-light-enabled').checked = pr.enabled !== false;
       document.getElementById('apt-edit-light-label').value = placement.label || '';
+    }
+    // V10 Parameter label edit panel
+    const paramWrap = document.getElementById('apt-edit-param-wrap');
+    if (paramWrap) paramWrap.style.display = isParam ? 'inline' : 'none';
+    if (isParam) {
+      const pr = placement.params || {};
+      document.getElementById('apt-edit-param-field').textContent = pr.dps_field || '—';
+      document.getElementById('apt-edit-param-agg').value    = pr.agg || 'avg';
+      document.getElementById('apt-edit-param-font').value   = pr.font_size || 14;
+      document.getElementById('apt-edit-param-color').value  = pr.color || '#333';
+      document.getElementById('apt-edit-param-format').value = pr.format || '%.1f';
+      document.getElementById('apt-edit-param-unit').value   = pr.unit || '';
+      document.getElementById('apt-edit-param-label').value  = placement.label || '';
+      // Populate sources dropdown — in-room first, then cross-room.
+      const srcSel = document.getElementById('apt-edit-param-sources');
+      const { inRoom, other } = _paramSourceCandidates(pr.dps_field || 'temperature');
+      const cands = [...inRoom, ...other];
+      const selSet = new Set(pr.sources || []);
+      // Ensure currently-selected sources appear even if no longer in cands
+      for (const id of (pr.sources || [])) {
+        if (!cands.find(c => c.id === id)) {
+          const dev = (_allDevices || []).find(d => d.id === id);
+          if (dev) cands.push(dev);
+        }
+      }
+      srcSel.innerHTML = cands.map(d => {
+        const slug = (d.room || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const folded = SUBROOM_FOLD[d.room || ''] || slug;
+        const inThisRoom = (slug === activeSlug || folded === activeSlug);
+        const tag = inThisRoom ? '' : ' [' + (d.room || 'other') + ']';
+        return `<option value="${d.id}" ${selSet.has(d.id) ? 'selected' : ''}>${d.name}${tag}</option>`;
+      }).join('');
     }
   }
 
@@ -1832,6 +1879,50 @@
           }
           draw(); setStatus('Light updated.');
           renderZoneInformationTable();
+        } catch (e) { setStatus('Update failed: ' + e.message); }
+        return;
+      }
+      // V10 Parameter label branch — distinct from sensor device branch below.
+      if (placement && placement.device_type === 'parameter_label') {
+        const agg     = document.getElementById('apt-edit-param-agg').value;
+        const fontSz  = parseInt(document.getElementById('apt-edit-param-font').value, 10) || 14;
+        const color   = document.getElementById('apt-edit-param-color').value || '#333';
+        const fmtStr  = (document.getElementById('apt-edit-param-format').value || '%.1f').trim();
+        const unit    = document.getElementById('apt-edit-param-unit').value || '';
+        const lbl     = (document.getElementById('apt-edit-param-label').value || '').trim() || null;
+        const srcSel  = document.getElementById('apt-edit-param-sources');
+        const sources = Array.from(srcSel.selectedOptions).map(o => o.value);
+        if (sources.length === 0) { setStatus('Select at least one source sensor.'); return; }
+        const params = {
+          ...(placement.params || {}),
+          agg, font_size: fontSz, color,
+          format: fmtStr, unit, sources,
+        };
+        const prev_fields = {
+          device_id: placement.device_id,
+          params:    JSON.parse(JSON.stringify(placement.params || {})),
+          label:     placement.label,
+        };
+        const sourceChanged = (sources[0] !== placement.device_id);
+        const patchBody = sourceChanged
+          ? { device_id: sources[0], params, label: lbl }
+          : { params, label: lbl };
+        try {
+          const r = await fetch('/api/room-device-placements/' + placement.id, {
+            method: 'PATCH', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(patchBody),
+          });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const updated = await r.json();
+          pushUndo({ type: 'dev_update', id: placement.id, prev_fields });
+          Object.assign(placement, updated);
+          if (sourceChanged) {
+            const dev = (_allDevices || []).find(d => d.id === sources[0]) || {};
+            placement.device_name = dev.name;
+            placement.last_state  = dev.last_state;
+            placement.last_seen   = dev.last_seen;
+          }
+          draw(); setStatus('Parameter label updated.');
         } catch (e) { setStatus('Update failed: ' + e.message); }
         return;
       }
@@ -3148,6 +3239,18 @@
         continue;
       }
 
+      // V10 Parameter labels — render only the formatted value (no icon).
+      // Reads each source's last_state[dps_field], applies aggregation, formats
+      // with sprintf-like format string + unit, draws as a draggable SVG <text>.
+      // Wrapped in try/catch so a single broken param row doesn't halt
+      // the rest of the placement-rendering loop (motion sensors etc.).
+      if (p.device_type === 'parameter_label') {
+        if (!_showParameters) { continue; }
+        try { _renderParamLabel(g, p, cx, cy, slug, selId); }
+        catch (e) { console.error('parameter_label render failed for', p.id, e); }
+        continue;
+      }
+
       // V9 Door sensors — small square icon, red when open, grey when closed.
       // Same drag/select/edit handles as other placements.
       if (DEV_DOOR_TYPES.has(p.device_type)) {
@@ -3356,7 +3459,15 @@
       setStatus('Pick an active room first (not Apartment view).');
       return;
     }
-    const placedIds = new Set(roomPlacements.map(p => p.device_id));
+    // Only sensor-type placements (presence/motion/door_sensor) count as
+    // "already placed" for this picker. Lights and parameter_labels reference
+    // sensors but don't claim them — a sensor used as a parameter_label source
+    // is still available to be placed as an actual sensor too.
+    const placedIds = new Set(
+      roomPlacements
+        .filter(p => DEV_PLACEABLE_TYPES.has(p.device_type))
+        .map(p => p.device_id)
+    );
     const candidates = (_allDevices || []).filter(d =>
       DEV_PLACEABLE_TYPES.has(d.device_type) &&
       d.enabled !== false &&
@@ -3715,6 +3826,83 @@
     }
   }
 
+  // ── V10 Parameter-label rendering ──────────────────────────────────────────
+  // Cache of source-state by id. Built fresh in _renderParamLabel from devices
+  // since `roomPlacements` row only stores last_state for device_id (the first
+  // source); the OTHER sources' last_state must come from _allDevices.
+  function _paramSourceState(srcId) {
+    // Try roomPlacements first (the placement may have been polled already)
+    for (const pp of roomPlacements) {
+      if (pp.device_id === srcId && pp.last_state) return pp.last_state;
+    }
+    const dev = (_allDevices || []).find(d => d.id === srcId);
+    return (dev && dev.last_state) || null;
+  }
+
+  // sprintf-like format for a single number with %.Nf or %d. Falls back to
+  // String(n) on any unrecognised format.
+  function _fmtNumber(n, fmt) {
+    if (typeof n !== 'number' || !isFinite(n)) return '—';
+    if (!fmt) return n.toString();
+    const m = fmt.match(/%\.(\d+)f/);
+    if (m) return n.toFixed(parseInt(m[1], 10));
+    if (fmt === '%d') return Math.round(n).toString();
+    return n.toString();
+  }
+
+  function _renderParamLabel(g, p, cx, cy, slug, selId) {
+    const params = p.params || {};
+    const dpsField = params.dps_field;
+    const sources = Array.isArray(params.sources) ? params.sources : [];
+    const agg = params.agg || 'avg';
+    const fontSize = parseInt(params.font_size, 10) || 14;
+    const color = params.color || '#333';
+    const fmt  = params.format || '%.1f';
+    const unit = params.unit   || '';
+    const lo = p.label_offset || { x: 0, y: 0 };
+    const hidden = !!p.label_hidden;
+
+    // Aggregate the live values from all sources that have the field.
+    let displayText = '—';
+    if (dpsField && sources.length) {
+      const values = [];
+      for (const sid of sources) {
+        const ls = _paramSourceState(sid);
+        if (!ls) continue;
+        const raw = ls[dpsField];
+        const num = typeof raw === 'number' ? raw : parseFloat(raw);
+        if (typeof num === 'number' && isFinite(num)) values.push(num);
+      }
+      if (values.length) {
+        let val;
+        if      (agg === 'max')  val = Math.max(...values);
+        else if (agg === 'min')  val = Math.min(...values);
+        else if (agg === 'last') val = values[values.length - 1];
+        else                     val = values.reduce((a, b) => a + b, 0) / values.length; // avg
+        displayText = (p.label || '') + _fmtNumber(val, fmt) + (unit || '');
+      }
+    }
+
+    // Selected: bold + outline; otherwise normal weight.
+    const isSel = (p.id === selId);
+
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', cx + mToPx(lo.x || 0));
+    t.setAttribute('y', cy + mToPx(lo.y || 0));
+    t.setAttribute('font-size', String(fontSize));
+    t.setAttribute('fill', color);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('dominant-baseline', 'middle');
+    t.setAttribute('font-weight', isSel ? '700' : '500');
+    t.setAttribute('opacity', hidden ? '0.3' : '1');
+    t.setAttribute('style', 'cursor:pointer;user-select:none;pointer-events:all;' + (isSel ? 'paint-order:stroke;stroke:#27ae60;stroke-width:1.5;' : ''));
+    t.dataset.devPlacementId = p.id;       // selectable via existing handlers
+    t.dataset.devLabelId   = p.id;          // draggable via existing handlers
+    t.dataset.devLabelSlug = slug;
+    t.textContent = displayText;
+    g.appendChild(t);
+  }
+
   // ── V7 Light picker ────────────────────────────────────────────────────────
   // Controller candidates: every enabled switch / circuit_breaker / light — from
   // ANY room (cross-room supported, e.g. Bedroom Balcony Switch DPS 2 lights My
@@ -3853,6 +4041,155 @@
       draw(); refreshEditPanel();
       renderZoneInformationTable();
       setStatus(`Placed light via ${dev.name || controller_device_id}${controller_dps_key != null ? ':' + controller_dps_key : ''}.`);
+    } catch (e) {
+      setStatus('Place failed: ' + e.message);
+    }
+  };
+
+  // ── V10 Parameters ─────────────────────────────────────────────────────────
+  // Sub-rooms that are part of an open-plan parent room. Devices tagged with
+  // these `devices.room` values are physically inside the parent's drawn
+  // layout, even though they don't have their own `room_layouts.<slug>`.
+  // Mirrors people_home.py's DEFAULT_MANUAL_SUBROOM_MERGE for consistency.
+  const SUBROOM_FOLD = {
+    'Kitchen':     'living-room',
+    'Dining Room': 'living-room',
+  };
+
+  // Defaults per parameter type — pre-fill the picker when the user changes
+  // the type dropdown.
+  const PARAM_DEFAULTS = {
+    temperature: { agg: 'avg', color: '#c0392b', format: '%.1f', unit: '°C',  font_size: 14 },
+    humidity:    { agg: 'avg', color: '#2980b9', format: '%.0f', unit: '%',   font_size: 14 },
+    illuminance: { agg: 'max', color: '#e67e22', format: '%.0f', unit: ' lx', font_size: 14 },
+  };
+
+  // ALL sensors whose `last_state` exposes `dpsField`. Sensors in the active
+  // room are returned first (pre-checked in the UI); cross-room sensors come
+  // after (door sensors typically tagged to one room are useful as the other
+  // side's temperature source — e.g. Balcony Door is in the Living Room ↔
+  // Balcony wall, so it's a valid Living Room temperature source too).
+  function _paramSourceCandidates(dpsField) {
+    const inRoom = [];
+    const other  = [];
+    for (const dev of (_allDevices || [])) {
+      const ls = dev.last_state || {};
+      if (ls[dpsField] === undefined || ls[dpsField] === null) continue;
+      const devSlug = (dev.room || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      // Open-plan fold: Kitchen / Dining Room sensors render INSIDE the
+      // Living Room layout, so they belong to the parent room for picker UX.
+      const foldedSlug = SUBROOM_FOLD[dev.room || ''] || devSlug;
+      if (activeSlug && (devSlug === activeSlug || foldedSlug === activeSlug)) inRoom.push(dev);
+      else other.push(dev);
+    }
+    return { inRoom, other };
+  }
+
+  function _renderParamSources(dpsField) {
+    const box = document.getElementById('apt-param-picker-sources');
+    if (!box) return;
+    const { inRoom, other } = _paramSourceCandidates(dpsField);
+    if (!inRoom.length && !other.length) {
+      box.innerHTML = '<div style="color:#999;padding:4px;">No sensors expose <code>' + dpsField + '</code>.</div>';
+      return;
+    }
+    const renderOne = (d, checked) =>
+      `<label style="display:flex;align-items:center;gap:5px;padding:2px 0;cursor:pointer;">
+        <input type="checkbox" class="apt-param-source" value="${d.id}"${checked ? ' checked' : ''}>
+        <span><strong>${d.name}</strong> <span style="color:#888;">(${d.room || '—'} · ${d.last_state[dpsField]})</span></span>
+      </label>`;
+    let html = '';
+    if (inRoom.length) {
+      html += '<div style="font-size:0.7rem;color:#666;font-weight:600;padding:2px 0 2px 0;">In this room (pre-checked):</div>';
+      html += inRoom.map(d => renderOne(d, true)).join('');
+    }
+    if (other.length) {
+      html += '<div style="font-size:0.7rem;color:#666;font-weight:600;padding:6px 0 2px 0;">Other rooms (door sensors etc.):</div>';
+      html += other.map(d => renderOne(d, false)).join('');
+    }
+    box.innerHTML = html;
+  }
+
+  function aptParamPickerOpen(ev, xM, yM) {
+    if (!activeSlug || activeSlug === '_apartment') {
+      setStatus('Pick an active room first (not Apartment view).');
+      return;
+    }
+    const pop = document.getElementById('apt-param-picker');
+    if (!pop) { setStatus('Picker UI missing.'); return; }
+    // Default the picker to Temperature with Aeotec sensors pre-checked.
+    document.getElementById('apt-param-picker-type').value = 'temperature';
+    const defs = PARAM_DEFAULTS.temperature;
+    document.getElementById('apt-param-picker-agg').value = defs.agg;
+    document.getElementById('apt-param-picker-font').value = defs.font_size;
+    document.getElementById('apt-param-picker-color').value = defs.color;
+    _renderParamSources('temperature');
+    const rect = svg().getBoundingClientRect();
+    pop.style.left = Math.min(rect.width  - 300, Math.max(4, ev.clientX - rect.left)) + 'px';
+    pop.style.top  = Math.min(rect.height - 300, Math.max(4, ev.clientY - rect.top))  + 'px';
+    pop.style.display = '';
+    _paramPicker = { slug: activeSlug, x_m: xM, y_m: yM };
+  }
+
+  window.aptParamPickerCancel = function () {
+    _paramPicker = null;
+    const p = document.getElementById('apt-param-picker');
+    if (p) p.style.display = 'none';
+    setStatus('');
+  };
+
+  window.aptParamPickerTypeChanged = function () {
+    const dpsField = document.getElementById('apt-param-picker-type').value;
+    const defs = PARAM_DEFAULTS[dpsField] || PARAM_DEFAULTS.temperature;
+    document.getElementById('apt-param-picker-agg').value = defs.agg;
+    document.getElementById('apt-param-picker-font').value = defs.font_size;
+    document.getElementById('apt-param-picker-color').value = defs.color;
+    _renderParamSources(dpsField);
+  };
+
+  window.aptParamPickerConfirm = async function () {
+    if (!_paramPicker) return;
+    const { slug, x_m, y_m } = _paramPicker;
+    const dpsField  = document.getElementById('apt-param-picker-type').value;
+    const agg       = document.getElementById('apt-param-picker-agg').value;
+    const font_size = parseInt(document.getElementById('apt-param-picker-font').value, 10) || 14;
+    const color     = document.getElementById('apt-param-picker-color').value || '#333';
+    const sources   = Array.from(document.querySelectorAll('.apt-param-source:checked')).map(cb => cb.value);
+    if (sources.length === 0) { setStatus('Select at least one source sensor.'); return; }
+    const defs = PARAM_DEFAULTS[dpsField] || {};
+    const params = {
+      dps_field: dpsField,
+      sources,
+      agg,
+      font_size,
+      color,
+      format: defs.format || '%.1f',
+      unit:   defs.unit   || '',
+    };
+    const body = {
+      slug,
+      device_id: sources[0],            // poll path: first source's last_state
+      device_type: 'parameter_label',
+      x: x_m, y: y_m,
+      rotation: 0,
+      params,
+    };
+    try {
+      const r = await fetch('/api/room-device-placements', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const row = await r.json();
+      const dev = (_allDevices || []).find(d => d.id === sources[0]) || {};
+      row.device_name = dev.name; row.last_state = dev.last_state; row.last_seen = dev.last_seen;
+      roomPlacements.push(row);
+      selectedId = row.id;
+      pushUndo({ type: 'dev_create', row: { ...row } });
+      aptParamPickerCancel();
+      if (window.aptSetTool) window.aptSetTool('select');
+      draw(); refreshEditPanel();
+      setStatus(`Placed ${dpsField} label (${sources.length} source${sources.length > 1 ? 's' : ''}, agg=${agg}).`);
     } catch (e) {
       setStatus('Place failed: ' + e.message);
     }
@@ -4172,6 +4509,12 @@
     draw();
   };
 
+  window.aptSetShowParameters = function (v) {
+    _showParameters = !!v;
+    try { localStorage.setItem('apt_show_parameters', _showParameters ? '1' : '0'); } catch (e) {}
+    draw();
+  };
+
   window.aptRedraw = function () {
     const w = parseFloat(document.getElementById('apt-canvas-w').value) || null;
     const h = parseFloat(document.getElementById('apt-canvas-h').value) || null;
@@ -4210,6 +4553,9 @@
     // V7: sync Lights checkbox
     const lightsCb = document.getElementById('apt-show-lights');
     if (lightsCb) lightsCb.checked = _showLights;
+    // V10: sync Parameters checkbox
+    const paramsCb = document.getElementById('apt-show-parameters');
+    if (paramsCb) paramsCb.checked = _showParameters;
 
     // Label drag (any tool, any room): left-click on room-name OR divider label
     // starts drag. Right-click toggles hide (label_hidden=true). "Show hidden

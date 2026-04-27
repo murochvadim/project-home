@@ -3105,8 +3105,17 @@ app.post('/api/room-device-placements', async (req, res) => {
     const placementType = (typeof b.device_type === 'string' && b.device_type)
       ? b.device_type
       : devR.rows[0].device_type;
-    if (placementType !== 'light') {
-      await db.query(`DELETE FROM room_device_placements WHERE device_id = $1`, [b.device_id]);
+    // Prevent duplicate sensor placements (same device placed twice as a sensor).
+    // BUT preserve parameter_label rows that REFERENCE this sensor — they
+    // share device_id without claiming the sensor. Lights are already excluded.
+    // So: only delete same-device sensor-type placements.
+    const SENSOR_TYPES = ['presence', 'motion', 'door_sensor'];
+    if (SENSOR_TYPES.includes(placementType)) {
+      await db.query(
+        `DELETE FROM room_device_placements
+         WHERE device_id = $1 AND device_type = ANY($2::text[])`,
+        [b.device_id, SENSOR_TYPES]
+      );
     }
     const r = await db.query(
       `INSERT INTO room_device_placements
