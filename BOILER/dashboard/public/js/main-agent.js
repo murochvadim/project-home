@@ -485,9 +485,11 @@
           });
         } catch (e) { return '—'; }
       };
+      const hmEl = document.getElementById('tmb-home-mode');
       const tmEl = document.getElementById('tmb-time-mode');
       const srEl = document.getElementById('tmb-next-sunrise');
       const ssEl = document.getElementById('tmb-next-sunset');
+      if (hmEl) hmEl.textContent = s.home_mode || '—';
       if (tmEl) tmEl.textContent = s.time_mode || '—';
       if (srEl) srEl.textContent = fmtSunHM(s.next_sunrise);
       if (ssEl) ssEl.textContent = fmtSunHM(s.next_sunset);
