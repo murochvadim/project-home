@@ -234,6 +234,7 @@ async function loadSettings() {
     document.getElementById('s-probe-interval').value    = cfg.probe_interval_min ?? '';
     document.getElementById('s-consumption-temp').value   = cfg.consumption_temp_delta ?? '';
     document.getElementById('s-consumption-time').value   = cfg.consumption_time_delta ?? '';
+    document.getElementById('s-consumption-descent').value = cfg.consumption_descent_trigger_c ?? '';
     document.getElementById('s-probe-max-boiler').value   = cfg.probe_max_boiler_temp ?? '';
     document.getElementById('s-probe-max-delta').value    = cfg.probe_max_delta ?? '';
     document.getElementById('s-glitch-drop').value        = cfg.glitch_drop_threshold_c ?? '';
@@ -258,6 +259,7 @@ async function saveSettings(e) {
     probe_interval_min:         parseInt(document.getElementById('s-probe-interval').value),
     consumption_temp_delta:     parseFloat(document.getElementById('s-consumption-temp').value),
     consumption_time_delta:     parseInt(document.getElementById('s-consumption-time').value),
+    consumption_descent_trigger_c: parseFloat(document.getElementById('s-consumption-descent').value),
     probe_max_boiler_temp:      parseInt(document.getElementById('s-probe-max-boiler').value),
     probe_max_delta:            parseInt(document.getElementById('s-probe-max-delta').value),
     glitch_drop_threshold_c:    parseFloat(document.getElementById('s-glitch-drop').value),

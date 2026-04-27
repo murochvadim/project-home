@@ -264,7 +264,8 @@ def get_time_since_last_open(conn):
 def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_delta,
                                  run_interval_min,
                                  glitch_drop_threshold_c=10.0,
-                                 glitch_bounce_recovery_c=8.0):
+                                 glitch_bounce_recovery_c=8.0,
+                                 descent_trigger_c=0.4):
     """
     Scan recent raw_data for completed boiler temperature drop events.
     A drop event = boiler_temp falls >= consumption_temp_delta within consumption_time_delta minutes.
@@ -306,31 +307,51 @@ def detect_and_save_consumptions(conn, consumption_temp_delta, consumption_time_
         curr_temp = float(rows[i]['boiler_temp'])
         next_temp = float(rows[i + 1]['boiler_temp'])
 
-        # Look for start of a significant drop (>= 0.5°C per step)
-        if next_temp <= curr_temp - 0.5:
+        # Look for start of a significant drop (per-step descent trigger from settings,
+        # default 0.4°C — must be ≥ wf96c_temp_delta_c + a small margin so a
+        # minimum-delta dedupe write doesn't fire the trigger by itself)
+        if next_temp <= curr_temp - descent_trigger_c:
             start_idx  = i
             start_temp = curr_temp
             min_temp   = next_temp
             min_idx    = i + 1
 
             # Extension: keep chaining while the next reading is at or below the
-            # running minimum (with a small jitter tolerance). Replaces the old
-            # "each consecutive row must drop ≥0.3°C" check, which broke once
-            # raw_data switched from 5-min cron (2026-04-23) to ~2-3s MQTT
-            # ingest — consecutive rows during a real drop only differ by
-            # 0.1–0.2°C even when the overall trend is steep, so the old loop
-            # bailed almost immediately and big drops got fragmented or missed.
-            JITTER_TOL_C = 0.2
+            # running minimum (with a small jitter tolerance). The chain ends
+            # EITHER when temperature recovers meaningfully above the floor
+            # (real recovery), OR when PLATEAU_K consecutive readings sit
+            # at/near the floor without a meaningful new minimum (plateau
+            # detection — drop has settled and the boiler is now coasting).
+            #
+            # Plateau detection added 2026-04-27: previously the chain
+            # extended forever when temperature plateaued at the new floor
+            # and slowly cooled (boilers don't naturally recover after a real
+            # drop). min_idx ended up at the last row, the safety check
+            # `min_idx < len(rows) - 1` always failed, and real drops were
+            # silently never recorded. The earlier ≥0.3°C-per-step check
+            # (replaced 2026-04-24) had the opposite failure mode — fragmented
+            # big drops into many sub-events.
+            JITTER_TOL_C  = 0.2
+            PLATEAU_EPS_C = 0.2   # reading within this of floor counts as flat
+            PLATEAU_K     = 5     # consecutive flat readings = drop ended
             j = i + 1
+            plateau_count = 1
             while j < len(rows) - 1:
                 nxt = float(rows[j + 1]['boiler_temp'])
-                if nxt <= min_temp + JITTER_TOL_C:
-                    j += 1
+                if nxt > min_temp + JITTER_TOL_C:
+                    break
+                j += 1
+                if nxt < min_temp - PLATEAU_EPS_C:
+                    min_temp = nxt
+                    min_idx  = j
+                    plateau_count = 1
+                else:
                     if nxt < min_temp:
                         min_temp = nxt
                         min_idx  = j
-                else:
-                    break
+                    plateau_count += 1
+                    if plateau_count >= PLATEAU_K:
+                        break
 
             # Only record if drop completed before last reading (not still falling)
             if min_idx < len(rows) - 1:
@@ -773,9 +794,12 @@ def run_agent():
         glitch_drop_threshold_c = float(gt) if gt is not None else 10.0
         gb = settings.get('glitch_bounce_recovery_c')
         glitch_bounce_recovery_c = float(gb) if gb is not None else 8.0
+        dt = settings.get('consumption_descent_trigger_c')
+        descent_trigger_c = float(dt) if dt is not None else 0.4
         detect_and_save_consumptions(
             conn, consumption_temp_delta, consumption_time_delta, run_interval_min,
             glitch_drop_threshold_c, glitch_bounce_recovery_c,
+            descent_trigger_c,
         )
 
         conn.commit()

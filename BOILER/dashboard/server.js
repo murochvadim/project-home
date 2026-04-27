@@ -109,31 +109,34 @@ app.post('/api/settings', async (req, res) => {
           panel_temp_valid_after_on, panel_temp_valid_after_off,
           trend_runs, temp_debounce, probe_interval_min,
           consumption_temp_delta, consumption_time_delta,
+          consumption_descent_trigger_c,
           probe_max_boiler_temp, probe_max_delta,
           glitch_drop_threshold_c, glitch_bounce_recovery_c,
           wf96c_temp_delta_c, wf96c_heartbeat_sec } = req.body;
   try {
     await db.query(`
       UPDATE agent_settings SET
-        run_interval_min           = $1,
-        sync_poll_interval_sec     = $2,
-        panel_temp_valid_after_on  = $3,
-        panel_temp_valid_after_off = $4,
-        trend_runs                 = $5,
-        temp_debounce              = $6,
-        probe_interval_min         = $7,
-        consumption_temp_delta     = $8,
-        consumption_time_delta     = $9,
-        probe_max_boiler_temp      = $10,
-        probe_max_delta            = $11,
-        glitch_drop_threshold_c    = $12,
-        glitch_bounce_recovery_c   = $13,
-        wf96c_temp_delta_c         = $14,
-        wf96c_heartbeat_sec        = $15
+        run_interval_min              = $1,
+        sync_poll_interval_sec        = $2,
+        panel_temp_valid_after_on     = $3,
+        panel_temp_valid_after_off    = $4,
+        trend_runs                    = $5,
+        temp_debounce                 = $6,
+        probe_interval_min            = $7,
+        consumption_temp_delta        = $8,
+        consumption_time_delta        = $9,
+        consumption_descent_trigger_c = $10,
+        probe_max_boiler_temp         = $11,
+        probe_max_delta               = $12,
+        glitch_drop_threshold_c       = $13,
+        glitch_bounce_recovery_c      = $14,
+        wf96c_temp_delta_c            = $15,
+        wf96c_heartbeat_sec           = $16
     `, [run_interval_min, sync_poll_interval_sec,
         panel_temp_valid_after_on, panel_temp_valid_after_off,
         trend_runs, temp_debounce, probe_interval_min,
         consumption_temp_delta, consumption_time_delta,
+        consumption_descent_trigger_c,
         probe_max_boiler_temp, probe_max_delta,
         glitch_drop_threshold_c, glitch_bounce_recovery_c,
         wf96c_temp_delta_c, wf96c_heartbeat_sec]);
@@ -1696,6 +1699,7 @@ async function ensureSchema() {
   `);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_temp_delta NUMERIC(4,1) DEFAULT 3.0`);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_time_delta INTEGER DEFAULT 15`);
+  await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS consumption_descent_trigger_c NUMERIC DEFAULT 0.4`);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS glitch_drop_threshold_c NUMERIC DEFAULT 10.0`);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS glitch_bounce_recovery_c NUMERIC DEFAULT 8.0`);
   await db.query(`ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS wf96c_temp_delta_c NUMERIC DEFAULT 0.3`);

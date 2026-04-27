@@ -459,6 +459,10 @@
             <label for="s-consumption-time" title="Time window (minutes) scanned per agent run for drops. The actual lookback is this value + 2 × run_interval to guarantee a baseline sample before any drop.">Consumption Time Delta (min)</label>
             <input type="number" id="s-consumption-time" min="1">
           </div>
+          <div class="form-group">
+            <label for="s-consumption-descent" title="Per-step descent trigger (°C). A drop candidate starts when two consecutive raw_data rows differ by at least this much. Must be ≥ wf96c_temp_delta_c so a minimum-delta dedupe write doesn't fire it. Default 0.4.">Descent Trigger (°C)</label>
+            <input type="number" id="s-consumption-descent" min="0.1" step="0.1">
+          </div>
           <div style="grid-column:1/-1; font-size:0.78rem; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-top:6px; padding-top:10px; border-top:1px solid #e8e2db;">
             Probe Temperature Constraints
           </div>
