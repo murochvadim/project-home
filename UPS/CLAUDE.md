@@ -101,6 +101,8 @@ All in-handler proxies on the existing `/api/dashboard-settings/:key` route — 
 | `_ups_test_safety_on` | POST | Restore the `SAFETY_MODE` flag |
 | `_ups_test_safety_off` | POST | Remove the flag — orchestrator becomes live |
 
+In addition, `runHealthChecks()` in `server.js` reads the same latest `ups_status` row and surfaces it as `r.ups = { ok, status, battery_pct, runtime_min, line_volt, battery_volt, age_sec, stale }` on `/api/health/status`. This drives the **UPS** cell in the Project Health → System Status card (Infrastructure section, clickable to open the UPS tab) AND is counted by the sidebar Status badge in `alerts-monitor.js` — so a `COMMLOST` (USB unplugged) or stalled poller flips the top-left "Smart Home" indicator to red `⚠ N issues` on every page within 60 s.
+
 ## SAFETY_MODE semantics
 
 The orchestrator at `/etc/apcupsd/doshutdown` checks for `/etc/apcupsd/SAFETY_MODE` as its first action. If the file exists, it logs and exits. Removing the file is a single action that flips the orchestrator from "log-only" to "real shutdown on next BATTERYLEVEL trigger."

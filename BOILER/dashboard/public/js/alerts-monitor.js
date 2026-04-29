@@ -1,6 +1,15 @@
 // ── Sidebar alert indicator — runs on every page ──────────────
 (function () {
-  let prevCount = null;
+  // 2-tick smoothing: a single failed tick (e.g. WiFi blip on the Windows host
+  // briefly making every TCP-port-22 probe + DB query fail in the same poll)
+  // does NOT flip the badge — only sustained changes that persist for 2
+  // consecutive 60 s ticks do. Eliminates the "all red for 1 minute then back
+  // to green" cosmetic flapping. Real outages still surface, just 60 s slower.
+  // Direction flips are smoothed; in-state count changes (red 3 → red 5) apply
+  // immediately so the user sees worsening problems without delay.
+  let prevCount = null;     // last APPLIED count (what the badge currently shows)
+  let pendingDir = null;    // direction of pending opposite observation: true=red, false=green, null=none
+  let pendingTicks = 0;     // consecutive ticks the pending direction has held
   const STORE_KEY = '_alert_indicator';
 
   function applyState(count) {
@@ -17,10 +26,18 @@
     }
   }
 
-  // Restore last known state instantly (no flash on navigation)
+  // Restore last known state instantly + seed prevCount so the smoother can
+  // compare from tick 1 (otherwise navigation would bypass smoothing on the
+  // first tick after each page load).
   try {
     const saved = localStorage.getItem(STORE_KEY);
-    if (saved !== null) applyState(parseInt(saved, 10));
+    if (saved !== null) {
+      const c = parseInt(saved, 10);
+      if (!Number.isNaN(c)) {
+        applyState(c);
+        prevCount = c;
+      }
+    }
   } catch (e) {}
 
   function beep() {
@@ -69,18 +86,46 @@
         r.boiler_last_decision?.ok,
         // Orchestrator verdict (covers agent services + errors)
         r.active_alerts?.ok,
+        // UPS (master daemon comm + polling freshness)
+        r.ups?.ok,
       ];
-      const count = checks.filter(v => v === false).length;
+      const rawCount = checks.filter(v => v === false).length;
 
-      const el = document.getElementById('alert-indicator');
-      if (!el) return;
+      if (!document.getElementById('alert-indicator')) return;
 
-      applyState(count);
-      try { localStorage.setItem(STORE_KEY, count); } catch (e) {}
+      // Apply the smoothed state, persist, beep on rising count.
+      function commit(newCount) {
+        applyState(newCount);
+        try { localStorage.setItem(STORE_KEY, newCount); } catch (e) {}
+        if (prevCount !== null && newCount > prevCount) beep();
+        prevCount    = newCount;
+        pendingDir   = null;
+        pendingTicks = 0;
+      }
 
-      // Sound only fires when count rises (new problem appeared)
-      if (prevCount !== null && count > prevCount) beep();
-      prevCount = count;
+      // Cold start (no prior cached state): trust the immediate observation.
+      if (prevCount === null) { commit(rawCount); return; }
+
+      const prevIsRed = prevCount > 0;
+      const rawIsRed  = rawCount  > 0;
+
+      // Same colour: in-state count changes apply immediately; clear pending.
+      if (rawIsRed === prevIsRed) {
+        if (rawCount !== prevCount) commit(rawCount);
+        else { pendingDir = null; pendingTicks = 0; }
+        return;
+      }
+
+      // Direction-flipping tick: smooth across 2 consecutive observations.
+      if (pendingDir === rawIsRed) {
+        pendingTicks++;
+        if (pendingTicks >= 2) commit(rawCount);
+        return;
+      }
+
+      // First tick of a new opposite direction — start the counter, hold badge.
+      pendingDir   = rawIsRed;
+      pendingTicks = 1;
     } catch (e) {}
   }
 

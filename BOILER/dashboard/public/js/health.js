@@ -233,6 +233,26 @@ function renderStatus(r) {
       `<span style="color:${color}; font-size:0.85rem;">${aa.ok ? '⬤ All clear' : `⬤ ${aa.count} active`}</span>` +
       (!aa.ok && aa.worst ? `<div style="font-size:0.7rem; color:${color}; margin-top:3px;">worst: ${aa.worst}</div>` : '');
   }
+
+  const ups = r.ups;
+  const upsEl = document.getElementById('svc-ups');
+  if (ups && upsEl) {
+    const color = ups.ok ? '#7a9f5a' : '#b55e5e';
+    let label;
+    if (ups.stale) {
+      const mins = ups.age_sec != null ? Math.round(ups.age_sec / 60) : '?';
+      label = `⬤ Stale (${mins}m)`;
+    } else if (ups.status) {
+      label = `⬤ ${ups.status}`;
+    } else {
+      label = `⬤ ${ups.msg || 'no data'}`;
+    }
+    const detail = ups.battery_pct != null
+      ? `<div style="font-size:0.7rem; color:#888; margin-top:3px;">${Math.round(ups.battery_pct)}% · ${Math.round(ups.runtime_min || 0)}m · ${Math.round(ups.line_volt || 0)}V</div>`
+      : '';
+    upsEl.innerHTML =
+      `<span style="color:${color}; font-size:0.85rem;">${label}</span>${detail}`;
+  }
 }
 
 async function loadStatus() {
@@ -249,7 +269,7 @@ async function loadStatus() {
   } catch (e) {
     ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-vm101',
      'svc-agent','svc-media-agents','svc-voice-agent','svc-auto-scan','svc-ha-to-pg','svc-pm2',
-     'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs'
+     'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs','svc-ups'
     ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });
   }
 }
@@ -1164,9 +1184,12 @@ const UPS_STATUS_COLORS = {
   'ONLINE SLAVE':{ color: '#fff', bg: '#3a7d44' },
   ONBATT:        { color: '#fff', bg: '#d4a017' },
   'LOWBATT':     { color: '#fff', bg: '#c0392b' },
-  COMMLOST:      { color: '#fff', bg: '#888'    },
+  COMMLOST:      { color: '#fff', bg: '#c0392b' },
   'SHUTTING DOWN':{ color: '#fff', bg: '#c0392b' },
 };
+
+// Statuses that mean "all good"
+const UPS_OK_STATES = new Set(['ONLINE', 'ONLINE SLAVE']);
 
 async function upsLoadLive() {
   try {
@@ -1179,10 +1202,35 @@ async function upsLoadLive() {
     }
     const status = (d.status || '').trim();
     const badge = document.getElementById('ups-status-badge');
-    const style = UPS_STATUS_COLORS[status.toUpperCase()] || { color: '#fff', bg: '#666' };
-    badge.textContent = status || '—';
+    const style = UPS_STATUS_COLORS[status.toUpperCase()] || { color: '#fff', bg: '#c0392b' };
+    badge.textContent = status || 'NO DATA';
     badge.style.background = style.bg;
     badge.style.color = style.color;
+
+    // Big visible alert banner at the top of Card 1 when status is not OK,
+    // OR when polling data is stale > 3 min (timer not firing / DB write failing).
+    let alertEl = document.getElementById('ups-alert-banner');
+    const isOk = UPS_OK_STATES.has(status.toUpperCase());
+    const stale = (d.age_sec || 0) > 180;
+    if (!isOk || stale) {
+      if (!alertEl) {
+        alertEl = document.createElement('div');
+        alertEl.id = 'ups-alert-banner';
+        alertEl.style.cssText = 'background:#c0392b;color:#fff;padding:10px 14px;margin-bottom:12px;border-radius:6px;font-weight:600;display:flex;align-items:center;gap:10px;';
+        const card1 = document.getElementById('ups-status-badge').closest('.card');
+        card1.insertBefore(alertEl, card1.firstChild);
+      }
+      const reason = stale
+        ? `⚠ UPS data is stale (last poll ${Math.round((d.age_sec || 0)/60)} min ago) — polling daemon may not be running on LXC 105`
+        : status === 'COMMLOST'
+        ? `⚠ UPS COMMUNICATION LOST — apcupsd cannot reach the UPS via USB. Check the cable.`
+        : status === 'ONBATT'
+        ? `⚠ UPS ON BATTERY — mains power lost. Runtime: ${d.runtime_min} min remaining.`
+        : `⚠ UPS state: ${status}`;
+      alertEl.textContent = reason;
+    } else if (alertEl) {
+      alertEl.remove();
+    }
 
     const fmt = (v, suffix, decimals = 1) =>
       (v == null || isNaN(v)) ? '—' : (Number(v).toFixed(decimals) + (suffix || ''));

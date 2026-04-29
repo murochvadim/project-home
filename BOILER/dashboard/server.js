@@ -893,6 +893,37 @@ async function runHealthChecks() {
   };
   r.active_alerts = { count: alertsResult.n, worst: alertsResult.worst, ok: alertsResult.n === 0 };
 
+  // UPS — latest row from ups_status (populated by net-ups-poll on LXC 105 every 60 s)
+  try {
+    const upsR = await db.query(`
+      SELECT status, battery_pct, runtime_min, line_volt, battery_volt,
+             EXTRACT(EPOCH FROM (NOW() - ts))::int AS age_sec
+        FROM ups_status ORDER BY ts DESC LIMIT 1
+    `);
+    const u = upsR.rows[0];
+    if (!u) {
+      r.ups = { ok: false, status: null, age_sec: null, msg: 'no data — check polling daemon' };
+    } else {
+      const status = (u.status || '').trim();
+      const upper  = status.toUpperCase();
+      const okStates = new Set(['ONLINE', 'ONLINE SLAVE']);
+      const stale = (u.age_sec || 0) > 180;
+      const ok = okStates.has(upper) && !stale;
+      r.ups = {
+        ok,
+        status,
+        battery_pct:  u.battery_pct  != null ? Number(u.battery_pct)  : null,
+        runtime_min:  u.runtime_min  != null ? Number(u.runtime_min)  : null,
+        line_volt:    u.line_volt    != null ? Number(u.line_volt)    : null,
+        battery_volt: u.battery_volt != null ? Number(u.battery_volt) : null,
+        age_sec: u.age_sec,
+        stale,
+      };
+    }
+  } catch (e) {
+    r.ups = { ok: false, status: null, msg: 'query error: ' + e.message };
+  }
+
   r.cached_at = new Date().toISOString();
   statusCache = r;
 }
@@ -923,6 +954,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'rule_events', 'rule_engine_state', 'rule_engine_log',
       'pixoo_presets', 'pixoo_log', 'analyzer_settings', 'analyzer_log',
       'retention_policies', 'dashboard_settings', 'room_device_placements',
+      'ups_status',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -942,6 +974,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       face_crops: null, person_embeddings: null, documents: null,
       retention_policies: null,
       dashboard_settings: 'updated_at', room_device_placements: 'updated_at',
+      ups_status: 'ts',
     };
 
     const sizes = await db.query(`

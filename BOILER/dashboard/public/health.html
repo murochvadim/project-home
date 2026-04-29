@@ -104,6 +104,10 @@
           <label>Home Assistant</label>
           <div class="value small" id="svc-ha">—</div>
         </div>
+        <div class="status-item">
+          <label>UPS</label>
+          <div class="value small" id="svc-ups" style="cursor:pointer;" onclick="document.querySelector('.tab-btn:nth-of-type(8)')?.click()" title="Click to open UPS tab">—</div>
+        </div>
       </div>
 
       <!-- Services (Agents) -->
@@ -696,9 +700,9 @@ async function deploy() {
   }
 }
 </script>
-<script src="js/alerts-monitor.js"></script>
+<script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=5"></script>
+<script src="js/health.js?v=7"></script>
 </body>
 </html>
