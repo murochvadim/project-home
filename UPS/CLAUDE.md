@@ -58,6 +58,10 @@ USB cable plugs into a back panel USB-A port on the **Proxmox host** (PVE, `192.
 | `/etc/apcupsd/apcupsd.conf` (LXC 105) | Slave config — `UPSTYPE=net`, `DEVICE=192.168.1.101:3551`, `BATTERYLEVEL=0` (slave never triggers), local NIS on 127.0.0.1 |
 | `/etc/apcupsd/doshutdown` (PVE) | The orchestrator. SAFETY_MODE-gated. On real fire: best-effort SSH `poweroff` to QNAP as `admin123@192.168.1.155` (key auth via `/root/.ssh/id_ed25519_ups`) → parallel `pct shutdown` LXCs → parallel `qm shutdown` VMs (HA gets `--timeout 60`) → wait → `shutdown -h now`. |
 | `/etc/apcupsd/SAFETY_MODE` (PVE) | If present: orchestrator logs and exits without shutting anything down. Default state until going live. |
+| `/etc/apcupsd/onbattery` (PVE) | Hook fired by apcupsd when STATUS flips ONLINE → ONBATT (after `ONBATTERYDELAY=6 s` filter). INSERTs a `severity=warn, alert_type=ups_onbattery` row into `system_alerts` on LXC 102 with message `UPS on battery — N min runtime left at X% battery`. Idempotent (skips insert if an active row already exists). Best-effort (`timeout 5 psql ... \|\| true` — DB failures never block apcupsd). |
+| `/etc/apcupsd/offbattery` (PVE) | Hook fired when mains restored. UPDATE `resolved_at = NOW()` on any active `ups_onbattery` row. |
+| `/etc/apcupsd/commfailure` (PVE) | Hook fired when USB comm to UPS is lost. INSERTs `alert_type=ups_commlost`. Idempotent. |
+| `/etc/apcupsd/commok` (PVE) | Hook fired when USB restored. Resolves `ups_commlost`. |
 | BOILER/dashboard/public/health.html | Project Health → UPS tab markup (4 cards) |
 | BOILER/dashboard/public/js/health.js | `ups*` functions (loadLive, loadHistory, loadEvents, runTest) |
 | BOILER/dashboard/server.js | In-handler proxies on `/api/dashboard-settings/:key` for `_ups_live`, `_ups_history`, `_ups_events`, `_ups_test_<name>` |
@@ -102,6 +106,25 @@ All in-handler proxies on the existing `/api/dashboard-settings/:key` route — 
 | `_ups_test_safety_off` | POST | Remove the flag — orchestrator becomes live |
 
 In addition, `runHealthChecks()` in `server.js` reads the same latest `ups_status` row and surfaces it as `r.ups = { ok, status, battery_pct, runtime_min, line_volt, battery_volt, age_sec, stale }` on `/api/health/status`. This drives the **UPS** cell in the Project Health → System Status card (Infrastructure section, clickable to open the UPS tab) AND is counted by the sidebar Status badge in `alerts-monitor.js` — so a `COMMLOST` (USB unplugged) or stalled poller flips the top-left "Smart Home" indicator to red `⚠ N issues` on every page within 60 s.
+
+## Lost-input-power warning (apcupsd hooks → system_alerts)
+
+Independent of the orchestrator (which only fires on BATTERYLEVEL), apcupsd auto-runs scripts in `/etc/apcupsd/` on each event transition. The 4 hook scripts (`onbattery`, `offbattery`, `commfailure`, `commok`) write rows to `system_alerts` on LXC 102 — same table that drives the Project Health → System Alerts card and the sidebar Status badge.
+
+| Event | Action | Row state |
+|---|---|---|
+| onbattery | INSERT `severity=warn, alert_type=ups_onbattery, source=apcupsd_pve, affected_agent=ups`, message includes live `TIMELEFT` + `BCHARGE` from `apcaccess` | active until offbattery |
+| offbattery | UPDATE `resolved_at = NOW()` on the active `ups_onbattery` row | resolved |
+| commfailure | INSERT `alert_type=ups_commlost`, message `UPS USB cable lost — apcupsd cannot reach the UPS` | active until commok |
+| commok | UPDATE `resolved_at = NOW()` on the active `ups_commlost` row | resolved |
+
+**Auth path**: `psql` from PVE → LXC 102 (192.168.1.219:5432) over the existing `192.168.1.0/24` trust subnet (same pattern as the boiler agent on LXC 103 — no DB password file on PVE). All hook scripts wrap the `psql` call in `timeout 5 ... || true` so DB failures (LXC 102 down, LAN blip) never block apcupsd's event handling. Idempotency: each INSERT is gated by `WHERE NOT EXISTS (... resolved_at IS NULL)` so re-firing the same event doesn't create duplicates.
+
+**Dependency**: PVE has `postgresql-client` installed (~25 MB) — provides `psql`. Installed 2026-04-29 during Phase 2A.
+
+**Detection lag**: `onbattery` fires within `ONBATTERYDELAY=6 s` of mains loss → row appears in dashboard immediately on next page load; sidebar Status badge picks it up within 60 s (alerts-monitor poll cadence with 2-tick smoothing).
+
+**Manual test**: just run any of the 4 hook scripts on PVE directly (`ssh root@192.168.1.101 /etc/apcupsd/onbattery`). End-to-end test for commfailure/commok: physically unplug then replug the USB cable.
 
 ## SAFETY_MODE semantics
 
@@ -150,5 +173,8 @@ The `/pss-update` skill (in `.claude/skills/pss-update/SKILL.md`) automates rout
 - **2026-04-29 Phase 1** — apcupsd master installed on PVE, USB comm verified, orchestrator written with SAFETY_MODE gate, SSH key generated.
 - **2026-04-29 Phase 2** — apcupsd NIS slave on LXC 105, reading master successfully.
 - **2026-04-29 Phase 3** — `ups_status` DB table + 60-s polling daemon + Project Health → UPS tab + 4 in-handler API proxies.
-- **(pending)** Phase 4 — going live: BATTERYLEVEL=30, SAFETY_MODE removed, BATTERYLEVEL=95 test passed, KILLPOWER + auto-boot verified.
+- **2026-04-29 Phase 3.5** — System Status surfaces `ups` cell + sidebar Status badge counts UPS health; `ups_status` listed in DB Volumes view.
+- **2026-04-29 Phase 3.6** — QNAP SSH switched from `admin` (default) to `admin123` (custom admin in `administrators` group); orchestrator + dashboard test endpoint updated; pubkey installed at `/share/homes/admin123/.ssh/authorized_keys`.
+- **2026-04-29 Phase 3.7** — Lost-input-power warning: 4 apcupsd hook scripts on PVE write `ups_onbattery` / `ups_commlost` rows to `system_alerts` (warn severity, idempotent, best-effort, < 7 s detection from mains loss). `postgresql-client` installed on PVE for trust-auth `psql`. Independent of Phase 4 — fires regardless of SAFETY_MODE.
+- **(pending)** Phase 4 — going live: BATTERYLEVEL=30 + MINUTES=8 (runtime safety net), SAFETY_MODE removed, BATTERYLEVEL=95 test passed, KILLPOWER + auto-boot verified.
 - **(out of scope today)** Phase 5+ — rule engine integration (`state.shared['ups.*']` keys → rules push Pixoo "POWER OUT" preset, etc.), battery-aging alerts.
