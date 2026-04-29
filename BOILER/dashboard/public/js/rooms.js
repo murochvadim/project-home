@@ -2672,8 +2672,7 @@
       // Score cells — filled by aptApplyScoresToRoomInfoTable after fetch.
       tr.innerHTML = `
         <td style="padding:3px 6px;">${r.name}</td>
-        <td style="padding:3px 4px;text-align:right;color:#aaa;" data-rd-score-new="${r.name}">—</td>
-        <td style="padding:3px 4px;text-align:right;color:#aaa;border-right:2px solid #e8e3d8;" data-rd-score-old="${r.name}">—</td>
+        <td style="padding:3px 4px;text-align:right;color:#aaa;border-right:2px solid #e8e3d8;" data-rd-score-new="${r.name}">—</td>
         <td style="padding:3px 6px 3px 14px;font-size:0.72rem;color:#666;">${status}</td>
         <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${w}" ${wAttrs}></td>
         <td style="padding:3px 6px;text-align:right;"><input type="number" step="0.1" min="0" value="${l}" ${lAttrs}></td>
@@ -2839,12 +2838,11 @@
     }
     if (!Array.isArray(_scoreboardData)) { _scoreboardData = []; return; }
 
-    // Update header dates
-    const mostRecentOld = _scoreboardData.map(x => x.ai_score_old_at).filter(Boolean).sort().reverse()[0];
+    // Update header date — only the new score is shown in the table; the modal
+    // still surfaces old vs new via _scoreboardData (preserved from the API).
     const mostRecentNew = _scoreboardData.map(x => x.ai_score_new_at).filter(Boolean).sort().reverse()[0];
-    const thOld = document.getElementById('apt-passage-th-score-old');
+    const mostRecentOld = _scoreboardData.map(x => x.ai_score_old_at).filter(Boolean).sort().reverse()[0];
     const thNew = document.getElementById('apt-passage-th-score-new');
-    if (thOld) thOld.textContent = `Score ${_fmtDdMmYy(mostRecentOld)}`;
     if (thNew) thNew.textContent = `Score ${_fmtDdMmYy(mostRecentNew)}`;
 
     // Scoreboard button label: date = whichever score was most recently written.
@@ -2856,16 +2854,7 @@
 
     // Fill per-room cells (match by name)
     for (const row of _scoreboardData) {
-      const oldCell = document.querySelector(`[data-rd-score-old="${CSS.escape(row.name)}"]`);
       const newCell = document.querySelector(`[data-rd-score-new="${CSS.escape(row.name)}"]`);
-      if (oldCell) {
-        if (row.ai_score_old != null) {
-          oldCell.innerHTML = `<span style="color:${_scoreColor(row.ai_score_old)};font-weight:600;">${row.ai_score_old}</span>`;
-        } else {
-          oldCell.textContent = '—';
-          oldCell.style.color = '#aaa';
-        }
-      }
       if (newCell) {
         if (row.ai_score_new != null) {
           newCell.innerHTML = `<span style="color:${_scoreColor(row.ai_score_new)};font-weight:600;">${row.ai_score_new}</span>`;
