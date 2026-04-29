@@ -1299,6 +1299,8 @@ async function upsLoadEvents() {
 
 async function upsRunTest(name, btn) {
   const out = document.getElementById('ups-test-out-' + name);
+  // Remove any prior Clear button so we don't end up with stale ones during a re-run
+  document.getElementById('ups-test-clear-' + name)?.remove();
   if (out) out.textContent = 'running…';
   btn.disabled = true;
   try {
@@ -1316,6 +1318,14 @@ async function upsRunTest(name, btn) {
         out.textContent = `[exit ${v.code ?? '?'}] ${v.stdout || ''}${v.stderr ? '\n--- stderr ---\n' + v.stderr : ''}`;
         out.style.color = (v.code === 0) ? '#2e2e2e' : '#c0392b';
       }
+      // Inject a ✕ Clear button after the <pre> so the user can dismiss the output
+      const clearBtn = document.createElement('button');
+      clearBtn.id = 'ups-test-clear-' + name;
+      clearBtn.className = 'btn btn-secondary btn-sm';
+      clearBtn.style.cssText = 'margin-top:4px;font-size:0.7rem;padding:2px 10px;';
+      clearBtn.textContent = '✕ Clear';
+      clearBtn.onclick = () => { out.textContent = ''; clearBtn.remove(); };
+      out.parentNode.insertBefore(clearBtn, out.nextSibling);
     }
   } finally { btn.disabled = false; }
 }

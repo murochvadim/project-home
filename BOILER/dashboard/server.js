@@ -2998,7 +2998,7 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
       const testName = req.params.key.slice('_ups_test_'.length);
       const cmds = {
         apcaccess:  'apcaccess status | head -25',
-        qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin@192.168.1.155 "echo qnap-reachable"',
+        qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin123@192.168.1.155 "echo qnap-reachable"',
         dryrun:     '/etc/apcupsd/doshutdown && tail -10 /var/log/apcupsd_shutdown.log',
         safety_on:  'touch /etc/apcupsd/SAFETY_MODE && ls -la /etc/apcupsd/SAFETY_MODE',
         safety_off: 'rm -f /etc/apcupsd/SAFETY_MODE && (ls /etc/apcupsd/SAFETY_MODE 2>&1 || echo "SAFETY_MODE removed — orchestrator will fire for real on next BATTERYLEVEL trigger")',
@@ -3044,7 +3044,7 @@ app.post('/api/dashboard-settings/:key', async (req, res) => {
       const testName = req.params.key.slice('_ups_test_'.length);
       const cmds = {
         apcaccess:  'apcaccess status | head -25',
-        qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin@192.168.1.155 "echo qnap-reachable"',
+        qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin123@192.168.1.155 "echo qnap-reachable"',
         dryrun:     '/etc/apcupsd/doshutdown && tail -10 /var/log/apcupsd_shutdown.log',
         safety_on:  'touch /etc/apcupsd/SAFETY_MODE && ls -la /etc/apcupsd/SAFETY_MODE',
         safety_off: 'rm -f /etc/apcupsd/SAFETY_MODE && (ls /etc/apcupsd/SAFETY_MODE 2>&1 || echo "SAFETY_MODE removed — orchestrator will fire for real on next BATTERYLEVEL trigger")',

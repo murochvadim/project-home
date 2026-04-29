@@ -56,7 +56,7 @@ USB cable plugs into a back panel USB-A port on the **Proxmox host** (PVE, `192.
 | [scripts/net-ups-poll.timer](scripts/net-ups-poll.timer) | every-60s timer for the service |
 | `/etc/apcupsd/apcupsd.conf` (PVE) | Master config — `UPSCABLE=usb`, `UPSTYPE=usb`, `BATTERYLEVEL=5` (paranoid until going live), `NETSERVER=on`, `NISIP=0.0.0.0`, `NISPORT=3551` |
 | `/etc/apcupsd/apcupsd.conf` (LXC 105) | Slave config — `UPSTYPE=net`, `DEVICE=192.168.1.101:3551`, `BATTERYLEVEL=0` (slave never triggers), local NIS on 127.0.0.1 |
-| `/etc/apcupsd/doshutdown` (PVE) | The orchestrator. SAFETY_MODE-gated. On real fire: best-effort SSH `poweroff` to QNAP → parallel `pct shutdown` LXCs → parallel `qm shutdown` VMs (HA gets `--timeout 60`) → wait → `shutdown -h now`. |
+| `/etc/apcupsd/doshutdown` (PVE) | The orchestrator. SAFETY_MODE-gated. On real fire: best-effort SSH `poweroff` to QNAP as `admin123@192.168.1.155` (key auth via `/root/.ssh/id_ed25519_ups`) → parallel `pct shutdown` LXCs → parallel `qm shutdown` VMs (HA gets `--timeout 60`) → wait → `shutdown -h now`. |
 | `/etc/apcupsd/SAFETY_MODE` (PVE) | If present: orchestrator logs and exits without shutting anything down. Default state until going live. |
 | BOILER/dashboard/public/health.html | Project Health → UPS tab markup (4 cards) |
 | BOILER/dashboard/public/js/health.js | `ups*` functions (loadLive, loadHistory, loadEvents, runTest) |
@@ -118,11 +118,13 @@ The orchestrator at `/etc/apcupsd/doshutdown` checks for `/etc/apcupsd/SAFETY_MO
 
 When user is physically ready (UPS charged + PVE plugged into UPS output + BIOS verified):
 
-1. **Install the orchestrator's SSH pubkey on QNAP** (only needed if QNAP is on UPS):
+1. **Install the orchestrator's SSH pubkey on QNAP** (already done 2026-04-29 — kept here for re-deploy / hardware-swap reference):
    ```bash
-   # PVE → QNAP, paste this line into /share/homes/admin/.ssh/authorized_keys:
+   # QNAP user used by the orchestrator: admin123 (custom admin account in `administrators` group, NOT the default `admin`).
+   # Append to /share/homes/admin123/.ssh/authorized_keys (perms 700 on dir, 600 on file):
    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKAWBnlevV/wO+n/tLxoaNQ23KrrzFdR/TzrPOWSfNY4 ups-orchestrator@pve 2026-04-29
    ```
+   The orchestrator script (`/etc/apcupsd/doshutdown`) and the `_ups_test_qnap_ssh` dashboard endpoint both SSH as `admin123@192.168.1.155`. If the username ever changes again, update both sides — `grep -rn "admin123@192.168.1.155"` finds them.
 2. **Bump `BATTERYLEVEL`**: edit `/etc/apcupsd/apcupsd.conf` on PVE, change `BATTERYLEVEL 5` → `30`, then `systemctl restart apcupsd`.
 3. **Enable apcupsd at boot**: `systemctl enable apcupsd` on PVE (currently disabled).
 4. **Click "Remove SAFETY_MODE"** on the dashboard UPS tab.
