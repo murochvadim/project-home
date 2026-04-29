@@ -2993,6 +2993,66 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
         return res.json({ value: (r.stdout || '').trim().split('\n').filter(Boolean) });
       } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
     }
+    // UPS trigger settings — read-only snapshot of apcupsd.conf knobs + flag state
+    if (req.params.key === '_ups_settings') {
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
+        const r = await ssh.execCommand(
+          'grep -E "^(BATTERYLEVEL|MINUTES|TIMEOUT|ONBATTERYDELAY)" /etc/apcupsd/apcupsd.conf; ' +
+          'echo "---FLAG---"; [ -f /etc/apcupsd/SAFETY_MODE ] && echo present || echo absent; ' +
+          'echo "---BOOT---"; systemctl is-enabled apcupsd 2>/dev/null; ' +
+          'echo "---NOMPOWER---"; apcaccess status 2>/dev/null | awk "/^NOMPOWER/{print \\$3}"'
+        );
+        ssh.dispose();
+        const out = (r.stdout || '');
+        const [confBlock, safetyMode, atBoot, nompower] = out.split(/---(?:FLAG|BOOT|NOMPOWER)---/).map(s => s.trim());
+        const conf = {};
+        for (const line of confBlock.split('\n')) {
+          const m = line.match(/^(\w+)\s+(\S+)/);
+          if (m) conf[m[1]] = m[2];
+        }
+        return res.json({ value: {
+          battery_level:    parseInt(conf.BATTERYLEVEL, 10),
+          minutes:          parseInt(conf.MINUTES, 10),
+          timeout:          parseInt(conf.TIMEOUT, 10),
+          onbattery_delay:  parseInt(conf.ONBATTERYDELAY, 10),
+          safety_mode:      safetyMode,
+          at_boot:          atBoot,
+          nompower_w:       parseInt(nompower, 10) || null,
+        }});
+      } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
+    }
+    // UPS shutdown inventory — what would be propagated by /etc/apcupsd/doshutdown right now
+    if (req.params.key === '_ups_inventory') {
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
+        const r = await ssh.execCommand(
+          'pct list 2>/dev/null; echo "---VMS---"; qm list 2>/dev/null; echo "---QNAP---"; ' +
+          'ping -c 1 -W 1 192.168.1.155 >/dev/null 2>&1 && echo OK || echo DOWN'
+        );
+        ssh.dispose();
+        const [lxcBlock, vmBlock, qnapBlock] = (r.stdout || '').split(/---(?:VMS|QNAP)---/).map(s => s.trim());
+        // pct list columns: VMID Status [Lock] Name — return ALL (any status) so the
+        // Shutdown Propagation card can show live transitions during a rehearsal.
+        const lxcs = lxcBlock.split('\n').slice(1).map(l => {
+          const parts = l.trim().split(/\s+/);
+          return parts.length >= 3 && /^\d+$/.test(parts[0])
+            ? { id: parseInt(parts[0], 10), status: parts[1], name: parts[parts.length - 1] }
+            : null;
+        }).filter(x => x);
+        // qm list columns: VMID NAME STATUS MEM(MB) BOOTDISK(GB) PID — return ALL.
+        const vms = vmBlock.split('\n').slice(1).map(l => {
+          const m = l.match(/^\s*(\d+)\s+(\S+)\s+(\S+)/);
+          return m ? { id: parseInt(m[1], 10), name: m[2], status: m[3] } : null;
+        }).filter(x => x);
+        const qnap_reachable = qnapBlock.split('\n').pop().trim() === 'OK';
+        return res.json({ value: { lxcs, vms, qnap_reachable, qnap_ip: '192.168.1.155' } });
+      } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
+    }
     // UPS test runners — read-only or SAFETY_MODE-gated commands
     if (req.params.key.startsWith('_ups_test_')) {
       const testName = req.params.key.slice('_ups_test_'.length);
@@ -3000,6 +3060,8 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
         apcaccess:  'apcaccess status | head -25',
         qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin123@192.168.1.155 "echo qnap-reachable"',
         dryrun:     '/etc/apcupsd/doshutdown && tail -10 /var/log/apcupsd_shutdown.log',
+        rehearse:   '/etc/apcupsd/doshutdown_rehearse && tail -25 /var/log/apcupsd_shutdown.log',
+        recover:    '/etc/apcupsd/doshutdown_recover && tail -30 /var/log/apcupsd_shutdown.log',
         safety_on:  'touch /etc/apcupsd/SAFETY_MODE && ls -la /etc/apcupsd/SAFETY_MODE',
         safety_off: 'rm -f /etc/apcupsd/SAFETY_MODE && (ls /etc/apcupsd/SAFETY_MODE 2>&1 || echo "SAFETY_MODE removed — orchestrator will fire for real on next BATTERYLEVEL trigger")',
       };
@@ -3046,16 +3108,35 @@ app.post('/api/dashboard-settings/:key', async (req, res) => {
         apcaccess:  'apcaccess status | head -25',
         qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin123@192.168.1.155 "echo qnap-reachable"',
         dryrun:     '/etc/apcupsd/doshutdown && tail -10 /var/log/apcupsd_shutdown.log',
+        rehearse:   '/etc/apcupsd/doshutdown_rehearse && tail -25 /var/log/apcupsd_shutdown.log',
+        recover:    '/etc/apcupsd/doshutdown_recover && tail -30 /var/log/apcupsd_shutdown.log',
         safety_on:  'touch /etc/apcupsd/SAFETY_MODE && ls -la /etc/apcupsd/SAFETY_MODE',
         safety_off: 'rm -f /etc/apcupsd/SAFETY_MODE && (ls /etc/apcupsd/SAFETY_MODE 2>&1 || echo "SAFETY_MODE removed — orchestrator will fire for real on next BATTERYLEVEL trigger")',
       };
       const cmd = cmds[testName];
       if (!cmd) return res.status(400).json({ error: `unknown test '${testName}'` });
+      // Build optional SELECTION env from POST body's `devices` array — only
+      // honored by rehearse + recover. Validates: only `qnap` or numeric ids,
+      // deduped, up to 16 entries. Anything fancier is rejected. If the array
+      // is provided but empty / all-invalid, return 400 — the caller asked for
+      // a selection and we have nothing valid to act on, do NOT default to all.
+      let envPrefix = '';
+      const devs = (req.body && req.body.value && req.body.value.devices);
+      if (Array.isArray(devs) && (testName === 'rehearse' || testName === 'recover')) {
+        const clean = Array.from(new Set(
+          devs.map(d => String(d).trim().toLowerCase())
+              .filter(d => d === 'qnap' || /^\d{1,5}$/.test(d))
+        )).slice(0, 16);
+        if (!clean.length) {
+          return res.status(400).json({ error: 'devices array provided but no valid tokens (expected "qnap" or 1-5 digit ids)' });
+        }
+        envPrefix = `SELECTION=${JSON.stringify(clean.join(','))} `;
+      }
       const { NodeSSH } = require('node-ssh');
       const ssh = new NodeSSH();
       try {
         await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
-        const r = await ssh.execCommand(cmd);
+        const r = await ssh.execCommand(envPrefix + cmd);
         ssh.dispose();
         return res.json({ value: { stdout: r.stdout, stderr: r.stderr, code: r.code } });
       } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }

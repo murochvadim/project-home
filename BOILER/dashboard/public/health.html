@@ -569,7 +569,66 @@
       </div>
     </div>
 
-    <!-- Card 2: battery health (mini chart) -->
+    <!-- Card 2: trigger settings (read-only snapshot of apcupsd.conf) -->
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <h2 style="margin:0;">Trigger Settings <span id="ups-settings-badge" style="font-size:0.78rem;font-weight:500;padding:3px 10px;border-radius:10px;margin-left:6px;background:#aaa;color:#fff;">—</span></h2>
+        <span style="font-size:0.78rem;color:#888;">Edit via <code>/pss-update</code> skill — these are read-only here.</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:14px;">
+        <div>
+          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Shutdown at battery</div>
+          <div style="font-size:1.4rem;font-weight:700;" id="ups-set-battlvl">—</div>
+          <div style="font-size:0.7rem;color:#888;">trigger when battery % falls to this <code style="opacity:.6;">(BATTERYLEVEL)</code></div>
+        </div>
+        <div>
+          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Shutdown at low runtime</div>
+          <div style="font-size:1.4rem;font-weight:700;" id="ups-set-minutes">—</div>
+          <div style="font-size:0.7rem;color:#888;">trigger when remaining runtime ≤ X min <code style="opacity:.6;">(MINUTES)</code></div>
+        </div>
+        <div>
+          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Shutdown after time on battery</div>
+          <div style="font-size:1.4rem;font-weight:700;" id="ups-set-timeout">—</div>
+          <div style="font-size:0.7rem;color:#888;">trigger after X seconds on battery <code style="opacity:.6;">(TIMEOUT)</code></div>
+        </div>
+        <div>
+          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Mains-loss confirm delay</div>
+          <div style="font-size:1.4rem;font-weight:700;" id="ups-set-onbdelay">—</div>
+          <div style="font-size:0.7rem;color:#888;">wait before declaring mains lost <code style="opacity:.6;">(ONBATTERYDELAY)</code></div>
+        </div>
+        <div>
+          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Safety mode</div>
+          <div style="font-size:1.4rem;font-weight:700;" id="ups-set-safety">—</div>
+          <div style="font-size:0.7rem;color:#888;">when ON, orchestrator only logs — no shutdown</div>
+        </div>
+        <div>
+          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Auto-start after PVE reboot</div>
+          <div style="font-size:1.4rem;font-weight:700;" id="ups-set-atboot">—</div>
+          <div style="font-size:0.7rem;color:#888;">daemon resumes automatically on reboot</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 3: shutdown propagation — live state + Shutdown / Recover buttons + per-device checkboxes -->
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+        <h2 style="margin:0;">Shutdown Propagation</h2>
+        <div style="display:flex;gap:8px;">
+          <button id="ups-btn-shutdown" class="btn btn-secondary btn-sm" style="border-color:#c0392b;color:#c0392b;" onclick="upsShutdown(this)">Shutdown</button>
+          <button id="ups-btn-recover"  class="btn btn-secondary btn-sm" style="border-color:#2e7d32;color:#2e7d32;" onclick="upsRecover(this)">Recover</button>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:0.75rem;color:#666;margin-top:6px;">
+        <label style="cursor:pointer;display:flex;align-items:center;gap:5px;">
+          <input type="checkbox" id="ups-select-all" checked onchange="upsToggleAll(this)">
+          <span>select all / none</span>
+        </label>
+        <span id="ups-inventory-status" style="margin-left:auto;color:#888;">—</span>
+      </div>
+      <div id="ups-inventory" style="margin-top:8px;">Loading…</div>
+    </div>
+
+    <!-- Card 4: battery health (mini chart) -->
     <div class="card">
       <h2>Battery Health (last 7 days)</h2>
       <div style="font-size:0.78rem;color:#666;margin-bottom:8px;">Battery voltage trend (BATTV). Healthy lead-acid sits around 27&nbsp;V at full charge. A persistent downward slope suggests battery aging.</div>
@@ -703,6 +762,6 @@ async function deploy() {
 <script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=8"></script>
+<script src="js/health.js?v=17"></script>
 </body>
 </html>

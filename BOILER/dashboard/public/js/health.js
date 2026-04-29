@@ -1330,9 +1330,250 @@ async function upsRunTest(name, btn) {
   } finally { btn.disabled = false; }
 }
 
+async function upsLoadSettings() {
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_settings').then(r => r.json());
+    const s = r.value;
+    if (!s) {
+      document.getElementById('ups-settings-badge').textContent = 'unreachable';
+      document.getElementById('ups-settings-badge').style.background = '#888';
+      return;
+    }
+    const fmt    = (v, suf) => (Number.isFinite(v) ? `${v}${suf || ''}` : '—');
+    const fmtOff = (v, suf) => (v === 0 ? 'Off' : fmt(v, suf));
+    document.getElementById('ups-set-battlvl').textContent  = fmt(s.battery_level, ' %');
+    document.getElementById('ups-set-minutes').textContent  = fmtOff(s.minutes, ' min');
+    document.getElementById('ups-set-timeout').textContent  = fmtOff(s.timeout, ' s');
+    document.getElementById('ups-set-onbdelay').textContent = fmt(s.onbattery_delay, ' s');
+    document.getElementById('ups-set-safety').textContent   = ({present:'On',absent:'Off'})[s.safety_mode] || s.safety_mode || '—';
+    document.getElementById('ups-set-atboot').textContent   = ({enabled:'Yes',disabled:'No'})[s.at_boot]    || s.at_boot    || '—';
+    // Posture badge — derived from the values
+    const badge = document.getElementById('ups-settings-badge');
+    let label = 'CUSTOM', color = '#7a5a00';   // amber default
+    const bl = s.battery_level, sm = s.safety_mode, ab = s.at_boot;
+    if (bl >= 50)                                                    { label = 'MAINS-PULL TEST'; color = '#c0392b'; }
+    else if (sm === 'absent' && ab === 'enabled' && bl >= 20 && bl <= 40) { label = 'PRODUCTION';     color = '#2e7d32'; }
+    else if (sm === 'present' && bl <= 10)                           { label = 'PARANOID-SAFE';  color = '#7a9f5a'; }
+    badge.textContent = label;
+    badge.style.background = color;
+  } catch (e) {
+    document.getElementById('ups-settings-badge').textContent = 'error';
+    document.getElementById('ups-settings-badge').style.background = '#c0392b';
+  }
+}
+
+// ── Shutdown Propagation card ────────────────────────────────
+// Per-row live state + per-device timing. The user clicks Shutdown or
+// Recover, and during the action each row transitions stopped/running with
+// a "took N s" duration computed by the JS as it polls every 2 s.
+
+// Curated display list — order shown to user, always visible regardless of
+// current state. Ids match what pct/qm return.
+const _UPS_DEVICES = [
+  { kind: 'qnap', label: 'QNAP NAS' },
+  { kind: 'lxc',  id: 100, label: 'Media' },
+  { kind: 'lxc',  id: 102, label: 'Postgres' },
+  { kind: 'lxc',  id: 103, label: 'Agents' },
+  { kind: 'lxc',  id: 104, label: 'Servers' },
+  { kind: 'lxc',  id: 105, label: 'Main Agent' },
+  { kind: 'lxc',  id: 106, label: 'Voice' },
+  { kind: 'lxc',  id: 107, label: 'MQTT' },
+  { kind: 'vm',   id: 101, label: 'Home Assistant' },
+];
+
+// Per-action session: tracks when an action started + per-device transition
+// times. Keys: action ('shutdown'|'recover'|null), startedAt, doneAt {key->ms}.
+let _upsAction = null;
+let _upsLastInv = null;
+let _upsPollHandle = null;
+
+function _upsKey(d)         { return d.kind === 'qnap' ? 'qnap' : `${d.kind}-${d.id}`; }
+function _upsIsTargetState(action, isRunning) {
+  // shutdown wants stopped (isRunning=false); recover wants running (isRunning=true)
+  return action === 'shutdown' ? !isRunning : isRunning;
+}
+
+function _upsResolveStatus(d, inv) {
+  if (d.kind === 'qnap') return inv.qnap_reachable ? 'running' : 'stopped';
+  const arr = d.kind === 'lxc' ? inv.lxcs : inv.vms;
+  const m   = (arr || []).find(x => x.id === d.id);
+  return m ? m.status : 'stopped';
+}
+
+function _upsRenderRows(inv) {
+  return _UPS_DEVICES.map((d, i) => {
+    const isRunning = _upsResolveStatus(d, inv) === 'running';
+    const color = isRunning ? '#2e7d32' : '#888';
+    const dot   = isRunning ? '●' : '○';
+    const lbl   = d.kind === 'qnap'
+      ? (isRunning ? 'online'  : 'offline')
+      : (isRunning ? 'running' : 'stopped');
+    const idCol = d.kind === 'qnap' ? '' : `<span style="color:#888;width:38px;display:inline-block;text-align:right;">${d.id}</span>`;
+    // Timing column — only meaningful during/after an action
+    let took = '—';
+    if (_upsAction) {
+      const k = _upsKey(d);
+      const t = _upsAction.doneAt[k];
+      if (t != null) took = `${Math.round(t / 1000)} s`;
+      else if (_upsIsTargetState(_upsAction.action, isRunning)) took = `${Math.round((Date.now() - _upsAction.startedAt) / 1000)} s`;
+      else took = '…';
+    }
+    const border = i < _UPS_DEVICES.length - 1 ? 'border-bottom:1px solid rgba(0,0,0,0.08);' : '';
+    // Checkbox: token = "qnap" or numeric id, used for SELECTION env var
+    const token = d.kind === 'qnap' ? 'qnap' : String(d.id);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:7px 4px;${border}font-family:monospace;font-size:0.85rem;">
+      <input type="checkbox" class="ups-dev-cb" data-token="${token}" checked onchange="upsCbChanged()" style="cursor:pointer;">
+      <span style="color:${color};width:14px;">${dot}</span>
+      ${idCol}
+      <span style="flex:1;font-family:inherit;">${d.label}</span>
+      <span style="color:${color};font-size:0.78rem;width:80px;">${lbl}</span>
+      <span style="color:#888;font-size:0.78rem;width:60px;text-align:right;">${took}</span>
+    </div>`;
+  }).join('');
+}
+
+// Master toggle: select all / none.
+function upsToggleAll(master) {
+  document.querySelectorAll('.ups-dev-cb').forEach(cb => { cb.checked = master.checked; });
+}
+window.upsToggleAll = upsToggleAll;
+
+// Keep the master checkbox in sync when user clicks individual rows.
+function upsCbChanged() {
+  const all = document.querySelectorAll('.ups-dev-cb');
+  const checkedN = Array.from(all).filter(cb => cb.checked).length;
+  const master = document.getElementById('ups-select-all');
+  if (master) {
+    master.checked = checkedN === all.length;
+    master.indeterminate = checkedN > 0 && checkedN < all.length;
+  }
+}
+window.upsCbChanged = upsCbChanged;
+
+// Returns the list of currently-checked tokens — what we send to the server.
+function _upsSelectedTokens() {
+  return Array.from(document.querySelectorAll('.ups-dev-cb'))
+    .filter(cb => cb.checked)
+    .map(cb => cb.dataset.token);
+}
+
+async function upsLoadInventory() {
+  const box = document.getElementById('ups-inventory');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_inventory').then(r => r.json());
+    const inv = r.value;
+    if (!inv) { box.innerHTML = '<span style="color:#c0392b;">unreachable</span>'; return; }
+    // If a session is active, mark per-device transition timestamps the first
+    // time each one reaches the target state.
+    if (_upsAction) {
+      for (const d of _UPS_DEVICES) {
+        const k = _upsKey(d);
+        if (_upsAction.doneAt[k] != null) continue;
+        const isRunning = _upsResolveStatus(d, inv) === 'running';
+        if (_upsIsTargetState(_upsAction.action, isRunning)) {
+          _upsAction.doneAt[k] = Date.now() - _upsAction.startedAt;
+        }
+      }
+    }
+    _upsLastInv = inv;
+    box.innerHTML = _upsRenderRows(inv);
+  } catch (e) {
+    box.innerHTML = `<span style="color:#c0392b;">error: ${e.message}</span>`;
+  }
+}
+
+function _upsSetStatus(text, color) {
+  const el = document.getElementById('ups-inventory-status');
+  if (el) { el.textContent = text; el.style.color = color || '#888'; }
+}
+
+function _upsLockButtons(disabled) {
+  ['ups-btn-shutdown', 'ups-btn-recover'].forEach(id => {
+    const b = document.getElementById(id); if (b) b.disabled = disabled;
+  });
+}
+
+async function _upsRunAction(actionName, confirmWord, endpoint, statusLabel, refuseWhen) {
+  // Refusal cases
+  const tokens = _upsSelectedTokens();
+  if (tokens.length === 0) {
+    alert('Select at least one device.');
+    return;
+  }
+  if (typeof refuseWhen === 'function') {
+    const reason = refuseWhen(tokens, _upsLastInv);
+    if (reason) { alert(reason); return; }
+  }
+  // Confirm with the list of devices the user is about to act on
+  const labels = _UPS_DEVICES
+    .filter(d => tokens.includes(d.kind === 'qnap' ? 'qnap' : String(d.id)))
+    .map(d => '  • ' + d.label).join('\n');
+  const msg = `WARNING — ${statusLabel} on these ${tokens.length} device(s):\n${labels}\n\nType ${confirmWord} to proceed, or click Cancel to abort.`;
+  if (prompt(msg) !== confirmWord) return;
+
+  _upsAction = { action: actionName, startedAt: Date.now(), doneAt: {} };
+  _upsLockButtons(true);
+  _upsSetStatus(`${statusLabel} in progress…`, '#7a5a00');
+  if (_upsPollHandle) clearInterval(_upsPollHandle);
+  _upsPollHandle = setInterval(() => upsLoadInventory(), 2000);
+  try {
+    await fetch('/api/dashboard-settings/' + endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: { trigger: actionName, ts: Date.now(), devices: tokens } }),
+    });
+  } catch (e) { /* keep going to final refreshes */ }
+  clearInterval(_upsPollHandle); _upsPollHandle = null;
+  await upsLoadInventory();
+  setTimeout(upsLoadInventory, 2000);
+  _upsLockButtons(false);
+  const elapsed = Math.round((Date.now() - _upsAction.startedAt) / 1000);
+  _upsSetStatus(`${statusLabel} complete (${elapsed} s elapsed)`, '#2e7d32');
+}
+
+async function upsShutdown(btn) {
+  await _upsRunAction('shutdown', 'SHUTDOWN', '_ups_test_rehearse',
+    'Shutdown',
+    (tokens, inv) => {
+      // Refuse if every selected device is already stopped
+      if (!inv) return null;
+      const anyRunning = tokens.some(t => {
+        if (t === 'qnap') return inv.qnap_reachable;
+        const id = parseInt(t, 10);
+        const lxc = (inv.lxcs || []).find(x => x.id === id);
+        if (lxc) return lxc.status === 'running';
+        const vm  = (inv.vms  || []).find(x => x.id === id);
+        return vm && vm.status === 'running';
+      });
+      return anyRunning ? null : 'All selected devices are already stopped.';
+    });
+}
+async function upsRecover(btn) {
+  await _upsRunAction('recover', 'RECOVER', '_ups_test_recover',
+    'Recovery',
+    (tokens, inv) => {
+      // Refuse if every selected device is already running
+      if (!inv) return null;
+      const anyStopped = tokens.some(t => {
+        if (t === 'qnap') return !inv.qnap_reachable;
+        const id = parseInt(t, 10);
+        const lxc = (inv.lxcs || []).find(x => x.id === id);
+        if (lxc) return lxc.status !== 'running';
+        const vm  = (inv.vms  || []).find(x => x.id === id);
+        return vm && vm.status !== 'running';
+      });
+      return anyStopped ? null : 'All selected devices are already running.';
+    });
+}
+window.upsShutdown = upsShutdown;
+window.upsRecover  = upsRecover;
+
 function upsLoadAll() {
   upsLoadLive();
   upsLoadHistory();
   upsLoadEvents();
+  upsLoadSettings();
+  upsLoadInventory();
 }
 window.upsRunTest = upsRunTest;
