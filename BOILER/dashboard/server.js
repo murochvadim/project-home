@@ -1185,16 +1185,22 @@ app.get('/api/network/timers', async (req, res) => {
       'systemctl status net-arp-scan.timer net-snmp-scan.timer --no-pager 2>&1'
     );
     ssh.dispose();
-    // Parse "Trigger: Wed 2026-04-01 10:45:08 UTC; 4min 31s left"
+    // Parse "Trigger: Wed 2026-04-01 10:45:08 IDT; 4min 31s left"
+    // (locale on LXC 104 is Asia/Jerusalem so timestamps come back as IDT or IST,
+    // not UTC. Map them to numeric offsets so JS Date.parse handles them.)
     const timers = { arp: { next: null }, snmp: { next: null } };
     let current = null;
     for (const line of r.stdout.split('\n')) {
       // Detect block header — must check snmp before arp (snmp contains 'arp' substring)
       if (line.includes('net-snmp-scan.timer')) current = 'snmp';
       else if (line.includes('net-arp-scan.timer'))  current = 'arp';
-      const m = line.match(/Trigger:\s+(.+UTC)/);
+      const m = line.match(/Trigger:\s+(.+?);/);
       if (m && current) {
-        const ms = new Date(m[1]).getTime();
+        const tsStr = m[1].trim()
+          .replace(/\s+UTC$/, ' +0000')
+          .replace(/\s+IDT$/, ' +0300')   // Israel Daylight Time
+          .replace(/\s+IST$/, ' +0200');  // Israel Standard Time
+        const ms = new Date(tsStr).getTime();
         if (!isNaN(ms)) timers[current].next = ms;
       }
     }
@@ -2884,6 +2890,43 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
 // ─── Dashboard Settings ─────────────────────────────────────────────────────
 app.get('/api/dashboard-settings/:key', async (req, res) => {
   try {
+    if (req.params.key === '_mqtt_browser_pass') {
+      // Self-healing: prefer process.env, fall back to reading .env at request time
+      // (with 5-min TTL) so a stale pm2 env (e.g. after `pm2 restart` instead of
+      // delete+start, or a Windows reboot that resurrected with cached env)
+      // doesn't break the Awtrix tab silently.
+      let v = process.env.MQTT_BROWSER_PASS;
+      if (!v) {
+        const now = Date.now();
+        if (!global._envCache) global._envCache = { ts: 0, vals: {} };
+        if (now - global._envCache.ts > 5 * 60 * 1000) {
+          try {
+            const lines = require('fs').readFileSync(require('path').join(__dirname, '.env'), 'utf8').split('\n');
+            const vals = {};
+            for (const line of lines) {
+              const [k, ...rest] = line.trim().split('=');
+              if (k && !k.startsWith('#')) vals[k] = rest.join('=');
+            }
+            global._envCache = { ts: now, vals };
+          } catch (_) { global._envCache.ts = now; }
+        }
+        v = global._envCache.vals.MQTT_BROWSER_PASS || null;
+      }
+      return res.json({ value: v || null });
+    }
+    if (req.params.key === '_awtrix_settings') {
+      const proxyReq = http.get('http://192.168.1.165/api/settings', { timeout: 4000 }, (devRes) => {
+        let data = '';
+        devRes.on('data', c => data += c);
+        devRes.on('end', () => {
+          try { res.json({ value: JSON.parse(data) }); }
+          catch (e) { res.json({ value: null, error: 'parse failed' }); }
+        });
+      });
+      proxyReq.on('error',   (e) => res.json({ value: null, error: e.message }));
+      proxyReq.on('timeout', ()  => { proxyReq.destroy(); res.json({ value: null, error: 'timeout' }); });
+      return;
+    }
     const r = await db.query('SELECT value, updated_at FROM dashboard_settings WHERE key = $1', [req.params.key]);
     res.json(r.rows.length ? { value: r.rows[0].value, updated_at: r.rows[0].updated_at } : { value: null });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2893,6 +2936,22 @@ app.post('/api/dashboard-settings/:key', async (req, res) => {
   try {
     const { value } = req.body;
     if (value === undefined) return res.status(400).json({ error: 'Missing value' });
+    if (req.params.key === '_awtrix_settings') {
+      const body = JSON.stringify(value);
+      const proxyReq = http.request({
+        hostname: '192.168.1.165', port: 80, path: '/api/settings', method: 'POST', timeout: 4000,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, (devRes) => {
+        let data = '';
+        devRes.on('data', c => data += c);
+        devRes.on('end', () => res.json({ ok: devRes.statusCode === 200, status: devRes.statusCode }));
+      });
+      proxyReq.on('error',   (e) => res.status(502).json({ error: e.message }));
+      proxyReq.on('timeout', ()  => { proxyReq.destroy(); res.status(504).json({ error: 'timeout' }); });
+      proxyReq.write(body);
+      proxyReq.end();
+      return;
+    }
     await db.query(
       `INSERT INTO dashboard_settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW())
        ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()`,

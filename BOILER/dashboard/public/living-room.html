@@ -91,6 +91,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('wallmote', this)">Wallmote</button>
     <button class="tab-btn" onclick="showTab('rules', this)">Rule Settings</button>
+    <button class="tab-btn" onclick="showTab('awtrix', this)">Awtrix</button>
   </div>
 
   <div class="tab-panel active" id="tab-wallmote">
@@ -271,6 +272,120 @@
     </div>
   </div>
 
+  <!-- Awtrix tab — sentence editor with {{var}} substitution from rule_engine_state.
+       Pushes via MQTT-over-WebSocket directly to awtrix_05ec2c/notify or .../custom/<name>. -->
+  <div class="tab-panel" id="tab-awtrix">
+
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">AWTRIX <span id="aw-online-dot" title="MQTT" style="font-size:0.85rem;color:#aaa;">●</span> <span id="aw-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">connecting…</span></h2>
+        <span style="font-size:0.82rem;color:#666;">Battery: <b id="aw-bat">—</b>%</span>
+        <span style="font-size:0.82rem;color:#666;">Brightness: <b id="aw-bri">—</b></span>
+        <span style="font-size:0.82rem;color:#666;">Signal: <b id="aw-rssi">—</b> dBm</span>
+        <span style="font-size:0.82rem;color:#666;">Current app: <b id="aw-app">—</b></span>
+        <span style="font-size:0.82rem;color:#666;">Sensor: <b id="aw-temp">—</b>°C / <b id="aw-hum">—</b>%</span>
+        <div style="margin-left:auto;display:flex;gap:6px;">
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="awPower(true)">On</button>
+          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="awPower(false)">Off</button>
+        </div>
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e8e2da;display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:0.85rem;">
+        <span style="color:#666;">Built-in apps <span style="color:#999;font-size:0.75rem;">(reboot to apply)</span>:</span>
+        <label style="display:inline-flex;gap:5px;align-items:center;cursor:pointer;">
+          <input type="checkbox" id="aw-bi-TIM"  onchange="awBuiltin('TIM',  this.checked)"> Time
+        </label>
+        <label style="display:inline-flex;gap:5px;align-items:center;cursor:pointer;">
+          <input type="checkbox" id="aw-bi-TEMP" onchange="awBuiltin('TEMP', this.checked)"> Temp
+        </label>
+        <label style="display:inline-flex;gap:5px;align-items:center;cursor:pointer;">
+          <input type="checkbox" id="aw-bi-HUM"  onchange="awBuiltin('HUM',  this.checked)"> Humidity
+        </label>
+        <label style="display:inline-flex;gap:5px;align-items:center;cursor:pointer;">
+          <input type="checkbox" id="aw-bi-BAT"  onchange="awBuiltin('BAT',  this.checked)"> Battery
+        </label>
+        <button class="btn-test" style="margin-left:auto;border-color:#7a9ab8;color:#7a9ab8;" onclick="awReboot()">⟳ Reboot &amp; Apply</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin:0 0 10px;font-size:1.05rem;">Sentence Editor</h2>
+      <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
+        Use <code style="background:#eee;padding:1px 4px;border-radius:3px;">{{key}}</code> to embed live state — e.g. <code style="background:#eee;padding:1px 4px;border-radius:3px;">Boiler {{boiler_temp}}°C</code>. Available keys come from rule_engine state.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:10px;">
+        <input type="text" id="aw-text" oninput="awPreview()" placeholder="Boiler {{boiler_temp}}°C"
+               style="padding:7px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.9rem;box-sizing:border-box;">
+        <div style="background:#f8f5f1;padding:8px 10px;border-radius:4px;border-left:3px solid #7a9ab8;font-size:0.85rem;">
+          Preview: <span id="aw-preview" style="font-family:monospace;color:#000;">—</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;font-size:0.75rem;color:#444;">
+          <label style="width:54px;">Color
+            <input type="color" id="aw-color" value="#FFFFFF" style="width:100%;height:28px;cursor:pointer;border:1px solid #d0cbc4;border-radius:4px;display:block;margin-top:2px;">
+          </label>
+          <label style="width:58px;" title="Scroll speed 0-100">Speed
+            <input type="number" id="aw-speed" min="0" max="100" value="80" style="width:100%;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;box-sizing:border-box;display:block;margin-top:2px;">
+          </label>
+          <label style="width:78px;">Case
+            <select id="aw-case" style="width:100%;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;display:block;margin-top:2px;">
+              <option value="0">Auto</option>
+              <option value="1">UPPER</option>
+              <option value="2">lower</option>
+            </select>
+          </label>
+          <label style="width:60px;" title="Duration in seconds (Show now only)">Dur (s)
+            <input type="number" id="aw-duration" min="1" max="60" value="6" style="width:100%;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;box-sizing:border-box;display:block;margin-top:2px;">
+          </label>
+          <span style="display:inline-flex;align-items:center;gap:6px;padding-bottom:4px;">
+            <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="aw-blink"> Blink</label>
+            <input type="number" id="aw-blink-ms" min="100" max="2000" value="500" step="100" title="Blink interval (ms)" style="width:54px;padding:3px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
+          </span>
+          <label style="width:78px;" title="High = wake + override; Low = subtle; Normal = default">Priority
+            <select id="aw-priority" style="width:100%;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;display:block;margin-top:2px;">
+              <option value="low">Low</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <span style="display:inline-flex;align-items:center;gap:6px;padding-bottom:4px;">
+            <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="aw-sound"> Sound</label>
+            <input type="text" id="aw-sound-val" placeholder="beep / RTTTL" title="Built-in name (e.g. beep) or full RTTTL string" style="width:120px;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;box-sizing:border-box;">
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:6px;padding-bottom:4px;min-height:28px;" title="Save-as-app: when on, the custom app auto-removes itself after `duration` seconds (lifetime). When off (default), it stays in rotation until you Delete it.">
+            <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="aw-clear"> Clear after run</label>
+          </span>
+          <span id="aw-msg" style="font-size:0.78rem;color:#666;flex:1;min-width:0;text-align:right;padding-bottom:6px;"></span>
+          <button class="btn-test" onclick="awClearDisplay()" title="Dismisses notification + if a saved custom app is currently shown, REMOVES it permanently from the device rotation. Built-in apps (Time/Temp/etc.) just get skipped." style="margin-right:14px;">Clear display</button>
+          <button class="btn-save" onclick="awPushNotify()" style="background:#7a9ab8;border-color:#7a9ab8;">Show now</button>
+          <button class="btn-save" onclick="awSaveAsApp()">Save as app</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="padding:14px;">
+      <h2 style="margin:0 0 10px;font-size:1.05rem;">Saved Apps</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+        <thead>
+          <tr style="border-bottom:1px solid #d0cbc4;">
+            <th style="text-align:left;padding:6px 4px;">Name</th>
+            <th style="text-align:left;padding:6px 4px;">Template</th>
+            <th style="text-align:center;padding:6px 4px;width:42px;">Color</th>
+            <th style="text-align:center;padding:6px 4px;width:50px;">Speed</th>
+            <th style="text-align:center;padding:6px 4px;width:60px;">Case</th>
+            <th style="text-align:center;padding:6px 4px;width:48px;">Dur</th>
+            <th style="text-align:center;padding:6px 4px;width:64px;">Blink</th>
+            <th style="text-align:left;padding:6px 4px;width:90px;">Sound</th>
+            <th style="text-align:center;padding:6px 4px;width:64px;">Priority</th>
+            <th style="text-align:center;padding:6px 4px;width:48px;" title="Clears after `Dur` seconds when set">Clear</th>
+            <th style="text-align:right;padding:6px 4px;width:240px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="aw-saved-body">
+          <tr><td colspan="11" style="padding:14px;color:#888;text-align:center;">No saved apps yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
 </main>
 
 <!-- Device picker popover -->
@@ -296,6 +411,7 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="js/device-picker.js?v=4"></script>
-<script src="js/living-room.js?v=16"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/living-room.js?v=32"></script>
 </body>
 </html>

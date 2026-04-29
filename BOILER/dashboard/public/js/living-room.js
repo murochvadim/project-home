@@ -818,4 +818,410 @@
   window.addEventListener('DOMContentLoaded', rsLoad);
 
   window.addEventListener('DOMContentLoaded', refreshPage);
+
+  // ─── Awtrix tab ────────────────────────────────────────────────────────────
+  // Browser publishes MQTT directly via WebSocket on the broker (port 9001).
+  // No new server.js endpoints — message templates are stored under
+  // dashboard_settings.awtrix.messages, the broker password is fetched once
+  // via the existing /api/dashboard-settings/_mqtt_browser_pass endpoint
+  // (special-cased in-handler to read from process.env.MQTT_BROWSER_PASS).
+  const AW_DEVICE       = 'awtrix_05ec2c';
+  const AW_BROKER_HOST  = '192.168.1.189';
+  const AW_BROKER_PORT  = 9001;
+  const AW_USER         = 'dashboard_browser';
+  const AW_STORAGE_KEY  = 'awtrix.messages';
+
+  let _awInited     = false;
+  let _awMqtt       = null;
+  let _awState      = {};   // cached state.shared dict
+  let _awMessages   = [];   // array of {name, template, color, scroll_speed, text_case, duration_s}
+  let _awPrevTimer  = null;
+  let _awLastStats  = {};   // most recent stats payload (used by Clear display to know current app)
+
+  function awSetOnline(connected) {
+    const dot  = document.getElementById('aw-online-dot');
+    const text = document.getElementById('aw-online-text');
+    if (dot)  dot.style.color = connected ? '#3a7d44' : '#c0392b';
+    if (text) text.textContent = connected ? 'connected' : 'disconnected';
+  }
+
+  function awSetMsg(text, isError) {
+    const el = document.getElementById('aw-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = isError ? '#c0392b' : '#3a7d44';
+    if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000);
+  }
+
+  function awUpdateStatus(stats) {
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    set('aw-bat',  stats.bat ?? '—');
+    set('aw-bri',  stats.bri ?? '—');
+    set('aw-rssi', stats.wifi_signal ?? '—');
+    set('aw-app',  stats.app ?? '—');
+    set('aw-temp', stats.temp ?? '—');
+    set('aw-hum',  stats.hum ?? '—');
+  }
+
+  async function awLoadState() {
+    try {
+      const r = await fetch('/api/rule-engine/state').then(r => r.json());
+      _awState = r && typeof r.state === 'object' ? r.state : {};
+    } catch (e) {
+      console.error('awLoadState failed:', e);
+      _awState = {};
+    }
+  }
+
+  function awResolve(tpl) {
+    if (!tpl) return '';
+    return String(tpl).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
+      const v = _awState[key];
+      if (v === undefined || v === null) return '?';
+      if (typeof v === 'object') return JSON.stringify(v);
+      return String(v);
+    });
+  }
+
+  function awPreview() {
+    if (_awPrevTimer) clearTimeout(_awPrevTimer);
+    _awPrevTimer = setTimeout(() => {
+      const text = document.getElementById('aw-text').value;
+      const out  = document.getElementById('aw-preview');
+      if (out) out.textContent = awResolve(text) || '—';
+    }, 300);
+  }
+  window.awPreview = awPreview;
+
+  // Clear what's currently on the display.
+  //   • Active notification popup → dismissed
+  //   • ANY custom app currently displaying → REMOVED permanently (empty retained
+  //     pub to remove from device NVS + remove from dashboard storage if present).
+  //   • Built-in app (Time/Date/Temperature/Humidity/Battery) → rotation advanced.
+  const AW_BUILTINS = new Set(['Time', 'Date', 'Temperature', 'Humidity', 'Battery']);
+  async function awClearDisplay() {
+    console.log('[awtrix] Clear display clicked. _awLastStats.app =', _awLastStats && _awLastStats.app);
+    if (!_awMqtt || !_awMqtt.connected) { awSetMsg('MQTT not connected', true); return; }
+    const cur = _awLastStats && _awLastStats.app;
+    // Always dismiss notifications
+    _awMqtt.publish(`${AW_DEVICE}/notify/dismiss`, '', { qos: 0 });
+    if (cur && !AW_BUILTINS.has(cur)) {
+      // Custom app — remove from device (empty retained) regardless of dashboard storage
+      _awMqtt.publish(`${AW_DEVICE}/custom/${cur}`, '', { qos: 0, retain: true }, (err) => {
+        if (err) console.error('[awtrix] custom remove pub err', err);
+        else     console.log('[awtrix] custom remove pub OK for', cur);
+      });
+      // Sync dashboard storage if we had it
+      const had = _awMessages.find(m => m.name === cur);
+      if (had) {
+        _awMessages = _awMessages.filter(m => m.name !== cur);
+        try { await awSaveMessages(); } catch (_) {}
+        awRenderSaved();
+      }
+      awSetMsg(`Removed "${cur}" — display cleared`);
+    } else if (cur) {
+      // Built-in — just advance
+      _awMqtt.publish(`${AW_DEVICE}/nextapp`, '', { qos: 0 });
+      awSetMsg(`"${cur}" is built-in — advanced rotation`);
+    } else {
+      // No stats yet (just opened tab) — best effort dismiss + advance
+      _awMqtt.publish(`${AW_DEVICE}/nextapp`, '', { qos: 0 });
+      awSetMsg('No current app info yet — try again in a few seconds');
+    }
+  }
+  window.awClearDisplay = awClearDisplay;
+
+  function awGetForm() {
+    const blinkChk = document.getElementById('aw-blink').checked;
+    const blinkMs  = parseInt(document.getElementById('aw-blink-ms').value, 10) || 500;
+    const soundChk = document.getElementById('aw-sound').checked;
+    const soundVal = document.getElementById('aw-sound-val').value.trim();
+    return {
+      text:        document.getElementById('aw-text').value,
+      color:       document.getElementById('aw-color').value,
+      scrollSpeed: parseInt(document.getElementById('aw-speed').value, 10),
+      textCase:    parseInt(document.getElementById('aw-case').value, 10),
+      duration:    parseInt(document.getElementById('aw-duration').value, 10),
+      blinkMs:     blinkChk ? blinkMs : 0,
+      sound:       soundChk ? soundVal : '',
+      priority:    document.getElementById('aw-priority').value,
+      clearAfter:  document.getElementById('aw-clear').checked,
+    };
+  }
+
+  function awBuildPayload(form, persistent) {
+    const payload = {
+      text:        awResolve(form.text),
+      color:       form.color,
+      scrollSpeed: form.scrollSpeed,
+      textCase:    form.textCase,
+    };
+    if (persistent) {
+      payload.repeat = -1;
+      // "Clear after run" → set lifetime so the custom app auto-removes after duration
+      if (form.clearAfter) {
+        payload.lifetime     = form.duration;
+        payload.lifetimeMode = 0;          // 0 = remove on expiry, 1 = mark stale
+      }
+    } else {
+      payload.duration = form.duration;
+    }
+    if (form.blinkMs && form.blinkMs > 0) payload.blinkText = form.blinkMs;
+    if (form.sound) {
+      // RTTTL strings have ":d=" / ":o=" / ":b=" markers — anything else is treated as a filename
+      if (/:[dob]=/.test(form.sound)) payload.rtttl = form.sound;
+      else                            payload.sound = form.sound;
+    }
+    // Priority maps to AWTRIX flags: high = wake + don't queue (override now);
+    // low = no push-icon animation; normal = defaults.
+    if (form.priority === 'high') {
+      payload.wakeup = true;
+      payload.stack  = false;
+    } else if (form.priority === 'low') {
+      payload.pushIcon = 0;
+    }
+    return payload;
+  }
+
+  function awPower(on) {
+    if (!_awMqtt || !_awMqtt.connected) { awSetMsg('MQTT not connected', true); return; }
+    _awMqtt.publish(`${AW_DEVICE}/power`, JSON.stringify({ power: !!on }), { qos: 0 }, (err) => {
+      if (err) awSetMsg('Power failed: ' + err.message, true);
+      else     awSetMsg(`Display ${on ? 'on' : 'off'}`);
+    });
+  }
+  window.awPower = awPower;
+
+  // Toggle uses the in-handler HTTP proxy on server.js (POST /api/dashboard-settings/_awtrix_settings).
+  // We don't use MQTT for built-ins because firmware 0.98 silently ignores DAT via the MQTT settings
+  // topic — HTTP path works for all 5 keys reliably.
+  async function awBuiltin(key, on) {
+    try {
+      const body = {}; body[key] = !!on;
+      const r = await fetch('/api/dashboard-settings/_awtrix_settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: body }),
+      }).then(r => r.json());
+      if (r.ok || r.status === 200) {
+        awSetMsg(`${key} ${on ? 'on' : 'off'} — click Reboot & Apply to refresh rotation`);
+      } else {
+        awSetMsg(`Toggle ${key} failed: ${r.error || 'unknown'}`, true);
+      }
+    } catch (e) { awSetMsg('Toggle failed: ' + e.message, true); }
+  }
+  window.awBuiltin = awBuiltin;
+
+  async function awLoadBuiltins() {
+    try {
+      const r = await fetch('/api/dashboard-settings/_awtrix_settings').then(r => r.json());
+      const s = r && r.value ? r.value : {};
+      ['TIM','TEMP','HUM','BAT'].forEach(k => {
+        const el = document.getElementById('aw-bi-' + k);
+        if (el) el.checked = !!s[k];
+      });
+    } catch (e) {
+      console.error('awLoadBuiltins failed:', e);
+    }
+  }
+
+  function awReboot() {
+    if (!_awMqtt || !_awMqtt.connected) { awSetMsg('MQTT not connected', true); return; }
+    if (!confirm('Reboot the AWTRIX display? Takes ~10 s.')) return;
+    _awMqtt.publish(`${AW_DEVICE}/reboot`, '', { qos: 0 }, (err) => {
+      if (err) awSetMsg('Reboot failed: ' + err.message, true);
+      else     awSetMsg('Rebooting… display will return in ~10 s with rotation rebuilt');
+    });
+  }
+  window.awReboot = awReboot;
+
+  function awPushNotify() {
+    if (!_awMqtt || !_awMqtt.connected) { awSetMsg('MQTT not connected', true); return; }
+    const form = awGetForm();
+    if (!form.text) { awSetMsg('Type a sentence first', true); return; }
+    const payload = awBuildPayload(form, false);
+    _awMqtt.publish(`${AW_DEVICE}/notify`, JSON.stringify(payload), { qos: 0 }, (err) => {
+      if (err) awSetMsg('Publish failed: ' + err.message, true);
+      else     awSetMsg('Pushed: ' + payload.text);
+    });
+  }
+  window.awPushNotify = awPushNotify;
+
+  async function awSaveAsApp() {
+    if (!_awMqtt || !_awMqtt.connected) { awSetMsg('MQTT not connected', true); return; }
+    const form = awGetForm();
+    if (!form.text) { awSetMsg('Type a sentence first', true); return; }
+    const name = (prompt('Name for this app (lowercase, no spaces):', '') || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+    if (!name) return;
+    if (['time', 'temperature', 'humidity', 'battery', 'date'].includes(name)) {
+      awSetMsg(`"${name}" collides with a built-in — pick another`, true); return;
+    }
+    const row = {
+      name, template: form.text, color: form.color,
+      scroll_speed: form.scrollSpeed, text_case: form.textCase, duration_s: form.duration,
+      blink_ms: form.blinkMs, sound: form.sound, priority: form.priority,
+      clear_after: form.clearAfter,
+    };
+    const idx = _awMessages.findIndex(m => m.name === name);
+    if (idx >= 0) _awMessages[idx] = row; else _awMessages.push(row);
+    await awSaveMessages();
+    // Push retained custom app (persistent in rotation)
+    const payload = awBuildPayload(form, true);
+    _awMqtt.publish(`${AW_DEVICE}/custom/${name}`, JSON.stringify(payload), { qos: 0, retain: true }, (err) => {
+      if (err) awSetMsg('Saved DB but MQTT failed: ' + err.message, true);
+      else     awSetMsg(`Saved "${name}" + pushed to device`);
+    });
+    awRenderSaved();
+  }
+  window.awSaveAsApp = awSaveAsApp;
+
+  async function awSaveMessages() {
+    await fetch(`/api/dashboard-settings/${encodeURIComponent(AW_STORAGE_KEY)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: _awMessages }),
+    });
+  }
+
+  async function awLoadMessages() {
+    try {
+      const r = await fetch(`/api/dashboard-settings/${encodeURIComponent(AW_STORAGE_KEY)}`).then(r => r.json());
+      _awMessages = Array.isArray(r.value) ? r.value : [];
+    } catch (e) {
+      _awMessages = [];
+    }
+    awRenderSaved();
+  }
+
+  function awRenderSaved() {
+    const tbody = document.getElementById('aw-saved-body');
+    if (!tbody) return;
+    if (!_awMessages.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:14px;color:#888;text-align:center;">No saved apps yet</td></tr>';
+      return;
+    }
+    const caseLabel = c => ({0:'Auto', 1:'UPPER', 2:'lower'}[c] || 'Auto');
+    const prio = p => p === 'high' ? '<b style="color:#c0392b;">High</b>'
+                    : p === 'low'  ? '<span style="color:#888;">Low</span>'
+                    : 'Normal';
+    tbody.innerHTML = _awMessages.map(m => `
+      <tr style="border-bottom:1px solid #e8e2da;">
+        <td style="padding:6px 4px;font-family:monospace;">${escapeHtml(m.name)}</td>
+        <td style="padding:6px 4px;">${escapeHtml(m.template)}</td>
+        <td style="padding:6px 4px;text-align:center;"><span title="${escapeHtml(m.color)}" style="display:inline-block;width:18px;height:14px;background:${escapeHtml(m.color)};border:1px solid #ccc;vertical-align:middle;"></span></td>
+        <td style="padding:6px 4px;text-align:center;">${m.scroll_speed ?? ''}</td>
+        <td style="padding:6px 4px;text-align:center;">${caseLabel(m.text_case)}</td>
+        <td style="padding:6px 4px;text-align:center;">${m.duration_s ?? ''}s</td>
+        <td style="padding:6px 4px;text-align:center;">${m.blink_ms && m.blink_ms > 0 ? m.blink_ms + 'ms' : '—'}</td>
+        <td style="padding:6px 4px;font-family:monospace;font-size:0.78rem;color:${m.sound ? '#444' : '#aaa'};">${m.sound ? escapeHtml(m.sound) : '—'}</td>
+        <td style="padding:6px 4px;text-align:center;">${prio(m.priority || 'normal')}</td>
+        <td style="padding:6px 4px;text-align:center;">${m.clear_after ? '✓' : '—'}</td>
+        <td style="padding:6px 4px;text-align:right;white-space:nowrap;">
+          <button class="btn-test" onclick="awPushSaved('${m.name}')">Push</button>
+          <button class="btn-test" onclick="awEdit('${m.name}')">Edit</button>
+          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="awDelete('${m.name}')">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function awEdit(name) {
+    const m = _awMessages.find(x => x.name === name);
+    if (!m) return;
+    document.getElementById('aw-text').value     = m.template;
+    document.getElementById('aw-color').value    = m.color;
+    document.getElementById('aw-speed').value    = m.scroll_speed;
+    document.getElementById('aw-case').value     = m.text_case;
+    document.getElementById('aw-duration').value = m.duration_s;
+    document.getElementById('aw-blink').checked  = !!(m.blink_ms && m.blink_ms > 0);
+    document.getElementById('aw-blink-ms').value = m.blink_ms && m.blink_ms > 0 ? m.blink_ms : 500;
+    document.getElementById('aw-sound').checked  = !!m.sound;
+    document.getElementById('aw-sound-val').value = m.sound || '';
+    document.getElementById('aw-priority').value = m.priority || 'normal';
+    document.getElementById('aw-clear').checked  = !!m.clear_after;
+    awPreview();
+    awSetMsg(`Loaded "${name}" — edit, then Save as app to overwrite`);
+  }
+  window.awEdit = awEdit;
+
+  function awMessageToForm(m) {
+    return {
+      text: m.template, color: m.color,
+      scrollSpeed: m.scroll_speed, textCase: m.text_case, duration: m.duration_s,
+      blinkMs: m.blink_ms || 0, sound: m.sound || '', priority: m.priority || 'normal',
+      clearAfter: !!m.clear_after,
+    };
+  }
+
+  function awPushSaved(name) {
+    if (!_awMqtt || !_awMqtt.connected) { awSetMsg('MQTT not connected', true); return; }
+    const m = _awMessages.find(x => x.name === name);
+    if (!m) return;
+    const payload = awBuildPayload(awMessageToForm(m), true);
+    _awMqtt.publish(`${AW_DEVICE}/custom/${name}`, JSON.stringify(payload), { qos: 0, retain: true }, (err) => {
+      if (err) awSetMsg('Push failed: ' + err.message, true);
+      else     awSetMsg(`Pushed "${name}"`);
+    });
+  }
+  window.awPushSaved = awPushSaved;
+
+  async function awDelete(name) {
+    if (!confirm(`Delete app "${name}"?`)) return;
+    _awMessages = _awMessages.filter(m => m.name !== name);
+    await awSaveMessages();
+    if (_awMqtt && _awMqtt.connected) {
+      // Empty retained payload removes the custom app from the device rotation
+      _awMqtt.publish(`${AW_DEVICE}/custom/${name}`, '', { qos: 0, retain: true });
+    }
+    awRenderSaved();
+    awSetMsg(`Deleted "${name}"`);
+  }
+  window.awDelete = awDelete;
+
+  async function awInit() {
+    if (_awInited) return;
+    _awInited = true;
+    if (typeof mqtt === 'undefined') { awSetMsg('mqtt.js library missing', true); return; }
+
+    let pass;
+    try {
+      const r = await fetch('/api/dashboard-settings/_mqtt_browser_pass').then(r => r.json());
+      pass = r.value;
+    } catch (e) { awSetMsg('Could not fetch broker password', true); return; }
+    if (!pass) { awSetMsg('MQTT_BROWSER_PASS not set in dashboard .env', true); return; }
+
+    await awLoadState();
+    await awLoadMessages();
+    await awLoadBuiltins();
+
+    _awMqtt = mqtt.connect(`ws://${AW_BROKER_HOST}:${AW_BROKER_PORT}`, {
+      username: AW_USER, password: pass,
+      clientId: 'awtrix-tab-' + Math.random().toString(36).slice(2, 10),
+      reconnectPeriod: 5000, connectTimeout: 8000,
+    });
+    _awMqtt.on('connect', () => {
+      awSetOnline(true);
+      _awMqtt.subscribe(`${AW_DEVICE}/stats`, { qos: 0 });
+    });
+    _awMqtt.on('reconnect', () => awSetOnline(false));
+    _awMqtt.on('close',     () => awSetOnline(false));
+    _awMqtt.on('error',     (e) => { console.error('MQTT error:', e); awSetOnline(false); });
+    _awMqtt.on('message', (topic, payload) => {
+      if (topic === `${AW_DEVICE}/stats`) {
+        try {
+          const stats = JSON.parse(payload.toString());
+          _awLastStats = stats;
+          awUpdateStatus(stats);
+        } catch (_) {}
+      }
+    });
+  }
+
+  // Hook into showTab so awInit runs first time the tab is opened
+  const _origShowTab = window.showTab;
+  window.showTab = function (name, btn) {
+    _origShowTab(name, btn);
+    if (name === 'awtrix') awInit();
+  };
 })();

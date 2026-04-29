@@ -49,6 +49,88 @@ def run_arp():
 
     return devices
 
+def merge_replaced_macs(cur, now):
+    """Detect MAC changes for the same physical device and merge them.
+
+    A new MAC X 'replaces' an old MAC Y at the same IP if all of:
+      1. X was seen this scan (last_seen ~= now)
+      2. Y has been silent for at least 30 minutes (>= 6 missed scans)
+         — protects against transient gateway/sub-device flapping
+      3. Either:
+           a. X.vendor == Y.vendor (both known + equal OUI), OR
+           b. Y.vendor == 'Locally administered' AND X.vendor is a KNOWN vendor.
+         (3b handles the privacy-MAC-cycle case — a device cycling random
+          MACs that finally commits to a stable manufacturer MAC. We require
+          X.vendor to be known so we don't merge unrelated devices that
+          coincidentally share an IP via DHCP reuse — empty/unknown vendor
+          is too weak a link to assume same physical device.)
+      4. NOT (both X and Y exist as separate rows in the `devices` table).
+         If our system already tracks them as distinct devices, they are
+         distinct — common case is Tuya gateways that surface multiple
+         sub-devices at the same gateway IP with different MACs.
+
+    On match: transfer Y's name + earliest first_seen onto X, re-point any
+    devices.mac FK from Y to X, then DELETE Y. The devices.mac re-point is
+    critical — without it, device_agent's _update_net_device call on next
+    cycle would re-INSERT Y as a ghost.
+
+    Returns count of merges performed.
+    """
+    fresh_cutoff = now - timedelta(minutes=5)   # NEW must be alive this scan
+    silent_cutoff = now - timedelta(minutes=30)  # OLD must be silent ≥ 30 min (≥ 6 missed scans)
+    cur.execute("""
+        SELECT new.mac, new.ip, new.vendor, new.first_seen,
+               old.mac, old.vendor, old.name, old.first_seen
+          FROM net_devices new
+          JOIN net_devices old
+            ON old.ip = new.ip AND old.mac <> new.mac
+         WHERE new.last_seen >= %s
+           AND old.last_seen <  %s
+    """, (fresh_cutoff, silent_cutoff))
+    candidates = cur.fetchall()
+
+    merged = 0
+    for new_mac, ip, new_vendor, new_first, old_mac, old_vendor, old_name, old_first in candidates:
+        same_vendor    = new_vendor and old_vendor and new_vendor == old_vendor
+        # Random predecessor → only merge if NEW has a known, non-random vendor
+        # (otherwise it's likely IP reuse via DHCP between unrelated devices)
+        random_to_known = (
+            old_vendor == 'Locally administered'
+            and bool(new_vendor)
+            and new_vendor != 'Locally administered'
+        )
+        if not (same_vendor or random_to_known):
+            continue
+        # Anti-corruption guard: if both MACs are already tracked as distinct
+        # rows in the devices table, they're known to be different physical
+        # devices (e.g. Tuya gateway sub-devices sharing an IP). Don't merge.
+        cur.execute(
+            "SELECT COUNT(DISTINCT mac) FROM devices WHERE mac IN (%s, %s)",
+            (new_mac, old_mac)
+        )
+        if cur.fetchone()[0] >= 2:
+            continue
+        # The old MAC may already have been deleted by a previous iteration if
+        # multiple predecessors collide on one new MAC. Skip if gone.
+        cur.execute("SELECT 1 FROM net_devices WHERE mac = %s", (old_mac,))
+        if not cur.fetchone():
+            continue
+        # Transfer name (only if new has none) + earliest first_seen
+        cur.execute("""
+            UPDATE net_devices
+               SET name       = COALESCE(name, %s),
+                   first_seen = LEAST(first_seen, %s)
+             WHERE mac = %s
+        """, (old_name, old_first, new_mac))
+        # Re-point devices table FK so device_agent doesn't resurrect old MAC
+        cur.execute("UPDATE devices SET mac = %s WHERE mac = %s", (new_mac, old_mac))
+        # Delete the ghost
+        cur.execute("DELETE FROM net_devices WHERE mac = %s", (old_mac,))
+        merged += 1
+        print(f"[arp_scan] merged {old_mac} ({old_vendor}) -> {new_mac} ({new_vendor or '?'}) at {ip}")
+    return merged
+
+
 def main():
     devices = run_arp()
     now = datetime.now(timezone.utc)
@@ -68,6 +150,9 @@ def main():
                         last_online = EXCLUDED.last_online
                 """, (mac, ip, vendor, name, now, now, now))
 
+            # Dedup pass — collapse replaced MACs of existing physical devices
+            merged = merge_replaced_macs(cur, now)
+
             cur.execute("SELECT COUNT(*) FROM net_devices")
             total_ever = cur.fetchone()[0]
 
@@ -84,7 +169,7 @@ def main():
                 (now, total_online, total_offline, total_ever)
             )
         conn.commit()
-    print(f"[arp_scan] {now.isoformat()} — online:{total_online} offline:{total_offline} ever:{total_ever} (grace:{ONLINE_GRACE_MIN}m)")
+    print(f"[arp_scan] {now.isoformat()} — online:{total_online} offline:{total_offline} ever:{total_ever} merged:{merged} (grace:{ONLINE_GRACE_MIN}m)")
 
 if __name__ == '__main__':
     main()
