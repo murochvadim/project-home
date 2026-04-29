@@ -1151,3 +1151,130 @@ setInterval(() => {
     loadStatus();
   }
 }, 60000);
+
+// ─── UPS tab (apcupsd master on PVE, NIS slave on LXC 105) ─────────────────
+// Endpoints used (all in-handler proxies on the existing /api/dashboard-settings/:key):
+//   _ups_live          → latest ups_status row + age_sec
+//   _ups_history       → recent rows for chart (default 7 days)
+//   _ups_events        → tail of /var/log/apcupsd.events on PVE via SSH
+//   _ups_test_<name>   → SSH-execute named test on PVE, return stdout/stderr/code
+
+const UPS_STATUS_COLORS = {
+  ONLINE:        { color: '#fff', bg: '#3a7d44' },
+  'ONLINE SLAVE':{ color: '#fff', bg: '#3a7d44' },
+  ONBATT:        { color: '#fff', bg: '#d4a017' },
+  'LOWBATT':     { color: '#fff', bg: '#c0392b' },
+  COMMLOST:      { color: '#fff', bg: '#888'    },
+  'SHUTTING DOWN':{ color: '#fff', bg: '#c0392b' },
+};
+
+async function upsLoadLive() {
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_live').then(r => r.json());
+    const d = r && r.value;
+    if (!d) {
+      document.getElementById('ups-status-badge').textContent = 'no data';
+      document.getElementById('ups-age').textContent = 'no row in ups_status yet — wait for first poll (60 s cadence)';
+      return;
+    }
+    const status = (d.status || '').trim();
+    const badge = document.getElementById('ups-status-badge');
+    const style = UPS_STATUS_COLORS[status.toUpperCase()] || { color: '#fff', bg: '#666' };
+    badge.textContent = status || '—';
+    badge.style.background = style.bg;
+    badge.style.color = style.color;
+
+    const fmt = (v, suffix, decimals = 1) =>
+      (v == null || isNaN(v)) ? '—' : (Number(v).toFixed(decimals) + (suffix || ''));
+    document.getElementById('ups-bcharge').textContent = fmt(d.battery_pct, '%', 0);
+    document.getElementById('ups-runtime').textContent = fmt(d.runtime_min, ' min', 0);
+    document.getElementById('ups-linev').textContent   = fmt(d.line_volt, ' V', 0);
+    document.getElementById('ups-load').textContent    = fmt(d.load_pct, '%', 0);
+    document.getElementById('ups-battv').textContent   = fmt(d.battery_volt, ' V');
+    document.getElementById('ups-model').textContent   = (d.model || '—').trim();
+    document.getElementById('ups-serial').textContent  = (d.serial || '—').trim();
+    document.getElementById('ups-lastxfer').textContent= (d.last_xfer || '—').trim();
+
+    const age = d.age_sec || 0;
+    const ageStr = age < 90 ? `${age}s ago` : `${Math.round(age/60)} min ago`;
+    const ageEl = document.getElementById('ups-age');
+    ageEl.textContent = ageStr;
+    ageEl.style.color = age > 180 ? '#c0392b' : '#888';
+  } catch (e) {
+    console.error('upsLoadLive', e);
+    document.getElementById('ups-status-badge').textContent = 'error';
+  }
+}
+
+let _upsBattChart = null;
+async function upsLoadHistory() {
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_history?days=7').then(r => r.json());
+    const rows = (r && r.value) || [];
+    if (!rows.length) return;
+    const labels = rows.map(x => new Date(x.ts).toLocaleString('he-IL', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }));
+    const battv  = rows.map(x => x.battery_volt);
+    const ctx = document.getElementById('ups-batt-chart');
+    if (!ctx || typeof Chart === 'undefined') return;
+    if (_upsBattChart) _upsBattChart.destroy();
+    _upsBattChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'BATTV (V)', data: battv, borderColor: '#3a7d44', backgroundColor: 'rgba(58,125,68,0.1)',
+          fill: true, tension: 0.2, pointRadius: 0, borderWidth: 1.5,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+        scales: {
+          y: { suggestedMin: 24, suggestedMax: 28, title: { display: true, text: 'Volts' }, grid: { color: 'rgba(0,0,0,0.05)' } },
+          x: { ticks: { autoSkip: true, maxTicksLimit: 8 }, grid: { display: false } },
+        },
+      },
+    });
+  } catch (e) { console.error('upsLoadHistory', e); }
+}
+
+async function upsLoadEvents() {
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_events').then(r => r.json());
+    const lines = (r && r.value) || [];
+    document.getElementById('ups-events').textContent =
+      lines.length ? lines.join('\n') : '(no events yet)';
+  } catch (e) {
+    document.getElementById('ups-events').textContent = '(failed to load events)';
+  }
+}
+
+async function upsRunTest(name, btn) {
+  const out = document.getElementById('ups-test-out-' + name);
+  if (out) out.textContent = 'running…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_test_' + name, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: { trigger: 'dashboard', ts: Date.now() } }),
+    }).then(r => r.json());
+    if (out) {
+      if (r.error) {
+        out.textContent = 'ERROR: ' + r.error;
+        out.style.color = '#c0392b';
+      } else {
+        const v = r.value || {};
+        out.textContent = `[exit ${v.code ?? '?'}] ${v.stdout || ''}${v.stderr ? '\n--- stderr ---\n' + v.stderr : ''}`;
+        out.style.color = (v.code === 0) ? '#2e2e2e' : '#c0392b';
+      }
+    }
+  } finally { btn.disabled = false; }
+}
+
+function upsLoadAll() {
+  upsLoadLive();
+  upsLoadHistory();
+  upsLoadEvents();
+}
+window.upsRunTest = upsRunTest;

@@ -310,6 +310,7 @@ Each project has its own CLAUDE.md with full details:
 | Voice System | `VOICE/` | `VOICE/CLAUDE.md` |
 | Corridor Agent | `CORRIDOR/` | `CORRIDOR/CLAUDE.md` — dashboard-only (Pixoo editor); service runs on LXC 100 as `pixoo_service` |
 | Living Room Agent | `LIVING_ROOM/` | `LIVING_ROOM/CLAUDE.md` — dashboard-only; wallmote bindings + floor-plan layout editor (foundation for AI spatial investigations) + future scenes/lights |
+| UPS subsystem | `UPS/` | `UPS/CLAUDE.md` — APC Back-UPS BX2200MI orchestrated shutdown. Master apcupsd on PVE host (USB), NIS slave on LXC 105 (observer), 60-s polling daemon writes to `ups_status` on LXC 102, dashboard surface on Project Health → UPS tab. Routine updates via `/pss-update` skill. |
 | Scripts (LXC 100) | `scripts/` | see `MEDIA/CLAUDE.md` |
 | Windows Backup (LXC 104) | `scripts/backup-script.sh` | see root `CLAUDE.md` LXC 104 section |
 

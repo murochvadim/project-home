@@ -1,0 +1,9 @@
+[Unit]
+Description=UPS poll — read apcaccess and write to ups_status DB
+After=network.target apcupsd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/network-agent/ups_poll.py
+StandardOutput=append:/var/log/net-ups-poll.log
+StandardError=append:/var/log/net-ups-poll.log

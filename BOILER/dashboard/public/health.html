@@ -54,6 +54,7 @@
     <button class="tab-btn" onclick="showHealthTab('documents', this)">Documents</button>
     <button class="tab-btn" onclick="showHealthTab('backups', this)">Proxmox Backup</button>
     <button class="tab-btn" onclick="showHealthTab('win-backup', this)">Windows Backup</button>
+    <button class="tab-btn" onclick="showHealthTab('ups', this)">UPS</button>
     <button class="tab-btn" onclick="showHealthTab('settings', this)">Settings</button>
   </div>
 
@@ -543,6 +544,71 @@
 
   </div><!-- /tab-settings -->
 
+  <!-- UPS tab — apcupsd master on PVE, NIS slave on LXC 105, polling daemon writes ups_status -->
+  <div class="tab-panel" id="tab-ups">
+
+    <!-- Card 1: live status -->
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <h2 style="margin:0;">APC Back-UPS BX2200MI <span id="ups-status-badge" style="font-size:0.78rem;font-weight:500;padding:3px 10px;border-radius:10px;margin-left:6px;background:#aaa;color:#fff;">—</span></h2>
+        <span style="font-size:0.78rem;color:#888;">last reading: <span id="ups-age">—</span></span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px;">
+        <div><div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Battery</div><div style="font-size:1.6rem;font-weight:700;" id="ups-bcharge">—</div></div>
+        <div><div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Runtime</div><div style="font-size:1.6rem;font-weight:700;" id="ups-runtime">—</div></div>
+        <div><div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Line Voltage</div><div style="font-size:1.6rem;font-weight:700;" id="ups-linev">—</div></div>
+        <div><div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Load</div><div style="font-size:1.6rem;font-weight:700;" id="ups-load">—</div></div>
+        <div><div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Battery V</div><div style="font-size:1.6rem;font-weight:700;" id="ups-battv">—</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:0.78rem;color:#666;">
+        Model: <span id="ups-model">—</span> · Serial: <span id="ups-serial">—</span> · Last transfer: <span id="ups-lastxfer">—</span>
+      </div>
+    </div>
+
+    <!-- Card 2: battery health (mini chart) -->
+    <div class="card">
+      <h2>Battery Health (last 7 days)</h2>
+      <div style="font-size:0.78rem;color:#666;margin-bottom:8px;">Battery voltage trend (BATTV). Healthy lead-acid sits around 27&nbsp;V at full charge. A persistent downward slope suggests battery aging.</div>
+      <div style="position:relative;height:220px;width:100%;">
+        <canvas id="ups-batt-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Card 3: tests -->
+    <div class="card">
+      <h2>Tests</h2>
+      <div style="font-size:0.78rem;color:#666;margin-bottom:8px;">Run on demand. Output appears below each button.</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div>
+          <button class="btn btn-secondary btn-sm" onclick="upsRunTest('apcaccess', this)">Test apcaccess (PVE)</button>
+          <pre id="ups-test-out-apcaccess" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto;"></pre>
+        </div>
+        <div>
+          <button class="btn btn-secondary btn-sm" onclick="upsRunTest('qnap_ssh', this)">Test SSH to QNAP</button>
+          <pre id="ups-test-out-qnap_ssh" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:120px;overflow:auto;"></pre>
+        </div>
+        <div>
+          <button class="btn btn-secondary btn-sm" onclick="upsRunTest('dryrun', this)">Test orchestrator (DRY RUN — SAFETY_MODE only)</button>
+          <pre id="ups-test-out-dryrun" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto;"></pre>
+        </div>
+        <div style="border-top:1px dashed #d4a017;padding-top:10px;margin-top:6px;">
+          <div style="font-size:0.78rem;color:#7a5a00;margin-bottom:6px;"><b>⚠ Going live</b> — only after pre-flight P1+P2 verified and PVE physically on UPS.</div>
+          <button class="btn btn-secondary btn-sm" onclick="if(confirm('Remove SAFETY_MODE flag? After this, the orchestrator will fire for real on BATTERYLEVEL trigger.')) upsRunTest('safety_off', this)" style="border-color:#c0392b;color:#c0392b;">Remove SAFETY_MODE</button>
+          <button class="btn btn-secondary btn-sm" onclick="upsRunTest('safety_on', this)">Restore SAFETY_MODE</button>
+          <pre id="ups-test-out-safety_off" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:80px;overflow:auto;"></pre>
+          <pre id="ups-test-out-safety_on" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:80px;overflow:auto;"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 4: events -->
+    <div class="card">
+      <h2>Recent Events <span style="font-size:0.72rem;color:#888;font-weight:500;">(/var/log/apcupsd.events on PVE)</span></h2>
+      <pre id="ups-events" style="background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto;">loading…</pre>
+    </div>
+
+  </div><!-- /tab-ups -->
+
 </main>
 
 <script>
@@ -579,6 +645,13 @@ function showHealthTab(name, btn) {
     loadWinStorages();
     loadWinJobs();
     loadWinLog();
+  }
+  // Load UPS tab lazily on first visit
+  if (name === 'ups' && !window._upsTabLoaded) {
+    window._upsTabLoaded = true;
+    upsLoadAll();
+    if (window._upsRefreshTimer) clearInterval(window._upsRefreshTimer);
+    window._upsRefreshTimer = setInterval(upsLoadLive, 60000); // refresh live card every 60s
   }
   // Load settings tab data lazily on first visit
   if (name === 'settings' && !window._settingsTabLoaded) {
@@ -625,6 +698,7 @@ async function deploy() {
 </script>
 <script src="js/alerts-monitor.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/health.js?v=4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="js/health.js?v=5"></script>
 </body>
 </html>

@@ -2927,6 +2927,60 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
       proxyReq.on('timeout', ()  => { proxyReq.destroy(); res.json({ value: null, error: 'timeout' }); });
       return;
     }
+    // UPS live — latest row from ups_status (populated by net-ups-poll on LXC 105 every 60 s)
+    if (req.params.key === '_ups_live') {
+      const r = await db.query(
+        `SELECT ts, status, battery_pct, runtime_min, line_volt, battery_volt,
+                load_pct, model, serial, last_xfer, raw,
+                EXTRACT(EPOCH FROM (NOW() - ts))::int AS age_sec
+           FROM ups_status ORDER BY ts DESC LIMIT 1`
+      );
+      return res.json({ value: r.rows[0] || null });
+    }
+    // UPS history — last N days for charts
+    if (req.params.key === '_ups_history') {
+      const days = Math.max(1, Math.min(30, parseInt(req.query.days, 10) || 7));
+      const r = await db.query(
+        `SELECT ts, battery_pct, runtime_min, line_volt, battery_volt, load_pct
+           FROM ups_status
+          WHERE ts > NOW() - ($1 || ' days')::interval
+          ORDER BY ts ASC`,
+        [days]
+      );
+      return res.json({ value: r.rows });
+    }
+    // UPS events — tail PVE's /var/log/apcupsd.events via SSH
+    if (req.params.key === '_ups_events') {
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
+        const r = await ssh.execCommand('tail -25 /var/log/apcupsd.events 2>&1');
+        ssh.dispose();
+        return res.json({ value: (r.stdout || '').trim().split('\n').filter(Boolean) });
+      } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
+    }
+    // UPS test runners — read-only or SAFETY_MODE-gated commands
+    if (req.params.key.startsWith('_ups_test_')) {
+      const testName = req.params.key.slice('_ups_test_'.length);
+      const cmds = {
+        apcaccess:  'apcaccess status | head -25',
+        qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin@192.168.1.155 "echo qnap-reachable"',
+        dryrun:     '/etc/apcupsd/doshutdown && tail -10 /var/log/apcupsd_shutdown.log',
+        safety_on:  'touch /etc/apcupsd/SAFETY_MODE && ls -la /etc/apcupsd/SAFETY_MODE',
+        safety_off: 'rm -f /etc/apcupsd/SAFETY_MODE && (ls /etc/apcupsd/SAFETY_MODE 2>&1 || echo "SAFETY_MODE removed — orchestrator will fire for real on next BATTERYLEVEL trigger")',
+      };
+      const cmd = cmds[testName];
+      if (!cmd) return res.status(400).json({ error: `unknown test '${testName}'` });
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
+        const r = await ssh.execCommand(cmd);
+        ssh.dispose();
+        return res.json({ value: { stdout: r.stdout, stderr: r.stderr, code: r.code } });
+      } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
+    }
     const r = await db.query('SELECT value, updated_at FROM dashboard_settings WHERE key = $1', [req.params.key]);
     res.json(r.rows.length ? { value: r.rows[0].value, updated_at: r.rows[0].updated_at } : { value: null });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2951,6 +3005,27 @@ app.post('/api/dashboard-settings/:key', async (req, res) => {
       proxyReq.write(body);
       proxyReq.end();
       return;
+    }
+    // UPS test runners — same allow-list as the GET branch (POST is more REST-correct since these have side effects)
+    if (req.params.key.startsWith('_ups_test_')) {
+      const testName = req.params.key.slice('_ups_test_'.length);
+      const cmds = {
+        apcaccess:  'apcaccess status | head -25',
+        qnap_ssh:   'timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519_ups admin@192.168.1.155 "echo qnap-reachable"',
+        dryrun:     '/etc/apcupsd/doshutdown && tail -10 /var/log/apcupsd_shutdown.log',
+        safety_on:  'touch /etc/apcupsd/SAFETY_MODE && ls -la /etc/apcupsd/SAFETY_MODE',
+        safety_off: 'rm -f /etc/apcupsd/SAFETY_MODE && (ls /etc/apcupsd/SAFETY_MODE 2>&1 || echo "SAFETY_MODE removed — orchestrator will fire for real on next BATTERYLEVEL trigger")',
+      };
+      const cmd = cmds[testName];
+      if (!cmd) return res.status(400).json({ error: `unknown test '${testName}'` });
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
+        const r = await ssh.execCommand(cmd);
+        ssh.dispose();
+        return res.json({ value: { stdout: r.stdout, stderr: r.stderr, code: r.code } });
+      } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
     }
     await db.query(
       `INSERT INTO dashboard_settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW())
