@@ -1368,14 +1368,28 @@ async function upsLoadSettings() {
     document.getElementById('ups-set-safety').textContent   = ({present:'On',absent:'Off'})[s.safety_mode] || s.safety_mode || '—';
     document.getElementById('ups-set-atboot').textContent   = ({enabled:'Yes',disabled:'No'})[s.at_boot]    || s.at_boot    || '—';
     // Binary state badge — SHUTDOWN OFF (safe state) vs SHUTDOWN ON (live).
-    // Colors preserved from the previous PARANOID-SAFE / PRODUCTION palette.
+    // Also drives the "Run orchestrator" button label/style so the user can
+    // see at a glance whether clicking it does a real halt or a logged dry-run.
     const badge = document.getElementById('ups-settings-badge');
+    const dryBtn = document.getElementById('ups-btn-dryrun');
     if (s.safety_mode === 'absent') {
       badge.textContent = 'SHUTDOWN ON';
       badge.style.background = '#c0392b';        // red — orchestrator armed for real shutdown
+      if (dryBtn) {
+        dryBtn.textContent = 'Run orchestrator (LIVE — will halt EVERYTHING)';
+        dryBtn.style.borderColor = '#c0392b';
+        dryBtn.style.color = '#c0392b';
+        dryBtn.dataset.armed = '1';
+      }
     } else if (s.safety_mode === 'present') {
       badge.textContent = 'SHUTDOWN OFF';
       badge.style.background = '#7a9f5a';        // green — safe state, orchestrator log-only
+      if (dryBtn) {
+        dryBtn.textContent = 'Run orchestrator (dry-run — SAFETY_MODE on, logs only)';
+        dryBtn.style.borderColor = '';
+        dryBtn.style.color = '';
+        dryBtn.dataset.armed = '0';
+      }
     } else {
       badge.textContent = '—';
       badge.style.background = '#aaa';
@@ -1776,3 +1790,21 @@ setInterval(() => {
   el.style.color = ageSec > 60 ? '#b55e5e' : '#888';
 }, 1000);
 window.upsRunTest = upsRunTest;
+
+// Click handler for the "Run orchestrator" button. Two modes:
+//   SAFETY_MODE present (button data-armed=0) → logged dry-run, no halt → fire directly
+//   SAFETY_MODE absent  (button data-armed=1) → REAL shutdown → require typed confirm
+function upsTriggerDryRun(btn) {
+  if (btn && btn.dataset.armed === '1') {
+    const msg = 'WARNING — SAFETY_MODE is OFF.\n\n' +
+                'This will run /etc/apcupsd/doshutdown for REAL:\n' +
+                '  • Halt QNAP (SSH poweroff)\n' +
+                '  • Stop every LXC and VM\n' +
+                '  • Halt PVE itself\n\n' +
+                'You will need to power-cycle the mini PC to bring it back.\n\n' +
+                'Type SHUTDOWN to proceed, or click Cancel to abort.';
+    if (prompt(msg) !== 'SHUTDOWN') return;
+  }
+  upsRunTest('dryrun', btn);
+}
+window.upsTriggerDryRun = upsTriggerDryRun;

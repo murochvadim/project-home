@@ -172,7 +172,24 @@ check_mains_or_abort "post-qnap-wait"
 # ensure the symlink. Cred lives in /etc/apcupsd/qnap_claude_pass (mode 600).
 if [ "$QNAP_BACK" = "yes" ]; then
   echo "[3.4/4] ensuring /share/homes symlink on QNAP"
-  if ssh -i /root/.ssh/id_ed25519_ups -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin123@192.168.1.155 'true' 2>/dev/null; then
+
+  # QNAP responds to ping ~80 s after WoL but sshd takes ~30-60 s longer to
+  # start listening. Wait for port 22 to be open before any SSH attempt —
+  # otherwise the symlink fix gets one chance and silently fails ("Connection
+  # refused"). Up to 90 s extra wait, in addition to the 120 s ping wait above.
+  SSH_READY=no
+  for i in $(seq 1 30); do
+    if timeout 3 bash -c "</dev/tcp/192.168.1.155/22" 2>/dev/null; then
+      echo "  QNAP sshd port 22 open after ${i} attempts (~$((i*3))s)"
+      SSH_READY=yes
+      break
+    fi
+    sleep 3
+  done
+
+  if [ "$SSH_READY" != "yes" ]; then
+    echo "  WARNING: QNAP sshd port 22 NOT open after 90 s — skipping symlink fix"
+  elif ssh -i /root/.ssh/id_ed25519_ups -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin123@192.168.1.155 'true' 2>/dev/null; then
     echo "  admin123 key auth OK -- symlink intact"
   else
     if [ -r /etc/apcupsd/qnap_claude_pass ]; then

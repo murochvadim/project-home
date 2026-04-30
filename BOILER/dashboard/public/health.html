@@ -693,7 +693,7 @@
           <pre id="ups-test-out-qnap_ssh" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:120px;overflow:auto;"></pre>
         </div>
         <div>
-          <button class="btn btn-secondary btn-sm" onclick="upsRunTest('dryrun', this)">Test orchestrator (DRY RUN — SAFETY_MODE only)</button>
+          <button id="ups-btn-dryrun" class="btn btn-secondary btn-sm" onclick="upsTriggerDryRun(this)">Run orchestrator</button>
           <pre id="ups-test-out-dryrun" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto;"></pre>
         </div>
         <div style="border-top:1px dashed #d4a017;padding-top:10px;margin-top:6px;">
@@ -824,6 +824,6 @@ async function deploy() {
 <script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=32"></script>
+<script src="js/health.js?v=33"></script>
 </body>
 </html>
