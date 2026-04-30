@@ -1,0 +1,17 @@
+[Unit]
+Description=Wait for UPS battery to recharge before pve-guests starts LXCs/VMs
+Documentation=https://github.com/local/UPS/CLAUDE.md
+After=apcupsd.service network-online.target
+Before=pve-guests.service
+Wants=apcupsd.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/apcupsd/wait_for_battery.sh
+TimeoutStartSec=620
+RemainAfterExit=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

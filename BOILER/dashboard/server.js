@@ -3038,7 +3038,7 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
         // Grep only the 5 known keys; recover.conf may not exist yet (Phase 4 install)
         const r = await ssh.execCommand(
           '[ -f /etc/apcupsd/recover.conf ] && ' +
-          'grep -E "^(RECOVER_AUTO|RECOVER_MIN_BCHARGE|RECOVER_REQUIRE_ONLINE_SEC|RECOVER_BOOT_DELAY_SEC|RECOVER_MARKER_MAX_AGE_HOURS)=" /etc/apcupsd/recover.conf || ' +
+          'grep -E "^(RECOVER_AUTO|RECOVER_MIN_BCHARGE|RECOVER_REQUIRE_ONLINE_SEC|RECOVER_BOOT_DELAY_SEC|RECOVER_MARKER_MAX_AGE_HOURS|BATTERY_GATE_PCT)=" /etc/apcupsd/recover.conf || ' +
           'echo "MISSING"'
         );
         ssh.dispose();
@@ -3056,6 +3056,7 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
           require_online_sec:         parseInt(conf.RECOVER_REQUIRE_ONLINE_SEC, 10),
           boot_delay_sec:             parseInt(conf.RECOVER_BOOT_DELAY_SEC, 10),
           marker_max_age_hours:       parseInt(conf.RECOVER_MARKER_MAX_AGE_HOURS, 10),
+          battery_gate_pct:           parseInt(conf.BATTERY_GATE_PCT, 10) || 0,
         }});
       } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
     }
@@ -3143,6 +3144,7 @@ app.post('/api/dashboard-settings/:key', async (req, res) => {
         require_online_sec:           { kind: 'recover_int', conf_key: 'RECOVER_REQUIRE_ONLINE_SEC',   min: 0, max: 600 },
         boot_delay_sec:               { kind: 'recover_int', conf_key: 'RECOVER_BOOT_DELAY_SEC',       min: 0, max: 600 },
         marker_max_age_hours:         { kind: 'recover_int', conf_key: 'RECOVER_MARKER_MAX_AGE_HOURS', min: 1, max: 720 },
+        battery_gate_pct:             { kind: 'recover_int', conf_key: 'BATTERY_GATE_PCT',            min: 0, max: 99  },
       };
       const meta = FIELDS[f];
       if (!meta) return res.status(400).json({ error: `unknown field '${f}'` });

@@ -569,12 +569,11 @@
       </div>
     </div>
 
-    <!-- Card 2: trigger settings (read-only snapshot of apcupsd.conf) -->
+    <!-- Card 2: Shutdown Settings -->
     <div class="card">
-      <!-- Shutdown Settings sub-section (mirrors Auto-Recovery Settings structure for symmetry) -->
       <div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
-          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Shutdown Settings</span><span id="ups-settings-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;">—</span></h3>
+          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Shutdown Settings</span><span id="ups-settings-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;min-width:130px;text-align:center;display:inline-block;">—</span></h3>
           <span style="font-size:0.72rem;color:#888;">live on PVE: <code>/etc/apcupsd/apcupsd.conf</code> · click any value to edit</span>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
@@ -604,17 +603,20 @@
           <div style="font-size:0.7rem;color:#888;">when ON, orchestrator only logs — no shutdown</div>
         </div>
         <div>
-          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Auto-start after PVE reboot</div>
+          <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">UPS protection after mini-PC restart</div>
           <div style="font-size:1.4rem;font-weight:700;" id="ups-set-atboot">—</div>
-          <div style="font-size:0.7rem;color:#888;">daemon resumes automatically on reboot</div>
+          <div style="font-size:0.7rem;color:#888;">when ON, the mini-PC keeps watching the UPS automatically after every reboot — no manual login needed</div>
         </div>
         </div>
       </div>
 
-      <!-- Auto-Recovery Settings (mirrors Shutdown Settings structure for symmetry) -->
-      <div style="border-top:1px solid #e0dbd4;margin-top:18px;padding-top:14px;">
+    </div>
+
+    <!-- Card 3: Auto-Recovery Settings (separate card for visual clarity) -->
+    <div class="card">
+      <div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
-          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Auto-Recovery Settings</span><span id="ups-recover-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;">—</span></h3>
+          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Auto-Recovery Settings</span><span id="ups-recover-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;min-width:130px;text-align:center;display:inline-block;">—</span></h3>
           <span style="font-size:0.72rem;color:#888;">live on PVE: <code>/etc/apcupsd/recover.conf</code> · click any value to edit</span>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
@@ -639,15 +641,20 @@
             <div style="font-size:0.7rem;color:#888;">s — settle time after PVE boots before checking gates</div>
           </div>
           <div>
-            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Marker max age (zombie filter)</div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Skip recovery if outage older than</div>
             <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-markerage">—</div>
-            <div style="font-size:0.7rem;color:#888;">h — ignore markers older than this</div>
+            <div style="font-size:0.7rem;color:#888;">hours — if the mini-PC was off longer than this, treat the outage as old news and just boot normally without auto-recovery</div>
+          </div>
+          <div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Wait for battery before starting guests</div>
+            <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-battgate">—</div>
+            <div style="font-size:0.7rem;color:#888;">% — on every PVE boot, hold off starting LXCs/VMs until the UPS battery has recharged to this level. <code style="opacity:.6;">0 = off</code>. Protects against a second short outage hitting while battery is still low</div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Card 3: shutdown propagation — live state + Shutdown / Recover buttons + per-device checkboxes -->
+    <!-- Card 4: shutdown propagation — live state + Shutdown / Recover buttons (operate on ALL devices, always) -->
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
         <h2 style="margin:0;">Shutdown Propagation</h2>
@@ -656,17 +663,14 @@
           <button id="ups-btn-recover"  class="btn btn-secondary btn-sm" style="border-color:#2e7d32;color:#2e7d32;" onclick="upsRecover(this)">Recover</button>
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;font-size:0.75rem;color:#666;margin-top:6px;">
-        <label style="cursor:pointer;display:flex;align-items:center;gap:5px;">
-          <input type="checkbox" id="ups-select-all" checked onchange="upsToggleAll(this)">
-          <span>select all / none</span>
-        </label>
+      <div style="font-size:0.75rem;color:#666;margin-top:6px;display:flex;align-items:center;">
+        <span>Shutdown halts every device. Recover restarts every device. No per-device selection.</span>
         <span id="ups-inventory-status" style="margin-left:auto;color:#888;">—</span>
       </div>
       <div id="ups-inventory" style="margin-top:8px;">Loading…</div>
     </div>
 
-    <!-- Card 4: battery health (mini chart) -->
+    <!-- Card 5: battery health (mini chart) -->
     <div class="card">
       <h2>Battery Health (last 7 days)</h2>
       <div style="font-size:0.78rem;color:#666;margin-bottom:8px;">Battery voltage trend (BATTV). Healthy lead-acid sits around 27&nbsp;V at full charge. A persistent downward slope suggests battery aging.</div>
@@ -675,7 +679,7 @@
       </div>
     </div>
 
-    <!-- Card 3: tests -->
+    <!-- Card 6: tests -->
     <div class="card">
       <h2>Tests</h2>
       <div style="font-size:0.78rem;color:#666;margin-bottom:8px;">Run on demand. Output appears below each button.</div>
@@ -820,6 +824,6 @@ async function deploy() {
 <script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=27"></script>
+<script src="js/health.js?v=32"></script>
 </body>
 </html>

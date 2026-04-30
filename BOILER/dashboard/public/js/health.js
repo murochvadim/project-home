@@ -1372,10 +1372,10 @@ async function upsLoadSettings() {
     const badge = document.getElementById('ups-settings-badge');
     if (s.safety_mode === 'absent') {
       badge.textContent = 'SHUTDOWN ON';
-      badge.style.background = '#2e7d32';        // production green — live
+      badge.style.background = '#c0392b';        // red — orchestrator armed for real shutdown
     } else if (s.safety_mode === 'present') {
       badge.textContent = 'SHUTDOWN OFF';
-      badge.style.background = '#7a9f5a';        // paranoid-safe green-ish — installed but disabled
+      badge.style.background = '#7a9f5a';        // green — safe state, orchestrator log-only
     } else {
       badge.textContent = '—';
       badge.style.background = '#aaa';
@@ -1407,6 +1407,8 @@ const _UPS_FIELD_BY_DOM = {
   'ups-rec-online':    { field: 'require_online_sec',    type: 'int',  min: 0, max: 600, unit: 's' },
   'ups-rec-bootdelay': { field: 'boot_delay_sec',        type: 'int',  min: 0, max: 600, unit: 's' },
   'ups-rec-markerage': { field: 'marker_max_age_hours',  type: 'int',  min: 1, max: 720, unit: 'h' },
+  'ups-rec-battgate':  { field: 'battery_gate_pct',      type: 'int',  min: 0, max: 99,  unit: '%',
+                         confirmAt: v => parseInt(v,10) >= 70 ? 'High gate (≥70 %) — guests may stay off for 30+ min after a deep outage while UPS recharges. Confirm?' : null },
 };
 
 // Attach click-to-edit on all editable tiles. Idempotent — safe to re-call
@@ -1504,7 +1506,7 @@ async function upsLoadRecoverSettings() {
     if (!s || !s.installed) {
       badge.textContent = 'NOT INSTALLED';
       badge.style.background = '#aaa';
-      ['ups-rec-auto','ups-rec-bcharge','ups-rec-online','ups-rec-bootdelay','ups-rec-markerage']
+      ['ups-rec-auto','ups-rec-bcharge','ups-rec-online','ups-rec-bootdelay','ups-rec-markerage','ups-rec-battgate']
         .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
       return;
     }
@@ -1514,6 +1516,7 @@ async function upsLoadRecoverSettings() {
     document.getElementById('ups-rec-online').textContent    = fmt(s.require_online_sec, ' s');
     document.getElementById('ups-rec-bootdelay').textContent = fmt(s.boot_delay_sec, ' s');
     document.getElementById('ups-rec-markerage').textContent = fmt(s.marker_max_age_hours, ' h');
+    document.getElementById('ups-rec-battgate').textContent  = (s.battery_gate_pct === 0) ? 'Off' : fmt(s.battery_gate_pct, ' %');
     if (s.recover_auto === 'yes') {
       badge.textContent = 'AUTO-RECOVER ON';
       badge.style.background = '#2e7d32';
@@ -1593,32 +1596,24 @@ function _upsRenderRows(inv) {
       ? (isRunning ? 'online'  : 'offline')
       : (isRunning ? 'running' : 'stopped');
     const idCol = d.kind === 'qnap' ? '' : `<span style="color:#888;width:38px;display:inline-block;text-align:right;">${d.id}</span>`;
-    // Timing column — duration in current state (always shown after the
-    // first observation), with extra precision during active actions.
-    let took = '—';
+    // Timing column — only shown DURING an action, where we have a real
+    // anchor (action start time). In idle, we have no real transition
+    // timestamp, so showing "for 5m" would be misleading (it'd actually
+    // be "since the page first observed this state"). Drop it in idle.
+    let took = '';
     const k = _upsKey(d);
     if (_upsAction) {
       const t = _upsAction.doneAt[k];
       if (t != null) {
-        // We just transitioned during this action — show the seconds it took
-        took = `${Math.round(t / 1000)} s`;
+        took = `${Math.round(t / 1000)} s`;            // real transition time
       } else if (_upsIsTargetState(_upsAction.action, isRunning)) {
-        // Transition is happening right now (target state reached this poll)
         took = `${Math.round((Date.now() - _upsAction.startedAt) / 1000)} s`;
       } else {
-        // Still in pre-action state during the action — running clock
         took = '…';
       }
-    } else {
-      // Idle polling — show how long we've been observing the current state
-      const trk = _upsStateSince[k];
-      if (trk && trk.state === lbl) took = _upsFmtDuration(Date.now() - trk.sinceTs);
     }
     const border = i < _UPS_DEVICES.length - 1 ? 'border-bottom:1px solid rgba(0,0,0,0.08);' : '';
-    // Checkbox: token = "qnap" or numeric id, used for SELECTION env var
-    const token = d.kind === 'qnap' ? 'qnap' : String(d.id);
     return `<div style="display:flex;align-items:center;gap:10px;padding:7px 4px;${border}font-family:monospace;font-size:0.85rem;">
-      <input type="checkbox" class="ups-dev-cb" data-token="${token}" checked onchange="upsCbChanged()" style="cursor:pointer;">
       <span style="color:${color};width:14px;">${dot}</span>
       ${idCol}
       <span style="flex:1;font-family:inherit;">${d.label}</span>
@@ -1629,29 +1624,10 @@ function _upsRenderRows(inv) {
 }
 
 // Master toggle: select all / none.
-function upsToggleAll(master) {
-  document.querySelectorAll('.ups-dev-cb').forEach(cb => { cb.checked = master.checked; });
-}
-window.upsToggleAll = upsToggleAll;
-
-// Keep the master checkbox in sync when user clicks individual rows.
-function upsCbChanged() {
-  const all = document.querySelectorAll('.ups-dev-cb');
-  const checkedN = Array.from(all).filter(cb => cb.checked).length;
-  const master = document.getElementById('ups-select-all');
-  if (master) {
-    master.checked = checkedN === all.length;
-    master.indeterminate = checkedN > 0 && checkedN < all.length;
-  }
-}
-window.upsCbChanged = upsCbChanged;
-
-// Returns the list of currently-checked tokens — what we send to the server.
-function _upsSelectedTokens() {
-  return Array.from(document.querySelectorAll('.ups-dev-cb'))
-    .filter(cb => cb.checked)
-    .map(cb => cb.dataset.token);
-}
+// Always-all-devices: per the user's "UPS recovery/shutdown always = ALL"
+// rule, the per-device checkboxes were removed. The action runner sends an
+// empty `devices` array so the server's recovery/shutdown helpers fall back
+// to their "no SELECTION = act on every device" code path.
 
 async function upsLoadInventory() {
   const box = document.getElementById('ups-inventory');
@@ -1687,6 +1663,7 @@ async function upsLoadInventory() {
       }
     }
     _upsLastInv = inv;
+    window._upsLastRefresh = Date.now();
     box.innerHTML = _upsRenderRows(inv);
   } catch (e) {
     box.innerHTML = `<span style="color:#c0392b;">error: ${e.message}</span>`;
@@ -1705,21 +1682,12 @@ function _upsLockButtons(disabled) {
 }
 
 async function _upsRunAction(actionName, confirmWord, endpoint, statusLabel, refuseWhen) {
-  // Refusal cases
-  const tokens = _upsSelectedTokens();
-  if (tokens.length === 0) {
-    alert('Select at least one device.');
-    return;
-  }
   if (typeof refuseWhen === 'function') {
-    const reason = refuseWhen(tokens, _upsLastInv);
+    const reason = refuseWhen(_upsLastInv);
     if (reason) { alert(reason); return; }
   }
-  // Confirm with the list of devices the user is about to act on
-  const labels = _UPS_DEVICES
-    .filter(d => tokens.includes(d.kind === 'qnap' ? 'qnap' : String(d.id)))
-    .map(d => '  • ' + d.label).join('\n');
-  const msg = `WARNING — ${statusLabel} on these ${tokens.length} device(s):\n${labels}\n\nType ${confirmWord} to proceed, or click Cancel to abort.`;
+  const labels = _UPS_DEVICES.map(d => '  • ' + d.label).join('\n');
+  const msg = `WARNING — ${statusLabel} on ALL ${_UPS_DEVICES.length} device(s):\n${labels}\n\nType ${confirmWord} to proceed, or click Cancel to abort.`;
   if (prompt(msg) !== confirmWord) return;
 
   _upsAction = { action: actionName, startedAt: Date.now(), doneAt: {} };
@@ -1731,7 +1699,8 @@ async function _upsRunAction(actionName, confirmWord, endpoint, statusLabel, ref
     await fetch('/api/dashboard-settings/' + endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: { trigger: actionName, ts: Date.now(), devices: tokens } }),
+      // Empty devices array = no SELECTION env on the server side = act on all
+      body: JSON.stringify({ value: { trigger: actionName, ts: Date.now() } }),
     });
   } catch (e) { /* keep going to final refreshes */ }
   clearInterval(_upsPollHandle); _upsPollHandle = null;
@@ -1740,40 +1709,32 @@ async function _upsRunAction(actionName, confirmWord, endpoint, statusLabel, ref
   _upsLockButtons(false);
   const elapsed = Math.round((Date.now() - _upsAction.startedAt) / 1000);
   _upsSetStatus(`${statusLabel} complete (${elapsed} s elapsed)`, '#2e7d32');
+  // Clear the action session so the background poll (every 5 s) resumes
+  // taking over for live ●/○ updates. Keep the elapsed-status message
+  // showing — the row's per-device "took N s" was already rendered.
+  _upsAction = null;
 }
 
 async function upsShutdown(btn) {
   await _upsRunAction('shutdown', 'SHUTDOWN', '_ups_test_rehearse',
     'Shutdown',
-    (tokens, inv) => {
-      // Refuse if every selected device is already stopped
+    (inv) => {
       if (!inv) return null;
-      const anyRunning = tokens.some(t => {
-        if (t === 'qnap') return inv.qnap_reachable;
-        const id = parseInt(t, 10);
-        const lxc = (inv.lxcs || []).find(x => x.id === id);
-        if (lxc) return lxc.status === 'running';
-        const vm  = (inv.vms  || []).find(x => x.id === id);
-        return vm && vm.status === 'running';
-      });
-      return anyRunning ? null : 'All selected devices are already stopped.';
+      const anyRunning = inv.qnap_reachable
+        || (inv.lxcs || []).some(x => x.status === 'running')
+        || (inv.vms  || []).some(x => x.status === 'running');
+      return anyRunning ? null : 'Everything is already stopped.';
     });
 }
 async function upsRecover(btn) {
   await _upsRunAction('recover', 'RECOVER', '_ups_test_recover',
     'Recovery',
-    (tokens, inv) => {
-      // Refuse if every selected device is already running
+    (inv) => {
       if (!inv) return null;
-      const anyStopped = tokens.some(t => {
-        if (t === 'qnap') return !inv.qnap_reachable;
-        const id = parseInt(t, 10);
-        const lxc = (inv.lxcs || []).find(x => x.id === id);
-        if (lxc) return lxc.status !== 'running';
-        const vm  = (inv.vms  || []).find(x => x.id === id);
-        return vm && vm.status !== 'running';
-      });
-      return anyStopped ? null : 'All selected devices are already running.';
+      const anyStopped = !inv.qnap_reachable
+        || (inv.lxcs || []).some(x => x.status !== 'running')
+        || (inv.vms  || []).some(x => x.status !== 'running');
+      return anyStopped ? null : 'Everything is already running.';
     });
 }
 window.upsShutdown = upsShutdown;
@@ -1787,4 +1748,31 @@ function upsLoadAll() {
   upsLoadRecoverSettings();
   upsLoadInventory();
 }
+
+// Background auto-refresh — keeps the Shutdown Propagation card + UPS live
+// status fresh when the UPS tab is active. 30s is the right rate: each
+// inventory poll SSHes to PVE (pct/qm/QNAP-SSH = ~1-2s of work). State
+// transitions (halt/recover) take 5-60s, so 30s is fast enough to catch
+// them in 1-2 ticks while keeping idle SSH duty-cycle near 5%. During an
+// active shutdown/recover session, the action handler runs its own 2s
+// poll (faster feedback while operations are in flight) — skipped here
+// to avoid double-polling.
+setInterval(() => {
+  if (!document.getElementById('tab-ups')?.classList.contains('active')) return;
+  if (_upsAction) return;
+  upsLoadInventory();
+  upsLoadLive();
+}, 30000);
+
+// "Last refreshed" indicator on the inventory status line — updates every
+// 1 s so the user can tell data freshness honestly. Set by upsLoadInventory
+// (`_upsLastRefresh`). Goes red after 60 s without refresh = something stuck.
+setInterval(() => {
+  const el = document.getElementById('ups-inventory-status');
+  if (!el || !window._upsLastRefresh || _upsAction) return;
+  const ageSec = Math.round((Date.now() - window._upsLastRefresh) / 1000);
+  const ts = new Date(window._upsLastRefresh).toLocaleTimeString();
+  el.textContent = `last refresh: ${ts} (${ageSec}s ago)`;
+  el.style.color = ageSec > 60 ? '#b55e5e' : '#888';
+}, 1000);
 window.upsRunTest = upsRunTest;

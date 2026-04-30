@@ -54,7 +54,10 @@ def coerce_numeric(s: str):
 
 
 def main():
-    proc = subprocess.run(['/usr/sbin/apcaccess', 'status'],
+    # Query master directly via NIS — the local slave only forwards a subset of
+    # fields (just STATUS, no BCHARGE/TIMELEFT/LINEV/BATTV). Going to the master
+    # at 192.168.1.101:3551 returns the full apcaccess key set.
+    proc = subprocess.run(['/usr/sbin/apcaccess', 'status', '192.168.1.101:3551'],
                           capture_output=True, text=True, timeout=10)
     if proc.returncode != 0:
         print(f'[ups_poll] apcaccess failed (rc={proc.returncode}): {proc.stderr[:200]}')
