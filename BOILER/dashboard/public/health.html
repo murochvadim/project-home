@@ -646,9 +646,9 @@
             <div style="font-size:0.7rem;color:#888;">hours — if the mini-PC was off longer than this, treat the outage as old news and just boot normally without auto-recovery</div>
           </div>
           <div>
-            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Wait for battery before starting guests</div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Wait for battery before starting Proxmox mini PC</div>
             <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-battgate">—</div>
-            <div style="font-size:0.7rem;color:#888;">% — on every PVE boot, hold off starting LXCs/VMs until the UPS battery has recharged to this level. <code style="opacity:.6;">0 = off</code>. Protects against a second short outage hitting while battery is still low</div>
+            <div style="font-size:0.7rem;color:#888;">% — when the mini PC boots back up, hold off starting LXCs and VMs until the UPS battery has recharged to this level. <code style="opacity:.6;">0 = off</code>. Protects against a second short outage hitting while battery is still low</div>
           </div>
         </div>
       </div>
@@ -706,7 +706,7 @@
       </div>
     </div>
 
-    <!-- Card 4: events -->
+    <!-- Card 7: events -->
     <div class="card">
       <h2>Recent Events <span style="font-size:0.72rem;color:#888;font-weight:500;">(/var/log/apcupsd.events on PVE)</span></h2>
       <div id="ups-events-mtime" style="font-size:0.72rem;color:#888;margin-bottom:6px;"></div>
