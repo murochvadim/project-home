@@ -15,13 +15,32 @@ echo "================================================================"
 
 set +e
 
-# Phase classification — keep in sync with /etc/apcupsd/doshutdown
-CLIENT_LXCS=(100 103 104 105 106)
-CLIENT_VMS=(101)
-SERVICE_LXCS=(102 107)
+# Phase classification — keep in sync with /etc/apcupsd/doshutdown.
+# Numerical order across mixed LXCs / VMs: 100, 101, 103, 104, 105, 106.
+PHASE_A_CLIENTS=(100:lxc 101:vm 103:lxc 104:lxc 105:lxc 106:lxc)
+PHASE_B_SERVICES=(102:lxc 107:lxc)
 
 is_running_lxc() { pct status "$1" 2>/dev/null | grep -q running; }
 is_running_vm()  { qm  status "$1" 2>/dev/null | grep -q running; }
+
+shutdown_one() {
+  local id="${1%:*}" type="${1#*:}" timeout="$2"
+  if [ "$type" = "lxc" ]; then
+    if is_running_lxc "$id"; then
+      echo "  pct shutdown $id (LXC, ${timeout}s timeout)"
+      pct shutdown "$id" --forceStop 1 --timeout "$timeout" &
+    else
+      echo "  LXC $id — already stopped, skipping"
+    fi
+  else
+    if is_running_vm "$id"; then
+      echo "  qm shutdown $id (VM, ${timeout}s timeout)"
+      qm shutdown "$id" --forceStop --timeout "$timeout" &
+    else
+      echo "  VM $id — already stopped, skipping"
+    fi
+  fi
+}
 
 # ---- [1] QNAP ----
 echo "[1/4] poweroff QNAP (192.168.1.155)"
@@ -29,36 +48,18 @@ timeout 12 /etc/apcupsd/qnap_halt.sh \
   && echo "  QNAP halt issued (CGI)" \
   || echo "  QNAP halt failed / unreachable (continuing)"
 
-# ---- [2] Phase A — CLIENTS ----
+# ---- [2] Phase A — CLIENTS (numerical order: 100, 101, 103, 104, 105, 106) ----
 echo "[2/4] Phase A — clients (parallel, 60 s timeout)"
-for id in "${CLIENT_LXCS[@]}"; do
-  if is_running_lxc "$id"; then
-    echo "  pct shutdown $id (LXC)"
-    pct shutdown "$id" --forceStop 1 --timeout 60 &
-  else
-    echo "  LXC $id — already stopped, skipping"
-  fi
-done
-for id in "${CLIENT_VMS[@]}"; do
-  if is_running_vm "$id"; then
-    echo "  qm shutdown $id (VM, --timeout 60)"
-    qm shutdown "$id" --forceStop --timeout 60 &
-  else
-    echo "  VM $id — already stopped, skipping"
-  fi
+for entry in "${PHASE_A_CLIENTS[@]}"; do
+  shutdown_one "$entry" 60
 done
 wait
 echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase A clients stopped"
 
-# ---- [3] Phase B — SERVICES ----
+# ---- [3] Phase B — SERVICES (102 Postgres, 107 MQTT) ----
 echo "[3/4] Phase B — services (parallel, 30 s timeout)"
-for id in "${SERVICE_LXCS[@]}"; do
-  if is_running_lxc "$id"; then
-    echo "  pct shutdown $id (LXC service)"
-    pct shutdown "$id" --forceStop 1 --timeout 30 &
-  else
-    echo "  LXC $id — already stopped, skipping"
-  fi
+for entry in "${PHASE_B_SERVICES[@]}"; do
+  shutdown_one "$entry" 30
 done
 wait
 echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase B services stopped"
