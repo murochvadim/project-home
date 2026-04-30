@@ -161,6 +161,38 @@ fi
 # Mains check #3 — after QNAP wait, before starting QNAP-dependent LXCs
 check_mains_or_abort "post-qnap-wait"
 
+# ---- 3.4. Ensure QNAP /share/homes symlink (QTS quirk on cold boot) ----
+# Why: after a QNAP cold boot the /share/homes symlink is sometimes missing.
+# admin123 home dir + .ssh/authorized_keys are still on the volume at
+# /share/CACHEDEV1_DATA/homes/admin123/.ssh/, but sshd cannot follow the path
+# because the symlink was not recreated. Without this fix, key auth as admin123
+# breaks → orchestrator's QNAP shutdown step fails silently in the next outage.
+# Fix: SSH as claude (SMB cred — claude is in administrators group, /share/ is
+# drwxrwxrwt sticky-world-writable so symlink creation does not need root) and
+# ensure the symlink. Cred lives in /etc/apcupsd/qnap_claude_pass (mode 600).
+if [ "$QNAP_BACK" = "yes" ]; then
+  echo "[3.4/4] ensuring /share/homes symlink on QNAP"
+  if ssh -i /root/.ssh/id_ed25519_ups -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin123@192.168.1.155 'true' 2>/dev/null; then
+    echo "  admin123 key auth OK -- symlink intact"
+  else
+    if [ -r /etc/apcupsd/qnap_claude_pass ]; then
+      QNAP_CLAUDE_PASS=$(cat /etc/apcupsd/qnap_claude_pass)
+      echo "  admin123 key auth broken -- re-creating symlink as claude"
+      sshpass -p "$QNAP_CLAUDE_PASS" ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=8 claude@192.168.1.155 \
+        'ln -sfn /share/CACHEDEV1_DATA/homes /share/homes' 2>&1 | sed 's/^/    /'
+      if ssh -i /root/.ssh/id_ed25519_ups -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin123@192.168.1.155 'true' 2>/dev/null; then
+        echo "  symlink restored -- admin123 key auth now works"
+      else
+        echo "  WARNING: symlink creation may have failed -- admin123 key auth still broken"
+      fi
+    else
+      echo "  /etc/apcupsd/qnap_claude_pass missing -- cannot auto-fix (manual: ssh claude@QNAP and ln -s)"
+    fi
+  fi
+else
+  echo "[3.4/4] SKIPPED -- QNAP not back, cannot fix symlink"
+fi
+
 # ---- 3.5. Re-trigger PVE NFS/CIFS mounts now that QNAP is up ----
 # Why: fstab entries with _netdev,nofail silently fail at boot if QNAP was not
 # online yet. mount -a is idempotent — it only mounts what is not already mounted.
