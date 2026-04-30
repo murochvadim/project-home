@@ -1,0 +1,85 @@
+#!/bin/bash
+# /etc/apcupsd/doshutdown — invoked by apccontrol on battery-low.
+#
+# Phased shutdown sequence (added 2026-04-30) protects against transactions
+# rolled back when Postgres or MQTT die while clients are still mid-write:
+#
+#   [1] QNAP halt (CGI) — issued first, has its own boot-down sequence
+#   [2] Phase A — clients in parallel (60 s): 100, 101, 103, 104, 105, 106
+#       things that write to Postgres / MQTT must finish before services die
+#   [3] Phase B — services in parallel (30 s): 102 (Postgres), 107 (MQTT)
+#       safe to halt now — nobody is writing
+#   [4] Write Phase 4 marker → halt PVE
+#
+# SAFETY_MODE: if /etc/apcupsd/SAFETY_MODE exists, log only — DO NOT shutdown.
+# Remove that file once you have verified the dry-run + KILLPOWER tests.
+
+LOG=/var/log/apcupsd_shutdown.log
+exec >> "$LOG" 2>&1
+echo
+echo "================================================================"
+echo "$(date +%Y-%m-%d_%H:%M:%S) — apcupsd doshutdown invoked"
+echo "================================================================"
+
+if [ -f /etc/apcupsd/SAFETY_MODE ]; then
+  echo "[SAFETY MODE] /etc/apcupsd/SAFETY_MODE exists — would have run orchestrator + shutdown PVE."
+  echo "[SAFETY MODE] No action taken. Remove the file to enable real shutdown."
+  exit 0
+fi
+
+set +e
+
+# Phase classification — see UPS/CLAUDE.md "Phased shutdown"
+CLIENT_LXCS=(100 103 104 105 106)   # write to Postgres / MQTT
+CLIENT_VMS=(101)                     # HA — recorder + MQTT integration
+SERVICE_LXCS=(102 107)               # 102 Postgres, 107 MQTT
+
+is_running_lxc() { pct status "$1" 2>/dev/null | grep -q running; }
+is_running_vm()  { qm  status "$1" 2>/dev/null | grep -q running; }
+
+# ---- [1] External peer: QNAP ----
+echo "[1/4] poweroff QNAP (192.168.1.155)"
+timeout 12 /etc/apcupsd/qnap_halt.sh \
+  && echo "  QNAP halt issued (CGI)" \
+  || echo "  QNAP halt failed / unreachable (continuing)"
+
+# ---- [2] Phase A — CLIENTS in parallel ----
+echo "[2/4] Phase A — clients (parallel, 60 s timeout)"
+for id in "${CLIENT_LXCS[@]}"; do
+  if is_running_lxc "$id"; then
+    echo "  pct shutdown $id (LXC)"
+    pct shutdown "$id" --forceStop 1 --timeout 60 &
+  else
+    echo "  LXC $id — already stopped, skipping"
+  fi
+done
+for id in "${CLIENT_VMS[@]}"; do
+  if is_running_vm "$id"; then
+    echo "  qm shutdown $id (VM, --timeout 60)"
+    qm shutdown "$id" --forceStop --timeout 60 &
+  else
+    echo "  VM $id — already stopped, skipping"
+  fi
+done
+wait
+echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase A clients stopped"
+
+# ---- [3] Phase B — SERVICES in parallel ----
+echo "[3/4] Phase B — services (parallel, 30 s timeout)"
+for id in "${SERVICE_LXCS[@]}"; do
+  if is_running_lxc "$id"; then
+    echo "  pct shutdown $id (LXC service)"
+    pct shutdown "$id" --forceStop 1 --timeout 30 &
+  else
+    echo "  LXC $id — already stopped, skipping"
+  fi
+done
+wait
+echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase B services stopped"
+
+sleep 5
+
+echo "[4/4] $(date +%Y-%m-%d_%H:%M:%S) guests stopped, halting PVE"
+# A1: write the "UPS halted me" marker for apcupsd-auto-recover.service
+echo "ups_$(date +%s)" > /etc/apcupsd/last_shutdown_reason
+exec /sbin/shutdown -h now "UPS battery low — controlled shutdown"

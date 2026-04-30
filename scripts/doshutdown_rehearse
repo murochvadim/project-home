@@ -1,0 +1,68 @@
+#!/bin/bash
+# /etc/apcupsd/doshutdown_rehearse — same orchestration as /etc/apcupsd/doshutdown
+# but without the final PVE halt. Used by the dashboard's "Shutdown" button on
+# the Shutdown Propagation card so the user can verify the halt sequence end-to-end
+# without needing to physically power-cycle the mini-PC.
+#
+# Phased: same A → B as the real one (see UPS/CLAUDE.md "Phased shutdown").
+
+LOG=/var/log/apcupsd_shutdown.log
+exec >> "$LOG" 2>&1
+echo
+echo "================================================================"
+echo "$(date +%Y-%m-%d_%H:%M:%S) — REHEARSAL (PVE stays up)"
+echo "================================================================"
+
+set +e
+
+# Phase classification — keep in sync with /etc/apcupsd/doshutdown
+CLIENT_LXCS=(100 103 104 105 106)
+CLIENT_VMS=(101)
+SERVICE_LXCS=(102 107)
+
+is_running_lxc() { pct status "$1" 2>/dev/null | grep -q running; }
+is_running_vm()  { qm  status "$1" 2>/dev/null | grep -q running; }
+
+# ---- [1] QNAP ----
+echo "[1/4] poweroff QNAP (192.168.1.155)"
+timeout 12 /etc/apcupsd/qnap_halt.sh \
+  && echo "  QNAP halt issued (CGI)" \
+  || echo "  QNAP halt failed / unreachable (continuing)"
+
+# ---- [2] Phase A — CLIENTS ----
+echo "[2/4] Phase A — clients (parallel, 60 s timeout)"
+for id in "${CLIENT_LXCS[@]}"; do
+  if is_running_lxc "$id"; then
+    echo "  pct shutdown $id (LXC)"
+    pct shutdown "$id" --forceStop 1 --timeout 60 &
+  else
+    echo "  LXC $id — already stopped, skipping"
+  fi
+done
+for id in "${CLIENT_VMS[@]}"; do
+  if is_running_vm "$id"; then
+    echo "  qm shutdown $id (VM, --timeout 60)"
+    qm shutdown "$id" --forceStop --timeout 60 &
+  else
+    echo "  VM $id — already stopped, skipping"
+  fi
+done
+wait
+echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase A clients stopped"
+
+# ---- [3] Phase B — SERVICES ----
+echo "[3/4] Phase B — services (parallel, 30 s timeout)"
+for id in "${SERVICE_LXCS[@]}"; do
+  if is_running_lxc "$id"; then
+    echo "  pct shutdown $id (LXC service)"
+    pct shutdown "$id" --forceStop 1 --timeout 30 &
+  else
+    echo "  LXC $id — already stopped, skipping"
+  fi
+done
+wait
+echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase B services stopped"
+
+sleep 5
+echo "[4/4] $(date +%Y-%m-%d_%H:%M:%S) — selected guests stopped, PVE stays up (rehearsal)"
+echo "================================================================"
