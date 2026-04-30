@@ -39,18 +39,25 @@ is_running_lxc() { pct status "$1" 2>/dev/null | grep -q running; }
 is_running_vm()  { qm  status "$1" 2>/dev/null | grep -q running; }
 
 shutdown_one() {
+  # Sequential — blocks until the guest is stopped (or pct/qm timeout fires)
+  # so the next guest in the list does not start shutting down until this
+  # one is fully halted. Predictable numerical order in the logs, no I/O
+  # contention from concurrent guest halts.
   local id="${1%:*}" type="${1#*:}" timeout="$2"
+  local t0=$(date +%s)
   if [ "$type" = "lxc" ]; then
     if is_running_lxc "$id"; then
-      echo "  pct shutdown $id (LXC, ${timeout}s timeout)"
-      pct shutdown "$id" --forceStop 1 --timeout "$timeout" &
+      echo "  pct shutdown $id (LXC, ${timeout}s max) — waiting…"
+      pct shutdown "$id" --forceStop 1 --timeout "$timeout"
+      echo "    → LXC $id stopped (took $(( $(date +%s) - t0 ))s)"
     else
       echo "  LXC $id — already stopped, skipping"
     fi
   else
     if is_running_vm "$id"; then
-      echo "  qm shutdown $id (VM, ${timeout}s timeout)"
-      qm shutdown "$id" --forceStop --timeout "$timeout" &
+      echo "  qm shutdown $id (VM, ${timeout}s max) — waiting…"
+      qm shutdown "$id" --forceStop --timeout "$timeout"
+      echo "    → VM $id stopped (took $(( $(date +%s) - t0 ))s)"
     else
       echo "  VM $id — already stopped, skipping"
     fi
@@ -63,20 +70,18 @@ timeout 12 /etc/apcupsd/qnap_halt.sh \
   && echo "  QNAP halt issued (CGI)" \
   || echo "  QNAP halt failed / unreachable (continuing)"
 
-# ---- [2] Phase A — CLIENTS in parallel (numerical order: 100, 101, 103, 104, 105, 106) ----
-echo "[2/4] Phase A — clients (parallel, 60 s timeout)"
+# ---- [2] Phase A — CLIENTS sequential (100 → 101 → 103 → 104 → 105 → 106) ----
+echo "[2/4] Phase A — clients (sequential, 60 s per guest max)"
 for entry in "${PHASE_A_CLIENTS[@]}"; do
   shutdown_one "$entry" 60
 done
-wait
 echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase A clients stopped"
 
-# ---- [3] Phase B — SERVICES in parallel (102 Postgres, 107 MQTT) ----
-echo "[3/4] Phase B — services (parallel, 30 s timeout)"
+# ---- [3] Phase B — SERVICES sequential (102 Postgres → 107 MQTT) ----
+echo "[3/4] Phase B — services (sequential, 30 s per guest max)"
 for entry in "${PHASE_B_SERVICES[@]}"; do
   shutdown_one "$entry" 30
 done
-wait
 echo "  $(date +%Y-%m-%d_%H:%M:%S) — Phase B services stopped"
 
 sleep 5
