@@ -1555,13 +1555,13 @@ async function upsLoadRecoverSettings() {
 const _UPS_DEVICES = [
   { kind: 'qnap', label: 'QNAP NAS' },
   { kind: 'lxc',  id: 100, label: 'Media' },
+  { kind: 'vm',   id: 101, label: 'Home Assistant' },
   { kind: 'lxc',  id: 102, label: 'Postgres' },
   { kind: 'lxc',  id: 103, label: 'Agents' },
   { kind: 'lxc',  id: 104, label: 'Servers' },
   { kind: 'lxc',  id: 105, label: 'Main Agent' },
   { kind: 'lxc',  id: 106, label: 'Voice' },
   { kind: 'lxc',  id: 107, label: 'MQTT' },
-  { kind: 'vm',   id: 101, label: 'Home Assistant' },
 ];
 
 // Per-action session: tracks when an action started + per-device transition
