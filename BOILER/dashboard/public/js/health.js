@@ -1289,9 +1289,29 @@ async function upsLoadHistory() {
 async function upsLoadEvents() {
   try {
     const r = await fetch('/api/dashboard-settings/_ups_events').then(r => r.json());
-    const lines = (r && r.value) || [];
+    // Backward-compat: old shape was an array; new shape is {lines, mtime_unix}
+    const v = (r && r.value) || {};
+    const lines = Array.isArray(v) ? v : (v.lines || []);
+    const mtime_unix = Array.isArray(v) ? null : v.mtime_unix;
     document.getElementById('ups-events').textContent =
       lines.length ? lines.join('\n') : '(no events yet)';
+    // Render "file last modified" — explains why the list looks frozen during quiet
+    // periods (apcupsd only writes on real UPS state transitions).
+    const tag = document.getElementById('ups-events-mtime');
+    if (tag) {
+      if (mtime_unix) {
+        const ageS = Math.max(0, Math.floor(Date.now() / 1000 - mtime_unix));
+        let ago;
+        if (ageS < 60)             ago = `${ageS} s ago`;
+        else if (ageS < 3600)      ago = `${Math.floor(ageS / 60)} min ago`;
+        else if (ageS < 86400)     ago = `${Math.floor(ageS / 3600)} h ago`;
+        else                       ago = `${Math.floor(ageS / 86400)} d ago`;
+        const dt = new Date(mtime_unix * 1000).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+        tag.textContent = `file last modified: ${dt} (${ago})`;
+      } else {
+        tag.textContent = '';
+      }
+    }
   } catch (e) {
     document.getElementById('ups-events').textContent = '(failed to load events)';
   }
@@ -1347,18 +1367,164 @@ async function upsLoadSettings() {
     document.getElementById('ups-set-onbdelay').textContent = fmt(s.onbattery_delay, ' s');
     document.getElementById('ups-set-safety').textContent   = ({present:'On',absent:'Off'})[s.safety_mode] || s.safety_mode || '—';
     document.getElementById('ups-set-atboot').textContent   = ({enabled:'Yes',disabled:'No'})[s.at_boot]    || s.at_boot    || '—';
-    // Posture badge — derived from the values
+    // Binary state badge — SHUTDOWN OFF (safe state) vs SHUTDOWN ON (live).
+    // Colors preserved from the previous PARANOID-SAFE / PRODUCTION palette.
     const badge = document.getElementById('ups-settings-badge');
-    let label = 'CUSTOM', color = '#7a5a00';   // amber default
-    const bl = s.battery_level, sm = s.safety_mode, ab = s.at_boot;
-    if (bl >= 50)                                                    { label = 'MAINS-PULL TEST'; color = '#c0392b'; }
-    else if (sm === 'absent' && ab === 'enabled' && bl >= 20 && bl <= 40) { label = 'PRODUCTION';     color = '#2e7d32'; }
-    else if (sm === 'present' && bl <= 10)                           { label = 'PARANOID-SAFE';  color = '#7a9f5a'; }
-    badge.textContent = label;
-    badge.style.background = color;
+    if (s.safety_mode === 'absent') {
+      badge.textContent = 'SHUTDOWN ON';
+      badge.style.background = '#2e7d32';        // production green — live
+    } else if (s.safety_mode === 'present') {
+      badge.textContent = 'SHUTDOWN OFF';
+      badge.style.background = '#7a9f5a';        // paranoid-safe green-ish — installed but disabled
+    } else {
+      badge.textContent = '—';
+      badge.style.background = '#aaa';
+    }
+    _upsAttachEditHandlers();
   } catch (e) {
     document.getElementById('ups-settings-badge').textContent = 'error';
     document.getElementById('ups-settings-badge').style.background = '#c0392b';
+  }
+}
+
+// Inline-edit metadata for the 11 editable Trigger Settings tiles. The keys
+// are DOM ids (matching the value spans rendered by upsLoadSettings /
+// upsLoadRecoverSettings). meta.field is the server-side field name passed
+// to /api/dashboard-settings/_ups_settings_set.
+const _UPS_FIELD_BY_DOM = {
+  'ups-set-battlvl':   { field: 'battery_level',         type: 'int',  min: 1, max: 99,    unit: '%',
+                         confirmAt: v => parseInt(v,10) >= 50 ? 'High threshold (≥50 %) — typical mains-pull test territory. Confirm?' : null },
+  'ups-set-minutes':   { field: 'minutes',               type: 'int',  min: 0, max: 60,    unit: 'min' },
+  'ups-set-timeout':   { field: 'timeout',               type: 'int',  min: 0, max: 86400, unit: 's' },
+  'ups-set-onbdelay':  { field: 'onbattery_delay',       type: 'int',  min: 0, max: 60,    unit: 's' },
+  'ups-set-safety':    { field: 'safety_mode',           type: 'enum', allowed: ['present','absent'],
+                         confirmAt: v => v === 'absent' ? 'GOING LIVE: real shutdown will fire on next real outage. Confirm?' : null },
+  'ups-set-atboot':    { field: 'at_boot',               type: 'enum', allowed: ['enabled','disabled'],
+                         confirmAt: v => v === 'disabled' ? 'Disabling auto-start: apcupsd will not run after PVE reboot. Confirm?' : null },
+  'ups-rec-auto':      { field: 'recover_auto',          type: 'enum', allowed: ['yes','no'],
+                         confirmAt: v => v === 'yes' ? 'Auto-recovery will fire on next PVE boot if marker file is present. Confirm?' : null },
+  'ups-rec-bcharge':   { field: 'min_bcharge_pct',       type: 'int',  min: 0, max: 100, unit: '%' },
+  'ups-rec-online':    { field: 'require_online_sec',    type: 'int',  min: 0, max: 600, unit: 's' },
+  'ups-rec-bootdelay': { field: 'boot_delay_sec',        type: 'int',  min: 0, max: 600, unit: 's' },
+  'ups-rec-markerage': { field: 'marker_max_age_hours',  type: 'int',  min: 1, max: 720, unit: 'h' },
+};
+
+// Attach click-to-edit on all editable tiles. Idempotent — safe to re-call
+// after each upsLoadSettings / upsLoadRecoverSettings refresh.
+function _upsAttachEditHandlers() {
+  for (const [domId, meta] of Object.entries(_UPS_FIELD_BY_DOM)) {
+    const el = document.getElementById(domId);
+    if (!el || el.dataset.upsEditBound === '1') continue;
+    el.dataset.upsEditBound = '1';
+    el.style.cursor = 'pointer';
+    el.title = 'Click to edit';
+    el.addEventListener('click', (e) => {
+      // Skip if user clicked inside an active edit input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
+      upsBeginEdit(domId);
+    });
+  }
+}
+
+function upsBeginEdit(domId) {
+  const meta = _UPS_FIELD_BY_DOM[domId]; if (!meta) return;
+  const el = document.getElementById(domId);  if (!el)   return;
+  const currentText = el.textContent.trim();
+  let inputHtml;
+  if (meta.type === 'enum') {
+    inputHtml = `<select id="${domId}-input" style="font-size:1rem;font-weight:600;padding:2px 4px;">` +
+      meta.allowed.map(o => {
+        // Try to pre-select current value (handles "On"/"Off" -> "present"/"absent" mapping etc.)
+        const cur = currentText.toLowerCase();
+        const lo  = o.toLowerCase();
+        const sel = (cur === lo || cur.includes(lo) || (cur === 'on' && lo === 'present') || (cur === 'off' && lo === 'absent')
+                    || (cur === 'yes' && lo === 'yes') || (cur === 'no' && lo === 'no')) ? ' selected' : '';
+        return `<option value="${o}"${sel}>${o}</option>`;
+      }).join('') + `</select>`;
+  } else {
+    const cur = parseInt(currentText, 10) || 0;
+    inputHtml = `<input id="${domId}-input" type="number" min="${meta.min}" max="${meta.max}" value="${cur}" style="font-size:1rem;font-weight:600;width:80px;padding:2px 4px;">${meta.unit ? ' ' + meta.unit : ''}`;
+  }
+  el.innerHTML = inputHtml +
+    ` <button onclick="upsSaveEdit('${domId}')" style="margin-left:6px;padding:1px 8px;background:#2e7d32;color:#fff;border:0;border-radius:3px;cursor:pointer;font-size:0.8rem;">✓ Save</button>` +
+    ` <button onclick="upsCancelEdit('${domId}')" style="margin-left:2px;padding:1px 8px;background:#888;color:#fff;border:0;border-radius:3px;cursor:pointer;font-size:0.8rem;">✕</button>`;
+  // Auto-focus the input
+  const inp = document.getElementById(`${domId}-input`);
+  if (inp) inp.focus();
+}
+
+async function upsSaveEdit(domId) {
+  const meta = _UPS_FIELD_BY_DOM[domId]; if (!meta) return;
+  const inputEl = document.getElementById(`${domId}-input`); if (!inputEl) return;
+  const v = String(inputEl.value).trim();
+  // Optional confirm dialog for dangerous changes
+  if (typeof meta.confirmAt === 'function') {
+    const msg = meta.confirmAt(v);
+    if (msg && !confirm(msg)) { upsCancelEdit(domId); return; }
+  }
+  const el = document.getElementById(domId);
+  el.innerHTML = '<span style="font-size:0.85rem;color:#7a5a00;">saving…</span>';
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_settings_set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: { field: meta.field, value: v } }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+    // Refresh both settings sections so badges + values resync
+    await upsLoadSettings();
+    await upsLoadRecoverSettings();
+    _upsAttachEditHandlers();
+  } catch (e) {
+    el.innerHTML = `<span style="color:#c0392b;font-size:0.85rem;">error: ${e.message}</span>`;
+    setTimeout(() => { upsLoadSettings(); upsLoadRecoverSettings(); _upsAttachEditHandlers(); }, 3000);
+  }
+}
+
+function upsCancelEdit(domId) {
+  // Re-render from server (reverts whatever was typed)
+  upsLoadSettings();
+  upsLoadRecoverSettings();
+  _upsAttachEditHandlers();
+}
+window.upsBeginEdit  = upsBeginEdit;
+window.upsSaveEdit   = upsSaveEdit;
+window.upsCancelEdit = upsCancelEdit;
+
+// Auto-Recovery Settings — read /etc/apcupsd/recover.conf via the dashboard
+// proxy and render the 5 values into the sub-section. Color the master-switch
+// badge red when recover_auto=no (installed but disabled), green when yes.
+async function upsLoadRecoverSettings() {
+  const badge = document.getElementById('ups-recover-badge');
+  if (!badge) return;
+  try {
+    const r = await fetch('/api/dashboard-settings/_ups_recover_settings').then(r => r.json());
+    const s = r.value;
+    if (!s || !s.installed) {
+      badge.textContent = 'NOT INSTALLED';
+      badge.style.background = '#aaa';
+      ['ups-rec-auto','ups-rec-bcharge','ups-rec-online','ups-rec-bootdelay','ups-rec-markerage']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
+      return;
+    }
+    const fmt = (v, suf) => (Number.isFinite(v) ? `${v}${suf || ''}` : '—');
+    document.getElementById('ups-rec-auto').textContent      = ({yes:'Yes', no:'No'})[s.recover_auto] || s.recover_auto || '—';
+    document.getElementById('ups-rec-bcharge').textContent   = fmt(s.min_bcharge_pct, ' %');
+    document.getElementById('ups-rec-online').textContent    = fmt(s.require_online_sec, ' s');
+    document.getElementById('ups-rec-bootdelay').textContent = fmt(s.boot_delay_sec, ' s');
+    document.getElementById('ups-rec-markerage').textContent = fmt(s.marker_max_age_hours, ' h');
+    if (s.recover_auto === 'yes') {
+      badge.textContent = 'AUTO-RECOVER ON';
+      badge.style.background = '#2e7d32';
+    } else {
+      badge.textContent = 'AUTO-RECOVER OFF';
+      badge.style.background = '#7a5a00';
+    }
+    _upsAttachEditHandlers();
+  } catch (e) {
+    badge.textContent = 'error';
+    badge.style.background = '#c0392b';
   }
 }
 
@@ -1386,6 +1552,24 @@ const _UPS_DEVICES = [
 let _upsAction = null;
 let _upsLastInv = null;
 let _upsPollHandle = null;
+// Idle polling — keeps the inventory fresh while the UPS tab is visible.
+let _upsIdlePollHandle = null;
+// Per-device "in current state since" map: { 'lxc-100': { state: 'running', sinceTs: <ms> } }
+// Used for the duration column ("for 5 min", "for 2 h"). Reset on state change.
+const _upsStateSince = {};
+
+// Format a duration in ms as "for 5 s" / "for 12 min" / "for 1 h 12 min" / "for 2 d 5 h"
+function _upsFmtDuration(ms) {
+  if (ms == null || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60)        return `for ${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60)        return `for ${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24)        return `for ${h} h ${m % 60} min`;
+  const d = Math.floor(h / 24);
+  return `for ${d} d ${h % 24} h`;
+}
 
 function _upsKey(d)         { return d.kind === 'qnap' ? 'qnap' : `${d.kind}-${d.id}`; }
 function _upsIsTargetState(action, isRunning) {
@@ -1409,14 +1593,26 @@ function _upsRenderRows(inv) {
       ? (isRunning ? 'online'  : 'offline')
       : (isRunning ? 'running' : 'stopped');
     const idCol = d.kind === 'qnap' ? '' : `<span style="color:#888;width:38px;display:inline-block;text-align:right;">${d.id}</span>`;
-    // Timing column — only meaningful during/after an action
+    // Timing column — duration in current state (always shown after the
+    // first observation), with extra precision during active actions.
     let took = '—';
+    const k = _upsKey(d);
     if (_upsAction) {
-      const k = _upsKey(d);
       const t = _upsAction.doneAt[k];
-      if (t != null) took = `${Math.round(t / 1000)} s`;
-      else if (_upsIsTargetState(_upsAction.action, isRunning)) took = `${Math.round((Date.now() - _upsAction.startedAt) / 1000)} s`;
-      else took = '…';
+      if (t != null) {
+        // We just transitioned during this action — show the seconds it took
+        took = `${Math.round(t / 1000)} s`;
+      } else if (_upsIsTargetState(_upsAction.action, isRunning)) {
+        // Transition is happening right now (target state reached this poll)
+        took = `${Math.round((Date.now() - _upsAction.startedAt) / 1000)} s`;
+      } else {
+        // Still in pre-action state during the action — running clock
+        took = '…';
+      }
+    } else {
+      // Idle polling — show how long we've been observing the current state
+      const trk = _upsStateSince[k];
+      if (trk && trk.state === lbl) took = _upsFmtDuration(Date.now() - trk.sinceTs);
     }
     const border = i < _UPS_DEVICES.length - 1 ? 'border-bottom:1px solid rgba(0,0,0,0.08);' : '';
     // Checkbox: token = "qnap" or numeric id, used for SELECTION env var
@@ -1427,7 +1623,7 @@ function _upsRenderRows(inv) {
       ${idCol}
       <span style="flex:1;font-family:inherit;">${d.label}</span>
       <span style="color:${color};font-size:0.78rem;width:80px;">${lbl}</span>
-      <span style="color:#888;font-size:0.78rem;width:60px;text-align:right;">${took}</span>
+      <span style="color:#888;font-size:0.78rem;width:90px;text-align:right;">${took}</span>
     </div>`;
   }).join('');
 }
@@ -1474,6 +1670,20 @@ async function upsLoadInventory() {
         if (_upsIsTargetState(_upsAction.action, isRunning)) {
           _upsAction.doneAt[k] = Date.now() - _upsAction.startedAt;
         }
+      }
+    }
+    // Idle state-since tracking: detect transitions between polls so the time
+    // column can show "for 5 min" / "for 2 h" continuously.
+    const now = Date.now();
+    for (const d of _UPS_DEVICES) {
+      const k = _upsKey(d);
+      const isRunning = _upsResolveStatus(d, inv) === 'running';
+      const lbl = d.kind === 'qnap'
+        ? (isRunning ? 'online'  : 'offline')
+        : (isRunning ? 'running' : 'stopped');
+      const trk = _upsStateSince[k];
+      if (!trk || trk.state !== lbl) {
+        _upsStateSince[k] = { state: lbl, sinceTs: now };
       }
     }
     _upsLastInv = inv;
@@ -1574,6 +1784,7 @@ function upsLoadAll() {
   upsLoadHistory();
   upsLoadEvents();
   upsLoadSettings();
+  upsLoadRecoverSettings();
   upsLoadInventory();
 }
 window.upsRunTest = upsRunTest;

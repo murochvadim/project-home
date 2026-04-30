@@ -2982,15 +2982,20 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
       );
       return res.json({ value: r.rows });
     }
-    // UPS events — tail PVE's /var/log/apcupsd.events via SSH
+    // UPS events — tail PVE's /var/log/apcupsd.events via SSH + file mtime
     if (req.params.key === '_ups_events') {
       const { NodeSSH } = require('node-ssh');
       const ssh = new NodeSSH();
       try {
         await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
-        const r = await ssh.execCommand('tail -25 /var/log/apcupsd.events 2>&1');
+        const r = await ssh.execCommand(
+          'tail -25 /var/log/apcupsd.events 2>&1; echo "---MTIME---"; stat -c %Y /var/log/apcupsd.events 2>/dev/null'
+        );
         ssh.dispose();
-        return res.json({ value: (r.stdout || '').trim().split('\n').filter(Boolean) });
+        const [body, mtimeBlock] = (r.stdout || '').split('---MTIME---').map(s => s.trim());
+        const mtime_unix = parseInt(mtimeBlock, 10) || null;
+        const lines = (body || '').split('\n').filter(Boolean);
+        return res.json({ value: { lines, mtime_unix } });
       } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
     }
     // UPS trigger settings — read-only snapshot of apcupsd.conf knobs + flag state
@@ -3021,6 +3026,36 @@ app.get('/api/dashboard-settings/:key', async (req, res) => {
           safety_mode:      safetyMode,
           at_boot:          atBoot,
           nompower_w:       parseInt(nompower, 10) || null,
+        }});
+      } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
+    }
+    // UPS auto-recover settings — read-only snapshot of /etc/apcupsd/recover.conf
+    if (req.params.key === '_ups_recover_settings') {
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
+        // Grep only the 5 known keys; recover.conf may not exist yet (Phase 4 install)
+        const r = await ssh.execCommand(
+          '[ -f /etc/apcupsd/recover.conf ] && ' +
+          'grep -E "^(RECOVER_AUTO|RECOVER_MIN_BCHARGE|RECOVER_REQUIRE_ONLINE_SEC|RECOVER_BOOT_DELAY_SEC|RECOVER_MARKER_MAX_AGE_HOURS)=" /etc/apcupsd/recover.conf || ' +
+          'echo "MISSING"'
+        );
+        ssh.dispose();
+        const out = (r.stdout || '').trim();
+        if (out === 'MISSING') return res.json({ value: { installed: false } });
+        const conf = {};
+        for (const line of out.split('\n')) {
+          const m = line.match(/^(\w+)=(\S+)/);
+          if (m) conf[m[1]] = m[2];
+        }
+        return res.json({ value: {
+          installed:                  true,
+          recover_auto:               conf.RECOVER_AUTO || 'no',
+          min_bcharge_pct:            parseInt(conf.RECOVER_MIN_BCHARGE, 10),
+          require_online_sec:         parseInt(conf.RECOVER_REQUIRE_ONLINE_SEC, 10),
+          boot_delay_sec:             parseInt(conf.RECOVER_BOOT_DELAY_SEC, 10),
+          marker_max_age_hours:       parseInt(conf.RECOVER_MARKER_MAX_AGE_HOURS, 10),
         }});
       } catch (e) { try { ssh.dispose(); } catch {} return res.json({ value: null, error: e.message }); }
     }
@@ -3085,6 +3120,70 @@ app.post('/api/dashboard-settings/:key', async (req, res) => {
   try {
     const { value } = req.body;
     if (value === undefined) return res.status(400).json({ error: 'Missing value' });
+    // UPS settings writeback — single endpoint that dispatches per field type.
+    // Body: { value: { field: '<name>', value: '<new_value>' } }
+    // Field map enforces validation server-side; client-side validation is a UX
+    // nicety only (server is the source of truth for what's accepted).
+    if (req.params.key === '_ups_settings_set') {
+      const f = (value && value.field) || '';
+      const v = value && value.value;
+      const FIELDS = {
+        // apcupsd.conf integers — sed-rewrite + restart apcupsd
+        battery_level:    { kind: 'apcupsd_int', conf_key: 'BATTERYLEVEL',    min: 1, max: 99 },
+        minutes:          { kind: 'apcupsd_int', conf_key: 'MINUTES',         min: 0, max: 60 },
+        timeout:          { kind: 'apcupsd_int', conf_key: 'TIMEOUT',         min: 0, max: 86400 },
+        onbattery_delay:  { kind: 'apcupsd_int', conf_key: 'ONBATTERYDELAY',  min: 0, max: 60 },
+        // SAFETY_MODE flag file — touch / rm
+        safety_mode:      { kind: 'flag', allowed: ['present', 'absent'] },
+        // apcupsd unit enable/disable at boot
+        at_boot:          { kind: 'service', allowed: ['enabled', 'disabled'] },
+        // recover.conf — sed-rewrite (no daemon to restart, read at next boot)
+        recover_auto:                 { kind: 'recover_yn',  conf_key: 'RECOVER_AUTO', allowed: ['yes', 'no'] },
+        min_bcharge_pct:              { kind: 'recover_int', conf_key: 'RECOVER_MIN_BCHARGE',          min: 0, max: 100 },
+        require_online_sec:           { kind: 'recover_int', conf_key: 'RECOVER_REQUIRE_ONLINE_SEC',   min: 0, max: 600 },
+        boot_delay_sec:               { kind: 'recover_int', conf_key: 'RECOVER_BOOT_DELAY_SEC',       min: 0, max: 600 },
+        marker_max_age_hours:         { kind: 'recover_int', conf_key: 'RECOVER_MARKER_MAX_AGE_HOURS', min: 1, max: 720 },
+      };
+      const meta = FIELDS[f];
+      if (!meta) return res.status(400).json({ error: `unknown field '${f}'` });
+      // Build SSH command per kind
+      let cmd;
+      if (meta.kind === 'apcupsd_int' || meta.kind === 'recover_int') {
+        const n = parseInt(v, 10);
+        if (!Number.isFinite(n) || n < meta.min || n > meta.max) {
+          return res.status(400).json({ error: `value must be integer ${meta.min}-${meta.max}` });
+        }
+        const path = meta.kind === 'apcupsd_int' ? '/etc/apcupsd/apcupsd.conf' : '/etc/apcupsd/recover.conf';
+        const sep  = meta.kind === 'apcupsd_int' ? ' ' : '=';   // apcupsd.conf is "KEY VALUE", recover.conf is "KEY=VALUE"
+        // sed: replace existing line, or append if missing. Use # as delimiter to avoid / collisions.
+        cmd = `if grep -qE "^${meta.conf_key}${sep === ' ' ? '\\s' : '='}" ${path}; then ` +
+              `sed -i "s#^${meta.conf_key}${sep === ' ' ? '\\s.*' : '=.*'}#${meta.conf_key}${sep}${n}#" ${path}; ` +
+              `else echo "${meta.conf_key}${sep}${n}" >> ${path}; fi; ` +
+              `grep -E "^${meta.conf_key}${sep === ' ' ? '\\s' : '='}" ${path}`;
+        if (meta.kind === 'apcupsd_int') cmd += '; systemctl restart apcupsd && systemctl is-active apcupsd';
+      } else if (meta.kind === 'recover_yn') {
+        if (!meta.allowed.includes(v)) return res.status(400).json({ error: `value must be one of: ${meta.allowed.join(', ')}` });
+        cmd = `sed -i "s#^${meta.conf_key}=.*#${meta.conf_key}=${v}#" /etc/apcupsd/recover.conf && grep -E "^${meta.conf_key}=" /etc/apcupsd/recover.conf`;
+      } else if (meta.kind === 'flag') {
+        if (!meta.allowed.includes(v)) return res.status(400).json({ error: `value must be one of: ${meta.allowed.join(', ')}` });
+        cmd = v === 'present'
+          ? 'touch /etc/apcupsd/SAFETY_MODE && ls -la /etc/apcupsd/SAFETY_MODE'
+          : 'rm -f /etc/apcupsd/SAFETY_MODE && (ls /etc/apcupsd/SAFETY_MODE 2>&1 || echo "SAFETY_MODE absent — go-live confirmed")';
+      } else if (meta.kind === 'service') {
+        if (!meta.allowed.includes(v)) return res.status(400).json({ error: `value must be one of: ${meta.allowed.join(', ')}` });
+        cmd = v === 'enabled' ? 'systemctl enable apcupsd 2>&1' : 'systemctl disable apcupsd 2>&1';
+        cmd += '; systemctl is-enabled apcupsd';
+      }
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.101', username: 'root', privateKeyPath: SSH_KEY });
+        const r = await ssh.execCommand(cmd);
+        ssh.dispose();
+        if (r.code !== 0) return res.status(500).json({ error: `SSH command failed: ${r.stderr || r.stdout}` });
+        return res.json({ ok: true, field: f, value: v, output: r.stdout });
+      } catch (e) { try { ssh.dispose(); } catch {} return res.status(500).json({ error: e.message }); }
+    }
     if (req.params.key === '_awtrix_settings') {
       const body = JSON.stringify(value);
       const proxyReq = http.request({

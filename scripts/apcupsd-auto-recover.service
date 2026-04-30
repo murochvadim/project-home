@@ -1,0 +1,15 @@
+[Unit]
+Description=Auto-recover after a UPS-triggered shutdown
+After=network-online.target apcupsd.service pve-guests.service
+Wants=network-online.target
+ConditionPathExists=/etc/apcupsd/last_shutdown_reason
+
+[Service]
+Type=oneshot
+ExecStart=/etc/apcupsd/doshutdown_auto_recover
+ExecStartPost=/bin/rm -f /etc/apcupsd/last_shutdown_reason
+TimeoutStartSec=600
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

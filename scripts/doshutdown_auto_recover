@@ -1,0 +1,109 @@
+#!/bin/bash
+# /etc/apcupsd/doshutdown_auto_recover — gate-check script.
+# Called by apcupsd-auto-recover.service at PVE boot, only when marker
+# /etc/apcupsd/last_shutdown_reason exists (ConditionPathExists on the unit).
+#
+# Reads /etc/apcupsd/recover.conf, runs 6 gates, delegates to
+# /etc/apcupsd/doshutdown_recover if all pass.
+#
+# Env-var overrides (for testing only):
+#   DRY_RUN=1  — log decisions but don't actually call doshutdown_recover
+#   FAST=1     — collapse the boot delay + online soak windows to ~3 s
+
+set +e
+LOG=/var/log/apcupsd_shutdown.log
+CONF=/etc/apcupsd/recover.conf
+MARKER=/etc/apcupsd/last_shutdown_reason
+
+exec >> "$LOG" 2>&1
+echo
+echo "================================================================"
+echo "$(date +%Y-%m-%d_%H:%M:%S) — AUTO-RECOVER gate check"
+echo "================================================================"
+
+# Read config
+if [ ! -r "$CONF" ]; then
+  echo "  ABORT: $CONF not readable"
+  exit 0
+fi
+. "$CONF"
+
+# Test-mode overrides (won't apply in production — env vars not set by systemd)
+if [ "${FAST:-}" = "1" ]; then
+  RECOVER_BOOT_DELAY_SEC=1
+  RECOVER_REQUIRE_ONLINE_SEC=2
+  echo "  [FAST mode: boot delay ${RECOVER_BOOT_DELAY_SEC}s, online soak ${RECOVER_REQUIRE_ONLINE_SEC}s]"
+fi
+if [ "${DRY_RUN:-}" = "1" ]; then
+  echo "  [DRY_RUN mode: will not delegate to doshutdown_recover at the end]"
+fi
+
+# ---- GATE 1: master switch ----
+if [ "${RECOVER_AUTO:-no}" != "yes" ]; then
+  echo "  GATE 1: RECOVER_AUTO=${RECOVER_AUTO:-no} → auto-recovery disabled, exiting"
+  exit 0
+fi
+echo "  GATE 1: RECOVER_AUTO=yes ✓"
+
+# ---- GATE 2: marker file present + age check ----
+if [ ! -f "$MARKER" ]; then
+  echo "  GATE 2: marker $MARKER not present → nothing to recover, exiting"
+  exit 0
+fi
+NOW=$(date +%s)
+MARK_TS=$(stat -c %Y "$MARKER" 2>/dev/null)
+[ -z "$MARK_TS" ] && { echo "  GATE 2: stat failed on marker, exiting"; exit 0; }
+AGE_HOURS=$(( (NOW - MARK_TS) / 3600 ))
+if [ "$AGE_HOURS" -gt "${RECOVER_MARKER_MAX_AGE_HOURS:-48}" ]; then
+  echo "  GATE 2: marker age ${AGE_HOURS}h > max ${RECOVER_MARKER_MAX_AGE_HOURS:-48}h → zombie, deleting + exiting"
+  rm -f "$MARKER"
+  exit 0
+fi
+echo "  GATE 2: marker age ${AGE_HOURS}h ≤ max ${RECOVER_MARKER_MAX_AGE_HOURS:-48}h ✓"
+
+# ---- GATE 3: boot grace period ----
+DELAY="${RECOVER_BOOT_DELAY_SEC:-30}"
+echo "  GATE 3: sleeping ${DELAY}s for system to settle..."
+sleep "$DELAY"
+echo "  GATE 3: ✓"
+
+# ---- GATE 4: apcaccess STATUS=ONLINE ----
+STATUS=$(apcaccess status 2>/dev/null | awk '/^STATUS/{print $3}')
+if [ "$STATUS" != "ONLINE" ]; then
+  echo "  GATE 4: apcaccess STATUS=$STATUS → mains not stable, exiting (apcupsd will handle re-shutdown if battery hits threshold)"
+  exit 0
+fi
+echo "  GATE 4: apcaccess STATUS=ONLINE ✓"
+
+# ---- GATE 5: stable ONLINE for N seconds (soak) ----
+SOAK="${RECOVER_REQUIRE_ONLINE_SEC:-60}"
+echo "  GATE 5: soaking ${SOAK}s for stable ONLINE..."
+SOAK_TARGET=$(( $(date +%s) + SOAK ))
+while [ "$(date +%s)" -lt "$SOAK_TARGET" ]; do
+  sleep 5
+  STATUS=$(apcaccess status 2>/dev/null | awk '/^STATUS/{print $3}')
+  if [ "$STATUS" != "ONLINE" ]; then
+    echo "  GATE 5: STATUS dropped to $STATUS during soak → aborting"
+    exit 0
+  fi
+done
+echo "  GATE 5: ✓"
+
+# ---- GATE 6: battery charge ≥ threshold ----
+BCHARGE=$(apcaccess status 2>/dev/null | awk '/^BCHARGE/{print int($3)}')
+[ -z "$BCHARGE" ] && { echo "  GATE 6: BCHARGE could not be read → aborting"; exit 0; }
+MIN_BCHARGE="${RECOVER_MIN_BCHARGE:-30}"
+if [ "$BCHARGE" -lt "$MIN_BCHARGE" ]; then
+  echo "  GATE 6: BCHARGE=${BCHARGE}% < min ${MIN_BCHARGE}% → aborting"
+  exit 0
+fi
+echo "  GATE 6: BCHARGE=${BCHARGE}% ≥ min ${MIN_BCHARGE}% ✓"
+
+# ---- All gates passed → delegate to recovery ----
+echo "$(date +%Y-%m-%d_%H:%M:%S) — all 6 gates passed"
+if [ "${DRY_RUN:-}" = "1" ]; then
+  echo "  [DRY_RUN: would exec /etc/apcupsd/doshutdown_recover]"
+  exit 0
+fi
+echo "  delegating to /etc/apcupsd/doshutdown_recover"
+exec /etc/apcupsd/doshutdown_recover

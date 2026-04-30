@@ -571,11 +571,13 @@
 
     <!-- Card 2: trigger settings (read-only snapshot of apcupsd.conf) -->
     <div class="card">
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-        <h2 style="margin:0;">Trigger Settings <span id="ups-settings-badge" style="font-size:0.78rem;font-weight:500;padding:3px 10px;border-radius:10px;margin-left:6px;background:#aaa;color:#fff;">—</span></h2>
-        <span style="font-size:0.78rem;color:#888;">Edit via <code>/pss-update</code> skill — these are read-only here.</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:14px;">
+      <!-- Shutdown Settings sub-section (mirrors Auto-Recovery Settings structure for symmetry) -->
+      <div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Shutdown Settings</span><span id="ups-settings-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;">—</span></h3>
+          <span style="font-size:0.72rem;color:#888;">live on PVE: <code>/etc/apcupsd/apcupsd.conf</code> · click any value to edit</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
         <div>
           <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Shutdown at battery</div>
           <div style="font-size:1.4rem;font-weight:700;" id="ups-set-battlvl">—</div>
@@ -605,6 +607,42 @@
           <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Auto-start after PVE reboot</div>
           <div style="font-size:1.4rem;font-weight:700;" id="ups-set-atboot">—</div>
           <div style="font-size:0.7rem;color:#888;">daemon resumes automatically on reboot</div>
+        </div>
+        </div>
+      </div>
+
+      <!-- Auto-Recovery Settings (mirrors Shutdown Settings structure for symmetry) -->
+      <div style="border-top:1px solid #e0dbd4;margin-top:18px;padding-top:14px;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Auto-Recovery Settings</span><span id="ups-recover-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;">—</span></h3>
+          <span style="font-size:0.72rem;color:#888;">live on PVE: <code>/etc/apcupsd/recover.conf</code> · click any value to edit</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
+          <div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Auto-recover after UPS shutdown</div>
+            <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-auto">—</div>
+            <div style="font-size:0.7rem;color:#888;">master switch — fires on next boot if marker is present</div>
+          </div>
+          <div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Min battery before recovering</div>
+            <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-bcharge">—</div>
+            <div style="font-size:0.7rem;color:#888;">% — block recovery if battery still below this</div>
+          </div>
+          <div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Mains must be stable for</div>
+            <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-online">—</div>
+            <div style="font-size:0.7rem;color:#888;">s — wait for stable ONLINE before starting</div>
+          </div>
+          <div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Wait after boot</div>
+            <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-bootdelay">—</div>
+            <div style="font-size:0.7rem;color:#888;">s — settle time after PVE boots before checking gates</div>
+          </div>
+          <div>
+            <div style="font-size:0.72rem;color:#888;text-transform:uppercase;">Marker max age (zombie filter)</div>
+            <div style="font-size:1.4rem;font-weight:700;" id="ups-rec-markerage">—</div>
+            <div style="font-size:0.7rem;color:#888;">h — ignore markers older than this</div>
+          </div>
         </div>
       </div>
     </div>
@@ -667,6 +705,7 @@
     <!-- Card 4: events -->
     <div class="card">
       <h2>Recent Events <span style="font-size:0.72rem;color:#888;font-weight:500;">(/var/log/apcupsd.events on PVE)</span></h2>
+      <div id="ups-events-mtime" style="font-size:0.72rem;color:#888;margin-bottom:6px;"></div>
       <pre id="ups-events" style="background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto;">loading…</pre>
     </div>
 
@@ -709,12 +748,31 @@ function showHealthTab(name, btn) {
     loadWinJobs();
     loadWinLog();
   }
-  // Load UPS tab lazily on first visit
-  if (name === 'ups' && !window._upsTabLoaded) {
-    window._upsTabLoaded = true;
-    upsLoadAll();
+  // Load UPS tab lazily on first visit + always re-pull inventory on revisit
+  if (name === 'ups') {
+    if (!window._upsTabLoaded) {
+      window._upsTabLoaded = true;
+      upsLoadAll();
+    } else {
+      // Subsequent visits: refresh dynamic cards (cheap)
+      upsLoadInventory();
+      upsLoadLive();
+    }
+    // Idle polling — keep Shutdown Propagation card fresh while UPS tab is
+    // visible. 5 s when no active shutdown/recover (the action helper has its
+    // own 2 s polling). Tick is skipped when the user is on a different tab.
     if (window._upsRefreshTimer) clearInterval(window._upsRefreshTimer);
-    window._upsRefreshTimer = setInterval(upsLoadLive, 60000); // refresh live card every 60s
+    window._upsRefreshTimer = setInterval(() => {
+      if (!document.getElementById('tab-ups')?.classList.contains('active')) return;
+      if (typeof _upsAction !== 'undefined' && _upsAction) return; // active action has its own 2s poll
+      upsLoadInventory();
+    }, 5000);
+    // Also keep the live battery card fresh on its own 60 s cadence
+    if (window._upsLiveTimer) clearInterval(window._upsLiveTimer);
+    window._upsLiveTimer = setInterval(() => {
+      if (!document.getElementById('tab-ups')?.classList.contains('active')) return;
+      upsLoadLive();
+    }, 60000);
   }
   // Load settings tab data lazily on first visit
   if (name === 'settings' && !window._settingsTabLoaded) {
@@ -762,6 +820,6 @@ async function deploy() {
 <script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=17"></script>
+<script src="js/health.js?v=27"></script>
 </body>
 </html>

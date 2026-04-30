@@ -1,0 +1,194 @@
+#!/bin/bash
+# /etc/apcupsd/doshutdown_recover — recovery: WoL QNAP + start guests.
+#
+# Selection (optional via SELECTION env var):
+#   SELECTION=""           (default) → all (WoL + every LXC + VM 101)
+#   SELECTION="qnap,100"   → WoL + LXC 100 only
+#   SELECTION="103,105"    → only those two LXCs (no WoL)
+#
+# Concurrency: flock guard prevents simultaneous fires.
+# Idempotency: pct/qm start only fires for NOT-running guests
+# (avoids "TASK ERROR: already running" noise in PVE task log).
+# Mains-drop guard: check_mains_or_abort() exits cleanly between phases
+# if STATUS != ONLINE — already-started guests run on UPS battery and will
+# be re-shutdown by apcupsd's threshold trigger if battery hits BATTERYLEVEL.
+
+LOG=/var/log/apcupsd_shutdown.log
+LOCK=/var/run/apcupsd_recover.lock
+exec >> "$LOG" 2>&1
+exec 9>"$LOCK"
+flock -n 9 || { echo "$(date +%Y-%m-%d_%H:%M:%S) — recovery already running, skipping"; exit 0; }
+
+echo
+echo "================================================================"
+echo "$(date +%Y-%m-%d_%H:%M:%S) — RECOVERY"
+[ -n "$SELECTION" ] && echo "SELECTION=$SELECTION" || echo "SELECTION=(empty — recover all)"
+echo "================================================================"
+
+QNAP_MAC="24:5e:be:61:31:d7"  # eth0 motherboard Intel i225 (USB eth2 cannot wake from S5)
+QNAP_IP="192.168.1.155"
+
+# ---- Mains-drop guard ----
+# Called between phases. If UPS reports anything other than ONLINE, abort
+# the rest of the recovery cleanly — guests already started will run on
+# battery, and apcupsd will fire its threshold trigger if needed.
+check_mains_or_abort() {
+  local phase=$1
+  local status
+  status=$(apcaccess status 2>/dev/null | awk '/^STATUS/{print $3; exit}')
+  if [ -z "$status" ]; then
+    echo "  [$phase] mains check: apcaccess unreadable — proceeding cautiously (assume ONLINE)"
+    return 0
+  fi
+  if [ "$status" != "ONLINE" ]; then
+    echo "  [$phase] ABORT: mains dropped to STATUS=$status during recovery"
+    echo "  Already-started guests run on UPS battery; apcupsd will fire doshutdown if BATTERYLEVEL trips."
+    echo "$(date +%Y-%m-%d_%H:%M:%S) — recovery aborted at $phase (mains=$status)"
+    echo "================================================================"
+    exit 0
+  fi
+  echo "  [$phase] mains check: STATUS=ONLINE ✓"
+}
+
+# ---- Parse SELECTION ----
+do_qnap=1
+selected_ids=""
+if [ -n "$SELECTION" ]; then
+  do_qnap=0
+  IFS=, read -ra SEL <<< "$SELECTION"
+  for tok in "${SEL[@]}"; do
+    tok="${tok// /}"
+    if [ "$tok" = "qnap" ]; then
+      do_qnap=1
+    elif [[ "$tok" =~ ^[0-9]+$ ]]; then
+      selected_ids="$selected_ids $tok"
+    fi
+  done
+fi
+
+should_act() {
+  local id=$1
+  [ -z "$SELECTION" ] && return 0
+  for sel in $selected_ids; do
+    [ "$sel" = "$id" ] && return 0
+  done
+  return 1
+}
+
+# Idempotent starters — only fire if not already running
+pct_start_if_stopped() {
+  local id=$1 name=$2
+  if pct status "$id" 2>/dev/null | grep -q running; then
+    echo "  $id ($name) — already running, skipping"
+  else
+    echo "  pct start $id ($name)"
+    pct start "$id" &
+  fi
+}
+qm_start_if_stopped() {
+  local id=$1 name=$2
+  if qm status "$id" 2>/dev/null | grep -q running; then
+    echo "  $id ($name) — already running, skipping"
+  else
+    echo "  qm start $id ($name)"
+    qm start "$id" &
+  fi
+}
+
+# ---- 1. WoL ----
+if [ "$do_qnap" = "1" ]; then
+  echo "[1/4] WoL magic packet to QNAP ($QNAP_MAC)"
+  python3 -c "
+import socket
+mac = bytes.fromhex(\"${QNAP_MAC//:/}\")
+pkt = b\"\xff\"*6 + mac*16
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+s.sendto(pkt, (\"10.0.0.255\", 9))
+s.sendto(pkt, (\"10.0.0.255\", 7))
+print(\"  WoL packet sent\")
+" 2>&1 || echo "  WoL Python failed"
+else
+  echo "[1/4] WoL — SKIPPED (qnap not in selection)"
+fi
+
+# Mains check #1 — after WoL, before starting QNAP-independent guests
+check_mains_or_abort "post-WoL"
+
+# ---- 2. Start QNAP-independent guests ----
+echo "[2/4] starting QNAP-independent guests in parallel"
+for pair in "102:Postgres" "107:MQTT" "103:Agents" "105:MainAgent" "106:Voice"; do
+  VMID="${pair%%:*}"; NAME="${pair##*:}"
+  if should_act "$VMID"; then
+    pct_start_if_stopped "$VMID" "$NAME"
+  else
+    echo "  $VMID ($NAME) — SKIPPED (not in selection)"
+  fi
+done
+if should_act 101; then
+  qm_start_if_stopped 101 "HomeAssistant"
+else
+  echo "  101 (HomeAssistant) — SKIPPED (not in selection)"
+fi
+wait
+
+# Mains check #2 — after QNAP-independent guests up, before QNAP wait
+check_mains_or_abort "post-phase-2"
+
+# ---- 3. Wait for QNAP if any QNAP-dependent LXCs are in selection ----
+need_qnap_dep=0
+for vmid in 100 104; do
+  should_act "$vmid" && need_qnap_dep=1
+done
+
+if [ "$need_qnap_dep" = "1" ] || [ "$do_qnap" = "1" ]; then
+  echo "[3/4] waiting for QNAP to come up (max 120 s)..."
+  QNAP_BACK=no
+  for i in $(seq 1 60); do
+    if ping -c 1 -W 1 "$QNAP_IP" >/dev/null 2>&1; then
+      echo "  QNAP reachable after ${i} ping attempts (~$((i*2)) s)"
+      QNAP_BACK=yes
+      break
+    fi
+    sleep 2
+  done
+  [ "$QNAP_BACK" = no ] && echo "  QNAP did NOT respond within 120 s — manual power-on required"
+else
+  echo "[3/4] QNAP wait — SKIPPED (no QNAP-dependent LXCs in selection)"
+  QNAP_BACK=no
+fi
+
+# Mains check #3 — after QNAP wait, before starting QNAP-dependent LXCs
+check_mains_or_abort "post-qnap-wait"
+
+# ---- 3.5. Re-trigger PVE NFS/CIFS mounts now that QNAP is up ----
+# Why: fstab entries with _netdev,nofail silently fail at boot if QNAP was not
+# online yet. mount -a is idempotent — it only mounts what is not already mounted.
+# Without this, LXC 100/104 bind-mounts point at empty PVE directories, and
+# media-agent / backup-script crash on first write attempt.
+if [ "$QNAP_BACK" = "yes" ]; then
+  echo "[3.5/4] re-mounting PVE NFS/CIFS shares from QNAP"
+  mount -a -t nfs,nfs4,cifs 2>&1 | sed 's/^/  /'
+  echo "  active QNAP mounts:"
+  mount | grep -E '10\.0\.0\.1|192\.168\.1\.155' | awk '{print "    " $1, "→", $3}'
+else
+  echo "[3.5/4] SKIPPED — QNAP not back, mounts will stay stale"
+fi
+
+# ---- 4. Start QNAP-dependent LXCs ----
+if should_act 100 || should_act 104; then
+  if [ "$QNAP_BACK" = "yes" ]; then
+    echo "[4/4] starting QNAP-dependent LXCs"
+    if should_act 100; then pct_start_if_stopped 100 "Media";   fi
+    if should_act 104; then pct_start_if_stopped 104 "Servers"; fi
+    wait
+  else
+    echo "[4/4] SKIPPED — QNAP not back. After power-on, run: pct start 100 ; pct start 104"
+  fi
+else
+  echo "[4/4] QNAP-dependent LXCs — SKIPPED (none in selection)"
+fi
+
+echo
+echo "$(date +%Y-%m-%d_%H:%M:%S) — recovery sequence complete"
+echo "================================================================"

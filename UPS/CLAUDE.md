@@ -56,12 +56,16 @@ USB cable plugs into a back panel USB-A port on the **Proxmox host** (PVE, `192.
 | [scripts/net-ups-poll.timer](scripts/net-ups-poll.timer) | every-60s timer for the service |
 | `/etc/apcupsd/apcupsd.conf` (PVE) | Master config — `UPSCABLE=usb`, `UPSTYPE=usb`, `BATTERYLEVEL=5` (paranoid until going live), `NETSERVER=on`, `NISIP=0.0.0.0`, `NISPORT=3551` |
 | `/etc/apcupsd/apcupsd.conf` (LXC 105) | Slave config — `UPSTYPE=net`, `DEVICE=192.168.1.101:3551`, `BATTERYLEVEL=0` (slave never triggers), local NIS on 127.0.0.1 |
-| `/etc/apcupsd/doshutdown` (PVE) | The orchestrator. SAFETY_MODE-gated. On real fire: best-effort SSH `poweroff` to QNAP as `admin123@192.168.1.155` (key auth via `/root/.ssh/id_ed25519_ups`) → parallel `pct shutdown` LXCs → parallel `qm shutdown` VMs (HA gets `--timeout 60`) → wait → `shutdown -h now`. |
+| `/etc/apcupsd/doshutdown` (PVE) | The orchestrator. SAFETY_MODE-gated. On real fire: best-effort SSH `poweroff` to QNAP as `admin123@192.168.1.155` (key auth via `/root/.ssh/id_ed25519_ups`) → parallel `pct shutdown` LXCs → parallel `qm shutdown` VMs (HA gets `--timeout 60`) → wait → **writes Phase 4 marker `/etc/apcupsd/last_shutdown_reason`** → `shutdown -h now`. |
 | `/etc/apcupsd/SAFETY_MODE` (PVE) | If present: orchestrator logs and exits without shutting anything down. Default state until going live. |
 | `/etc/apcupsd/onbattery` (PVE) | Hook fired by apcupsd when STATUS flips ONLINE → ONBATT (after `ONBATTERYDELAY=6 s` filter). INSERTs a `severity=warn, alert_type=ups_onbattery` row into `system_alerts` on LXC 102 with message `UPS on battery — N min runtime left at X% battery`. Idempotent (skips insert if an active row already exists). Best-effort (`timeout 5 psql ... \|\| true` — DB failures never block apcupsd). |
 | `/etc/apcupsd/offbattery` (PVE) | Hook fired when mains restored. UPDATE `resolved_at = NOW()` on any active `ups_onbattery` row. |
 | `/etc/apcupsd/commfailure` (PVE) | Hook fired when USB comm to UPS is lost. INSERTs `alert_type=ups_commlost`. Idempotent. |
 | `/etc/apcupsd/commok` (PVE) | Hook fired when USB restored. Resolves `ups_commlost`. |
+| [scripts/recover.conf](../scripts/recover.conf) → `/etc/apcupsd/recover.conf` (PVE) | Phase 4 auto-recovery config. 5 keys: `RECOVER_AUTO`, `RECOVER_MIN_BCHARGE`, `RECOVER_REQUIRE_ONLINE_SEC`, `RECOVER_BOOT_DELAY_SEC`, `RECOVER_MARKER_MAX_AGE_HOURS`. Read by `doshutdown_auto_recover` at boot. Tunable from dashboard (UPS tab → Auto-Recovery Settings sub-section). |
+| [scripts/doshutdown_recover](../scripts/doshutdown_recover) → `/etc/apcupsd/doshutdown_recover` (PVE) | Recovery body: WoL QNAP via eth0 MAC + `10.0.0.255` broadcast → wait for QNAP ping → `mount -a -t nfs,nfs4,cifs` (re-trigger PVE NFS mounts that silently failed at boot when QNAP was offline) → `pct/qm start` for guests not already running. `flock` concurrency guard. `check_mains_or_abort` called 3× between phases — exits cleanly on STATUS≠ONLINE. Honors optional `SELECTION` env var for testing only (production always recovers all). |
+| [scripts/doshutdown_auto_recover](../scripts/doshutdown_auto_recover) → `/etc/apcupsd/doshutdown_auto_recover` (PVE) | Phase 4 6-gate boot-time gate-check script. Sources `recover.conf`, then: G1 `RECOVER_AUTO=yes` → G2 marker present + age ≤ `MAX_AGE_HOURS` → G3 sleep `BOOT_DELAY_SEC` → G4 `apcaccess STATUS=ONLINE` → G5 ONLINE soak for `REQUIRE_ONLINE_SEC` → G6 `BCHARGE ≥ MIN_BCHARGE`. On all-pass: delegates to `doshutdown_recover`. Test env vars `DRY_RUN=1` (skip delegation), `FAST=1` (collapse sleeps to 1s+2s). Logs to `/var/log/apcupsd_shutdown.log`. |
+| [scripts/apcupsd-auto-recover.service](../scripts/apcupsd-auto-recover.service) → `/etc/systemd/system/apcupsd-auto-recover.service` (PVE) | Phase 4 systemd unit. `Type=oneshot`, `After=network-online.target apcupsd.service pve-guests.service`, `ConditionPathExists=/etc/apcupsd/last_shutdown_reason` (only fires after a UPS-triggered halt — regular reboots ignored), `ExecStart=/etc/apcupsd/doshutdown_auto_recover`, `ExecStartPost=/bin/rm -f /etc/apcupsd/last_shutdown_reason` (always cleans marker — no recovery loops), `TimeoutStartSec=600`. |
 | BOILER/dashboard/public/health.html | Project Health → UPS tab markup (4 cards) |
 | BOILER/dashboard/public/js/health.js | `ups*` functions (loadLive, loadHistory, loadEvents, runTest) |
 | BOILER/dashboard/server.js | In-handler proxies on `/api/dashboard-settings/:key` for `_ups_live`, `_ups_history`, `_ups_events`, `_ups_test_<name>` |
@@ -104,6 +108,9 @@ All in-handler proxies on the existing `/api/dashboard-settings/:key` route — 
 | `_ups_test_dryrun` | POST | Run `/etc/apcupsd/doshutdown` (SAFETY_MODE-gated, just logs) |
 | `_ups_test_safety_on` | POST | Restore the `SAFETY_MODE` flag |
 | `_ups_test_safety_off` | POST | Remove the flag — orchestrator becomes live |
+| `_ups_settings` | GET | Reads live `/etc/apcupsd/apcupsd.conf` + flag file + service state, returns 7 fields: `battery_level`, `minutes`, `timeout`, `onbattery_delay`, `safety_mode`, `at_boot`, `nompower_w`. Drives Shutdown Settings sub-section. |
+| `_ups_recover_settings` | GET | Reads live `/etc/apcupsd/recover.conf`, returns 5 fields: `recover_auto`, `min_bcharge_pct`, `require_online_sec`, `boot_delay_sec`, `marker_max_age_hours`. Drives Auto-Recovery Settings sub-section. |
+| `_ups_settings_set` | POST | Single-field editor for all 11 fields above. Body `{field, value}`. Validates kind/range/enum, then SSHes to PVE and runs targeted `sed` (apcupsd.conf / recover.conf), `touch`/`rm` (SAFETY_MODE), `systemctl enable`/`disable` (apcupsd at boot). `apcupsd_int` writes also `systemctl restart apcupsd` so changes take effect immediately. |
 
 In addition, `runHealthChecks()` in `server.js` reads the same latest `ups_status` row and surfaces it as `r.ups = { ok, status, battery_pct, runtime_min, line_volt, battery_volt, age_sec, stale }` on `/api/health/status`. This drives the **UPS** cell in the Project Health → System Status card (Infrastructure section, clickable to open the UPS tab) AND is counted by the sidebar Status badge in `alerts-monitor.js` — so a `COMMLOST` (USB unplugged) or stalled poller flips the top-left "Smart Home" indicator to red `⚠ N issues` on every page within 60 s.
 
@@ -137,23 +144,20 @@ The orchestrator at `/etc/apcupsd/doshutdown` checks for `/etc/apcupsd/SAFETY_MO
 
 **The dashboard "Remove SAFETY_MODE" button is the gate to going live.**
 
-## Going-live procedure
+## Going-live procedure (Phase 4 Part B)
 
-When user is physically ready (UPS charged + PVE plugged into UPS output + BIOS verified):
+Phase 4 Part A is **already installed** (auto-recovery machinery + dashboard editor + concurrency + mains-drop guard + NFS remount). All edits below can be done from the dashboard's UPS tab → Shutdown Settings + Auto-Recovery Settings sub-sections (click any value to edit). Per-step rationale:
 
-1. **Install the orchestrator's SSH pubkey on QNAP** (already done 2026-04-29 — kept here for re-deploy / hardware-swap reference):
-   ```bash
-   # QNAP user used by the orchestrator: admin123 (custom admin account in `administrators` group, NOT the default `admin`).
-   # Append to /share/homes/admin123/.ssh/authorized_keys (perms 700 on dir, 600 on file):
-   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKAWBnlevV/wO+n/tLxoaNQ23KrrzFdR/TzrPOWSfNY4 ups-orchestrator@pve 2026-04-29
-   ```
-   The orchestrator script (`/etc/apcupsd/doshutdown`) and the `_ups_test_qnap_ssh` dashboard endpoint both SSH as `admin123@192.168.1.155`. If the username ever changes again, update both sides — `grep -rn "admin123@192.168.1.155"` finds them.
-2. **Bump `BATTERYLEVEL`**: edit `/etc/apcupsd/apcupsd.conf` on PVE, change `BATTERYLEVEL 5` → `30`, then `systemctl restart apcupsd`.
-3. **Enable apcupsd at boot**: `systemctl enable apcupsd` on PVE (currently disabled).
-4. **Click "Remove SAFETY_MODE"** on the dashboard UPS tab.
-5. **Verify**: dashboard "Test orchestrator (DRY RUN)" should now show real commands (or just `[1/3] poweroff QNAP` log entries since orchestrator no longer short-circuits).
-6. **BATTERYLEVEL=95 mains-pull test** — temporarily set `BATTERYLEVEL=95`, restart apcupsd, unplug mains for ~30 s. Watch full orchestrator fire. After PVE halts and KILLPOWER cuts UPS output, plug mains back in: verify UPS auto-restarts AND PVE auto-boots (BIOS "Restore on Power Loss" must be on).
-7. **Reset to production**: `BATTERYLEVEL=30`, restart apcupsd. System is live.
+When user is physically ready (UPS charged + PVE plugged into UPS battery output + QNAP plugged into UPS output + BIOS POWER_ON verified):
+
+1. **(reference only, already done 2026-04-29)** Orchestrator's SSH pubkey installed on QNAP at `/share/homes/admin123/.ssh/authorized_keys`. Used by `/etc/apcupsd/doshutdown` and dashboard `_ups_test_qnap_ssh`. If username changes: `grep -rn "admin123@192.168.1.155"` finds both sites.
+2. **B1 — `BATTERYLEVEL=30`**: dashboard Shutdown Settings → click "Shutdown at battery" → 30. (Auto-restarts apcupsd.)
+3. **B2 — `MINUTES=8`**: dashboard Shutdown Settings → click "Shutdown at low runtime" → 8.
+4. **B3 — apcupsd at boot = enabled**: dashboard Shutdown Settings → click "Auto-start after PVE reboot" → enabled. (Already done 2026-04-30 during recovery hardening — confirm.)
+5. **B4 — `RECOVER_AUTO=yes`**: dashboard Auto-Recovery Settings → click "Auto-recover after UPS shutdown" → yes. (No daemon to restart — read at next boot.)
+6. **B5 — Remove SAFETY_MODE** (the moment of truth): dashboard Shutdown Settings → click "Safety mode" → absent. After this, the next time `BATTERYLEVEL=30` or `MINUTES=8` trips, the orchestrator fires for real.
+7. **B6 — Verify**: dashboard "Test orchestrator (DRY RUN)" → should now log real commands (no SAFETY_MODE short-circuit).
+8. **(optional) Part C — BATTERYLEVEL=95 mains-pull test**: temporarily set `BATTERYLEVEL=95`, unplug mains for ~30 s. Watch full orchestrator fire (system_alerts shows `ups_onbattery` warning, then full halt). After PVE halts + UPS KILLPOWER cuts output, plug mains back: verify UPS auto-restarts → PVE auto-boots (BIOS POWER_ON) → systemd `apcupsd-auto-recover.service` fires → 6 gates pass → `doshutdown_recover` runs → all guests come back. Reset `BATTERYLEVEL=30`.
 
 ## Known quirks / limitations
 
@@ -176,5 +180,7 @@ The `/pss-update` skill (in `.claude/skills/pss-update/SKILL.md`) automates rout
 - **2026-04-29 Phase 3.5** — System Status surfaces `ups` cell + sidebar Status badge counts UPS health; `ups_status` listed in DB Volumes view.
 - **2026-04-29 Phase 3.6** — QNAP SSH switched from `admin` (default) to `admin123` (custom admin in `administrators` group); orchestrator + dashboard test endpoint updated; pubkey installed at `/share/homes/admin123/.ssh/authorized_keys`.
 - **2026-04-29 Phase 3.7** — Lost-input-power warning: 4 apcupsd hook scripts on PVE write `ups_onbattery` / `ups_commlost` rows to `system_alerts` (warn severity, idempotent, best-effort, < 7 s detection from mains loss). `postgresql-client` installed on PVE for trust-auth `psql`. Independent of Phase 4 — fires regardless of SAFETY_MODE.
-- **(pending)** Phase 4 — going live: BATTERYLEVEL=30 + MINUTES=8 (runtime safety net), SAFETY_MODE removed, BATTERYLEVEL=95 test passed, KILLPOWER + auto-boot verified.
+- **2026-04-30 Phase 4 Part A — auto-recovery infrastructure installed (default OFF, safe).** Marker pattern: `doshutdown` writes `/etc/apcupsd/last_shutdown_reason` just before `shutdown -h now`. On next PVE boot, systemd unit `apcupsd-auto-recover.service` checks `ConditionPathExists` for the marker. If present, runs `doshutdown_auto_recover` (6 gates: master switch / marker age / boot delay / STATUS=ONLINE / online soak / battery charge), and on all-pass delegates to `doshutdown_recover` (WoL QNAP → wait → `mount -a` re-mounts NFS shares → start LXCs/VM). `flock` prevents concurrent runs (boot auto-recovery + dashboard manual Recover button). `check_mains_or_abort()` between phases exits cleanly if mains drop again mid-recovery. **Master switch** (`RECOVER_AUTO=yes` in `recover.conf`) keeps machinery dormant until explicit go-live. `apcupsd-auto-recover.service` is enabled but harmless without the marker file. Dashboard UPS tab → Trigger Settings card extended with **Auto-Recovery Settings** sub-section + made all 11 settings inline-editable with validation (apcupsd 4 ints, SAFETY_MODE flag, apcupsd-at-boot service toggle, recover.conf 1 enum + 4 ints). Live test validated: orchestrator halt sequence + marker write + systemd unit fire on boot + gate 1 exit + marker cleanup + concurrency guard. NFS remount step `[3.5/4]` added after live test exposed gap (analyzer crashed when LXC 100's bind mount pointed at empty `/mnt/qnap-media` because PVE's NFS mount silently failed when QNAP was still off at boot).
+- **2026-04-30 Hardening (post-Phase 4 Part A test):** `onboot=1` set on all 7 LXCs + VM 101 (was only 100, 102, 101) so PVE auto-starts every guest on its own boot — `recover.conf` recovery script just adds QNAP WoL + NFS remount on top. apcupsd enabled at boot (was disabled — caused "UPS COMMUNICATION LOST" alert post-test when PVE rebooted without apcupsd auto-starting). Decision recorded in memory `feedback_ups_all_or_nothing.md`: shutdown and recovery always include every device, no per-device selection in production UI, no `onboot=1` subset.
+- **(pending)** Phase 4 Part B — going live: BATTERYLEVEL=30 + MINUTES=8 (runtime safety net), `RECOVER_AUTO=yes`, SAFETY_MODE removed, BATTERYLEVEL=95 mains-pull test passed, KILLPOWER + auto-boot verified.
 - **(out of scope today)** Phase 5+ — rule engine integration (`state.shared['ups.*']` keys → rules push Pixoo "POWER OUT" preset, etc.), battery-aging alerts.
