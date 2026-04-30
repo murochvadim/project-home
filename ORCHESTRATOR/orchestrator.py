@@ -87,15 +87,21 @@ def raise_alert(cur, alert_type, affected_agent, severity, message):
 
 
 def resolve_alert(cur, alert_type, affected_agent):
-    """Resolve an active alert if one exists."""
-    existing = get_active_alert(cur, alert_type, affected_agent)
-    if not existing:
-        return
+    """Resolve ALL active alerts of this type+agent (handles duplicate rows)."""
     cur.execute(
-        "UPDATE system_alerts SET resolved_at = NOW() WHERE id = %s",
-        (existing,)
+        """UPDATE system_alerts SET resolved_at = NOW()
+           WHERE alert_type = %s
+             AND (affected_agent IS NOT DISTINCT FROM %s)
+             AND resolved_at IS NULL
+           RETURNING id""",
+        (alert_type, affected_agent)
     )
-    write_log(cur, 'info', f'ALERT resolved [{alert_type}] {f"→ {affected_agent}" if affected_agent else "(all)"}')
+    rows = cur.fetchall()
+    if not rows:
+        return
+    suffix = f' (cleared {len(rows)} duplicate rows)' if len(rows) > 1 else ''
+    write_log(cur, 'info',
+              f'ALERT resolved [{alert_type}] {f"→ {affected_agent}" if affected_agent else "(all)"}{suffix}')
 
 
 # Two-strike rule for service checks (added 2026-04-30):
