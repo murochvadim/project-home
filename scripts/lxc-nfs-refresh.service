@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh LXCs whose QNAP bind mounts are stale after PVE boot
+Documentation=https://github.com/local/UPS/CLAUDE.md
+After=pve-guests.service network-online.target
+Wants=pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lxc-nfs-refresh.sh
+TimeoutStartSec=900
+RemainAfterExit=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
