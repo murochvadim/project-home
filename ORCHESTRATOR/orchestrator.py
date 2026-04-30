@@ -98,6 +98,36 @@ def resolve_alert(cur, alert_type, affected_agent):
     write_log(cur, 'info', f'ALERT resolved [{alert_type}] {f"→ {affected_agent}" if affected_agent else "(all)"}')
 
 
+# Two-strike rule for service checks (added 2026-04-30):
+# A single failed SSH or service check is treated as a SOFT failure (logged
+# as 'warn' to orchestrator_log, no alert row in system_alerts). Only on the
+# SECOND consecutive failure within ~7 minutes does it escalate to a real
+# alert. Eliminates the false-alarm cascade after every UPS recovery / LXC
+# restart, where an LXC is briefly unreachable for 15-30 s and a single
+# orchestrator quick-run pass coincides with that window.
+SOFT_FAIL_PREFIX = 'soft-fail'
+SOFT_FAIL_WINDOW_MIN = 7
+
+def is_repeat_soft_fail(cur, alert_type, affected_agent):
+    """Did we record a soft-fail of this kind for this agent in the last 7 min?"""
+    pattern = f'{SOFT_FAIL_PREFIX}:{alert_type}:{affected_agent or "_"}:%'
+    cur.execute(
+        f"""SELECT 1 FROM orchestrator_log
+            WHERE source = 'orchestrator'
+              AND severity = 'warn'
+              AND message LIKE %s
+              AND ts > now() - interval '{SOFT_FAIL_WINDOW_MIN} minutes'
+            LIMIT 1""",
+        (pattern,)
+    )
+    return cur.fetchone() is not None
+
+def record_soft_fail(cur, alert_type, affected_agent, detail):
+    """Log a soft-fail without raising an alert. Escalation logic in the caller."""
+    write_log(cur, 'warn',
+              f'{SOFT_FAIL_PREFIX}:{alert_type}:{affected_agent or "_"}: {detail}')
+
+
 # ── Agent health checks ──────────────────────────────────────────────────────
 def check_schedule(cur, agent):
     table = agent['data_table']
@@ -210,15 +240,27 @@ def check_service(cur, agent):
                 resolve_alert(cur, 'service_down',       agent['name'])
                 resolve_alert(cur, 'service_ssh_failed', agent['name'])
             else:
-                write_log(cur, 'error', f'Auto-restart failed: {label} still {new_status!r} on {lxc_ip}')
-                raise_alert(cur, 'service_down', agent['name'], 'critical',
-                            f"{label} on {lxc_ip} is '{new_status}' after auto-restart attempt")
+                # Two-strike: only raise after a prior soft-fail within 7 min.
+                if is_repeat_soft_fail(cur, 'service_down', agent['name']):
+                    write_log(cur, 'error', f'Auto-restart failed: {label} still {new_status!r} on {lxc_ip}')
+                    raise_alert(cur, 'service_down', agent['name'], 'critical',
+                                f"{label} on {lxc_ip} is '{new_status}' after auto-restart attempt")
+                else:
+                    record_soft_fail(cur, 'service_down', agent['name'],
+                                     f"{label} still {new_status!r} after auto-restart (will alert if next run also fails)")
         else:
             resolve_alert(cur, 'service_down',       agent['name'])
             resolve_alert(cur, 'service_ssh_failed', agent['name'])
     except Exception as e:
-        raise_alert(cur, 'service_ssh_failed', agent['name'], 'error',
-                    f"SSH service check failed for {lxc_ip}: {e}")
+        # Two-strike: a single SSH/check failure (LXC briefly unreachable during
+        # recovery, brief restart, network blip) is logged but not alerted.
+        # Escalates only if next run (~5 min later) also fails.
+        if is_repeat_soft_fail(cur, 'service_ssh_failed', agent['name']):
+            raise_alert(cur, 'service_ssh_failed', agent['name'], 'error',
+                        f"SSH service check failed for {lxc_ip}: {e}")
+        else:
+            record_soft_fail(cur, 'service_ssh_failed', agent['name'],
+                             f"SSH check failed for {lxc_ip}: {e} (will alert if next run also fails)")
 
 
 def check_weather_freshness(cur):
