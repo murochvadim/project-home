@@ -7,18 +7,29 @@
 (function () {
   let _devices = [];
   let _pixooPresets = [];
+  let _awtrixApps = [];      // saved apps from dashboard_settings.awtrix.messages
   let _modal = null;
   let _onPick = null;
 
   const MULTI_CHANNEL_TYPES = new Set(['switch', 'circuit_breaker']);
 
-  // Returns [[key, label], ...] pairs to render as sub-pickable "channels" for
-  // a device, or null if the device has none. For Pixoo displays, the
-  // "channels" are preset names from pixoo_presets (fetched into _pixooPresets).
+  // True if the device should expose display-style action sub-buttons
+  // (on / off / push <preset>) — Awtrix + Pixoo today, future ambient
+  // displays automatically by setting device_type='display'.
+  function _isDisplayDevice(d) {
+    return d.device_type === 'display' || d.protocol === 'pixoo' || d.protocol === 'awtrix';
+  }
+
+  function _displayPresetsFor(d) {
+    if (d.protocol === 'pixoo')  return _pixooPresets.map(p => p.name).filter(Boolean);
+    if (d.protocol === 'awtrix') return _awtrixApps.map(a => a.name).filter(Boolean);
+    return [];
+  }
+
+  // Returns [[key, label], ...] pairs for SUB-channel pickers (multi-gang
+  // switches). Display devices use a different sub-row (rendered inline)
+  // because they need 'on/off' actions on top of 'push <preset>'.
   function _virtualChannelsFor(d) {
-    if (d.protocol === 'pixoo') {
-      return _pixooPresets.map(p => [p.name, p.name]);
-    }
     if (MULTI_CHANNEL_TYPES.has(d.device_type) && d.dps_labels && Object.keys(d.dps_labels).length > 0) {
       return Object.entries(d.dps_labels);
     }
@@ -90,34 +101,48 @@
       return;
     }
     listEl.innerHTML = filtered.map(d => {
+      const isDisplay = _isDisplayDevice(d);
       const channelPairs = _virtualChannelsFor(d);
       const hasChannels = !!(channelPairs && channelPairs.length);
-      const isPixoo = d.protocol === 'pixoo';
       const roomStr = d.room ? `<span style="color:#888;font-size:0.72rem;margin-left:6px;">(${d.room})</span>` : '';
       const typeStr = `<span style="color:#6c4f9f;font-size:0.7rem;margin-left:6px;">[${d.device_type || 'device'}]</span>`;
-      let channelsHtml = '';
-      if (hasChannels) {
-        const channels = channelPairs.map(([key, label]) => {
-          const display = isPixoo ? (label || key) : `${key}: ${label || '(unnamed)'}`;
-          return `<button data-dp-pick="device:${encodeURIComponent(d.id)}" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-label="${(label||'').replace(/"/g,'&quot;')}"
-                          style="padding:2px 8px;margin:2px;border:1px solid #d0cbc4;background:#fafaf7;border-radius:3px;cursor:pointer;font-size:0.72rem;">
-                    ${display}
-                  </button>`;
-        }).join('');
-        const emptyHint = (isPixoo && channelPairs.length === 0) ? '<span style="color:#999;font-size:0.72rem;">No presets — create some on the Corridor page first.</span>' : '';
-        channelsHtml = `<div style="padding:2px 8px 6px 24px;">${channels}${emptyHint}</div>`;
-      } else if (isPixoo) {
-        channelsHtml = `<div style="padding:2px 8px 6px 24px;color:#999;font-size:0.72rem;">No presets — create some on the Corridor page first.</div>`;
+
+      let extrasHtml = '';
+      if (isDisplay) {
+        // on/off + push <preset> sub-buttons. Tokens: '@Name on'/'@Name off' or '@Name push <preset>'.
+        const presets = _displayPresetsFor(d);
+        const onBtn  = `<button data-dp-action="on"  data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}"
+                          style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">on</button>`;
+        const offBtn = `<button data-dp-action="off" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}"
+                          style="padding:2px 8px;margin:2px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">off</button>`;
+        const pushBtns = presets.map(p =>
+          `<button data-dp-action="push" data-dp-preset="${(p||'').replace(/"/g,'&quot;')}" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}"
+                   style="padding:2px 8px;margin:2px;border:1px solid #d0cbc4;background:#fafaf7;border-radius:3px;cursor:pointer;font-size:0.72rem;">push ${p}</button>`
+        ).join('');
+        const emptyHint = !presets.length
+          ? `<span style="color:#999;font-size:0.7rem;margin-left:4px;">no saved ${d.protocol === 'awtrix' ? 'apps' : 'presets'} yet</span>`
+          : '';
+        extrasHtml = `<div style="padding:2px 8px 6px 24px;">${onBtn}${offBtn}${pushBtns}${emptyHint}</div>`;
+      } else if (hasChannels) {
+        const channels = channelPairs.map(([key, label]) =>
+          `<button data-dp-pick="device:${encodeURIComponent(d.id)}" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-label="${(label||'').replace(/"/g,'&quot;')}"
+                   style="padding:2px 8px;margin:2px;border:1px solid #d0cbc4;background:#fafaf7;border-radius:3px;cursor:pointer;font-size:0.72rem;">${key}: ${label || '(unnamed)'}</button>`
+        ).join('');
+        extrasHtml = `<div style="padding:2px 8px 6px 24px;">${channels}</div>`;
       }
-      return `
-        <div style="border-bottom:1px solid #e8e3d8;">
-          <div data-dp-pick="device:${encodeURIComponent(d.id)}" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}"
-               style="padding:6px 10px;cursor:pointer;" title="Click to insert reference without specific channel">
-            <strong>${d.name || '(unnamed)'}</strong>${typeStr}${roomStr}
-          </div>
-          ${channelsHtml}
-        </div>`;
+
+      const baseRow = isDisplay
+        // For display devices, the bare-name click is removed — actions are mandatory.
+        ? `<div style="padding:6px 10px;color:#666;"><strong>${d.name || '(unnamed)'}</strong>${typeStr}${roomStr}</div>`
+        : `<div data-dp-pick="device:${encodeURIComponent(d.id)}" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}"
+                 style="padding:6px 10px;cursor:pointer;" title="Click to insert reference without specific channel">
+             <strong>${d.name || '(unnamed)'}</strong>${typeStr}${roomStr}
+           </div>`;
+
+      return `<div style="border-bottom:1px solid #e8e3d8;">${baseRow}${extrasHtml}</div>`;
     }).join('');
+
+    // Channel/bare-name picks (legacy + multi-gang switches)
     listEl.querySelectorAll('[data-dp-pick]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -128,15 +153,23 @@
         if (!channel) {
           token = `@${name}`;
         } else {
-          // For Pixoo presets the "channel" IS the preset name — use it verbatim.
-          // For switches/breakers, prefer the dps_label, fall back to `Ch{key}`.
-          const isPixooPreset = name === 'Pixoo';
-          const labelClean = isPixooPreset
-            ? channel
-            : (label && label !== '(unnamed)' ? label : `Ch${channel}`);
-          token = `@${name} ${labelClean}`;
+          token = `@${name} ${(label && label !== '(unnamed)') ? label : `Ch${channel}`}`;
         }
         if (_onPick) _onPick(token);
+        window._dpClose();
+      });
+    });
+
+    // Display action picks (on / off / push <preset>)
+    listEl.querySelectorAll('[data-dp-action]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = el.dataset.dpName || '';
+        const action = el.dataset.dpAction;
+        let token;
+        if (action === 'on' || action === 'off') token = `@${name} ${action}`;
+        else if (action === 'push')               token = `@${name} push ${el.dataset.dpPreset || ''}`.trim();
+        if (token && _onPick) _onPick(token);
         window._dpClose();
       });
     });
@@ -197,16 +230,20 @@
     const fresh = !_devices.length || (Date.now() - (_devices._loadedAt || 0)) > 30000;
     if (fresh) {
       try {
-        const [devRes, presRes] = await Promise.all([
+        const [devRes, presRes, awRes] = await Promise.all([
           fetch('/api/devices').then(r => r.json()),
           fetch('/api/pixoo/presets').then(r => r.json()).catch(() => []),
+          fetch('/api/dashboard-settings/awtrix.messages').then(r => r.json()).catch(() => ({ value: [] })),
         ]);
         _devices = Array.isArray(devRes) ? devRes : [];
         _devices._loadedAt = Date.now();
         _pixooPresets = Array.isArray(presRes) ? presRes : [];
+        const awVal = awRes && awRes.value;
+        _awtrixApps = Array.isArray(awVal) ? awVal : [];
       } catch (e) {
         _devices = [];
         _pixooPresets = [];
+        _awtrixApps = [];
       }
     }
     _renderTypeFilter();

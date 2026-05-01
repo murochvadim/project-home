@@ -224,15 +224,22 @@ def _parse_config(state, container):
     return cfg
 
 
+_PRESET_CHIP_RE = re.compile(r'^@(?P<dev>Pixoo|Awtrix)\s+(?:push\s+)?(?P<preset>.+)$', re.IGNORECASE)
+
+
 def _extract_preset_name(sentence, fallback_text):
-    """Pixoo presets are typically authored via the @Pixoo <PresetName> chip
-    syntax. Prefer the chip value (with the `@Pixoo ` prefix stripped); fall
-    back to the captured raw text if no chip is present."""
+    """Pixoo presets are typically authored via @Pixoo or @Awtrix chip syntax.
+    Recognized formats:
+      @Pixoo <PresetName>        (legacy)
+      @Pixoo push <PresetName>   (display-picker action format)
+      @Awtrix push <SavedApp>    (Awtrix saved app — same shape)
+    """
     chips = _iter_dev_chips(sentence)
     if chips:
         chip = chips[0]
-        if chip.startswith('@Pixoo '):
-            return chip[len('@Pixoo '):].strip()
+        m = _PRESET_CHIP_RE.match(chip.strip())
+        if m:
+            return m.group('preset').strip()
         if chip.startswith('@'):
             return chip[1:].strip()
     return (fallback_text or '').strip()

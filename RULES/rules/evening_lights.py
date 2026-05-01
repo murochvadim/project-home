@@ -51,8 +51,17 @@ Companion rules:
 import json
 import logging
 import re
+import sys
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+# RULES/ is the parent of rules/ — needed for `import _display_chips` since
+# rule files are loaded via importlib.util but share sys.path with the engine.
+_RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RULES_DIR not in sys.path:
+    sys.path.insert(0, _RULES_DIR)
+from _display_chips import parse_display_chip, build_devices_by_name  # noqa: E402
 
 log = logging.getLogger('rule.evening_lights')
 
@@ -181,10 +190,17 @@ def _read_evening_lights_container(state):
 
 
 def _load_evening_light_targets(state, container):
-    """Extract (device_id, dps_key) tuples from the device-list sentence."""
+    """Extract targets from the device-list sentence.
+
+    Returns a list whose items are either:
+      - (device_id, dps_key)            for switch/light style chips → turn_on
+      - {device_id, protocol, action…}  for display chips (Pixoo / Awtrix
+                                         on/off/push) → dispatched verbatim
+    """
     if not container:
         return []
     devices_by_name_desc = _build_devices_by_name_desc(state.devices)
+    devices_by_name = build_devices_by_name(state.devices)
     targets = []
     seen = set()
     for s in (container.get('sentences') or []):
@@ -194,6 +210,14 @@ def _load_evening_light_targets(state, container):
         if not _DEVICES_TRIGGER_RE.search(text):
             continue
         for chip in _iter_dev_chips(s):
+            # Display chips first (Awtrix/Pixoo on/off/push)
+            disp = parse_display_chip(chip, devices_by_name)
+            if disp:
+                key = ('disp', disp.get('device_id'), disp.get('action'), disp.get('preset_name'))
+                if key not in seen:
+                    targets.append(disp)
+                    seen.add(key)
+                continue
             parsed = _parse_dev_chip(chip, devices_by_name_desc)
             if parsed and parsed not in seen:
                 targets.append(parsed)
@@ -351,14 +375,15 @@ def evaluate(event, state):
         return []
 
     commands = []
-    for dev_id, dps_key in targets:
-        cmd = {
-            'device_id': dev_id,
-            'action':    'turn_on',
-            'rule':      'Evening Lights',
-        }
-        if dps_key is not None:
-            cmd['channel'] = dps_key
+    for t in targets:
+        if isinstance(t, dict):
+            # Display chip (already a complete command dict)
+            cmd = {**t, 'rule': 'Evening Lights'}
+        else:
+            dev_id, dps_key = t
+            cmd = {'device_id': dev_id, 'action': 'turn_on', 'rule': 'Evening Lights'}
+            if dps_key is not None:
+                cmd['channel'] = dps_key
         commands.append(cmd)
 
     scenario = 'A:sun_anchor' if sun_anchor_hit else 'B:home_arrival'
