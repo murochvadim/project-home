@@ -15,21 +15,6 @@ for rule_engine._dispatch_command, or None if the token isn't a display
 chip.
 """
 
-import re
-
-_TOKEN_RE = re.compile(
-    r"""
-    ^@
-    (?P<name>[^@]+?)        # device name (greedy until trailing whitespace)
-    (?:\s+
-      (?P<rest>.+)          # action + optional preset
-    )?
-    \s*$
-    """,
-    re.VERBOSE,
-)
-
-
 def parse_display_chip(token, devices_by_name):
     """Return a command dict for a display chip, or None.
 
@@ -38,26 +23,22 @@ def parse_display_chip(token, devices_by_name):
     """
     if not token or not isinstance(token, str) or not token.startswith("@"):
         return None
-    m = _TOKEN_RE.match(token.strip())
-    if not m:
+    body = token[1:].strip()
+    if not body:
         return None
 
-    rest = (m.group("rest") or "").strip()
-    name = m.group("name").strip()
-
-    # Walk back through prefixes — the rest of the token may be eaten by
-    # the device name. Try longest-prefix-match against known names.
+    # Longest-prefix match: try the full body as device name, then shorten
+    # by one trailing word until a known name matches. Handles both
+    # single-word ('@Pixoo on') and multi-word ('@Multi Word Display on').
+    parts = body.split()
     dev = None
-    while name:
-        if name in devices_by_name:
-            dev = devices_by_name[name]
+    rest = ""
+    for split_at in range(len(parts), 0, -1):
+        candidate = " ".join(parts[:split_at])
+        if candidate in devices_by_name:
+            dev = devices_by_name[candidate]
+            rest = " ".join(parts[split_at:]).strip()
             break
-        # Move the last word from name to rest
-        idx = name.rfind(" ")
-        if idx < 0:
-            break
-        rest = name[idx + 1:] + (" " + rest if rest else "")
-        name = name[:idx]
 
     if not dev:
         return None
