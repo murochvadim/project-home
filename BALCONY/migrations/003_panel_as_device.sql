@@ -4,6 +4,6 @@
 -- Same pattern as the 'pixoo' device row.
 -- Idempotent: ON CONFLICT DO NOTHING.
 
-INSERT INTO devices (id, name, vendor, protocol, device_type, room, show_dashboard, poll_enabled, enabled)
-VALUES ('hasp:balcony', 'balcony', 'OpenHASP', 'hasp', 'panel', 'Balcony', false, false, true)
+INSERT INTO devices (id, name, vendor, protocol, device_type, room, show_dashboard, poll_enabled, enabled, mac)
+VALUES ('hasp:balcony', 'balcony', 'OpenHASP', 'hasp', 'panel', 'Balcony', true, false, true, '8c:bf:ea:0d:c3:24')
 ON CONFLICT (id) DO NOTHING;
