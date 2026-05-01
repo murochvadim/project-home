@@ -775,12 +775,16 @@ class RuleEngine:
         # Pixoo is a virtual device — route directly to pixoo command topic
         protocol = cmd.get('protocol', '')
         if protocol == 'pixoo':
-            pixoo_payload = {k: v for k, v in cmd.items() if k not in {'device_id', 'protocol', 'rule'}}
+            pixoo_payload = {k: v for k, v in cmd.items() if k not in {'device_id', 'protocol', 'rule', '_skip_loop_guard'}}
             self.mqtt.publish_command('mur/home/pixoo/command', pixoo_payload)
             log.info("Rule '%s' -> pixoo %s", rule_name, action)
             return
 
-        if self._check_loop(device_id, action, rule_name):
+        # Loop guard catches runaway automation feedback (rule → device →
+        # rule → …). Rules that act on human input (panel button, wallmote)
+        # can mark their commands with `_skip_loop_guard=True` so rapid
+        # intentional presses don't auto-disable the rule.
+        if not cmd.get('_skip_loop_guard') and self._check_loop(device_id, action, rule_name):
             return
 
         dev = self.state.devices.get(device_id, {})
@@ -788,7 +792,7 @@ class RuleEngine:
         device_name = dev.get('name', device_id)
 
         # Strip internal keys — only pass device-specific payload
-        _internal = {'device_id', 'action', 'channel', 'rule', 'path', 'value'}
+        _internal = {'device_id', 'action', 'channel', 'rule', 'path', 'value', '_skip_loop_guard'}
 
         if protocol == 'hasp':
             path = cmd.get('path', '')

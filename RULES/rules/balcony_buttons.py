@@ -88,12 +88,16 @@ def _build_command(binding, page, bid, evt):
     if not atype or not atarget:
         return None
 
+    # Human button presses are intentional input, not automation feedback —
+    # exempt from the rule engine's same-action-4x-in-10s loop guard so
+    # rapid tapping during testing doesn't auto-disable the rule.
     if atype == "device":
         action = apayload.get("action", "toggle")
         cmd = {
             "device_id": atarget,
             "action": action,
             "rule": "Balcony Buttons",
+            "_skip_loop_guard": True,
         }
         if apayload.get("channel"):
             cmd["channel"] = apayload["channel"]
@@ -111,6 +115,7 @@ def _build_command(binding, page, bid, evt):
             "path": path,
             "value": value,
             "rule": "Balcony Buttons",
+            "_skip_loop_guard": True,
         }
 
     if atype == "pixoo_preset":
@@ -120,6 +125,7 @@ def _build_command(binding, page, bid, evt):
             "action": "push_preset",
             "preset_name": atarget,
             "rule": "Balcony Buttons",
+            "_skip_loop_guard": True,
         }
         if apayload.get("vars"):
             cmd["vars"] = apayload["vars"]
