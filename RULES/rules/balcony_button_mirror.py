@@ -38,25 +38,41 @@ _last_sent = {}  # (page, button_id) → last val we published (0 or 1)
 
 def _bindings_by_device(state):
     """Return dict device_id → [{page, button_id, channel}, …] for every
-    action_type='device' row on the balcony panel. 30 s TTL cache."""
+    button whose first device-type binding points at that device.
+
+    'First device' semantics: a button with N bindings can fan out to N
+    devices, but the panel's @checked tint is binary — we mirror only the
+    first device-type binding's state. User puts the 'representative'
+    device first if it matters.
+    30 s TTL cache.
+    """
     now = time.time()
     if _cache["data"] is not None and (now - _cache["ts"]) < _CACHE_TTL_SEC:
         return _cache["data"]
 
     rows = state.db_query(
         """
-        SELECT b.page, b.button_id, b.action_target, b.action_payload->>'channel' AS channel
+        SELECT b.page, b.button_id, b.bindings
         FROM hasp_buttons b
         JOIN hasp_panels p ON p.id = b.panel_id
         WHERE p.name = 'balcony'
-          AND b.action_type = 'device'
-          AND b.action_target IS NOT NULL
+          AND b.bindings IS NOT NULL
+          AND jsonb_array_length(b.bindings) > 0
         """
     )
     by_device = {}
     for row in rows or []:
-        page, bid, target, channel = row
-        if not target or not channel:
+        page, bid, bindings = row
+        if not bindings:
+            continue
+        # Find first device-type binding (skip hasp_command / pixoo_preset)
+        first = next((b for b in bindings
+                      if (b.get("type") in (None, "device")) and b.get("device_id")), None)
+        if not first:
+            continue
+        target = first.get("device_id")
+        channel = first.get("channel")
+        if not channel:
             continue
         by_device.setdefault(target, []).append(
             {"page": page, "button_id": bid, "channel": channel}

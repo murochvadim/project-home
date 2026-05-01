@@ -1705,7 +1705,7 @@ app.post('/api/rule-engine/test', async (req, res) => {
 // Config tables only — no business logic. Rule engine on LXC 105 owns dispatch.
 
 const _HASP_PANEL_RE = /^[a-z][a-z0-9-]*$/;
-const _HASP_BTN_FIELDS = new Set(['event', 'action_type', 'action_target', 'action_payload']);
+const _HASP_BTN_FIELDS = new Set(['event', 'label', 'bindings', 'action_type', 'action_target', 'action_payload']);
 const _HASP_DISP_FIELDS = new Set(['page', 'label_id', 'description', 'display_type', 'target_property',
                                     'source_type', 'source_value', 'format_string', 'refresh_sec']);
 
@@ -1721,7 +1721,7 @@ app.get('/api/hasp/:panel/buttons', async (req, res) => {
     const pid = await _haspPanelId(req.params.panel);
     const r = await db.query(
       `SELECT id, page, button_id, event, label, icon_codepoint,
-              action_type, action_target, action_payload, last_event_at
+              bindings, action_type, action_target, action_payload, last_event_at
        FROM hasp_buttons WHERE panel_id = $1
        ORDER BY page, button_id, event`,
       [pid]
@@ -1741,13 +1741,14 @@ app.patch('/api/hasp/:panel/buttons/:id', async (req, res) => {
     for (const [k, v] of Object.entries(req.body || {})) {
       if (!_HASP_BTN_FIELDS.has(k)) continue;
       sets.push(`${k} = $${i++}`);
-      vals.push(k === 'action_payload' ? JSON.stringify(v || {}) : v);
+      const isJson = k === 'action_payload' || k === 'bindings';
+      vals.push(isJson ? JSON.stringify(v || (k === 'bindings' ? [] : {})) : v);
     }
     if (!sets.length) return res.status(400).json({ error: 'no valid fields' });
     vals.push(id, pid);
     const r = await db.query(
       `UPDATE hasp_buttons SET ${sets.join(', ')} WHERE id = $${i++} AND panel_id = $${i}
-       RETURNING id, page, button_id, event, action_type, action_target, action_payload`,
+       RETURNING id, page, button_id, event, label, bindings`,
       vals
     );
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
@@ -1755,55 +1756,68 @@ app.patch('/api/hasp/:panel/buttons/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Test-fire — direct dispatch (bypasses rule engine; verifies the binding alone)
+// Test-fire — iterates bindings array, dispatches each (bypasses rule engine).
+async function _haspDispatchOne(panelName, b) {
+  if (b.type === 'hasp_command' || (!b.type && b.target && !b.device_id)) {
+    const parts = String(b.target).trim().split(/\s+/);
+    const path = parts[0];
+    const value = parts.slice(1).join(' ');
+    mqttClient.publish(`hasp/${panelName}/command/${path}`, value);
+    return { kind: 'hasp_command', topic: `hasp/${panelName}/command/${path}`, payload: value };
+  }
+  if (b.type === 'pixoo_preset') {
+    const payload = { action: 'push_preset', preset_name: b.target };
+    if (b.vars) payload.vars = b.vars;
+    mqttClient.publish('mur/home/pixoo/command', JSON.stringify(payload));
+    return { kind: 'pixoo_preset', preset: b.target };
+  }
+  // Default: device binding
+  const device_id = b.device_id;
+  if (!device_id) throw new Error('binding missing device_id');
+  const channel = b.channel;
+  const action = b.action || 'toggle';
+  const body = channel ? { channel } : {};
+  if (action === 'turn_on') body.state = true;
+  else if (action === 'turn_off') body.state = false;
+  else {
+    const devR = await db.query('SELECT last_state FROM devices WHERE id = $1', [device_id]);
+    const cur = devR.rows[0]?.last_state || {};
+    const curVal = channel ? cur[channel] : (cur['1'] ?? cur.state ?? cur.power);
+    body.state = !(curVal === true || curVal === 1 || curVal === 'on' || curVal === 'ON' || curVal === 'true');
+  }
+  const proxy = await fetch(`http://127.0.0.1:3000/api/devices/${encodeURIComponent(device_id)}/toggle`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const out = await proxy.json();
+  if (!proxy.ok) throw new Error(out.error || `HTTP ${proxy.status}`);
+  return { kind: 'device', device: b.name || device_id, action, result: out };
+}
+
 app.post('/api/hasp/:panel/buttons/:id/test', async (req, res) => {
   try {
     const pid = await _haspPanelId(req.params.panel);
     const id = parseInt(req.params.id, 10);
     const r = await db.query(
-      `SELECT action_type, action_target, action_payload FROM hasp_buttons WHERE id = $1 AND panel_id = $2`,
+      `SELECT bindings FROM hasp_buttons WHERE id = $1 AND panel_id = $2`,
       [id, pid]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
-    const { action_type, action_target, action_payload } = r.rows[0];
-    if (!action_type || !action_target) return res.status(400).json({ error: 'binding incomplete' });
+    const bindings = r.rows[0].bindings || [];
+    if (!bindings.length) return res.status(400).json({ error: 'no bindings on this row' });
 
-    if (action_type === 'device') {
-      const action = (action_payload && action_payload.action) || 'toggle';
-      const channel = action_payload && action_payload.channel;
-      let body = { channel };
-      if (action === 'turn_on') body.state = true;
-      else if (action === 'turn_off') body.state = false;
-      else {
-        // toggle — read current state from devices table last_state
-        const devR = await db.query('SELECT last_state FROM devices WHERE id = $1', [action_target]);
-        const cur = devR.rows[0]?.last_state || {};
-        const curVal = channel ? cur[channel] : (cur['1'] ?? cur.state ?? cur.power);
-        body.state = !(curVal === true || curVal === 1 || curVal === 'on' || curVal === 'ON' || curVal === 'true');
+    const results = [];
+    let ok = 0, fail = 0;
+    for (const b of bindings) {
+      try {
+        const r = await _haspDispatchOne(req.params.panel, b);
+        results.push({ ok: true, ...r });
+        ok++;
+      } catch (e) {
+        results.push({ ok: false, error: e.message, binding: b });
+        fail++;
       }
-      const proxy = await fetch(`http://127.0.0.1:3000/api/devices/${encodeURIComponent(action_target)}/toggle`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      const out = await proxy.json();
-      return res.json({ ok: proxy.ok, dispatched: 'device', result: out });
     }
-
-    if (action_type === 'hasp_command') {
-      const parts = String(action_target).trim().split(/\s+/);
-      const path = parts[0];
-      const value = parts.slice(1).join(' ');
-      mqttClient.publish(`hasp/${req.params.panel}/command/${path}`, value);
-      return res.json({ ok: true, dispatched: 'hasp_command', topic: `hasp/${req.params.panel}/command/${path}`, payload: value });
-    }
-
-    if (action_type === 'pixoo_preset') {
-      const payload = { action: 'push_preset', preset_name: action_target };
-      if (action_payload && action_payload.vars) payload.vars = action_payload.vars;
-      mqttClient.publish('mur/home/pixoo/command', JSON.stringify(payload));
-      return res.json({ ok: true, dispatched: 'pixoo_preset', preset: action_target });
-    }
-
-    res.status(400).json({ error: `unsupported action_type '${action_type}'` });
+    res.json({ ok: fail === 0, fired: ok, failed: fail, results });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2471,6 +2485,8 @@ async function ensureSchema() {
 
   // Idempotent migration for instances that pre-date the 'event' column (added 2026-05-01).
   await db.query(`ALTER TABLE hasp_buttons ADD COLUMN IF NOT EXISTS event VARCHAR(20) NOT NULL DEFAULT 'short'`);
+  // bindings JSONB array — multi-device per button (added 2026-05-01, wallmote parity).
+  await db.query(`ALTER TABLE hasp_buttons ADD COLUMN IF NOT EXISTS bindings JSONB NOT NULL DEFAULT '[]'::jsonb`);
   await db.query(`ALTER TABLE hasp_buttons DROP CONSTRAINT IF EXISTS hasp_buttons_panel_id_page_button_id_key`);
   await db.query(`
     DO $$ BEGIN

@@ -14,12 +14,13 @@
   }
   window.refreshPage = refreshPage;
 
+  function escHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  }
+
   // ─── HASP Balcony status card ──────────────────────────────────────────────
   // Browser subscribes to mosquitto over WebSocket (port 9001) as `dashboard_browser`.
-  // Mirrors the Awtrix tab pattern (see living-room.js Awtrix section).
-  // Required ACL on LXC 107 (one-time):
-  //   read hasp/balcony/state/#
-  //   read hasp/balcony/LWT
+  // Required ACL on LXC 107: read hasp/balcony/state/# + read hasp/balcony/LWT
   const HP_BROKER_HOST = '192.168.1.189';
   const HP_BROKER_PORT = 9001;
   const HP_USER        = 'dashboard_browser';
@@ -59,14 +60,12 @@
     if (_hpInited) return;
     _hpInited = true;
     if (typeof mqtt === 'undefined') { hpSetOnline(false, 'mqtt.js missing'); return; }
-
     let pass;
     try {
       const r = await fetch('/api/dashboard-settings/_mqtt_browser_pass').then(r => r.json());
       pass = r.value;
     } catch (e) { hpSetOnline(false, 'broker pass fetch failed'); return; }
     if (!pass) { hpSetOnline(false, 'MQTT_BROWSER_PASS not set'); return; }
-
     _hpMqtt = mqtt.connect(`ws://${HP_BROKER_HOST}:${HP_BROKER_PORT}`, {
       username: HP_USER, password: pass,
       clientId: 'hasp-balcony-tab-' + Math.random().toString(36).slice(2, 10),
@@ -89,239 +88,295 @@
     });
   }
 
-  // ─── Button Bindings card ──────────────────────────────────────────────────
-  let _devices = [];      // cached /api/devices result
-  let _presets = [];      // cached /api/pixoo/presets result
-  let _buttons = [];      // current rows from /api/hasp/balcony/buttons
-  let _btnDirty = false;  // any unsaved changes
-
+  // ─── Button Bindings — wallmote-style multi-device per slot ────────────────
   const BC_PANEL = 'balcony';
-  // OpenHASP firmware emits 'down' + 'up' on every press by default; 'short' /
-  // 'long' / 'double' only fire if the button is configured to synthesize them
-  // in pages.jsonl — so 'up' is the safe default that always works.
-  const EVENT_OPTIONS = ['up', 'down', 'short', 'long', 'double'];
-  const ACTION_TYPES = ['', 'device', 'hasp_command', 'pixoo_preset'];
+  const ACTIONS = [
+    { v: 'turn_on',  label: 'Turn On',  tag: 'on'     },
+    { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
+    { v: 'toggle',   label: 'Toggle',   tag: 'toggle' },
+  ];
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve']);
 
-  function escHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-  }
+  let _buttons = [];
+  let _controllable = [];
+  let _bcActivePicker = null;  // {row_id, snapshot}
 
-  function bcMarkDirty() {
-    _btnDirty = true;
-    const b = document.getElementById('btn-bindings-save');
-    if (b) b.disabled = false;
-  }
+  function bcActionLabel(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.label : v; }
+  function bcActionTag(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.tag : 'toggle'; }
+  function bcDefaultActionFor(_event) { return 'toggle'; }
 
-  async function bcLoadDevices() {
-    if (_devices.length) return _devices;
+  async function bcLoadControllableDevices() {
+    if (_controllable.length) return _controllable;
     try {
-      const r = await fetch('/api/devices').then(r => r.json());
-      _devices = (r.devices || r || []).filter(d => d.id && d.name);
-      _devices.sort((a, b) => (a.room || '').localeCompare(b.room || '') || a.name.localeCompare(b.name));
-    } catch (_) { _devices = []; }
-    return _devices;
+      const devs = await fetch('/api/devices').then(r => r.json());
+      const list = Array.isArray(devs) ? devs : (devs.devices || []);
+      _controllable = [];
+      for (const d of list) {
+        if (d.enabled === false) continue;
+        if (!CONTROLLABLE_TYPES.has(d.device_type)) continue;
+        const chanCfg = d.channel_config || {};
+        const dpsLabels = d.dps_labels || {};
+        const tuyaChans = Object.keys(chanCfg).filter(k => k && !isNaN(parseInt(k))).sort();
+        const zigbeeChans = Object.keys(dpsLabels).filter(k => /^state_l\d+$/i.test(k))
+          .sort((a, b) => parseInt(a.replace(/\D/g,'')) - parseInt(b.replace(/\D/g,'')));
+        if (tuyaChans.length > 1) {
+          for (const ch of tuyaChans) {
+            const ci = chanCfg[ch] || {};
+            _controllable.push({ device_id: d.id, channel: ch, name: d.name, label: ci.name || `Ch.${ch}`,
+                                 room: ci.room || d.room || '', protocol: d.protocol });
+          }
+        } else if (zigbeeChans.length > 1) {
+          for (const ch of zigbeeChans) {
+            _controllable.push({ device_id: d.id, channel: ch, name: d.name, label: dpsLabels[ch] || ch,
+                                 room: d.room || '', protocol: d.protocol });
+          }
+        } else {
+          _controllable.push({ device_id: d.id, channel: null, name: d.name, label: '',
+                               room: d.room || '', protocol: d.protocol });
+        }
+      }
+      _controllable.sort((a, b) => (a.room || 'zzz').localeCompare(b.room || 'zzz')
+                                || a.name.localeCompare(b.name));
+    } catch (_) { _controllable = []; }
+    return _controllable;
   }
 
-  async function bcLoadPresets() {
-    if (_presets.length) return _presets;
-    try {
-      const r = await fetch('/api/pixoo/presets').then(r => r.json());
-      _presets = (r.presets || r || []).filter(p => p && p.name);
-    } catch (_) { _presets = []; }
-    return _presets;
+  function bcRenderPickerDisplay(rowId) {
+    const row = _buttons.find(r => r.id === rowId);
+    const el = document.querySelector(`[data-bc-picker="${rowId}"]`);
+    if (!row || !el) return;
+    const sel = row.bindings || [];
+    if (!sel.length) {
+      el.classList.add('empty');
+      el.innerHTML = '— select devices —';
+      el.title = '';
+    } else {
+      el.classList.remove('empty');
+      el.innerHTML = sel.map(s =>
+        `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`
+      ).join(' · ');
+      el.title = sel.map(s => `${s.name || '?'}${s.label?':'+s.label:''} → ${bcActionLabel(s.action)}`).join('\n');
+    }
   }
 
-  function bcRenderTargetCell(row) {
-    const at = row.action_type || '';
-    const ap = row.action_payload || {};
-    const target = row.action_target || '';
-
-    if (at === 'device') {
-      const opts = ['<option value="">— pick device —</option>'].concat(_devices.map(d =>
-        `<option value="${escHtml(d.id)}"${d.id === target ? ' selected' : ''}>${escHtml(d.room || '·')} / ${escHtml(d.name)}</option>`
-      )).join('');
-      return `<select onchange="bcUpdateRow(${row.id},'action_target',this.value)" style="width:100%;font-size:0.78rem;">${opts}</select>`;
-    }
-    if (at === 'pixoo_preset') {
-      const opts = ['<option value="">— pick preset —</option>'].concat(_presets.map(p =>
-        `<option value="${escHtml(p.name)}"${p.name === target ? ' selected' : ''}>${escHtml(p.name)}</option>`
-      )).join('');
-      return `<select onchange="bcUpdateRow(${row.id},'action_target',this.value)" style="width:100%;font-size:0.78rem;">${opts}</select>`;
-    }
-    if (at === 'hasp_command') {
-      return `<input type="text" value="${escHtml(target)}" placeholder="page 2 / clearpage 1 / p1b110.val 1"
-        oninput="bcUpdateRow(${row.id},'action_target',this.value)" style="width:100%;font-size:0.78rem;padding:3px 5px;">`;
-    }
-    return `<span style="color:#aaa;font-size:0.78rem;">— pick action type first —</span>`;
-  }
-
-  // For a target device, list the valid channel keys derived from its protocol.
-  // Zigbee multi-gang: state_l1, state_l2, … (from dps_labels).
-  // Tuya local/gateway: numeric DPS keys from channel_config or dps_labels.
-  // Single-channel devices return [] — no channel needed.
-  function bcChannelOptions(dev) {
-    if (!dev) return null;
-    const labels = dev.dps_labels || {};
-    if (dev.protocol === 'zigbee') {
-      const keys = Object.keys(labels).filter(k => /^state(_l\d+)?$/.test(k));
-      return keys.length ? keys : Object.keys(labels);
-    }
-    if (dev.protocol === 'local' || dev.protocol === 'gateway') {
-      const cc = dev.channel_config || {};
-      const ccKeys = Object.keys(cc);
-      if (ccKeys.length) return ccKeys;
-      return Object.keys(labels).filter(k => /^\d+$/.test(k));
-    }
-    return [];
-  }
-
-  function bcRenderPayloadCell(row) {
-    const at = row.action_type || '';
-    const ap = row.action_payload || {};
-    if (at !== 'device') return `<span style="color:#bbb;font-size:0.78rem;">—</span>`;
-
-    const action = ap.action || 'toggle';
-    const channel = ap.channel || '';
-    const actionSel = `
-      <select onchange="bcUpdatePayload(${row.id},'action',this.value)" style="width:72px;font-size:0.78rem;">
-        <option value="toggle"${action === 'toggle' ? ' selected' : ''}>toggle</option>
-        <option value="turn_on"${action === 'turn_on' ? ' selected' : ''}>on</option>
-        <option value="turn_off"${action === 'turn_off' ? ' selected' : ''}>off</option>
-      </select>`;
-
-    const dev = row.action_target ? _devices.find(d => d.id === row.action_target) : null;
-    const channels = bcChannelOptions(dev);
-
-    if (!dev) {
-      return actionSel + `<span style="color:#bbb;font-size:0.72rem;margin-left:4px;">pick target</span>`;
-    }
-    if (channels === null || channels.length === 0) {
-      return actionSel + `<span style="color:#888;font-size:0.72rem;margin-left:4px;">no channel</span>`;
-    }
-    // Build dropdown — preserve any value not in the list (legacy / typo'd) as a stub option
-    const inList = channels.includes(channel);
-    const opts = [`<option value="">— ch —</option>`].concat(channels.map(c => {
-      const lbl = (dev.dps_labels && dev.dps_labels[c]) || c;
-      return `<option value="${escHtml(c)}"${c === channel ? ' selected' : ''}>${escHtml(c)}${lbl !== c ? ` — ${escHtml(lbl)}` : ''}</option>`;
-    }));
-    if (channel && !inList) {
-      opts.push(`<option value="${escHtml(channel)}" selected style="color:#c0392b;">${escHtml(channel)} (legacy)</option>`);
-    }
-    return actionSel + `
-      <select onchange="bcUpdatePayload(${row.id},'channel',this.value)" style="width:170px;font-size:0.78rem;margin-left:4px;">
-        ${opts.join('')}
-      </select>`;
-  }
-
-  function bcRenderRow(row) {
-    const eventSel = EVENT_OPTIONS.map(e =>
-      `<option value="${e}"${e === row.event ? ' selected' : ''}>${e}</option>`
-    ).join('');
-    const typeSel = ACTION_TYPES.map(t =>
-      `<option value="${t}"${t === (row.action_type || '') ? ' selected' : ''}>${t || '— none —'}</option>`
-    ).join('');
+  function bcRenderButtonCard(headerRow, allRowsForButton) {
     return `
-      <tr data-id="${row.id}" style="border-bottom:1px dashed #e8e2da;">
-        <td style="padding:6px 4px;font-weight:600;">${escHtml(row.label)} <span style="color:#aaa;font-weight:normal;font-size:0.72rem;">(p${row.page}b${row.button_id})</span></td>
-        <td style="padding:6px 4px;"><select onchange="bcUpdateRow(${row.id},'event',this.value)" style="width:100%;font-size:0.78rem;">${eventSel}</select></td>
-        <td style="padding:6px 4px;"><select onchange="bcUpdateRow(${row.id},'action_type',this.value)" style="width:100%;font-size:0.78rem;">${typeSel}</select></td>
-        <td style="padding:6px 4px;" data-cell="target">${bcRenderTargetCell(row)}</td>
-        <td style="padding:6px 4px;" data-cell="payload">${bcRenderPayloadCell(row)}</td>
-        <td style="padding:6px 4px;">
-          <button class="btn-test" onclick="bcTestRow(${row.id})">▶ Test</button>
-          <span data-cell="status" style="font-size:0.72rem;color:#888;margin-left:4px;"></span>
-        </td>
-      </tr>`;
+      <div class="button-row" data-bc-btn="${headerRow.page}-${headerRow.button_id}">
+        <div class="button-label">
+          ${escHtml(headerRow.label || '')}
+          <div style="font-weight:normal;color:#aaa;font-size:0.72rem;">p${headerRow.page}b${headerRow.button_id}</div>
+        </div>
+        <div class="event-rows">
+          ${allRowsForButton.map(r => `
+            <div class="event-row">
+              <span class="event-type ${r.event}">${r.event}</span>
+              <div class="device-picker ${(r.bindings && r.bindings.length) ? '' : 'empty'}"
+                   data-bc-picker="${r.id}"
+                   onclick="bcOpenPicker(${r.id})">
+                ${(r.bindings && r.bindings.length)
+                    ? r.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`).join(' · ')
+                    : '— select devices —'}
+              </div>
+              <button class="btn-test" onclick="bcTestRow(${r.id}, this)">Test</button>
+            </div>`).join('')}
+        </div>
+      </div>`;
   }
 
-  function bcRedrawRow(row) {
-    const tr = document.querySelector(`#bc-buttons-tbody tr[data-id="${row.id}"]`);
-    if (!tr) return;
-    tr.querySelector('[data-cell="target"]').innerHTML = bcRenderTargetCell(row);
-    tr.querySelector('[data-cell="payload"]').innerHTML = bcRenderPayloadCell(row);
-  }
-
-  window.bcUpdateRow = function (id, field, value) {
-    const row = _buttons.find(r => r.id === id);
+  // ─── Picker popover ────────────────────────────────────────────────────────
+  window.bcOpenPicker = function (rowId) {
+    const row = _buttons.find(r => r.id === rowId);
     if (!row) return;
-    row[field] = value;
-    if (field === 'action_type') {
-      row.action_target = '';
-      row.action_payload = {};
-      bcRedrawRow(row);
-    } else if (field === 'action_target') {
-      // Target changed — re-render payload cell so the channel dropdown adapts
-      // to the new device's protocol (zigbee state_lN vs Tuya numeric).
-      bcRedrawRow(row);
-    }
-    bcMarkDirty();
+    if (!row.bindings) row.bindings = [];
+    _bcActivePicker = { rowId, snapshot: JSON.parse(JSON.stringify(row.bindings)) };
+    const lbl = row.label || `p${row.page}b${row.button_id}`;
+    document.getElementById('picker-title').textContent = `${lbl} · ${row.event}`;
+    document.getElementById('picker-search-input').value = '';
+    bcRenderPickerList('');
+    document.getElementById('picker-overlay').classList.add('show');
   };
 
-  window.bcUpdatePayload = function (id, key, value) {
-    const row = _buttons.find(r => r.id === id);
+  window.bcClosePicker = function (save) {
+    document.getElementById('picker-overlay').classList.remove('show');
+    if (!save && _bcActivePicker) {
+      const row = _buttons.find(r => r.id === _bcActivePicker.rowId);
+      if (row) row.bindings = _bcActivePicker.snapshot;
+    }
+    if (_bcActivePicker) bcRenderPickerDisplay(_bcActivePicker.rowId);
+    _bcActivePicker = null;
+  };
+
+  window.bcFilterPicker = function () {
+    bcRenderPickerList(document.getElementById('picker-search-input').value);
+  };
+
+  function bcRenderPickerList(filter) {
+    if (!_bcActivePicker) return;
+    const row = _buttons.find(r => r.id === _bcActivePicker.rowId);
     if (!row) return;
-    row.action_payload = row.action_payload || {};
-    if (value) row.action_payload[key] = value;
-    else delete row.action_payload[key];
-    bcMarkDirty();
+    if (!row.bindings) row.bindings = [];
+    const selByKey = new Map(row.bindings.map(s => [s.device_id + ':' + (s.channel || ''), s]));
+    const f = (filter || '').toLowerCase();
+    const list = document.getElementById('picker-list');
+    list.innerHTML = '';
+    let currentRoom = null, visible = 0;
+    const defAct = bcDefaultActionFor(row.event);
+
+    for (const d of _controllable) {
+      const rowKey = d.device_id + ':' + (d.channel || '');
+      const displayName = d.label ? `${d.name} — ${d.label}` : d.name;
+      const blob = `${d.name} ${d.label} ${d.room} ${d.protocol}`.toLowerCase();
+      if (f && !blob.includes(f)) continue;
+
+      if (d.room !== currentRoom) {
+        currentRoom = d.room;
+        const rl = document.createElement('div');
+        rl.className = 'picker-room-label';
+        rl.textContent = d.room || '(no room)';
+        list.appendChild(rl);
+      }
+
+      const existing = selByKey.get(rowKey);
+      const checked = !!existing;
+      const act = existing ? existing.action : defAct;
+
+      const item = document.createElement('div');
+      item.className = 'picker-item';
+      item.innerHTML = `
+        <input type="checkbox" ${checked ? 'checked' : ''}>
+        <div class="picker-item-name">${escHtml(displayName)}</div>
+        <select class="picker-action-select">
+          ${ACTIONS.map(a => `<option value="${a.v}" ${a.v === act ? 'selected' : ''}>${a.label}</option>`).join('')}
+        </select>
+        <div class="picker-item-meta">${escHtml(d.protocol)}${d.channel ? ' · '+d.channel : ''}</div>`;
+      const cb = item.querySelector('input');
+      const sel = item.querySelector('select');
+      item.addEventListener('click', (e) => {
+        if (e.target === sel || sel.contains(e.target)) return;
+        if (e.target !== cb) cb.checked = !cb.checked;
+        bcToggleSelection(d, cb.checked, sel.value);
+      });
+      sel.addEventListener('change', (e) => {
+        e.stopPropagation();
+        if (!cb.checked) cb.checked = true;
+        bcToggleSelection(d, cb.checked, sel.value);
+      });
+      sel.addEventListener('click', (e) => e.stopPropagation());
+      list.appendChild(item);
+      visible++;
+    }
+    if (!visible) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:20px;color:#aaa;text-align:center;font-size:0.82rem;';
+      empty.textContent = 'No devices match your filter';
+      list.appendChild(empty);
+    }
+    bcUpdatePickerCount();
+  }
+
+  function bcToggleSelection(dev, checked, action) {
+    if (!_bcActivePicker) return;
+    const row = _buttons.find(r => r.id === _bcActivePicker.rowId);
+    if (!row) return;
+    if (!row.bindings) row.bindings = [];
+    const idx = row.bindings.findIndex(s =>
+      s.device_id === dev.device_id && (s.channel || null) === (dev.channel || null));
+    if (checked) {
+      if (idx >= 0) {
+        row.bindings[idx].action = action;
+      } else {
+        row.bindings.push({
+          device_id: dev.device_id, channel: dev.channel,
+          name: dev.name, label: dev.label, action,
+        });
+      }
+    } else if (idx >= 0) {
+      row.bindings.splice(idx, 1);
+    }
+    bcUpdatePickerCount();
+  }
+
+  function bcUpdatePickerCount() {
+    if (!_bcActivePicker) return;
+    const row = _buttons.find(r => r.id === _bcActivePicker.rowId);
+    document.getElementById('picker-count').textContent =
+      `${(row && row.bindings ? row.bindings.length : 0)} selected`;
+  }
+
+  // ─── Test + Save ───────────────────────────────────────────────────────────
+  window.bcTestRow = async function (rowId, btn) {
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      const r = await fetch(`/api/hasp/${BC_PANEL}/buttons/${rowId}/test`, { method: 'POST' });
+      const out = await r.json();
+      if (r.ok && out.fired) {
+        btn.textContent = out.failed ? `✗ ${out.failed}/${out.fired+out.failed}` : `✓ ${out.fired}`;
+        btn.style.cssText = `background:${out.failed?'#c0392b':'#3a7d44'};color:#fff;border-color:transparent;`;
+      } else {
+        btn.textContent = '✗ ' + (out.error || 'fail');
+        btn.style.cssText = 'background:#c0392b;color:#fff;border-color:transparent;';
+      }
+    } catch (e) {
+      btn.textContent = '✗ ' + e.message;
+      btn.style.cssText = 'background:#c0392b;color:#fff;border-color:transparent;';
+    }
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; btn.style.cssText = ''; }, 2500);
   };
 
   window.bcSaveAllBindings = async function () {
-    const b = document.getElementById('btn-bindings-save');
-    b.disabled = true; b.textContent = 'Saving…';
-    let okCount = 0, failCount = 0;
+    const saveBtn = document.querySelector('.wallmote-card .btn-save');
+    if (!saveBtn) return;
+    const original = saveBtn.textContent;
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    let ok = 0, fail = 0;
     for (const row of _buttons) {
       try {
         const r = await fetch(`/api/hasp/${BC_PANEL}/buttons/${row.id}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            event: row.event,
-            action_type: row.action_type || null,
-            action_target: row.action_target || null,
-            action_payload: row.action_payload || {},
-          })
+          body: JSON.stringify({ bindings: row.bindings || [] })
         });
-        if (r.ok) okCount++; else failCount++;
-      } catch (_) { failCount++; }
+        if (r.ok) ok++; else fail++;
+      } catch (_) { fail++; }
     }
-    b.textContent = failCount ? `Save All (${failCount} failed)` : 'Save All';
-    b.disabled = !!failCount;
-    _btnDirty = !!failCount;
-  };
-
-  window.bcTestRow = async function (id) {
-    const row = _buttons.find(r => r.id === id);
-    if (!row) return;
-    const tr = document.querySelector(`#bc-buttons-tbody tr[data-id="${id}"]`);
-    const status = tr && tr.querySelector('[data-cell="status"]');
-    if (status) { status.style.color = '#888'; status.textContent = '…'; }
-    try {
-      const r = await fetch(`/api/hasp/${BC_PANEL}/buttons/${id}/test`, { method: 'POST' });
-      const out = await r.json();
-      if (status) {
-        status.style.color = r.ok ? '#3a7d44' : '#c0392b';
-        status.textContent = r.ok ? `✓ ${out.dispatched}` : `✗ ${out.error || 'fail'}`;
-        setTimeout(() => { if (status.textContent.startsWith('✓') || status.textContent.startsWith('✗')) status.textContent = ''; }, 4000);
-      }
-    } catch (e) {
-      if (status) { status.style.color = '#c0392b'; status.textContent = '✗ ' + e.message; }
-    }
+    saveBtn.textContent = fail === 0 ? '✓ Saved' : `✗ ${fail} failed`;
+    saveBtn.style.background = fail === 0 ? '#3a7d44' : '#c0392b';
+    setTimeout(() => {
+      saveBtn.textContent = original; saveBtn.style.background = ''; saveBtn.disabled = false;
+    }, 2000);
   };
 
   async function bcLoadButtons() {
-    await Promise.all([bcLoadDevices(), bcLoadPresets()]);
+    await bcLoadControllableDevices();
     try {
       const r = await fetch(`/api/hasp/${BC_PANEL}/buttons`).then(r => r.json());
-      _buttons = (r.buttons || []).map(b => ({ ...b, action_payload: b.action_payload || {} }));
+      _buttons = (r.buttons || []).map(b => ({ ...b, bindings: b.bindings || [] }));
     } catch (_) { _buttons = []; }
-    const tbody = document.getElementById('bc-buttons-tbody');
-    if (!tbody) return;
+    const list = document.getElementById('bc-buttons-list');
+    if (!list) return;
     if (!_buttons.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="padding:12px;color:#888;">No button rows. Seeded by ensureSchema on first dashboard start.</td></tr>';
+      list.innerHTML = '<div style="padding:8px;color:#888;font-size:0.85rem;">No buttons. Run Sync from panel after adding widgets in the OpenHASP web UI.</div>';
       return;
     }
-    tbody.innerHTML = _buttons.map(bcRenderRow).join('');
+    // Group by (page, button_id) — render one card per button with all its event-rows inside
+    const seen = new Set();
+    const cards = [];
+    for (const r of _buttons) {
+      const key = `${r.page}-${r.button_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const allRows = _buttons.filter(b => b.page === r.page && b.button_id === r.button_id);
+      cards.push(bcRenderButtonCard(r, allRows));
+    }
+    list.innerHTML = cards.join('');
   }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _bcActivePicker) bcClosePicker(false);
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'picker-overlay' && _bcActivePicker) bcClosePicker(false);
+  });
 
   // ─── Display Templates card ────────────────────────────────────────────────
   let _displays = [];
@@ -527,7 +582,6 @@
         status.style.color = '#3a7d44';
         status.textContent = `✓ ${out.objects} widgets parsed${parts.length ? ' — ' + parts.join(', ') : ' — no changes'}${out.file_saved ? `, saved ${out.file_saved}` : ''}`;
       }
-      // Reload tables so new rows show
       await Promise.all([bcLoadButtons(), bcLoadDisplays()]);
     } catch (e) {
       if (status) { status.style.color = '#c0392b'; status.textContent = '✗ ' + e.message; }

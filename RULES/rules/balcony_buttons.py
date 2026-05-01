@@ -1,8 +1,9 @@
 """Balcony Buttons — dispatch device commands on HASP panel button presses.
 
-Reads bindings from `hasp_buttons` table (rows for the balcony panel).
-Each (page, button_id, event) row maps to an action_type + action_target
-that the rule resolves to a command.
+Reads bindings from `hasp_buttons.bindings` (JSONB array of device/action
+combos, same shape as Living Room wallmote bindings — each element:
+{device_id, channel, name, label, action}). Multi-device per button:
+one panel press dispatches N commands.
 
 Triggered by synthetic events the rule engine generates from
 `hasp/balcony/state/p<page>b<id>` MQTT messages — see
@@ -10,10 +11,9 @@ Triggered by synthetic events the rule engine generates from
 event has `device_id = 'hasp:balcony:p<page>b<id>'` and dps =
 `{event: 'short'|'long'|'down'|'up'|'double', ...}`.
 
-Action types supported in v1:
-  - 'device'        → turn_on / turn_off / toggle a real device
-  - 'hasp_command'  → run a HASP command on the same panel (e.g. 'page 2')
-  - 'pixoo_preset'  → push a named Pixoo preset
+Non-device binding variants supported (less common):
+  {type:'hasp_command', target:'page 2'}     — panel command
+  {type:'pixoo_preset', target:'name', vars} — push a Pixoo preset
 """
 
 import logging
@@ -25,7 +25,7 @@ log = logging.getLogger("rule.balcony_buttons")
 RULE = {
     "name": "Balcony Buttons",
     "description": "Dispatch actions on HASP balcony panel button presses",
-    "triggers": ["*"],  # wildcard with prefix early-return — see evaluate()
+    "triggers": ["*"],
     "controls": [],
     "category": "control",
     "group": "balcony",
@@ -38,12 +38,9 @@ RULE = {
     },
 }
 
-# Same panel-button can fire down+up+short in rapid succession on a single tap;
-# we want one dispatch per press. Cooldown is per (page, button_id, event).
 _COOLDOWN_SEC = 1.0
-_last_fired = {}  # key = "p<page>b<id>:<event>" → unix ts
+_last_fired = {}
 
-# Bindings cache — avoid hitting the DB on every event.
 _bindings_cache = {"data": None, "ts": 0.0}
 _CACHE_TTL_SEC = 30
 
@@ -51,28 +48,25 @@ _BTN_RE = re.compile(r"^hasp:balcony:p(\d+)b(\d+)$")
 
 
 def _get_bindings(state):
-    """Load all hasp_buttons rows for the balcony panel into a dict keyed
-    on (page, button_id, event). Cached for 30s."""
+    """Return dict (page, button_id, event) → bindings_array. 30 s TTL cache."""
     now = time.time()
     if _bindings_cache["data"] is not None and (now - _bindings_cache["ts"]) < _CACHE_TTL_SEC:
         return _bindings_cache["data"]
 
     rows = state.db_query(
         """
-        SELECT b.page, b.button_id, b.event, b.action_type, b.action_target, b.action_payload
+        SELECT b.page, b.button_id, b.event, b.bindings
         FROM hasp_buttons b
         JOIN hasp_panels p ON p.id = b.panel_id
         WHERE p.name = 'balcony'
+          AND b.bindings IS NOT NULL
+          AND jsonb_array_length(b.bindings) > 0
         """
     )
     data = {}
     for row in rows or []:
-        page, bid, evt, atype, atarget, apayload = row
-        data[(page, bid, evt)] = {
-            "action_type": atype,
-            "action_target": atarget,
-            "action_payload": apayload or {},
-        }
+        page, bid, evt, bindings = row
+        data[(page, bid, evt)] = bindings or []
 
     _bindings_cache["data"] = data
     _bindings_cache["ts"] = now
@@ -80,11 +74,7 @@ def _get_bindings(state):
 
 
 def _resolve_toggle(state, device_id, channel):
-    """Read current device state and return 'turn_on' or 'turn_off' to flip it.
-
-    Mirrors the wallmote_handler resolution — channel keys vary per protocol
-    (Tuya '1'/'2'/'3', Zigbee 'state_l1'…, single-channel: 'state'/'power'/'1').
-    """
+    """Read current device state and return 'turn_on' or 'turn_off' to flip it."""
     dev_state = state.devices.get(device_id, {}) or {}
     cur_dps = dev_state.get("dps", {}) or {}
     if channel:
@@ -104,26 +94,20 @@ def _resolve_toggle(state, device_id, channel):
     return "turn_on"
 
 
-def _build_command(binding, page, bid, evt, state):
-    """Translate a hasp_buttons row into a command dict (or None to skip)."""
-    atype = binding.get("action_type")
-    atarget = binding.get("action_target") or ""
-    apayload = binding.get("action_payload") or {}
+def _build_command(b, state):
+    """Translate one binding element into a command dict (or None to skip)."""
+    btype = b.get("type")  # None implies device
 
-    if not atype or not atarget:
-        return None
-
-    # Human button presses are intentional input, not automation feedback —
-    # exempt from the rule engine's same-action-4x-in-10s loop guard so
-    # rapid tapping during testing doesn't auto-disable the rule.
-    if atype == "device":
-        action = apayload.get("action", "toggle")
-        channel = apayload.get("channel")
-        # Resolve toggle client-side — device_agent only handles turn_on/turn_off
+    if btype is None or btype == "device":
+        device_id = b.get("device_id")
+        if not device_id:
+            return None
+        channel = b.get("channel")
+        action = b.get("action", "toggle")
         if action == "toggle":
-            action = _resolve_toggle(state, atarget, channel)
+            action = _resolve_toggle(state, device_id, channel)
         cmd = {
-            "device_id": atarget,
+            "device_id": device_id,
             "action": action,
             "rule": "Balcony Buttons",
             "_skip_loop_guard": True,
@@ -132,10 +116,9 @@ def _build_command(binding, page, bid, evt, state):
             cmd["channel"] = channel
         return cmd
 
-    if atype == "hasp_command":
-        # action_target is the full HASP command line, e.g. "page 2", "clearpage 1",
-        # "p1b110.val 1". Split on first space → path / value.
-        parts = atarget.strip().split(" ", 1)
+    if btype == "hasp_command":
+        target = b.get("target") or ""
+        parts = target.strip().split(" ", 1)
         path = parts[0]
         value = parts[1] if len(parts) > 1 else ""
         return {
@@ -147,21 +130,20 @@ def _build_command(binding, page, bid, evt, state):
             "_skip_loop_guard": True,
         }
 
-    if atype == "pixoo_preset":
+    if btype == "pixoo_preset":
         cmd = {
             "device_id": "pixoo",
             "protocol": "pixoo",
             "action": "push_preset",
-            "preset_name": atarget,
+            "preset_name": b.get("target"),
             "rule": "Balcony Buttons",
             "_skip_loop_guard": True,
         }
-        if apayload.get("vars"):
-            cmd["vars"] = apayload["vars"]
+        if b.get("vars"):
+            cmd["vars"] = b["vars"]
         return cmd
 
-    log.warning("Balcony Buttons: unsupported action_type '%s' for p%db%d:%s",
-                atype, page, bid, evt)
+    log.warning("Balcony Buttons: unsupported binding type '%s'", btype)
     return None
 
 
@@ -178,7 +160,6 @@ def evaluate(event, state):
     if evt not in {"short", "long", "down", "up", "double"}:
         return []
 
-    # Cooldown: collapse down+up+short for one tap into a single dispatch.
     cooldown_key = f"p{page}b{bid}:{evt}"
     now = time.time()
     last = _last_fired.get(cooldown_key, 0.0)
@@ -186,16 +167,19 @@ def evaluate(event, state):
         return []
     _last_fired[cooldown_key] = now
 
-    bindings = _get_bindings(state)
-    binding = bindings.get((page, bid, evt))
-    if not binding:
+    bindings_map = _get_bindings(state)
+    bindings = bindings_map.get((page, bid, evt))
+    if not bindings:
         log.info("Balcony Buttons: no binding for p%db%d:%s", page, bid, evt)
         return []
 
-    cmd = _build_command(binding, page, bid, evt, state)
-    if not cmd:
-        return []
+    commands = []
+    for b in bindings:
+        cmd = _build_command(b, state)
+        if cmd:
+            commands.append(cmd)
 
-    log.info("Balcony Buttons: p%db%d:%s → %s %s",
-             page, bid, evt, binding.get("action_type"), binding.get("action_target"))
-    return [cmd]
+    if commands:
+        log.info("Balcony Buttons: p%db%d:%s → %d command(s)",
+                 page, bid, evt, len(commands))
+    return commands

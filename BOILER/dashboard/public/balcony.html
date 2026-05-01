@@ -5,6 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Balcony Agent</title>
   <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* Wallmote-style bindings UI — copied from living-room.html for parity */
+    .wallmote-card { padding:14px; margin-bottom:16px; }
+    .wallmote-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #d0cbc4; }
+    .wallmote-header h2 { margin:0; font-size:1.05rem; }
+    .wallmote-meta { font-size:0.78rem; color:#888; display:flex; gap:14px; }
+    .button-row { display:grid; grid-template-columns:90px 1fr; gap:6px 12px; padding:8px 0; border-bottom:1px dashed #e8e2da; }
+    .button-row:last-child { border-bottom:none; }
+    .button-label { font-weight:600; font-size:0.85rem; padding-top:6px; }
+    .event-rows { display:flex; flex-direction:column; gap:6px; }
+    .event-row { display:grid; grid-template-columns:60px 1fr 70px; gap:8px; align-items:center; }
+    .event-type { font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.5px; padding:4px 8px; border-radius:3px; text-align:center; }
+    .event-type.up { background:#e8f0d8; color:#4a6a2a; }
+    .event-type.down { background:#d8e8f0; color:#2a4a6a; }
+    .event-type.long { background:#f0d8d8; color:#8b3a3a; }
+    .event-type.short { background:#f0e0d8; color:#6a4a2a; }
+    .event-type.double { background:#e0d8f0; color:#4a2a6a; }
+    .device-picker { border:1px solid #d0cbc4; border-radius:4px; background:#faf8f5; padding:4px 8px; font-size:0.78rem; min-height:26px; cursor:pointer; display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
+    .device-picker:hover { border-color:#7a9ab8; }
+    .device-picker.empty { color:#aaa; font-style:italic; }
+    .action-tag { display:inline-block; padding:1px 5px; border-radius:3px; font-size:0.7rem; font-weight:600; margin-left:3px; }
+    .action-tag.on { background:#d7e7c7; color:#375a1a; }
+    .action-tag.off { background:#e7c7c7; color:#6a1a1a; }
+    .action-tag.toggle { background:#c7d7e7; color:#1a3a6a; }
+    .picker-action-select { border:1px solid #d0cbc4; border-radius:3px; background:#fff; padding:2px 4px; font-size:0.72rem; cursor:pointer; }
+    .btn-test { padding:4px 10px; font-size:0.75rem; border:1px solid #7a9ab8; background:#fff; color:#7a9ab8; border-radius:4px; cursor:pointer; font-weight:600; }
+    .btn-test:hover { background:#7a9ab8; color:#fff; }
+    .btn-test:disabled { opacity:0.4; cursor:not-allowed; }
+    .btn-save { padding:8px 18px; font-size:0.85rem; border:1px solid #3a7d44; background:#3a7d44; color:#fff; border-radius:4px; cursor:pointer; font-weight:600; }
+    .btn-save:hover { background:#2e6234; }
+    /* Picker popover */
+    .picker-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.35); z-index:1000; display:none; align-items:center; justify-content:center; }
+    .picker-overlay.show { display:flex; }
+    .picker-popover { background:#fff; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.2); width:560px; max-height:70vh; display:flex; flex-direction:column; }
+    .picker-head { padding:10px 14px; border-bottom:1px solid #d0cbc4; display:flex; justify-content:space-between; align-items:center; }
+    .picker-head h3 { margin:0; font-size:0.95rem; }
+    .picker-search { padding:8px 14px; border-bottom:1px solid #e8e2da; }
+    .picker-search input { width:100%; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem; box-sizing:border-box; }
+    .picker-list { overflow-y:auto; flex:1; padding:6px 0; }
+    .picker-room-label { padding:6px 14px 2px; font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:0.5px; font-weight:600; background:#f8f5f1; }
+    .picker-item { display:grid; grid-template-columns:20px 1fr 100px 120px; align-items:center; gap:8px; padding:6px 14px; cursor:pointer; font-size:0.82rem; }
+    .picker-item:hover { background:#f4f1ec; }
+    .picker-item input { cursor:pointer; }
+    .picker-item-name { flex:1; }
+    .picker-item-meta { font-size:0.72rem; color:#888; }
+    .picker-foot { padding:10px 14px; border-top:1px solid #d0cbc4; display:flex; justify-content:space-between; align-items:center; font-size:0.78rem; }
+    .btn-picker-done { padding:5px 14px; font-size:0.8rem; border:1px solid #3a7d44; background:#3a7d44; color:#fff; border-radius:4px; cursor:pointer; font-weight:600; }
+    .btn-picker-cancel { padding:5px 14px; font-size:0.8rem; border:1px solid #d0cbc4; background:#fff; color:#666; border-radius:4px; cursor:pointer; }
+  </style>
 </head>
 <body>
 
@@ -77,29 +126,16 @@
       </div>
     </div>
 
-    <!-- Button Bindings -->
-    <div class="card" style="padding:14px;margin-bottom:16px;">
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
-        <h2 style="margin:0;font-size:1.05rem;">Button Bindings</h2>
-        <span style="font-size:0.78rem;color:#888;">Press a panel button → real device / HASP cmd / Pixoo preset</span>
-        <button id="btn-bindings-save" class="btn-save" style="margin-left:auto;padding:5px 16px;" onclick="bcSaveAllBindings()" disabled>Save All</button>
+    <!-- Button Bindings — wallmote-style multi-device per slot -->
+    <div class="card wallmote-card">
+      <div class="wallmote-header">
+        <h2>Button Bindings</h2>
+        <span class="wallmote-meta"><span>Click <b>— select devices —</b> to add one or more devices per button. Multi-device: one press fires all.</span></span>
       </div>
-      <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
-        <b>Action types</b> — <code>device</code>: turn_on / turn_off / toggle a registered device · <code>hasp_command</code>: panel command (e.g. <code>page 2</code>) · <code>pixoo_preset</code>: push a saved Pixoo preset.
+      <div id="bc-buttons-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      <div style="margin-top:12px;text-align:right;">
+        <button class="btn-save" onclick="bcSaveAllBindings()">Save Bindings</button>
       </div>
-      <table style="width:100%;font-size:0.85rem;border-collapse:collapse;" id="bc-buttons-table">
-        <thead>
-          <tr style="text-align:left;border-bottom:1px solid #d0cbc4;">
-            <th style="padding:6px 4px;">Button</th>
-            <th style="padding:6px 4px;width:90px;">Event</th>
-            <th style="padding:6px 4px;width:130px;">Action type</th>
-            <th style="padding:6px 4px;">Target</th>
-            <th style="padding:6px 4px;width:140px;">Payload</th>
-            <th style="padding:6px 4px;width:140px;">Test / Status</th>
-          </tr>
-        </thead>
-        <tbody id="bc-buttons-tbody"><tr><td colspan="6" style="padding:12px;color:#888;">loading…</td></tr></tbody>
-      </table>
     </div>
 
     <!-- Display Templates -->
@@ -133,6 +169,27 @@
 
   </div>
 </main>
+
+<!-- Device picker popover (shared with bindings UI) -->
+<div class="picker-overlay" id="picker-overlay">
+  <div class="picker-popover">
+    <div class="picker-head">
+      <h3 id="picker-title">Select devices</h3>
+      <span style="font-size:0.75rem;color:#888;" id="picker-count">0 selected</span>
+    </div>
+    <div class="picker-search">
+      <input type="text" id="picker-search-input" placeholder="Filter by name or room…" oninput="bcFilterPicker()">
+    </div>
+    <div class="picker-list" id="picker-list"></div>
+    <div class="picker-foot">
+      <span style="color:#888;">Click a row to toggle</span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-picker-cancel" onclick="bcClosePicker(false)">Cancel</button>
+        <button class="btn-picker-done" onclick="bcClosePicker(true)">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js"></script>
