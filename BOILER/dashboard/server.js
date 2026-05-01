@@ -955,6 +955,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'pixoo_presets', 'pixoo_log', 'analyzer_settings', 'analyzer_log',
       'retention_policies', 'dashboard_settings', 'room_device_placements',
       'ups_status',
+      'hasp_panels', 'hasp_buttons', 'hasp_displays',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -975,6 +976,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       retention_policies: null,
       dashboard_settings: 'updated_at', room_device_placements: 'updated_at',
       ups_status: 'ts',
+      hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
     };
 
     const sizes = await db.query(`
@@ -2053,6 +2055,94 @@ async function ensureSchema() {
       ('media_library', NULL, false, 24, 'Media file metadata — keep forever'),
       ('face_registry',  NULL, false, 24, 'Face recognition embeddings — keep forever')
     ON CONFLICT (table_name) DO NOTHING
+  `);
+
+  // ─── HASP touch panels (OpenHASP) — Phase 1 schema (2026-05-01) ────────────
+  // Three config tables driving the rule on LXC 105 + dashboard "Panels" page.
+  // hasp_panels  — registry of physical devices (one row per panel)
+  // hasp_buttons — toggle-button → action mapping (page+button_id is the panel-side key)
+  // hasp_displays — value-label → data source mapping (rule pushes values to panel)
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS hasp_panels (
+      id                 SERIAL PRIMARY KEY,
+      name               VARCHAR(50)  UNIQUE NOT NULL,        -- short slug, used in MQTT topic
+      ip                 INET,
+      mac                MACADDR,
+      hardware           VARCHAR(50),                          -- e.g. "ESP32-S3 4848S040"
+      firmware_version   VARCHAR(50),
+      location           VARCHAR(100),                         -- human label (e.g. "Balcony")
+      mqtt_prefix        VARCHAR(100) DEFAULT 'hasp',          -- topic prefix; full = <prefix>/<name>/...
+      enabled            BOOLEAN NOT NULL DEFAULT true,
+      last_seen          TIMESTAMPTZ,
+      last_status        JSONB,                                -- last statusupdate payload
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS hasp_buttons (
+      id              SERIAL PRIMARY KEY,
+      panel_id        INTEGER NOT NULL REFERENCES hasp_panels(id) ON DELETE CASCADE,
+      page            INTEGER NOT NULL,
+      button_id       INTEGER NOT NULL,
+      label           VARCHAR(50),                              -- "GATES" (display in dashboard)
+      icon_codepoint  VARCHAR(10),                              -- "U+E10B" for car
+      action_type     VARCHAR(30),                              -- 'zigbee_toggle'|'ha_service'|'rule_fire'|'scene'|NULL
+      action_target   VARCHAR(200),                             -- device_id / domain.service / rule name / scene_id
+      action_payload  JSONB,                                    -- extra args for the action
+      last_state      JSONB,                                    -- last known toggle/event state from device
+      last_event_at   TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (panel_id, page, button_id)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS hasp_displays (
+      id                  SERIAL PRIMARY KEY,
+      panel_id            INTEGER NOT NULL REFERENCES hasp_panels(id) ON DELETE CASCADE,
+      page                INTEGER NOT NULL,
+      label_id            INTEGER NOT NULL,
+      description         TEXT,                                 -- "UPS battery percentage"
+      source_type         VARCHAR(20),                          -- 'sql'|'mqtt_subscribe'|'shared_state'|'ha_state'
+      source_value        VARCHAR(500),                         -- SQL query / topic / shared key / HA entity
+      format_string       VARCHAR(100) DEFAULT '{}',            -- format applied to the source value
+      refresh_sec         INTEGER NOT NULL DEFAULT 30,
+      last_value          TEXT,
+      last_published_at   TIMESTAMPTZ,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (panel_id, page, label_id)
+    )
+  `);
+
+  // Retention: all three are config tables — keep forever.
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES
+      ('hasp_panels',   NULL, false, 24, 'OpenHASP panel registry — keep forever'),
+      ('hasp_buttons',  NULL, false, 24, 'HASP button → action mapping — keep forever'),
+      ('hasp_displays', NULL, false, 24, 'HASP value-label → data source mapping — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
+  `);
+
+  // Seed: balcony panel (the one already configured + persisted to /etc/apcupsd-style location)
+  await db.query(`
+    INSERT INTO hasp_panels (name, ip, mac, hardware, firmware_version, location)
+    VALUES ('balcony', '192.168.1.141', '8c:bf:ea:0d:c3:24', 'ESP32-S3 4848S040', '0.7.0-rc12', 'Balcony')
+    ON CONFLICT (name) DO NOTHING
+  `);
+
+  // Seed: balcony's 4 buttons (action_type/target NULL — wired in Phase 2)
+  await db.query(`
+    INSERT INTO hasp_buttons (panel_id, page, button_id, label, icon_codepoint)
+    SELECT p.id, 1, b.button_id, b.label, b.icon
+    FROM hasp_panels p,
+         (VALUES (110, 'GATES', 'U+E10B'),
+                 (120, 'BARRIER', 'U+E10B'),
+                 (130, 'LIGHT 1', 'U+E769'),
+                 (140, 'LIGHT 2', 'U+E769')) AS b(button_id, label, icon)
+    WHERE p.name = 'balcony'
+    ON CONFLICT (panel_id, page, button_id) DO NOTHING
   `);
 }
 
