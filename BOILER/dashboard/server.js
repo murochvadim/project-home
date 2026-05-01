@@ -3251,13 +3251,24 @@ app.get('/api/backup/windows/browse', (req, res) => {
 app.get('/api/devices', async (req, res) => {
   try {
     const { type, protocol, room, search } = req.query;
-    let sql = 'SELECT * FROM devices WHERE 1=1';
+    // LEFT JOIN net_devices via MAC for devices that aren't managed by
+    // device_agent (pixoo, hasp:balcony, awtrix, …): when devices.local_ip
+    // is NULL, fall back to net_devices.ip and surface ARP-discovered
+    // last_online. Adapter-managed devices keep their own local_ip.
+    let sql = `
+      SELECT d.*,
+             COALESCE(d.local_ip, net.ip)        AS local_ip,
+             COALESCE(d.last_seen, net.last_online) AS last_seen,
+             CASE WHEN d.local_ip IS NULL AND net.ip IS NOT NULL THEN 'net_devices' ELSE NULL END AS ip_source
+      FROM devices d
+      LEFT JOIN net_devices net ON d.mac IS NOT NULL AND lower(d.mac) = lower(net.mac::text)
+      WHERE 1=1`;
     const params = [];
-    if (type)     { params.push(type);              sql += ` AND device_type=$${params.length}`; }
-    if (protocol) { params.push(protocol);           sql += ` AND protocol=$${params.length}`; }
-    if (room)     { params.push(room);               sql += ` AND room=$${params.length}`; }
-    if (search)   { params.push(`%${search}%`);      sql += ` AND (name ILIKE $${params.length} OR notes ILIKE $${params.length})`; }
-    sql += ' ORDER BY device_type, room, name';
+    if (type)     { params.push(type);          sql += ` AND d.device_type=$${params.length}`; }
+    if (protocol) { params.push(protocol);      sql += ` AND d.protocol=$${params.length}`; }
+    if (room)     { params.push(room);          sql += ` AND d.room=$${params.length}`; }
+    if (search)   { params.push(`%${search}%`); sql += ` AND (d.name ILIKE $${params.length} OR d.notes ILIKE $${params.length})`; }
+    sql += ' ORDER BY d.device_type, d.room, d.name';
     const r = await db.query(sql, params);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
