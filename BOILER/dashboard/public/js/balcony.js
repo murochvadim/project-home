@@ -75,6 +75,12 @@
       hpSetOnline(false, 'broker connected, awaiting panel…');
       _hpMqtt.subscribe(`hasp/${HP_PLATE}/state/statusupdate`, { qos: 0 });
       _hpMqtt.subscribe(`hasp/${HP_PLATE}/LWT`, { qos: 0 });
+      // OpenHASP firmware doesn't auto-push statusupdate periodically — it
+      // only responds when asked. Request once now + every 30 s after.
+      const askForStatus = () => _hpMqtt.publish(`hasp/${HP_PLATE}/command/statusupdate`, '');
+      askForStatus();
+      if (window._hpStatusTimer) clearInterval(window._hpStatusTimer);
+      window._hpStatusTimer = setInterval(askForStatus, 30000);
     });
     _hpMqtt.on('reconnect', () => hpSetOnline(false, 'reconnecting…'));
     _hpMqtt.on('close',     () => hpSetOnline(false));
