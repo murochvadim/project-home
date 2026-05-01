@@ -94,15 +94,31 @@
 
     <!-- Display Templates -->
     <div class="card" style="padding:14px;margin-bottom:16px;">
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
-        <h2 style="margin:0;font-size:1.05rem;">Display Templates</h2>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">Display Templates <span id="bc-displays-count" style="color:#888;font-size:0.78rem;font-weight:normal;"></span></h2>
         <span style="font-size:0.78rem;color:#888;">Push live values to label / gauge widgets on the panel</span>
-        <button class="btn-test" style="margin-left:auto;border-color:#3a7d44;color:#3a7d44;" onclick="bcAddDisplay()">+ Add</button>
+        <span style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:0.78rem;color:#666;">
+          Show:
+          <select id="bc-displays-filter" onchange="bcRenderDisplaysList()" style="padding:2px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;">
+            <option value="active" selected>only configured</option>
+            <option value="all">all (incl. empty)</option>
+          </select>
+          <select id="bc-displays-limit" onchange="bcRenderDisplaysList()" style="padding:2px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;">
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+            <option value="all">all</option>
+          </select>
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="bcAddDisplay()">+ Add</button>
+          <button class="btn-test" style="border-color:#7a9ab8;color:#7a9ab8;" onclick="bcToggleDisplaysCard()" id="bc-displays-toggle" title="Collapse / expand">▾</button>
+        </span>
       </div>
-      <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
-        Use <code style="background:#eee;padding:1px 4px;border-radius:3px;">{{key}}</code> in the format string to embed live state — e.g. <code style="background:#eee;padding:1px 4px;border-radius:3px;">Boiler {{boiler_temp}}°C</code>. Available keys come from rule_engine state.
+      <div id="bc-displays-body">
+        <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
+          Use <code style="background:#eee;padding:1px 4px;border-radius:3px;">{{key}}</code> in the format string to embed live state — e.g. <code style="background:#eee;padding:1px 4px;border-radius:3px;">Boiler {{boiler_temp}}°C</code>. Available keys come from rule_engine state.
+        </div>
+        <div id="bc-displays-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
       </div>
-      <div id="bc-displays-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
     </div>
 
     <!-- Static info -->

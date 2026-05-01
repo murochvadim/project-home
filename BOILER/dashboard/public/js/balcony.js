@@ -454,21 +454,56 @@
     } catch (e) { alert('Add failed: ' + e.message); }
   };
 
+  function bcRenderDisplaysList() {
+    const list = document.getElementById('bc-displays-list');
+    const count = document.getElementById('bc-displays-count');
+    if (!list) return;
+    const filter = (document.getElementById('bc-displays-filter') || {}).value || 'active';
+    const limitRaw = (document.getElementById('bc-displays-limit') || {}).value || '10';
+    const limit = limitRaw === 'all' ? Infinity : parseInt(limitRaw, 10);
+
+    let pool = _displays;
+    if (filter === 'active') {
+      pool = pool.filter(d => (d.format_string && d.format_string.trim()) || (d.source_value && d.source_value.trim()));
+    }
+    const total = _displays.length;
+    const filtered = pool.length;
+    const shown = pool.slice(0, limit);
+
+    if (count) {
+      const showingTxt = shown.length === filtered ? `${filtered}` : `${shown.length} of ${filtered}`;
+      count.textContent = filter === 'active'
+        ? `(${showingTxt} configured / ${total} total)`
+        : `(${showingTxt} of ${total})`;
+    }
+
+    if (!shown.length) {
+      list.innerHTML = filter === 'active'
+        ? `<div style="padding:8px;color:#888;font-size:0.85rem;">No configured displays. Switch <b>Show</b> to "all" to see the ${total} placeholder rows synced from the panel, or click <b>+ Add</b> to create one.</div>`
+        : '<div style="padding:8px;color:#888;font-size:0.85rem;">No displays yet. Click <b>+ Add</b> to bind a panel widget to live state.</div>';
+      return;
+    }
+    list.innerHTML = shown.map(bcRenderDisplay).join('');
+    for (const d of shown) bcUpdatePreview(d.id);
+  }
+  window.bcRenderDisplaysList = bcRenderDisplaysList;
+
+  window.bcToggleDisplaysCard = function () {
+    const body = document.getElementById('bc-displays-body');
+    const toggle = document.getElementById('bc-displays-toggle');
+    if (!body) return;
+    const collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    if (toggle) toggle.textContent = collapsed ? '▾' : '▸';
+  };
+
   async function bcLoadDisplays() {
     await bcLoadStateKeys();
     try {
       const r = await fetch(`/api/hasp/${BC_PANEL}/displays`).then(r => r.json());
       _displays = r.displays || [];
     } catch (_) { _displays = []; }
-    const list = document.getElementById('bc-displays-list');
-    if (!list) return;
-    if (!_displays.length) {
-      list.innerHTML = '<div style="padding:8px;color:#888;font-size:0.85rem;">No displays yet. Click <b>+ Add</b> to bind a panel widget to live state.</div>';
-      return;
-    }
-    list.innerHTML = _displays.map(bcRenderDisplay).join('');
-    // Render previews
-    for (const d of _displays) bcUpdatePreview(d.id);
+    bcRenderDisplaysList();
   }
 
   // ─── Sync from panel ───────────────────────────────────────────────────────
