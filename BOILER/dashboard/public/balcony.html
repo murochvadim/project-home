@@ -114,8 +114,8 @@
         <span style="font-size:0.82rem;color:#666;">Signal: <b id="hp-rssi">—</b> dBm</span>
         <span style="font-size:0.82rem;color:#666;">Current page: <b id="hp-page">—</b></span>
         <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
-          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="hpPower(true)" title="Backlight on (dim 100)">On</button>
-          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="hpPower(false)" title="Backlight off (dim 0)">Off</button>
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="hpPower(true)" title="backlight on + dim 100">On</button>
+          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="hpPower(false)" title="backlight off (hard cut)">Off</button>
           <span style="font-size:0.78rem;color:#666;margin-left:10px;">Page</span>
           <select id="hp-page-select" onchange="hpGotoPage(this.value)" style="padding:3px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;" title="Jump panel to this page">
             <option value="">— go to —</option>

@@ -70,7 +70,11 @@
   // open MQTT WebSocket (hpInit). dashboard_browser ACL: write hasp/+/command/#
   window.hpPower = function (on) {
     if (!_hpMqtt || !_hpMqtt.connected) return;
-    _hpMqtt.publish(`hasp/${HP_PLATE}/command/dim`, on ? '100' : '0');
+    // 'dim 0' sets brightness to 0% but doesn't turn off the backlight
+    // controller — many panels still show a faint glow. 'backlight off'
+    // hard-cuts the LED rail. Use both: backlight on/off + a sensible dim.
+    _hpMqtt.publish(`hasp/${HP_PLATE}/command/backlight`, on ? 'on' : 'off');
+    if (on) _hpMqtt.publish(`hasp/${HP_PLATE}/command/dim`, '100');
   };
   window.hpGotoPage = function (n) {
     if (!_hpMqtt || !_hpMqtt.connected || n === '') return;
