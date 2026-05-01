@@ -502,32 +502,51 @@
       `<option value="${t}"${t === d.target_property ? ' selected' : ''}>${t}</option>`
     ).join('');
     const last = d.last_value ? `last: ${escHtml(d.last_value)}` : '';
+    const inp = 'padding:3px 5px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;width:100%;box-sizing:border-box;';
+    const lblStyle = 'display:flex;flex-direction:column;font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.4px;gap:2px;min-width:0;';
     return `
-      <div class="card" style="padding:10px;margin-bottom:10px;background:#faf8f5;" data-id="${d.id}">
-        <div style="display:grid;grid-template-columns:90px 90px 130px 110px 1fr;gap:8px;align-items:end;font-size:0.78rem;color:#444;">
-          <label>Page<input type="number" value="${d.page}" min="0" max="12" oninput="bcUpdateDisplay(${d.id},'page',parseInt(this.value))" style="width:100%;padding:3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;"></label>
-          <label>Label ID<input type="number" value="${d.label_id}" min="0" oninput="bcUpdateDisplay(${d.id},'label_id',parseInt(this.value))" style="width:100%;padding:3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;"></label>
-          <label>Display type<select onchange="bcUpdateDisplay(${d.id},'display_type',this.value)" style="width:100%;font-size:0.78rem;">${dtypes}</select></label>
-          <label>Target prop<select onchange="bcUpdateDisplay(${d.id},'target_property',this.value)" style="width:100%;font-size:0.78rem;">${tprops}</select></label>
-          <label>Refresh (s)<input type="number" value="${d.refresh_sec || 30}" min="5" max="3600" oninput="bcUpdateDisplay(${d.id},'refresh_sec',parseInt(this.value))" style="width:100%;padding:3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;"></label>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;font-size:0.78rem;color:#444;">
-          <label>Source (state.shared key or Device sensor)<select onchange="bcUpdateDisplay(${d.id},'source_value',this.value); bcUpdateDisplay(${d.id},'source_type',this.value.startsWith('device:')?'device':'shared_state'); bcUpdatePreview(${d.id})" style="width:100%;font-size:0.78rem;">${keysOptions}</select></label>
-          <label>Description<input type="text" value="${escHtml(d.description || '')}" oninput="bcUpdateDisplay(${d.id},'description',this.value)" style="width:100%;padding:3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;"></label>
-        </div>
-        <div style="margin-top:6px;font-size:0.78rem;color:#444;">
-          <label>Format<input type="text" value="${escHtml(d.format_string || '')}" placeholder="Boiler {{boiler_temp}}°C"
-            oninput="bcUpdateDisplay(${d.id},'format_string',this.value); bcUpdatePreview(${d.id})"
-            style="width:100%;padding:4px 6px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.85rem;font-family:monospace;"></label>
-        </div>
-        <div style="background:#fff;padding:6px 10px;border-radius:3px;border-left:3px solid #7a9ab8;margin-top:6px;font-size:0.82rem;">
-          Preview: <span data-cell="preview" style="font-family:monospace;color:#000;">—</span>
-          <span style="margin-left:14px;color:#888;font-size:0.72rem;">${last}</span>
-        </div>
-        <div style="margin-top:8px;display:flex;gap:8px;">
-          <button class="btn-save" style="padding:4px 12px;" onclick="bcSaveDisplay(${d.id})">Save</button>
-          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="bcDeleteDisplay(${d.id})">Delete</button>
-          <span data-cell="status" style="font-size:0.78rem;color:#888;align-self:center;"></span>
+      <div class="card" style="padding:8px 10px;margin-bottom:8px;background:#faf8f5;overflow-x:auto;" data-id="${d.id}">
+        <div style="display:grid;grid-template-columns:60px 70px 92px 88px 70px 1.4fr 1.1fr 1.5fr 110px auto;gap:8px;align-items:end;min-width:1180px;">
+          <label style="${lblStyle}">Page
+            <input type="number" value="${d.page}" min="0" max="12"
+              oninput="bcUpdateDisplay(${d.id},'page',parseInt(this.value))" style="${inp}">
+          </label>
+          <label style="${lblStyle}">Label ID
+            <input type="number" value="${d.label_id}" min="0"
+              oninput="bcUpdateDisplay(${d.id},'label_id',parseInt(this.value))" style="${inp}">
+          </label>
+          <label style="${lblStyle}">Type
+            <select onchange="bcUpdateDisplay(${d.id},'display_type',this.value)" style="${inp}">${dtypes}</select>
+          </label>
+          <label style="${lblStyle}">Target
+            <select onchange="bcUpdateDisplay(${d.id},'target_property',this.value)" style="${inp}">${tprops}</select>
+          </label>
+          <label style="${lblStyle}">Refresh
+            <input type="number" value="${d.refresh_sec || 30}" min="5" max="3600"
+              oninput="bcUpdateDisplay(${d.id},'refresh_sec',parseInt(this.value))" style="${inp}">
+          </label>
+          <label style="${lblStyle}" title="state.shared key or Device sensor">Source
+            <select onchange="bcUpdateDisplay(${d.id},'source_value',this.value); bcUpdateDisplay(${d.id},'source_type',this.value.startsWith('device:')?'device':'shared_state'); bcUpdatePreview(${d.id})" style="${inp}">${keysOptions}</select>
+          </label>
+          <label style="${lblStyle}">Description
+            <input type="text" value="${escHtml(d.description || '')}"
+              oninput="bcUpdateDisplay(${d.id},'description',this.value)" style="${inp}">
+          </label>
+          <label style="${lblStyle}">Format
+            <input type="text" value="${escHtml(d.format_string || '')}" placeholder="{{val}}°C"
+              oninput="bcUpdateDisplay(${d.id},'format_string',this.value); bcUpdatePreview(${d.id})"
+              style="${inp}font-family:monospace;">
+          </label>
+          <div style="${lblStyle}">Preview
+            <div style="background:#fff;padding:3px 8px;border-radius:3px;border-left:3px solid #7a9ab8;font-size:0.82rem;font-family:monospace;color:#000;height:22px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="last: ${escHtml(d.last_value || '')}">
+              <span data-cell="preview">—</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:end;height:100%;">
+            <button class="btn-save" style="padding:4px 10px;" onclick="bcSaveDisplay(${d.id})">Save</button>
+            <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="bcDeleteDisplay(${d.id})">×</button>
+            <span data-cell="status" style="font-size:0.72rem;color:#888;align-self:center;"></span>
+          </div>
         </div>
       </div>`;
   }
