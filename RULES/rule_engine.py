@@ -795,9 +795,13 @@ class RuleEngine:
         _internal = {'device_id', 'action', 'channel', 'rule', 'path', 'value', '_skip_loop_guard'}
 
         if protocol == 'hasp':
+            # Plate name (used in MQTT topic) lives in the device id as
+            # 'hasp:<plate>', not in `name` — so users can freely rename
+            # the device's human display name without breaking dispatch.
+            plate = device_id[5:].split(':', 1)[0] if device_id.startswith('hasp:') else device_name
             path = cmd.get('path', '')
             value = cmd.get('value', '')
-            self.mqtt.publish_raw(f'hasp/{device_name}/command/{path}', str(value))
+            self.mqtt.publish_raw(f'hasp/{plate}/command/{path}', str(value))
 
         elif protocol == 'zigbee':
             # For multi-gang zigbee switches, `channel` (e.g. 'state_l1') is the
