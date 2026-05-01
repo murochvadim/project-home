@@ -152,22 +152,62 @@
     return `<span style="color:#aaa;font-size:0.78rem;">— pick action type first —</span>`;
   }
 
+  // For a target device, list the valid channel keys derived from its protocol.
+  // Zigbee multi-gang: state_l1, state_l2, … (from dps_labels).
+  // Tuya local/gateway: numeric DPS keys from channel_config or dps_labels.
+  // Single-channel devices return [] — no channel needed.
+  function bcChannelOptions(dev) {
+    if (!dev) return null;
+    const labels = dev.dps_labels || {};
+    if (dev.protocol === 'zigbee') {
+      const keys = Object.keys(labels).filter(k => /^state(_l\d+)?$/.test(k));
+      return keys.length ? keys : Object.keys(labels);
+    }
+    if (dev.protocol === 'local' || dev.protocol === 'gateway') {
+      const cc = dev.channel_config || {};
+      const ccKeys = Object.keys(cc);
+      if (ccKeys.length) return ccKeys;
+      return Object.keys(labels).filter(k => /^\d+$/.test(k));
+    }
+    return [];
+  }
+
   function bcRenderPayloadCell(row) {
     const at = row.action_type || '';
     const ap = row.action_payload || {};
-    if (at === 'device') {
-      const action = ap.action || 'toggle';
-      const channel = ap.channel || '';
-      return `
-        <select onchange="bcUpdatePayload(${row.id},'action',this.value)" style="width:75px;font-size:0.78rem;">
-          <option value="toggle"${action === 'toggle' ? ' selected' : ''}>toggle</option>
-          <option value="turn_on"${action === 'turn_on' ? ' selected' : ''}>on</option>
-          <option value="turn_off"${action === 'turn_off' ? ' selected' : ''}>off</option>
-        </select>
-        <input type="text" value="${escHtml(channel)}" placeholder="ch" title="channel (e.g. state_l1, '1')"
-          oninput="bcUpdatePayload(${row.id},'channel',this.value)" style="width:55px;font-size:0.78rem;padding:2px 4px;margin-left:4px;">`;
+    if (at !== 'device') return `<span style="color:#bbb;font-size:0.78rem;">—</span>`;
+
+    const action = ap.action || 'toggle';
+    const channel = ap.channel || '';
+    const actionSel = `
+      <select onchange="bcUpdatePayload(${row.id},'action',this.value)" style="width:72px;font-size:0.78rem;">
+        <option value="toggle"${action === 'toggle' ? ' selected' : ''}>toggle</option>
+        <option value="turn_on"${action === 'turn_on' ? ' selected' : ''}>on</option>
+        <option value="turn_off"${action === 'turn_off' ? ' selected' : ''}>off</option>
+      </select>`;
+
+    const dev = row.action_target ? _devices.find(d => d.id === row.action_target) : null;
+    const channels = bcChannelOptions(dev);
+
+    if (!dev) {
+      return actionSel + `<span style="color:#bbb;font-size:0.72rem;margin-left:4px;">pick target</span>`;
     }
-    return `<span style="color:#bbb;font-size:0.78rem;">—</span>`;
+    if (channels === null || channels.length === 0) {
+      return actionSel + `<span style="color:#888;font-size:0.72rem;margin-left:4px;">no channel</span>`;
+    }
+    // Build dropdown — preserve any value not in the list (legacy / typo'd) as a stub option
+    const inList = channels.includes(channel);
+    const opts = [`<option value="">— ch —</option>`].concat(channels.map(c => {
+      const lbl = (dev.dps_labels && dev.dps_labels[c]) || c;
+      return `<option value="${escHtml(c)}"${c === channel ? ' selected' : ''}>${escHtml(c)}${lbl !== c ? ` — ${escHtml(lbl)}` : ''}</option>`;
+    }));
+    if (channel && !inList) {
+      opts.push(`<option value="${escHtml(channel)}" selected style="color:#c0392b;">${escHtml(channel)} (legacy)</option>`);
+    }
+    return actionSel + `
+      <select onchange="bcUpdatePayload(${row.id},'channel',this.value)" style="width:170px;font-size:0.78rem;margin-left:4px;">
+        ${opts.join('')}
+      </select>`;
   }
 
   function bcRenderRow(row) {
@@ -205,6 +245,10 @@
     if (field === 'action_type') {
       row.action_target = '';
       row.action_payload = {};
+      bcRedrawRow(row);
+    } else if (field === 'action_target') {
+      // Target changed — re-render payload cell so the channel dropdown adapts
+      // to the new device's protocol (zigbee state_lN vs Tuya numeric).
       bcRedrawRow(row);
     }
     bcMarkDirty();
