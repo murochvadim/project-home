@@ -760,6 +760,73 @@ class RuleEngine:
     # Command dispatch
     # ------------------------------------------------------------------
 
+    # ─── Awtrix dispatch helpers ────────────────────────────────────────
+    # Awtrix firmware 0.98 uses a flat MQTT prefix that equals the device id
+    # (e.g. 'awtrix_05ec2c'), so topics are '<id>/power', '<id>/notify' —
+    # NOT nested under awtrix/<name>/. devices.id IS the prefix.
+
+    _AWTRIX_TPL_RE = re.compile(r'\{\{(\w+)\}\}')
+
+    def _dispatch_awtrix(self, cmd, device_id, rule_name):
+        action = cmd.get('action', '')
+        if action in ('power_on', 'power_off'):
+            self.mqtt.publish_command(f'{device_id}/power', {'power': action == 'power_on'})
+            log.info("Rule '%s' -> awtrix %s %s", rule_name, action, device_id)
+            return
+        if action == 'push_preset':
+            self._awtrix_push_preset(cmd, device_id, rule_name)
+            return
+        log.warning("Rule '%s' awtrix: unsupported action '%s'", rule_name, action)
+
+    def _awtrix_push_preset(self, cmd, device_id, rule_name):
+        preset_name = cmd.get('preset_name', '')
+        if not preset_name:
+            log.warning("Rule '%s' awtrix push_preset: missing preset_name", rule_name)
+            return
+        rows = self.state.db_query(
+            "SELECT value FROM dashboard_settings WHERE key = 'awtrix.messages'"
+        )
+        messages = (rows[0][0] if rows else None) or []
+        if isinstance(messages, str):
+            try:    messages = json.loads(messages)
+            except: messages = []
+        preset = next((m for m in messages if isinstance(m, dict) and m.get('name') == preset_name), None)
+        if not preset:
+            log.warning("Rule '%s' awtrix push_preset: preset '%s' not found in dashboard_settings.awtrix.messages",
+                        rule_name, preset_name)
+            return
+
+        # Substitute {{var}} in template — first from cmd['vars'] (rule-supplied),
+        # falling back to state.shared.
+        explicit_vars = cmd.get('vars') or {}
+        def sub(m):
+            k = m.group(1)
+            if k in explicit_vars:
+                v = explicit_vars[k]
+            else:
+                v = self.state.shared.get(k)
+            return '' if v is None else str(v)
+        text = self._AWTRIX_TPL_RE.sub(sub, preset.get('template') or '')
+
+        # Translate stored preset fields → Awtrix wire format
+        payload = {'text': text}
+        if preset.get('color'):        payload['color']       = preset['color']
+        if preset.get('scroll_speed') is not None: payload['scrollSpeed'] = preset['scroll_speed']
+        if preset.get('text_case')   is not None: payload['textCase']    = preset['text_case']
+        if preset.get('duration_s')  is not None: payload['duration']    = preset['duration_s']
+        if preset.get('blink_ms'):     payload['blinkText']   = preset['blink_ms']
+        if preset.get('sound'):
+            s = preset['sound']
+            payload['rtttl' if re.search(r':[dob]=', s) else 'sound'] = s
+        if preset.get('priority') == 'high': payload['wakeup'] = True
+        if preset.get('clear_after') and preset.get('persistent'):
+            payload['lifetime'] = preset.get('duration_s', 6)
+            payload['lifetimeMode'] = 0
+
+        self.mqtt.publish_command(f'{device_id}/notify', payload)
+        log.info("Rule '%s' -> awtrix preset '%s' (%s) -> %r",
+                 rule_name, preset_name, device_id, text)
+
     def _dispatch_command(self, cmd, rule_name):
         """Route a command dict to the correct MQTT topic."""
         if not isinstance(cmd, dict):
@@ -813,8 +880,8 @@ class RuleEngine:
             self.mqtt.publish_command(f'zigbee2mqtt/{device_name}/set', z2m_payload)
 
         elif protocol == 'awtrix':
-            awtrix_payload = {k: v for k, v in cmd.items() if k not in _internal}
-            self.mqtt.publish_command(f'awtrix/{device_name}/custom', awtrix_payload)
+            self._dispatch_awtrix(cmd, device_id, rule_name)
+            return
 
         else:
             # Default: Tuya / BSH / other
