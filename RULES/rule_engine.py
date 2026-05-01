@@ -446,9 +446,17 @@ class RuleEngine:
         elif len(parts) == 4 and parts[0] == 'hasp' and parts[2] == 'state':
             node = parts[1]
             obj = parts[3]
-            device_id = self._lookup_device_by_name(node)
-            dps = {obj: payload} if not isinstance(payload, dict) else payload
-            source = 'hasp'
+            # Button widgets (p<page>b<id>): synthesize device_id "hasp:<plate>:<obj>"
+            # so rules can target panel widgets directly without registering the panel
+            # as a "device". Payload is {event: 'short'|'long'|'down'|'up'|'double', ...}.
+            if re.match(r'^p\d+b\d+$', obj):
+                device_id = f'hasp:{node}:{obj}'
+                dps = payload if isinstance(payload, dict) else {'val': payload}
+                source = 'hasp_button'
+            else:
+                device_id = self._lookup_device_by_name(node)
+                dps = {obj: payload} if not isinstance(payload, dict) else payload
+                source = 'hasp'
 
         # zigbee2mqtt/+ (skip "bridge")
         elif len(parts) == 2 and parts[0] == 'zigbee2mqtt':

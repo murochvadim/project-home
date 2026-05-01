@@ -57,15 +57,51 @@
       </div>
     </div>
 
+    <!-- Button Bindings -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">Button Bindings</h2>
+        <span style="font-size:0.78rem;color:#888;">Press a panel button → real device / HASP cmd / Pixoo preset</span>
+        <button id="btn-bindings-save" class="btn-save" style="margin-left:auto;padding:5px 16px;" onclick="bcSaveAllBindings()" disabled>Save All</button>
+      </div>
+      <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
+        <b>Action types</b> — <code>device</code>: turn_on / turn_off / toggle a registered device · <code>hasp_command</code>: panel command (e.g. <code>page 2</code>) · <code>pixoo_preset</code>: push a saved Pixoo preset.
+      </div>
+      <table style="width:100%;font-size:0.85rem;border-collapse:collapse;" id="bc-buttons-table">
+        <thead>
+          <tr style="text-align:left;border-bottom:1px solid #d0cbc4;">
+            <th style="padding:6px 4px;">Button</th>
+            <th style="padding:6px 4px;width:90px;">Event</th>
+            <th style="padding:6px 4px;width:130px;">Action type</th>
+            <th style="padding:6px 4px;">Target</th>
+            <th style="padding:6px 4px;width:140px;">Payload</th>
+            <th style="padding:6px 4px;width:140px;">Test / Status</th>
+          </tr>
+        </thead>
+        <tbody id="bc-buttons-tbody"><tr><td colspan="6" style="padding:12px;color:#888;">loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Display Templates -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">Display Templates</h2>
+        <span style="font-size:0.78rem;color:#888;">Push live values to label / gauge widgets on the panel</span>
+        <button class="btn-test" style="margin-left:auto;border-color:#3a7d44;color:#3a7d44;" onclick="bcAddDisplay()">+ Add</button>
+      </div>
+      <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
+        Use <code style="background:#eee;padding:1px 4px;border-radius:3px;">{{key}}</code> in the format string to embed live state — e.g. <code style="background:#eee;padding:1px 4px;border-radius:3px;">Boiler {{boiler_temp}}°C</code>. Available keys come from rule_engine state.
+      </div>
+      <div id="bc-displays-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+    </div>
+
+    <!-- Static info -->
     <div class="card" style="padding:14px;">
       <h2 style="margin-top:0;font-size:1.05rem;">OpenHASP Touch Panel</h2>
       <div style="font-size:0.85rem;color:#555;line-height:1.55;">
         Sunton ESP32-S3 4848S040 · 480×480 IPS · OpenHASP 0.7.0-rc12<br>
         IP <code>192.168.1.141</code> · MQTT prefix <code>hasp/balcony/</code> · Plate name <code>balcony</code><br>
         <a href="http://192.168.1.141" target="_blank">Web UI ↗</a>
-      </div>
-      <div style="margin-top:14px;font-size:0.82rem;color:#888;font-style:italic;">
-        Page editor / button mappings / value displays land here as features are built.
       </div>
     </div>
   </div>

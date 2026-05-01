@@ -35,12 +35,14 @@ System-wide HASP tables (`hasp_panels`, `hasp_buttons`, `hasp_displays`) hold pa
 
 | Rule | File | Trigger | Purpose |
 |------|------|---------|---------|
-| _none yet_ | — | — | — |
+| Balcony Buttons | `RULES/rules/balcony_buttons.py` | `*` (early-return on `hasp:balcony:` device-id prefix) | On every panel button press, look up the matching `hasp_buttons` row (keyed on `(page, button_id, event)`) and dispatch the action_type — `device` (turn_on/off/toggle), `hasp_command` (panel cmd like `page 2`), or `pixoo_preset`. 1 s cooldown per (page, button, event) collapses HASP's down+up+short triple into one fire. |
+| Balcony Displays | `RULES/rules/balcony_displays.py` | `heartbeat` (60 s) | Iterate `hasp_displays` rows, render `format_string` against `state.shared` (substituting `{{key}}`), publish to `hasp/balcony/command/p<page>b<label_id>.<target_property>`. Per-row `refresh_sec` honored. Dedupe against `last_value` so the panel only sees real changes. |
 
-Future rules created via [`/create-rule`](../.claude/skills/create-rule/SKILL.md) with `"group": "balcony"` will be wired here. Likely first rules:
+### How HASP button events reach the rule engine
 
-- **HASP button → device action** — listens on `hasp/balcony/state/p1b<id>` events, looks up `hasp_buttons.action_target` for the matching `(panel, page, button_id)`, dispatches the action.
-- **Live value publisher** — heartbeat-triggered, reads `hasp_displays` rows, substitutes `{{val}}` from `state.shared` / virtual devices, publishes to `hasp/balcony/command/p<page>b<id>.text`.
+The engine subscribes to `hasp/+/state/+` (already present on every plate). For object IDs matching `^p\d+b\d+$` (button widgets), it synthesizes a device_id `hasp:<plate>:<obj>` (e.g. `hasp:balcony:p1b110`) so rules can target the panel widget directly without registering each button as a separate device. Payload `{event:'short'|'long'|'down'|'up'|'double'}` is passed through as `dps`.
+
+The panel ITSELF is registered as a single device row (`id='hasp:balcony', name='balcony', protocol='hasp'`) so the rule engine's existing `protocol='hasp'` dispatch path resolves and publishes commands to `hasp/balcony/command/<path>` — same shape Pixoo uses.
 
 ## Dashboard Page
 
@@ -48,7 +50,10 @@ Path: `/balcony.html` (served by the Windows dashboard). Sidebar link under "Age
 
 ### Tabs
 
-- **Panel** — OpenHASP page editor / button mappings / value displays (placeholder; built out as features land)
+- **Panel** — three cards:
+  - **HASP Balcony status** — live MQTT-over-WebSocket connection, uptime / signal / current page (subscribes to `hasp/balcony/state/statusupdate` + `LWT` as `dashboard_browser`).
+  - **Button Bindings** — table of `hasp_buttons` rows. Per row: event (short/long/down/up/double), action_type (device/hasp_command/pixoo_preset), target picker (varies by action_type), payload (channel + on/off/toggle for device actions). Save All persists; Test fires the binding directly via `/api/hasp/balcony/buttons/:id/test`.
+  - **Display Templates** — list of `hasp_displays` rows. Per row: page, label_id, display_type, target_property (text / val / bg_color / text_color), source key (state.shared dropdown), format string (`Boiler {{boiler_temp}}°C`), refresh seconds. Live preview substitutes against current `state.shared`.
 
 ## Hardware
 

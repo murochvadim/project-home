@@ -1701,6 +1701,181 @@ app.post('/api/rule-engine/test', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── HASP panel widget CRUD (button bindings + display templates) ──────────
+// Config tables only — no business logic. Rule engine on LXC 105 owns dispatch.
+
+const _HASP_PANEL_RE = /^[a-z][a-z0-9-]*$/;
+const _HASP_BTN_FIELDS = new Set(['event', 'action_type', 'action_target', 'action_payload']);
+const _HASP_DISP_FIELDS = new Set(['page', 'label_id', 'description', 'display_type', 'target_property',
+                                    'source_type', 'source_value', 'format_string', 'refresh_sec']);
+
+async function _haspPanelId(panel) {
+  if (!_HASP_PANEL_RE.test(panel)) throw new Error('invalid panel name');
+  const r = await db.query('SELECT id FROM hasp_panels WHERE name = $1', [panel]);
+  if (!r.rows.length) throw new Error('panel not found');
+  return r.rows[0].id;
+}
+
+app.get('/api/hasp/:panel/buttons', async (req, res) => {
+  try {
+    const pid = await _haspPanelId(req.params.panel);
+    const r = await db.query(
+      `SELECT id, page, button_id, event, label, icon_codepoint,
+              action_type, action_target, action_payload, last_event_at
+       FROM hasp_buttons WHERE panel_id = $1
+       ORDER BY page, button_id, event`,
+      [pid]
+    );
+    res.json({ buttons: r.rows });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.patch('/api/hasp/:panel/buttons/:id', async (req, res) => {
+  try {
+    const pid = await _haspPanelId(req.params.panel);
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'bad id' });
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (!_HASP_BTN_FIELDS.has(k)) continue;
+      sets.push(`${k} = $${i++}`);
+      vals.push(k === 'action_payload' ? JSON.stringify(v || {}) : v);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'no valid fields' });
+    vals.push(id, pid);
+    const r = await db.query(
+      `UPDATE hasp_buttons SET ${sets.join(', ')} WHERE id = $${i++} AND panel_id = $${i}
+       RETURNING id, page, button_id, event, action_type, action_target, action_payload`,
+      vals
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    res.json({ button: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Test-fire — direct dispatch (bypasses rule engine; verifies the binding alone)
+app.post('/api/hasp/:panel/buttons/:id/test', async (req, res) => {
+  try {
+    const pid = await _haspPanelId(req.params.panel);
+    const id = parseInt(req.params.id, 10);
+    const r = await db.query(
+      `SELECT action_type, action_target, action_payload FROM hasp_buttons WHERE id = $1 AND panel_id = $2`,
+      [id, pid]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    const { action_type, action_target, action_payload } = r.rows[0];
+    if (!action_type || !action_target) return res.status(400).json({ error: 'binding incomplete' });
+
+    if (action_type === 'device') {
+      const action = (action_payload && action_payload.action) || 'toggle';
+      const channel = action_payload && action_payload.channel;
+      let body = { channel };
+      if (action === 'turn_on') body.state = true;
+      else if (action === 'turn_off') body.state = false;
+      else {
+        // toggle — read current state from devices table last_state
+        const devR = await db.query('SELECT last_state FROM devices WHERE id = $1', [action_target]);
+        const cur = devR.rows[0]?.last_state || {};
+        const curVal = channel ? cur[channel] : (cur['1'] ?? cur.state ?? cur.power);
+        body.state = !(curVal === true || curVal === 1 || curVal === 'on' || curVal === 'ON' || curVal === 'true');
+      }
+      const proxy = await fetch(`http://127.0.0.1:3000/api/devices/${encodeURIComponent(action_target)}/toggle`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const out = await proxy.json();
+      return res.json({ ok: proxy.ok, dispatched: 'device', result: out });
+    }
+
+    if (action_type === 'hasp_command') {
+      const parts = String(action_target).trim().split(/\s+/);
+      const path = parts[0];
+      const value = parts.slice(1).join(' ');
+      mqttClient.publish(`hasp/${req.params.panel}/command/${path}`, value);
+      return res.json({ ok: true, dispatched: 'hasp_command', topic: `hasp/${req.params.panel}/command/${path}`, payload: value });
+    }
+
+    if (action_type === 'pixoo_preset') {
+      const payload = { action: 'push_preset', preset_name: action_target };
+      if (action_payload && action_payload.vars) payload.vars = action_payload.vars;
+      mqttClient.publish('mur/home/pixoo/command', JSON.stringify(payload));
+      return res.json({ ok: true, dispatched: 'pixoo_preset', preset: action_target });
+    }
+
+    res.status(400).json({ error: `unsupported action_type '${action_type}'` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/hasp/:panel/displays', async (req, res) => {
+  try {
+    const pid = await _haspPanelId(req.params.panel);
+    const r = await db.query(
+      `SELECT id, page, label_id, description, display_type, target_property,
+              source_type, source_value, format_string, refresh_sec, last_value, last_published_at
+       FROM hasp_displays WHERE panel_id = $1
+       ORDER BY page, label_id`,
+      [pid]
+    );
+    res.json({ displays: r.rows });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/hasp/:panel/displays', async (req, res) => {
+  try {
+    const pid = await _haspPanelId(req.params.panel);
+    const b = req.body || {};
+    const page = parseInt(b.page, 10);
+    const label_id = parseInt(b.label_id, 10);
+    if (!page || !label_id) return res.status(400).json({ error: 'page and label_id are required' });
+    const r = await db.query(
+      `INSERT INTO hasp_displays (panel_id, page, label_id, description, display_type, target_property,
+                                  source_type, source_value, format_string, refresh_sec)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, page, label_id`,
+      [pid, page, label_id, b.description || null,
+       b.display_type || 'text', b.target_property || 'text',
+       b.source_type || 'shared_state', b.source_value || null,
+       b.format_string || '', b.refresh_sec || 30]
+    );
+    res.json({ display: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/hasp/:panel/displays/:id', async (req, res) => {
+  try {
+    const pid = await _haspPanelId(req.params.panel);
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'bad id' });
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (!_HASP_DISP_FIELDS.has(k)) continue;
+      sets.push(`${k} = $${i++}`);
+      vals.push(v);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'no valid fields' });
+    vals.push(id, pid);
+    const r = await db.query(
+      `UPDATE hasp_displays SET ${sets.join(', ')} WHERE id = $${i++} AND panel_id = $${i} RETURNING id`,
+      vals
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/hasp/:panel/displays/:id', async (req, res) => {
+  try {
+    const pid = await _haspPanelId(req.params.panel);
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'bad id' });
+    const r = await db.query('DELETE FROM hasp_displays WHERE id = $1 AND panel_id = $2', [id, pid]);
+    res.json({ ok: true, deleted: r.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/rule-engine/events', async (req, res) => {
   try {
     const name = req.query.rule || '';
@@ -2085,16 +2260,31 @@ async function ensureSchema() {
       panel_id        INTEGER NOT NULL REFERENCES hasp_panels(id) ON DELETE CASCADE,
       page            INTEGER NOT NULL,
       button_id       INTEGER NOT NULL,
+      event           VARCHAR(20) NOT NULL DEFAULT 'short',     -- 'short'|'long'|'down'|'up'|'double' — same panel button, different event = different row
       label           VARCHAR(50),                              -- "GATES" (display in dashboard)
       icon_codepoint  VARCHAR(10),                              -- "U+E10B" for car
-      action_type     VARCHAR(30),                              -- 'zigbee_toggle'|'ha_service'|'rule_fire'|'scene'|NULL
-      action_target   VARCHAR(200),                             -- device_id / domain.service / rule name / scene_id
-      action_payload  JSONB,                                    -- extra args for the action
+      action_type     VARCHAR(30),                              -- 'device'|'hasp_command'|'pixoo_preset'|'scene'|NULL — picker dispatcher
+      action_target   VARCHAR(200),                             -- device_id / "page 2" / preset name / scene_id
+      action_payload  JSONB,                                    -- extra args (channel, var subs, etc.)
       last_state      JSONB,                                    -- last known toggle/event state from device
       last_event_at   TIMESTAMPTZ,
       created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (panel_id, page, button_id)
+      UNIQUE (panel_id, page, button_id, event)
     )
+  `);
+
+  // Idempotent migration for instances that pre-date the 'event' column (added 2026-05-01).
+  await db.query(`ALTER TABLE hasp_buttons ADD COLUMN IF NOT EXISTS event VARCHAR(20) NOT NULL DEFAULT 'short'`);
+  await db.query(`ALTER TABLE hasp_buttons DROP CONSTRAINT IF EXISTS hasp_buttons_panel_id_page_button_id_key`);
+  await db.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'hasp_buttons_panel_id_page_button_id_event_key'
+      ) THEN
+        ALTER TABLE hasp_buttons ADD CONSTRAINT hasp_buttons_panel_id_page_button_id_event_key
+          UNIQUE (panel_id, page, button_id, event);
+      END IF;
+    END $$;
   `);
 
   await db.query(`
@@ -2104,9 +2294,11 @@ async function ensureSchema() {
       page                INTEGER NOT NULL,
       label_id            INTEGER NOT NULL,
       description         TEXT,                                 -- "UPS battery percentage"
+      display_type        VARCHAR(20) NOT NULL DEFAULT 'text',  -- 'text'|'gauge'|'series'|'bar' — drives renderer
+      target_property     VARCHAR(20) NOT NULL DEFAULT 'text',  -- HASP property to mutate ('text','val','bg_color',…)
       source_type         VARCHAR(20),                          -- 'sql'|'mqtt_subscribe'|'shared_state'|'ha_state'
       source_value        VARCHAR(500),                         -- SQL query / topic / shared key / HA entity
-      format_string       VARCHAR(100) DEFAULT '{}',            -- format applied to the source value
+      format_string       VARCHAR(100) DEFAULT '{}',            -- "{{val}}°C" applied to the source value
       refresh_sec         INTEGER NOT NULL DEFAULT 30,
       last_value          TEXT,
       last_published_at   TIMESTAMPTZ,
@@ -2114,6 +2306,10 @@ async function ensureSchema() {
       UNIQUE (panel_id, page, label_id)
     )
   `);
+
+  // Idempotent migration for instances that pre-date display_type / target_property (added 2026-05-01).
+  await db.query(`ALTER TABLE hasp_displays ADD COLUMN IF NOT EXISTS display_type    VARCHAR(20) NOT NULL DEFAULT 'text'`);
+  await db.query(`ALTER TABLE hasp_displays ADD COLUMN IF NOT EXISTS target_property VARCHAR(20) NOT NULL DEFAULT 'text'`);
 
   // Retention: all three are config tables — keep forever.
   await db.query(`
@@ -2142,7 +2338,7 @@ async function ensureSchema() {
                  (130, 'LIGHT 1', 'U+E769'),
                  (140, 'LIGHT 2', 'U+E769')) AS b(button_id, label, icon)
     WHERE p.name = 'balcony'
-    ON CONFLICT (panel_id, page, button_id) DO NOTHING
+    ON CONFLICT (panel_id, page, button_id, event) DO NOTHING
   `);
 }
 
