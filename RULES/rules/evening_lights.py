@@ -309,6 +309,15 @@ def evaluate(event, state):
     now = datetime.now(_TZ)
     now_min = now.hour * 60 + now.minute
 
+    # Daily latch reset — without this, a user who's continuously 'home'
+    # (vacation week, WFH) would never re-fire after the first night.
+    # Empty fired_date (legacy state from before this fix) is treated as
+    # "not today" so the latch clears on the first run after upgrade.
+    today_iso = now.date().isoformat()
+    fired_date = state.shared.get('_evening_lights_fired_date', '')
+    if fired and fired_date != today_iso:
+        fired = False
+
     # Scenario A — kick-in: current minute matches any configured sun-event
     # anchor. Heartbeat is 60 s, so equality on minute-of-day catches it.
     anchor_minutes = _anchor_minutes(sun_anchors, state)
@@ -329,6 +338,8 @@ def evaluate(event, state):
     # Persist transitions for next tick (always — even if we're not firing).
     state.shared['_evening_lights_prev_home_mode']      = home_mode
     state.shared['_evening_lights_fired_this_period']   = fired or fire
+    if fire:
+        state.shared['_evening_lights_fired_date'] = today_iso
 
     if not fire:
         return []
