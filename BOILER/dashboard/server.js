@@ -1909,16 +1909,41 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
       } catch (_) {}
     }
 
-    // 3) Upsert
+    // 3) Upsert — for buttons, derive label from contained label widget
+    //    (panel buttons typically have no text; the visible name is a
+    //    separate label widget overlaid on the button bbox).
+    const labelsByPage = {};
+    for (const o of objects) {
+      if (o.obj === 'label' && o.text) {
+        (labelsByPage[o.page] = labelsByPage[o.page] || []).push(o);
+      }
+    }
+    function findBtnLabel(btn) {
+      const cands = (labelsByPage[btn.page] || []).filter(lbl => {
+        const lx = lbl.x ?? 0, ly = lbl.y ?? 0;
+        const lxe = lx + (lbl.w ?? 0), lye = ly + (lbl.h ?? 0);
+        const bx = btn.x ?? 0, by = btn.y ?? 0;
+        const bxe = bx + (btn.w ?? 0), bye = by + (btn.h ?? 0);
+        return lx >= bx && lxe <= bxe && ly >= by && lye <= bye;
+      });
+      if (!cands.length) return null;
+      // Prefer non-icon labels (drop private-use codepoint glyphs)
+      const text = cands.filter(lbl => {
+        const c = String(lbl.text).charCodeAt(0);
+        return c < 0xE000 || c > 0xF8FF;
+      });
+      const pool = text.length ? text : cands;
+      // Pick the one positioned LOWEST inside the button (name vs icon)
+      pool.sort((a, b) => (b.y ?? 0) - (a.y ?? 0));
+      return pool[0].text;
+    }
+
     let btnAdded = 0, btnRelabeled = 0;
     let dispAdded = 0, dispTypeUpdated = 0;
     for (const o of objects) {
       if (_HASP_BUTTON_OBJS.has(o.obj)) {
-        // Panel buttons rarely carry their own text (label is usually a
-        // separate overlay widget). When inserting a fresh row, inherit
-        // any existing label for the same (page, button_id) so the new
-        // row isn't NULL-labeled in the dashboard.
-        let labelToInsert = o.text || null;
+        // Derive label: panel.text → contained-label heuristic → existing row
+        let labelToInsert = o.text || findBtnLabel(o);
         if (!labelToInsert) {
           const inh = await db.query(
             `SELECT label FROM hasp_buttons
@@ -1935,13 +1960,13 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
           [pid, o.page, o.id, labelToInsert]
         );
         if (ins.rowCount > 0) btnAdded++;
-        else if (o.text) {
-          // Existing row — update label if changed (across all events for this button)
+        else if (labelToInsert) {
+          // Existing row — push the panel-derived label down (across all events)
           const upd = await db.query(
             `UPDATE hasp_buttons SET label = $1
              WHERE panel_id = $2 AND page = $3 AND button_id = $4
                AND label IS DISTINCT FROM $1`,
-            [o.text, pid, o.page, o.id]
+            [labelToInsert, pid, o.page, o.id]
           );
           if (upd.rowCount > 0) btnRelabeled++;
         }

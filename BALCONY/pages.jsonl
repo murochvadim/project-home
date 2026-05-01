@@ -13,7 +13,7 @@
 {"page":1,"id":132,"obj":"label","x":10,"y":305,"w":225,"h":40,"text":"LIGHT 1","text_font":24,"align":1,"text_color":"#ffffff","click":false}
 {"page":1,"id":140,"obj":"btn","x":245,"y":220,"w":225,"h":140,"toggle":true,"radius":18,"border_width":0,"bg_color":"#75471a","bg_grad_color":"#75471a"}
 {"page":1,"id":141,"obj":"label","x":245,"y":235,"w":225,"h":60,"text":"","text_font":48,"align":1,"text_color":"#ffffff","click":false}
-{"page":1,"id":142,"obj":"label","x":245,"y":305,"w":225,"h":40,"text":"LIGHT 3","text_font":24,"align":1,"text_color":"#ffffff","click":false}
+{"page":1,"id":142,"obj":"label","x":245,"y":305,"w":225,"h":40,"text":"LIGHT vadim","text_font":24,"align":1,"text_color":"#ffffff","click":false}
 
 {"page":2,"id":0,"bg_color":"#111"}
 {"page":3,"id":0,"bg_color":"#111"}
