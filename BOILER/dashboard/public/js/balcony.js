@@ -569,6 +569,8 @@
         status.textContent = r.ok ? '✓ saved' : '✗ save failed';
         setTimeout(() => { status.textContent = ''; }, 3000);
       }
+      // Refresh list so the 'only configured' filter sees the saved values
+      if (r.ok) bcRenderDisplaysList();
     } catch (e) {
       if (status) { status.style.color = '#c0392b'; status.textContent = '✗ ' + e.message; }
     }
