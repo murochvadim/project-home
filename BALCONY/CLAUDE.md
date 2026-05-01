@@ -35,8 +35,9 @@ System-wide HASP tables (`hasp_panels`, `hasp_buttons`, `hasp_displays`) hold pa
 
 | Rule | File | Trigger | Purpose |
 |------|------|---------|---------|
-| Balcony Buttons | `RULES/rules/balcony_buttons.py` | `*` (early-return on `hasp:balcony:` device-id prefix) | On every panel button press, look up the matching `hasp_buttons` row (keyed on `(page, button_id, event)`) and dispatch the action_type — `device` (turn_on/off/toggle), `hasp_command` (panel cmd like `page 2`), or `pixoo_preset`. 1 s cooldown per (page, button, event) collapses HASP's down+up+short triple into one fire. |
-| Balcony Displays | `RULES/rules/balcony_displays.py` | `heartbeat` (60 s) | Iterate `hasp_displays` rows, render `format_string` against `state.shared` (substituting `{{key}}`), publish to `hasp/balcony/command/p<page>b<label_id>.<target_property>`. Per-row `refresh_sec` honored. Dedupe against `last_value` so the panel only sees real changes. |
+| Balcony Buttons | `RULES/rules/balcony_buttons.py` | `*` (early-return on `hasp:balcony:` device-id prefix) | On every panel button press, look up the matching `hasp_buttons` row (keyed on `(page, button_id, event)`) and dispatch the action_type — `device` (turn_on/off/toggle, with toggle resolved client-side from `state.devices[id].dps[channel]`), `hasp_command` (panel cmd like `page 2`), or `pixoo_preset`. 1 s cooldown per (page, button, event) collapses HASP's down+up triple into one fire. Sets `_skip_loop_guard=True` on emitted commands so rapid intentional presses don't trip the same-action-4-in-10s loop guard in `rule_engine._dispatch_command`. |
+| Balcony Displays | `RULES/rules/balcony_displays.py` | `heartbeat` (60 s) | Iterate `hasp_displays` rows, render `format_string` against `state.shared` (substituting `{{key}}`), publish to `hasp/balcony/command/p<page>b<label_id>.<target_property>`. Per-row `refresh_sec` honored. Dedupe against `last_value` so the panel only sees real changes. Empty `format_string` ⇒ rule skips the row (placeholder). |
+| Balcony Button Mirror | `RULES/rules/balcony_button_mirror.py` | `*` (early-return on devices that are `action_target` of a balcony button) | Output complement of `balcony_buttons`: when the bound device's state changes from ANY source (HA dashboard, mobile app, manual switch, our own command), publish `hasp/balcony/command/p<page>b<button_id>.val=0|1` so the panel button's @checked tint stays in sync. depends_on: `["Balcony Buttons"]`. ~2 s end-to-end latency. |
 
 ### How HASP button events reach the rule engine
 
@@ -50,10 +51,25 @@ Path: `/balcony.html` (served by the Windows dashboard). Sidebar link under "Age
 
 ### Tabs
 
-- **Panel** — three cards:
-  - **HASP Balcony status** — live MQTT-over-WebSocket connection, uptime / signal / current page (subscribes to `hasp/balcony/state/statusupdate` + `LWT` as `dashboard_browser`).
-  - **Button Bindings** — table of `hasp_buttons` rows. Per row: event (short/long/down/up/double), action_type (device/hasp_command/pixoo_preset), target picker (varies by action_type), payload (channel + on/off/toggle for device actions). Save All persists; Test fires the binding directly via `/api/hasp/balcony/buttons/:id/test`.
-  - **Display Templates** — list of `hasp_displays` rows. Per row: page, label_id, display_type, target_property (text / val / bg_color / text_color), source key (state.shared dropdown), format string (`Boiler {{boiler_temp}}°C`), refresh seconds. Live preview substitutes against current `state.shared`.
+- **Panel** — five cards (top to bottom):
+  - **OpenHASP Touch Panel** — static info: hardware (Sunton ESP32-S3 4848S040), IP `192.168.1.141`, MQTT prefix `hasp/balcony/`, web-UI link.
+  - **HASP Balcony status** — live MQTT-over-WebSocket connection (browser → broker port 9001 as `dashboard_browser`), shows `● connected/offline` from LWT, uptime / signal / current page from `hasp/balcony/state/statusupdate`. Required ACL on LXC 107: `read hasp/balcony/state/#` + `read hasp/balcony/LWT`.
+  - **Sync from panel** — POST `/api/hasp/balcony/sync` fetches the panel's current `pages.jsonl` over HTTP, parses every widget, upserts rows in `hasp_buttons` / `hasp_displays`, deletes unconfigured-stale rows whose widgets no longer exist, and saves the jsonl back to `BALCONY/pages.jsonl` for git history. Filters: skips `page=0` (OpenHASP global/nav layer) and label widgets whose text is purely a private-use codepoint glyph (E000–F8FF — they're icons, not data displays). User-configured rows (`action_type` set on a button / `format_string` set on a display) are preserved across syncs even if the widget is removed from the panel.
+  - **Button Bindings** — table of `hasp_buttons` rows for the panel. Per row: event (`up` / `down` / `short` / `long` / `double` — note: panel only emits `up` / `down` by default, the rest need per-button config in pages.jsonl), action_type (`device` / `hasp_command` / `pixoo_preset`), target picker (device dropdown for `device`, free text for `hasp_command`, preset dropdown for `pixoo_preset`), payload (action `toggle` / `on` / `off` plus protocol-aware channel dropdown for `device`). Save All persists; Test fires the binding directly via `/api/hasp/balcony/buttons/:id/test` (HTTP path; bypasses the rule engine for fast wiring verification). Channel dropdown auto-populates from the target device's `dps_labels` / `channel_config` — Zigbee multi-gang shows `state_l1`/`state_l2`/…, Tuya shows numeric `1`/`2`/`3`. Legacy values not in the dropdown surface as red `(legacy)` options so they're easy to spot and replace.
+  - **Display Templates** — list of `hasp_displays` rows. Per row: page, label_id, display_type (`text` / `gauge` / `series` / `bar`), target_property (`text` / `val` / `bg_color` / `text_color`), source key (state.shared dropdown), format string (`Boiler {{boiler_temp}}°C`), refresh seconds. Live preview substitutes against current `state.shared`. Filters: `Show: only configured` (default) hides empty placeholder rows; switch to `all` to bind a panel widget. Limit: `10` / `20` / `50` / `all`. ▾ collapse toggle to fold the whole card.
+
+### API endpoints (panel-scoped CRUD; `:panel = balcony` for now)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/hasp/:panel/buttons` | list `hasp_buttons` rows |
+| `PATCH /api/hasp/:panel/buttons/:id` | update `event` / `action_type` / `action_target` / `action_payload` |
+| `POST /api/hasp/:panel/buttons/:id/test` | direct dispatch — test a binding without going through rule engine |
+| `GET /api/hasp/:panel/displays` | list `hasp_displays` rows |
+| `POST /api/hasp/:panel/displays` | create a new display row |
+| `PATCH /api/hasp/:panel/displays/:id` | update display fields |
+| `DELETE /api/hasp/:panel/displays/:id` | delete |
+| `POST /api/hasp/:panel/sync` | pull pages.jsonl + upsert + delete stale + save to repo |
 
 ## Hardware
 

@@ -519,8 +519,10 @@
       const parts = [];
       if (out.buttons.added) parts.push(`${out.buttons.added} new button${out.buttons.added > 1 ? 's' : ''}`);
       if (out.buttons.relabeled) parts.push(`${out.buttons.relabeled} relabeled`);
+      if (out.buttons.deleted) parts.push(`${out.buttons.deleted} stale button${out.buttons.deleted > 1 ? 's' : ''} removed`);
       if (out.displays.added) parts.push(`${out.displays.added} new display${out.displays.added > 1 ? 's' : ''}`);
       if (out.displays.type_updated) parts.push(`${out.displays.type_updated} display type${out.displays.type_updated > 1 ? 's' : ''} updated`);
+      if (out.displays.deleted) parts.push(`${out.displays.deleted} stale display${out.displays.deleted > 1 ? 's' : ''} removed`);
       if (status) {
         status.style.color = '#3a7d44';
         status.textContent = `✓ ${out.objects} widgets parsed${parts.length ? ' — ' + parts.join(', ') : ' — no changes'}${out.file_saved ? `, saved ${out.file_saved}` : ''}`;

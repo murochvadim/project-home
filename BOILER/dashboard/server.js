@@ -1912,6 +1912,23 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
     // 3) Upsert — for buttons, derive label from contained label widget
     //    (panel buttons typically have no text; the visible name is a
     //    separate label widget overlaid on the button bbox).
+    //
+    //    Filters:
+    //      - page=0 is the global background/nav row — buttons there are
+    //        OpenHASP-built-in (back/home/forward); they don't need rule
+    //        bindings or display rows.
+    //      - label widgets whose text is *only* a private-use codepoint
+    //        (E000-F8FF) are icon glyphs, not data displays; skip them
+    //        from hasp_displays.
+    function isPureIcon(s) {
+      if (!s) return false;
+      for (const ch of String(s)) {
+        const c = ch.codePointAt(0);
+        if (c < 0xE000 || c > 0xF8FF) return false;
+      }
+      return true;
+    }
+
     const labelsByPage = {};
     for (const o of objects) {
       if (o.obj === 'label' && o.text) {
@@ -1927,21 +1944,22 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
         return lx >= bx && lxe <= bxe && ly >= by && lye <= bye;
       });
       if (!cands.length) return null;
-      // Prefer non-icon labels (drop private-use codepoint glyphs)
-      const text = cands.filter(lbl => {
-        const c = String(lbl.text).charCodeAt(0);
-        return c < 0xE000 || c > 0xF8FF;
-      });
+      const text = cands.filter(lbl => !isPureIcon(lbl.text));
       const pool = text.length ? text : cands;
-      // Pick the one positioned LOWEST inside the button (name vs icon)
       pool.sort((a, b) => (b.y ?? 0) - (a.y ?? 0));
       return pool[0].text;
     }
 
+    // Track widgets we deem "real" so we can delete unconfigured stale rows
+    const liveButtons = new Set();   // 'page:button_id'
+    const liveDisplays = new Set();  // 'page:label_id'
+
     let btnAdded = 0, btnRelabeled = 0;
     let dispAdded = 0, dispTypeUpdated = 0;
     for (const o of objects) {
+      if (o.page === 0) continue;  // page-0 is OpenHASP's global/nav layer
       if (_HASP_BUTTON_OBJS.has(o.obj)) {
+        liveButtons.add(`${o.page}:${o.id}`);
         // Derive label: panel.text → contained-label heuristic → existing row
         let labelToInsert = o.text || findBtnLabel(o);
         if (!labelToInsert) {
@@ -1971,6 +1989,9 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
           if (upd.rowCount > 0) btnRelabeled++;
         }
       } else if (_HASP_DISPLAY_OBJS[o.obj]) {
+        // Skip pure-icon labels — they're decorative glyphs, not data displays
+        if (o.obj === 'label' && isPureIcon(o.text)) continue;
+        liveDisplays.add(`${o.page}:${o.id}`);
         const dt = _HASP_DISPLAY_OBJS[o.obj];
         const ins = await db.query(
           `INSERT INTO hasp_displays (panel_id, page, label_id, display_type, target_property, format_string)
@@ -1992,6 +2013,35 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
       }
     }
 
+    // 3b) Delete unconfigured stale rows — widgets that no longer exist
+    //     in pages.jsonl OR are now filtered out (page-0, pure-icon).
+    //     Only delete rows with NO user configuration so we never lose
+    //     bindings or templates.
+    const exB = await db.query(
+      `SELECT id, page, button_id FROM hasp_buttons
+       WHERE panel_id = $1 AND action_type IS NULL AND action_target IS NULL`,
+      [pid]
+    );
+    let btnDeleted = 0;
+    for (const r of exB.rows) {
+      if (!liveButtons.has(`${r.page}:${r.button_id}`)) {
+        await db.query('DELETE FROM hasp_buttons WHERE id = $1', [r.id]);
+        btnDeleted++;
+      }
+    }
+    const exD = await db.query(
+      `SELECT id, page, label_id FROM hasp_displays
+       WHERE panel_id = $1 AND (format_string IS NULL OR format_string = '') AND source_value IS NULL`,
+      [pid]
+    );
+    let dispDeleted = 0;
+    for (const r of exD.rows) {
+      if (!liveDisplays.has(`${r.page}:${r.label_id}`)) {
+        await db.query('DELETE FROM hasp_displays WHERE id = $1', [r.id]);
+        dispDeleted++;
+      }
+    }
+
     // 4) Save back to repo
     let fileSaved = null;
     try {
@@ -2005,8 +2055,8 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
 
     res.json({
       ok: true, objects: objects.length,
-      buttons: { added: btnAdded, relabeled: btnRelabeled },
-      displays: { added: dispAdded, type_updated: dispTypeUpdated },
+      buttons: { added: btnAdded, relabeled: btnRelabeled, deleted: btnDeleted },
+      displays: { added: dispAdded, type_updated: dispTypeUpdated, deleted: dispDeleted },
       file_saved: fileSaved,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
