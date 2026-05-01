@@ -96,7 +96,10 @@
   let _btnDirty = false;  // any unsaved changes
 
   const BC_PANEL = 'balcony';
-  const EVENT_OPTIONS = ['short', 'long', 'down', 'up', 'double'];
+  // OpenHASP firmware emits 'down' + 'up' on every press by default; 'short' /
+  // 'long' / 'double' only fire if the button is configured to synthesize them
+  // in pages.jsonl — so 'up' is the safe default that always works.
+  const EVENT_OPTIONS = ['up', 'down', 'short', 'long', 'double'];
   const ACTION_TYPES = ['', 'device', 'hasp_command', 'pixoo_preset'];
 
   function escHtml(s) {
