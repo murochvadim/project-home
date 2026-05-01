@@ -503,7 +503,7 @@
     ).join('');
     const last = d.last_value ? `last: ${escHtml(d.last_value)}` : '';
     const inp = 'padding:3px 5px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;width:100%;box-sizing:border-box;';
-    const lblStyle = 'display:flex;flex-direction:column;font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.4px;gap:2px;min-width:0;';
+    const lblStyle = 'display:flex;flex-direction:column;font-size:0.72rem;color:#888;text-transform:uppercase;letter-spacing:0.4px;gap:2px;min-width:0;';
     return `
       <div class="card" style="padding:8px 10px;margin-bottom:8px;background:#faf8f5;overflow-x:auto;" data-id="${d.id}">
         <div style="display:grid;grid-template-columns:60px 70px 92px 88px 70px 1.4fr 1.1fr 1.5fr 110px auto;gap:8px;align-items:end;min-width:1180px;">
@@ -543,8 +543,8 @@
             </div>
           </div>
           <div style="display:flex;gap:6px;align-items:end;height:100%;">
-            <button class="btn-save" style="padding:4px 10px;" onclick="bcSaveDisplay(${d.id})">Save</button>
-            <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="bcDeleteDisplay(${d.id})">×</button>
+            <button class="btn-save" style="padding:4px 10px;" onclick="bcSaveDisplay(${d.id})" title="Save this row">Save</button>
+            <button class="btn-test" style="border-color:#c0392b;color:#c0392b;font-size:1rem;line-height:1;padding:3px 9px;" onclick="bcDeleteDisplay(${d.id})" title="Delete this display row">×</button>
             <span data-cell="status" style="font-size:0.72rem;color:#888;align-self:center;"></span>
           </div>
         </div>
@@ -560,7 +560,18 @@
     const d = _displays.find(x => x.id === id);
     if (!d) return;
     const el = document.querySelector(`[data-id="${id}"] [data-cell="preview"]`);
-    if (el) el.textContent = await bcRenderPreview(d.format_string, d.source_value) || '—';
+    if (!el) return;
+    const rendered = await bcRenderPreview(d.format_string, d.source_value);
+    el.textContent = rendered || '—';
+    // Put the full rendered value in the parent's tooltip so truncated text
+    // is recoverable on hover. Keep last_value too if it differs.
+    const wrap = el.parentElement;
+    if (wrap) {
+      const parts = [];
+      if (rendered) parts.push(rendered);
+      if (d.last_value && d.last_value !== rendered) parts.push(`last: ${d.last_value}`);
+      wrap.title = parts.join(' · ');
+    }
   };
 
   window.bcSaveDisplay = async function (id) {
