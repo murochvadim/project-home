@@ -57,6 +57,16 @@
       </div>
     </div>
 
+    <!-- Sync from panel -->
+    <div class="card" style="padding:10px 14px;margin-bottom:16px;background:#f8f5f1;">
+      <div style="display:flex;align-items:center;gap:14px;font-size:0.85rem;">
+        <b>Sync from panel</b>
+        <span style="color:#666;font-size:0.78rem;">After editing widgets / labels in the OpenHASP web UI, click here to pull pages.jsonl, upsert binding/display rows, and save the jsonl back to the repo.</span>
+        <button id="bc-sync-btn" class="btn-test" style="margin-left:auto;border-color:#7a9ab8;color:#7a9ab8;" onclick="bcSyncFromPanel()">↺ Sync from panel</button>
+        <span id="bc-sync-status" style="font-size:0.78rem;color:#888;"></span>
+      </div>
+    </div>
+
     <!-- Button Bindings -->
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">

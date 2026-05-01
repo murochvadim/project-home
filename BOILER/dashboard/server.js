@@ -1866,6 +1866,127 @@ app.patch('/api/hasp/:panel/displays/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── HASP panel sync ──────────────────────────────────────────────────────
+// Pull the panel's current pages.jsonl, upsert hasp_buttons / hasp_displays
+// rows from every widget, save the jsonl back to BALCONY/pages.jsonl so
+// the repo stays in sync. Existing bindings (action_type/target/payload,
+// format_string/source) are preserved — only auto-derivable fields update.
+const _HASP_BUTTON_OBJS = new Set(['btn', 'switch', 'checkbox', 'slider']);
+const _HASP_DISPLAY_OBJS = {
+  label: { display_type: 'text',  target_property: 'text' },
+  gauge: { display_type: 'gauge', target_property: 'val'  },
+  arc:   { display_type: 'gauge', target_property: 'val'  },
+  bar:   { display_type: 'bar',   target_property: 'val'  },
+};
+
+app.post('/api/hasp/:panel/sync', async (req, res) => {
+  try {
+    if (!_HASP_PANEL_RE.test(req.params.panel)) return res.status(400).json({ error: 'invalid panel' });
+    const pR = await db.query('SELECT id, ip FROM hasp_panels WHERE name = $1', [req.params.panel]);
+    if (!pR.rows.length) return res.status(404).json({ error: 'panel not found' });
+    const pid = pR.rows[0].id;
+    const ip = pR.rows[0].ip;
+    if (!ip) return res.status(400).json({ error: 'panel has no IP' });
+
+    // 1) Fetch panel's pages.jsonl
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let text;
+    try {
+      const r = await fetch(`http://${ip}/pages.jsonl`, { signal: ctrl.signal });
+      if (!r.ok) throw new Error(`panel returned HTTP ${r.status}`);
+      text = await r.text();
+    } finally { clearTimeout(timer); }
+
+    // 2) Parse — one JSON object per non-comment line
+    const objects = [];
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('//')) continue;
+      try {
+        const o = JSON.parse(t);
+        if (o.page != null && o.id != null && o.obj) objects.push(o);
+      } catch (_) {}
+    }
+
+    // 3) Upsert
+    let btnAdded = 0, btnRelabeled = 0;
+    let dispAdded = 0, dispTypeUpdated = 0;
+    for (const o of objects) {
+      if (_HASP_BUTTON_OBJS.has(o.obj)) {
+        // Panel buttons rarely carry their own text (label is usually a
+        // separate overlay widget). When inserting a fresh row, inherit
+        // any existing label for the same (page, button_id) so the new
+        // row isn't NULL-labeled in the dashboard.
+        let labelToInsert = o.text || null;
+        if (!labelToInsert) {
+          const inh = await db.query(
+            `SELECT label FROM hasp_buttons
+             WHERE panel_id = $1 AND page = $2 AND button_id = $3 AND label IS NOT NULL LIMIT 1`,
+            [pid, o.page, o.id]
+          );
+          if (inh.rows.length) labelToInsert = inh.rows[0].label;
+        }
+        const ins = await db.query(
+          `INSERT INTO hasp_buttons (panel_id, page, button_id, event, label)
+           VALUES ($1, $2, $3, 'up', $4)
+           ON CONFLICT (panel_id, page, button_id, event) DO NOTHING
+           RETURNING id`,
+          [pid, o.page, o.id, labelToInsert]
+        );
+        if (ins.rowCount > 0) btnAdded++;
+        else if (o.text) {
+          // Existing row — update label if changed (across all events for this button)
+          const upd = await db.query(
+            `UPDATE hasp_buttons SET label = $1
+             WHERE panel_id = $2 AND page = $3 AND button_id = $4
+               AND label IS DISTINCT FROM $1`,
+            [o.text, pid, o.page, o.id]
+          );
+          if (upd.rowCount > 0) btnRelabeled++;
+        }
+      } else if (_HASP_DISPLAY_OBJS[o.obj]) {
+        const dt = _HASP_DISPLAY_OBJS[o.obj];
+        const ins = await db.query(
+          `INSERT INTO hasp_displays (panel_id, page, label_id, display_type, target_property, format_string)
+           VALUES ($1, $2, $3, $4, $5, '')
+           ON CONFLICT (panel_id, page, label_id) DO NOTHING
+           RETURNING id`,
+          [pid, o.page, o.id, dt.display_type, dt.target_property]
+        );
+        if (ins.rowCount > 0) dispAdded++;
+        else {
+          const upd = await db.query(
+            `UPDATE hasp_displays SET display_type = $1, target_property = $2
+             WHERE panel_id = $3 AND page = $4 AND label_id = $5
+               AND (display_type IS DISTINCT FROM $1 OR target_property IS DISTINCT FROM $2)`,
+            [dt.display_type, dt.target_property, pid, o.page, o.id]
+          );
+          if (upd.rowCount > 0) dispTypeUpdated++;
+        }
+      }
+    }
+
+    // 4) Save back to repo
+    let fileSaved = null;
+    try {
+      const repoPath = path.resolve(__dirname, '..', '..', 'BALCONY', 'pages.jsonl');
+      fs.writeFileSync(repoPath, text);
+      fileSaved = 'BALCONY/pages.jsonl';
+    } catch (e) {
+      // File save is best-effort; the DB sync is the load-bearing part
+      console.error('HASP sync: failed to save pages.jsonl —', e.message);
+    }
+
+    res.json({
+      ok: true, objects: objects.length,
+      buttons: { added: btnAdded, relabeled: btnRelabeled },
+      displays: { added: dispAdded, type_updated: dispTypeUpdated },
+      file_saved: fileSaved,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete('/api/hasp/:panel/displays/:id', async (req, res) => {
   try {
     const pid = await _haspPanelId(req.params.panel);
@@ -2330,8 +2451,8 @@ async function ensureSchema() {
 
   // Seed: balcony's 4 buttons (action_type/target NULL — wired in Phase 2)
   await db.query(`
-    INSERT INTO hasp_buttons (panel_id, page, button_id, label, icon_codepoint)
-    SELECT p.id, 1, b.button_id, b.label, b.icon
+    INSERT INTO hasp_buttons (panel_id, page, button_id, event, label, icon_codepoint)
+    SELECT p.id, 1, b.button_id, 'up', b.label, b.icon
     FROM hasp_panels p,
          (VALUES (110, 'GATES', 'U+E10B'),
                  (120, 'BARRIER', 'U+E10B'),

@@ -471,6 +471,32 @@
     for (const d of _displays) bcUpdatePreview(d.id);
   }
 
+  // ─── Sync from panel ───────────────────────────────────────────────────────
+  window.bcSyncFromPanel = async function () {
+    const btn = document.getElementById('bc-sync-btn');
+    const status = document.getElementById('bc-sync-status');
+    btn.disabled = true;
+    if (status) { status.style.color = '#888'; status.textContent = 'syncing…'; }
+    try {
+      const r = await fetch(`/api/hasp/${BC_PANEL}/sync`, { method: 'POST' });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error || 'sync failed');
+      const parts = [];
+      if (out.buttons.added) parts.push(`${out.buttons.added} new button${out.buttons.added > 1 ? 's' : ''}`);
+      if (out.buttons.relabeled) parts.push(`${out.buttons.relabeled} relabeled`);
+      if (out.displays.added) parts.push(`${out.displays.added} new display${out.displays.added > 1 ? 's' : ''}`);
+      if (out.displays.type_updated) parts.push(`${out.displays.type_updated} display type${out.displays.type_updated > 1 ? 's' : ''} updated`);
+      if (status) {
+        status.style.color = '#3a7d44';
+        status.textContent = `✓ ${out.objects} widgets parsed${parts.length ? ' — ' + parts.join(', ') : ' — no changes'}${out.file_saved ? `, saved ${out.file_saved}` : ''}`;
+      }
+      // Reload tables so new rows show
+      await Promise.all([bcLoadButtons(), bcLoadDisplays()]);
+    } catch (e) {
+      if (status) { status.style.color = '#c0392b'; status.textContent = '✗ ' + e.message; }
+    } finally { btn.disabled = false; }
+  };
+
   window.addEventListener('DOMContentLoaded', () => {
     refreshPage();
     hpInit();
