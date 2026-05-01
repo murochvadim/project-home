@@ -54,7 +54,31 @@
     const page = s.page ?? null;
     const num  = s.numPages ?? null;
     set('hp-page', page != null ? (num != null ? `${page} / ${num}` : `${page}`) : '—');
+    // Populate page selector once (numPages reported by the panel)
+    const sel = document.getElementById('hp-page-select');
+    if (sel && num && sel.options.length <= 1) {
+      for (let i = 0; i <= num; i++) {  // include page 0 (global / nav layer)
+        const o = document.createElement('option');
+        o.value = String(i);
+        o.textContent = i === 0 ? '0 (global)' : String(i);
+        sel.appendChild(o);
+      }
+    }
   }
+
+  // Panel control — backlight on/off + page navigation. Publishes via the
+  // open MQTT WebSocket (hpInit). dashboard_browser ACL: write hasp/+/command/#
+  window.hpPower = function (on) {
+    if (!_hpMqtt || !_hpMqtt.connected) return;
+    _hpMqtt.publish(`hasp/${HP_PLATE}/command/dim`, on ? '100' : '0');
+  };
+  window.hpGotoPage = function (n) {
+    if (!_hpMqtt || !_hpMqtt.connected || n === '') return;
+    _hpMqtt.publish(`hasp/${HP_PLATE}/command/page`, String(n));
+    // Reset the dropdown to its placeholder so the same page can be re-clicked
+    const sel = document.getElementById('hp-page-select');
+    if (sel) sel.value = '';
+  };
 
   async function hpInit() {
     if (_hpInited) return;
