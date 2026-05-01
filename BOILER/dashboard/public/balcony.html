@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Balcony Agent</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html" class="active">Balcony Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Balcony Agent</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshPage()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('panel', this)">Panel</button>
+  </div>
+
+  <div class="tab-panel active" id="tab-panel">
+
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">HASP Balcony <span id="hp-online-dot" title="MQTT" style="font-size:0.85rem;color:#aaa;">●</span> <span id="hp-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">connecting…</span></h2>
+        <span style="font-size:0.82rem;color:#666;">Uptime: <b id="hp-uptime">—</b></span>
+        <span style="font-size:0.82rem;color:#666;">Signal: <b id="hp-rssi">—</b> dBm</span>
+        <span style="font-size:0.82rem;color:#666;">Current page: <b id="hp-page">—</b></span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:14px;">
+      <h2 style="margin-top:0;font-size:1.05rem;">OpenHASP Touch Panel</h2>
+      <div style="font-size:0.85rem;color:#555;line-height:1.55;">
+        Sunton ESP32-S3 4848S040 · 480×480 IPS · OpenHASP 0.7.0-rc12<br>
+        IP <code>192.168.1.141</code> · MQTT prefix <code>hasp/balcony/</code> · Plate name <code>balcony</code><br>
+        <a href="http://192.168.1.141" target="_blank">Web UI ↗</a>
+      </div>
+      <div style="margin-top:14px;font-size:0.82rem;color:#888;font-style:italic;">
+        Page editor / button mappings / value displays land here as features are built.
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/alerts-monitor.js"></script>
+<script src="js/balcony.js"></script>
+</body>
+</html>

@@ -1,8 +1,54 @@
 # Balcony Agent
 
-OpenHASP touch panel mounted on the balcony. Manages physical controls (gates, barrier, lights) and surfaces live values.
+Per-room agent for the balcony — OpenHASP touch panel, rules, and balcony-area devices (gates, barrier, lights).
 
-This agent is **dashboard-only** — same pattern as Living Room and Corridor agents. No dedicated LXC service. Logic lives in the rule engine on LXC 105 (when added in later phases).
+Dashboard-only agent (no dedicated LXC service) — same pattern as Living Room and Corridor agents. All automation logic lives in the rule engine on LXC 105.
+
+## File Locations
+
+Everything scattered across canonical directories — this file is the index.
+
+| Artifact | Path |
+|----------|------|
+| Dashboard page | [`BOILER/dashboard/public/balcony.html`](../BOILER/dashboard/public/balcony.html) |
+| Dashboard JS | [`BOILER/dashboard/public/js/balcony.js`](../BOILER/dashboard/public/js/balcony.js) |
+| Rules | `RULES/rules/*.py` (group=`balcony`) — none yet |
+| DB setup migration | [`BALCONY/migrations/setup.sql`](migrations/setup.sql) |
+| DB agent row | `agents` table, `name = 'balcony'` |
+| Config storage | `dashboard_settings` keys prefixed `balcony.*` |
+| Memory | [`memory/project_agent_balcony.md`](../.claude/projects/c--Users-muroc-project-home/memory/project_agent_balcony.md) |
+| Panel artifacts | [`BALCONY/build_pages.py`](build_pages.py), [`BALCONY/pages.jsonl`](pages.jsonl), [`BALCONY/pages_backup.jsonl`](pages_backup.jsonl) |
+
+## Storage Convention
+
+All balcony configs use `dashboard_settings` keys with prefix `balcony.`:
+
+| Key | Shape | Purpose |
+|-----|-------|---------|
+| _none yet_ | — | — |
+
+Future keys land here as features ship (e.g. `balcony.button_actions` for HASP button → device wiring once it moves out of `hasp_buttons.action_*` columns, or `balcony.rule_sentences` if sentence-based rule authoring is added like Living Room).
+
+System-wide HASP tables (`hasp_panels`, `hasp_buttons`, `hasp_displays`) hold panel-level state — those are deliberately NOT under `balcony.*` because they're shared across every room HASP agent. Balcony's rows in those tables are seeded by `server.js ensureSchema()`.
+
+## Rules (group=`balcony`)
+
+| Rule | File | Trigger | Purpose |
+|------|------|---------|---------|
+| _none yet_ | — | — | — |
+
+Future rules created via [`/create-rule`](../.claude/skills/create-rule/SKILL.md) with `"group": "balcony"` will be wired here. Likely first rules:
+
+- **HASP button → device action** — listens on `hasp/balcony/state/p1b<id>` events, looks up `hasp_buttons.action_target` for the matching `(panel, page, button_id)`, dispatches the action.
+- **Live value publisher** — heartbeat-triggered, reads `hasp_displays` rows, substitutes `{{val}}` from `state.shared` / virtual devices, publishes to `hasp/balcony/command/p<page>b<id>.text`.
+
+## Dashboard Page
+
+Path: `/balcony.html` (served by the Windows dashboard). Sidebar link under "Agents" section, after Living Room Agent.
+
+### Tabs
+
+- **Panel** — OpenHASP page editor / button mappings / value displays (placeholder; built out as features land)
 
 ## Hardware
 
@@ -118,3 +164,14 @@ Same shape for `120/121/122 BARRIER`, `130/131/132 LIGHT 1`, `140/141/142 LIGHT 
 | `hasp_panels` | 1 row, `name='balcony'`, IP `192.168.1.141`, mac `8c:bf:ea:0d:c3:24` (seeded by `server.js ensureSchema()` 2026-05-01) |
 | `hasp_buttons` | 4 rows for page 1: GATES (110), BARRIER (120), LIGHT 1 (130), LIGHT 2 (140). `action_type` and `action_target` are NULL — wired in a later phase. |
 | `hasp_displays` | 0 rows yet — value displays will be added when we drive live data onto the panel. |
+
+## Planned Future Features
+
+- **Button → device wiring** — fill in `hasp_buttons.action_type` + `action_target` for the 4 page-1 buttons (Gates, Barrier, Light 1, Light 2) and a rule in `RULES/rules/` (group=`balcony`) that dispatches them.
+- **Live value displays** — populate `hasp_displays` rows; rule pushes substituted text via MQTT to label objects on the panel (same `{{var}}` template engine pattern as Pixoo presets).
+- **Page editor in the dashboard Panel tab** — read/write `pages.jsonl` from the browser instead of `BALCONY/build_pages.py`.
+- **Multi-panel scaling** — when a 2nd panel is added in another room (e.g. kitchen), scaffold a peer agent (`/create-agent` → `Kitchen Agent` → `KITCHEN/`) that reuses the shared HASP DB tables.
+
+## Extending the Agent
+
+To add a service layer later (if a balcony-specific Python loop is ever needed): run `/create-agent Edit` → "add service layer". The skill generates `BALCONY/agent/balcony-agent.service` + env file + orphan guard, updates the `agents` row, and converts the file-locations table to include the service.
