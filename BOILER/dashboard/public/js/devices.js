@@ -154,6 +154,8 @@ function lastSeenText(ts, stale) {
 }
 
 function isOnline(dev) {
+  // Virtual devices have no network presence — registered = online by definition.
+  if (dev.protocol === 'virtual') return true;
   if (!dev.last_seen) return false;
   const ageSec = (Date.now() - new Date(dev.last_seen)) / 1000;
   if (ageSec < 0) return true; // clock drift
@@ -163,6 +165,12 @@ function isOnline(dev) {
   if (dev.protocol === 'zigbee') return dev.last_state ? true : ageSec < 600;  // Z2M push on state change only
   if (dev.protocol === 'zwave') return dev.last_state ? true : ageSec < 600;  // HA WebSocket push on state change
   if (dev.protocol === 'ring') return dev.last_state ? true : ageSec < 600;  // HA WebSocket push
+  // External network devices (Pixoo, Awtrix, HASP panels) — last_seen comes
+  // from net_devices via the ARP scan (5-min cadence). 600s threshold covers
+  // 5-min scan + margin so a single missed scan doesn't flip them offline.
+  if (dev.protocol === 'pixoo')  return dev.last_state ? true : ageSec < 600;
+  if (dev.protocol === 'awtrix') return dev.last_state ? true : ageSec < 600;
+  if (dev.protocol === 'hasp')   return dev.last_state ? true : ageSec < 600;
   return ageSec < 180;  // gateway/cloud poll every 60s
 }
 
