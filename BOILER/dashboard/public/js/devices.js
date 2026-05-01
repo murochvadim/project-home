@@ -528,10 +528,12 @@ function allRooms() {
 function applySettingsFilters() {
   const search = (document.getElementById('settings-search').value || '').toLowerCase();
   const type   = document.getElementById('settings-type').value;
+  const proto  = (document.getElementById('settings-proto') || {}).value || '';
 
   const filtered = allDevices.filter(d => {
     if (search && !d.name.toLowerCase().includes(search)) return false;
     if (type   && d.device_type !== type)                 return false;
+    if (proto  && d.protocol    !== proto)                return false;
     return true;
   });
 
