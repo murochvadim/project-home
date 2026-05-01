@@ -480,15 +480,15 @@
 
   function bcRenderDisplay(d) {
     const cur = d.source_value || '';
-    // Build a combined source picker: state.shared keys (optgroup) + device sensors (optgroup)
+    // Build a combined source picker: state.shared keys (optgroup) + device sensors (optgroup).
+    // Optgroups can't be nested, so room is shown inline in the device label
+    // ('<Room> · <DeviceName> · <field>') rather than a sub-group.
     const sharedOpts = _stateKeys.map(k =>
       `<option value="${escHtml(k)}"${k === cur ? ' selected' : ''}>${escHtml(k)}</option>`
     ).join('');
-    let curRoom = null;
     const deviceOpts = _deviceSources.map(s => {
-      let prefix = '';
-      if (s.room !== curRoom) { curRoom = s.room; prefix = `</optgroup><optgroup label="${escHtml(s.room || '(no room)')}">`; }
-      return `${prefix}<option value="${escHtml(s.value)}"${s.value === cur ? ' selected' : ''}>${escHtml(s.label)}</option>`;
+      const lab = s.room ? `${s.room} · ${s.label}` : s.label;
+      return `<option value="${escHtml(s.value)}"${s.value === cur ? ' selected' : ''}>${escHtml(lab)}</option>`;
     }).join('');
     const keysOptions = `
       <option value="">— pick a source —</option>
