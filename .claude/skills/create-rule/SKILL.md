@@ -71,6 +71,8 @@ Ask what should happen when the rule fires:
 - **Pixoo preset** — push a named preset to Pixoo64 display with optional template variables
 - **Pixoo resume** — unpause Pixoo rotation
 - **Pixoo wipe** — clear Pixoo display
+- **Awtrix on/off** — toggle the Awtrix LED matrix backlight (`power_on` / `power_off`)
+- **Awtrix preset** — push a saved Awtrix message preset (text + color + scroll) with optional `{{var}}` template substitution
 - **Device command** — turn_on/turn_off a specific device
 - **Zigbee command** — send command to zigbee device
 - **HASP command** — send command to HASP touchpanel
@@ -87,6 +89,20 @@ Ask:
 - Which preset to push?
 - Show the preset's `{{var}}` placeholders
 - Ask what values to fill them with (can use state values like `state.shared.get("people_home")`)
+
+## Step 5b: Awtrix Details (if Awtrix action)
+
+For **Awtrix on/off**: ask whether the rule turns it ON or OFF.
+
+For **Awtrix preset**:
+1. Query saved presets:
+   ```sql
+   SELECT value FROM dashboard_settings WHERE key = 'awtrix.messages'
+   ```
+   The value is a JSON array of `{name, template, color, scroll_speed, text_case, duration_s, ...}`. Show preset names.
+2. If the array is empty: tell the user to create one first via the dashboard's Living Room → Awtrix tab.
+3. Ask which preset to push.
+4. Show the preset's template (e.g. `Boiler {{boiler_temp}}°C`) and ask what `vars` to pass. The rule's emitted `vars: {...}` dict overrides `state.shared` lookups for the listed keys; unlisted `{{key}}` placeholders fall back to `state.shared[key]`. For simple cases pass `vars: {}` and let state.shared do all the work.
 
 ## Step 6: Conditions
 
@@ -325,6 +341,33 @@ def evaluate(event, state):
                     "action": "resume",
                 })
 ```
+
+**Awtrix on/off:**
+```python
+                commands.append({
+                    "device_id": "awtrix_05ec2c",       # MQTT prefix = device id
+                    "protocol":  "awtrix",
+                    "action":    "{turn_on_or_off}",     # 'power_on' or 'power_off'
+                })
+```
+
+**Awtrix preset (with variable substitution):**
+```python
+                commands.append({
+                    "device_id":   "awtrix_05ec2c",
+                    "protocol":    "awtrix",
+                    "action":      "push_preset",
+                    "preset_name": "{preset_name}",
+                    "vars":        {vars_dict},  # e.g. {"boiler_temp": state.shared.get("boiler_temp")}
+                })
+```
+Rule engine resolves the preset from `dashboard_settings.awtrix.messages`,
+substitutes `{{key}}` against `cmd['vars']` first then `state.shared`,
+translates stored fields to wire format (`text` / `color` / `scrollSpeed` /
+`textCase` / `duration` / `blinkText` / `rtttl`/`sound`), publishes to
+`awtrix_05ec2c/notify`. Empty `vars` ⇒ all substitutions come from
+`state.shared`. Required ACL on LXC 107 (already in place):
+`rule_engine` has `topic write awtrix_05ec2c/{power,notify}`.
 
 **Device on/off:**
 ```python
