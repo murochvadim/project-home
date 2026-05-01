@@ -2336,7 +2336,7 @@ async function ensureSchema() {
          (VALUES (110, 'GATES', 'U+E10B'),
                  (120, 'BARRIER', 'U+E10B'),
                  (130, 'LIGHT 1', 'U+E769'),
-                 (140, 'LIGHT 2', 'U+E769')) AS b(button_id, label, icon)
+                 (140, 'LIGHT 3', 'U+E769')) AS b(button_id, label, icon)
     WHERE p.name = 'balcony'
     ON CONFLICT (panel_id, page, button_id, event) DO NOTHING
   `);

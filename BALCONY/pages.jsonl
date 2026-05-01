@@ -13,7 +13,7 @@
 {"page":1,"id":132,"obj":"label","x":10,"y":305,"w":225,"h":40,"text":"LIGHT 1","text_font":24,"align":1,"text_color":"#ffffff","click":false}
 {"page":1,"id":140,"obj":"btn","x":245,"y":220,"w":225,"h":140,"toggle":true,"radius":18,"border_width":0,"bg_color":"#75471a","bg_grad_color":"#75471a"}
 {"page":1,"id":141,"obj":"label","x":245,"y":235,"w":225,"h":60,"text":"","text_font":48,"align":1,"text_color":"#ffffff","click":false}
-{"page":1,"id":142,"obj":"label","x":245,"y":305,"w":225,"h":40,"text":"LIGHT 2","text_font":24,"align":1,"text_color":"#ffffff","click":false}
+{"page":1,"id":142,"obj":"label","x":245,"y":305,"w":225,"h":40,"text":"LIGHT 3","text_font":24,"align":1,"text_color":"#ffffff","click":false}
 
 {"page":2,"id":0,"bg_color":"#111"}
 {"page":3,"id":0,"bg_color":"#111"}
@@ -219,4 +219,92 @@
 
 {"page":6,"id":2,"obj":"obj","x":15,"y":165,"w":160,"h":75,"radius":10,"click":false,"disabled":true,"border_side":0,"bg_color":"#1c1c1c"}
 
-{"page":6,"id":3,"obj":"label","x":23,"y":170,"w":65,"h":65,"text":"\uF1DB","click":false,"disabled":true,"text_font":48,"text_color":"#6F
+{"page":6,"id":3,"obj":"label","x":23,"y":170,"w":65,"h":65,"text":"\uF1DB","click":false,"disabled":true,"text_font":48,"text_color":"#6F6F6F"}
+ 
+{"page":6,"id":4,"obj":"label","x":90,"y":185,"w":100,"h":40,"text":"Close", "text_font": 24}
+
+{"page":6,"id":5,"obj":"obj","x":310,"y":165,"w":160,"h":75,"radius":15,"click":false,"border_side":0,"bg_color":"#1c1c1c"}
+{"page":6,"id":6,"obj":"label","x":335,"y":170,"w":65,"h":65,"text":"\uE81B","click":false,"text_font": 48, "text_color":"#6F6F6F"}
+ 
+
+{"page":6,"id":7,"obj":"label","x":395,"y":185,"w":100,"h":40,"text":"Open", "text_font": 24}
+
+// .................LD2420 Sensor..........
+{"page":6,"id":11,"obj":"label","x":55,"y":15,"w":100,"h":80,"text":"---","text_font":48,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+// .................Motor Encoder Reel Revolution ..........
+{"page":6,"id":12,"obj":"label","x":330,"y":15,"w":100,"h":80,"text":"---","text_font":48,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+ 
+{"page":6,"id":13,"obj":"label","x":87,"y":80,"w":240,"h":30,"text":"cm", "text_font": 28}
+{"page":6,"id":14,"obj":"label","x":362,"y":80,"w":240,"h":30,"text":"rev", "text_font": 28}
+
+//..................Auto ON/OFF..............
+{"page":6,"id":15,"obj":"label","x":55,"y":257,"w":200,"h":40,"text":"Auto --","click":false,"text_font": 24}
+{"page":6,"id":16,"obj":"switch","x":25,"y":295,"w":120,"h":55,"radius":15}
+
+//..................Monitor Sensors ON/OFF..............
+{"page":6,"id":17,"obj":"label","x":212,"y":257,"w":200,"h":40,"text":"Monitor","click":false,"text_font": 24}
+{"page":6,"id":18,"obj":"switch","x":185,"y":295,"w":120,"h":55,"radius":15}
+
+// .................Stop...........Do not change location !!!! must sit here
+{"page":6,"id":8,"obj":"obj","x":200,"y":165,"w":85,"h":75,"radius":15,"click":false,"border_side":0,"bg_color":"#1c1c1c"}
+{"page":6,"id":9,"obj":"label","x":210,"y":165,"w":65,"h":65,"text":"\uE4DB", "text_font": 68, "text_color":"#6F6F6F"}
+
+
+// .................Distance in cm done by Motor ..........
+{"page":6,"id":21,"obj":"label","x":165,"y":15,"w":150,"h":80,"text":"---","text_font":48,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+{"page":6,"id":22,"obj":"label","x":223,"y":80,"w":240,"h":30,"text":"cm", "text_font": 28}
+
+//..................Calibration..............
+{"page":6,"id":23,"obj":"label","x":370,"y":257,"w":200,"h":40,"text":"Calib","click":false,"text_font": 24}
+{"page":6,"id":24,"obj":"switch","x":340,"y":295,"w":120,"h":55,"radius":15}
+
+//.......................................... Page 7 Settings Motor------------------------------------------------------------- 
+// .................1..........
+{"page":7,"id":1,"obj":"label","x":35,"y":10,"w":130,"h":80,"text":"---","text_font":24,"align":1,"text_color":"#00FF00","bg_color":"#1c1c1c"}
+// .................2 ..........
+{"page":7,"id":2,"obj":"label","x":170,"y":10,"w":160,"h":80,"text":"---","text_font":24,"align":1,"text_color":"#00FF00","bg_color":"#1c1c1c"}
+// .................3 ..........
+{"page":7,"id":3,"obj":"label","x":320,"y":10,"w":160,"h":80,"text":"---","text_font":24,"align":1,"text_color":"#00FF00","bg_color":"#1c1c1c"}
+
+// .................4..........
+{"page":7,"id":14,"obj":"label","x":35,"y":85,"w":130,"h":80,"text":"---","text_font":24,"align":1,"text_color":"#00FF00","bg_color":"#1c1c1c"}
+// .................5 ..........
+{"page":7,"id":15,"obj":"label","x":170,"y":85,"w":160,"h":80,"text":"---","text_font":24,"align":1,"text_color":"#00FF00","bg_color":"#1c1c1c"}
+// .................6 ..........
+{"page":7,"id":16,"obj":"label","x":335,"y":85,"w":130,"h":80,"text":"---","text_font":24,"align":1,"text_color":"#00FF00","bg_color":"#1c1c1c"}
+
+
+//{"page":7,"id":4,"obj":"label","x":87,"y":80,"w":240,"h":30,"text":"cm", "text_font": 28}
+
+{"page":7,"id":5,"obj":"label","x":35,"y":170,"w":200,"h":30,"text":"Glide Tics to stop", "text_font": 24}
+{"page":7,"id":6,"obj":"label","x":35,"y":242,"w":120,"h":30,"text":"Motor speed", "text_font": 24}
+
+{"page":7,"id":7,"obj":"slider","x":25,"y":210,"w":400,"h":30,"min":10,"max":90,"val":15}
+{"page":7,"id":8,"obj":"label","x":440,"y":207,"w":40,"h":30,"text":"22", "text_font": 28} 
+
+{"page":7,"id":9,"obj":"slider","x":25,"y":280,"w":400,"h":30,"min":30,"max":100,"val":60}
+{"page":7,"id":10,"obj":"label","x":442,"y":276,"w":40,"h":30,"text":"33", "text_font": 28} 
+
+{"page":7,"id":11,"obj":"label","x":50,"y":50,"w":100,"h":80,"text":"Missed Tics","text_font":18,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+{"page":7,"id":12,"obj":"label","x":190,"y":50,"w":130,"h":80,"text":"Real Dist (cm)","text_font":18,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+{"page":7,"id":13,"obj":"label","x":345,"y":50,"w":130,"h":80,"text":"Missed Dist (cm)","text_font":18,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+{"page":7,"id":17,"obj":"label","x":50,"y":130,"w":100,"h":80,"text":"Tics in Stop","text_font":18,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+{"page":7,"id":18,"obj":"label","x":200,"y":130,"w":130,"h":80,"text":"Dist in Stop (cm)","text_font":18,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+{"page":7,"id":19,"obj":"label","x":350,"y":130,"w":100,"h":80,"text":"Status","text_font":18,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+//.......................................... Page 8  clock-------------------------------------------------------------
+{"page":8,"id":50,"obj":"label","x":0,"y":140,"w":480,"h":200,"text":"--:--","text_font":150,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+
+//..........................................  Page 9 .........................................................
+{"page":9,"id":1,"obj":"label","x":80,"y":40,"w":65,"h":65, "text":"\uE09A","click":false,"text_font": 58, "text_color":"#e88c03"} 
+
+//{"page":8,"id":2,"obj":"obj","x":60,"y":80,"w":350,"h":250,"click":0,"bg_opa":0,"shadow_opa":140,"shadow_color":"orange"//,"shadow_width":30,"shadow_spread":0}
+
+{"page":9,"id":3,"obj":"label","x":20,"y":100,"w":430,"h":100,"text":"", "text_font": 48}
+

@@ -47,7 +47,7 @@ specs = [
     (10,  50, 110, 111, 112, 'GATES',   ICON_CAR,  '#1a4775'),  # mid blue
     (245, 50, 120, 121, 122, 'BARRIER', ICON_CAR,  '#471a75'),  # mid purple
     (10, 220, 130, 131, 132, 'LIGHT 1', ICON_LAMP, '#1a7547'),  # mid green
-    (245,220, 140, 141, 142, 'LIGHT 2', ICON_LAMP, '#75471a'),  # mid amber
+    (245,220, 140, 141, 142, 'LIGHT 3', ICON_LAMP, '#75471a'),  # mid amber
 ]
 TXT = '#ffffff'
 
