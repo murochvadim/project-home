@@ -79,7 +79,32 @@ def _get_bindings(state):
     return data
 
 
-def _build_command(binding, page, bid, evt):
+def _resolve_toggle(state, device_id, channel):
+    """Read current device state and return 'turn_on' or 'turn_off' to flip it.
+
+    Mirrors the wallmote_handler resolution — channel keys vary per protocol
+    (Tuya '1'/'2'/'3', Zigbee 'state_l1'…, single-channel: 'state'/'power'/'1').
+    """
+    dev_state = state.devices.get(device_id, {}) or {}
+    cur_dps = dev_state.get("dps", {}) or {}
+    if channel:
+        cur_val = cur_dps.get(channel)
+    elif "1" in cur_dps:
+        cur_val = cur_dps["1"]
+    elif "state" in cur_dps:
+        cur_val = cur_dps["state"]
+    elif "power" in cur_dps:
+        cur_val = cur_dps["power"]
+    elif len(cur_dps) == 1:
+        cur_val = next(iter(cur_dps.values()))
+    else:
+        cur_val = None
+    if cur_val in (True, 1, "on", "ON", "true", "True"):
+        return "turn_off"
+    return "turn_on"
+
+
+def _build_command(binding, page, bid, evt, state):
     """Translate a hasp_buttons row into a command dict (or None to skip)."""
     atype = binding.get("action_type")
     atarget = binding.get("action_target") or ""
@@ -93,14 +118,18 @@ def _build_command(binding, page, bid, evt):
     # rapid tapping during testing doesn't auto-disable the rule.
     if atype == "device":
         action = apayload.get("action", "toggle")
+        channel = apayload.get("channel")
+        # Resolve toggle client-side — device_agent only handles turn_on/turn_off
+        if action == "toggle":
+            action = _resolve_toggle(state, atarget, channel)
         cmd = {
             "device_id": atarget,
             "action": action,
             "rule": "Balcony Buttons",
             "_skip_loop_guard": True,
         }
-        if apayload.get("channel"):
-            cmd["channel"] = apayload["channel"]
+        if channel:
+            cmd["channel"] = channel
         return cmd
 
     if atype == "hasp_command":
@@ -163,7 +192,7 @@ def evaluate(event, state):
         log.info("Balcony Buttons: no binding for p%db%d:%s", page, bid, evt)
         return []
 
-    cmd = _build_command(binding, page, bid, evt)
+    cmd = _build_command(binding, page, bid, evt, state)
     if not cmd:
         return []
 
