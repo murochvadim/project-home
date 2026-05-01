@@ -35,9 +35,24 @@ System-wide HASP tables (`hasp_panels`, `hasp_buttons`, `hasp_displays`) hold pa
 
 | Rule | File | Trigger | Purpose |
 |------|------|---------|---------|
-| Balcony Buttons | `RULES/rules/balcony_buttons.py` | `*` (early-return on `hasp:balcony:` device-id prefix) | On every panel button press, look up the matching `hasp_buttons` row (keyed on `(page, button_id, event)`) and dispatch the action_type — `device` (turn_on/off/toggle, with toggle resolved client-side from `state.devices[id].dps[channel]`), `hasp_command` (panel cmd like `page 2`), or `pixoo_preset`. 1 s cooldown per (page, button, event) collapses HASP's down+up triple into one fire. Sets `_skip_loop_guard=True` on emitted commands so rapid intentional presses don't trip the same-action-4-in-10s loop guard in `rule_engine._dispatch_command`. |
+| Balcony Buttons | `RULES/rules/balcony_buttons.py` | `*` (early-return on `hasp:balcony:` device-id prefix) | On every panel button press, look up the matching `hasp_buttons` row (keyed on `(page, button_id, event)`) and dispatch every binding in its `bindings` JSONB array (multi-device per press, wallmote-parity since 2026-05-01). Each binding shape `{device_id, channel, name, label, action}` for device, or `{type:'hasp_command'\|'pixoo_preset', target}` for non-device. Toggle resolved client-side from `state.devices[id].dps[channel]`. 1 s cooldown per (page, button, event) collapses HASP's down+up triple into one fire. Sets `_skip_loop_guard=True` on emitted commands so rapid intentional presses don't trip the same-action-4-in-10s loop guard in `rule_engine._dispatch_command`. |
 | Balcony Displays | `RULES/rules/balcony_displays.py` | `heartbeat` (60 s) | Iterate `hasp_displays` rows, render `format_string` against `state.shared` (substituting `{{key}}`), publish to `hasp/balcony/command/p<page>b<label_id>.<target_property>`. Per-row `refresh_sec` honored. Dedupe against `last_value` so the panel only sees real changes. Empty `format_string` ⇒ rule skips the row (placeholder). |
-| Balcony Button Mirror | `RULES/rules/balcony_button_mirror.py` | `*` (early-return on devices that are `action_target` of a balcony button) | Output complement of `balcony_buttons`: when the bound device's state changes from ANY source (HA dashboard, mobile app, manual switch, our own command), publish `hasp/balcony/command/p<page>b<button_id>.val=0|1` so the panel button's @checked tint stays in sync. depends_on: `["Balcony Buttons"]`. ~2 s end-to-end latency. |
+| Balcony Button Mirror | `RULES/rules/balcony_button_mirror.py` | `*` (early-return on devices referenced by `bindings[0]` of any balcony button) | Output complement of `balcony_buttons`: when the bound device's state changes from ANY source (HA dashboard, mobile app, manual switch, our own command), publish `hasp/balcony/command/p<page>b<button_id>.val=0\|1` so the panel button's @checked tint stays in sync. Mirrors `bindings[0]`'s state when a button has multi-device bindings — first device wins (user puts the representative device first if they have a multi-device button). depends_on: `["Balcony Buttons"]`. ~2 s end-to-end latency. |
+
+### `hasp_buttons.bindings` — JSONB array shape (added 2026-05-01)
+
+Each panel button's actions live in a single JSONB array. One press fires N actions:
+
+```json
+[
+  {"device_id": "32104641ecfabc567240", "channel": "2",
+   "name": "Kitchen Switch", "label": "Frig Spots", "action": "toggle"},
+  {"device_id": "321046412cf43237bd9d", "channel": "1",
+   "name": "Balcony Switch", "label": "Wall Light", "action": "turn_on"}
+]
+```
+
+Same shape as `dashboard_settings.living-room.wallmote_bindings` slot entries, plus rare non-device variants `{type:'hasp_command', target:'page 2'}` and `{type:'pixoo_preset', target:'<name>', vars:{...}}`. The legacy `action_type` / `action_target` / `action_payload` columns are retained but no longer read by code (preserved for rollback safety).
 
 ### How HASP button events reach the rule engine
 
