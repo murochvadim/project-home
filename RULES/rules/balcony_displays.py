@@ -35,10 +35,35 @@ RULE = {
 _TEMPLATE_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
-def _render(format_string, shared):
-    """Substitute {{key}} placeholders in format_string from state.shared."""
+def _resolve_source(source_value, state):
+    """Resolve source_value → live value.
+
+    Two source_value formats:
+      'foo'                    → state.shared['foo']
+      'device:<id>:<dps_key>'  → state.devices[id].dps[dps_key]
+    """
+    if not source_value:
+        return None
+    if source_value.startswith("device:"):
+        rest = source_value[len("device:"):]
+        if ":" in rest:
+            dev_id, dps_key = rest.split(":", 1)
+            dev = (state.devices or {}).get(dev_id) or {}
+            dps = dev.get("dps") or {}
+            return dps.get(dps_key)
+    return (state.shared or {}).get(source_value)
+
+
+def _render(format_string, shared, source_val):
+    """Substitute {{key}} placeholders.
+
+    {{val}}  → the resolved source value (works for both source_types)
+    {{key}}  → state.shared[key]  (for legacy multi-key templates)
+    """
     def sub(m):
         k = m.group(1)
+        if k == "val":
+            return "" if source_val is None else str(source_val)
         v = shared.get(k)
         return str(v) if v is not None else ""
     return _TEMPLATE_RE.sub(sub, format_string or "")
@@ -48,7 +73,7 @@ def evaluate(event, state):
     rows = state.db_query(
         """
         SELECT d.id, d.page, d.label_id, d.target_property, d.format_string,
-               d.source_type, d.refresh_sec, d.last_value, d.last_published_at
+               d.source_type, d.source_value, d.refresh_sec, d.last_value, d.last_published_at
         FROM hasp_displays d
         JOIN hasp_panels p ON p.id = d.panel_id
         WHERE p.name = 'balcony'
@@ -62,7 +87,7 @@ def evaluate(event, state):
     commands = []
 
     for row in rows:
-        disp_id, page, label_id, target_prop, fmt, src_type, refresh_sec, last_val, last_pub = row
+        disp_id, page, label_id, target_prop, fmt, src_type, src_val, refresh_sec, last_val, last_pub = row
 
         # Per-row cadence — skip if not yet due
         if last_pub:
@@ -73,12 +98,12 @@ def evaluate(event, state):
             if now_ts - last_pub_ts < (refresh_sec or 30):
                 continue
 
-        if src_type and src_type != "shared_state":
-            log.debug("Balcony Displays: source_type '%s' not supported in v1 — skipping id=%d",
-                      src_type, disp_id)
-            continue
+        # source_type is informational — actual resolution is keyed by source_value:
+        #   'device:<id>:<dps_key>' → state.devices[...].dps[key]
+        #   anything else            → state.shared[source_value]
+        source_val_resolved = _resolve_source(src_val, state)
 
-        rendered = _render(fmt, shared)
+        rendered = _render(fmt, shared, source_val_resolved)
         if rendered == (last_val or ""):
             # No change — bump last_published_at so we don't re-render every heartbeat
             state.db_execute(

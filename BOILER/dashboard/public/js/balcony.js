@@ -387,6 +387,12 @@
   // ─── Display Templates card ────────────────────────────────────────────────
   let _displays = [];
   let _stateKeys = [];
+  let _deviceSources = []; // [{value:'device:<id>:<key>', label:'<DeviceName> · <key>', room}]
+
+  // Numeric / displayable dps keys worth offering as a display source
+  const _DEVICE_DPS_FIELDS = ['temperature', 'humidity', 'illuminance', 'uv',
+                              'battery', 'power', 'energy', 'voltage', 'current',
+                              'pressure', 'co2', 'voc', 'pm25'];
 
   async function bcLoadStateKeys() {
     try {
@@ -396,25 +402,99 @@
     return _stateKeys;
   }
 
-  function bcRenderTemplate(format, shared) {
+  async function bcLoadDeviceSources() {
+    if (_deviceSources.length) return _deviceSources;
+    try {
+      const devs = await fetch('/api/devices').then(r => r.json());
+      const list = Array.isArray(devs) ? devs : (devs.devices || []);
+      const out = [];
+      for (const d of list) {
+        if (!d.id || !d.name) continue;
+        const ls = d.last_state || {};
+        for (const k of _DEVICE_DPS_FIELDS) {
+          if (ls[k] == null) continue;
+          out.push({
+            value: `device:${d.id}:${k}`,
+            label: `${d.name} · ${k}`,
+            room: d.room || '',
+            sample: ls[k],
+          });
+        }
+      }
+      out.sort((a, b) => (a.room || 'zzz').localeCompare(b.room || 'zzz')
+                     || a.label.localeCompare(b.label));
+      _deviceSources = out;
+    } catch (_) { _deviceSources = []; }
+    return _deviceSources;
+  }
+
+  // Cache device list for preview rendering — refreshes every 10 s
+  let _bcPreviewDevsCache = { ts: 0, list: [] };
+  async function _bcPreviewDevices() {
+    const now = Date.now();
+    if (now - _bcPreviewDevsCache.ts < 10000 && _bcPreviewDevsCache.list.length) {
+      return _bcPreviewDevsCache.list;
+    }
+    try {
+      const r = await fetch('/api/devices').then(r => r.json());
+      _bcPreviewDevsCache = { ts: now, list: Array.isArray(r) ? r : (r.devices || []) };
+    } catch (_) {}
+    return _bcPreviewDevsCache.list;
+  }
+
+  function bcRenderTemplate(format, shared, sourceVal) {
     return String(format || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => {
+      if (k === 'val') return sourceVal == null ? '' : String(sourceVal);
       const v = shared[k];
       return v == null ? '' : String(v);
     });
   }
 
-  async function bcRenderPreview(format) {
-    if (!format) return '';
+  async function _bcResolveSource(srcVal) {
+    if (!srcVal) return null;
+    if (srcVal.startsWith('device:')) {
+      const rest = srcVal.slice('device:'.length);
+      const i = rest.indexOf(':');
+      if (i > 0) {
+        const [devId, key] = [rest.slice(0, i), rest.slice(i + 1)];
+        const devs = await _bcPreviewDevices();
+        const d = devs.find(x => x.id === devId);
+        return (d && d.last_state) ? d.last_state[key] : null;
+      }
+      return null;
+    }
     try {
       const r = await fetch('/api/rule-engine/state').then(r => r.json());
-      return bcRenderTemplate(format, (r && r.state) || {});
-    } catch (_) { return ''; }
+      return ((r && r.state) || {})[srcVal];
+    } catch (_) { return null; }
+  }
+
+  async function bcRenderPreview(format, sourceVal) {
+    if (!format) return '';
+    const [r, resolved] = await Promise.all([
+      fetch('/api/rule-engine/state').then(r => r.json()).catch(() => ({})),
+      _bcResolveSource(sourceVal),
+    ]);
+    return bcRenderTemplate(format, (r && r.state) || {}, resolved);
   }
 
   function bcRenderDisplay(d) {
-    const keysOptions = ['<option value="">— state.shared key —</option>'].concat(_stateKeys.map(k =>
-      `<option value="${escHtml(k)}"${k === (d.source_value || '') ? ' selected' : ''}>${escHtml(k)}</option>`
-    )).join('');
+    const cur = d.source_value || '';
+    // Build a combined source picker: state.shared keys (optgroup) + device sensors (optgroup)
+    const sharedOpts = _stateKeys.map(k =>
+      `<option value="${escHtml(k)}"${k === cur ? ' selected' : ''}>${escHtml(k)}</option>`
+    ).join('');
+    let curRoom = null;
+    const deviceOpts = _deviceSources.map(s => {
+      let prefix = '';
+      if (s.room !== curRoom) { curRoom = s.room; prefix = `</optgroup><optgroup label="${escHtml(s.room || '(no room)')}">`; }
+      return `${prefix}<option value="${escHtml(s.value)}"${s.value === cur ? ' selected' : ''}>${escHtml(s.label)}</option>`;
+    }).join('');
+    const keysOptions = `
+      <option value="">— pick a source —</option>
+      <optgroup label="state.shared keys">${sharedOpts}</optgroup>
+      <optgroup label="Device sensors">${deviceOpts}</optgroup>
+    `;
     const dtypes = ['text', 'gauge', 'series', 'bar'].map(t =>
       `<option value="${t}"${t === d.display_type ? ' selected' : ''}>${t}</option>`
     ).join('');
@@ -432,7 +512,7 @@
           <label>Refresh (s)<input type="number" value="${d.refresh_sec || 30}" min="5" max="3600" oninput="bcUpdateDisplay(${d.id},'refresh_sec',parseInt(this.value))" style="width:100%;padding:3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;"></label>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;font-size:0.78rem;color:#444;">
-          <label>Key (state.shared)<select onchange="bcUpdateDisplay(${d.id},'source_value',this.value)" style="width:100%;font-size:0.78rem;">${keysOptions}</select></label>
+          <label>Source (state.shared key or Device sensor)<select onchange="bcUpdateDisplay(${d.id},'source_value',this.value); bcUpdateDisplay(${d.id},'source_type',this.value.startsWith('device:')?'device':'shared_state'); bcUpdatePreview(${d.id})" style="width:100%;font-size:0.78rem;">${keysOptions}</select></label>
           <label>Description<input type="text" value="${escHtml(d.description || '')}" oninput="bcUpdateDisplay(${d.id},'description',this.value)" style="width:100%;padding:3px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.78rem;"></label>
         </div>
         <div style="margin-top:6px;font-size:0.78rem;color:#444;">
@@ -461,7 +541,7 @@
     const d = _displays.find(x => x.id === id);
     if (!d) return;
     const el = document.querySelector(`[data-id="${id}"] [data-cell="preview"]`);
-    if (el) el.textContent = await bcRenderPreview(d.format_string) || '—';
+    if (el) el.textContent = await bcRenderPreview(d.format_string, d.source_value) || '—';
   };
 
   window.bcSaveDisplay = async function (id) {
@@ -470,6 +550,7 @@
     const status = document.querySelector(`[data-id="${id}"] [data-cell="status"]`);
     if (status) { status.style.color = '#888'; status.textContent = '…'; }
     try {
+      const srcType = (d.source_value || '').startsWith('device:') ? 'device' : 'shared_state';
       const r = await fetch(`/api/hasp/${BC_PANEL}/displays/${id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -477,7 +558,7 @@
           description: d.description || null,
           display_type: d.display_type || 'text',
           target_property: d.target_property || 'text',
-          source_type: 'shared_state',
+          source_type: srcType,
           source_value: d.source_value || null,
           format_string: d.format_string || '',
           refresh_sec: d.refresh_sec || 30,
@@ -559,7 +640,7 @@
   };
 
   async function bcLoadDisplays() {
-    await bcLoadStateKeys();
+    await Promise.all([bcLoadStateKeys(), bcLoadDeviceSources()]);
     try {
       const r = await fetch(`/api/hasp/${BC_PANEL}/displays`).then(r => r.json());
       _displays = r.displays || [];
