@@ -31,6 +31,19 @@ function filterStale() {
 function decodeStatus(dev) {
   const dps = dev.last_state;
   const type = dev.device_type;
+  const proto = dev.protocol;
+
+  // Virtual states (rule-engine derived) are 'online' iff registered.
+  if (proto === 'virtual') return { label: 'on', cls: 'dot-on', text: 'Online' };
+
+  // Externally-managed network devices (Pixoo, Awtrix, OpenHASP panels) —
+  // their dedicated services own state; we only know reachability via the
+  // ARP scan + (for HASP) LWT in last_state. Online dot tracks isOnline().
+  if (proto === 'pixoo' || proto === 'awtrix' || proto === 'hasp') {
+    return isOnline(dev)
+      ? { label: 'on',  cls: 'dot-on',  text: 'Online' }
+      : { label: 'off', cls: 'dot-off', text: 'Offline' };
+  }
 
   // Remote devices with no DPS but recently seen — show Alive (keepalive keeps last_seen fresh)
   if (type === 'remote' && !dps && dev.last_seen && (Date.now() - new Date(dev.last_seen)) / 1000 < 7200) return { label: 'on', cls: 'dot-on', text: 'Alive' };
