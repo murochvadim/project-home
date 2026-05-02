@@ -34,6 +34,13 @@ RULE = {
 
 _TEMPLATE_RE = re.compile(r"\{\{(\w+)\}\}")
 
+# Force re-publish every N seconds even when the rendered value hasn't
+# changed. Without this, a stable value (e.g. temperature that holds at
+# 21.0 for hours) is published once on first change, then `last_value`
+# dedupe skips it forever — and a panel that reboots after that misses
+# the value entirely (label stays at its default text "0.0" forever).
+_FORCE_REPUBLISH_S = 600   # 10 min
+
 
 def _resolve_source(source_value, state):
     """Resolve source_value → live value.
@@ -89,7 +96,10 @@ def evaluate(event, state):
     for row in rows:
         disp_id, page, label_id, target_prop, fmt, src_type, src_val, refresh_sec, last_val, last_pub = row
 
-        # Per-row cadence — skip if not yet due
+        # Per-row cadence — skip if not yet due. Also compute age so we can
+        # force a re-publish on stable values that would otherwise dedupe
+        # forever (panel-reboot recovery).
+        last_pub_ts = 0
         if last_pub:
             try:
                 last_pub_ts = last_pub.timestamp() if hasattr(last_pub, "timestamp") else 0
@@ -97,6 +107,7 @@ def evaluate(event, state):
                 last_pub_ts = 0
             if now_ts - last_pub_ts < (refresh_sec or 30):
                 continue
+        force_republish = last_pub_ts and (now_ts - last_pub_ts) >= _FORCE_REPUBLISH_S
 
         # source_type is informational — actual resolution is keyed by source_value:
         #   'device:<id>:<dps_key>' → state.devices[...].dps[key]
@@ -104,8 +115,10 @@ def evaluate(event, state):
         source_val_resolved = _resolve_source(src_val, state)
 
         rendered = _render(fmt, shared, source_val_resolved)
-        if rendered == (last_val or ""):
-            # No change — bump last_published_at so we don't re-render every heartbeat
+        if rendered == (last_val or "") and not force_republish:
+            # No change AND we published recently — bump last_published_at so
+            # we don't re-render every heartbeat. Will fall through to
+            # publish once age exceeds _FORCE_REPUBLISH_S.
             state.db_execute(
                 "UPDATE hasp_displays SET last_published_at = NOW() WHERE id = %s",
                 (disp_id,),
