@@ -39,7 +39,9 @@ function decodeStatus(dev) {
   // Externally-managed network devices (Pixoo, Awtrix, OpenHASP panels) —
   // their dedicated services own state; we only know reachability via the
   // ARP scan + (for HASP) LWT in last_state. Online dot tracks isOnline().
-  if (proto === 'pixoo' || proto === 'awtrix' || proto === 'hasp') {
+  // ESP boards (Phase 4 2026-05-02) follow the same pattern — last_seen is
+  // refreshed by the rule-engine ingest from /status heartbeats every 60 s.
+  if (proto === 'pixoo' || proto === 'awtrix' || proto === 'hasp' || proto === 'esp') {
     return isOnline(dev)
       ? { label: 'on',  cls: 'dot-on',  text: 'Online' }
       : { label: 'off', cls: 'dot-off', text: 'Offline' };
@@ -184,6 +186,8 @@ function isOnline(dev) {
   if (dev.protocol === 'pixoo')  return dev.last_state ? true : ageSec < 600;
   if (dev.protocol === 'awtrix') return dev.last_state ? true : ageSec < 600;
   if (dev.protocol === 'hasp')   return dev.last_state ? true : ageSec < 600;
+  // ESP boards push /status every 60 s; 180 s = 3 missed heartbeats. Phase 4 (2026-05-02).
+  if (dev.protocol === 'esp')    return ageSec < 180;
   return ageSec < 180;  // gateway/cloud poll every 60s
 }
 

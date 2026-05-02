@@ -422,6 +422,13 @@ class RuleEngine:
             self._test_rule(payload)
             return
 
+        # mur/home/esp/<id>/{availability,schema,status,event} — ESP boards subsystem
+        # Phase 5 (2026-05-02): rule engine is sole writer of esp_boards.last_*
+        # columns. Dashboard owns config CRUD; this is read-only ingest.
+        if (len(parts) == 5 and parts[:3] == ['mur', 'home', 'esp']):
+            self._handle_esp_message(parts[3], parts[4], msg.payload, payload)
+            return
+
         # ---- Event topics (update state AND trigger rules) ----
 
         device_id = None
@@ -629,6 +636,113 @@ class RuleEngine:
         if dev_id is None:
             log.debug('Device lookup failed for name=%s', name)
         return dev_id
+
+    # ------------------------------------------------------------------
+    # ESP boards ingest (mur/home/esp/<id>/{availability,schema,status,event})
+    # ------------------------------------------------------------------
+
+    _ESP_ID_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
+
+    def _esp_known_ids(self, refresh=False):
+        """Cached set of esp_boards.id. Refreshes lazily — on first access AND
+        when an UPDATE misses (so a freshly INSERTed row is picked up without
+        an engine reload). Avoids db_execute warnings for unknown board ids
+        (e.g. messages arriving before the operator has INSERTed the row)."""
+        if refresh or not hasattr(self, '_esp_ids_cache'):
+            try:
+                rows = self.state.db_query('SELECT id FROM esp_boards')
+                self._esp_ids_cache = {r[0] for r in (rows or [])}
+            except Exception:
+                log.warning('ESP boards id cache refresh failed', exc_info=True)
+                if not hasattr(self, '_esp_ids_cache'):
+                    self._esp_ids_cache = set()
+        return self._esp_ids_cache
+
+    @staticmethod
+    def _parse_esp_build_ts(raw):
+        """Parse C __DATE__ " " __TIME__ output (e.g. 'May  2 2026 14:30:00')
+        into ISO. Returns None if input is missing or malformed."""
+        if not raw or not isinstance(raw, str):
+            return None
+        try:
+            return datetime.strptime(' '.join(raw.split()), '%b %d %Y %H:%M:%S').isoformat()
+        except (ValueError, TypeError):
+            return None
+
+    def _handle_esp_message(self, board_id, suffix, raw_payload, parsed_payload):
+        """Route an ESP topic message to the right esp_boards UPDATE."""
+        if not self._ESP_ID_RE.match(board_id or ''):
+            return
+        if board_id not in self._esp_known_ids():
+            self._esp_known_ids(refresh=True)
+            if board_id not in self._esp_known_ids():
+                log.debug('ESP message for unknown board %s/%s — ignoring', board_id, suffix)
+                return
+
+        if suffix == 'availability':
+            try:
+                text = (raw_payload or b'').decode('utf-8', errors='replace').strip()
+            except Exception:
+                text = ''
+            if text == 'online':
+                self.state.db_execute(
+                    'UPDATE esp_boards SET last_seen = NOW() WHERE id = %s',
+                    (board_id,)
+                )
+            elif text == 'offline':
+                # LWT fired — broker detected board disconnect (~22 s after
+                # power loss with default 15 s keepalive). Backdate last_seen
+                # to push isOnline() in the dashboard past its 180 s threshold
+                # immediately, instead of waiting 3 missed heartbeats. The
+                # value still represents "last time we believed the board
+                # was online" — semantically correct.
+                self.state.db_execute(
+                    "UPDATE esp_boards SET last_seen = NOW() - interval '1 hour' WHERE id = %s",
+                    (board_id,)
+                )
+            return
+
+        if suffix == 'status':
+            if not isinstance(parsed_payload, dict):
+                return
+            self.state.db_execute(
+                """UPDATE esp_boards SET
+                       last_status    = %s::jsonb,
+                       last_seen      = NOW(),
+                       ip             = COALESCE(%s::inet, ip),
+                       sketch_name    = COALESCE(%s, sketch_name),
+                       sketch_version = COALESCE(%s, sketch_version),
+                       build_ts       = COALESCE(%s::timestamptz, build_ts)
+                   WHERE id = %s""",
+                (
+                    json.dumps(parsed_payload),
+                    parsed_payload.get('ip'),
+                    parsed_payload.get('sketch_name'),
+                    parsed_payload.get('sketch_version'),
+                    self._parse_esp_build_ts(parsed_payload.get('build_ts')),
+                    board_id,
+                )
+            )
+            return
+
+        if suffix == 'schema':
+            if not isinstance(parsed_payload, dict):
+                return
+            self.state.db_execute(
+                'UPDATE esp_boards SET board_schema = %s::jsonb WHERE id = %s',
+                (json.dumps(parsed_payload), board_id)
+            )
+            return
+
+        if suffix == 'event':
+            # Acks + ad-hoc events. Dashboard Test sub-tab (Phase 4) consumes
+            # acks via direct browser-MQTT subscribe; rule engine doesn't
+            # persist them (would need rate limiting and they'd dilute the
+            # device_events table).
+            log.debug('ESP event from %s: %s', board_id, parsed_payload)
+            return
+
+        log.debug('ESP message: unknown suffix %s for board %s', suffix, board_id)
 
     # ------------------------------------------------------------------
     # Rule evaluation
@@ -1416,6 +1530,7 @@ class RuleEngine:
             ('mur/home/rule-engine/enable/+', 0),
             ('mur/home/rule-engine/reload', 0),
             ('mur/home/rule-engine/test', 0),
+            ('mur/home/esp/+/+', 0),  # ESP boards ingest (Phase 5, 2026-05-02)
             ('hasp/+/state', 0),
             ('hasp/+/state/+', 0),
             ('awtrix/+/stats', 0),

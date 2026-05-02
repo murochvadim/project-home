@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Boards</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* Per-board tab bar — DB-driven, one tab per esp_boards row */
+    .board-tabs { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:14px; padding-bottom:8px; border-bottom:1px solid #d0cbc4; }
+    .board-tab { padding:8px 14px; border:1px solid transparent; border-radius:5px 5px 0 0; background:#f4f1ec; color:#555; cursor:pointer; font-size:0.85rem; display:inline-flex; align-items:center; gap:6px; font-weight:500; }
+    .board-tab:hover { background:#ede8e0; }
+    .board-tab.active { background:#fff; border-color:#d0cbc4 #d0cbc4 #fff #d0cbc4; color:#222; cursor:default; font-weight:600; }
+    .board-tab .dot { font-size:0.85rem; line-height:1; }
+    .board-tab .dot.online { color:#3a7d44; }
+    .board-tab .dot.offline { color:#c0392b; }
+    .board-tab .dot.unknown { color:#aaa; }
+
+    .summary-strip { padding:10px 14px; margin-bottom:12px; font-size:0.85rem; display:flex; gap:18px; align-items:center; }
+    .summary-strip .pill { padding:3px 10px; border-radius:10px; font-weight:600; font-size:0.78rem; }
+    .summary-strip .pill.online { background:#dcecd8; color:#3a7d44; }
+    .summary-strip .pill.offline { background:#f4d8d3; color:#c0392b; }
+
+    /* Per-board sub-tabs */
+    .sub-tabs { display:flex; gap:0; border-bottom:1px solid #d0cbc4; margin-bottom:14px; }
+    .sub-tab { padding:7px 14px; border:1px solid transparent; border-bottom:none; background:transparent; color:#666; cursor:pointer; font-size:0.82rem; }
+    .sub-tab:hover { color:#222; }
+    .sub-tab.active { background:#fff; border-color:#d0cbc4 #d0cbc4 #fff #d0cbc4; color:#222; font-weight:600; cursor:default; margin-bottom:-1px; }
+
+    .sub-panel { display:none; }
+    .sub-panel.active { display:block; }
+
+    /* Status grid */
+    .status-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px 24px; }
+    .status-grid .item label { display:block; font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:3px; }
+    .status-grid .item .value { font-size:0.95rem; font-weight:600; color:#222; }
+    .status-grid .item .value.dim { color:#aaa; font-weight:400; font-style:italic; }
+
+    /* Params form */
+    .params-form { display:grid; grid-template-columns:200px 130px 80px 1fr; gap:8px 14px; align-items:center; margin-bottom:14px; }
+    .params-form .label { font-size:0.85rem; font-weight:500; }
+    .params-form .label .key { color:#222; }
+    .params-form .label .desc { font-size:0.72rem; color:#888; display:block; }
+    .params-form input[type="number"], .params-form input[type="text"] { width:100%; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem; box-sizing:border-box; }
+    .params-form .unit { font-size:0.72rem; color:#888; }
+    .params-form .range { font-size:0.72rem; color:#aaa; font-style:italic; }
+
+    /* Test sub-tab */
+    .actions-grid { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+    .action-btn { padding:8px 14px; font-size:0.85rem; border:1px solid #7a9ab8; background:#fff; color:#7a9ab8; border-radius:4px; cursor:pointer; font-weight:600; display:inline-flex; align-items:center; gap:8px; }
+    .action-btn:hover { background:#7a9ab8; color:#fff; }
+    .action-btn.destructive { border-color:#c0392b; color:#c0392b; }
+    .action-btn.destructive:hover { background:#c0392b; color:#fff; }
+    .action-btn .badge { font-size:0.7rem; padding:1px 6px; border-radius:8px; }
+    .action-btn .badge.ok { background:#dcecd8; color:#3a7d44; }
+    .action-btn .badge.fail { background:#f4d8d3; color:#c0392b; }
+    .action-btn .badge.pending { background:#f0e0d8; color:#a06030; }
+
+    /* OTA */
+    .ota-drop { border:2px dashed #d0cbc4; border-radius:6px; padding:24px; text-align:center; color:#888; cursor:pointer; }
+    .ota-drop.dragover { border-color:#3a7d44; color:#3a7d44; background:#f4faf2; }
+    .ota-status { margin-top:10px; font-size:0.85rem; font-family:monospace; color:#555; min-height:20px; }
+    .ota-disabled { padding:12px; background:#f8f5f1; border-radius:5px; color:#888; font-style:italic; font-size:0.85rem; }
+
+    .empty-state { padding:32px 14px; text-align:center; color:#aaa; }
+    .empty-state h3 { color:#666; margin:0 0 8px 0; }
+    .empty-state code { background:#f4f1ec; padding:2px 6px; border-radius:3px; font-size:0.85rem; }
+
+    /* Cards inside a sub-panel — used for grouping (Status: Connection / Brokers / System; Simulation: Doorlock / Robot / HiveMQ) */
+    .esp-card { border:1px solid #e0dcd4; border-radius:5px; padding:12px 14px; margin-bottom:14px; background:#faf8f5; }
+    .esp-card:last-child { margin-bottom:0; }
+    .esp-card-title { margin:0 0 10px 0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.5px; color:#666; font-weight:600; padding-bottom:6px; border-bottom:1px solid #e8e2da; }
+
+    .btn-save-params { padding:7px 18px; font-size:0.85rem; border:1px solid #3a7d44; background:#3a7d44; color:#fff; border-radius:4px; cursor:pointer; font-weight:600; }
+    .btn-save-params:hover { background:#2e6234; }
+    .btn-save-params:disabled { opacity:0.5; cursor:not-allowed; }
+    .save-status { display:inline-block; margin-left:14px; font-size:0.78rem; }
+    .save-status.ok { color:#3a7d44; }
+    .save-status.fail { color:#c0392b; }
+  </style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html" class="active">Project Boards</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Project Boards</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadBoards()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <div class="card summary-strip" id="summary-strip">
+    <span id="summary-text">Loading…</span>
+  </div>
+
+  <div class="board-tabs" id="board-tabs"></div>
+
+  <div id="board-pane">
+    <div class="empty-state">
+      <h3>No ESP boards registered</h3>
+      <p>Insert a row into <code>esp_boards</code> to register your first board:</p>
+      <pre style="text-align:left;display:inline-block;background:#f4f1ec;padding:10px 14px;border-radius:4px;font-size:0.78rem;">INSERT INTO esp_boards (id, name, mac, ota_password) VALUES
+  ('remoteXY_01', 'RemoteXY Gate', '&lt;mac&gt;', '&lt;ota_pass&gt;');</pre>
+      <p style="margin-top:14px;">Then reload the page; the board will appear here as a tab.</p>
+    </div>
+  </div>
+</main>
+
+<script src="js/alerts-monitor.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/esp-boards.js?v=20260502j"></script>
+</body>
+</html>

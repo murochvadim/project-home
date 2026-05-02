@@ -956,6 +956,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'retention_policies', 'dashboard_settings', 'room_device_placements',
       'ups_status',
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
+      'esp_boards',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -977,6 +978,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       dashboard_settings: 'updated_at', room_device_placements: 'updated_at',
       ups_status: 'ts',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
+      esp_boards: 'created_at',
     };
 
     const sizes = await db.query(`
@@ -2086,6 +2088,198 @@ app.delete('/api/hasp/:panel/displays/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── ESP boards (ESP8266 / ESP32) — config CRUD + command dispatch ─────────
+// Phase 3 endpoints — registry + parameter push + test-action push.
+// Status ingest (Phase 5) is owned by the rule engine on LXC 105.
+// OTA upload (Phase 6) lands here later as POST /api/esp/boards/:id/ota.
+const _ESP_BOARD_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const _ESP_BOARD_FIELDS = new Set(['name', 'enabled', 'ota_password']);
+
+function _espBoardId(id) {
+  if (!_ESP_BOARD_ID_RE.test(id || '')) throw new Error('invalid board id');
+  return id;
+}
+
+// List boards. LEFT JOIN net_devices on MAC so live IP / last_seen reflect
+// the ARP scanner (5-min cadence) — same pattern used by /api/devices.
+app.get('/api/esp/boards', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT b.id, b.name,
+             COALESCE(split_part(b.ip::text, '/', 1), nd.ip) AS ip,
+             b.mac::text AS mac,
+             b.sketch_name, b.sketch_version, b.build_ts,
+             b.board_schema AS schema, b.parameters,
+             b.ota_password IS NOT NULL AS has_ota_password,
+             b.enabled,
+             COALESCE(b.last_seen, nd.last_seen) AS last_seen,
+             b.last_status, b.created_at
+      FROM esp_boards b
+      LEFT JOIN net_devices nd ON LOWER(nd.mac::text) = LOWER(b.mac::text)
+      ORDER BY b.id
+    `);
+    res.json({ boards: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update name / enabled / ota_password.
+app.patch('/api/esp/boards/:id', async (req, res) => {
+  try {
+    const id = _espBoardId(req.params.id);
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (!_ESP_BOARD_FIELDS.has(k)) continue;
+      // Reject empty/whitespace ota_password — `has_ota_password` would
+      // still report true (column is non-NULL) but OTA upload would fail
+      // with the truthiness check, leaving the dashboard saying "set" while
+      // every push errors. Clearer to refuse the bad input upfront.
+      if (k === 'ota_password' && (typeof v !== 'string' || !v.trim())) {
+        return res.status(400).json({ error: 'ota_password must be a non-empty string' });
+      }
+      sets.push(`${k} = $${i++}`);
+      vals.push(v);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'no valid fields' });
+    vals.push(id);
+    const r = await db.query(
+      `UPDATE esp_boards SET ${sets.join(', ')} WHERE id = $${i} RETURNING id, name, enabled`,
+      vals
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    res.json({ board: r.rows[0] });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Save parameters → publish JSON to mur/home/esp/<id>/config (board reads
+// → updates EspParams + EEPROM where persistent=true). Validates each key
+// against the board's published schema so a typo or stale dashboard tab
+// can't push noise that the board's StaticJsonDocument can't parse.
+app.post('/api/esp/boards/:id/parameters', async (req, res) => {
+  try {
+    const id = _espBoardId(req.params.id);
+    const params = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    if (!Object.keys(params).length) return res.status(400).json({ error: 'no parameters in body' });
+
+    // Fetch schema first to validate keys + (later) types.
+    const schemaR = await db.query(`SELECT board_schema FROM esp_boards WHERE id = $1`, [id]);
+    if (!schemaR.rows.length) return res.status(404).json({ error: 'not found' });
+    const schemaParams = (schemaR.rows[0].board_schema?.parameters || []);
+    const declared = new Set(schemaParams.map(p => p.key));
+
+    if (declared.size === 0) {
+      return res.status(400).json({ error: 'board has not yet published its parameter schema — wait for first connect' });
+    }
+    const unknown = Object.keys(params).filter(k => !declared.has(k));
+    if (unknown.length) {
+      return res.status(400).json({ error: `unknown parameter key(s): ${unknown.join(', ')}` });
+    }
+
+    const r = await db.query(
+      `UPDATE esp_boards SET parameters = $1::jsonb WHERE id = $2 RETURNING id`,
+      [JSON.stringify(params), id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    mqttClient.publish(`mur/home/esp/${id}/config`, JSON.stringify(params), { qos: 1 });
+    res.json({ ok: true, published: `mur/home/esp/${id}/config`, keys: Object.keys(params) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Push test action → publish action key as plain string to
+// mur/home/esp/<id>/command. Action must match a key declared in
+// board_schema.actions (or one of the built-ins restart/factory_reset).
+const _ESP_BUILTIN_ACTIONS = new Set(['restart', 'factory_reset']);
+app.post('/api/esp/boards/:id/command', async (req, res) => {
+  try {
+    const id = _espBoardId(req.params.id);
+    const action = (req.body && req.body.action) ? String(req.body.action).trim() : '';
+    if (!action || !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(action)) {
+      return res.status(400).json({ error: 'invalid action key' });
+    }
+    const r = await db.query(`SELECT board_schema FROM esp_boards WHERE id = $1`, [id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    const declared = (r.rows[0].board_schema?.actions || []).map(a => a.key);
+    if (!_ESP_BUILTIN_ACTIONS.has(action) && !declared.includes(action)) {
+      return res.status(400).json({ error: `action '${action}' not declared in board schema` });
+    }
+    mqttClient.publish(`mur/home/esp/${id}/command`, action, { qos: 1 });
+    res.json({ ok: true, published: `mur/home/esp/${id}/command`, action });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// OTA upload — accept .bin via multipart, spawn espota.py against the board.
+// Phase 6 (2026-05-02). Variant resolution: ESP8266_OTA_PY by default; if the
+// board's last_status.sketch_name (or the chip query string) suggests ESP32,
+// fall back to ESP32_OTA_PY. Both paths come from .env.
+const espOtaUpload = multer({ dest: path.join(os.tmpdir(), 'esp-ota'), limits: { fileSize: 4 * 1024 * 1024 } });
+
+app.post('/api/esp/boards/:id/ota', espOtaUpload.single('firmware'), async (req, res) => {
+  // Capture tmpPath upfront — multer has ALREADY saved the file by the time
+  // our handler runs. Any subsequent throw must still hit the finally
+  // unlink, otherwise we leak a temp .bin per failed call.
+  let tmpPath = req.file ? req.file.path : null;
+  try {
+    const id = _espBoardId(req.params.id);
+    if (!req.file) return res.status(400).json({ error: 'firmware (.bin) file required as multipart field "firmware"' });
+
+    const r = await db.query(
+      `SELECT b.id, b.ota_password,
+              COALESCE(split_part(b.ip::text, '/', 1), nd.ip) AS ip,
+              b.last_status
+       FROM esp_boards b
+       LEFT JOIN net_devices nd ON LOWER(nd.mac::text) = LOWER(b.mac::text)
+       WHERE b.id = $1`,
+      [id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'board not found' });
+    const board = r.rows[0];
+    if (!board.ip) return res.status(400).json({ error: 'board has no known IP — check that ARP scan or board status has populated it' });
+    if (!board.ota_password) return res.status(400).json({ error: 'board has no ota_password set — PATCH /api/esp/boards/:id with ota_password first' });
+
+    // Resolve which espota.py + ArduinoOTA listen port to use. ESP8266
+    // ArduinoOTA defaults to 8266; ESP32 ArduinoOTA defaults to 3232.
+    const chipParam = (req.query.chip || '').toLowerCase();
+    const sketchName = (board.last_status?.sketch_name || '').toLowerCase();
+    const isEsp32 = chipParam === 'esp32' || sketchName.includes('esp32');
+    const otaPy = isEsp32 ? process.env.ESP32_OTA_PY : process.env.ESP8266_OTA_PY;
+    const otaPort = isEsp32 ? '3232' : '8266';
+    if (!otaPy) return res.status(500).json({ error: `ESP${isEsp32 ? 32 : 8266}_OTA_PY not configured in .env` });
+    if (!fs.existsSync(otaPy)) return res.status(500).json({ error: `espota.py not found at configured path: ${otaPy}` });
+
+    // Spawn — use python via PATH, with stdout/stderr captured for the response.
+    const { spawn } = require('child_process');
+    const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', board.ota_password, '-f', tmpPath, '-r'];
+    const child = spawn('python', args, { windowsHide: true });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => { stdout += d.toString(); });
+    child.stderr.on('data', d => { stderr += d.toString(); });
+
+    const code = await new Promise((resolve) => {
+      const t = setTimeout(() => { try { child.kill(); } catch (_) {} resolve(-1); }, 60_000);
+      child.on('close', c => { clearTimeout(t); resolve(c); });
+      child.on('error', e => { clearTimeout(t); stderr += '\nSPAWN ERROR: ' + e.message; resolve(-1); });
+    });
+
+    res.json({
+      ok: code === 0,
+      exit_code: code,
+      board_ip: board.ip,
+      chip: isEsp32 ? 'esp32' : 'esp8266',
+      stdout: stdout.slice(-4000),  // tail in case of long progress prints
+      stderr: stderr.slice(-4000),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+    }
+  }
+});
+
 app.get('/api/rule-engine/events', async (req, res) => {
   try {
     const name = req.query.rule || '';
@@ -2551,6 +2745,38 @@ async function ensureSchema() {
                  (140, 'LIGHT 3', 'U+E769')) AS b(button_id, label, icon)
     WHERE p.name = 'balcony'
     ON CONFLICT (panel_id, page, button_id, event) DO NOTHING
+  `);
+
+  // ─── ESP boards (ESP8266 / ESP32 sketches) — Phase 3 schema (2026-05-02) ────
+  // Registry of self-managed Arduino boards. Each board self-declares its
+  // tunable parameters + test actions via MQTT topic mur/home/esp/<id>/schema.
+  // Status (RSSI / uptime / heap) flows in via mur/home/esp/<id>/status and is
+  // persisted to last_status. Rule engine on LXC 105 owns the MQTT ingest;
+  // dashboard only owns config CRUD + OTA orchestration.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS esp_boards (
+      id              VARCHAR(50) PRIMARY KEY,         -- matches MQTT <id>, e.g. 'remoteXY_01'
+      name            VARCHAR(100),                     -- human label
+      ip              INET,                             -- last known IP (also resolvable via net_devices.mac)
+      mac             MACADDR,                          -- for net_devices live-IP join
+      sketch_name     VARCHAR(100),                     -- self-reported via /status
+      sketch_version  VARCHAR(50),
+      build_ts        TIMESTAMPTZ,
+      board_schema    JSONB DEFAULT '{}'::jsonb,        -- {parameters:[...], actions:[...]} from /schema
+      parameters      JSONB DEFAULT '{}'::jsonb,        -- last-set values (dashboard → /config)
+      ota_password    VARCHAR(100),                     -- per-board ArduinoOTA password
+      enabled         BOOLEAN NOT NULL DEFAULT true,
+      last_seen       TIMESTAMPTZ,
+      last_status     JSONB,                            -- last /status payload
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  // Retention: config table — keep forever, no auto-clean.
+  await db.query(`
+    INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
+    VALUES ('esp_boards', NULL, false, 24, 'ESP8266/ESP32 board registry — keep forever')
+    ON CONFLICT (table_name) DO NOTHING
   `);
 }
 
