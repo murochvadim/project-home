@@ -134,10 +134,24 @@
     </div>
   </div>
 
+  <div class="board-tabs" id="board-tabs"></div>
+
+  <div id="board-pane">
+    <div class="empty-state">
+      <h3>No ESP boards registered</h3>
+      <p>Insert a row into <code>esp_boards</code> to register your first board:</p>
+      <pre style="text-align:left;display:inline-block;background:#f4f1ec;padding:10px 14px;border-radius:4px;font-size:0.78rem;">INSERT INTO esp_boards (id, name, mac, ota_password) VALUES
+  ('remoteXY_01', 'RemoteXY Gate', '&lt;mac&gt;', '&lt;ota_pass&gt;');</pre>
+      <p style="margin-top:14px;">Then reload the page; the board will appear here as a tab.</p>
+    </div>
+  </div>
+
   <!-- Page-level OTA — pick any board from the dropdown and push a .bin to it.
        Replaces the per-board OTA sub-tab; the underlying espota.py spawn is
-       identical, just one form serving every board instead of one per tab. -->
-  <div class="card" id="page-ota-card" style="padding:12px 14px;margin-bottom:12px;">
+       identical, just one form serving every board instead of one per tab.
+       Bottom of page (under the board pane) so the per-board details stay
+       above-the-fold and OTA only enters the viewport when you scroll. -->
+  <div class="card" id="page-ota-card" style="padding:12px 14px;margin-top:12px;margin-bottom:12px;">
     <div style="font-size:0.85rem;color:#666;margin-bottom:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
       <strong>OTA Push</strong>
       <label for="page-ota-board" style="font-size:0.78rem;color:#888;">Target:</label>
@@ -150,18 +164,6 @@
       <input type="file" id="page-ota-file" accept=".bin" style="display:none;">
     </div>
     <div class="ota-status" id="page-ota-status"></div>
-  </div>
-
-  <div class="board-tabs" id="board-tabs"></div>
-
-  <div id="board-pane">
-    <div class="empty-state">
-      <h3>No ESP boards registered</h3>
-      <p>Insert a row into <code>esp_boards</code> to register your first board:</p>
-      <pre style="text-align:left;display:inline-block;background:#f4f1ec;padding:10px 14px;border-radius:4px;font-size:0.78rem;">INSERT INTO esp_boards (id, name, mac, ota_password) VALUES
-  ('remoteXY_01', 'RemoteXY Gate', '&lt;mac&gt;', '&lt;ota_pass&gt;');</pre>
-      <p style="margin-top:14px;">Then reload the page; the board will appear here as a tab.</p>
-    </div>
   </div>
 </main>
 
