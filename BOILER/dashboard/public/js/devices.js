@@ -392,11 +392,7 @@ function applyFilters() {
             if (ageS > BUTTON_FRESH_S) {
               dot = 'dot-off'; txt = '—';                      // stale → idle
             } else {
-              dot = 'dot-on';
-              const rel = ageS < 1 ? 'now'
-                       : ageS < 60 ? `${Math.round(ageS)}s ago`
-                       : `${Math.round(ageS / 60)}m ago`;
-              txt = `${buttonVerb} ${rel}`;
+              dot = 'dot-on'; txt = buttonVerb;                // just the verb, no relative-time suffix
             }
           }
         } else if (raw === undefined || raw === null) {
