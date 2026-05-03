@@ -572,8 +572,12 @@ function applySettingsFilters() {
   const rows = [];
 
   for (const d of filtered) {
-    const chanKeys = getChannelKeys(d);
+    // In Set Devices, "channels" come strictly from channel_config (gang
+    // switches, virtual button channels). DPS rows come from dps_labels.
+    // getChannelKeys() merges both for the live-status tab — using it here
+    // would duplicate every labeled DPS as both a Ch.X row and a DPS row.
     const cfg = d.channel_config || {};
+    const chanKeys = Object.keys(cfg);
 
     rows.push(`
     <tr data-id="${escHtml(d.id)}">

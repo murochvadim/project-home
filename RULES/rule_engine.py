@@ -723,6 +723,12 @@ class RuleEngine:
                     board_id,
                 )
             )
+            # Also project a subset of status fields into devices.last_state.dps
+            # so rules + the device picker treat ESP boards like any other
+            # device (state.devices[id].dps['pump_state'] etc.). Only the
+            # fields a board actually publishes get mapped — the dashboard's
+            # dps_labels column controls which ones are user-visible.
+            self._update_esp_device_dps(board_id, parsed_payload)
             return
 
         if suffix == 'schema':
@@ -743,6 +749,47 @@ class RuleEngine:
             return
 
         log.debug('ESP message: unknown suffix %s for board %s', suffix, board_id)
+
+    # Status fields lifted from any ESP board's `mur/home/esp/<id>/status`
+    # payload into devices.last_state.dps. Each board only publishes the
+    # subset relevant to its hardware — the field is projected only when
+    # present, so the smell board contributes pump_state + auto_enabled
+    # while RemoteXY contributes door_relay + charge_relay. New boards add
+    # a new key here when they want a status field rule-addressable.
+    _ESP_STATUS_DPS_FIELDS = (
+        'pump_state', 'auto_enabled', 'auto_phase', 'manual_active',
+        'door_relay', 'charge_relay',
+    )
+
+    def _update_esp_device_dps(self, board_id, status_payload):
+        """Project ESP status fields into devices.last_state for rule/dashboard use.
+
+        Convention across this project: devices.last_state holds the dps
+        dict directly with flat keys (matches Tuya/Zigbee/HASP rows already
+        written by device_agent). Same shape that state_manager loads into
+        state.devices[id]['dps'] — so a rule reads `dev['dps']['pump_state']`
+        and the Devices page reads `last_state.pump_state`.
+        """
+        dps = {k: status_payload[k] for k in self._ESP_STATUS_DPS_FIELDS if k in status_payload}
+        if not dps:
+            return
+        # JSONB || JSONB merges right onto left (right wins on key collision)
+        # so concurrent writes from other paths aren't clobbered.
+        rowcount = self.state.db_execute(
+            """UPDATE devices SET
+                   last_state  = COALESCE(last_state, '{}'::jsonb) || %s::jsonb,
+                   last_seen   = NOW(),
+                   last_source = 'esp_status'
+               WHERE id = %s""",
+            (json.dumps(dps), board_id),
+        )
+        if rowcount:
+            # Mirror into the in-memory state.devices map so currently-firing
+            # rules see the new dps without waiting for the next load_from_db.
+            dev = self.state.devices.get(board_id)
+            if dev is not None:
+                dev_dps = dev.setdefault('dps', {})
+                dev_dps.update(dps)
 
     # ------------------------------------------------------------------
     # Rule evaluation
@@ -1012,11 +1059,55 @@ class RuleEngine:
             self._dispatch_awtrix(cmd, device_id, rule_name)
             return
 
+        elif protocol == 'esp':
+            # ESP boards expect a single action key on mur/home/esp/<id>/command
+            # (plain-string payload). turn_on/turn_off map per board via
+            # devices.dps_config[<channel>].action_on/action_off so different
+            # boards can wire on/off to different sketch actions (smell board:
+            # smell_auto_start; future boards: their own keys).
+            esp_action = self._resolve_esp_action(dev, cmd)
+            if not esp_action:
+                log.warning("Rule '%s' -> esp %s/%s: no mapping for action '%s' (channel=%s)",
+                            rule_name, device_id, device_name, action, cmd.get('channel'))
+                return
+            self.mqtt.publish_raw(f'mur/home/esp/{device_id}/command', esp_action)
+            log.info("Rule '%s' -> esp %s '%s'", rule_name, device_name, esp_action)
+            return
+
         else:
             # Default: Tuya / BSH / other
             self.mqtt.publish_command(f'mur/home/device/{device_id}/command', cmd)
 
         log.info("Rule '%s' -> %s %s", rule_name, action, device_name)
+
+    # ESP turn_on/turn_off → sketch action key.
+    #
+    # Per-channel mapping lives in devices.dps_config[<channel>] as
+    # `action_on` / `action_off`. The smell board's `auto` channel maps
+    # turn_on→smell_auto_start, turn_off→smell_auto_stop; a future board
+    # can map differently per channel without engine changes. If `action`
+    # is already a literal sketch key (e.g. a rule emits action='restart'),
+    # pass it through unchanged so existing patterns keep working.
+    def _resolve_esp_action(self, dev, cmd):
+        action = cmd.get('action', '')
+        if not action:
+            return None
+        # Pass-through for actions that are already sketch keys
+        # (restart, factory_reset, smell_auto_start, etc.).
+        if action not in ('turn_on', 'turn_off'):
+            return action
+        channel = cmd.get('channel') or ''
+        cfg = (dev.get('dps_config') or {}).get(channel, {}) if channel else {}
+        if action == 'turn_on'  and cfg.get('action_on'):  return cfg['action_on']
+        if action == 'turn_off' and cfg.get('action_off'): return cfg['action_off']
+        # If the channel itself is missing or has no explicit mapping, pick
+        # the first channel whose dps_config carries the matching key.
+        for ch_cfg in (dev.get('dps_config') or {}).values():
+            if not isinstance(ch_cfg, dict):
+                continue
+            if action == 'turn_on'  and ch_cfg.get('action_on'):  return ch_cfg['action_on']
+            if action == 'turn_off' and ch_cfg.get('action_off'): return ch_cfg['action_off']
+        return None
 
     def _check_loop(self, device_id, action, rule_name):
         """Detect command loops. Returns True if loop detected (rule auto-disabled)."""

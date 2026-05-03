@@ -36,6 +36,26 @@
     return null;
   }
 
+  // Returns [[channel, label], ...] for channels in dps_config that declare
+  // action_on / action_off mappings (any protocol). Used to render on/off
+  // sub-buttons for devices like the smell board where the rule engine knows
+  // how to translate generic turn_on/turn_off into a board-specific MQTT
+  // action (e.g. smell_auto_start). Single channel → plain "on"/"off" tokens
+  // ("@Name on"); multiple channels → channel-suffixed tokens
+  // ("@Name auto_enabled on") so the dispatcher routes to the right one.
+  function _actionableChannelsFor(d) {
+    const cfg = d.dps_config || {};
+    const labels = d.dps_labels || {};
+    const out = [];
+    for (const [k, ch] of Object.entries(cfg)) {
+      if (!ch || typeof ch !== 'object') continue;
+      if (ch.action_on || ch.action_off) {
+        out.push([k, labels[k] || ch.name || k]);
+      }
+    }
+    return out;
+  }
+
   function _ensureModal() {
     if (_modal) return _modal;
     _modal = document.createElement('div');
@@ -104,6 +124,8 @@
       const isDisplay = _isDisplayDevice(d);
       const channelPairs = _virtualChannelsFor(d);
       const hasChannels = !!(channelPairs && channelPairs.length);
+      const actionable = !isDisplay ? _actionableChannelsFor(d) : [];
+      const hasActionable = actionable.length > 0;
       const roomStr = d.room ? `<span style="color:#888;font-size:0.72rem;margin-left:6px;">(${d.room})</span>` : '';
       const typeStr = `<span style="color:#6c4f9f;font-size:0.7rem;margin-left:6px;">[${d.device_type || 'device'}]</span>`;
 
@@ -129,6 +151,26 @@
                    style="padding:2px 8px;margin:2px;border:1px solid #d0cbc4;background:#fafaf7;border-radius:3px;cursor:pointer;font-size:0.72rem;">${key}: ${label || '(unnamed)'}</button>`
         ).join('');
         extrasHtml = `<div style="padding:2px 8px 6px 24px;">${channels}</div>`;
+      } else if (hasActionable) {
+        // One on/off button pair per actionable channel. Button label always
+        // carries the channel's friendly name so e.g. "AUTO Cycle: on" makes
+        // it obvious which mode is being toggled (vs. a bare "on" that the
+        // user might confuse with manual). Token suffix is only added when
+        // the device exposes multiple actionable channels — single-channel
+        // devices keep the short "@Name on" form and let the engine resolve
+        // via the dps_config fallback.
+        const single = actionable.length === 1;
+        const buttons = actionable.flatMap(([key, label]) => {
+          const suffix = single ? '' : ` ${key}`;
+          const lblPrefix = `${label || key}: `;
+          return [
+            `<button data-dp-action="esp-on"  data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
+                     style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}on</button>`,
+            `<button data-dp-action="esp-off" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
+                     style="padding:2px 8px;margin:2px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}off</button>`,
+          ];
+        }).join('');
+        extrasHtml = `<div style="padding:2px 8px 6px 24px;">${buttons}</div>`;
       }
 
       const baseRow = isDisplay
@@ -160,15 +202,22 @@
       });
     });
 
-    // Display action picks (on / off / push <preset>)
+    // Display action picks (on / off / push <preset>) AND ESP-style on/off
+    // (with optional channel suffix when the device has multiple actionable
+    // channels — e.g. "@My Bathroom Smell auto_enabled on").
     listEl.querySelectorAll('[data-dp-action]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const name = el.dataset.dpName || '';
         const action = el.dataset.dpAction;
         let token;
-        if (action === 'on' || action === 'off') token = `@${name} ${action}`;
-        else if (action === 'push')               token = `@${name} push ${el.dataset.dpPreset || ''}`.trim();
+        if (action === 'on' || action === 'off')        token = `@${name} ${action}`;
+        else if (action === 'push')                     token = `@${name} push ${el.dataset.dpPreset || ''}`.trim();
+        else if (action === 'esp-on' || action === 'esp-off') {
+          const suffix = el.dataset.dpSuffix || '';   // ' <channel>' or ''
+          const verb   = action === 'esp-on' ? 'on' : 'off';
+          token = `@${name}${suffix} ${verb}`;
+        }
         if (token && _onPick) _onPick(token);
         window._dpClose();
       });
