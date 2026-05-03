@@ -302,5 +302,6 @@ Render as markdown table. Highlight offline boards (last_seen NULL or > 180 s ag
 - **MQTT buffer size**: `setBufferSize(N)` where N must hold the schema JSON + topic + framing (~35 bytes overhead). Schema can grow fast — start with 4096; bump if you add many parameters/actions.
 - **Board ID regex** is enforced server-side AND in rule engine. Validate before generating any code.
 - **Architecture invariant**: dashboard owns config CRUD (parameters / ota_password / enabled), rule engine on LXC 105 is the SOLE writer of `last_status` / `last_seen` / `board_schema`. Don't violate this.
+- **Float values in `/status` JSON**: when the board's `publishEspStatus` includes float sensor readings (temp / humidity / RSSI / battery_voltage / etc.), format with explicit precision (`Serial.printf("%.1f", val)` / equivalent) — DO NOT publish full IEEE 754 precision. Otherwise downstream consumers (HASP `_fmt`, Awtrix `_fmt_awtrix`, Pixoo render screens) carry sensor noise into dedupe loops + ugly long display strings. See [Float rounding feedback](../../projects/c--Users-muroc-project-home/memory/feedback_float_rounding.md) for the project-wide rule.
 
 After completing the flow, briefly remind the user the next concrete action (compile + flash, or just refresh the dashboard).

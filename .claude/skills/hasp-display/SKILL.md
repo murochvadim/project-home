@@ -16,8 +16,9 @@ Follow the steps. Use `AskUserQuestion` for every choice. Don't skip steps or as
 - `format_string` substitutions:
   - `{{val}}` — the resolved source value
   - `{{<key>}}` — `state.shared[<key>]` (works for multi-key templates like `B {{boiler_temp}} / P {{panel_temp}}`)
-- Empty `format_string` ⇒ rule skips the row (placeholder, no panel write)
-- Heartbeat fires every 60 s; per-row `refresh_sec` (default 30) gates re-publish; `last_value` dedupes so the panel only sees real changes
+- **Float values are auto-rounded to 1 decimal** in `_fmt()` (since 2026-05-03) — no need to embed `.1f` precision in `format_string` for noisy sensors. Bare `{{val}}` of a float like `21.039999961853` renders as `21.0`. This drives the dedupe correctly so stable temperatures stop spamming republishes. See [Float rounding feedback](../../projects/c--Users-muroc-project-home/memory/feedback_float_rounding.md). If a future use case ever needs more precision (battery voltage at 0.01 V), tell the user it's not currently configurable per-row — would need a code change in `_fmt()`.
+- Empty `format_string` ⇒ rule skips the row (placeholder, no panel write); SELECT also filters out empty `source_value` rows so they don't burn DB roundtrips on every heartbeat.
+- Heartbeat fires every 60 s; per-row `refresh_sec` (default 30) gates re-publish; `last_value` dedupes so the panel only sees real changes; **force-republish every 10 min** (since 2026-05-03) so a panel reboot doesn't leave stable values stuck on default text.
 - Filters in dashboard UI: `Show: only configured` hides rows with empty format/source
 
 ## Step 0 — Action
