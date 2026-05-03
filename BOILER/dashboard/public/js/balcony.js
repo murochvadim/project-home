@@ -735,6 +735,240 @@
     } finally { btn.disabled = false; }
   };
 
+  // ════════════════════════════════════════════════════════════════════════
+  // ─── Balcony Smart Switch (Tuya TS0044) — bindings UI ────────────────────
+  // 4 buttons × 2 events (single, hold) = 8 binding slots, multi-device per
+  // slot. Storage: dashboard_settings.balcony.smart_switch_bindings. Mirrors
+  // the HASP-button bindings pattern above with sw* prefix instead of bc*.
+  // ════════════════════════════════════════════════════════════════════════
+  const SW_STORAGE_KEY = 'balcony.smart_switch_bindings';
+  // Single-press only (decided 2026-05-03). Hold doesn't work on the user's
+  // MOES TS0044 firmware variant (0 hold events captured across many tests).
+  // Double-click was tried but causes a visible on→off flicker that no
+  // immediate-dispatch design can avoid; deferring single by 500ms to
+  // suppress it introduced sluggish latency. Cleanest UX: bind one row per
+  // button — user picks per-binding whether the action is `toggle`,
+  // `turn_on`, or `turn_off`. Multi-device per slot still supported.
+  const SW_EVENTS = ['single'];
+
+  let _swButtons = [];          // [{id:'btn1:single', button:1, event:'single', label:'Button 1', bindings:[]}]
+  let _swActivePicker = null;   // {rowId, snapshot}
+
+  // Build the 8 fixed slots (button × event), seeding from saved bindings.
+  function swBuildButtons(saved) {
+    const out = [];
+    for (let n = 1; n <= 4; n++) {
+      for (const ev of SW_EVENTS) {
+        const id = `btn${n}:${ev}`;
+        out.push({
+          id, button: n, event: ev,
+          label: `Button ${n}`,
+          bindings: Array.isArray(saved[id]) ? saved[id] : [],
+        });
+      }
+    }
+    return out;
+  }
+
+  async function swLoadBindings() {
+    try {
+      const r = await fetch('/api/dashboard-settings/' + encodeURIComponent(SW_STORAGE_KEY)).then(r => r.json());
+      const saved = (r && typeof r.value === 'object' && r.value) ? r.value : {};
+      _swButtons = swBuildButtons(saved);
+    } catch (_) {
+      _swButtons = swBuildButtons({});
+    }
+    await bcLoadControllableDevices();   // re-use the bc devices cache
+    swRender();
+  }
+
+  function swRender() {
+    const host = document.getElementById('sw-buttons-list');
+    if (!host) return;
+    // Group rows by button.
+    const html = [1, 2, 3, 4].map(n => {
+      const rowsForButton = _swButtons.filter(r => r.button === n);
+      return swRenderButtonCard(rowsForButton[0], rowsForButton);
+    }).join('');
+    host.innerHTML = html || '<div style="padding:8px;color:#888;font-size:0.85rem;">no buttons</div>';
+  }
+
+  function swRenderButtonCard(headerRow, allRowsForButton) {
+    return `
+      <div class="button-row" data-sw-btn="${headerRow.button}">
+        <div class="button-label">
+          ${escHtml(headerRow.label)}
+          <div style="font-weight:normal;color:#aaa;font-size:0.72rem;">btn${headerRow.button}</div>
+        </div>
+        <div class="event-rows">
+          ${allRowsForButton.map(r => `
+            <div class="event-row">
+              <span class="event-type ${r.event}">${r.event}</span>
+              <div class="device-picker ${(r.bindings && r.bindings.length) ? '' : 'empty'}"
+                   data-sw-picker="${escHtml(r.id)}"
+                   onclick="swOpenPicker('${escHtml(r.id)}')">
+                ${(r.bindings && r.bindings.length)
+                    ? r.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`).join(' · ')
+                    : '— select devices —'}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  function swRenderPickerDisplay(rowId) {
+    const row = _swButtons.find(r => r.id === rowId);
+    const el = document.querySelector(`[data-sw-picker="${rowId}"]`);
+    if (!row || !el) return;
+    el.classList.toggle('empty', !(row.bindings && row.bindings.length));
+    el.innerHTML = (row.bindings && row.bindings.length)
+      ? row.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`).join(' · ')
+      : '— select devices —';
+  }
+
+  // Picker — separate state from HASP-button picker (_bcActivePicker) so the
+  // two UIs don't collide when both tabs have open dialogs (rare but safe).
+  window.swOpenPicker = function (rowId) {
+    const row = _swButtons.find(r => r.id === rowId);
+    if (!row) return;
+    if (!row.bindings) row.bindings = [];
+    _swActivePicker = { rowId, snapshot: JSON.parse(JSON.stringify(row.bindings)) };
+    document.getElementById('picker-title').textContent = `${row.label} · ${row.event}`;
+    document.getElementById('picker-search-input').value = '';
+    swRenderPickerList('');
+    document.getElementById('picker-overlay').classList.add('show');
+    // Repoint the picker overlay's footer/close handlers to the smart-switch
+    // helpers — the existing bcClosePicker / bcFilterPicker / bcTogglePickerItem
+    // are wired via inline onclick to the bc* functions; we override via
+    // window for the duration of this picker session and restore on close.
+    window._swPickerActive = true;
+  };
+
+  function swRenderPickerList(filter) {
+    if (!_swActivePicker) return;
+    const row = _swButtons.find(r => r.id === _swActivePicker.rowId);
+    if (!row) return;
+    if (!row.bindings) row.bindings = [];
+    const selByKey = new Map(row.bindings.map(s => [s.device_id + ':' + (s.channel || ''), s]));
+    const f = (filter || '').toLowerCase();
+    const list = document.getElementById('picker-list');
+    list.innerHTML = '';
+    let currentRoom = null;
+    const defAct = 'toggle';
+
+    for (const d of _controllable) {
+      const rowKey = d.device_id + ':' + (d.channel || '');
+      const displayName = d.label ? `${d.name} — ${d.label}` : d.name;
+      const blob = `${d.name} ${d.label || ''} ${d.room || ''}`.toLowerCase();
+      if (f && !blob.includes(f)) continue;
+
+      if (d.room !== currentRoom) {
+        currentRoom = d.room;
+        const rl = document.createElement('div');
+        rl.className = 'picker-room-label';
+        rl.textContent = d.room || '(no room)';
+        list.appendChild(rl);
+      }
+
+      const sel = selByKey.get(rowKey);
+      const item = document.createElement('div');
+      item.className = 'picker-item';
+      const checked = sel ? 'checked' : '';
+      item.innerHTML = `
+        <input type="checkbox" ${checked} data-sw-item="${escHtml(rowKey)}">
+        <span class="picker-item-name">${escHtml(displayName)}</span>
+        <span class="picker-item-meta">${escHtml(d.protocol || '')}</span>
+        <select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
+          ${ACTIONS.map(a => `<option value="${a.v}" ${(sel?.action || defAct) === a.v ? 'selected' : ''}>${a.label}</option>`).join('')}
+        </select>
+      `;
+      const cb = item.querySelector('input[type=checkbox]');
+      const selEl = item.querySelector('select.picker-action-select');
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          row.bindings.push({
+            device_id: d.device_id, channel: d.channel, name: d.name,
+            label: d.label || '', action: selEl.value || defAct,
+          });
+          selEl.disabled = false;
+        } else {
+          row.bindings = row.bindings.filter(s => !(s.device_id === d.device_id && (s.channel || '') === (d.channel || '')));
+          selEl.disabled = true;
+        }
+      });
+      selEl.addEventListener('change', () => {
+        const b = row.bindings.find(s => s.device_id === d.device_id && (s.channel || '') === (d.channel || ''));
+        if (b) b.action = selEl.value;
+      });
+      list.appendChild(item);
+    }
+  }
+
+  // Override picker close + filter when a smart-switch picker is active so
+  // the same overlay (declared in HTML, wired via inline onclick to bc*)
+  // routes to the right state. The wrapper checks _swPickerActive; if not
+  // set, falls through to the original bc* behavior.
+  const _origBcClosePicker = window.bcClosePicker;
+  window.bcClosePicker = function (save) {
+    if (window._swPickerActive) {
+      document.getElementById('picker-overlay').classList.remove('show');
+      if (!save && _swActivePicker) {
+        const row = _swButtons.find(r => r.id === _swActivePicker.rowId);
+        if (row) row.bindings = _swActivePicker.snapshot;
+      }
+      if (_swActivePicker) swRenderPickerDisplay(_swActivePicker.rowId);
+      _swActivePicker = null;
+      window._swPickerActive = false;
+      return;
+    }
+    return _origBcClosePicker.apply(this, arguments);
+  };
+  const _origBcFilterPicker = window.bcFilterPicker;
+  window.bcFilterPicker = function () {
+    if (window._swPickerActive) {
+      swRenderPickerList(document.getElementById('picker-search-input').value);
+      return;
+    }
+    return _origBcFilterPicker.apply(this, arguments);
+  };
+
+  window.swSaveAllBindings = async function () {
+    // Serialize _swButtons → {slot_key: bindings[]} object expected by the rule.
+    const payload = {};
+    for (const r of _swButtons) {
+      payload[r.id] = (r.bindings || []).map(b => ({
+        device_id: b.device_id,
+        channel:   b.channel,
+        action:    b.action,
+        name:      b.name,
+        label:     b.label || '',
+      }));
+    }
+    try {
+      const resp = await fetch('/api/dashboard-settings/' + encodeURIComponent(SW_STORAGE_KEY), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: payload }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      alert('Saved.');
+    } catch (e) {
+      alert('Save failed: ' + e.message);
+    }
+  };
+
+  // Lazy-load on first tab activation. The original showTab fires once when
+  // the user first clicks the smart-switch tab — wrap it to load bindings then.
+  const _origShowTab = window.showTab;
+  let _swInitialized = false;
+  window.showTab = function (name, btn) {
+    _origShowTab(name, btn);
+    if (name === 'smart-switch' && !_swInitialized) {
+      _swInitialized = true;
+      swLoadBindings();
+    }
+  };
+
   window.addEventListener('DOMContentLoaded', () => {
     refreshPage();
     hpInit();

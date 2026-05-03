@@ -94,6 +94,7 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('panel', this)">Panel</button>
+    <button class="tab-btn" onclick="showTab('smart-switch', this)">Balcony Smart Switch</button>
   </div>
 
   <div class="tab-panel active" id="tab-panel">
@@ -173,6 +174,32 @@
           Use <code style="background:#eee;padding:1px 4px;border-radius:3px;">{{key}}</code> in the format string to embed live state — e.g. <code style="background:#eee;padding:1px 4px;border-radius:3px;">Boiler {{boiler_temp}}°C</code>. Available keys come from rule_engine state.
         </div>
         <div id="bc-displays-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ════════════════════════════════════════════════════ -->
+  <!-- TAB: Balcony Smart Switch — Tuya TS0044 4-button bindings -->
+  <!-- ════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-smart-switch">
+
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.05rem;">Balcony Smart Switch <span style="font-weight:normal;color:#888;font-size:0.78rem;margin-left:8px;">Tuya TS0044 · Zigbee · battery-powered</span></h2>
+      <div style="font-size:0.82rem;color:#555;line-height:1.55;">
+        4-button wireless scene remote. Each button supports two events: <b>Single tap</b> and <b>Hold</b>. Multi-device per slot — one press fires all bound commands at once.<br>
+        Z2M friendly name: <code>Balcony Smart Switch</code> · IEEE: <code>0x8c65a3fffeb139ae</code>
+      </div>
+    </div>
+
+    <div class="card wallmote-card">
+      <div class="wallmote-header">
+        <h2>Button Bindings</h2>
+        <span class="wallmote-meta"><span>Click <b>— select devices —</b> to add one or more devices per button event. Save when done.</span></span>
+      </div>
+      <div id="sw-buttons-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      <div style="margin-top:12px;text-align:right;">
+        <button class="btn-save" onclick="swSaveAllBindings()">Save Bindings</button>
       </div>
     </div>
 
