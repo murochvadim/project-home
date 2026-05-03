@@ -123,7 +123,7 @@ function renderSummary() {
 function _boardLabelColor(id) {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360}, 65%, 38%)`;
+  return `hsl(${h % 360}, 90%, 28%)`;
 }
 
 function renderTabs() {
