@@ -911,15 +911,30 @@ class RuleEngine:
             return
 
         # Substitute {{var}} in template — first from cmd['vars'] (rule-supplied),
-        # falling back to state.shared.
+        # falling back to state.shared. Floats are rounded to 1 decimal so
+        # micro sensor-noise (e.g. 21.039999961853) doesn't render as an ugly
+        # long string scrolling across the LED matrix. Numeric strings get
+        # the same treatment only if they were already in decimal form.
         explicit_vars = cmd.get('vars') or {}
+        def _fmt_awtrix(v):
+            if v is None:               return ''
+            if isinstance(v, bool):     return str(v)
+            if isinstance(v, int):      return str(v)
+            if isinstance(v, float):    return f"{v:.1f}"
+            if isinstance(v, str):
+                try:
+                    f = float(v)
+                    return f"{f:.1f}" if '.' in v else v
+                except ValueError:
+                    pass
+            return str(v)
         def sub(m):
             k = m.group(1)
             if k in explicit_vars:
                 v = explicit_vars[k]
             else:
                 v = self.state.shared.get(k)
-            return '' if v is None else str(v)
+            return _fmt_awtrix(v)
         text = self._AWTRIX_TPL_RE.sub(sub, preset.get('template') or '')
 
         # Translate stored preset fields → Awtrix wire format

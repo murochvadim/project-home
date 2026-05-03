@@ -61,6 +61,30 @@ def _resolve_source(source_value, state):
     return (state.shared or {}).get(source_value)
 
 
+def _fmt(v):
+    """String-format a value with 1-decimal precision for floats so micro
+    sensor-noise (e.g. 21.039999961853 → 21.040001869202) doesn't blow
+    past the dedupe and trigger spurious publishes. Ints / bools / strings
+    that are not numeric pass through unchanged. Numeric strings (e.g.
+    Tuya stores some readings as "21.0") get the same rounding only if
+    they were already in decimal form."""
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return f"{v:.1f}"
+    if isinstance(v, str):
+        try:
+            f = float(v)
+            return f"{f:.1f}" if '.' in v else v
+        except ValueError:
+            pass
+    return str(v)
+
+
 def _render(format_string, shared, source_val):
     """Substitute {{key}} placeholders.
 
@@ -70,9 +94,8 @@ def _render(format_string, shared, source_val):
     def sub(m):
         k = m.group(1)
         if k == "val":
-            return "" if source_val is None else str(source_val)
-        v = shared.get(k)
-        return str(v) if v is not None else ""
+            return _fmt(source_val)
+        return _fmt(shared.get(k))
     return _TEMPLATE_RE.sub(sub, format_string or "")
 
 
