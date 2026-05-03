@@ -358,7 +358,14 @@ function applyFilters() {
           if (m && m[1] === btnNum) raw = m[2];   // "single" / "double" / "hold"
         }
         let dot, txt;
-        if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
+        if (raw === undefined || raw === null) {
+          // Virtual button channels (TS0044 etc.) read undefined when this
+          // particular button isn't the one most recently pressed — the
+          // device only publishes a single `action` field at press time, so
+          // 3 of 4 buttons are always undefined. Render as a quiet idle
+          // state instead of literal "undefined".
+          dot = 'dot-off'; txt = '—';
+        } else if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
           const isOn = raw === true || raw === 1;
           dot = isOn ? 'dot-on' : 'dot-off';
           txt = isOn ? 'ON' : 'OFF';
