@@ -62,10 +62,11 @@ const DESTRUCTIVE_ACTIONS = new Set(['reset_wifi', 'clear_eeprom', 'restart', 'f
 // the schema but NOT listed here fall through to a generic "Other" card so
 // new sketches stay visible without dashboard edits.
 const ACTION_GROUPS = [
-  { id: 'system',   label: 'System',        tab: 'status',     keys: ['restart', 'clear_eeprom', 'reset_wifi'] },
+  { id: 'system',   label: 'System',        tab: 'status',     keys: ['restart', 'clear_eeprom', 'reset_wifi', 'factory_reset'] },
   { id: 'doorlock', label: 'Doorlock',      tab: 'simulation', keys: ['open_doorlock'],                           statusFlag: 'door_relay',   statusLabel: 'Door Relay' },
   { id: 'robot',    label: 'Robot',         tab: 'simulation', keys: ['robot_alive', 'robot_lost_power'],         statusFlag: 'charge_relay', statusLabel: 'Charge Relay' },
   { id: 'hivemq',   label: 'HiveMQ Bridge', tab: 'simulation', keys: ['reconnect_hivemq', 'sim_came_parking', 'sim_in_parking', 'sim_no_data'] },
+  { id: 'pump',     label: 'Pump',          tab: 'simulation', keys: ['smell_start', 'smell_stop', 'smell_auto_start', 'smell_auto_stop'], statusFlag: 'pump_state',   statusLabel: 'Pump' },
 ];
 
 // ─── Load + render ─────────────────────────────────────────────────────
@@ -90,6 +91,7 @@ async function loadBoards(auto = false) {
   }
   renderSummary();
   renderTabs();
+  refreshPageOtaOptions();   // keep page-level OTA dropdown in sync with current board list
   if (BOARDS.length === 0) {
     // Empty state already rendered in HTML
     return;
@@ -146,12 +148,10 @@ function renderBoardPane() {
         <button class="sub-tab" data-pane="status">Status</button>
         <button class="sub-tab" data-pane="params">Params</button>
         <button class="sub-tab" data-pane="simulation">Simulation</button>
-        <button class="sub-tab" data-pane="ota">OTA</button>
       </div>
       <div class="sub-panel" id="sub-status">${renderStatus(board)}</div>
       <div class="sub-panel" id="sub-params">${renderParams(board)}</div>
       <div class="sub-panel" id="sub-simulation">${renderSimulation(board)}</div>
-      <div class="sub-panel" id="sub-ota">${renderOta(board)}</div>
     </div>
   `;
   // Apply the remembered tab; fall back to status if the remembered one is
@@ -169,9 +169,10 @@ function renderBoardPane() {
   });
   wireParamsForm(board);
   wireActionButtons(board);   // covers System (in Status) + Simulation buttons
-  wireOtaForm(board);
-  // Live MQTT stream is page-level now — wired once from init(), not per
-  // board. No call here.
+  // OTA + Live MQTT stream are both page-level now — wired once from init().
+  // The page-level OTA target dropdown follows SELECTED_ID, so switching
+  // boards here updates the OTA panel via syncPageOtaToSelected().
+  syncPageOtaToSelected();
 }
 
 // ─── Sub-panel: Status ─────────────────────────────────────────────────
@@ -212,14 +213,26 @@ function renderStatus(b) {
       </div>
     </div>
 
-    <div class="esp-card">
-      <h3 class="esp-card-title">Brokers</h3>
-      <div class="status-grid">
-        <div class="item"><label>HiveMQ Cloud</label><div class="value">${dotCell(online ? status.hivemq_connected : null, 'connected', 'disconnected')}</div></div>
-        <div class="item"><label>Mosquitto (LXC 107)</label><div class="value">${dotCell(online ? status.mosq_connected : null, 'connected', 'disconnected')}</div></div>
-      </div>
-      ${online ? '' : '<p style="margin:8px 0 0 0;font-size:0.75rem;color:#aaa;font-style:italic;">Board is offline — broker state shown as unknown until heartbeat resumes.</p>'}
-    </div>
+    ${(() => {
+      // Render each broker row only if the board's last_status actually
+      // publishes that field — boards that don't bridge to HiveMQ would
+      // otherwise show "● unknown" forever (the field is never sent).
+      const rows = [];
+      if ('hivemq_connected' in status) {
+        rows.push(`<div class="item"><label>HiveMQ Cloud</label><div class="value">${dotCell(online ? status.hivemq_connected : null, 'connected', 'disconnected')}</div></div>`);
+      }
+      if ('mosq_connected' in status) {
+        rows.push(`<div class="item"><label>Mosquitto (LXC 107)</label><div class="value">${dotCell(online ? status.mosq_connected : null, 'connected', 'disconnected')}</div></div>`);
+      }
+      if (!rows.length) return '';
+      return `
+        <div class="esp-card">
+          <h3 class="esp-card-title">Brokers</h3>
+          <div class="status-grid">${rows.join('')}</div>
+          ${online ? '' : '<p style="margin:8px 0 0 0;font-size:0.75rem;color:#aaa;font-style:italic;">Board is offline — broker state shown as unknown until heartbeat resumes.</p>'}
+        </div>
+      `;
+    })()}
 
     ${renderActionGroup(b, ACTION_GROUPS.find(g => g.id === 'system'), { destructive: true })}
   `;
@@ -236,14 +249,12 @@ function renderActionGroup(b, group, opts = {}) {
   const present = group.keys
     .map(k => schemaActions.find(a => a.key === k))
     .filter(Boolean);
-  // If schema hasn't arrived yet, render an explanatory empty-state for
-  // the simulation tab; for the status tab (System card), skip silently
-  // to avoid clutter when the board is offline or pre-schema.
-  if (!present.length) {
-    if (group.tab !== 'simulation') return '';
-    return `<div class="esp-card"><h3 class="esp-card-title">${escHtml(group.label)}</h3>
-      <div class="empty-state" style="padding:14px;font-size:0.85rem;">No matching actions in board schema yet.</div></div>`;
-  }
+  // Skip silently when none of this group's keys appear in the schema.
+  // The "schema not arrived" state is handled once at the top of
+  // renderSimulation; once the schema IS published, an empty card here
+  // means this board genuinely doesn't expose those actions, so showing
+  // a placeholder would be misleading clutter.
+  if (!present.length) return '';
   const status = b.last_status || {};
   const online = isOnline(b);
   const statusRow = group.statusFlag
@@ -532,35 +543,72 @@ async function wireLiveStream() {
   _liveMqtt.on('message',   (t, payload) => liveAppendRow(payload.toString(), t));
 }
 
-// ─── Sub-panel: OTA ─────────────────────────────────────────────────────
-function renderOta(b) {
-  if (!b.ip) {
-    return `<div class="ota-disabled">No known IP for this board yet — wait for the next ARP scan or the board's first /status publish.</div>`;
-  }
-  if (!b.has_ota_password) {
-    return `<div class="ota-disabled">Board has no <code>ota_password</code> set. Set one via the DB (<code>UPDATE esp_boards SET ota_password='…' WHERE id='${escHtml(b.id)}'</code>) before flashing.</div>`;
-  }
-  const isEsp32 = (b.last_status?.sketch_name || '').toLowerCase().includes('esp32');
-  return `
-    <div class="ota-drop" id="ota-drop">
-      <div style="font-size:1.1rem;margin-bottom:6px;">Drop <code>.bin</code> file here, or click to browse</div>
-      <div style="font-size:0.78rem;">Target: <code>${escHtml(b.ip)}</code> · espota.py (${isEsp32 ? 'ESP32' : 'ESP8266'}) · OTA password baked in</div>
-      <input type="file" id="ota-file" accept=".bin" style="display:none;">
-    </div>
-    <div class="ota-status" id="ota-status"></div>
-    <p style="margin-top:14px;font-size:0.78rem;color:#888;">
-      Upload spawns <code>espota.py -i ${escHtml(b.ip)} -p 8266 -a &lt;password&gt; -f &lt;your.bin&gt; -r</code>.
-      The board reboots into the new firmware on success.
-    </p>
-  `;
+// ─── Page-level OTA panel ──────────────────────────────────────────────
+// Single drop zone shared across all boards — pick the target via the
+// dropdown above the drop area. Replaces the per-board OTA sub-tab so the
+// upload flow lives in one place regardless of which board tab is active.
+function refreshPageOtaOptions() {
+  const sel = document.getElementById('page-ota-board');
+  if (!sel) return;
+  const prev = sel.value || SELECTED_ID;
+  sel.innerHTML = BOARDS.length
+    ? BOARDS.map(b => `<option value="${escHtml(b.id)}">${escHtml(b.name || b.id)}</option>`).join('')
+    : '<option value="">— no boards registered —</option>';
+  // Prefer the board the user had selected before the refresh; fall back
+  // to the currently-active board tab; finally to the first option.
+  if (prev && BOARDS.some(b => b.id === prev)) sel.value = prev;
+  else if (SELECTED_ID && BOARDS.some(b => b.id === SELECTED_ID)) sel.value = SELECTED_ID;
+  syncPageOtaToBoard(sel.value);
 }
 
-function wireOtaForm(board) {
-  const drop = document.getElementById('ota-drop');
-  const fileEl = document.getElementById('ota-file');
-  const status = document.getElementById('ota-status');
-  if (!drop || !fileEl) return;
+// Called from renderBoardPane() when the user clicks a different board tab —
+// keeps the OTA target in sync with the active board so a quick "tap board,
+// drop bin" flow works without touching the dropdown.
+function syncPageOtaToSelected() {
+  const sel = document.getElementById('page-ota-board');
+  if (!sel || !SELECTED_ID || sel.value === SELECTED_ID) return;
+  if (BOARDS.some(b => b.id === SELECTED_ID)) {
+    sel.value = SELECTED_ID;
+    syncPageOtaToBoard(SELECTED_ID);
+  }
+}
 
+function syncPageOtaToBoard(boardId) {
+  const drop = document.getElementById('page-ota-drop');
+  const target = document.getElementById('page-ota-target');
+  const meta = document.getElementById('page-ota-meta');
+  const board = BOARDS.find(b => b.id === boardId);
+  if (!drop || !target) return;
+
+  if (!board) {
+    drop.style.opacity = '0.6';
+    drop.style.pointerEvents = 'none';
+    target.textContent = '— pick a target above —';
+    if (meta) meta.textContent = '';
+    return;
+  }
+  if (!board.ip) {
+    drop.style.opacity = '0.6';
+    drop.style.pointerEvents = 'none';
+    target.innerHTML = `<span style="color:#c0392b;">✗ no known IP for <strong>${escHtml(board.name || board.id)}</strong> yet — wait for the next ARP scan or the board's first /status publish.</span>`;
+    if (meta) meta.textContent = '';
+    return;
+  }
+  const isEsp32 = (board.last_status?.sketch_name || '').toLowerCase().includes('esp32');
+  drop.style.opacity = '1';
+  drop.style.pointerEvents = '';
+  target.innerHTML = `Pushing to <strong>${escHtml(board.name || board.id)}</strong> at <code>${escHtml(board.ip)}</code>`;
+  if (meta) meta.textContent = `${isEsp32 ? 'ESP32 (port 3232)' : 'ESP8266 (port 8266)'} · password baked in`;
+}
+
+function wirePageOta() {
+  const drop = document.getElementById('page-ota-drop');
+  const fileEl = document.getElementById('page-ota-file');
+  const status = document.getElementById('page-ota-status');
+  const sel = document.getElementById('page-ota-board');
+  if (!drop || !fileEl || !sel) return;
+
+  sel.addEventListener('change', () => syncPageOtaToBoard(sel.value));
   drop.addEventListener('click', () => fileEl.click());
   drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
@@ -571,27 +619,35 @@ function wireOtaForm(board) {
   });
   fileEl.addEventListener('change', () => {
     if (fileEl.files.length > 0) doUpload(fileEl.files[0]);
+    fileEl.value = '';   // allow re-uploading the same file
   });
 
   async function doUpload(file) {
+    const boardId = sel.value;
+    const board = BOARDS.find(b => b.id === boardId);
+    if (!board || !board.ip) {
+      status.style.color = '#c0392b';
+      status.textContent = '✗ pick a target board with a known IP first';
+      return;
+    }
     if (!/\.bin$/i.test(file.name)) {
       status.style.color = '#c0392b';
       status.textContent = '✗ Must be a .bin file';
       return;
     }
     status.style.color = '#555';
-    status.textContent = `Uploading ${file.name} (${(file.size / 1024).toFixed(1)} KB)…`;
+    status.textContent = `Uploading ${file.name} (${(file.size / 1024).toFixed(1)} KB) → ${board.name || board.id}…`;
     const fd = new FormData();
     fd.append('firmware', file);
     try {
-      const r = await fetch(`/api/esp/boards/${encodeURIComponent(board.id)}/ota`, { method: 'POST', body: fd });
+      const r = await fetch(`/api/esp/boards/${encodeURIComponent(boardId)}/ota`, { method: 'POST', body: fd });
       const data = await r.json();
       if (!r.ok || !data.ok) {
         status.style.color = '#c0392b';
         status.textContent = `✗ exit=${data.exit_code ?? 'n/a'} ${data.error || ''}\n${data.stderr || ''}\n${data.stdout || ''}`;
       } else {
         status.style.color = '#3a7d44';
-        status.textContent = `✓ OTA push succeeded (exit 0). Board rebooting.\n${data.stdout || ''}`;
+        status.textContent = `✓ OTA push to ${board.name || board.id} succeeded (exit 0). Board rebooting.\n${data.stdout || ''}`;
         setTimeout(loadBoards, 5000);
       }
     } catch (e) {
@@ -604,4 +660,5 @@ function wireOtaForm(board) {
 // ─── Init + auto-refresh ───────────────────────────────────────────────
 loadBoards();
 wireLiveStream();   // page-level subscription; persists across board switches
+wirePageOta();      // page-level OTA upload form
 setInterval(() => loadBoards(true), 30000);  // 30 s — half the board's status heartbeat cadence

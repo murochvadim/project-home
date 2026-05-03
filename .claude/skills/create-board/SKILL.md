@@ -94,9 +94,10 @@ If a group key isn't already in `BOILER/dashboard/public/js/esp-boards.js` `ACTI
 ### C5: OTA + MQTT credentials
 
 - Pull `ESP_BOARDS_MQTT_PASS` from `BOILER/dashboard/.env` — this is the shared MQTT password (every board uses it).
-- **OTA password**: ask user — generate a random 16-char (no `'`, `"`, `\`, `$`, space) OR accept user input.
-  - Save to `.env` as `ESP_OTA_PASS_<ID_UPPER>=<password>`.
-  - Will be baked into sketch's `OTA_PASSWORD` define AND stored in `esp_boards.ota_password` column.
+- **OTA password**: also shared across all boards via `ESP_OTA_PASSWORD` in `.env`. Same justification as MQTT — single value serves the whole subsystem; per-board override (`esp_boards.ota_password` column) stays available for future lockdown but is normally NULL.
+  - Pull `ESP_OTA_PASSWORD` from `.env` and bake it into the sketch's `OTA_PASSWORD` define.
+  - Do NOT generate a per-board password and do NOT write to the `esp_boards.ota_password` column. The dashboard's OTA endpoint reads `process.env.ESP_OTA_PASSWORD` automatically when the column is NULL.
+  - If `ESP_OTA_PASSWORD` is missing from `.env` (first board ever), generate one yourself (16 chars, no `'`, `"`, `\`, `$`, space), append `ESP_OTA_PASSWORD=<value>` to `.env`, also append the same key to the `env:` block in `BOILER/dashboard/ecosystem.config.js`, and tell the user to restart pm2 (`pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`).
 
 ### C6: Generate sketch files
 
@@ -165,38 +166,84 @@ This is the BOARD-AGNOSTIC base block. Copy from `C:\Users\muroc\Arduino_Project
 
 For each user-declared command action, generate a handler stub (with `// TODO:` comments) that the user fills in.
 
-### C7: Generate DB rows + .env entry
+### C7: Generate DB rows
 
 Generate SQL (do NOT execute yet — show to user for review):
 
 ```sql
--- Register in esp_boards (drives Project Boards page)
-INSERT INTO esp_boards (id, name, mac, ota_password, enabled)
-VALUES ('<id>', '<name>', '<mac or NULL>', '<ota_password>', true);
+-- Register in esp_boards (drives Project Boards page).
+-- ota_password column is left NULL — OTA falls back to the shared
+-- ESP_OTA_PASSWORD env var. Set the column only as a per-board override.
+INSERT INTO esp_boards (id, name, mac, enabled)
+VALUES ('<id>', '<name>', '<mac or NULL>', true);
 
 -- Companion row in devices (universal Devices page visibility)
 INSERT INTO devices (id, name, vendor, device_type, protocol, mac, room, show_dashboard, poll_enabled)
 VALUES ('<id>', '<name>', '<vendor: espressif>', 'esp_board', 'esp', '<mac or NULL>', '<room or NULL>', true, false);
 ```
 
-Append to `BOILER/dashboard/.env`:
-```
-ESP_OTA_PASS_<ID_UPPER>=<ota_password>
-```
+No `.env` change is needed for the OTA password — `ESP_OTA_PASSWORD` is already shared across all boards. Only the FIRST board ever (when the env var doesn't yet exist) requires the one-time append + pm2 restart described in C5.
 
 After user approves, run:
 1. `psql` query against LXC 102 (192.168.1.219, db `home_data`) — execute the SQL.
-2. Append the `.env` line via Edit tool.
-3. **No pm2 restart needed** — endpoints already loaded; first poll picks up the new row.
+2. **No pm2 restart needed** — endpoints already loaded; first poll picks up the new row.
+
+### C7b: (Optional) Make the board addressable from rules
+
+Ask the user: "Do you want this board to be controllable from rule
+sentences (e.g. `@<Name> on` to fire one of its sketch actions)?" If
+yes, walk through:
+
+1. Identify which `/status` payload fields the board publishes that
+   should appear as user-visible state on the Devices page (e.g.
+   `pump_state`, `auto_enabled` for the smell board). Pick friendly
+   labels for each.
+2. Identify which of those channels are CONTROLLABLE — i.e. the board
+   has a sketch action that turns the underlying state on/off. Get the
+   matching action keys (`smell_auto_start` ↔ `smell_auto_stop`).
+3. UPDATE the `devices` row's `dps_labels` + `dps_config`:
+
+   ```sql
+   UPDATE devices SET
+     dps_labels = '{"<channel1>":"<Friendly Label>","<channel2>":"<...>"}'::jsonb,
+     dps_config = '{
+       "<controllable_channel>": {"name":"<Friendly Label>","enabled":true,"show_dashboard":true,
+                                  "action_on":"<sketch_action_key>","action_off":"<sketch_action_key>"},
+       "<readonly_channel>":     {"name":"<Friendly Label>","enabled":true,"show_dashboard":true}
+     }'::jsonb
+   WHERE id = '<id>';
+   ```
+
+4. Verify the status field is in `_ESP_STATUS_DPS_FIELDS` in
+   `RULES/rule_engine.py`. Current set:
+   `('pump_state', 'auto_enabled', 'auto_phase', 'manual_active', 'door_relay', 'charge_relay')`.
+   If your channel uses a NEW field name, add it to the tuple +
+   `scp` + `systemctl restart rule-engine` on LXC 105 — without this
+   the projection won't lift the field into `devices.last_state`.
+
+5. Smoke-test:
+   - `mosquitto_pub -t mur/home/esp/<id>/command -m '<sketch_action_key>'`
+     to verify the board responds.
+   - Wait ≤60 s for the next status heartbeat, then query
+     `devices.last_state` — your channel should appear with the new value.
+   - Open Living Room → Rule Settings (or Main Agent → Base Rule
+     Settings), click `+Dev`, find the board — it should show on/off
+     buttons (label-prefixed if multiple controllable channels).
+
+The full pattern is documented in
+[BOILER/dashboard/docs/esp_boards.md](../../BOILER/dashboard/docs/esp_boards.md)
+under "Make the board addressable from rules".
 
 ### C8: Final instructions
 
 Tell the user:
 1. **Open the new sketch in Arduino IDE**: `C:\Users\muroc\Arduino_Projects\<sketch_name>`. Required libraries: `PubSubClient`, `ArduinoJson`, `ArduinoOTA` (built-in), `EEPROM` (built-in), `ESP8266WiFi` or `WiFi`.
-2. **Verify/Compile**. Fix any errors (most likely: missing libraries, `// TODO` handlers).
+2. **Verify/Compile**. Fix any errors (most likely: missing libraries, `// TODO` handlers, missing `#include <ArduinoOTA.h>` in the main `.ino` since `ArduinoOTA.handle()` is called there — only `Esp_Base.ino` includes it by default).
 3. **USB-flash once** (subsequent updates flow via OTA from the dashboard).
 4. **Open Project Boards** (`http://127.0.0.1:3000/esp-boards.html`) — the new board's tab appears within ~30 s of first MQTT publish.
-5. Test the Doorlock / Robot / HiveMQ / custom action buttons via the Simulation sub-tab.
+5. Test the board's actions via the Simulation sub-tab. Action grouping comes from `ACTION_GROUPS` in `esp-boards.js` — if your board's actions don't match an existing group, they'll appear in the auto-generated "Other" card. Add a group entry to `ACTION_GROUPS` for a labeled card with a `statusFlag` (the "Pump" group keys to `smell_*` actions and reads `pump_state` for the live indicator).
+6. **OTA pushes**: use the page-level **OTA Push** card (above the board-tab bar). The dropdown auto-syncs to whichever board tab is active; drop the `.bin` and the dashboard spawns `espota.py`.
+7. If the user asked for rule-targetability in C7b, remind them to author a test rule via `/create-rule` using `@<Name> on` / `@<Name> off` in a sentence.
 
 ---
 

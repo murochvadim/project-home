@@ -39,13 +39,16 @@ get a confirm dialog before sending.
 
 ### 1. Sketch side
 
-Copy `Esp_Base.ino` from the `RemoteXY_ESP8266_ver13` sketch into your new
-sketch folder (Arduino IDE merges all `.ino` files in the folder before
-compiling). Then in your `Main.h`:
+Reference sketches:
+- ESP8266: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_ver13\` (full HiveMQ-bridge example)
+- ESP32-C3: `C:\Users\muroc\Arduino_Projects\My_Bathroom_Smell_6\` (minimal Mosquitto-only example with AUTO-cycle pump state machine)
+
+Copy the appropriate `Esp_Base.ino` into your new sketch folder (Arduino IDE
+merges all `.ino` files in the folder before compiling). Then in your `Main.h`:
 
 - Set `device_id` to your unique board ID (must match the regex above).
 - Set `sketch_name`, `sketch_version` constants.
-- Set `OTA_PASSWORD` define.
+- Set `OTA_PASSWORD` define to the shared OTA password (see "Required server-side config" below).
 - Set `mqtt_server_moskuitto = "192.168.1.189"`,
   `mqtt_user_moskuitto = "esp_boards"`, and `mqtt_pass_moskuitto` to the
   shared `esp_boards` mosquitto password (stored in
@@ -75,9 +78,11 @@ Two rows: one in `esp_boards` (drives the Project Boards page), one in
 `devices` (drives the universal Device Agent page).
 
 ```sql
--- esp_boards row
-INSERT INTO esp_boards (id, name, mac, ota_password, enabled)
-VALUES ('my_board_01', 'My Board', '<mac-addr>', '<ota-password>', true);
+-- esp_boards row. ota_password column is normally left NULL — server.js
+-- falls back to the shared ESP_OTA_PASSWORD env var. Set the column only
+-- if you want a per-board override.
+INSERT INTO esp_boards (id, name, mac, enabled)
+VALUES ('my_board_01', 'My Board', '<mac-addr>', true);
 
 -- devices row (so the board appears on the Devices page with status dot)
 INSERT INTO devices (id, name, vendor, device_type, protocol, mac, room, show_dashboard, poll_enabled)
@@ -96,12 +101,64 @@ The status dot updates within ~60 s of the board's first MQTT publish.
 
 1. Edit your sketch in Arduino IDE.
 2. Build (don't upload).
-3. In the Project Boards page, select your board's tab → OTA sub-tab.
+3. Open the Project Boards page. Above the board-tab bar there's a single
+   page-level **OTA Push** card with a target-board dropdown — it
+   auto-syncs to whichever board tab is currently active, but you can
+   pick any board manually.
 4. Drag the `.bin` file (typically at
    `%LOCALAPPDATA%\Temp\arduino\sketches\<hash>\<sketch>.ino.bin`)
    onto the drop zone, or click to browse.
-5. The dashboard spawns `espota.py` with the per-board OTA password; the
+5. The dashboard spawns `espota.py` with the shared OTA password; the
    board reboots into the new firmware on success.
+
+### 6. (Optional) Make the board addressable from rules
+
+If you want rules to be able to fire actions on this board (e.g. "when
+presence in bathroom → @My Bathroom Smell on"), populate the `devices`
+row's `dps_labels` and `dps_config`:
+
+```sql
+UPDATE devices SET
+  dps_labels = '{"auto_enabled":"AUTO Cycle","pump_state":"Pump"}'::jsonb,
+  dps_config = '{
+    "auto_enabled": {"name":"AUTO Cycle","enabled":true,"show_dashboard":true,
+                     "action_on":"smell_auto_start","action_off":"smell_auto_stop"},
+    "pump_state":   {"name":"Pump","enabled":true,"show_dashboard":true}
+  }'::jsonb
+WHERE id = 'my_board_01';
+```
+
+What this gives you:
+
+- **`dps_labels`**: declares which `/status` payload fields are
+  user-visible on the Devices page. Only labeled fields appear; unlabeled
+  ones (like `auto_phase`, `manual_active`) stay internal.
+- **`dps_config.<channel>.action_on` / `action_off`**: declares which
+  sketch action key to publish to `mur/home/esp/<id>/command` when a
+  rule says `turn_on` / `turn_off`. Channels without an action mapping
+  (like `pump_state` above) are read-only — visible on dashboard, not
+  controllable from rules.
+
+The rule engine on LXC 105 then:
+
+- Projects the listed status fields into `devices.last_state` so rules
+  can read e.g. `state.devices['my_board_01']['dps']['pump_state']`.
+- Routes `{action: 'turn_on', device_id: 'my_board_01'}` through
+  `_resolve_esp_action()` to the matching `action_on` (channel-aware,
+  with single-channel fallback so `@My Board on` works without a
+  channel suffix).
+
+For the device to **show on/off buttons in the rule sentence picker**
+(`+Dev` modal), at least one channel must have `action_on` or
+`action_off`. The picker auto-detects this and renders the buttons —
+single actionable channel → plain "label: on/off" buttons + short token
+`@Name on`; multiple → channel-prefixed buttons + suffixed token
+`@Name <channel> on`. No picker code change per board.
+
+If the board's `/status` payload publishes a status field that's not yet
+listed in `_ESP_STATUS_DPS_FIELDS` (in `RULES/rule_engine.py`), add it
+there so the projection picks it up. Current set: `pump_state`,
+`auto_enabled`, `auto_phase`, `manual_active`, `door_relay`, `charge_relay`.
 
 ## Required broker / ACL setup
 
@@ -135,14 +192,29 @@ HA-style discovery topics. Remove if your board doesn't need them.
 
 ```
 ESP_BOARDS_MQTT_PASS=<your-shared-mosquitto-password>
-ESP_OTA_PASS_<BOARD_ID_UPPER>=<per-board-OTA-password>     # one per board
+ESP_OTA_PASSWORD=<your-shared-OTA-password>                # ONE value, all boards
 ESP8266_OTA_PY=C:\...\packages\esp8266\hardware\esp8266\<ver>\tools\espota.py
 ESP32_OTA_PY=C:\...\packages\esp32\hardware\esp32\<ver>\tools\espota.py
 ```
 
-The `ESP_OTA_PASS_*` env entries are reference copies; the operative
-value lives in `esp_boards.ota_password` per board. Storing both means
-the password is recoverable from `.env` if the DB row is ever lost.
+`ESP_OTA_PASSWORD` is shared across every board (since 2026-05-03) — same
+philosophy as the shared `esp_boards` MQTT user. Each sketch bakes the
+same value into its `OTA_PASSWORD` define. `server.js` reads this env
+var as the fallback OTA password whenever `esp_boards.ota_password` is
+NULL (which is the normal state). Per-board override is still possible
+by setting the column explicitly.
+
+`ESP_OTA_PASSWORD` must also be listed in the `env:` block of
+`BOILER/dashboard/ecosystem.config.js` so pm2 picks it up — same pattern
+as the other secret env vars. **After adding any new env var, restart
+pm2 with `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
+(NEVER `pm2 restart` — caches the old environment).**
+
+Legacy `ESP_OTA_PASS_<BOARD_ID_UPPER>` entries (one per board) are still
+supported for back-compat — if the per-board column carries a value, it
+overrides the env var. Existing boards (e.g. `remoteXY_01`) continue to
+work without re-flashing as long as their column matches the value baked
+into the sketch.
 
 ## Architecture notes
 

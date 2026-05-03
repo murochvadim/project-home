@@ -2118,6 +2118,10 @@ app.get('/api/esp/boards', async (req, res) => {
       LEFT JOIN net_devices nd ON LOWER(nd.mac::text) = LOWER(b.mac::text)
       ORDER BY b.id
     `);
+    // OTA falls back to the shared ESP_OTA_PASSWORD env var when the
+    // per-board column is unset, so reflect that in has_ota_password.
+    const sharedOta = !!process.env.ESP_OTA_PASSWORD;
+    for (const row of r.rows) row.has_ota_password = row.has_ota_password || sharedOta;
     res.json({ boards: r.rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2235,7 +2239,10 @@ app.post('/api/esp/boards/:id/ota', espOtaUpload.single('firmware'), async (req,
     if (!r.rows.length) return res.status(404).json({ error: 'board not found' });
     const board = r.rows[0];
     if (!board.ip) return res.status(400).json({ error: 'board has no known IP — check that ARP scan or board status has populated it' });
-    if (!board.ota_password) return res.status(400).json({ error: 'board has no ota_password set — PATCH /api/esp/boards/:id with ota_password first' });
+    // Per-board ota_password (DB column) is an OPTIONAL override; the default
+    // is the shared ESP_OTA_PASSWORD env var, baked into every board's sketch.
+    const otaPassword = board.ota_password || process.env.ESP_OTA_PASSWORD || '';
+    if (!otaPassword) return res.status(400).json({ error: 'no OTA password — set ESP_OTA_PASSWORD in .env, or PATCH this board with ota_password' });
 
     // Resolve which espota.py + ArduinoOTA listen port to use. ESP8266
     // ArduinoOTA defaults to 8266; ESP32 ArduinoOTA defaults to 3232.
@@ -2249,7 +2256,7 @@ app.post('/api/esp/boards/:id/ota', espOtaUpload.single('firmware'), async (req,
 
     // Spawn — use python via PATH, with stdout/stderr captured for the response.
     const { spawn } = require('child_process');
-    const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', board.ota_password, '-f', tmpPath, '-r'];
+    const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', otaPassword, '-f', tmpPath, '-r'];
     const child = spawn('python', args, { windowsHide: true });
 
     let stdout = '';
