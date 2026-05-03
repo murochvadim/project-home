@@ -119,8 +119,13 @@ function renderSummary() {
 // Stable per-board color — same hue every time for the same id, so the
 // user can recognise boards by color across page reloads. Hue is derived
 // from a quick hash of the id; saturation + lightness chosen for legible
-// dark text on the page's light card background.
+// dark text on the page's light card background. Per-board overrides win
+// over the hash so specific boards can claim well-known colors.
+const _BOARD_LABEL_COLOR_OVERRIDES = {
+  'My_Bathroom_Smell_6': '#0d2f6b',  // dark blue
+};
 function _boardLabelColor(id) {
+  if (_BOARD_LABEL_COLOR_OVERRIDES[id]) return _BOARD_LABEL_COLOR_OVERRIDES[id];
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
   return `hsl(${h % 360}, 90%, 28%)`;
