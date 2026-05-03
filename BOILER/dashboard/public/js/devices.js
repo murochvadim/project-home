@@ -351,19 +351,55 @@ function applyFilters() {
         const lbl = (d.dps_labels || {})[k] || '';
         // Virtual button channel (e.g. Tuya TS0044): channel_config declares
         // button1..button4 but last_state only has `action: "1_single"` etc.
-        // Derive the per-button value by matching the leading digit.
+        // Derive the per-button value by matching the leading digit. The TS0044
+        // also lacks per-button timestamps, so we fall back to last_state.last_seen
+        // (set when this `action` arrived) for the relative-time display below.
+        let pressTs = null;   // ISO string of when this button was last pressed (if known)
         if (raw === undefined && /^button(\d+)$/.test(k) && typeof d.last_state.action === 'string') {
           const btnNum = k.match(/^button(\d+)$/)[1];
           const m = d.last_state.action.match(/^(\d+)_(.+)$/);
-          if (m && m[1] === btnNum) raw = m[2];   // "single" / "double" / "hold"
+          if (m && m[1] === btnNum) {
+            raw = m[2];                              // "single" / "double" / "hold"
+            pressTs = d.last_state.last_seen || d.last_seen || null;
+          }
+        }
+
+        // ─── Common button-press vocabulary ──────────────────────────
+        // Both TS0044 and Wallmote-style remotes are buttons (no ON/OFF).
+        // Translate every vendor-specific press encoding to one of:
+        //   single | double | hold   (with relative time when ≤ BUTTON_FRESH_S)
+        // After freshness window expires, fade to idle "—" so days-old
+        // timestamps don't read as "single 5d ago" forever.
+        const BUTTON_FRESH_S = 60;
+        const isButtonChan = /^button\d+$/.test(k);
+        let buttonVerb = null;        // 'single' | 'double' | 'hold'
+        if (isButtonChan) {
+          if (raw === 'single' || raw === 'double' || raw === 'hold') {
+            buttonVerb = raw;                                  // TS0044 native
+          } else if (typeof raw === 'string') {
+            // Wallmote (Aeotec) — bare ISO timestamp, OR pushed:/held: prefix.
+            if (raw.startsWith('held:'))   { buttonVerb = 'hold';   pressTs = raw.slice(5); }
+            else if (raw.startsWith('pushed:')) { buttonVerb = 'single'; pressTs = raw.slice(7); }
+            else if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) { buttonVerb = 'single'; pressTs = raw; }
+          }
         }
         let dot, txt;
-        if (raw === undefined || raw === null) {
-          // Virtual button channels (TS0044 etc.) read undefined when this
-          // particular button isn't the one most recently pressed — the
-          // device only publishes a single `action` field at press time, so
-          // 3 of 4 buttons are always undefined. Render as a quiet idle
-          // state instead of literal "undefined".
+        if (isButtonChan) {
+          if (!buttonVerb) {
+            dot = 'dot-off'; txt = '—';                        // never pressed / unknown form
+          } else {
+            const ageS = pressTs ? Math.max(0, (Date.now() - new Date(pressTs).getTime()) / 1000) : Infinity;
+            if (ageS > BUTTON_FRESH_S) {
+              dot = 'dot-off'; txt = '—';                      // stale → idle
+            } else {
+              dot = 'dot-on';
+              const rel = ageS < 1 ? 'now'
+                       : ageS < 60 ? `${Math.round(ageS)}s ago`
+                       : `${Math.round(ageS / 60)}m ago`;
+              txt = `${buttonVerb} ${rel}`;
+            }
+          }
+        } else if (raw === undefined || raw === null) {
           dot = 'dot-off'; txt = '—';
         } else if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
           const isOn = raw === true || raw === 1;
