@@ -673,7 +673,27 @@ function wirePageOta() {
   }
 }
 
+// ─── Page-level top tabs (Boards | OTA) ───────────────────────────────
+// Top-level tab bar above everything. Choice persists across reloads via
+// localStorage so the user lands on the same tab they left.
+const PAGE_TAB_STORE = '_esp_boards_page_tab';
+function _activatePageTab(name) {
+  document.querySelectorAll('#page-tabs .sub-tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.pagePane === name));
+  document.querySelectorAll('.page-pane').forEach(p =>
+    p.style.display = (p.id === 'page-pane-' + name) ? '' : 'none');
+  try { localStorage.setItem(PAGE_TAB_STORE, name); } catch (e) {}
+}
+function wirePageTabs() {
+  const saved = (() => { try { return localStorage.getItem(PAGE_TAB_STORE); } catch (e) { return null; } })();
+  if (saved && document.getElementById('page-pane-' + saved)) _activatePageTab(saved);
+  document.querySelectorAll('#page-tabs .sub-tab').forEach(btn => {
+    btn.addEventListener('click', () => _activatePageTab(btn.dataset.pagePane));
+  });
+}
+
 // ─── Init + auto-refresh ───────────────────────────────────────────────
+wirePageTabs();
 loadBoards();
 wireLiveStream();   // page-level subscription; persists across board switches
 wirePageOta();      // page-level OTA upload form

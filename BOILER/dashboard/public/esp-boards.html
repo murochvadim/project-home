@@ -120,55 +120,63 @@
     <span id="summary-text">Loading…</span>
   </div>
 
-  <!-- Page-level Live MQTT Events — subscribes to mur/home/esp/+/event so
-       events from ANY board appear here (board ID badge shown per row).
-       Persists across board-tab switches; one WebSocket for the whole page. -->
-  <div class="card" id="live-events-card" style="padding:12px 14px;margin-bottom:12px;">
-    <div style="font-size:0.85rem;color:#666;margin-bottom:8px;display:flex;align-items:center;gap:14px;">
-      <span><strong>Live MQTT Events</strong> — all boards (<code>mur/home/esp/+/event</code>)</span>
-      <span id="live-status" style="font-size:0.75rem;color:#aaa;">connecting…</span>
-      <button id="live-clear" class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:0.72rem;">Clear</button>
-    </div>
-    <div id="live-rows" style="background:#1c1f24;color:#e0e0e0;border-radius:5px;padding:10px;font-family:monospace;font-size:0.78rem;max-height:300px;overflow-y:auto;line-height:1.5;">
-      <div style="color:#888;font-style:italic;">awaiting first event…</div>
-    </div>
+  <!-- Page-level top tabs: Boards (status/params/simulation per board) | OTA (firmware push). -->
+  <div class="sub-tabs" id="page-tabs" style="margin-bottom:10px;">
+    <button class="sub-tab active" data-page-pane="boards">Boards</button>
+    <button class="sub-tab" data-page-pane="ota">OTA</button>
   </div>
 
-  <div class="board-tabs" id="board-tabs"></div>
+  <!-- ─── Boards pane ───────────────────────────────────────────── -->
+  <div class="page-pane active" id="page-pane-boards">
 
-  <div id="board-pane">
-    <div class="empty-state">
-      <h3>No ESP boards registered</h3>
-      <p>Insert a row into <code>esp_boards</code> to register your first board:</p>
-      <pre style="text-align:left;display:inline-block;background:#f4f1ec;padding:10px 14px;border-radius:4px;font-size:0.78rem;">INSERT INTO esp_boards (id, name, mac, ota_password) VALUES
+    <!-- Page-level Live MQTT Events — subscribes to mur/home/esp/+/event so
+         events from ANY board appear here (board ID badge shown per row).
+         Persists across board-tab switches; one WebSocket for the whole page. -->
+    <div class="card" id="live-events-card" style="padding:12px 14px;margin-bottom:12px;">
+      <div style="font-size:0.85rem;color:#666;margin-bottom:8px;display:flex;align-items:center;gap:14px;">
+        <span><strong>Live MQTT Events</strong> — all boards (<code>mur/home/esp/+/event</code>)</span>
+        <span id="live-status" style="font-size:0.75rem;color:#aaa;">connecting…</span>
+        <button id="live-clear" class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:0.72rem;">Clear</button>
+      </div>
+      <div id="live-rows" style="background:#1c1f24;color:#e0e0e0;border-radius:5px;padding:10px;font-family:monospace;font-size:0.78rem;max-height:300px;overflow-y:auto;line-height:1.5;">
+        <div style="color:#888;font-style:italic;">awaiting first event…</div>
+      </div>
+    </div>
+
+    <div class="board-tabs" id="board-tabs"></div>
+
+    <div id="board-pane">
+      <div class="empty-state">
+        <h3>No ESP boards registered</h3>
+        <p>Insert a row into <code>esp_boards</code> to register your first board:</p>
+        <pre style="text-align:left;display:inline-block;background:#f4f1ec;padding:10px 14px;border-radius:4px;font-size:0.78rem;">INSERT INTO esp_boards (id, name, mac, ota_password) VALUES
   ('remoteXY_01', 'RemoteXY Gate', '&lt;mac&gt;', '&lt;ota_pass&gt;');</pre>
-      <p style="margin-top:14px;">Then reload the page; the board will appear here as a tab.</p>
+        <p style="margin-top:14px;">Then reload the page; the board will appear here as a tab.</p>
+      </div>
     </div>
   </div>
 
-  <!-- Page-level OTA — pick any board from the dropdown and push a .bin to it.
-       Replaces the per-board OTA sub-tab; the underlying espota.py spawn is
-       identical, just one form serving every board instead of one per tab.
-       Bottom of page (under the board pane) so the per-board details stay
-       above-the-fold and OTA only enters the viewport when you scroll. -->
-  <div class="card" id="page-ota-card" style="padding:12px 14px;margin-top:12px;margin-bottom:12px;">
-    <div style="font-size:0.85rem;color:#666;margin-bottom:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-      <strong>OTA Push</strong>
-      <label for="page-ota-board" style="font-size:0.78rem;color:#888;">Target:</label>
-      <select id="page-ota-board" style="font-size:0.85rem;padding:3px 8px;"></select>
-      <span id="page-ota-meta" style="font-size:0.75rem;color:#888;"></span>
+  <!-- ─── OTA pane ──────────────────────────────────────────────── -->
+  <div class="page-pane" id="page-pane-ota" style="display:none;">
+    <div class="card" id="page-ota-card" style="padding:12px 14px;margin-bottom:12px;">
+      <div style="font-size:0.85rem;color:#666;margin-bottom:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <strong>OTA Push</strong>
+        <label for="page-ota-board" style="font-size:0.78rem;color:#888;">Target:</label>
+        <select id="page-ota-board" style="font-size:0.85rem;padding:3px 8px;"></select>
+        <span id="page-ota-meta" style="font-size:0.75rem;color:#888;"></span>
+      </div>
+      <div class="ota-drop" id="page-ota-drop" style="opacity:0.6;">
+        <div style="font-size:1.05rem;margin-bottom:4px;">Drop <code>.bin</code> file here, or click to browse</div>
+        <div id="page-ota-target" style="font-size:0.78rem;color:#666;">— pick a target above —</div>
+        <input type="file" id="page-ota-file" accept=".bin" style="display:none;">
+      </div>
+      <div class="ota-status" id="page-ota-status"></div>
     </div>
-    <div class="ota-drop" id="page-ota-drop" style="opacity:0.6;">
-      <div style="font-size:1.05rem;margin-bottom:4px;">Drop <code>.bin</code> file here, or click to browse</div>
-      <div id="page-ota-target" style="font-size:0.78rem;color:#666;">— pick a target above —</div>
-      <input type="file" id="page-ota-file" accept=".bin" style="display:none;">
-    </div>
-    <div class="ota-status" id="page-ota-status"></div>
   </div>
 </main>
 
 <script src="js/alerts-monitor.js"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/esp-boards.js?v=20260503g"></script>
+<script src="js/esp-boards.js?v=20260504a"></script>
 </body>
 </html>
