@@ -347,8 +347,16 @@ function applyFilters() {
         return (cfg[k]?.room || d.room || '') === roomFilt;
       });
       for (const k of visibleChans) {
-        const raw = d.last_state[k];
+        let raw = d.last_state[k];
         const lbl = (d.dps_labels || {})[k] || '';
+        // Virtual button channel (e.g. Tuya TS0044): channel_config declares
+        // button1..button4 but last_state only has `action: "1_single"` etc.
+        // Derive the per-button value by matching the leading digit.
+        if (raw === undefined && /^button(\d+)$/.test(k) && typeof d.last_state.action === 'string') {
+          const btnNum = k.match(/^button(\d+)$/)[1];
+          const m = d.last_state.action.match(/^(\d+)_(.+)$/);
+          if (m && m[1] === btnNum) raw = m[2];   // "single" / "double" / "hold"
+        }
         let dot, txt;
         if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
           const isOn = raw === true || raw === 1;
@@ -504,13 +512,32 @@ function getChannelKeys(dev) {
   if (!dev.last_state) return [];
   const labels = dev.dps_labels || {};
   const dpsCfg = dev.dps_config || {};
-  // Only labeled DPS keys become channels — skip disabled (kill switch)
-  const keys = Object.keys(labels).filter(k => {
+  const chCfg  = dev.channel_config || {};
+  // Labeled DPS keys with live values in last_state — original logic
+  const dpsKeys = Object.keys(labels).filter(k => {
     if (dev.last_state[k] === undefined) return false;
     if (dpsCfg[k]?.enabled === false) return false;
     if (dpsCfg[k]?.show_dashboard === false) return false;
     return true;
-  }).sort((a, b) => +a - +b);
+  });
+  // Plus channel_config keys not already counted — handles devices where
+  // channels are virtual (e.g. Tuya TS0044 publishes a single `action` field
+  // encoding "<button>_<event>" — button1..button4 don't exist as DPS keys
+  // but are declared in channel_config so the dashboard can show them).
+  const chanKeys = Object.keys(chCfg).filter(k => {
+    if (dpsKeys.includes(k)) return false;
+    if (chCfg[k]?.enabled === false) return false;
+    if (chCfg[k]?.show_dashboard === false) return false;
+    return true;
+  });
+  const keys = [...dpsKeys, ...chanKeys].sort((a, b) => {
+    // Numeric DPS keys first, named channels after
+    const an = parseFloat(a), bn = parseFloat(b);
+    if (!isNaN(an) && !isNaN(bn)) return an - bn;
+    if (!isNaN(an)) return -1;
+    if (!isNaN(bn)) return 1;
+    return a.localeCompare(b);
+  });
   return keys.length > 1 ? keys : [];
 }
 
