@@ -27,35 +27,6 @@
 //.......................................... Page 0  -------------------------------------------------------------
 {"page":0,"id":101,"obj":"label","x":20,"y":400,"w":440,"h":60,"text":"eee","text_font":32,"align":1,"text_color":"#FF0000"}
 
-//.......................................... Page 1  -------------------------------------------------------------
-//{"page":1,"id":1,"obj":"label","x":20,"y":20,"w":150,"h":40,"text":"Sensors", "text_font": 28}
-//{"page":1,"id":29,"obj":"label","x":280,"y":20,"w":160,"h":40,"text":"","text_font":28,"align":1,"text_color":"#FF0000"}
-
-//{"page":1,"id":2,"obj":"obj","x":10,"y":70,"w":220,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-//{"page":1,"id":3,"obj":"label","x":25,"y":82,"w":200,"h":40,"text":"Temperature", "text_font": 16, "text_color":"#9b9b9b"}
-//{"page":1,"id":4,"obj":"label","x":35,"y":105,"w":200,"h":40,"text":"---°C", "text_font": 24}
-
-//{"page":1,"id":5,"obj":"label","x":150,"y":82,"w":200,"h":40,"text":"Humidity", "text_font": 16, "text_color":"#9b9b9b"}
-//{"page":1,"id":6,"obj":"label","x":160,"y":105,"w":200,"h":40,"text":"---%", "text_font": 24}
-
-//{"page":1,"id":7,"obj":"obj","x":245,"y":70,"w":225,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}     
-//{"page":1,"id":8,"obj":"label","x":265,"y":82,"w":100,"h":40,"text":"Illuminance", "text_font": 16, "text_color":"#9b9b9b"}   
-//{"page":1,"id":9,"obj":"label","x":275,"y":105,"w":100,"h":40,"text":"--- lx", "text_font": 24}  
-
-
-//{"page":1,"id":10,"obj":"label","x":390,"y":82,"w":100,"h":40,"text":"Wind", "text_font": 16, "text_color":"#9b9b9b"}   
-//{"page":1,"id":11,"obj":"label","x":360,"y":105,"w":100,"h":40,"text":"--- km", "text_font": 24}  
-
-//{"page":1,"id":12,"obj":"label","x":20,"y":155,"w":240,"h":40,"text":"Balcony Devices", "text_font": 28}
-
-
-
-
-
-
-
-
-
 
  //.......................Prev , Back , Next  arrow-----------------------------------
 {"page":0,"id":10,"obj":"btn","action":"prev","x":75,"y":390,"w":107,"h":65,"bg_color":"#1c1c1c","text":"\uE141","text_color":"#FFFFFF","radius":0,"border_side":0,"text_font":32} 
@@ -66,49 +37,23 @@
 {"page":1,"id":0,"prev":9}
 {"page":9,"id":0,"next":1}
 
-//..........................................  Page 2 Devices.........................................................
 
-// {"page":2,"id":1,"obj":"label","x":20,"y":5,"w":240,"h":40,"text":"Sensors", "text_font": 28}  
 
-{"page":2,"id":2,"obj":"obj","x":5,"y":20,"w":225,"h":75,"radius":10,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":3,"obj":"label","x":23,"y":35,"w":65,"h":65, "text":"ALL","click":false,"text_font": 38, "text_color":"#6F6F6F"} 
-{"page":2,"id":4,"obj":"label","x":80,"y":30,"w":200,"h":40,"text":"Saloon Area","click":false,"text_font": 24}
-{"page":2,"id":5,"obj":"label","x":100,"y":60,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
+///---- Page 2 v5: 4 buttons, icon+text, taps fall through to btn ----
+{"page":2,"id":110,"obj":"btn","x":10,"y":50,"w":225,"h":140,"toggle":true,"radius":18,"border_width":0,"bg_color":"#1a4775","bg_grad_color":"#1a4775"}
+{"page":2,"id":111,"obj":"label","x":10,"y":65,"w":225,"h":60,"text":"","text_font":48,"align":1,"text_color":"#ffffff","click":false}
+{"page":2,"id":112,"obj":"label","x":10,"y":135,"w":225,"h":40,"text":"LIGHT 1","text_font":24,"align":1,"text_color":"#ffffff","click":false}
+{"page":2,"id":120,"obj":"btn","x":245,"y":50,"w":225,"h":140,"toggle":true,"radius":18,"border_width":0,"bg_color":"#471a75","bg_grad_color":"#471a75"}
+{"page":2,"id":121,"obj":"label","x":245,"y":65,"w":225,"h":60,"text":"","text_font":48,"align":1,"text_color":"#ffffff","click":false}
+{"page":2,"id":122,"obj":"label","x":245,"y":135,"w":225,"h":40,"text":"LIGHT 2","text_font":24,"align":1,"text_color":"#ffffff","click":false}
+{"page":2,"id":130,"obj":"btn","x":10,"y":220,"w":225,"h":140,"toggle":true,"radius":18,"border_width":0,"bg_color":"#1a7547","bg_grad_color":"#1a7547"}
+{"page":2,"id":131,"obj":"label","x":10,"y":235,"w":225,"h":60,"text":"","text_font":48,"align":1,"text_color":"#ffffff","click":false}
+{"page":2,"id":132,"obj":"label","x":10,"y":305,"w":225,"h":40,"text":"LIGHT 3","text_font":24,"align":1,"text_color":"#ffffff","click":false}
+{"page":2,"id":140,"obj":"btn","x":245,"y":220,"w":225,"h":140,"toggle":true,"radius":18,"border_width":0,"bg_color":"#75471a","bg_grad_color":"#75471a"}
+{"page":2,"id":141,"obj":"label","x":245,"y":235,"w":225,"h":60,"text":"","text_font":48,"align":1,"text_color":"#ffffff","click":false}
+{"page":2,"id":142,"obj":"label","x":245,"y":305,"w":225,"h":40,"text":"LIGHT 4","text_font":24,"align":1,"text_color":"#ffffff","click":false}
 
-{"page":2,"id":6,"obj":"obj","x":245,"y":20,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":7,"obj":"label","x":270,"y":35,"w":65,"h":65,"text":"ALL","click":false,"text_font": 38, "text_color":"#6F6F6F"}
-{"page":2,"id":8,"obj":"label","x":330,"y":30,"w":200,"h":40,"text":"Balcony Area","click":false,"text_font": 24}
-{"page":2,"id":9,"obj":"label","x":350,"y":60,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":2,"id":10,"obj":"obj","x":5,"y":110,"w":225,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":11,"obj":"label","x":23,"y":120,"w":65,"h":65,"text":"ALL", "text_font": 38, "text_color":"#6F6F6F"}
-{"page":2,"id":12,"obj":"label","x":80,"y":120,"w":200,"h":40,"text":"Kitchen light","click":false,"text_font": 24}
-{"page":2,"id":13,"obj":"label","x":100,"y":152,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
-
-{"page":2,"id":14,"obj":"obj","x":245,"y":110,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":15,"obj":"label","x":270,"y":120,"w":75,"h":65,"text":"ALL", "text_font": 38, "text_color":"#6F6F6F"}
-{"page":2,"id":16,"obj":"label","x":330,"y":120,"w":200,"h":40,"text":"Dining Light", "text_font": 24}
-{"page":2,"id":17,"obj":"label","x":350,"y":152,"w":200,"h":40,"text":"Off", "text_font": 16 , "text_color":"#9b9b9b"}
-
-{"page":2,"id":18,"obj":"obj","x":5,"y":199,"w":225,"h":75,"radius":10,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":19,"obj":"label","x":23,"y":209,"w":65,"h":65, "text":"\uE95F","click":false,"text_font": 48, "text_color":"#6F6F6F"} 
-{"page":2,"id":20,"obj":"label","x":80,"y":209,"w":200,"h":40,"text":"Tv Spot","click":false,"text_font": 24}
-{"page":2,"id":21,"obj":"label","x":100,"y":239,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
-
-{"page":2,"id":22,"obj":"obj","x":245,"y":199,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":23,"obj":"label","x":260,"y":209,"w":85,"h":65,"text":"SCENE","click":false,"text_font": 38, "text_color":"#6F6F6F"}
-{"page":2,"id":24,"obj":"label","x":360,"y":209,"w":200,"h":40,"text":"TV Watch","click":false,"text_font": 24}
-{"page":2,"id":25,"obj":"label","x":370,"y":239,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
-
-{"page":2,"id":26,"obj":"obj","x":5,"y":290,"w":225,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":27,"obj":"label","x":15,"y":300,"w":85,"h":65,"text":"SCENE", "text_font": 38, "text_color":"#6F6F6F"}
-{"page":2,"id":28,"obj":"label","x":120,"y":300,"w":200,"h":40,"text":"Guest's","click":false,"text_font": 24}
-{"page":2,"id":29,"obj":"label","x":125,"y":330,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
-
-{"page":2,"id":30,"obj":"obj","x":245,"y":290,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":2,"id":31,"obj":"label","x":260,"y":300,"w":85,"h":65,"text":"SCENE", "text_font": 38, "text_color":"#6F6F6F"}
-{"page":2,"id":32,"obj":"label","x":360,"y":300,"w":200,"h":40,"text":"Evening", "text_font": 24}
-{"page":2,"id":33,"obj":"label","x":370,"y":330,"w":200,"h":40,"text":"Off", "text_font": 16, "text_color":"#9b9b9b"}
 
 //..........................................  Page 3 Devices.........................................................
 
