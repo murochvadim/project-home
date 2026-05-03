@@ -116,14 +116,25 @@ function renderSummary() {
   document.getElementById('summary-text').innerHTML = html;
 }
 
+// Stable per-board color — same hue every time for the same id, so the
+// user can recognise boards by color across page reloads. Hue is derived
+// from a quick hash of the id; saturation + lightness chosen for legible
+// dark text on the page's light card background.
+function _boardLabelColor(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360}, 65%, 38%)`;
+}
+
 function renderTabs() {
   const host = document.getElementById('board-tabs');
   if (BOARDS.length === 0) { host.innerHTML = ''; return; }
   host.innerHTML = BOARDS.map(b => {
     const dotClass = !b.last_seen ? 'unknown' : (isOnline(b) ? 'online' : 'offline');
     const active = b.id === SELECTED_ID ? 'active' : '';
+    const color = _boardLabelColor(b.id);
     return `<div class="board-tab ${active}" data-id="${escHtml(b.id)}">
-      <span class="dot ${dotClass}">●</span>${escHtml(b.name || b.id)}
+      <span class="dot ${dotClass}">●</span><span style="color:${color};font-weight:600;">${escHtml(b.name || b.id)}</span>
     </div>`;
   }).join('');
   host.querySelectorAll('.board-tab').forEach(el => {
