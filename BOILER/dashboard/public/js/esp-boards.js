@@ -169,8 +169,9 @@ function renderBoardPane() {
   });
   wireParamsForm(board);
   wireActionButtons(board);   // covers System (in Status) + Simulation buttons
-  wireLiveStream(board);
   wireOtaForm(board);
+  // Live MQTT stream is page-level now — wired once from init(), not per
+  // board. No call here.
 }
 
 // ─── Sub-panel: Status ─────────────────────────────────────────────────
@@ -382,11 +383,8 @@ function renderSimulation(b) {
     html += `<div class="esp-card"><h3 class="esp-card-title">Other</h3><div class="actions-grid">${buttons}</div></div>`;
   }
   html += `<p style="font-size:0.78rem;color:#888;margin:6px 0 14px 0;">
-    Each click sends the action key to <code>mur/home/esp/${escHtml(b.id)}/command</code>. Destructive actions confirm before sending. The <strong>Live</strong> card below streams board-side ack + bridged events in real time.
+    Each click sends the action key to <code>mur/home/esp/${escHtml(b.id)}/command</code>. Destructive actions confirm before sending. Watch the page-level <strong>Live MQTT Events</strong> card (top of page) for board-side ack + bridged events from any board.
   </p>`;
-  // Inline the Live event stream as the last card so users can click a sim
-  // button and immediately see what flowed through MQTT — no tab switch.
-  html += `<div class="esp-card"><h3 class="esp-card-title">Live MQTT Events</h3>${renderLive(b)}</div>`;
   return html;
 }
 
@@ -438,36 +436,19 @@ function wireActionButtons(board) {
   });
 }
 
-// ─── Sub-panel: Live (MQTT-WS event stream) ─────────────────────────────
-// Subscribes to mur/home/esp/<id>/event via the broker's WebSocket port
-// (9001) and renders the rolling tail of board-side events: HiveMQ rx,
-// HOME_REQUEST rx, ack notifications, simulate-fires. Connection is kept
-// open across sub-tab switches; only closed when SELECTED_ID changes or
-// the page unloads.
+// ─── Page-level Live MQTT Events ─────────────────────────────────────────
+// Subscribes to mur/home/esp/+/event (wildcard) so events from EVERY board
+// appear here, not just the currently-selected board. Persists for the
+// whole page session — no tear-down on board switch. Each row carries a
+// board-ID badge parsed from the topic so you can tell who emitted what.
 const LIVE_BROKER_HOST = '192.168.1.189';   // LXC 107 — broker WebSocket listener (port 9001)
 const LIVE_BROKER_PORT = 9001;
 const LIVE_USER        = 'dashboard_browser';
+const LIVE_TOPIC       = 'mur/home/esp/+/event';
 const LIVE_MAX_ROWS    = 50;
 
 let _liveMqtt = null;
-let _liveBoardId = null;
 let _liveRows = [];
-
-function renderLive(b) {
-  return `
-    <div style="font-size:0.85rem;color:#666;margin-bottom:10px;display:flex;align-items:center;gap:14px;">
-      <span><strong>Live event stream</strong> — <code>mur/home/esp/${escHtml(b.id)}/event</code></span>
-      <span id="live-status" style="font-size:0.75rem;color:#aaa;">connecting…</span>
-      <button id="live-clear" class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:0.72rem;">Clear</button>
-    </div>
-    <div id="live-rows" style="background:#1c1f24;color:#e0e0e0;border-radius:5px;padding:10px;font-family:monospace;font-size:0.78rem;max-height:380px;overflow-y:auto;line-height:1.5;">
-      <div style="color:#888;font-style:italic;">awaiting first event…</div>
-    </div>
-    <p style="margin-top:10px;font-size:0.78rem;color:#888;">
-      Sources: <code>hivemq</code> = incoming from HiveMQ Cloud, <code>home_request</code> = incoming on HOME_REQUEST, <code>sim</code> = injected from a Test sim button, <code>ack</code> = command receipt confirmation.
-    </p>
-  `;
-}
 
 function liveSetStatus(text, color = '#aaa') {
   const el = document.getElementById('live-status');
@@ -477,8 +458,11 @@ function liveSetStatus(text, color = '#aaa') {
 function liveAppendRow(payloadStr, topic) {
   let parsed;
   try { parsed = JSON.parse(payloadStr); } catch (_) { parsed = { raw: payloadStr }; }
+  // Topic format: mur/home/esp/<id>/event — extract the id for the badge.
+  const parts = String(topic || '').split('/');
+  const boardId = parts.length >= 4 ? parts[3] : '?';
   const time = new Date().toLocaleTimeString();
-  _liveRows.unshift({ time, topic, ...parsed });
+  _liveRows.unshift({ time, topic, boardId, ...parsed });
   if (_liveRows.length > LIVE_MAX_ROWS) _liveRows.length = LIVE_MAX_ROWS;
   liveRedraw();
 }
@@ -492,40 +476,34 @@ function liveRedraw() {
                     : r.kind === 'ack' ? '#a6cee3'
                     : r.kind === 'sim' ? '#fdc086'
                     : '#bbb';
+    // Board id badge — distinct neutral color so it doesn't compete with kind/src
+    const idChip = `<span style="background:#3a4452;color:#dde;padding:1px 6px;border-radius:3px;font-size:0.7rem;font-weight:600;">${escHtml(r.boardId)}</span>`;
     const srcChip = r.src ? `<span style="background:${kindColor};color:#000;padding:1px 6px;border-radius:3px;font-size:0.7rem;font-weight:600;">${escHtml(r.src)}</span>` : '';
     const kindChip = r.kind ? `<span style="color:${kindColor};">${escHtml(r.kind)}</span>` : '';
-    const topic = r.topic ? `<span style="color:#888;">${escHtml(r.topic)}</span>` : '';
+    const tpc = r.topic ? `<span style="color:#888;">${escHtml(r.topic)}</span>` : '';
     const payload = r.payload != null ? `<span style="color:#fff;">${escHtml(r.payload)}</span>` : '';
     const action = r.action ? `<span style="color:#ffaa00;">${escHtml(r.action)}</span>` : '';
-    const extras = [topic, payload, action].filter(Boolean).join(' ');
-    return `<div><span style="color:#666;">${escHtml(r.time)}</span> ${srcChip} ${kindChip} ${extras}</div>`;
+    const extras = [tpc, payload, action].filter(Boolean).join(' ');
+    return `<div><span style="color:#666;">${escHtml(r.time)}</span> ${idChip} ${srcChip} ${kindChip} ${extras}</div>`;
   }).join('');
 }
 
-async function wireLiveStream(board) {
-  // Wire the Clear button regardless of MQTT state.
+async function wireLiveStream() {
+  // Wire the Clear button (idempotent — single page-level element).
   const clearBtn = document.getElementById('live-clear');
-  if (clearBtn) clearBtn.addEventListener('click', () => { _liveRows = []; liveRedraw(); });
+  if (clearBtn && !clearBtn._wired) {
+    clearBtn._wired = true;
+    clearBtn.addEventListener('click', () => { _liveRows = []; liveRedraw(); });
+  }
 
-  // On every re-render (incl. the 30 s auto-refresh) the static HTML resets
-  // to "awaiting first event…". Re-paint from the kept-in-memory array so
-  // accumulated history doesn't visually disappear when the user wasn't
-  // looking. No-op if _liveRows is empty.
-  if (_liveRows.length) liveRedraw();
-
-  // If we're already subscribed for this board, leave the connection alone.
-  if (_liveMqtt && _liveBoardId === board.id) {
-    liveSetStatus('connected', '#3a7d44');
+  // Already subscribed? Just refresh the rendered list (in case the host
+  // got recreated by some other UI event) and bail.
+  if (_liveMqtt) {
+    if (_liveRows.length) liveRedraw();
+    liveSetStatus(_liveMqtt.connected ? 'connected' : 'reconnecting…',
+                  _liveMqtt.connected ? '#3a7d44' : '#aaa');
     return;
   }
-
-  // Switching boards: tear down the previous subscription cleanly.
-  if (_liveMqtt) {
-    try { _liveMqtt.end(true); } catch (_) {}
-    _liveMqtt = null;
-    _liveRows = [];
-  }
-  _liveBoardId = board.id;
 
   if (typeof mqtt === 'undefined') { liveSetStatus('mqtt.js missing', '#c0392b'); return; }
 
@@ -542,20 +520,16 @@ async function wireLiveStream(board) {
     clientId: 'esp-live-' + Math.random().toString(36).slice(2, 10),
     reconnectPeriod: 5000, connectTimeout: 8000,
   });
-  const topic = `mur/home/esp/${board.id}/event`;
   _liveMqtt.on('connect', () => {
     liveSetStatus('connected', '#3a7d44');
-    _liveMqtt.subscribe(topic, { qos: 0 }, (err) => {
+    _liveMqtt.subscribe(LIVE_TOPIC, { qos: 0 }, (err) => {
       if (err) liveSetStatus('subscribe failed: ' + err.message, '#c0392b');
     });
   });
   _liveMqtt.on('reconnect', () => liveSetStatus('reconnecting…'));
   _liveMqtt.on('close',     () => liveSetStatus('disconnected', '#c0392b'));
   _liveMqtt.on('error',     (e) => { console.error('Live MQTT error:', e); liveSetStatus('error: ' + e.message, '#c0392b'); });
-  _liveMqtt.on('message',   (t, payload) => {
-    if (t !== topic) return;
-    liveAppendRow(payload.toString(), t);
-  });
+  _liveMqtt.on('message',   (t, payload) => liveAppendRow(payload.toString(), t));
 }
 
 // ─── Sub-panel: OTA ─────────────────────────────────────────────────────
@@ -629,4 +603,5 @@ function wireOtaForm(board) {
 
 // ─── Init + auto-refresh ───────────────────────────────────────────────
 loadBoards();
+wireLiveStream();   // page-level subscription; persists across board switches
 setInterval(() => loadBoards(true), 30000);  // 30 s — half the board's status heartbeat cadence

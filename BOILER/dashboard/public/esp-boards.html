@@ -120,6 +120,20 @@
     <span id="summary-text">Loading…</span>
   </div>
 
+  <!-- Page-level Live MQTT Events — subscribes to mur/home/esp/+/event so
+       events from ANY board appear here (board ID badge shown per row).
+       Persists across board-tab switches; one WebSocket for the whole page. -->
+  <div class="card" id="live-events-card" style="padding:12px 14px;margin-bottom:12px;">
+    <div style="font-size:0.85rem;color:#666;margin-bottom:8px;display:flex;align-items:center;gap:14px;">
+      <span><strong>Live MQTT Events</strong> — all boards (<code>mur/home/esp/+/event</code>)</span>
+      <span id="live-status" style="font-size:0.75rem;color:#aaa;">connecting…</span>
+      <button id="live-clear" class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:0.72rem;">Clear</button>
+    </div>
+    <div id="live-rows" style="background:#1c1f24;color:#e0e0e0;border-radius:5px;padding:10px;font-family:monospace;font-size:0.78rem;max-height:300px;overflow-y:auto;line-height:1.5;">
+      <div style="color:#888;font-style:italic;">awaiting first event…</div>
+    </div>
+  </div>
+
   <div class="board-tabs" id="board-tabs"></div>
 
   <div id="board-pane">
@@ -135,6 +149,6 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/esp-boards.js?v=20260502j"></script>
+<script src="js/esp-boards.js?v=20260503a"></script>
 </body>
 </html>
