@@ -67,6 +67,7 @@ const ACTION_GROUPS = [
   { id: 'robot',    label: 'Robot',         tab: 'simulation', keys: ['robot_alive', 'robot_lost_power'],         statusFlag: 'charge_relay', statusLabel: 'Charge Relay' },
   { id: 'hivemq',   label: 'HiveMQ Bridge', tab: 'simulation', keys: ['reconnect_hivemq', 'sim_came_parking', 'sim_in_parking', 'sim_no_data'] },
   { id: 'pump',     label: 'Pump',          tab: 'simulation', keys: ['smell_start', 'smell_stop', 'smell_auto_start', 'smell_auto_stop'], statusFlag: 'pump_state',   statusLabel: 'Pump' },
+  { id: 'coffee',   label: 'Coffee Machine', tab: 'simulation', keys: ['brew_espresso', 'brew_coffee', 'brew_2x_espresso', 'brew_2x_coffee', 'hot_water', 'cancel', 'standby'], statusFlag: 'power_state', statusLabel: 'Power' },
 ];
 
 // ─── Load + render ─────────────────────────────────────────────────────
@@ -123,6 +124,7 @@ function renderSummary() {
 // over the hash so specific boards can claim well-known colors.
 const _BOARD_LABEL_COLOR_OVERRIDES = {
   'My_Bathroom_Smell_6': '#0d2f6b',  // dark blue
+  'jura_bridge_01':      '#5a2a0a',  // dark coffee brown
 };
 function _boardLabelColor(id) {
   if (_BOARD_LABEL_COLOR_OVERRIDES[id]) return _BOARD_LABEL_COLOR_OVERRIDES[id];

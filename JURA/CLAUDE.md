@@ -1,8 +1,9 @@
 # Jura Coffee Machine
 
-Planning + protocol notes. Integration not started yet; this doc captures
-what's known so the next session (Path B prototype, then Path A
-ESPHome+HA wiring) doesn't have to re-discover anything.
+Planning + protocol notes. Integration STARTED 2026-05-04 — chosen
+implementation route is **Path C** (custom Arduino sketch on a spare
+ESP32-C3, fits our `esp_boards` subsystem). Paths A and B are kept
+below for context but are not the active route.
 
 ## Hardware
 
@@ -73,7 +74,40 @@ When the auth handshake is implemented, expect to read:
 
 ## Integration paths
 
-### Path A — ESPHome BLE proxy + HA integration (target architecture)
+### ⭐ Path C — custom Arduino sketch on ESP32-C3 (CHOSEN, 2026-05-04)
+
+```
+J6 service port → BlueFrog dongle → BLE (5 m line-of-sight)
+                                      → ESP32-C3 (custom Arduino sketch)
+                                      → Wi-Fi → Mosquitto (LXC 107)
+                                      → mur/home/esp/jura_bridge_01/{status,event,command}
+                                      → rule engine (LXC 105) → devices.last_state
+                                      → dashboard (Project Boards tab + rule sentence chips)
+```
+
+The C3 sketch:
+- Runs the Jutta-Proto auth handshake natively in C++ (~150 lines
+  ported from `pyjura` / `protocol-bt-cpp`)
+- Polls the BlueFrog every N seconds (Settings-tunable) for stats +
+  service flags
+- Publishes decoded state to MQTT in the same shape as every other
+  ESP board in the project (so it appears as a Project Board tab,
+  gets OTA, is rule-targetable via `dps_config.action_on/action_off`)
+- Subscribes to `mur/home/esp/jura_bridge_01/command` for brew /
+  cancel / cleaning actions
+
+Hardware: spare ESP32-C3 (already on hand, separate from
+`My_Bathroom_Smell_6`), USB-powered, placed within ~5 m of the J6.
+
+Effort: ~1 day (port the auth handshake + status decoding + scaffold
+via `/create-board`). More upfront work than Path A but the result is
+a first-class device in our system — no HA dependency, no extra hops,
+same patterns as RemoteXY / smell board.
+
+**BlueFrog reachability re-verified 2026-05-04** — bleak scan from the
+Windows host found `D5:B2:75:CC:85:CB "TT214H BlueFrog"` advertising.
+
+### Path A — ESPHome BLE proxy + HA integration (NOT CHOSEN, kept for context)
 
 ```
 J6 service port → BlueFrog dongle → BLE
@@ -90,14 +124,19 @@ Effort: ~30-45 min one-time. Result: persistent integration; brew counters,
 service alerts, brew commands all available as `devices` rows + rule
 chips + display-template sources.
 
+**Why not chosen (2026-05-04 decision):** Adds HA + HACS dependency for
+one device, extra hop in the data path, and doesn't slot into our
+`esp_boards` subsystem (no Project Boards tab, no MQTT-direct OTA).
+
 ### Path B — Python prototype on laptop (verification only)
 
 Implement the Jutta-Proto auth handshake (~150 lines) in a throwaway
 script on the dashboard host, read decoded values once, prove the
-protocol works. **No persistence, no rules, no dashboard.** User chose
-Path B as the next concrete step.
+protocol works. **No persistence, no rules, no dashboard.** Skipped
+2026-05-04 — Path C will port the handshake straight to Arduino, so a
+laptop dry-run isn't a prerequisite.
 
-Handshake outline:
+Handshake outline (still applies — same code lands in the sketch):
 1. Read 1-byte connection key from `5a401524`
 2. Derive response via Jutta-Proto bit-permutation + XOR mask
 3. Write derived response to `5a401525`
@@ -114,23 +153,29 @@ Handshake outline:
 - BlueFrog accepts connections without bonding/pairing prompts (J.O.E.
   app pattern)
 
-## Future work checklist
+## Path C work checklist (active)
 
-- [ ] **Path B**: implement Jutta-Proto handshake on dashboard host,
-      decode statistics + machine info, confirm full data set visible
-- [ ] **Path A**: flash ESPHome `bluetooth_proxy:` on a spare ESP32
-- [ ] Power ESP32 within BLE range of the J6
-- [ ] HA: install HACS Jura integration (pick the most-maintained one
-      — likely [Jutta-Proto/Home-Assistant](https://github.com/Jutta-Proto)
-      or successor)
-- [ ] Verify HA discovers entities; pair them to the right area
-- [ ] device_agent's HA adapter ingests entities → row in `devices`
-      with `protocol='ha_api'`
-- [ ] Optional: register the BlueFrog in the `devices` table with its
-      MAC for the ARP-link IP fallback (same pattern as
-      `pixoo` / `hasp:balcony` / `awtrix_05ec2c`)
-- [ ] Add Jura action vocabulary to `/create-rule` and the device
-      picker (similar to the display-chip work for Awtrix/Pixoo)
+- [x] Re-verify BlueFrog still reachable via BLE scan (2026-05-04)
+- [ ] Decide DPS shape for `devices.last_state` (status fields the
+      sketch publishes — see proposal below)
+- [ ] Decide action vocabulary (sketch action keys → rule on/off
+      mappings via `dps_config.action_on/action_off`)
+- [ ] Use `/create-board` skill to scaffold sketch + DB rows for
+      `jura_bridge_01` (board id, MAC, room, dps_labels, dps_config)
+- [ ] Port Jutta-Proto auth handshake from `pyjura` to Arduino C++
+      (~150 lines: read connection key, bit-permutation + XOR, write
+      derived response)
+- [ ] Implement BLE client in sketch using ESP32 Arduino BLE library
+      (`NimBLE-Arduino` is preferred — smaller footprint than the
+      stock Bluedroid stack, plenty for one peripheral connection)
+- [ ] Status poll loop: every N seconds reconnect-or-reuse, read
+      stats characteristic, decode, publish status
+- [ ] Command dispatch: subscribe to `mur/home/esp/jura_bridge_01/command`
+      and route action keys to the FA write characteristic
+- [ ] USB-flash once; then OTA from Project Boards page like every
+      other ESP board
+- [ ] Optional: register the BlueFrog in `net_devices` for ARP-link
+      MAC bookkeeping (BlueFrog itself is BLE-only, so no IP — skip)
 
 ## References
 

@@ -757,8 +757,15 @@ class RuleEngine:
     # while RemoteXY contributes door_relay + charge_relay. New boards add
     # a new key here when they want a status field rule-addressable.
     _ESP_STATUS_DPS_FIELDS = (
+        # smell board
         'pump_state', 'auto_enabled', 'auto_phase', 'manual_active',
+        # remoteXY gate
         'door_relay', 'charge_relay',
+        # jura coffee bridge
+        'power_state', 'current_drink',
+        'water_low', 'beans_low', 'grounds_full',
+        'cleaning_required', 'descale_required',
+        'total_dispensed', 'espressos_today',
     )
 
     def _update_esp_device_dps(self, board_id, status_payload):
