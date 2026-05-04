@@ -164,6 +164,9 @@
         <label for="page-ota-board" style="font-size:0.78rem;color:#888;">Target:</label>
         <select id="page-ota-board" style="font-size:0.85rem;padding:3px 8px;"></select>
         <span id="page-ota-meta" style="font-size:0.75rem;color:#888;"></span>
+        <button id="page-ota-prep-btn" type="button"
+                title="For boards where BLE coexistence makes OTA unreliable. Reboots the board without BLE init for 5 minutes — push the .bin within that window."
+                style="margin-left:auto;font-size:0.72rem;padding:3px 9px;border:1px solid #b48a2a;color:#7a5800;background:#fff8e1;border-radius:3px;cursor:pointer;">⚠ Enter OTA Mode</button>
       </div>
       <div class="ota-drop" id="page-ota-drop" style="opacity:0.6;">
         <div style="font-size:1.05rem;margin-bottom:4px;">Drop <code>.bin</code> file here, or click to browse</div>
@@ -177,6 +180,6 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/esp-boards.js?v=20260504d"></script>
+<script src="js/esp-boards.js?v=20260504e"></script>
 </body>
 </html>

@@ -624,9 +624,42 @@ function wirePageOta() {
   const fileEl = document.getElementById('page-ota-file');
   const status = document.getElementById('page-ota-status');
   const sel = document.getElementById('page-ota-board');
+  const prepBtn = document.getElementById('page-ota-prep-btn');
   if (!drop || !fileEl || !sel) return;
 
   sel.addEventListener('change', () => syncPageOtaToBoard(sel.value));
+
+  // "Enter OTA Mode" — sends the enter_ota_mode command to the selected
+  // board, which sets an RTC flag and reboots WITHOUT BLE init. The board
+  // gets ~5 min in OTA-only mode (radio uncontested), then auto-reverts
+  // to normal mode. Workaround for the C3 NimBLE+WiFi coex panic that
+  // makes runtime OTA crash mid-upload.
+  if (prepBtn) {
+    prepBtn.addEventListener('click', async () => {
+      const boardId = sel.value;
+      const board = BOARDS.find(b => b.id === boardId);
+      if (!board) { status.textContent = '✗ pick a target board first\n'; return; }
+      if (!confirm(`Send "enter_ota_mode" to ${board.name || board.id}?\n\nBoard will reboot WITHOUT BLE for 5 minutes so OTA can push without the coex panic.`)) return;
+      status.style.color = '#7a5800';
+      status.textContent = `[ota-mode] sending enter_ota_mode to ${board.name || board.id}…\n`;
+      try {
+        const r = await fetch(`/api/esp/boards/${encodeURIComponent(boardId)}/command`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'enter_ota_mode' }),
+        });
+        const j = await r.json();
+        if (!r.ok || j.error) {
+          status.style.color = '#c0392b';
+          status.append(document.createTextNode(`✗ command failed: ${j.error || r.statusText}\n`));
+          return;
+        }
+        status.append(document.createTextNode('✓ command sent. Board rebooting — wait ~10s, then drop the .bin (5 min window).\n'));
+      } catch (e) {
+        status.style.color = '#c0392b';
+        status.append(document.createTextNode('✗ ' + e.message + '\n'));
+      }
+    });
+  }
   drop.addEventListener('click', () => fileEl.click());
   drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
