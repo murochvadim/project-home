@@ -2245,10 +2245,15 @@ app.post('/api/esp/boards/:id/ota', espOtaUpload.single('firmware'), async (req,
     if (!otaPassword) return res.status(400).json({ error: 'no OTA password — set ESP_OTA_PASSWORD in .env, or PATCH this board with ota_password' });
 
     // Resolve which espota.py + ArduinoOTA listen port to use. ESP8266
-    // ArduinoOTA defaults to 8266; ESP32 ArduinoOTA defaults to 3232.
+    // ArduinoOTA defaults to 8266; ESP32 (incl. C3/S3) defaults to 3232.
+    // Detection: explicit ESP8266 marker → port 8266; everything else →
+    // port 3232. Defaulting to ESP32 because new boards in this project
+    // are mostly ESP32 family; only RemoteXY's sketch carries "ESP8266" in
+    // its name. Caller can still pin via ?chip=esp8266 / ?chip=esp32.
     const chipParam = (req.query.chip || '').toLowerCase();
     const sketchName = (board.last_status?.sketch_name || '').toLowerCase();
-    const isEsp32 = chipParam === 'esp32' || sketchName.includes('esp32');
+    const isEsp8266 = chipParam === 'esp8266' || sketchName.includes('esp8266');
+    const isEsp32 = !isEsp8266;
     const otaPy = isEsp32 ? process.env.ESP32_OTA_PY : process.env.ESP8266_OTA_PY;
     const otaPort = isEsp32 ? '3232' : '8266';
     if (!otaPy) return res.status(500).json({ error: `ESP${isEsp32 ? 32 : 8266}_OTA_PY not configured in .env` });
