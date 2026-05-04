@@ -595,8 +595,19 @@ function syncPageOtaToBoard(boardId) {
   const drop = document.getElementById('page-ota-drop');
   const target = document.getElementById('page-ota-target');
   const meta = document.getElementById('page-ota-meta');
+  const prepBtn = document.getElementById('page-ota-prep-btn');
   const board = BOARDS.find(b => b.id === boardId);
   if (!drop || !target) return;
+
+  // "Enter OTA Mode" button is only meaningful for boards whose sketch
+  // implements the enter_ota_mode action (currently the Jura bridge).
+  // Hide it for boards that don't expose it so the UI doesn't suggest a
+  // useless click.
+  if (prepBtn) {
+    const actions = board?.schema?.actions || [];
+    const hasOtaModeAction = actions.some(a => a && a.key === 'enter_ota_mode');
+    prepBtn.style.display = hasOtaModeAction ? '' : 'none';
+  }
 
   if (!board) {
     drop.style.opacity = '0.6';
@@ -612,7 +623,7 @@ function syncPageOtaToBoard(boardId) {
     if (meta) meta.textContent = '';
     return;
   }
-  const isEsp32 = (board.last_status?.sketch_name || '').toLowerCase().includes('esp32');
+  const isEsp32 = !(board.last_status?.sketch_name || '').toLowerCase().includes('esp8266');
   drop.style.opacity = '1';
   drop.style.pointerEvents = '';
   target.innerHTML = `Pushing to <strong>${escHtml(board.name || board.id)}</strong> at <code>${escHtml(board.ip)}</code>`;
