@@ -2264,7 +2264,10 @@ app.post('/api/esp/boards/:id/ota', espOtaUpload.single('firmware'), async (req,
     // "Sending invitation .....", upload %, etc.). Final line is a JSON
     // sentinel "[exit N ok=true|false]" the client parses for outcome.
     const { spawn } = require('child_process');
-    const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', otaPassword, '-f', tmpPath, '-r'];
+    // -t 30 raises espota's per-ack timeout from default 10 s → 30 s. Helps
+    // on ESP32-C3 boards where BLE + WiFi share the radio and packets
+    // get dropped under contention.
+    const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', otaPassword, '-f', tmpPath, '-r', '-t', '30'];
     const child = spawn('python', args, { windowsHide: true });
 
     res.writeHead(200, {
