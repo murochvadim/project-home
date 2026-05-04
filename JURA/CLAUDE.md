@@ -74,38 +74,95 @@ When the auth handshake is implemented, expect to read:
 
 ## Integration paths
 
-### ⭐ Path C — custom Arduino sketch on ESP32-C3 (CHOSEN, 2026-05-04)
+### ⭐ Path C — custom Arduino sketch on regular ESP32 (CHOSEN; Phase 1 done 2026-05-04)
 
 ```
 J6 service port → BlueFrog dongle → BLE (5 m line-of-sight)
-                                      → ESP32-C3 (custom Arduino sketch)
+                                      → ESP32 (regular WROOM-32, NOT C3)
                                       → Wi-Fi → Mosquitto (LXC 107)
                                       → mur/home/esp/jura_bridge_01/{status,event,command}
                                       → rule engine (LXC 105) → devices.last_state
                                       → dashboard (Project Boards tab + rule sentence chips)
 ```
 
-The C3 sketch:
+The sketch:
 - Runs the Jutta-Proto auth handshake natively in C++ (~150 lines
-  ported from `pyjura` / `protocol-bt-cpp`)
+  ported from `pyjura` / `protocol-bt-cpp`) — **Phase 2 (still TODO)**
 - Polls the BlueFrog every N seconds (Settings-tunable) for stats +
   service flags
 - Publishes decoded state to MQTT in the same shape as every other
   ESP board in the project (so it appears as a Project Board tab,
   gets OTA, is rule-targetable via `dps_config.action_on/action_off`)
 - Subscribes to `mur/home/esp/jura_bridge_01/command` for brew /
-  cancel / cleaning actions
+  cancel / standby actions
 
-Hardware: spare ESP32-C3 (already on hand, separate from
-`My_Bathroom_Smell_6`), USB-powered, placed within ~5 m of the J6.
+Hardware: regular ESP32 Dev Module (WROOM-32, dual-core), MAC
+`80:F3:DA:5E:B3:AC`, IP 192.168.1.118, USB-powered, placed within
+~5 m of the J6.
 
-Effort: ~1 day (port the auth handshake + status decoding + scaffold
-via `/create-board`). More upfront work than Path A but the result is
-a first-class device in our system — no HA dependency, no extra hops,
-same patterns as RemoteXY / smell board.
+### Migration story: ESP32-C3 → regular ESP32 (2026-05-04)
 
-**BlueFrog reachability re-verified 2026-05-04** — bleak scan from the
-Windows host found `D5:B2:75:CC:85:CB "TT214H BlueFrog"` advertising.
+Path C originally targeted the ESP32-C3. The C3 turned out to have a
+deterministic BLE controller bug (panic at `Saved PC: 0x4038ab62` with
+NimBLE / `0x4038ac4a` with Bluedroid) — both host stacks share the
+same controller firmware in arduino-esp32 3.3.8 for the C3 and both
+crash under any concurrent BLE+WiFi load. The bug is in pre-compiled
+controller IRAM; not fixable from sketch level.
+
+We migrated to a regular ESP32 (WROOM-32, dual-core) which has separate
+silicon for the BLE controller and is well-tested for this exact use
+case. The C3 panic stopped immediately on the new board.
+
+**Lessons that live in the final sketch as architectural decisions:**
+
+- **Library**: Bluedroid via `<BLEDevice.h>` (NOT NimBLE-Arduino). NimBLE
+  is more memory-efficient but the regular ESP32 has plenty of RAM, and
+  we hit fewer NimBLE-Arduino library bugs. Requires the
+  **Minimal SPIFFS (1.9 MB APP/190 KB SPIFFS)** partition scheme since
+  Bluedroid + our app is ~1.7 MB.
+- **Pattern**: poll-and-disconnect, NOT persistent connection. Every
+  `poll_interval_sec` (30 s default) the sketch opens a session — scan
+  → connect → auth → read stats → (queued cmd) → disconnect — and stays
+  idle in between. Long-lived BLE connections + remote-initiated
+  disconnects raced badly on the C3 even on the regular ESP32 the
+  pattern is more stable and gives WiFi clean radio time between polls.
+- **Connect**: scan-first-then-connect (canonical Bluedroid pattern).
+  Direct `_client->connect(BLEAddress, BLE_ADDR_TYPE_RANDOM)` blocks for
+  30 s before failing on regular ESP32 because the controller needs the
+  address-resolution table populated by a scan. Scan finds the peer,
+  produces a `BLEAdvertisedDevice`, then `_client->connect(found)` is
+  fast and reliable.
+- **OTA prep**: must `BLEDevice::deinit(true)` from `ArduinoOTA.onStart`.
+  Bluedroid uses ~30 KB of heap; without freeing it, OTA upload buffers
+  run out at ~25 KB free heap and the upload fails with
+  `OTA error 3 (RECEIVE_ERROR)` immediately at 0%. After deinit the
+  free heap goes from ~30 KB → ~160 KB and OTA flies through.
+- **Dual-core race**: BLE callbacks (`onConnect` / `onDisconnect`) fire
+  on Core 0 (BLE host task) but the app's MQTT client runs on Core 1.
+  PubSubClient is NOT thread-safe — calling `publishEspEvent()` from
+  callbacks corrupts internal state and panics. Callbacks now JUST set
+  `volatile bool` flags; `juraBleLoop()` drains them on Core 1.
+- **Watchdog**: BLE connect can legitimately block several seconds while
+  the controller does a connection setup. The default 5 s loop task
+  watchdog tripped during normal operation. We `esp_task_wdt_delete(NULL)`
+  early in setup() to remove the loop task from TWDT — interrupt and
+  RTC watchdogs still run for genuine hangs.
+- **Address type**: BlueFrog's MAC `D5:B2:75:CC:85:CB` has top-2 bits
+  set → static random address. Pass `BLE_ADDR_TYPE_RANDOM` explicitly
+  on the BLEAddress constructor; without it the connect call defaults
+  to public-address resolution which fails slowly.
+- **WiFi setup**: keep the scan + lock-to-strongest-BSSID pattern from
+  the smell board sketch (gives reliable WiFi acquisition in crowded
+  apartment AP environments). Disable PMF, force WPA2-only.
+
+**Effort actual**: 1 day for Phase 1 (scaffolding + migration + every
+gotcha above). Phase 2 (auth handshake + opcodes) still TODO.
+
+**BlueFrog reachability verified 2026-05-04** — bleak scan from the
+Windows host found `D5:B2:75:CC:85:CB "TT214H BlueFrog"` advertising;
+sketch successfully scans, finds, connects, runs (stub) auth, reads
+stats characteristic returning a 56-byte payload (encrypted prefix
+until real auth lands).
 
 ### Path A — ESPHome BLE proxy + HA integration (NOT CHOSEN, kept for context)
 
@@ -153,29 +210,44 @@ Handshake outline (still applies — same code lands in the sketch):
 - BlueFrog accepts connections without bonding/pairing prompts (J.O.E.
   app pattern)
 
-## Path C work checklist (active)
+## Path C work checklist
 
-- [x] Re-verify BlueFrog still reachable via BLE scan (2026-05-04)
-- [ ] Decide DPS shape for `devices.last_state` (status fields the
-      sketch publishes — see proposal below)
-- [ ] Decide action vocabulary (sketch action keys → rule on/off
-      mappings via `dps_config.action_on/action_off`)
-- [ ] Use `/create-board` skill to scaffold sketch + DB rows for
-      `jura_bridge_01` (board id, MAC, room, dps_labels, dps_config)
-- [ ] Port Jutta-Proto auth handshake from `pyjura` to Arduino C++
-      (~150 lines: read connection key, bit-permutation + XOR, write
-      derived response)
-- [ ] Implement BLE client in sketch using ESP32 Arduino BLE library
-      (`NimBLE-Arduino` is preferred — smaller footprint than the
-      stock Bluedroid stack, plenty for one peripheral connection)
-- [ ] Status poll loop: every N seconds reconnect-or-reuse, read
-      stats characteristic, decode, publish status
-- [ ] Command dispatch: subscribe to `mur/home/esp/jura_bridge_01/command`
-      and route action keys to the FA write characteristic
-- [ ] USB-flash once; then OTA from Project Boards page like every
-      other ESP board
-- [ ] Optional: register the BlueFrog in `net_devices` for ARP-link
-      MAC bookkeeping (BlueFrog itself is BLE-only, so no IP — skip)
+**Phase 1 — DONE (2026-05-04)**:
+- [x] Re-verify BlueFrog reachable via BLE scan
+- [x] DPS shape designed (`power_state` / `current_drink` / `water_low` /
+      `beans_low` / `grounds_full` / `cleaning_required` /
+      `descale_required` / `total_dispensed` / `espressos_today`)
+- [x] Action vocabulary designed (`brew_espresso` / `brew_coffee` /
+      `brew_2x_espresso` / `brew_2x_coffee` / `hot_water` / `cancel` /
+      `standby`, plus `on`/`off` aliases). `power_state` channel maps
+      `action_on` → `brew_espresso`, `action_off` → `standby`.
+- [x] DB rows inserted (`esp_boards.jura_bridge_01`,
+      `devices.jura_bridge_01`, MAC = `80:F3:DA:5E:B3:AC`).
+- [x] Sketch scaffolded (`Main.h`, `Esp_Base.ino`, `jura_bridge_01.ino`,
+      `Jura_BLE.ino`) at `C:\Users\muroc\Arduino_Projects\jura_bridge_01\`.
+- [x] Migrated from C3 → regular ESP32 (controller bug workaround).
+- [x] BLE library: Bluedroid via `<BLEDevice.h>` (NOT NimBLE).
+- [x] Pattern: poll-and-disconnect with scan-first-then-connect.
+- [x] OTA verified end-to-end (deinit Bluedroid in `onStart` to free heap).
+- [x] Cross-core race fixed (BLE callbacks → flag → main loop publishes MQTT).
+- [x] Loop task WDT disabled (BLE connect legitimately blocks several seconds).
+
+**Phase 2 — TODO (next session)**:
+- [ ] Port Jutta-Proto auth handshake from `pyjura` (`auth.py`) to
+      Arduino C++: read connection key from `5a401524`, apply
+      bit-permutation + XOR, write derived byte to `5a401525`
+- [ ] Set `jura_state.auth_ok = true` in `runAuthHandshake()` after
+      real handshake succeeds — unlocks `juraSendCommand` to write
+      FA opcodes (currently gated for safety)
+- [ ] Port the 56-byte stats decoder (`pyjura/stats.py`) into
+      `decodeStatsPayload()` — populate `power_state`, counters,
+      service alert bools
+- [ ] Port FA opcode table (`pyjura/commands.py`) into `resolveOpcode()`
+      so brew commands actually brew (currently uses placeholder
+      single-byte opcodes that the BlueFrog rejects)
+- [ ] Smoke-test: click Power ON in dashboard → real espresso 🎉
+- [ ] BlueFrog at RSSI -82 in current placement — consider moving the
+      ESP32 1-2 m closer to the J6 if scan misses become frequent
 
 ## References
 
