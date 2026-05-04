@@ -654,23 +654,53 @@ function wirePageOta() {
       return;
     }
     status.style.color = '#555';
-    status.textContent = `Uploading ${file.name} (${(file.size / 1024).toFixed(1)} KB) → ${board.name || board.id}…`;
+    status.textContent = `Uploading ${file.name} (${(file.size / 1024).toFixed(1)} KB) → ${board.name || board.id}…\n`;
     const fd = new FormData();
     fd.append('firmware', file);
+
+    // Live timer counting elapsed seconds while espota.py runs — separate
+    // from the streamed espota.py output appended below. Stops on completion.
+    const t0 = Date.now();
+    const elapsedEl = document.createElement('span');
+    elapsedEl.style.cssText = 'margin-left:8px;font-size:0.78rem;color:#888;';
+    status.appendChild(elapsedEl);
+    const timer = setInterval(() => {
+      elapsedEl.textContent = `(elapsed ${Math.round((Date.now() - t0) / 1000)} s)`;
+    }, 250);
+
     try {
       const r = await fetch(`/api/esp/boards/${encodeURIComponent(boardId)}/ota`, { method: 'POST', body: fd });
-      const data = await r.json();
-      if (!r.ok || !data.ok) {
-        status.style.color = '#c0392b';
-        status.textContent = `✗ exit=${data.exit_code ?? 'n/a'} ${data.error || ''}\n${data.stderr || ''}\n${data.stdout || ''}`;
-      } else {
+      // Stream the response — server writes espota.py stdout chunks live.
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let lastLine = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        // Append to status, keep elapsed timer at the end.
+        elapsedEl.remove();
+        status.append(document.createTextNode(chunk));
+        status.appendChild(elapsedEl);
+        lastLine += chunk;
+      }
+      clearInterval(timer);
+      // Final sentinel format: "[exit code=N ok=true|false]"
+      const m = /\[exit code=(-?\d+) ok=(true|false)\]/.exec(lastLine);
+      const ok = m && m[2] === 'true';
+      const code = m ? parseInt(m[1], 10) : 'n/a';
+      if (ok) {
         status.style.color = '#3a7d44';
-        status.textContent = `✓ OTA push to ${board.name || board.id} succeeded (exit 0). Board rebooting.\n${data.stdout || ''}`;
+        elapsedEl.textContent = `(✓ exit 0 — board rebooting; refreshing in 5 s)`;
         setTimeout(loadBoards, 5000);
+      } else {
+        status.style.color = '#c0392b';
+        elapsedEl.textContent = `(✗ exit ${code})`;
       }
     } catch (e) {
+      clearInterval(timer);
       status.style.color = '#c0392b';
-      status.textContent = '✗ ' + e.message;
+      status.append(document.createTextNode('\n✗ ' + e.message));
     }
   }
 }

@@ -2259,30 +2259,35 @@ app.post('/api/esp/boards/:id/ota', espOtaUpload.single('firmware'), async (req,
     if (!otaPy) return res.status(500).json({ error: `ESP${isEsp32 ? 32 : 8266}_OTA_PY not configured in .env` });
     if (!fs.existsSync(otaPy)) return res.status(500).json({ error: `espota.py not found at configured path: ${otaPy}` });
 
-    // Spawn — use python via PATH, with stdout/stderr captured for the response.
+    // Spawn — use python via PATH, stream stdout+stderr live to the client
+    // so the dashboard can show real-time progress (espota.py prints
+    // "Sending invitation .....", upload %, etc.). Final line is a JSON
+    // sentinel "[exit N ok=true|false]" the client parses for outcome.
     const { spawn } = require('child_process');
     const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', otaPassword, '-f', tmpPath, '-r'];
     const child = spawn('python', args, { windowsHide: true });
 
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', d => { stdout += d.toString(); });
-    child.stderr.on('data', d => { stderr += d.toString(); });
+    res.writeHead(200, {
+      'Content-Type':      'text/plain; charset=utf-8',
+      'Cache-Control':     'no-cache',
+      'X-Accel-Buffering': 'no',   // no-op for Express but documents intent
+    });
+    res.write(`[ota] target=${board.ip} chip=${isEsp32 ? 'esp32' : 'esp8266'} port=${otaPort}\n`);
+
+    child.stdout.on('data', d => res.write(d));
+    child.stderr.on('data', d => res.write(d));
 
     const code = await new Promise((resolve) => {
-      const t = setTimeout(() => { try { child.kill(); } catch (_) {} resolve(-1); }, 60_000);
+      // Generous 180 s timeout — first OTA after a Windows Defender prompt
+      // can stall for >60 s while the user clicks through. Successful pushes
+      // typically take 5–15 s.
+      const t = setTimeout(() => { try { child.kill(); } catch (_) {} resolve(-1); }, 180_000);
       child.on('close', c => { clearTimeout(t); resolve(c); });
-      child.on('error', e => { clearTimeout(t); stderr += '\nSPAWN ERROR: ' + e.message; resolve(-1); });
+      child.on('error', e => { clearTimeout(t); res.write('\nSPAWN ERROR: ' + e.message + '\n'); resolve(-1); });
     });
 
-    res.json({
-      ok: code === 0,
-      exit_code: code,
-      board_ip: board.ip,
-      chip: isEsp32 ? 'esp32' : 'esp8266',
-      stdout: stdout.slice(-4000),  // tail in case of long progress prints
-      stderr: stderr.slice(-4000),
-    });
+    res.write(`\n[exit code=${code} ok=${code === 0}]\n`);
+    res.end();
   } catch (e) {
     res.status(500).json({ error: e.message });
   } finally {

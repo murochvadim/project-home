@@ -59,7 +59,7 @@
     /* OTA */
     .ota-drop { border:2px dashed #d0cbc4; border-radius:6px; padding:24px; text-align:center; color:#888; cursor:pointer; }
     .ota-drop.dragover { border-color:#3a7d44; color:#3a7d44; background:#f4faf2; }
-    .ota-status { margin-top:10px; font-size:0.85rem; font-family:monospace; color:#555; min-height:20px; }
+    .ota-status { margin-top:10px; font-size:0.78rem; font-family:monospace; color:#555; min-height:20px; white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; background:#1c1f24; color:#e0e0e0; padding:8px 10px; border-radius:4px; line-height:1.45; }
     .ota-disabled { padding:12px; background:#f8f5f1; border-radius:5px; color:#888; font-style:italic; font-size:0.85rem; }
 
     .empty-state { padding:32px 14px; text-align:center; color:#aaa; }
@@ -177,6 +177,6 @@
 
 <script src="js/alerts-monitor.js"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/esp-boards.js?v=20260504c"></script>
+<script src="js/esp-boards.js?v=20260504d"></script>
 </body>
 </html>
