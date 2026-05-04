@@ -67,7 +67,7 @@ const ACTION_GROUPS = [
   { id: 'robot',    label: 'Robot',         tab: 'simulation', keys: ['robot_alive', 'robot_lost_power'],         statusFlag: 'charge_relay', statusLabel: 'Charge Relay' },
   { id: 'hivemq',   label: 'HiveMQ Bridge', tab: 'simulation', keys: ['reconnect_hivemq', 'sim_came_parking', 'sim_in_parking', 'sim_no_data'] },
   { id: 'pump',     label: 'Pump',          tab: 'simulation', keys: ['smell_start', 'smell_stop', 'smell_auto_start', 'smell_auto_stop'], statusFlag: 'pump_state',   statusLabel: 'Pump' },
-  { id: 'coffee',   label: 'Coffee Machine', tab: 'simulation', keys: ['brew_espresso', 'brew_coffee', 'brew_2x_espresso', 'brew_2x_coffee', 'hot_water', 'cancel', 'standby'], statusFlag: 'power_state', statusLabel: 'Power' },
+  { id: 'coffee',   label: 'Coffee Machine', tab: 'simulation', keys: ['on', 'off', 'brew_espresso', 'brew_coffee', 'brew_2x_espresso', 'brew_2x_coffee', 'hot_water', 'cancel', 'standby'], statusFlag: 'power_state', statusLabel: 'Power' },
 ];
 
 // ─── Load + render ─────────────────────────────────────────────────────
