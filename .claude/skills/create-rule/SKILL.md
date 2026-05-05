@@ -387,15 +387,66 @@ translates stored fields to wire format (`text` / `color` / `scrollSpeed` /
 
 ## Step 9: Deploy
 
-After the user approves the generated code:
+After the user approves the generated code, perform ALL THREE of these steps. None are optional.
+
+### 9a. Write + scp the rule file
 
 1. Write the file to `RULES/rules/{filename}.py`
 2. Deploy to LXC 105:
    ```bash
    scp RULES/rules/{filename}.py root@192.168.1.187:/opt/main-agent/project/RULES/rules/
    ```
-3. Tell the user: "Rule deployed. Click **Reload** on the Main Agent dashboard to load it — the button stays on **Reloading...** until the engine confirms the new rule is loaded (up to ~60s on the next background cycle), then returns to **Reload**."
-4. After reload, suggest: "Try clicking **Test** or **Force** on the new rule to verify it works."
+
+### 9b. Auto-create the sentence container in `dashboard_settings.apartment.rule_sentences`
+
+For sentence-driven rules (the canonical pattern — `Evening Lights`, `Morning Lights`, `Mode Buttons`, `Home Time Periods`, `Start Away Mode`, etc.), the rule file is a no-op until a matching named container exists in the rule-sentences JSONB. **You** create it as part of deploy, NOT the user via dashboard editing.
+
+INSERT a container into `apartment.rule_sentences` with:
+- `id`: `r_<rule_snake>_init` (e.g. `r_morning_lights_init`)
+- `name`: the EXACT case-insensitive match the rule's container-lookup expects (e.g. `Morning Lights`)
+- `active`: `true`
+- 3 sentence skeletons matching what the rule reads (device-list, anchors/modes, gates) — populated with the regex-trigger phrase as a single text segment so the rule can find the sentence even when the user hasn't added chips yet:
+
+```sql
+ssh root@192.168.1.219 "sudo -u postgres psql -d home_data -c \"
+UPDATE dashboard_settings
+SET value = value || jsonb_build_array(jsonb_build_object(
+  'id', 'r_<rule_snake>_init',
+  'name', '<Rule Name>',
+  'active', true,
+  'added_at', NOW()::text,
+  'updated_at', NOW()::text,
+  'sentences', jsonb_build_array(
+    jsonb_build_object('id','s_xx1', 'text','<device-list trigger phrase> ',
+                       'active', true,
+                       'segments', jsonb_build_array(jsonb_build_object('t','text','v','<device-list trigger phrase> ')),
+                       'added_at', NOW()::text, 'updated_at', NOW()::text),
+    jsonb_build_object('id','s_xx2', 'text','<active-modes sentence with sensible defaults>',
+                       'active', true,
+                       'segments', jsonb_build_array(jsonb_build_object('t','text','v','<active-modes sentence with sensible defaults>')),
+                       'added_at', NOW()::text, 'updated_at', NOW()::text),
+    jsonb_build_object('id','s_xx3', 'text','<gate sentence>',
+                       'active', true,
+                       'segments', jsonb_build_array(jsonb_build_object('t','text','v','<gate sentence>')),
+                       'added_at', NOW()::text, 'updated_at', NOW()::text)
+  )
+))
+WHERE key = 'apartment.rule_sentences'
+  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(value) AS r WHERE LOWER(r->>'name') = '<rule name lowercase>');
+\""
+```
+
+The `NOT EXISTS` guard makes the INSERT idempotent — running deploy twice doesn't duplicate the container. The user authors **only** chips/values via the dashboard later (e.g. clicks `+Dev` to add lights to `s_xx1`); the sentence STRUCTURE is your responsibility.
+
+### 9c. Tell the user how to load + test
+
+> "Rule deployed and sentence container seeded. Click **Reload** on the Main Agent dashboard to load it — the button stays on **Reloading...** until the engine confirms the new rule is loaded (up to ~60 s), then returns to **Reload**. Then click **Test** on the new rule from the rules table to verify it fires."
+
+### CRITICAL — what NOT to do during deploy
+
+- ❌ **NEVER `systemctl restart rule-engine`** as part of `/create-rule` deploy. The dashboard's **Reload** button uses a graceful path that re-imports the rules module without dropping in-memory state (timers, virtual-event dedupe maps, _LAST caches). `systemctl restart` is a HEAVIER hammer that resets all that — it's reserved for cases like a code change to `rule_engine.py` or `state_manager.py` that must be re-imported, NOT for adding/editing a rule file.
+- ❌ **NEVER** make the user manually create the sentence container in the dashboard. That's deploy-time housekeeping, not the user's job. They'll fill in chips/values via the UI; the container itself is yours.
+- ❌ **NEVER** skip the `NOT EXISTS` guard on the JSONB INSERT. Without it, every deploy retry re-appends the container.
 
 ## Important Notes
 
