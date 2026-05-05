@@ -728,7 +728,22 @@ class RuleEngine:
             # device (state.devices[id].dps['pump_state'] etc.). Only the
             # fields a board actually publishes get mapped — the dashboard's
             # dps_labels column controls which ones are user-visible.
-            self._update_esp_device_dps(board_id, parsed_payload)
+            projected_dps = self._update_esp_device_dps(board_id, parsed_payload)
+            # Fire a synthetic device event so downstream rules (e.g.
+            # gates_button_progress mirroring barrier_progress onto a HASP
+            # button) can react to ESP status updates the same way they
+            # react to Tuya/Zigbee/HA events. Without this, rules with
+            # `triggers=[<board_id>]` never fire because /status messages
+            # only update DB + in-memory dps and don't reach the rule
+            # firing pipeline. Skip when no fields were projected (no
+            # rule could care about an empty payload anyway).
+            if projected_dps:
+                self._fire_rules_for_event({
+                    'device_id': board_id,
+                    'dps':       projected_dps,
+                    'source':    'esp_status',
+                    'ts':        datetime.now(tz=TZ).isoformat(),
+                })
             return
 
         if suffix == 'schema':
@@ -781,7 +796,7 @@ class RuleEngine:
         """
         dps = {k: status_payload[k] for k in self._ESP_STATUS_DPS_FIELDS if k in status_payload}
         if not dps:
-            return
+            return {}
         # JSONB || JSONB merges right onto left (right wins on key collision)
         # so concurrent writes from other paths aren't clobbered.
         rowcount = self.state.db_execute(
@@ -799,6 +814,7 @@ class RuleEngine:
             if dev is not None:
                 dev_dps = dev.setdefault('dps', {})
                 dev_dps.update(dps)
+        return dps
 
     # ------------------------------------------------------------------
     # Rule evaluation

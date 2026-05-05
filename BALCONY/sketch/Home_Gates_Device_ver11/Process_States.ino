@@ -103,11 +103,12 @@ void Action_Timer_1(void) {
               publishEspStatusNow();
               publishEspEvent("state", "gates", "barrier", "done");
               Serial.print("\n Finished BARRIER ONLY...");
-              // Shortly transition back to idle so the dashboard returns
-              // to a neutral display. One tick of "done" is plenty for
-              // the display to register the 100% completion.
+              // Immediately transition to idle and re-publish so the
+              // dashboard / panel clear the corner-label progress
+              // without waiting up to 60 s for the next heartbeat.
               params.gates_state      = "idle";
               params.barrier_progress = -1;
+              publishEspStatusNow();
             }
           }
           break;
@@ -150,8 +151,11 @@ void Action_Timer_1(void) {
               publishEspStatusNow();
               publishEspEvent("state", "gates", "both", "done");
               Serial.print("\n Finished BOTH GATES...");
+              // Immediately re-publish idle so the panel clears the
+              // corner overlay without waiting on the 60 s heartbeat.
               params.gates_state    = "idle";
               params.gates_progress = -1;
+              publishEspStatusNow();
             }
           }
           break;
