@@ -232,22 +232,152 @@ Handshake outline (still applies — same code lands in the sketch):
 - [x] Cross-core race fixed (BLE callbacks → flag → main loop publishes MQTT).
 - [x] Loop task WDT disabled (BLE connect legitimately blocks several seconds).
 
-**Phase 2 — TODO (next session)**:
-- [ ] Port Jutta-Proto auth handshake from `pyjura` (`auth.py`) to
-      Arduino C++: read connection key from `5a401524`, apply
-      bit-permutation + XOR, write derived byte to `5a401525`
-- [ ] Set `jura_state.auth_ok = true` in `runAuthHandshake()` after
-      real handshake succeeds — unlocks `juraSendCommand` to write
-      FA opcodes (currently gated for safety)
-- [ ] Port the 56-byte stats decoder (`pyjura/stats.py`) into
-      `decodeStatsPayload()` — populate `power_state`, counters,
-      service alert bools
-- [ ] Port FA opcode table (`pyjura/commands.py`) into `resolveOpcode()`
-      so brew commands actually brew (currently uses placeholder
-      single-byte opcodes that the BlueFrog rejects)
-- [ ] Smoke-test: click Power ON in dashboard → real espresso 🎉
-- [ ] BlueFrog at RSSI -82 in current placement — consider moving the
-      ESP32 1-2 m closer to the J6 if scan misses become frequent
+**Phase 2 — IN PROGRESS, blocked on machine file (2026-05-04 session 2)**:
+
+Significant progress, brew not yet functional. Six things proven, one
+blocker.
+
+**Proven working ✓ (do not re-investigate):**
+- [x] Auth model is **NOT challenge/response** — there's no handshake.
+      The encryption "key" is byte 0 of the BLE advertisement's
+      Manufacturer Specific Data (AD type `0xFF`). Walk the raw
+      advertisement payload (`d.getPayload()` / `d.getPayloadLength()`)
+      and find the first `0xFF` AD record; the byte AFTER the AD type
+      is the key. On this BlueFrog the key is `0xAB` (static for the
+      lifetime of the dongle). Source: `Jura_BLE.ino` scan loop.
+- [x] **`juraEncDec` algorithm** ported verbatim from
+      [protocol-bt-cpp/ByteEncDecoder.cpp](https://github.com/Jutta-Proto/protocol-bt-cpp/blob/main/src/jutta_bt_proto/ByteEncDecoder.cpp):
+      two 16-byte permutation tables (`JURA_NUM1`, `JURA_NUM2`) +
+      per-nibble shuffle. Symmetric — calling `juraEncDec(juraEncDec(x))`
+      with the same key returns `x`. Implementation in `Jura_BLE.ino`.
+- [x] **`StartProduct` characteristic** is `5a401525` (W only — no
+      WRITE_NO_RSP). Bluedroid's `writeValue(..., false)` falls back
+      to write-with-response anyway because the char doesn't expose
+      the WRITE_NO_RSP property.
+- [x] **Service has 8 (sometimes 9) characteristics**, NOT the larger
+      set protocol-bt-cpp documents. Stable enumerated set:
+      `5a401524` (R), `5a401525` (W), `5a401527` (R), `5a401528` (W),
+      `5a401529` (W), `5a401530` (RW), `5a401531` (R), `5a401532` (RW),
+      sometimes `5a401535` (RW). Notably **no `5a401533/34/38`** —
+      protocol-bt-cpp's STATISTICS_COMMAND / STATISTICS_DATA /
+      P_MODE_READ don't exist on this BlueFrog firmware.
+- [x] **J6-specific opcodes** from
+      [ryanalden/esphome-jura-component](https://github.com/ryanalden/esphome-jura-component):
+      `0x07` espresso, `0x08` 2x espresso, `0x09` 1 coffee,
+      `0x0A` 2x coffee, `0x06` hot water. (NOT `0x03` from
+      protocol-bt-cpp's README — that was a different machine.)
+- [x] **`AN:01` / `AN:02`** = power on/off. Different prefix from
+      brew commands; routes through a different characteristic
+      (likely `P_MODE` `5a401529` but unverified). `on`/`off`/`cancel`/
+      `standby` are gated in code with a `cmd-blocked: an_prefix_pending`
+      event until verified.
+
+**The hard blocker:**
+- [ ] **`writeValue` to START_PRODUCT silently times out** for every
+      structure we've tried. The J6 doesn't ACK at the GATT layer →
+      Bluedroid blocks `writeValue` for ~25 s, then auto-resets the
+      chip. Confirmed across 5+ test cycles. Without ACK, the J6 also
+      doesn't physically react (no beep, no display change).
+
+### Failed write attempts (DO NOT REPEAT)
+
+Each row is a complete sketch state we flashed and tested. The
+"Reaction" column documents what the J6 did. None caused brewing.
+
+| Bytes (pre-encryption, big-endian) | Length | Reaction | Source of structure |
+|---|---|---|---|
+| `[KEY] 03 00 04 14 00 00 01 00 01 00 00 00 00 00 [KEY]` | 16 | None | protocol-bt-cpp README example |
+| `[KEY] 09 00 04 14 00 00 01 00 01 00 00 00 00 00 [KEY]` | 16 | None | Same template, J6 opcode `0x09` |
+| `[KEY] 09 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 [KEY]` | 18 | None (writeValue timed out) | AlexxIT 18-byte, all-zero attributes |
+| `[KEY] 09 00 04 28 00 00 02 00 01 00 00 00 00 00 00 00 [KEY]` | 18 | None (writeValue timed out) | AlexxIT 18-byte + protocol-bt-cpp's hardcoded attribute defaults |
+
+`[KEY]` = `0xAB` on this BlueFrog. Buffer is encrypted with `juraEncDec(buf, 18, 0xAB)` after key insertion.
+
+**Conclusion**: the J6 firmware checks the recipe payload (bytes 2-16)
+against a per-machine schema and silently rejects writes that don't
+match. The schema is NOT in any public source — it lives only in the
+J6's machine-file XML inside JURA's official **JOE Android APK** under
+`assets/machinefiles/<model>.xml`.
+
+### Failed library/architecture attempts (DO NOT REPEAT)
+
+| Attempt | Outcome |
+|---|---|
+| `writeValue(..., true)` (write-with-response) | Hangs ~25 s when J6 doesn't ACK, then chip software-reset |
+| `writeValue(..., false)` (write-no-response) | Same hang — Bluedroid falls back to write-request because the char only exposes WRITE prop |
+| FreeRTOS task wrapper with 5 s software timeout | Loop survives the timeout, but next session crashes with backtrace because the leaked task corrupts Bluedroid's mutex state. **Unsafe pattern, do not retry.** |
+| `pollStats()` reading `MACHINE_STATUS` (5a401524) | Same indefinite hang as writeValue — the J6 doesn't respond to plain reads. Disabled in current sketch. Likely needs the WRITE STATISTICS_COMMAND → READ STATISTICS_DATA handshake first, but those characteristics don't exist on this BlueFrog firmware. |
+| Reading `5a401534` STATISTICS_DATA | UUID doesn't exist on this BlueFrog (per enumeration) — kept the comment in `Main.h` for posterity. |
+
+### What lives in the sketch right now (last flash)
+
+Sketch directory: `C:\Users\muroc\Arduino_Projects\jura_bridge_01\`,
+mirrored into this repo at [JURA/sketch/](sketch/) for git tracking
+(authoritative copy is the Arduino_Projects one — Arduino IDE compiles
+from there).
+
+The four files:
+- `Main.h` — board identity, UUIDs, MQTT/WiFi credentials, OTA password
+- `Esp_Base.ino` — ESP base subsystem (schema, status, MQTT topics, OTA
+  hooks, tunable params)
+- `jura_bridge_01.ino` — main entry point, WiFi setup, Mosquitto
+  reconnect, 60 s BLE init deferral for OTA windows
+- `Jura_BLE.ino` — scan/connect/auth/cmd/disconnect, encryption,
+  command dispatch
+
+Current sketch state: best-guess 18-byte packet with protocol-bt-cpp
+attribute defaults (`28 00 00 02 00 01`) at bytes 4-9, key at [0] and [17].
+**Brew does not work**. Direct `writeValue(..., true)` (no FreeRTOS
+wrapper). Stats poll DISABLED (was hanging). Encryption self-test
+DISABLED (would also hang on the read).
+
+### The path forward (when resumed)
+
+The only realistic next step is extracting the J6 machine file from
+the JOE Android APK. Outline:
+
+1. Download the JOE app from the Google Play Store APK mirror
+   (apkmirror.com — package `com.jura.joe` or similar)
+2. Decompile with `jadx` or `apktool d <apk>`
+3. Locate `resources/assets/machinefiles/` (per
+   [protocol-bt-cpp README](https://github.com/Jutta-Proto/protocol-bt-cpp#machinefile))
+4. Identify the J6's file (likely `EF532V2.xml` — protocol-bt-cpp
+   uses that as its example, AND it's the machine ID family of the
+   Impressa J6 line; verify by cross-referencing the J6's
+   `ABOUT_MACHINE` read once we re-enable that path)
+5. Parse the XML's `<PRODUCT code="09">` block — it has child elements
+   describing each byte position and its meaning (`@Argument="P3"`
+   means byte 3, `@Default="0x14"` means default value, etc.)
+6. Plug those defaults into `cmdBuf[2..16]` in `Jura_BLE.ino`
+
+Estimated effort: 2-4 hours offline (APK download, decompile, XML
+parse, test). NOT incremental BLE debugging.
+
+Alternative: capture a real J6 brew packet via Wireshark with a
+phone running J.O.E. on Linux (`btmon` capture), decrypt with key
+0xAB, decode. Probably faster (~1 hour) if you have a Linux box with
+Bluetooth.
+
+### What's also disabled / has TODO comments
+
+- `pollStats()` — char reads hang, disabled. Re-enable with proper
+  STATISTICS_COMMAND → STATISTICS_DATA handshake once we have the
+  command bytes (probably also from machine file).
+- Encryption self-test reading `ABOUT_MACHINE` — disabled because
+  same hang. With handshake / proper write→read flow this would
+  prove the encryption end-to-end and tell us model+firmware.
+- `on`/`off`/`cancel`/`standby` — gated with `cmd-blocked:
+  an_prefix_pending`. Need to wire the `AN:` prefix to `P_MODE`
+  (5a401529) once the basic brew path works.
+
+### Reference repos consulted
+
+- [Jutta-Proto/protocol-bt-cpp](https://github.com/Jutta-Proto/protocol-bt-cpp) — encryption algorithm, UUIDs, write semantics, hardcoded 16-byte example (works for ONE machine, not J6)
+- [Jutta-Proto/protocol-cpp](https://github.com/Jutta-Proto/protocol-cpp) — UART variant; serial protocol with FA: prefix
+- [ryanalden/esphome-jura-component](https://github.com/ryanalden/esphome-jura-component) — J6-specific UART opcodes (FA:09 = coffee, etc.); confirms J6 model details
+- [AlexxIT/Jura](https://github.com/AlexxIT/Jura) — actively-maintained HA component; **canonical 18-byte structure with key at [17]** (vs protocol-bt-cpp's older 16-byte / key-at-[15])
+- [COM8/esp32-jura](https://github.com/COM8/esp32-jura) — older ESP32 prototype, UART only, NOT BLE; superseded by protocol-bt-cpp
+- [Jutta-Proto/pyjura](https://github.com/Jutta-Proto/pyjura) — Python equivalent
 
 ## References
 
