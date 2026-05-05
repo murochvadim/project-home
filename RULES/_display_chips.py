@@ -1,22 +1,32 @@
-"""Shared parser for display-device chips in rule_sentences.
+"""Shared parser for chip-driven action tokens in rule_sentences.
 
-Chip token formats produced by the dashboard's device picker for any
-device with `device_type='display'` (currently Pixoo + Awtrix):
+Display chips (device_type='display' or protocol in {pixoo, awtrix}):
 
     @<DeviceName> on              → power_on
     @<DeviceName> off             → power_off
     @<DeviceName> push <preset>   → push_preset (Pixoo preset OR Awtrix saved app)
 
-Legacy format (still in use): `@Pixoo <PresetName>` — same as
-`@Pixoo push <PresetName>`. Recognized as a fallback.
+Legacy (still in use): `@Pixoo <PresetName>` ≡ `@Pixoo push <PresetName>`.
 
-`parse_display_chip(token, devices_by_name)` returns a command-dict ready
-for rule_engine._dispatch_command, or None if the token isn't a display
-chip.
+Panel chips (device_type='panel' or protocol='hasp', added 2026-05-05):
+
+    @<PanelName> on               → backlight on
+    @<PanelName> off              → backlight off
+    @<PanelName> Page <N>         → goto_page N
+
+The function still named `parse_display_chip` for back-compat with the
+single existing caller (Evening Lights). Returns a command-dict ready
+for rule_engine._dispatch_command, or None if the token isn't a chip
+this parser knows about.
 """
 
+import re
+
+# `@<Panel> Page <N>` — case-insensitive; allow "page" / "Page" / "PAGE".
+_PAGE_RE = re.compile(r"^page\s+(\d+)$")
+
 def parse_display_chip(token, devices_by_name):
-    """Return a command dict for a display chip, or None.
+    """Return a command dict for a display / panel chip, or None.
 
     devices_by_name: map of {device_name: device_dict} where device_dict has
     at least 'id' and 'protocol' (typically built from state.devices).
@@ -42,13 +52,43 @@ def parse_display_chip(token, devices_by_name):
 
     if not dev:
         return None
-    if dev.get("device_type") != "display" and dev.get("protocol") not in ("pixoo", "awtrix"):
+
+    protocol  = dev.get("protocol")
+    dtype     = dev.get("device_type")
+    is_display = dtype == "display" or protocol in ("pixoo", "awtrix")
+    is_panel   = dtype == "panel"   or protocol == "hasp"
+    if not (is_display or is_panel):
         return None
 
-    device_id = dev.get("id")
-    protocol = dev.get("protocol")
-
+    device_id  = dev.get("id")
     rest_lower = rest.lower()
+
+    # ── Panel: HASP-specific actions (page nav + backlight on/off) ────
+    if is_panel:
+        m = _PAGE_RE.match(rest_lower)
+        if m:
+            # `@<Panel> Page <N>` → rule engine HASP branch resolves
+            # via dps_config.page.action_on='goto_page' and reads
+            # cmd['page_num'] as the publish payload for command/page.
+            return {
+                "device_id": device_id,
+                "protocol":  protocol,
+                "action":    "turn_on",
+                "channel":   "page",
+                "page_num":  int(m.group(1)),
+            }
+        if rest_lower in ("on", "off"):
+            # Backlight toggle — engine maps via dps_config.backlight
+            # alias to publish `command/backlight on|off`.
+            return {
+                "device_id": device_id,
+                "protocol":  protocol,
+                "action":    "turn_on" if rest_lower == "on" else "turn_off",
+                "channel":   "backlight",
+            }
+        return None
+
+    # ── Display: power + push preset ──────────────────────────────────
     if rest_lower == "on":
         return {"device_id": device_id, "protocol": protocol, "action": "power_on"}
     if rest_lower == "off":
