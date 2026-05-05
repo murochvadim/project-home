@@ -92,7 +92,6 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('wallmote', this)">Wallmote</button>
-    <button class="tab-btn" onclick="showTab('rules', this)">Rule Settings</button>
     <button class="tab-btn" onclick="showTab('awtrix', this)">Awtrix</button>
   </div>
 
@@ -252,28 +251,6 @@
 
   </div>
 
-  <!-- Rule Settings tab — rules (named containers) each with sentences describing behaviour.
-       No Generate button: user asks Claude in chat to turn rules+sentences into Python rules. -->
-  <div class="tab-panel" id="tab-rules">
-    <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-        <h2 style="margin:0;">Rule Settings — Living Room</h2>
-        <button onclick="rsAddRule()" style="background:#6c4f9f;color:#fff;border:none;border-radius:4px;padding:5px 14px;font-size:0.82rem;cursor:pointer;">+ Add rule</button>
-      </div>
-      <div style="font-size:0.78rem;color:#666;margin-bottom:12px;">
-        Each <b>rule</b> is a named behaviour with one or more sentences describing when/what it does. Example rule <em>"Evening Lights"</em>:
-        sentence 1 <em>"at sunset turn on TV spots"</em>; sentence 2 <em>"at sunset turn on main light at 60% brightness"</em>.
-        When ready, ask Claude in chat to generate Python rules from these.
-      </div>
-      <div id="rs-rules-container"></div>
-      <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px;">
-        <span id="rs-dirty-badge" style="display:none;color:#c0392b;font-size:0.78rem;">● Unsaved changes</span>
-        <button class="btn-save" onclick="rsSave()" style="padding:5px 16px;">Save All</button>
-        <button onclick="rsDiscard()" title="Discard all unsaved changes and reload from DB" style="padding:5px 12px;background:#fff;color:#666;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.82rem;">Discard</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Awtrix tab — sentence editor with {{var}} substitution from rule_engine_state.
        Pushes via MQTT-over-WebSocket directly to awtrix_05ec2c/notify or .../custom/<name>. -->
   <div class="tab-panel" id="tab-awtrix">
@@ -414,6 +391,6 @@
 <script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/device-picker.js?v=7"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/living-room.js?v=32"></script>
+<script src="js/living-room.js?v=35"></script>
 </body>
 </html>

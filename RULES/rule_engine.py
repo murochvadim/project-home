@@ -955,6 +955,33 @@ class RuleEngine:
 
     def _dispatch_awtrix(self, cmd, device_id, rule_name):
         action = cmd.get('action', '')
+        # turn_on / turn_off come from generic device-picker bindings
+        # (wallmote, smart switch, rule sentences). Resolve via
+        # devices.dps_config.<channel>.action_on/action_off alias —
+        # same pattern as ESP boards. Awtrix's only on/off-style
+        # alias today is `power_on` / `power_off`.
+        if action in ('turn_on', 'turn_off'):
+            dev = self.state.devices.get(device_id, {})
+            channel = cmd.get('channel') or ''
+            cfg = (dev.get('dps_config') or {}).get(channel, {}) if channel else {}
+            alias = cfg.get('action_on') if action == 'turn_on' else cfg.get('action_off')
+            # Fallback: legacy bindings stored before the picker was
+            # action-channel-aware have channel=null. If the device has
+            # only one alias channel, use it. Same pattern as the ESP
+            # _resolve_esp_action fallback.
+            if not alias:
+                for ch_cfg in (dev.get('dps_config') or {}).values():
+                    if not isinstance(ch_cfg, dict): continue
+                    cand = ch_cfg.get('action_on') if action == 'turn_on' else ch_cfg.get('action_off')
+                    if cand:
+                        alias = cand
+                        break
+            if alias in ('power_on', 'power_off'):
+                action = alias
+            else:
+                log.warning("Rule '%s' awtrix %s: no alias mapping for '%s' channel '%s'",
+                            rule_name, device_id, action, cmd.get('channel'))
+                return
         if action in ('power_on', 'power_off'):
             self.mqtt.publish_command(f'{device_id}/power', {'power': action == 'power_on'})
             log.info("Rule '%s' -> awtrix %s %s", rule_name, action, device_id)
@@ -1067,9 +1094,58 @@ class RuleEngine:
             # 'hasp:<plate>', not in `name` — so users can freely rename
             # the device's human display name without breaking dispatch.
             plate = device_id[5:].split(':', 1)[0] if device_id.startswith('hasp:') else device_name
-            path = cmd.get('path', '')
-            value = cmd.get('value', '')
+            # turn_on/turn_off via dps_config alias lookup — same pattern
+            # as ESP boards. dps_config.<channel>.action_on/action_off
+            # carries an alias (e.g. "backlight_on") that this branch
+            # translates to (path, value) before publishing. Lets a
+            # rule sentence / wallmote binding say "@Balcony Panel
+            # Display Screen on" without callers needing to know HASP's
+            # property names.
+            if action in ('turn_on', 'turn_off'):
+                channel = cmd.get('channel') or ''
+                cfg = (dev.get('dps_config') or {}).get(channel, {}) if channel else {}
+                alias = cfg.get('action_on') if action == 'turn_on' else cfg.get('action_off')
+                # Fallback for legacy bindings with channel=null: pick
+                # the first channel that has an action_on/off mapping
+                # AND doesn't need a parameter the cmd lacks. `goto_page`
+                # needs cmd['page_num']; if the binding doesn't carry
+                # one, skip it (so on/off bindings fall back to the
+                # backlight channel rather than failing on goto_page).
+                if not alias:
+                    needs_params = {'goto_page': 'page_num'}
+                    for ch_cfg in (dev.get('dps_config') or {}).values():
+                        if not isinstance(ch_cfg, dict): continue
+                        cand = ch_cfg.get('action_on') if action == 'turn_on' else ch_cfg.get('action_off')
+                        if not cand: continue
+                        req = needs_params.get(cand)
+                        if req and cmd.get(req) is None:
+                            continue   # skip alias that needs missing param
+                        alias = cand
+                        break
+                # Currently mapped aliases — add new ones here as future
+                # panel capabilities are surfaced.
+                if alias == 'backlight_on':    path, value = 'backlight', 'on'
+                elif alias == 'backlight_off': path, value = 'backlight', 'off'
+                elif alias == 'goto_page':
+                    # Page-select channel: the picker stored a chosen
+                    # page number on the binding; rule handler copied it
+                    # into cmd['page_num']. Publish it as the payload of
+                    # `hasp/<plate>/command/page` to switch the panel.
+                    pn = cmd.get('page_num')
+                    if pn is None:
+                        log.warning("Rule '%s' hasp %s: goto_page alias missing page_num",
+                                    rule_name, device_id)
+                        return
+                    path, value = 'page', str(int(pn))
+                else:
+                    log.warning("Rule '%s' hasp %s: no alias mapping for action '%s' channel '%s'",
+                                rule_name, device_id, action, cmd.get('channel'))
+                    return
+            else:
+                path  = cmd.get('path', '')
+                value = cmd.get('value', '')
             self.mqtt.publish_raw(f'hasp/{plate}/command/{path}', str(value))
+            log.info("Rule '%s' -> hasp %s %s=%s", rule_name, device_name, path, value)
 
         elif protocol == 'zigbee':
             # For multi-gang zigbee switches, `channel` (e.g. 'state_l1') is the

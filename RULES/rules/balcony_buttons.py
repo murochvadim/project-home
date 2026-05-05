@@ -114,6 +114,8 @@ def _build_command(b, state):
         }
         if channel:
             cmd["channel"] = channel
+        if "page_num" in b:
+            cmd["page_num"] = b["page_num"]
         return cmd
 
     if btype == "hasp_command":

@@ -25,7 +25,8 @@ All living-room configs use `dashboard_settings` keys with prefix `living-room.`
 | Key | Shape | Purpose |
 |-----|-------|---------|
 | `living-room.wallmote_bindings` | `{"<slug>:<button>:<event>": [{device_id, channel, action, name, label}, ...]}` | Wallmote button → device bindings |
-| `living-room.rule_sentences` | `[{id, name, active, sentences:[{id, segments:[{t,v}], active, added_at, updated_at}], added_at, updated_at}]` | Per-room rule authoring — numbered rule containers of segment-based sentences, consumed by AI sentence→Python pipeline. See [RULES/TODO_RULES.md](../RULES/TODO_RULES.md#sentence-wire-format-segments-model). |
+
+> **Note (2026-05-05):** `living-room.rule_sentences` was removed. Per-room rule authoring proved redundant — every actual rule (Evening Lights, Mode Buttons, Start Away Mode, etc.) cuts across multiple rooms via `@<device>` chips, so a "Living Room only" namespace was artificial. All rule authoring now lives on **Main Agent → Base Rule Settings** (`dashboard_settings.apartment.rule_sentences`). Future per-room agents (Balcony, Bedroom, etc.) follow the same pattern: their dashboards host area-specific control surfaces (wallmote bindings, smart switches, panels, displays) but NO rule editor.
 
 Saved via POST to `/api/dashboard-settings/living-room.wallmote_bindings` from the Living Room page.
 
@@ -51,7 +52,9 @@ Path: `/living-room.html` (served by the Windows dashboard). Sidebar link under 
 ### Tabs
 
 - **Wallmote** — binding editor for Wallmote 1 and Wallmote 2 (4 buttons × Pushed/Held = 8 slots per wallmote)
-- **Rule Settings** — sentence-based rule authoring for Living Room (Layer 3 action rules). Numbered rule containers, each containing one or more sentences assembled from free-text segments + device chips. Drag rules to reorder. Device chips come from a shared picker (no typed `@` names). × removes a chip; click the chip name opens the picker to swap the device. `+Dev` inserts a new chip at end. `Save All` writes to `dashboard_settings.living-room.rule_sentences`; `Discard` reloads from DB. `● Unsaved changes` badge tracks local edits; leaving the page with unsaved changes triggers a browser warning. AI sentence→Python pipeline consumes this store — see [RULES/TODO_RULES.md](../RULES/TODO_RULES.md).
+- **Awtrix** — sentence editor + saved-apps manager for the AWTRIX 3 LED matrix display. See root CLAUDE.md → Living Room Agent row for full details.
+
+> **Removed (2026-05-05):** `Rule Settings` tab. Rule authoring consolidated to Main Agent — see the Main Agent → Base Rule Settings tab. Rationale: every real rule cross-cuts rooms; a per-room rule namespace added complexity without value. Living Room agent now hosts only room-specific non-rule UI (wallmote bindings + Awtrix). Pattern applies to all future per-room agents.
 
 ### Wallmote Tab Features
 

@@ -54,6 +54,15 @@ _ACTION_RE       = re.compile(r"^(\d+)_(single|double|hold)$")
 _BINDINGS_CACHE  = {"data": None, "ts": 0.0}
 _CACHE_TTL_SEC   = 30
 
+# Per-slot cooldown to suppress duplicate `action` emissions from Z2M.
+# The MOES TS0044 firmware publishes the same action value twice in
+# rapid succession (press + release both carry it), so without this we
+# fire each binding twice per physical press — confuses devices like
+# Awtrix that don't tolerate two power-toggles 50 ms apart. 1 s window
+# matches the balcony_buttons rule's HASP cooldown for consistency.
+_COOLDOWN_SEC    = 1.0
+_last_fired      = {}
+
 
 def _get_bindings(state):
     """Load bindings from dashboard_settings with TTL cache."""
@@ -119,6 +128,11 @@ def _build_commands(slot, state, slot_key):
         }
         if channel:
             cmd["channel"] = channel
+        # Pass through page_num for HASP `page` channel bindings (the
+        # picker stores the chosen page 1-12 on the binding; rule engine
+        # HASP branch reads it to publish the page-switch command).
+        if "page_num" in b:
+            cmd["page_num"] = b["page_num"]
         commands.append(cmd)
     return commands
 
@@ -136,6 +150,15 @@ def evaluate(event, state):
 
     button_n, event_type = m.group(1), m.group(2)
     slot_key             = f"btn{button_n}:{event_type}"
+
+    # Z2M emits the same `action` field twice in quick succession on
+    # this TS0044 firmware. Drop dupes within the cooldown window.
+    now  = time.time()
+    last = _last_fired.get(slot_key, 0.0)
+    if now - last < _COOLDOWN_SEC:
+        return []
+    _last_fired[slot_key] = now
+
     bindings             = _get_bindings(state)
     slot                 = bindings.get(slot_key, [])
     if not slot:

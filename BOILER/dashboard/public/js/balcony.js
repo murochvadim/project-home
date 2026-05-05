@@ -129,7 +129,7 @@
     { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
     { v: 'toggle',   label: 'Toggle',   tag: 'toggle' },
   ];
-  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board']);
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display']);
 
   let _buttons = [];
   let _controllable = [];
@@ -137,6 +137,13 @@
 
   function bcActionLabel(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.label : v; }
   function bcActionTag(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.tag : 'toggle'; }
+  // Render-helper for binding chips: page-select bindings show `P<n>`
+  // instead of the generic action tag, so the user immediately sees
+  // which page each button jumps to.
+  function bcBindingTag(b) {
+    if (b && b.page_num != null) return `P${b.page_num}`;
+    return bcActionTag(b ? b.action : 'toggle');
+  }
   function bcDefaultActionFor(_event) { return 'toggle'; }
 
   async function bcLoadControllableDevices() {
@@ -175,8 +182,14 @@
         } else if (espChans.length) {
           for (const ch of espChans) {
             const cc = dpsCfg[ch] || {};
+            // Attach `chan_meta` so the picker can render the right
+            // control. type='page_select' makes the picker show a
+            // page-number dropdown (1..max) instead of the usual
+            // toggle/turn_on/turn_off action dropdown.
+            const meta = (cc.type ? { type: cc.type, min: cc.min, max: cc.max } : null);
             _controllable.push({ device_id: d.id, channel: ch, name: d.name, label: cc.name || ch,
-                                 room: cc.room || d.room || '', protocol: d.protocol });
+                                 room: cc.room || d.room || '', protocol: d.protocol,
+                                 chan_meta: meta });
           }
         } else {
           _controllable.push({ device_id: d.id, channel: null, name: d.name, label: '',
@@ -201,7 +214,7 @@
     } else {
       el.classList.remove('empty');
       el.innerHTML = sel.map(s =>
-        `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`
+        `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcBindingTag(s)}">${bcBindingTag(s)}</span>`
       ).join(' · ');
       el.title = sel.map(s => `${s.name || '?'}${s.label?':'+s.label:''} → ${bcActionLabel(s.action)}`).join('\n');
     }
@@ -222,7 +235,7 @@
                    data-bc-picker="${r.id}"
                    onclick="bcOpenPicker(${r.id})">
                 ${(r.bindings && r.bindings.length)
-                    ? r.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`).join(' · ')
+                    ? r.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcBindingTag(s)}">${bcBindingTag(s)}</span>`).join(' · ')
                     : '— select devices —'}
               </div>
               <button class="btn-test" onclick="bcTestRow(${r.id}, this)">Test</button>
@@ -287,27 +300,46 @@
       const existing = selByKey.get(rowKey);
       const checked = !!existing;
       const act = existing ? existing.action : defAct;
+      // Page-select channels (e.g. HASP balcony's `page` channel)
+      // replace the action dropdown with a page-number dropdown
+      // (min..max). Selecting a number stores `{action: 'turn_on',
+      // page_num: N}` on the binding — the rule engine HASP branch
+      // translates that into a `command/page` publish.
+      const isPageSelect = d.chan_meta && d.chan_meta.type === 'page_select';
+      let dropdownHtml;
+      if (isPageSelect) {
+        const lo = Number(d.chan_meta.min || 1);
+        const hi = Number(d.chan_meta.max || 12);
+        const cur = (existing && existing.page_num) || lo;
+        const opts = [];
+        for (let n = lo; n <= hi; n++) opts.push(n);
+        dropdownHtml = `<select class="picker-page-select">
+          ${opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>Page ${n}</option>`).join('')}
+        </select>`;
+      } else {
+        dropdownHtml = `<select class="picker-action-select">
+          ${ACTIONS.map(a => `<option value="${a.v}" ${a.v === act ? 'selected' : ''}>${a.label}</option>`).join('')}
+        </select>`;
+      }
 
       const item = document.createElement('div');
       item.className = 'picker-item';
       item.innerHTML = `
         <input type="checkbox" ${checked ? 'checked' : ''}>
         <div class="picker-item-name">${escHtml(displayName)}</div>
-        <select class="picker-action-select">
-          ${ACTIONS.map(a => `<option value="${a.v}" ${a.v === act ? 'selected' : ''}>${a.label}</option>`).join('')}
-        </select>
+        ${dropdownHtml}
         <div class="picker-item-meta">${escHtml(d.protocol)}${d.channel ? ' · '+d.channel : ''}</div>`;
       const cb = item.querySelector('input');
       const sel = item.querySelector('select');
       item.addEventListener('click', (e) => {
         if (e.target === sel || sel.contains(e.target)) return;
         if (e.target !== cb) cb.checked = !cb.checked;
-        bcToggleSelection(d, cb.checked, sel.value);
+        bcToggleSelection(d, cb.checked, sel.value, isPageSelect);
       });
       sel.addEventListener('change', (e) => {
         e.stopPropagation();
         if (!cb.checked) cb.checked = true;
-        bcToggleSelection(d, cb.checked, sel.value);
+        bcToggleSelection(d, cb.checked, sel.value, isPageSelect);
       });
       sel.addEventListener('click', (e) => e.stopPropagation());
       list.appendChild(item);
@@ -322,21 +354,31 @@
     bcUpdatePickerCount();
   }
 
-  function bcToggleSelection(dev, checked, action) {
+  function bcToggleSelection(dev, checked, action, isPageSelect) {
     if (!_bcActivePicker) return;
     const row = _buttons.find(r => r.id === _bcActivePicker.rowId);
     if (!row) return;
     if (!row.bindings) row.bindings = [];
     const idx = row.bindings.findIndex(s =>
       s.device_id === dev.device_id && (s.channel || null) === (dev.channel || null));
+    // For page-select channels, the dropdown's value is the chosen page
+    // number (string). The action stored on the binding is always
+    // 'turn_on' (the rule engine resolves via dps_config alias →
+    // 'goto_page' → publishes `page` topic with cmd.page_num).
+    const pageNum = isPageSelect ? parseInt(action, 10) : null;
+    const storedAction = isPageSelect ? 'turn_on' : action;
     if (checked) {
       if (idx >= 0) {
-        row.bindings[idx].action = action;
+        row.bindings[idx].action = storedAction;
+        if (isPageSelect) row.bindings[idx].page_num = pageNum;
+        else delete row.bindings[idx].page_num;
       } else {
-        row.bindings.push({
+        const b = {
           device_id: dev.device_id, channel: dev.channel,
-          name: dev.name, label: dev.label, action,
-        });
+          name: dev.name, label: dev.label, action: storedAction,
+        };
+        if (isPageSelect) b.page_num = pageNum;
+        row.bindings.push(b);
       }
     } else if (idx >= 0) {
       row.bindings.splice(idx, 1);
@@ -822,7 +864,7 @@
                    data-sw-picker="${escHtml(r.id)}"
                    onclick="swOpenPicker('${escHtml(r.id)}')">
                 ${(r.bindings && r.bindings.length)
-                    ? r.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`).join(' · ')
+                    ? r.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcBindingTag(s)}">${bcBindingTag(s)}</span>`).join(' · ')
                     : '— select devices —'}
               </div>
             </div>`).join('')}
@@ -836,7 +878,7 @@
     if (!row || !el) return;
     el.classList.toggle('empty', !(row.bindings && row.bindings.length));
     el.innerHTML = (row.bindings && row.bindings.length)
-      ? row.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcActionTag(s.action)}">${bcActionTag(s.action)}</span>`).join(' · ')
+      ? row.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bcBindingTag(s)}">${bcBindingTag(s)}</span>`).join(' · ')
       : '— select devices —';
   }
 

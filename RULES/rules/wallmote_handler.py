@@ -203,6 +203,8 @@ def evaluate(event, state):
         }
         if channel:
             cmd["channel"] = channel
+        if "page_num" in b:
+            cmd["page_num"] = b["page_num"]
         commands.append(cmd)
 
     log.info(
