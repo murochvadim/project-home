@@ -159,8 +159,33 @@
         // the device exposes multiple actionable channels — single-channel
         // devices keep the short "@Name on" form and let the engine resolve
         // via the dps_config fallback.
+        //
+        // Page-select channels (type='page_select' in dps_config) are
+        // special — the action isn't on/off but "go to page N". Render
+        // a number dropdown (min..max) per such channel; selecting a
+        // number inserts a token like "@Balcony Panel Display Page 5".
+        const cfg = d.dps_config || {};
         const single = actionable.length === 1;
         const buttons = actionable.flatMap(([key, label]) => {
+          const ch = cfg[key] || {};
+          if (ch.type === 'page_select') {
+            const lo = Number(ch.min || 1);
+            const hi = Number(ch.max || 12);
+            const opts = [];
+            for (let n = lo; n <= hi; n++) {
+              opts.push(`<option value="${n}">Page ${n}</option>`);
+            }
+            const lblPrefix = `${label || key}: `;
+            return [
+              `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px;">
+                 <span style="font-size:0.72rem;color:#555;">${lblPrefix}</span>
+                 <select data-dp-action="page-select" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel-label="${(label||key).replace(/"/g,'&quot;')}"
+                         style="padding:2px 6px;border:1px solid #6c4f9f;border-radius:3px;font-size:0.72rem;cursor:pointer;background:#fff;color:#6c4f9f;">
+                   <option value="">— pick page —</option>${opts.join('')}
+                 </select>
+               </span>`
+            ];
+          }
           const suffix = single ? '' : ` ${key}`;
           const lblPrefix = `${label || key}: `;
           return [
@@ -206,7 +231,10 @@
     // (with optional channel suffix when the device has multiple actionable
     // channels — e.g. "@My Bathroom Smell auto_enabled on").
     listEl.querySelectorAll('[data-dp-action]').forEach(el => {
-      el.addEventListener('click', (e) => {
+      // page-select uses a <select> + change event — everything else is
+      // a <button> + click. Wire both to a single action router.
+      const evt = el.tagName === 'SELECT' ? 'change' : 'click';
+      el.addEventListener(evt, (e) => {
         e.stopPropagation();
         const name = el.dataset.dpName || '';
         const action = el.dataset.dpAction;
@@ -217,6 +245,15 @@
           const suffix = el.dataset.dpSuffix || '';   // ' <channel>' or ''
           const verb   = action === 'esp-on' ? 'on' : 'off';
           token = `@${name}${suffix} ${verb}`;
+        }
+        else if (action === 'page-select') {
+          const n = parseInt(el.value, 10);
+          if (isNaN(n) || n < 1) return;              // placeholder option, ignore
+          // Token format: "@<Name> Page <N>". The receiving rule (or
+          // shared parser when one is added) recognizes 'Page <int>'
+          // as a goto-page command and dispatches via the rule engine
+          // HASP branch's existing goto_page alias path.
+          token = `@${name} Page ${n}`;
         }
         if (token && _onPick) _onPick(token);
         window._dpClose();
