@@ -240,7 +240,7 @@ class StateManager:
 
             with self._hb_conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, name, room, device_type, protocol, last_state, dps_labels "
+                    "SELECT id, name, room, device_type, protocol, last_state, dps_labels, dps_config "
                     "FROM devices WHERE enabled = true"
                 )
                 for row in cur.fetchall():
@@ -270,6 +270,22 @@ class StateManager:
                     else:
                         dps_labels = {}
 
+                    # dps_config — same JSONB shape; consumed by
+                    # rule_engine._resolve_esp_action to map turn_on/turn_off
+                    # to per-channel sketch actions (action_on / action_off).
+                    # Without this loaded, ESP boards added via rules silently
+                    # log "no mapping for action" and the dispatch is dropped.
+                    raw_cfg = row.get('dps_config')
+                    if isinstance(raw_cfg, dict):
+                        dps_config = raw_cfg
+                    elif isinstance(raw_cfg, str):
+                        try:
+                            dps_config = json.loads(raw_cfg) or {}
+                        except (json.JSONDecodeError, TypeError):
+                            dps_config = {}
+                    else:
+                        dps_config = {}
+
                     devices[dev_id] = {
                         'dps': dps,
                         'online': True,
@@ -278,6 +294,7 @@ class StateManager:
                         'device_type': row['device_type'] or '',
                         'protocol': row['protocol'] or '',
                         'dps_labels': dps_labels,
+                        'dps_config': dps_config,
                     }
 
                 cur.execute("SELECT name FROM rooms")
@@ -679,10 +696,12 @@ class StateManager:
             existing_dps = {}
             existing_online = True
             existing_dps_labels = {}
+            existing_dps_config = {}
             if dev_id in old_devices:
                 existing_dps = old_devices[dev_id].get('dps', {})
                 existing_online = old_devices[dev_id].get('online', True)
                 existing_dps_labels = old_devices[dev_id].get('dps_labels', {})
+                existing_dps_config = old_devices[dev_id].get('dps_config', {})
 
             new_devices[dev_id] = {
                 'dps': existing_dps,
@@ -692,6 +711,7 @@ class StateManager:
                 'device_type': item.get('device_type', ''),
                 'protocol': item.get('protocol', ''),
                 'dps_labels': existing_dps_labels,
+                'dps_config': existing_dps_config,
             }
 
             room = item.get('room', '')

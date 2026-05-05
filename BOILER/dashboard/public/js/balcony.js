@@ -129,7 +129,7 @@
     { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
     { v: 'toggle',   label: 'Toggle',   tag: 'toggle' },
   ];
-  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve']);
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board']);
 
   let _buttons = [];
   let _controllable = [];
@@ -150,9 +150,17 @@
         if (!CONTROLLABLE_TYPES.has(d.device_type)) continue;
         const chanCfg = d.channel_config || {};
         const dpsLabels = d.dps_labels || {};
+        const dpsCfg = d.dps_config || {};
         const tuyaChans = Object.keys(chanCfg).filter(k => k && !isNaN(parseInt(k))).sort();
         const zigbeeChans = Object.keys(dpsLabels).filter(k => /^state_l\d+$/i.test(k))
           .sort((a, b) => parseInt(a.replace(/\D/g,'')) - parseInt(b.replace(/\D/g,'')));
+        // ESP boards expose controllable channels via dps_config.<channel>.action_on
+        // (and optional action_off). Each such channel is a target the rule
+        // engine can dispatch turn_on / turn_off against — surface them in the
+        // picker exactly the same way as Tuya gangs.
+        const espChans = (d.protocol === 'esp')
+          ? Object.keys(dpsCfg).filter(k => (dpsCfg[k] || {}).action_on)
+          : [];
         if (tuyaChans.length > 1) {
           for (const ch of tuyaChans) {
             const ci = chanCfg[ch] || {};
@@ -163,6 +171,12 @@
           for (const ch of zigbeeChans) {
             _controllable.push({ device_id: d.id, channel: ch, name: d.name, label: dpsLabels[ch] || ch,
                                  room: d.room || '', protocol: d.protocol });
+          }
+        } else if (espChans.length) {
+          for (const ch of espChans) {
+            const cc = dpsCfg[ch] || {};
+            _controllable.push({ device_id: d.id, channel: ch, name: d.name, label: cc.name || ch,
+                                 room: cc.room || d.room || '', protocol: d.protocol });
           }
         } else {
           _controllable.push({ device_id: d.id, channel: null, name: d.name, label: '',

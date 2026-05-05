@@ -766,6 +766,8 @@ class RuleEngine:
         'water_low', 'beans_low', 'grounds_full',
         'cleaning_required', 'descale_required',
         'total_dispensed', 'espressos_today',
+        # home gates (gates_01) — live progress for HASP/Awtrix/Pixoo display
+        'gates_state', 'barrier_progress', 'gates_progress',
     )
 
     def _update_esp_device_dps(self, board_id, status_payload):

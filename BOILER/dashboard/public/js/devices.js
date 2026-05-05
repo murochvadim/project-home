@@ -460,7 +460,11 @@ function applyFilters() {
         const attrRoom = dpsCfg[k]?.room || d.room || '—';
         // Decode value
         let dot = '', statusTxt = '';
-        if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
+        if (typeof raw === 'number' && lbl.includes('%') && raw < 0) {
+          dot = 'dot-off'; statusTxt = '—';                  // idle progress
+        } else if (typeof raw === 'number' && lbl.includes('%')) {
+          dot = 'dot-on'; statusTxt = raw + '%';
+        } else if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
           const on = raw === true || raw === 1;
           dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
@@ -690,10 +694,17 @@ function applySettingsFilters() {
       const enabled  = dpsCfg[k]?.enabled !== false;
       const showDash = dpsCfg[k]?.show_dashboard !== false;
       let valTxt = String(raw);
-      if (typeof raw === 'number' && lbl.includes('x0.1')) valTxt = (raw / 10).toFixed(1) + '°C';
+      // Progress-style fields (label contains "%") use -1 as the "idle"
+      // sentinel — display as "—" instead of the raw negative number.
+      if (typeof raw === 'number' && lbl.includes('%') && raw < 0) valTxt = '—';
+      else if (typeof raw === 'number' && lbl.includes('%')) valTxt = raw + '%';
+      else if (typeof raw === 'number' && lbl.includes('x0.1')) valTxt = (raw / 10).toFixed(1) + '°C';
       // Shorten BSH enum values: BSH.Common.EnumType.DoorState.Closed → Closed
       if (typeof raw === 'string' && raw.includes('.')) valTxt = raw.split('.').pop();
-      const dot = (raw === true || raw === 1) ? 'dot-on' : (raw === false || raw === 0) ? 'dot-off' : 'dot-on';
+      const dot = (raw === true || raw === 1) ? 'dot-on'
+        : (raw === false || raw === 0) ? 'dot-off'
+        : (typeof raw === 'number' && raw < 0) ? 'dot-off'   // idle progress
+        : 'dot-on';
       rows.push(`
     <tr class="dps-attr-row" data-parent-id="${escHtml(d.id)}" data-dps="${k}">
       <td style="padding-left:28px;color:var(--muted);font-size:0.8rem;" title="${escHtml(k)}">
@@ -715,10 +726,79 @@ function applySettingsFilters() {
       <td colspan="1"></td>
     </tr>`);
     }
+
+    // Trigger-action sub-rows for ESP boards — every dps_config entry that
+    // has `action_on` (and no value in last_state, i.e. it's a write-only
+    // command channel, not a status field) gets a clickable button that
+    // POSTs to /api/esp/boards/<id>/command. Lets the user fire the
+    // board's actions directly from Set Devices without bouncing to the
+    // Project Boards page.
+    if (d.protocol === 'esp') {
+      const dpsLabelKeys = new Set(Object.keys(d.dps_labels || {}));
+      const dpsCfgAll    = d.dps_config || {};
+      const triggerKeys  = Object.keys(dpsCfgAll).filter(k => {
+        const c = dpsCfgAll[k] || {};
+        if (!c.action_on) return false;          // only command channels
+        if (dpsLabelKeys.has(k))    return false; // already rendered as DPS attr above
+        return true;
+      });
+      for (const tk of triggerKeys) {
+        const tcfg     = dpsCfgAll[tk];
+        const trigName = tcfg.name || tk;
+        const actionOn = tcfg.action_on;
+        const actionOff = tcfg.action_off;
+        rows.push(`
+    <tr class="trigger-action-row" data-parent-id="${escHtml(d.id)}" data-channel="${escHtml(tk)}">
+      <td style="padding-left:28px;color:var(--muted);font-size:0.8rem;">
+        <span class="chan-indicator dot-off"></span>${escHtml(trigName)}
+      </td>
+      <td><span style="font-size:0.72rem;color:var(--muted)">trigger</span></td>
+      <td>${escHtml(tcfg.room || '')}</td>
+      <td><span style="font-size:0.72rem;color:var(--muted)">${escHtml(tk)}</span></td>
+      <td colspan="3" style="text-align:center;">
+        <button class="trigger-btn" data-board="${escHtml(d.id)}" data-action="${escHtml(actionOn)}"
+          style="font-size:0.75rem;padding:3px 10px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:4px;cursor:pointer;margin-right:6px;">
+          ▶ ${escHtml(actionOn)}
+        </button>
+        ${actionOff ? `<button class="trigger-btn" data-board="${escHtml(d.id)}" data-action="${escHtml(actionOff)}"
+          style="font-size:0.75rem;padding:3px 10px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:4px;cursor:pointer;">
+          ▶ ${escHtml(actionOff)}
+        </button>` : ''}
+        <span class="trigger-status" style="font-size:0.72rem;color:var(--muted);margin-left:8px;"></span>
+      </td>
+      <td></td>
+      <td></td>
+    </tr>`);
+      }
+    }
   }
 
   tbody.innerHTML = rows.join('') ||
     '<tr><td colspan="10" style="color:var(--muted)">No devices match</td></tr>';
+
+  // Wire trigger buttons (delegated handler is fine, but a direct one keeps
+  // the click → POST → status update fast + scoped per-row).
+  tbody.querySelectorAll('.trigger-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const boardId = btn.dataset.board;
+      const action  = btn.dataset.action;
+      const statusEl = btn.closest('tr')?.querySelector('.trigger-status');
+      if (statusEl) { statusEl.style.color = '#7a5800'; statusEl.textContent = 'sending…'; }
+      try {
+        const r = await fetch(`/api/esp/boards/${encodeURIComponent(boardId)}/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        if (statusEl) { statusEl.style.color = '#3a7d44'; statusEl.textContent = '✓ sent'; }
+      } catch (e) {
+        if (statusEl) { statusEl.style.color = '#c0392b'; statusEl.textContent = '✗ ' + (e.message || 'error'); }
+      }
+      setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
+    });
+  });
 }
 
 // ─── Inline edit ──────────────────────────────────────────────────────────────

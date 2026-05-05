@@ -68,6 +68,7 @@ const ACTION_GROUPS = [
   { id: 'hivemq',   label: 'HiveMQ Bridge', tab: 'simulation', keys: ['reconnect_hivemq', 'sim_came_parking', 'sim_in_parking', 'sim_no_data'] },
   { id: 'pump',     label: 'Pump',          tab: 'simulation', keys: ['smell_start', 'smell_stop', 'smell_auto_start', 'smell_auto_stop'], statusFlag: 'pump_state',   statusLabel: 'Pump' },
   { id: 'coffee',   label: 'Coffee Machine', tab: 'simulation', keys: ['on', 'off', 'brew_espresso', 'brew_coffee', 'brew_2x_espresso', 'brew_2x_coffee', 'hot_water', 'cancel', 'standby'], statusFlag: 'power_state', statusLabel: 'Power' },
+  { id: 'gates',    label: 'Gates',          tab: 'simulation', keys: ['open_barrier', 'open_both_gates'], statusFlag: 'gates_state', statusLabel: 'State', progressFields: [{ key: 'barrier_progress', label: 'Barrier' }, { key: 'gates_progress', label: 'Both Gates' }] },
 ];
 
 // ─── Load + render ─────────────────────────────────────────────────────
@@ -281,6 +282,28 @@ function renderActionGroup(b, group, opts = {}) {
          ${dotCell(online ? status[group.statusFlag] : null, '<span style="color:#c0392b;">ON</span>', '<span style="color:#888;">off</span>')}
        </div>`
     : '';
+  // Progress-bar rows. Each `progressFields` entry expects an int 0..100
+  // (or -1/null when idle). Bar fills proportionally; idle renders an
+  // empty grey bar with "—" instead of a percent. IDs let the live MQTT
+  // /status subscriber update the fill + value text in place without a
+  // full re-render.
+  const progressRows = (group.progressFields || []).map(pf => {
+    const raw = (online && status[pf.key] !== undefined && status[pf.key] !== null)
+      ? Number(status[pf.key]) : -1;
+    const pct = (raw >= 0 && raw <= 100) ? raw : -1;
+    const fillW = pct >= 0 ? pct : 0;
+    const fillColor = pct >= 0 ? '#3a7d44' : '#d0cbc4';
+    const valueText = pct >= 0 ? `${pct}%` : '—';
+    const fillId = `pbar-${b.id}-${pf.key}-fill`;
+    const textId = `pbar-${b.id}-${pf.key}-text`;
+    return `<div style="margin-bottom:6px;font-size:0.82rem;display:grid;grid-template-columns:80px 100px 36px;gap:8px;align-items:center;">
+        <span><strong>${escHtml(pf.label)}:</strong></span>
+        <div style="background:#f0ece5;border:1px solid #d0cbc4;border-radius:3px;height:12px;overflow:hidden;">
+          <div id="${fillId}" data-pbar-board="${escHtml(b.id)}" data-pbar-key="${escHtml(pf.key)}" style="background:${fillColor};height:100%;width:${fillW}%;transition:width 0.3s;"></div>
+        </div>
+        <span id="${textId}" style="text-align:right;color:#555;font-variant-numeric:tabular-nums;">${valueText}</span>
+      </div>`;
+  }).join('');
   const buttons = present.map(a => {
     const cls = (opts.destructive || DESTRUCTIVE_ACTIONS.has(a.key)) ? 'destructive' : '';
     return `<button class="action-btn ${cls}" data-action-key="${escHtml(a.key)}" title="${escHtml(a.description || '')}">
@@ -291,6 +314,7 @@ function renderActionGroup(b, group, opts = {}) {
     <div class="esp-card">
       <h3 class="esp-card-title">${escHtml(group.label)}</h3>
       ${statusRow}
+      ${progressRows}
       <div class="actions-grid">${buttons}</div>
     </div>
   `;
@@ -474,7 +498,8 @@ const LIVE_BROKER_HOST = '192.168.1.189';   // LXC 107 — broker WebSocket list
 const LIVE_BROKER_PORT = 9001;
 const LIVE_USER        = 'dashboard_browser';
 const LIVE_TOPIC       = 'mur/home/esp/+/event';
-const LIVE_MAX_ROWS    = 50;
+const LIVE_STATUS_TOPIC = 'mur/home/esp/+/status';   // for real-time progress-bar updates
+const LIVE_MAX_ROWS    = 10;
 
 let _liveMqtt = null;
 let _liveRows = [];
@@ -554,11 +579,51 @@ async function wireLiveStream() {
     _liveMqtt.subscribe(LIVE_TOPIC, { qos: 0 }, (err) => {
       if (err) liveSetStatus('subscribe failed: ' + err.message, '#c0392b');
     });
+    // Also subscribe to /status so progress bars + statusFlag indicators
+    // update in real time without waiting for the 30 s /api/esp/boards
+    // poll. The status payload is the same JSON the rule engine ingests
+    // — we just route it straight to the relevant DOM elements here.
+    _liveMqtt.subscribe(LIVE_STATUS_TOPIC, { qos: 0 });
   });
   _liveMqtt.on('reconnect', () => liveSetStatus('reconnecting…'));
   _liveMqtt.on('close',     () => liveSetStatus('disconnected', '#c0392b'));
   _liveMqtt.on('error',     (e) => { console.error('Live MQTT error:', e); liveSetStatus('error: ' + e.message, '#c0392b'); });
-  _liveMqtt.on('message',   (t, payload) => liveAppendRow(payload.toString(), t));
+  _liveMqtt.on('message',   (t, payload) => {
+    // Route by topic suffix. /status → in-place progress-bar updates
+    // (no row appended to the events console, that would spam it).
+    // /event → the existing live console.
+    const s = t.endsWith('/status') ? '/status' : '/event';
+    if (s === '/status') {
+      const m = t.match(/^mur\/home\/esp\/([^/]+)\/status$/);
+      if (m) updateLiveStatusDom(m[1], payload.toString());
+      return;
+    }
+    liveAppendRow(payload.toString(), t);
+  });
+}
+
+// In-place DOM update for any progress bars whose data-attributes match
+// the board id from a /status MQTT message. Idempotent + cheap — only
+// touches the bars that exist on the currently-rendered board pane.
+function updateLiveStatusDom(boardId, payloadStr) {
+  let st;
+  try { st = JSON.parse(payloadStr); } catch (e) { return; }
+  // Update the in-memory BOARDS cache so the next 30 s refresh doesn't
+  // briefly revert visible state — also feeds the status sub-tab if the
+  // user switches back to it before the next poll.
+  const b = BOARDS.find(b => b.id === boardId);
+  if (b) b.last_status = { ...(b.last_status || {}), ...st };
+  // Find progress bars belonging to this board and update them.
+  document.querySelectorAll(`[data-pbar-board="${CSS.escape(boardId)}"]`).forEach(fillEl => {
+    const key = fillEl.getAttribute('data-pbar-key');
+    if (!key || st[key] === undefined) return;
+    const raw = Number(st[key]);
+    const pct = (raw >= 0 && raw <= 100) ? raw : -1;
+    fillEl.style.width = (pct >= 0 ? pct : 0) + '%';
+    fillEl.style.background = pct >= 0 ? '#3a7d44' : '#d0cbc4';
+    const textEl = document.getElementById(`pbar-${boardId}-${key}-text`);
+    if (textEl) textEl.textContent = pct >= 0 ? `${pct}%` : '—';
+  });
 }
 
 // ─── Page-level OTA panel ──────────────────────────────────────────────
