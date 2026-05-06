@@ -3626,6 +3626,26 @@ app.get('/api/devices/:id/events', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/devices/:id/battery-history', async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days, 10) || 7, 30);
+    const key  = String(req.query.key || 'battery');
+    const r = await db.query(
+      `SELECT date_trunc('day', ts) AS day,
+              ROUND(AVG((dps->>$2)::float)::numeric, 1)::float AS battery_avg
+         FROM device_events
+        WHERE device_id = $1
+          AND ts > now() - make_interval(days => $3)
+          AND dps ? $2
+          AND dps->>$2 ~ '^-?[0-9]+(\\.[0-9]+)?$'
+        GROUP BY day
+        ORDER BY day ASC`,
+      [req.params.id, key, days]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/devices/:id/toggle', async (req, res) => {
   try {
     const { id } = req.params;

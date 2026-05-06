@@ -1543,7 +1543,7 @@ function getBatteryValue(device) {
   if (!key) return null;
   const state = device.last_state || {};
   const val = state[key];
-  return typeof val === 'number' ? val : null;
+  return typeof val === 'number' ? Math.round(val * 10) / 10 : null;
 }
 
 function batteryColor(value, thresholds) {
@@ -1582,7 +1582,7 @@ function renderBatteryCard(device, batteryVal, color) {
   const online = isOnline(device);
   const cardColor = online ? color : '#999';
   const battKey = getBatteryKey(device);
-  return `<div class="presence-card battery-card" onclick="toggleBatteryChart('${escAttr(device.id)}','${escAttr(battKey)}','${cardColor}')" title="Click for 24h chart">
+  return `<div class="presence-card battery-card" onclick="toggleBatteryChart('${escAttr(device.id)}','${escAttr(battKey)}','${cardColor}')" title="Click for 7-day chart">
     <div style="display:flex;align-items:center;gap:12px;">
       <div class="battery-icon" style="border-color:${cardColor}">
         <div class="battery-fill" style="height:${fillH}%;background:${cardColor}"></div>
@@ -1658,14 +1658,15 @@ async function toggleBatteryChart(deviceId, batteryKey, color) {
   targetCard.after(panel);
 
   try {
-    const events = await fetch(`/api/devices/${deviceId}/events?minutes=1440`).then(r => r.json());
-    const batteryData = events
-      .filter(e => e.dps && e.dps[batteryKey] != null)
-      .map(e => ({ x: new Date(e.ts), y: typeof e.dps[batteryKey] === 'number' ? e.dps[batteryKey] : parseFloat(e.dps[batteryKey]) }))
+    const rows = await fetch(
+      `/api/devices/${deviceId}/battery-history?days=7&key=${encodeURIComponent(batteryKey)}`
+    ).then(r => r.json());
+    const batteryData = rows
+      .map(r => ({ x: new Date(r.day), y: parseFloat(r.battery_avg) }))
       .filter(p => !isNaN(p.y));
 
     if (!batteryData.length) {
-      panel.innerHTML = '<div style="color:#888;font-size:0.82rem;">No battery data in last 24h</div>';
+      panel.innerHTML = '<div style="color:#888;font-size:0.82rem;">No battery data in last 7 days</div>';
       return;
     }
 
@@ -1689,7 +1690,7 @@ async function toggleBatteryChart(deviceId, batteryKey, color) {
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { type: 'time', time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } }, grid: { display: false } },
+          x: { type: 'time', time: { unit: 'day', displayFormats: { day: 'MMM d' } }, grid: { display: false } },
           y: { min: 0, max: 100, ticks: { stepSize: 25, callback: v => v + '%' }, grid: { color: '#e8e2da' } },
         },
       },

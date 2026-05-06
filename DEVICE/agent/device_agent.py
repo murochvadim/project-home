@@ -185,6 +185,15 @@ class DeviceAgent:
                     self._update_net_device(net[0], net[1])
                 return
 
+            for k, v in list(dps.items()):
+                if not isinstance(v, float):
+                    continue
+                kl = k.lower()
+                if 'batter' in kl or 'temp' in kl or 'humid' in kl:
+                    dps[k] = round(v, 1)
+                elif 'illum' in kl or 'lux' in kl:
+                    dps[k] = round(v)
+
             # Track best source per device — upgrade, or downgrade after 600s silence
             cur_entry = self._device_best_source.get(device_id)
             cur_best = cur_entry[0] if cur_entry else None
