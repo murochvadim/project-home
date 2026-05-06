@@ -1,0 +1,35 @@
+
+{"id":0,"bg_color":"#111"}
+{"page":1,"id":0,"bg_color":"#111"}
+{"page":2,"id":0,"bg_color":"#111"}
+{"page":3,"id":0,"bg_color":"#111"}
+{"page":4,"id":0,"bg_color":"#111"}
+{"page":5,"id":0,"bg_color":"#111"}
+{"page":6,"id":0,"bg_color":"#111"}
+{"page":7,"id":0,"bg_color":"#111"}
+{"page":8,"id":0,"bg_color":"#000000"}
+
+ //.......................Prev , Back , Next  arrow-----------------------------------
+{"page":0,"id":10,"obj":"btn","action":"prev","x":75,"y":390,"w":107,"h":65,"bg_color":"#1c1c1c","text":"\uE141","text_color":"#FFFFFF","radius":0,"border_side":0,"text_font":32} 
+{"page":0,"id":11,"obj":"btn","action":"back","x":184,"y":390,"w":107,"h":65,"bg_color":"#1c1c1c","text":"\uE2DC","text_color":"#FFFFFF","radius":0,"border_side":0,"text_font":32}  
+{"page":0,"id":12,"obj":"btn","action":"next","x":293,"y":390,"w":107,"h":65,"bg_color":"#1c1c1c","text":"\uE142","text_color":"#FFFFFF","radius":0,"border_side":0,"text_font":32}
+
+ //........................ Pages rules ............................... 
+{"page":1,"id":0,"prev":8}
+{"page":8,"id":0,"next":1}
+
+  //...Icon
+{"page":1,"id":1,"obj":"label","x":180,"y":10,"w":120,"h":120, "text":"\uE9AB","click":false,"text_font": 98, "text_color":"#e88c03"} 
+{"page":1,"id":2,"obj":"label","x":100,"y":120,"w":430,"h":100,"text":"Smart Toilet", "text_font": 58}
+
+ //... Temperature
+{"page":1,"id":3,"obj":"label","x":75,"y":220,"w":200,"h":40,"text":"Temp", "text_font": 38, "text_color":"#e88c03"}
+{"page":1,"id":4,"obj":"label","x":50,"y":280,"w":200,"h":70,"text":"--.-° c", "text_font": 68}
+
+ //... Clock
+{"page":1,"id":5,"obj":"label","x":300,"y":220,"w":200,"h":40,"text":"Clock", "text_font": 38, "text_color":"#e88c03"}
+{"page":1,"id":6,"obj":"label","x":275,"y":280,"w":200,"h":70,"text":"--:--", "text_font": 68}
+
+
+
+

@@ -2058,14 +2058,20 @@ app.post('/api/hasp/:panel/sync', async (req, res) => {
       }
     }
 
-    // 4) Save back to repo
+    // 4) Save back to repo — per-panel directory by convention
+    //    (panel slug → upper case + dashes → underscores; e.g.
+    //    'balcony' → 'BALCONY/', 'my-bathroom' → 'MY_BATHROOM/').
+    //    Skipped silently if the destination directory doesn't exist —
+    //    the DB sync is the load-bearing part.
     let fileSaved = null;
     try {
-      const repoPath = path.resolve(__dirname, '..', '..', 'BALCONY', 'pages.jsonl');
-      fs.writeFileSync(repoPath, text);
-      fileSaved = 'BALCONY/pages.jsonl';
+      const dirName = req.params.panel.toUpperCase().replace(/-/g, '_');
+      const repoDir = path.resolve(__dirname, '..', '..', dirName);
+      if (fs.existsSync(repoDir)) {
+        fs.writeFileSync(path.join(repoDir, 'pages.jsonl'), text);
+        fileSaved = `${dirName}/pages.jsonl`;
+      }
     } catch (e) {
-      // File save is best-effort; the DB sync is the load-bearing part
       console.error('HASP sync: failed to save pages.jsonl —', e.message);
     }
 
