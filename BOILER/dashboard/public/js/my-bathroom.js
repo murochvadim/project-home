@@ -18,7 +18,7 @@
     return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   }
 
-  // ─── HASP Balcony status card ──────────────────────────────────────────────
+  // ─── HASP My BathRoom status card ──────────────────────────────────────────
   // Browser subscribes to mosquitto over WebSocket (port 9001) as `dashboard_browser`.
   // Required ACL on LXC 107: read hasp/my-bathroom/state/# + read hasp/my-bathroom/LWT
   const HP_BROKER_HOST = '192.168.1.189';
