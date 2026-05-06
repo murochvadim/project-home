@@ -448,6 +448,7 @@ class RuleEngine:
             device_id = self._lookup_device_by_name(node)
             dps = payload
             source = 'hasp'
+            self._update_hasp_panel_state(node, payload if isinstance(payload, dict) else None)
 
         # hasp/+/state/+
         elif len(parts) == 4 and parts[0] == 'hasp' and parts[2] == 'state':
@@ -464,6 +465,12 @@ class RuleEngine:
                 device_id = self._lookup_device_by_name(node)
                 dps = {obj: payload} if not isinstance(payload, dict) else payload
                 source = 'hasp'
+                # Refresh the panel's devices.last_seen + last_state on every
+                # state/<sub> push (statusupdate / idle / antiburn / backlight /
+                # sensors / etc.). Without this, the Devices page shows a stale
+                # last_seen for HASP panels — rule engine had no other write
+                # path for these rows. Same pattern as ESP boards' _update_esp_device_dps.
+                self._update_hasp_panel_state(node, {obj: payload})
 
         # zigbee2mqtt/+ (skip "bridge")
         elif len(parts) == 2 and parts[0] == 'zigbee2mqtt':
@@ -815,6 +822,34 @@ class RuleEngine:
                 dev_dps = dev.setdefault('dps', {})
                 dev_dps.update(dps)
         return dps
+
+    def _update_hasp_panel_state(self, plate, payload):
+        """Refresh devices.last_seen + merge payload into last_state for a HASP panel.
+
+        Called on every `hasp/<plate>/state` and `hasp/<plate>/state/<sub>` MQTT
+        message (excluding button-widget topics which are events, not panel
+        state). Without this, the Devices page shows a stale last_seen for HASP
+        panels — the device_agent doesn't manage them and the rule engine had
+        no other write path. Same pattern as `_update_esp_device_dps`.
+        """
+        if not isinstance(payload, dict):
+            # Bare scalar payloads (e.g. an idle string) — still bump last_seen
+            # so the panel registers as alive even though we don't merge into
+            # last_state.
+            self.state.db_execute(
+                """UPDATE devices SET last_seen = NOW(), last_source = 'hasp'
+                   WHERE id = %s""",
+                (f'hasp:{plate}',),
+            )
+            return
+        self.state.db_execute(
+            """UPDATE devices SET
+                   last_state  = COALESCE(last_state, '{}'::jsonb) || %s::jsonb,
+                   last_seen   = NOW(),
+                   last_source = 'hasp'
+               WHERE id = %s""",
+            (json.dumps(payload), f'hasp:{plate}'),
+        )
 
     # ------------------------------------------------------------------
     # Rule evaluation
