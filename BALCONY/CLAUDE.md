@@ -81,7 +81,7 @@ Path: `/balcony.html` (served by the Windows dashboard). Sidebar link under "Age
 
 ESP32 Dev Module at IP `192.168.1.158`, MAC `B0:CB:D8:CA:16:7C`, room `Balcony` (the controller's physical location, not the gates themselves which are downstairs at the building entrance). Sketch lives at `BALCONY/sketch/Home_Gates_Device_ver11/` (mirrored from `Arduino_Projects/Home_Gates_Device_ver11/` for git tracking; Arduino IDE compiles from the latter). Migrated from ESP8266 → ESP32 on 2026-05-05 because the ESP8266 board's MAC was stuck in REASON_AUTH_FAIL on the DECO mesh after a flash storm.
 
-**Hardware**: Relay_1 (GPIO 12 — gate motor), Relay_2 (GPIO 13 — barrier), Buzzer (GPIO 14 — beep on each request). GPIO 12 is a strapping pin on ESP32; if the dev module won't boot with the relay attached high, swap to a non-strapping GPIO.
+**Hardware**: Relay_1 (GPIO 16 — gate motor), Relay_2 (GPIO 17 — barrier), Buzzer (GPIO 14 — beep on each request). Migrated 12→16, 13→17 on 2026-05-06 to move off GPIO 12 (a strapping pin that can prevent boot when the relay holds it high during power-up). GPIO 16/17 are pure general-purpose IO on this generic ESP32 Dev Module — no strapping, no flash conflict, no PSRAM conflict (PSRAM only collides on WROVER, which this board isn't).
 
 **Two MQTT-driven actions** (via `mur/home/esp/gates_01/command`):
 - `open_barrier` — TOTAL_SEQUENCES (4) × BARRIER_PULSE_NUM (4) pulses on Relay_2 with `delay_btw_pulses_barrier` (default 3 s) between sequences. Auto-closes via the relay-pulse pattern.

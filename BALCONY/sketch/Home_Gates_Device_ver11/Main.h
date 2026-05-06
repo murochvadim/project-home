@@ -30,11 +30,14 @@ String        ha_ip                = "";
 volatile bool tick_1s              = false;
 
 // ─── Hardware pins (verify against your ESP32 wiring) ────────────────────
-// On ESP32 dev module, GPIO 14 / 12 / 13 are still safe outputs; if your
-// wiring uses different pins update here.
+// On ESP32 dev module: GPIO 14 / 16 / 17 are clean outputs.
+// GPIO 16/17 are safe on this generic ESP32 Dev Module (not WROVER —
+// no PSRAM conflict). They're NOT strapping pins, unlike the original
+// GPIO 12 which had to be LOW at boot for 3.3 V flash to come up.
+// Migrated 12→16, 13→17 on 2026-05-06 to remove the strapping-pin risk.
 const int Buzzer  = 14;
-const int Relay_1 = 12;   // gate relay
-const int Relay_2 = 13;   // barrier relay
+const int Relay_1 = 16;   // gate relay
+const int Relay_2 = 17;   // barrier relay
 
 // ─── Wi-Fi ───────────────────────────────────────────────────────────────
 char ssid[] = "Home";
