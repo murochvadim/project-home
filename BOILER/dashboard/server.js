@@ -3319,6 +3319,122 @@ app.get('/api/voice/token-log', async (req, res) => {
 
 // ─── Media: all endpoints → LXC 100 media-service http://192.168.1.138:8766 ──
 
+// ─── Alexa: HA-mediated control (notify.alexa_media + media_player.*) ─────
+// Reuses callHA() above (line ~2810). Devices live in `devices` table with
+// protocol='alexa' and id=HA entity_id (e.g. 'media_player.10inch_echo_show').
+
+// GET /api/alexa/devices — list rows + live HA state for each
+app.get('/api/alexa/devices', async (_req, res) => {
+  try {
+    const r = await db.query(
+      "SELECT id, name, room FROM devices WHERE protocol='alexa' AND enabled=true ORDER BY name"
+    );
+    const states = await Promise.all(r.rows.map(async d => {
+      try {
+        const sr = await fetch(`${HA_URL}/api/states/${d.id}`,
+          { headers: { Authorization: `Bearer ${getHaToken()}` },
+            signal: AbortSignal.timeout(4000) });
+        return sr.ok ? { ...d, ha: await sr.json() } : { ...d, ha: null };
+      } catch (_) { return { ...d, ha: null }; }
+    }));
+    res.json(states);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/alexa/:entity/say   body: { message, volume? }
+// Optionally sets volume first, then calls notify.alexa_media with announce.
+app.post('/api/alexa/:entity/say', async (req, res) => {
+  try {
+    const { message, volume } = req.body || {};
+    if (!message) return res.status(400).json({ error: 'message required' });
+    if (volume != null && !isNaN(Number(volume))) {
+      await callHA('media_player', 'volume_set',
+        { entity_id: req.params.entity, volume_level: Number(volume) });
+    }
+    await callHA('notify', 'alexa_media', {
+      target: req.params.entity,
+      message: String(message),
+      data: { type: 'announce' },
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/alexa/announce  body: { message, targets:[entity_id,...], volume? }
+app.post('/api/alexa/announce', async (req, res) => {
+  try {
+    const { message, targets, volume } = req.body || {};
+    if (!message) return res.status(400).json({ error: 'message required' });
+    if (!Array.isArray(targets) || !targets.length) return res.status(400).json({ error: 'targets array required' });
+    if (volume != null && !isNaN(Number(volume))) {
+      await Promise.all(targets.map(t => callHA('media_player', 'volume_set',
+        { entity_id: t, volume_level: Number(volume) })));
+    }
+    await callHA('notify', 'alexa_media', {
+      target: targets,
+      message: String(message),
+      data: { type: 'announce' },
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/alexa/:entity/volume   body: { level: 0..1 }
+app.post('/api/alexa/:entity/volume', async (req, res) => {
+  try {
+    const lvl = Number((req.body || {}).level);
+    if (isNaN(lvl) || lvl < 0 || lvl > 1) return res.status(400).json({ error: 'level must be 0..1' });
+    await callHA('media_player', 'volume_set', { entity_id: req.params.entity, volume_level: lvl });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/alexa/:entity/mute     body: { mute: true|false }
+app.post('/api/alexa/:entity/mute', async (req, res) => {
+  try {
+    const mute = !!(req.body || {}).mute;
+    await callHA('media_player', 'volume_mute', { entity_id: req.params.entity, is_volume_muted: mute });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/alexa/:entity/play_media   body: { content_id, content_type? }
+// Starts new playback (radio / song / playlist) — call when device is idle.
+// Default content_type='DEFAULT' lets Alexa interpret the phrase as a voice
+// command (e.g. content_id='ON 50s' acts like "Alexa, play ON 50s").
+app.post('/api/alexa/:entity/play_media', async (req, res) => {
+  try {
+    const { content_id, content_type } = req.body || {};
+    if (!content_id) return res.status(400).json({ error: 'content_id required' });
+    await callHA('media_player', 'play_media', {
+      entity_id:          req.params.entity,
+      media_content_id:   String(content_id),
+      media_content_type: String(content_type || 'DEFAULT'),
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/alexa/:entity/play | pause | stop | next | prev | turn_on | turn_off
+//   Generic media_player.<action> dispatcher; whitelists allowed actions.
+const _ALEXA_TRANSPORT = {
+  play:    'media_play',
+  pause:   'media_pause',
+  stop:    'media_stop',
+  next:    'media_next_track',
+  prev:    'media_previous_track',
+  turn_on: 'turn_on',
+  turn_off:'turn_off',
+};
+app.post('/api/alexa/:entity/:action', async (req, res) => {
+  try {
+    const svc = _ALEXA_TRANSPORT[req.params.action];
+    if (!svc) return res.status(404).json({ error: 'unknown action' });
+    await callHA('media_player', svc, { entity_id: req.params.entity });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Proxmox Backups ──────────────────────────────────────────
 app.get('/api/backups/proxmox', async (_req, res) => {
   try {

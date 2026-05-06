@@ -57,6 +57,7 @@
     <button class="tab-btn" onclick="showTab('analyzer', this); loadAnalyzer()">Analyzer Agent</button>
     <button class="tab-btn" onclick="showTab('ingest', this); loadIngest()">Ingest Agent</button>
     <button class="tab-btn" onclick="showTab('player', this); loadPlayer()">Player Agent</button>
+    <button class="tab-btn" onclick="showTab('alexa', this); loadAlexa()">Alexa Devices</button>
     <button class="tab-btn" onclick="showTab('settings', this); loadMediaSettings()">Settings</button>
   </div>
 
@@ -517,10 +518,49 @@
 
   </div><!-- /tab-settings -->
 
+  <!-- TAB: Alexa Devices -->
+  <div class="tab-panel" id="tab-alexa">
+
+    <!-- Per-device cards (rendered by JS into #alexa-cards) -->
+    <div id="alexa-cards" style="display:flex; gap:14px; flex-wrap:wrap;">
+      <div style="color:#888; font-size:0.85rem;">loading…</div>
+    </div>
+
+    <!-- Announcements card -->
+    <div class="card" style="margin-top:14px;">
+      <h2>Announcement</h2>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+        <label style="font-size:0.82rem; color:#666;">Target:</label>
+        <select id="alexa-ann-target" style="padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem; min-width:200px;">
+          <option value="__all__">All devices</option>
+        </select>
+        <label style="font-size:0.82rem; color:#666;">Volume override (0-100):</label>
+        <input id="alexa-ann-vol" type="number" min="0" max="100" placeholder="—" style="width:70px; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input id="alexa-ann-msg" type="text" placeholder="What should Alexa say…" style="flex:1; min-width:280px; padding:6px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.9rem;">
+        <button class="btn btn-secondary btn-sm" onclick="alexaSpeak()" style="background:#3a7d44; color:#fff; padding:6px 16px;">▶ Speak</button>
+      </div>
+      <div id="alexa-ann-status" style="margin-top:8px; font-size:0.78rem; color:#888;"></div>
+    </div>
+
+    <!-- Saved templates card -->
+    <div class="card">
+      <h2 style="display:flex; justify-content:space-between; align-items:center;">
+        Saved announcements
+        <button class="btn btn-secondary btn-sm" onclick="alexaTplNew()">+ New</button>
+      </h2>
+      <div id="alexa-tpl-list" style="font-size:0.85rem;">
+        <div style="color:#888;">loading…</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-alexa -->
+
 </main>
 
 <script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=55"></script>
+<script src="js/media.js?v=60"></script>
 </body>
 </html>

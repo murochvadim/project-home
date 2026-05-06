@@ -19,6 +19,9 @@
   function _isDisplayDevice(d) {
     return d.device_type === 'display' || d.protocol === 'pixoo' || d.protocol === 'awtrix';
   }
+  function _isAlexaDevice(d) {
+    return d.protocol === 'alexa';
+  }
 
   function _displayPresetsFor(d) {
     if (d.protocol === 'pixoo')  return _pixooPresets.map(p => p.name).filter(Boolean);
@@ -122,9 +125,10 @@
     }
     listEl.innerHTML = filtered.map(d => {
       const isDisplay = _isDisplayDevice(d);
+      const isAlexa   = _isAlexaDevice(d);
       const channelPairs = _virtualChannelsFor(d);
       const hasChannels = !!(channelPairs && channelPairs.length);
-      const actionable = !isDisplay ? _actionableChannelsFor(d) : [];
+      const actionable = !isDisplay && !isAlexa ? _actionableChannelsFor(d) : [];
       const hasActionable = actionable.length > 0;
       const roomStr = d.room ? `<span style="color:#888;font-size:0.72rem;margin-left:6px;">(${d.room})</span>` : '';
       const typeStr = `<span style="color:#6c4f9f;font-size:0.7rem;margin-left:6px;">[${d.device_type || 'device'}]</span>`;
@@ -145,6 +149,21 @@
           ? `<span style="color:#999;font-size:0.7rem;margin-left:4px;">no saved ${d.protocol === 'awtrix' ? 'apps' : 'presets'} yet</span>`
           : '';
         extrasHtml = `<div style="padding:2px 8px 6px 24px;">${onBtn}${offBtn}${pushBtns}${emptyHint}</div>`;
+      } else if (isAlexa) {
+        // Alexa: on/off (turn_on/turn_off) + say "<message>" with inline input.
+        // Tokens: '@Name on'  /  '@Name off'  /  '@Name say "<message>"'.
+        const safeName = (d.name || '').replace(/"/g, '&quot;');
+        const onBtn  = `<button data-dp-action="alexa-on"  data-dp-name="${safeName}"
+                          style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">on</button>`;
+        const offBtn = `<button data-dp-action="alexa-off" data-dp-name="${safeName}"
+                          style="padding:2px 8px;margin:2px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">off</button>`;
+        const sayInputId = `dp-say-${(d.id || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
+        const sayBtn = `<input type="text" id="${sayInputId}" placeholder="message…"
+                              style="padding:2px 6px;margin:2px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.72rem;width:140px;"
+                              onclick="event.stopPropagation()">
+                        <button data-dp-action="alexa-say" data-dp-name="${safeName}" data-dp-input-id="${sayInputId}"
+                          style="padding:2px 8px;margin:2px;border:1px solid #2980b9;color:#2980b9;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">say</button>`;
+        extrasHtml = `<div style="padding:2px 8px 6px 24px;">${onBtn}${offBtn}${sayBtn}</div>`;
       } else if (hasChannels) {
         const channels = channelPairs.map(([key, label]) =>
           `<button data-dp-pick="device:${encodeURIComponent(d.id)}" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-label="${(label||'').replace(/"/g,'&quot;')}"
@@ -241,6 +260,17 @@
         let token;
         if (action === 'on' || action === 'off')        token = `@${name} ${action}`;
         else if (action === 'push')                     token = `@${name} push ${el.dataset.dpPreset || ''}`.trim();
+        else if (action === 'alexa-on')                 token = `@${name} on`;
+        else if (action === 'alexa-off')                token = `@${name} off`;
+        else if (action === 'alexa-say') {
+          const inputId = el.dataset.dpInputId;
+          const msg = (document.getElementById(inputId)?.value || '').trim();
+          if (!msg) return;   // no message — ignore click
+          // Quotes in the message would break the parser; escape with single
+          // quotes if user types double-quotes, else use double-quotes.
+          const wrap = msg.includes('"') ? "'" : '"';
+          token = `@${name} say ${wrap}${msg}${wrap}`;
+        }
         else if (action === 'esp-on' || action === 'esp-off') {
           const suffix = el.dataset.dpSuffix || '';   // ' <channel>' or ''
           const verb   = action === 'esp-on' ? 'on' : 'off';

@@ -21,6 +21,8 @@ import time
 from datetime import datetime, timedelta
 
 import psycopg2
+import urllib.error
+import urllib.request
 
 try:
     from zoneinfo import ZoneInfo
@@ -31,6 +33,10 @@ from mqtt_client import MqttClient
 from state_manager import DB_CONFIG, StateManager
 
 TZ = ZoneInfo('Asia/Jerusalem')
+
+# Home Assistant — used by _dispatch_alexa for direct service calls (notify.alexa_media + media_player.*)
+HA_URL   = os.environ.get('HA_URL', 'http://192.168.1.110:8123')
+HA_TOKEN = os.environ.get('HA_TOKEN', '')
 
 # ======================================================================
 # Rule-knob sentence parser
@@ -1026,6 +1032,67 @@ class RuleEngine:
             return
         log.warning("Rule '%s' awtrix: unsupported action '%s'", rule_name, action)
 
+    def _dispatch_alexa(self, cmd, device_id, rule_name):
+        """Dispatch Alexa media_player commands via HA REST services.
+
+        device_id is the HA entity_id (e.g. 'media_player.10inch_echo_show').
+        Direct HA call (not via device_agent MQTT) — same pattern boiler_agent.py
+        already uses for valve control. Failures are logged but never raise.
+        """
+        if not HA_TOKEN:
+            log.warning("Rule '%s' alexa %s: HA_TOKEN not set in environment", rule_name, device_id)
+            return
+        action = cmd.get('action', '')
+        if action == 'say':
+            domain, service = 'notify', 'alexa_media'
+            data = {
+                'target':  device_id,
+                'message': str(cmd.get('message', '')),
+                'data':    {'type': 'announce'},
+            }
+        elif action in ('turn_on', 'turn_off', 'media_play', 'media_pause',
+                        'media_stop', 'media_next_track', 'media_previous_track'):
+            domain, service = 'media_player', action
+            data = {'entity_id': device_id}
+        elif action == 'play_media':
+            content_id   = cmd.get('content_id') or cmd.get('phrase') or ''
+            content_type = cmd.get('content_type') or 'DEFAULT'
+            if not content_id:
+                log.warning("Rule '%s' alexa %s: play_media missing content_id", rule_name, device_id)
+                return
+            domain, service = 'media_player', 'play_media'
+            data = {
+                'entity_id':          device_id,
+                'media_content_id':   str(content_id),
+                'media_content_type': str(content_type),
+            }
+        elif action == 'volume_set':
+            try:
+                lvl = float(cmd.get('volume_level'))
+            except (TypeError, ValueError):
+                log.warning("Rule '%s' alexa %s: volume_set missing/invalid volume_level", rule_name, device_id)
+                return
+            domain, service = 'media_player', 'volume_set'
+            data = {'entity_id': device_id, 'volume_level': max(0.0, min(1.0, lvl))}
+        else:
+            log.warning("Rule '%s' alexa %s: unknown action '%s'", rule_name, device_id, action)
+            return
+        try:
+            req = urllib.request.Request(
+                f'{HA_URL}/api/services/{domain}/{service}',
+                data=json.dumps(data).encode('utf-8'),
+                headers={'Authorization': f'Bearer {HA_TOKEN}',
+                         'Content-Type':  'application/json'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(f'HA returned {resp.status}')
+            log.info("Rule '%s' -> alexa %s.%s on %s", rule_name, domain, service, device_id)
+        except Exception as e:
+            log.warning("Rule '%s' alexa %s.%s on %s failed: %s",
+                        rule_name, domain, service, device_id, e)
+
     def _awtrix_push_preset(self, cmd, device_id, rule_name):
         preset_name = cmd.get('preset_name', '')
         if not preset_name:
@@ -1193,6 +1260,10 @@ class RuleEngine:
 
         elif protocol == 'awtrix':
             self._dispatch_awtrix(cmd, device_id, rule_name)
+            return
+
+        elif protocol == 'alexa':
+            self._dispatch_alexa(cmd, device_id, rule_name)
             return
 
         elif protocol == 'esp':

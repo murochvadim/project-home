@@ -8,6 +8,8 @@ The Media Agent runs on **LXC 100** (192.168.1.138). It handles:
 - Media browsing, search, upload, and metadata editing
 - Dashboard UI: `BOILER/dashboard/public/media.html` + `js/media.js`
 
+The Alexa Devices tab on the same Media Agents page is **NOT served by LXC 100** — it talks to Home Assistant (`192.168.1.110`) via the dashboard server's `/api/alexa/*` endpoints. See "Alexa Devices" section at the bottom of this file.
+
 ---
 
 ## LXC 100 Services
@@ -352,3 +354,78 @@ All three media services are registered in the `agents` table and monitored by t
 - Every `person_embeddings` row must have at least one `face_crops` row with matching `person_name`
 - No embedding in `face_crops` should be `array_length(embedding,1) != 512` (empty manual crops are transient — analyzer fills them)
 - `media_library.person[]` must be kept in sync when face labels are added/removed
+
+
+---
+
+## Alexa Devices (since 2026-05-06)
+
+Four Amazon Alexa devices are integrated via the **Home Assistant `alexa_media_player`** community integration. They are **NOT** in LXC 100's scope — Echo devices have no local API and are cloud-tied to Amazon. The dashboard tab wraps HA's existing service calls (Path A1 — chosen over direct AlexaPy or Smart Home Skill because HA already has the cookie auth working and adding a parallel Python service would just duplicate work).
+
+### Device registry (`devices` table, protocol='alexa')
+
+| HA entity (= devices.id) | name | room |
+|---|---|---|
+| `media_player.10inch_echo_show`  | 10inch Echo Show    | Living Room |
+| `media_player.alexa_my_bathroom` | Alexa My Bathroom   | My BathRoom |
+| `media_player.alexa_maya_bedroom`| Alexa Maya Bedroom  | Bedroom |
+| `media_player.alexa_guy_room`    | Alexa Guy Room      | Guy Room |
+
+Each row carries `dps_config = {power: {action_on:turn_on, action_off:turn_off}, volume: {type:range, min:0, max:100}}` so the Devices page renders the panel and rule chips can pick up actionable channels. Migration: [`MEDIA/migrations/alexa_devices.sql`](migrations/alexa_devices.sql).
+
+### Dashboard tab — Media Agents → Alexa Devices
+
+`BOILER/dashboard/public/media.html` adds a 4th tab. Layout, per Echo:
+- **Status row** (status dot · room · state) + On/Off buttons
+- **Volume slider** + mute (slider position locked for 3 s after user touches it, so the 5 s poll doesn't snap it back mid-drag)
+- **Transport row** (⏮ ▶ ⏸ ⏹ ⏭) — these only resume / control already-loaded media, they don't START playback from idle
+- **Saved-stations row** — clickable buttons of all saved stations (shared across cards), each with a × to delete. Click a station → plays on THIS Echo
+- **Play input + ▶ Play + 💾 Save** — type any phrase, click ▶ for one-shot playback OR 💾 to save it as a station for reuse
+
+**Two saved-station presets seeded on first load:**
+- `ON 50s` → content_type=`TUNEIN`, content_id=`s307975` (1.FM oldies station — voice phrase "ON 50s" is NOT recognized by Alexa, only the direct TuneIn ID works)
+- `Elvis Presley` → content_type=`DEFAULT`, content_id=`Elvis Presley` (Alexa interprets phrase like a voice command — picks an artist station automatically)
+
+Storage: `dashboard_settings.media-agents.alexa_quick_music` (JSONB array of `{id, name, content_id, content_type}`). Key name kept after a UI rename so existing data survives.
+
+**Saved Announcements card** below the device cards — TTS templates with target dropdown (single Echo or "All devices"), optional volume override, list of saved messages with Play/Edit/Delete. Storage: `dashboard_settings.media-agents.alexa_announcements`.
+
+### Server endpoints (all in `BOILER/dashboard/server.js`)
+
+All call HA's REST API via the existing `callHA(domain, service, data)` helper at `server.js:2810`. None of these touch LXC 100.
+
+| Endpoint | Calls | Purpose |
+|---|---|---|
+| `GET  /api/alexa/devices` | `GET /api/states/<entity_id>` per device | List 4 devices + live HA state |
+| `POST /api/alexa/:entity/say` body=`{message,volume?}` | `notify.alexa_media` (data.type=announce) + optional `media_player.volume_set` | Speak on one Echo |
+| `POST /api/alexa/announce` body=`{message,targets[],volume?}` | `notify.alexa_media` with array target | Multi-cast announcement |
+| `POST /api/alexa/:entity/volume` body=`{level: 0..1}` | `media_player.volume_set` | |
+| `POST /api/alexa/:entity/mute` body=`{mute: bool}` | `media_player.volume_mute` | |
+| `POST /api/alexa/:entity/play_media` body=`{content_id, content_type?}` | `media_player.play_media` | Start new playback (radio / song / phrase) |
+| `POST /api/alexa/:entity/{play\|pause\|stop\|next\|prev\|turn_on\|turn_off}` | `media_player.<corresponding>` | Whitelisted transport dispatch |
+
+### Rule integration
+
+Rule sentences can target Alexa devices via chips (parsed by [`RULES/_display_chips.py`](../RULES/_display_chips.py)):
+
+| Token | Result |
+|---|---|
+| `@<EchoName> say "<message>"` | TTS announcement (single or double quotes accepted) |
+| `@<EchoName> play "<phrase>"` | Start playback (always content_type=DEFAULT — see limitation) |
+| `@<EchoName> on` | turn_on |
+| `@<EchoName> off` | turn_off |
+
+`RULES/rule_engine.py` `_dispatch_alexa()` (called from the protocol='alexa' branch around line 1198) makes a direct `urllib.request.urlopen` POST to `/api/services/<domain>/<service>` with `HA_TOKEN` from environment. Same pattern `boiler_agent.py` already uses for valve control. No `requests` library dependency. Errors logged but never raise.
+
+**Required env on LXC 105** (`/etc/rule-engine.env`):
+```
+HA_URL=http://192.168.1.110:8123
+HA_TOKEN=<HA long-lived access token>
+```
+
+### Known limitations
+
+- **`@<Echo> play "s307975"` rule chip currently uses content_type=DEFAULT.** The dashboard UI auto-detects `s\d+` patterns and switches to TUNEIN, but the chip parser doesn't. If a rule needs a TuneIn station, it has to use the dashboard's saved station instead, or the parser needs an extension.
+- **No state polling for `media_player` entities into `device_events`.** The HA WebSocket adapter on LXC 103 restricts itself to external devices; Alexa entity state changes flow only when the dashboard polls `/api/alexa/devices`. Sufficient for the use cases above.
+- **HA going down breaks Alexa control + announcements.** Direct AlexaPy would survive HA outages but would duplicate cookie auth — explicit trade-off accepted in the integration plan.
+- **Voice control of OUR devices** ("Alexa, turn on the boiler") requires building an Amazon Smart Home Skill (different integration path entirely — not in scope).

@@ -14,6 +14,13 @@ Panel chips (device_type='panel' or protocol='hasp', added 2026-05-05):
     @<PanelName> off              → backlight off
     @<PanelName> Page <N>         → goto_page N
 
+Alexa media-player chips (protocol='alexa', added 2026-05-06):
+
+    @<EchoName> say "<message>"   → notify.alexa_media announce
+    @<EchoName> play "<phrase>"   → media_player.play_media (DEFAULT type)
+    @<EchoName> on                → media_player.turn_on
+    @<EchoName> off               → media_player.turn_off
+
 The function still named `parse_display_chip` for back-compat with the
 single existing caller (Evening Lights). Returns a command-dict ready
 for rule_engine._dispatch_command, or None if the token isn't a chip
@@ -24,6 +31,11 @@ import re
 
 # `@<Panel> Page <N>` — case-insensitive; allow "page" / "Page" / "PAGE".
 _PAGE_RE = re.compile(r"^page\s+(\d+)$")
+
+# `@<Echo> say "<message>"` — message wrapped in single OR double quotes.
+_SAY_RE  = re.compile(r"^say\s+(?:\"([^\"]*)\"|'([^']*)')$",  re.IGNORECASE)
+# `@<Echo> play "<phrase>"` — same wrapping.
+_PLAY_RE = re.compile(r"^play\s+(?:\"([^\"]*)\"|'([^']*)')$", re.IGNORECASE)
 
 def parse_display_chip(token, devices_by_name):
     """Return a command dict for a display / panel chip, or None.
@@ -57,11 +69,39 @@ def parse_display_chip(token, devices_by_name):
     dtype     = dev.get("device_type")
     is_display = dtype == "display" or protocol in ("pixoo", "awtrix")
     is_panel   = dtype == "panel"   or protocol == "hasp"
-    if not (is_display or is_panel):
+    is_alexa   = protocol == "alexa"
+    if not (is_display or is_panel or is_alexa):
         return None
 
     device_id  = dev.get("id")
     rest_lower = rest.lower()
+
+    # ── Alexa media_player: TTS announce + play_media + turn_on/off ───
+    if is_alexa:
+        m = _SAY_RE.match(rest)  # use original rest (preserve quoted casing)
+        if m:
+            message = m.group(1) if m.group(1) is not None else (m.group(2) or "")
+            return {
+                "device_id": device_id,
+                "protocol":  "alexa",
+                "action":    "say",
+                "message":   message,
+            }
+        m = _PLAY_RE.match(rest)
+        if m:
+            phrase = m.group(1) if m.group(1) is not None else (m.group(2) or "")
+            return {
+                "device_id":     device_id,
+                "protocol":      "alexa",
+                "action":        "play_media",
+                "content_id":    phrase,
+                "content_type":  "DEFAULT",
+            }
+        if rest_lower == "on":
+            return {"device_id": device_id, "protocol": "alexa", "action": "turn_on"}
+        if rest_lower == "off":
+            return {"device_id": device_id, "protocol": "alexa", "action": "turn_off"}
+        return None
 
     # ── Panel: HASP-specific actions (page nav + backlight on/off) ────
     if is_panel:

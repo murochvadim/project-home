@@ -25,6 +25,11 @@ function showTab(name, btn) {
       }
     }, 3000);
   }
+  // start/stop alexa polling
+  clearInterval(window._alexaPollTimer);
+  if (name === 'alexa') {
+    window._alexaPollTimer = setInterval(loadAlexa, 5000);
+  }
 }
 
 function statusDot(power) {
@@ -1705,4 +1710,401 @@ async function deleteLibraryItem() {
 document.getElementById('edit-modal-overlay').addEventListener('click', function(e) {
   if (e.target === this) closeEditModal();
 });
+
+// ─── Alexa Devices tab ───────────────────────────────────────────────────────
+// Backed by /api/alexa/* on dashboard server. Each call HA via callHA().
+
+const ALEXA_TPL_KEY = 'media-agents.alexa_announcements';
+
+function _esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function _alexaStatusDot(haState) {
+  if (!haState) return '<span style="color:#aaa;font-size:1.1rem;">●</span>';
+  const s = haState.state;
+  const map = {
+    playing:     '#2ecc71',
+    paused:      '#f39c12',
+    idle:        '#7a9ab8',
+    standby:     '#7a9ab8',
+    on:          '#2ecc71',
+    off:         '#e74c3c',
+    unavailable: '#e74c3c',
+  };
+  const c = map[s] || '#aaa';
+  return `<span style="color:${c};font-size:1.1rem;" title="${_esc(s)}">●</span>`;
+}
+
+// Track last "user touched this control" timestamp per (entity, field).
+// While < 3 s old, the poll-driven refresh skips that field so optimistic
+// values aren't snapped back by stale HA state.
+const _alexaTouched = {};
+function _alexaMarkTouched(entity, field) { _alexaTouched[entity + '|' + field] = Date.now(); }
+function _alexaWasTouched(entity, field, ms = 3000) {
+  return Date.now() - (_alexaTouched[entity + '|' + field] || 0) < ms;
+}
+
+function _alexaCardHtml(d) {
+  const eid = d.id;
+  return `
+    <div class="card" data-alexa-id="${_esc(eid)}" style="flex:1; min-width:280px; max-width:380px;">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+        <span data-alexa-field="dot">${_alexaStatusDot(null)}</span>
+        <div style="flex:1;">
+          <div style="font-weight:600; font-size:0.95rem;">${_esc(d.name)}</div>
+          <div style="font-size:0.72rem; color:#888;"><span>${_esc(d.room || '—')}</span> · <span data-alexa-field="state">—</span></div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','turn_on')" title="Wake">On</button>
+        <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','turn_off')" title="Sleep">Off</button>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <span style="font-size:0.72rem; color:#666; min-width:40px;">Vol</span>
+        <input type="range" min="0" max="100" value="0"
+               data-alexa-field="vol-slider"
+               oninput="_alexaMarkTouched('${_esc(eid)}','vol'); document.querySelector('[data-alexa-id=\\'${_esc(eid)}\\'] [data-alexa-field=vol-text]').textContent = this.value + '%'"
+               onchange="_alexaMarkTouched('${_esc(eid)}','vol'); alexaCmd('${_esc(eid)}','volume', this.value/100)"
+               style="flex:1;">
+        <span data-alexa-field="vol-text" style="font-size:0.78rem; min-width:34px; text-align:right;">0%</span>
+        <button class="btn btn-secondary btn-sm" data-alexa-field="mute-btn"
+                onclick="alexaCmd('${_esc(eid)}','mute', !this.dataset.muted || this.dataset.muted === 'false')"
+                title="Mute">🔇</button>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','prev')" title="Previous">⏮</button>
+        <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','play')" title="Play (resume)">▶</button>
+        <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','pause')" title="Pause">⏸</button>
+        <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','stop')" title="Stop">⏹</button>
+        <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','next')" title="Next">⏭</button>
+        <span data-alexa-field="title" style="flex:1; font-size:0.72rem; color:#888; padding-left:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+      </div>
+      <div data-alexa-field="stations" style="display:flex; flex-wrap:wrap; gap:0; padding:4px 0; border-top:1px dashed #e8e2da;">
+        <span style="color:#888; font-size:0.72rem;">loading stations…</span>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" placeholder="play radio / song / phrase…"
+               data-alexa-field="play-input"
+               onkeydown="if(event.key==='Enter') document.querySelector('[data-alexa-id=\\'${_esc(eid)}\\'] [data-alexa-field=play-btn]').click()"
+               style="flex:1; padding:3px 6px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.78rem;">
+        <button class="btn btn-secondary btn-sm" data-alexa-field="play-btn"
+                onclick="alexaPlayMedia('${_esc(eid)}', this.parentElement.querySelector('[data-alexa-field=play-input]').value)"
+                style="background:#3a7d44; color:#fff;" title="Start playback (one-shot)">▶ Play</button>
+        <button class="btn btn-secondary btn-sm"
+                onclick="alexaSaveStation('${_esc(eid)}')"
+                title="Save the typed phrase as a station you can reuse">💾 Save</button>
+      </div>
+    </div>`;
+}
+
+function _alexaUpdateCard(card, d) {
+  const eid = d.id;
+  const ha = d.ha || {};
+  const a = ha.attributes || {};
+  const vol = a.volume_level != null ? Math.round(a.volume_level * 100) : 0;
+  const muted = !!a.is_volume_muted;
+  const title = a.media_title ? _esc(a.media_title) : '';
+  const artist = a.media_artist ? ` — ${_esc(a.media_artist)}` : '';
+  const stateLabel = ha.state ? _esc(ha.state) : 'unknown';
+  const set = (sel, html) => { const el = card.querySelector(sel); if (el) el.innerHTML = html; };
+  const text = (sel, t) => { const el = card.querySelector(sel); if (el) el.textContent = t; };
+  set('[data-alexa-field=dot]', _alexaStatusDot(ha));
+  text('[data-alexa-field=state]', stateLabel);
+  set('[data-alexa-field=title]', title + artist);
+  // Don't snap-back the volume slider/text if user just touched it.
+  if (!_alexaWasTouched(eid, 'vol')) {
+    const sl = card.querySelector('[data-alexa-field=vol-slider]');
+    if (sl && document.activeElement !== sl) sl.value = vol;
+    text('[data-alexa-field=vol-text]', vol + '%');
+  }
+  const mb = card.querySelector('[data-alexa-field=mute-btn]');
+  if (mb) {
+    mb.dataset.muted = muted ? 'true' : 'false';
+    mb.style.opacity = muted ? '1' : '0.4';
+  }
+}
+
+async function loadAlexa() {
+  const cards = document.getElementById('alexa-cards');
+  const tgtSel = document.getElementById('alexa-ann-target');
+  if (!cards) return;
+  try {
+    const r = await fetch('/api/alexa/devices');
+    const list = await r.json();
+    if (!r.ok) throw new Error(list.error || 'load failed');
+
+    // Build the static structure once. Patch dynamic fields on every refresh.
+    const presentIds = new Set(Array.from(cards.querySelectorAll('[data-alexa-id]'))
+                                    .map(el => el.getAttribute('data-alexa-id')));
+    const wantIds    = new Set(list.map(d => d.id));
+    if (presentIds.size !== wantIds.size || ![...wantIds].every(id => presentIds.has(id))) {
+      cards.innerHTML = list.map(_alexaCardHtml).join('') ||
+        '<div style="color:#888;">No Alexa devices registered.</div>';
+    }
+    // Always patch dynamic fields
+    for (const d of list) {
+      const card = cards.querySelector(`[data-alexa-id="${d.id}"]`);
+      if (card) _alexaUpdateCard(card, d);
+    }
+
+    // Sync target dropdown (only if the option set changed)
+    if (tgtSel) {
+      const want = ['__all__', ...list.map(d => d.id)];
+      const have = Array.from(tgtSel.options).map(o => o.value);
+      if (want.length !== have.length || !want.every((v, i) => v === have[i])) {
+        const cur = tgtSel.value;
+        tgtSel.innerHTML = '<option value="__all__">All devices</option>' +
+          list.map(d => `<option value="${_esc(d.id)}">${_esc(d.name)}</option>`).join('');
+        if (cur && [...tgtSel.options].some(o => o.value === cur)) tgtSel.value = cur;
+      }
+    }
+
+    // Templates + saved stations (only on first load — they don't change unless user edits)
+    if (!cards.dataset.tplLoaded) {
+      cards.dataset.tplLoaded = '1';
+      loadAlexaTemplates();
+      await _alexaStationsGet(true);  // populate cache
+      _refreshAllStationRows();
+    }
+  } catch (e) {
+    if (!cards.querySelector('[data-alexa-id]')) {
+      cards.innerHTML = `<div style="color:#c0392b; font-size:0.85rem;">Load failed: ${_esc(e.message)}</div>`;
+    }
+  }
+}
+
+async function alexaCmd(entity, action, value) {
+  let path, body;
+  if (action === 'volume') { path = 'volume'; body = { level: value }; }
+  else if (action === 'mute') { path = 'mute'; body = { mute: value }; }
+  else { path = action; body = {}; }
+  try {
+    const r = await fetch(`/api/alexa/${encodeURIComponent(entity)}/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'cmd failed');
+    showFeedback(`✓ ${entity.replace('media_player.','')} — ${action}`, true);
+    // refresh cards after short delay so HA state catches up
+    setTimeout(loadAlexa, 1500);
+  } catch (e) {
+    showFeedback('✗ ' + e.message, false);
+  }
+}
+
+async function alexaSpeak() {
+  const target = document.getElementById('alexa-ann-target').value;
+  const msg = (document.getElementById('alexa-ann-msg').value || '').trim();
+  const volRaw = (document.getElementById('alexa-ann-vol').value || '').trim();
+  const status = document.getElementById('alexa-ann-status');
+  if (!msg) { status.textContent = 'Type a message first.'; status.style.color = '#c0392b'; return; }
+  status.textContent = 'Sending…'; status.style.color = '#888';
+  try {
+    const volume = volRaw === '' ? undefined : Math.max(0, Math.min(1, Number(volRaw) / 100));
+    let r;
+    if (target === '__all__') {
+      const devs = await fetch('/api/alexa/devices').then(r => r.json());
+      const targets = devs.map(d => d.id);
+      r = await fetch('/api/alexa/announce', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, targets, volume }),
+      });
+    } else {
+      r = await fetch(`/api/alexa/${encodeURIComponent(target)}/say`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, volume }),
+      });
+    }
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'speak failed');
+    status.textContent = '✓ Sent'; status.style.color = '#1e8449';
+  } catch (e) {
+    status.textContent = '✗ ' + e.message; status.style.color = '#c0392b';
+  }
+}
+
+async function loadAlexaTemplates() {
+  const list = document.getElementById('alexa-tpl-list');
+  if (!list) return;
+  try {
+    const r = await fetch(`/api/dashboard-settings/${ALEXA_TPL_KEY}`);
+    const data = await r.json();
+    const arr = Array.isArray(data.value) ? data.value : [];
+    if (!arr.length) {
+      list.innerHTML = '<div style="color:#888;">No saved announcements yet.</div>';
+      return;
+    }
+    list.innerHTML = arr.map(t => `
+      <div style="display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px dashed #e8e2da;">
+        <span style="font-weight:600; min-width:140px;">${_esc(t.name || '—')}</span>
+        <span style="flex:1; color:#555;">${_esc(t.message || '')}</span>
+        <button class="btn btn-secondary btn-sm" onclick="alexaTplPlay('${_esc(t.id)}')">▶ Speak</button>
+        <button class="btn btn-secondary btn-sm" onclick="alexaTplEdit('${_esc(t.id)}')">Edit</button>
+        <button class="btn btn-secondary btn-sm" onclick="alexaTplDelete('${_esc(t.id)}')" style="color:#c0392b;">Del</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<div style="color:#c0392b;">${_esc(e.message)}</div>`;
+  }
+}
+
+async function _alexaTplGet() {
+  const r = await fetch(`/api/dashboard-settings/${ALEXA_TPL_KEY}`);
+  const d = await r.json();
+  return Array.isArray(d.value) ? d.value : [];
+}
+async function _alexaTplSave(arr) {
+  await fetch(`/api/dashboard-settings/${ALEXA_TPL_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: arr }),
+  });
+}
+
+async function alexaTplNew() {
+  const name = prompt('Template name (short):');
+  if (!name) return;
+  const message = prompt('Message Alexa will speak:');
+  if (!message) return;
+  const arr = await _alexaTplGet();
+  arr.push({ id: 'tpl_' + Date.now().toString(36), name, message });
+  await _alexaTplSave(arr);
+  loadAlexaTemplates();
+}
+
+async function alexaTplEdit(id) {
+  const arr = await _alexaTplGet();
+  const t = arr.find(x => x.id === id);
+  if (!t) return;
+  const name = prompt('Template name:', t.name);
+  if (name == null) return;
+  const message = prompt('Message:', t.message);
+  if (message == null) return;
+  t.name = name; t.message = message;
+  await _alexaTplSave(arr);
+  loadAlexaTemplates();
+}
+
+async function alexaTplDelete(id) {
+  if (!confirm('Delete this template?')) return;
+  const arr = (await _alexaTplGet()).filter(x => x.id !== id);
+  await _alexaTplSave(arr);
+  loadAlexaTemplates();
+}
+
+async function alexaTplPlay(id) {
+  const arr = await _alexaTplGet();
+  const t = arr.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('alexa-ann-msg').value = t.message;
+  alexaSpeak();
+}
+
+// ── Saved stations (per-card) ────────────────────────────────────────────────
+// Storage key kept as alexa_quick_music for backwards compat with already-
+// seeded data. Each entry: {id, name, content_id, content_type}.
+const ALEXA_STATIONS_KEY = 'media-agents.alexa_quick_music';
+let _alexaStations = null;  // cached list
+
+async function alexaPlayMedia(entity, content_id, content_type) {
+  const phrase = (content_id || '').trim();
+  if (!phrase) { showFeedback('Type a phrase first', false); return; }
+  try {
+    const r = await fetch(`/api/alexa/${encodeURIComponent(entity)}/play_media`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content_id: phrase, content_type: content_type || 'DEFAULT' }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'play_media failed');
+    showFeedback(`▶ ${entity.replace('media_player.','')} — ${phrase}`, true);
+    setTimeout(loadAlexa, 1500);
+  } catch (e) {
+    showFeedback('✗ ' + e.message, false);
+  }
+}
+
+async function _alexaStationsGet(forceRefresh) {
+  if (_alexaStations && !forceRefresh) return _alexaStations;
+  const r = await fetch(`/api/dashboard-settings/${ALEXA_STATIONS_KEY}`);
+  const d = await r.json();
+  _alexaStations = Array.isArray(d.value) ? d.value : [];
+  // Clean up legacy default_target field that's no longer used
+  return _alexaStations;
+}
+async function _alexaStationsSave(arr) {
+  _alexaStations = arr;
+  await fetch(`/api/dashboard-settings/${ALEXA_STATIONS_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: arr }),
+  });
+}
+
+// Render the saved-stations row inside an Echo card.
+function _renderAlexaStations(card, eid) {
+  const row = card.querySelector('[data-alexa-field=stations]');
+  if (!row) return;
+  const stations = _alexaStations || [];
+  if (!stations.length) {
+    row.innerHTML = '<span style="color:#888; font-size:0.72rem;">No saved stations yet — type one below + click 💾 to save.</span>';
+    return;
+  }
+  row.innerHTML = stations.map(s => `
+    <span style="display:inline-flex; align-items:center; gap:0; margin:2px 4px 2px 0;">
+      <button class="btn btn-secondary btn-sm" title="Play on this Echo"
+              onclick="alexaPlayStation('${_esc(eid)}','${_esc(s.id)}')"
+              style="padding:3px 10px; font-size:0.78rem; border-radius:3px 0 0 3px;">${_esc(s.name)}</button>
+      <button class="btn btn-secondary btn-sm" title="Delete this station"
+              onclick="alexaDeleteStation('${_esc(s.id)}')"
+              style="padding:3px 6px; font-size:0.78rem; color:#c0392b; border-radius:0 3px 3px 0; border-left:none;">×</button>
+    </span>
+  `).join('');
+}
+
+// Re-render the stations row in every card after the list changes.
+function _refreshAllStationRows() {
+  document.querySelectorAll('#alexa-cards [data-alexa-id]').forEach(card => {
+    _renderAlexaStations(card, card.getAttribute('data-alexa-id'));
+  });
+}
+
+async function alexaPlayStation(eid, stationId) {
+  const arr = await _alexaStationsGet();
+  const s = arr.find(x => x.id === stationId);
+  if (!s) return;
+  alexaPlayMedia(eid, s.content_id, s.content_type || 'DEFAULT');
+}
+
+async function alexaSaveStation(eid) {
+  const card = document.querySelector(`#alexa-cards [data-alexa-id="${eid}"]`);
+  if (!card) return;
+  const input = card.querySelector('[data-alexa-field=play-input]');
+  const phrase = (input.value || '').trim();
+  if (!phrase) { showFeedback('Type a phrase first to save it', false); return; }
+  const name = prompt('Save as (short label):', phrase);
+  if (!name) return;
+  // Default to TUNEIN if user typed something that looks like a TuneIn id (s + digits),
+  // else DEFAULT (Alexa interprets as voice command).
+  const content_type = /^s\d+$/i.test(phrase) ? 'TUNEIN' : 'DEFAULT';
+  const arr = await _alexaStationsGet(true);
+  arr.push({ id: 'st_' + Date.now().toString(36), name, content_id: phrase, content_type });
+  await _alexaStationsSave(arr);
+  _refreshAllStationRows();
+  input.value = '';
+  showFeedback(`💾 Saved "${name}"`, true);
+}
+
+async function alexaDeleteStation(stationId) {
+  const arr = await _alexaStationsGet();
+  const s = arr.find(x => x.id === stationId);
+  if (!s) return;
+  if (!confirm(`Delete "${s.name}"?`)) return;
+  await _alexaStationsSave(arr.filter(x => x.id !== stationId));
+  _refreshAllStationRows();
+}
 
