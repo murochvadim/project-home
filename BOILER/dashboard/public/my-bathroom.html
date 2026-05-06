@@ -5,6 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My BathRoom Agent</title>
   <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* Wallmote-style bindings UI — copied from balcony.html for parity */
+    .wallmote-card { padding:14px; margin-bottom:16px; }
+    .wallmote-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #d0cbc4; }
+    .wallmote-header h2 { margin:0; font-size:1.05rem; }
+    .wallmote-meta { font-size:0.78rem; color:#888; display:flex; gap:14px; }
+    .button-row { display:grid; grid-template-columns:90px 1fr; gap:6px 12px; padding:8px 0; border-bottom:1px dashed #e8e2da; }
+    .button-row:last-child { border-bottom:none; }
+    .button-label { font-weight:600; font-size:0.85rem; padding-top:6px; }
+    .event-rows { display:flex; flex-direction:column; gap:6px; }
+    .event-row { display:grid; grid-template-columns:60px 1fr 70px; gap:8px; align-items:center; }
+    .event-type { font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.5px; padding:4px 8px; border-radius:3px; text-align:center; }
+    .event-type.up { background:#e8f0d8; color:#4a6a2a; }
+    .event-type.down { background:#d8e8f0; color:#2a4a6a; }
+    .event-type.long { background:#f0d8d8; color:#8b3a3a; }
+    .event-type.short { background:#f0e0d8; color:#6a4a2a; }
+    .event-type.double { background:#e0d8f0; color:#4a2a6a; }
+    .device-picker { border:1px solid #d0cbc4; border-radius:4px; background:#faf8f5; padding:4px 8px; font-size:0.78rem; min-height:26px; cursor:pointer; display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
+    .device-picker:hover { border-color:#7a9ab8; }
+    .device-picker.empty { color:#aaa; font-style:italic; }
+    .action-tag { display:inline-flex; align-items:center; justify-content:center; padding:4px 14px; min-width:60px; height:22px; border-radius:11px; font-size:0.78rem; font-weight:600; margin-left:8px; line-height:1; white-space:nowrap; vertical-align:middle; box-sizing:border-box; }
+    .action-tag.on { background:#d7e7c7; color:#375a1a; }
+    .action-tag.off { background:#e7c7c7; color:#6a1a1a; }
+    .action-tag.toggle { background:#c7d7e7; color:#1a3a6a; }
+    .picker-action-select { border:1px solid #d0cbc4; border-radius:3px; background:#fff; padding:2px 4px; font-size:0.72rem; cursor:pointer; }
+    .btn-test { padding:4px 10px; font-size:0.75rem; border:1px solid #7a9ab8; background:#fff; color:#7a9ab8; border-radius:4px; cursor:pointer; font-weight:600; }
+    .btn-test:hover { background:#7a9ab8; color:#fff; }
+    .btn-test:disabled { opacity:0.4; cursor:not-allowed; }
+    .btn-save { padding:8px 18px; font-size:0.85rem; border:1px solid #3a7d44; background:#3a7d44; color:#fff; border-radius:4px; cursor:pointer; font-weight:600; }
+    .btn-save:hover { background:#2e6234; }
+    /* Picker popover */
+    .picker-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.35); z-index:1000; display:none; align-items:center; justify-content:center; }
+    .picker-overlay.show { display:flex; }
+    .picker-popover { background:#fff; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.2); width:560px; max-height:70vh; display:flex; flex-direction:column; }
+    .picker-head { padding:10px 14px; border-bottom:1px solid #d0cbc4; display:flex; justify-content:space-between; align-items:center; }
+    .picker-head h3 { margin:0; font-size:0.95rem; }
+    .picker-search { padding:8px 14px; border-bottom:1px solid #e8e2da; }
+    .picker-search input { width:100%; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem; box-sizing:border-box; }
+    .picker-list { overflow-y:auto; flex:1; padding:6px 0; }
+    .picker-room-label { padding:6px 14px 2px; font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:0.5px; font-weight:600; background:#f8f5f1; }
+    .picker-item { display:grid; grid-template-columns:20px 1fr 100px 120px; align-items:center; gap:8px; padding:6px 14px; cursor:pointer; font-size:0.82rem; }
+    .picker-item:hover { background:#f4f1ec; }
+    .picker-item input { cursor:pointer; }
+    .picker-item-name { flex:1; }
+    .picker-item-meta { font-size:0.72rem; color:#888; }
+    .picker-foot { padding:10px 14px; border-top:1px solid #d0cbc4; display:flex; justify-content:space-between; align-items:center; font-size:0.78rem; }
+    .btn-picker-done { padding:5px 14px; font-size:0.8rem; border:1px solid #3a7d44; background:#3a7d44; color:#fff; border-radius:4px; cursor:pointer; font-weight:600; }
+    .btn-picker-cancel { padding:5px 14px; font-size:0.8rem; border:1px solid #d0cbc4; background:#fff; color:#666; border-radius:4px; cursor:pointer; }
+  </style>
 </head>
 <body>
 
@@ -44,29 +93,142 @@
     </div>
   </div>
 
-  <!-- Tab bar -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('panel', this)">Panel</button>
     <button class="tab-btn" onclick="showTab('smart-switch', this)">Smart Switch</button>
   </div>
 
   <div class="tab-panel active" id="tab-panel">
-    <div class="card">
-      <h2>Panel</h2>
-      <p style="color:#888;font-size:0.85rem;">Placeholder. When the OpenHASP touch panel is mounted in My BathRoom, button bindings + page editor will live here (mirror of the Balcony Agent → Panel tab).</p>
+
+    <!-- Static info — first card -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.05rem;">My BathRoom Panel Display</h2>
+      <div style="font-size:0.85rem;color:#555;line-height:1.55;">
+        Sunton ESP32-S3 4848S040 · 480×480 IPS · OpenHASP<br>
+        IP <code>192.168.1.220</code> · MQTT prefix <code>hasp/my-bathroom/</code> · Plate name <code>my-bathroom</code><br>
+        <a href="http://192.168.1.220" target="_blank">Web UI ↗</a>
+      </div>
     </div>
+
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">HASP My BathRoom <span id="hp-online-dot" title="MQTT" style="font-size:0.85rem;color:#aaa;">●</span> <span id="hp-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">connecting…</span></h2>
+        <span style="font-size:0.82rem;color:#666;">Uptime: <b id="hp-uptime">—</b></span>
+        <span style="font-size:0.82rem;color:#666;">Signal: <b id="hp-rssi">—</b> dBm</span>
+        <span style="font-size:0.82rem;color:#666;">Current page: <b id="hp-page">—</b></span>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="hpPower(true)" title="backlight on + dim 100">On</button>
+          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="hpPower(false)" title="backlight off (hard cut)">Off</button>
+          <span style="font-size:0.78rem;color:#666;margin-left:10px;">Page</span>
+          <select id="hp-page-select" onchange="hpGotoPage(this.value)" style="padding:3px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;" title="Jump panel to this page">
+            <option value="">— go to —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sync from panel -->
+    <div class="card" style="padding:10px 14px;margin-bottom:16px;background:#f8f5f1;">
+      <div style="display:flex;align-items:center;gap:14px;font-size:0.85rem;">
+        <b>Sync from panel</b>
+        <span style="color:#666;font-size:0.78rem;">After editing widgets / labels in the OpenHASP web UI, click here to pull pages.jsonl, upsert binding/display rows, and save the jsonl back to the repo.</span>
+        <button id="bc-sync-btn" class="btn-test" style="margin-left:auto;border-color:#7a9ab8;color:#7a9ab8;" onclick="bcSyncFromPanel()">↺ Sync from panel</button>
+        <span id="bc-sync-status" style="font-size:0.78rem;color:#888;"></span>
+      </div>
+    </div>
+
+    <!-- Button Bindings — wallmote-style multi-device per slot -->
+    <div class="card wallmote-card">
+      <div class="wallmote-header">
+        <h2>Button Bindings</h2>
+        <span class="wallmote-meta"><span>Click <b>— select devices —</b> to add one or more devices per button. Multi-device: one press fires all.</span></span>
+      </div>
+      <div id="bc-buttons-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      <div style="margin-top:12px;text-align:right;">
+        <button class="btn-save" onclick="bcSaveAllBindings()">Save Bindings</button>
+      </div>
+    </div>
+
+    <!-- Display Templates -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">Display Templates <span id="bc-displays-count" style="color:#888;font-size:0.78rem;font-weight:normal;"></span></h2>
+        <span style="font-size:0.78rem;color:#888;">Push live values to label / gauge widgets on the panel</span>
+        <span style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:0.78rem;color:#666;">
+          Show:
+          <select id="bc-displays-filter" onchange="bcRenderDisplaysList()" style="padding:2px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;">
+            <option value="active" selected>only configured</option>
+            <option value="all">all (incl. empty)</option>
+          </select>
+          <select id="bc-displays-limit" onchange="bcRenderDisplaysList()" style="padding:2px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;">
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+            <option value="all">all</option>
+          </select>
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="bcAddDisplay()">+ Add</button>
+          <button class="btn-test" style="border-color:#7a9ab8;color:#7a9ab8;" onclick="bcToggleDisplaysCard()" id="bc-displays-toggle" title="Collapse / expand">▾</button>
+        </span>
+      </div>
+      <div id="bc-displays-body">
+        <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
+          Use <code style="background:#eee;padding:1px 4px;border-radius:3px;">{{key}}</code> in the format string to embed live state — e.g. <code style="background:#eee;padding:1px 4px;border-radius:3px;">Boiler {{boiler_temp}}°C</code>. Available keys come from rule_engine state.
+        </div>
+        <div id="bc-displays-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      </div>
+    </div>
+
   </div>
 
+  <!-- ════════════════════════════════════════════════════ -->
+  <!-- TAB: My BathRoom Smart Switch — Tuya TS0044 4-button bindings -->
+  <!-- ════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-smart-switch">
-    <div class="card">
-      <h2>Smart Switch</h2>
-      <p style="color:#888;font-size:0.85rem;">Placeholder. When the wireless scene remote (TS0044-class) is paired, single-press bindings will live here (mirror of the Balcony Agent → Balcony Smart Switch tab).</p>
-    </div>
-  </div>
 
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.05rem;">My BathRoom Smart Switch</h2>
+      <div style="font-size:0.82rem;color:#555;line-height:1.55;">
+        4-button wireless scene remote. Single tap only. Zigbee Switch.
+      </div>
+    </div>
+
+    <div class="card wallmote-card">
+      <div class="wallmote-header">
+        <h2>Button Bindings</h2>
+        <span class="wallmote-meta"><span>Click <b>— select devices —</b> to add one or more devices per button event. Save when done.</span></span>
+      </div>
+      <div id="sw-buttons-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      <div style="margin-top:12px;text-align:right;">
+        <button class="btn-save" onclick="swSaveAllBindings()">Save Bindings</button>
+      </div>
+    </div>
+
+  </div>
 </main>
 
-<script src="js/my-bathroom.js?v=1"></script>
-<script src="js/alerts-monitor.js?v=3"></script>
+<!-- Device picker popover (shared with bindings UI) -->
+<div class="picker-overlay" id="picker-overlay">
+  <div class="picker-popover">
+    <div class="picker-head">
+      <h3 id="picker-title">Select devices</h3>
+      <span style="font-size:0.75rem;color:#888;" id="picker-count">0 selected</span>
+    </div>
+    <div class="picker-search">
+      <input type="text" id="picker-search-input" placeholder="Filter by name or room…" oninput="bcFilterPicker()">
+    </div>
+    <div class="picker-list" id="picker-list"></div>
+    <div class="picker-foot">
+      <span style="color:#888;">Click a row to toggle</span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-picker-cancel" onclick="bcClosePicker(false)">Cancel</button>
+        <button class="btn-picker-done" onclick="bcClosePicker(true)">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/alerts-monitor.js"></script>
+<script src="js/my-bathroom.js?v=2"></script>
 </body>
 </html>
