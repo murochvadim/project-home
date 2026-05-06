@@ -2,38 +2,64 @@
 
 Per-room agent for My BathRoom — touch panel, smart switch, smell pump, and bathroom-area devices.
 
-Dashboard-only agent (no dedicated LXC service). All automation logic lives in the rule engine on LXC 105 (rule sentences under `apartment.rule_sentences` on Main Agent → Base Rule Settings); UI is hosted by the Windows dashboard.
+Dashboard-only agent (no dedicated LXC service). Sibling of [Balcony Agent](../BALCONY/CLAUDE.md) — same shape and rule-pattern, fully isolated DB rows / MQTT topics / rule files. UI is hosted by the Windows dashboard; rule logic on LXC 105.
+
+## Hardware
+
+| Component | Spec |
+|---|---|
+| Touch panel | Sunton ESP32-S3 4848S040 · 480×480 IPS · OpenHASP 0.7.0-rc12 |
+| Panel IP | `192.168.1.220` |
+| Panel MAC | `8c:bf:ea:0d:bb:e8` |
+| Plate name | `my-bathroom` |
+| MQTT topic prefix | `hasp/my-bathroom/` |
+| MQTT broker | LXC 107 (`192.168.1.189`) as user `hasp` |
+| Smart switch (TS0044 wireless scene remote) | not yet paired — placeholder device id in the rule |
 
 ## File Locations
-
-This file is the index — all artifacts live in shared canonical directories:
 
 | Artifact | Path |
 |----------|------|
 | Dashboard page | [BOILER/dashboard/public/my-bathroom.html](../BOILER/dashboard/public/my-bathroom.html) |
 | Dashboard JS | [BOILER/dashboard/public/js/my-bathroom.js](../BOILER/dashboard/public/js/my-bathroom.js) |
-| Rules | [RULES/rules/](../RULES/rules/) — authored under Main Agent → Base Rule Settings, no per-agent group |
-| DB setup migration | [MY_BATHROOM/migrations/setup.sql](migrations/setup.sql) |
+| Panel page layout (version-controlled) | [pages.jsonl](pages.jsonl) — pulled from the panel via `Sync from panel` button |
+| Rule files (group=`my-bathroom`) | `RULES/rules/my_bathroom_*.py` (4 files, see below) |
 | DB agent row | `agents` table, `name = 'my-bathroom'` |
-| Config storage | `dashboard_settings` keys prefixed `my-bathroom.*` |
+| DB panel row | `hasp_panels` table, `name = 'my-bathroom'` |
+| DB device row (rule-target alias) | `devices.hasp:my-bathroom` |
+| DB setup migration | [migrations/setup.sql](migrations/setup.sql) (agent row) + [migrations/002_panel.sql](migrations/002_panel.sql) (panel + device rows) |
+| Config storage | `dashboard_settings.my-bathroom.*` |
 | Memory | [memory/project_agent_my-bathroom.md](../../.claude/projects/c--Users-muroc-project-home/memory/project_agent_my-bathroom.md) |
 
 ## Dashboard Tabs
 
-- **Panel** — placeholder for the future OpenHASP panel mounted in the bathroom (mirror of Balcony's Panel tab — same pattern: page editor + button bindings).
-- **Smart Switch** — placeholder for the future TS0044-class wireless scene remote bindings (mirror of Balcony's Smart Switch tab).
+- **Panel** — full Balcony-equivalent UI (info card / status card / sync from panel / button bindings (wallmote-style picker) / display templates).
+- **Smart Switch** — Balcony-equivalent wallmote-style binding UI for the TS0044 scene remote (single-press only, hold doesn't fire on this firmware variant). Empty until hardware is paired.
+
+## Rules (group=`my-bathroom`, 4 files)
+
+Direct copies of the balcony equivalents with panel name + group fields swapped, SQL `WHERE p.name = 'my-bathroom'`. Fully isolated — no cross-firing.
+
+| Rule | File | Trigger | Job |
+|---|---|---|---|
+| My BathRoom Buttons | [`my_bathroom_buttons.py`](../RULES/rules/my_bathroom_buttons.py) | wildcard (early-return on `hasp:my-bathroom:*`) | panel button press → device commands per `hasp_buttons.bindings` |
+| My BathRoom Button Mirror | [`my_bathroom_button_mirror.py`](../RULES/rules/my_bathroom_button_mirror.py) | wildcard (early-return on bound device events) | device state → panel button visuals (`p<page>b<id>.val = 0/1`) |
+| My BathRoom Displays | [`my_bathroom_displays.py`](../RULES/rules/my_bathroom_displays.py) | heartbeat (60 s) | render value templates onto panel labels via `hasp_displays` rows |
+| My BathRoom Smart Switch Handler | [`my_bathroom_smart_switch_handler.py`](../RULES/rules/my_bathroom_smart_switch_handler.py) | `SMART_SWITCH_ID` (placeholder until paired) | TS0044 button event → device commands per `dashboard_settings.my-bathroom.smart_switch_bindings` |
 
 ## Storage Keys
 
-`dashboard_settings.my-bathroom.*` — populated as features land. Naming examples for future use:
-- `my-bathroom.panel_buttons` — HASP button bindings (when panel arrives)
-- `my-bathroom.smart_switch_bindings` — TS0044 button bindings
+`dashboard_settings.my-bathroom.*`:
+- `my-bathroom.smart_switch_bindings` — populated by the Smart Switch tab once the TS0044 is paired
+
+Future:
 - `my-bathroom.scenes` — saved scene presets
 
-## Devices in the Room (current snapshot)
+## Devices in the Room (snapshot at agent creation)
 
 | Device | Protocol | Type | Notes |
 |---|---|---|---|
+| `hasp:my-bathroom` (panel) | hasp | panel | Controllable from rules via `dps_config` aliases (`backlight`, `page`) |
 | `My Bathroom Smell` (`My_Bathroom_Smell_6`) | esp | esp_board | Pump + auto-mode controllable from rules via `dps_config.auto_enabled.action_on='smell_auto_start'` |
 | `My Bathroom Door` | zwave | door_sensor | Aeotec; battery 42% |
 | `My Bathroom Damper` | local (Tuya) | circuit_breaker | |
@@ -43,13 +69,13 @@ This file is the index — all artifacts live in shared canonical directories:
 | `My Bathroom Switch` | local (Tuya) | switch | |
 | `My Bathroom Presence sens` | local (Tuya) | presence | |
 
-## Planned Future Features
+## When you pair a TS0044 for this room
 
-- Mount HASP panel → wire bindings via the Panel tab
-- Add TS0044 smart switch → bindings via the Smart Switch tab
-- Sentence-driven rules consuming presence + door + smell pump state
-- Scene presets (e.g. "Shower mode" — fan on, lights bright, panel page X)
+1. Pair via Z2M with friendly name `My BathRoom Smart Switch` (or any name — note the IEEE address).
+2. Open `RULES/rules/my_bathroom_smart_switch_handler.py` and set `SMART_SWITCH_ID = "<ieee_address>"` (replaces the placeholder).
+3. `scp` the file to LXC 105 + click Reload on Main Agent.
+4. Open the dashboard's My BathRoom Agent → Smart Switch tab and add bindings per button (saves to `dashboard_settings.my-bathroom.smart_switch_bindings`).
 
-## Extending the Agent
+## When you redesign the panel pages
 
-To add a service layer later: run `/create-agent Edit` → select "add service layer". Skill generates `MY_BATHROOM/agent/my-bathroom-agent.service` + env file, updates the `agents` table, and converts this pointer index into a full-module doc.
+The panel's page layout is edited via OpenHASP's web UI at `http://192.168.1.220` (or the `/edit` link). After editing, click **Sync from panel** in the dashboard's Panel tab — that pulls `pages.jsonl` from the panel, upserts `hasp_buttons` + `hasp_displays` rows, and saves the jsonl to `MY_BATHROOM/pages.jsonl` (per-panel directory derivation in `server.js`, since 2026-05-06).
