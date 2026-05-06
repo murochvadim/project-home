@@ -235,6 +235,8 @@ def evaluate(event, state):
     # virtual device. Sun events written as ISO strings (date + time + tz).
     state.shared['time_mode']   = time_mode or 'unknown'
     state.shared['day_of_week'] = now.weekday()
+    # Wall-clock HH:MM for HASP panel clock widgets (and any other consumer)
+    state.shared['clock_hhmm']  = now.strftime("%H:%M")
     for ev in SUN_EVENTS:
         if ev in sun_times:
             state.shared[ev] = sun_times[ev].isoformat()
