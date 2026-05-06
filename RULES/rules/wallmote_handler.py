@@ -200,6 +200,12 @@ def evaluate(event, state):
             "device_id": device_id,
             "action": target,
             "rule": "Wallmote Handler",
+            # Human-input rule — skip the same-action-4x-in-10s loop guard.
+            # Multi-channel "Master OFF" bindings legitimately fire 4+ turn_off
+            # commands to the same device in one press, which was tripping the
+            # guard and silently disabling the rule until the next engine
+            # restart. Same fix as balcony_buttons.py / balcony_smart_switch_handler.py.
+            "_skip_loop_guard": True,
         }
         if channel:
             cmd["channel"] = channel
