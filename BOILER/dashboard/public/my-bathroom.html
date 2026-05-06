@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My BathRoom Agent</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html">Project Boards</a>
+  <a href="general.html">Weather</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+  <a href="my-bathroom.html" class="active">My BathRoom Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>My BathRoom Agent</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshPage()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('panel', this)">Panel</button>
+    <button class="tab-btn" onclick="showTab('smart-switch', this)">Smart Switch</button>
+  </div>
+
+  <div class="tab-panel active" id="tab-panel">
+    <div class="card">
+      <h2>Panel</h2>
+      <p style="color:#888;font-size:0.85rem;">Placeholder. When the OpenHASP touch panel is mounted in My BathRoom, button bindings + page editor will live here (mirror of the Balcony Agent → Panel tab).</p>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-smart-switch">
+    <div class="card">
+      <h2>Smart Switch</h2>
+      <p style="color:#888;font-size:0.85rem;">Placeholder. When the wireless scene remote (TS0044-class) is paired, single-press bindings will live here (mirror of the Balcony Agent → Balcony Smart Switch tab).</p>
+    </div>
+  </div>
+
+</main>
+
+<script src="js/my-bathroom.js?v=1"></script>
+<script src="js/alerts-monitor.js?v=3"></script>
+</body>
+</html>

@@ -667,12 +667,23 @@ type: project
 
 ## Sidebar Injection
 
-For each of the 9 OTHER HTML files (not the new one), use sed to inject the link at the correct anchor per Step 2 choice. Example for Agents section:
+For each OTHER HTML file in `BOILER/dashboard/public/` (not the new one, not `viewer.html`), use sed to inject the link at the correct anchor per Step 2 choice. The anchor regex MUST match `</a>` only — NOT `href="...">`, because the page where the anchor link is the active one has `class="active"` between the href and `>`. Example for Agents section (anchor = the agent listed just above the new one — currently the Balcony Agent line):
+
 ```bash
-sed -i '/<a href="devices.html">Device Agent<\/a>/a\  <a href="<SLUG>.html"><NAME></a>' <path>/<file>.html
+# WRONG — skips pages where the anchor link is the .active one (e.g. balcony.html itself):
+#   sed -i '/<a href="balcony.html">Balcony Agent<\/a>/a\...'
+# RIGHT — matches both `<a href="balcony.html">Balcony Agent</a>` AND
+#                      `<a href="balcony.html" class="active">Balcony Agent</a>`:
+sed -i '/Balcony Agent<\/a>/a\  <a href="<SLUG>.html"><NAME></a>' <path>/<file>.html
 ```
 
-Verify insertion by `grep -c '<slug>.html' <file>.html` — should be 1 per file (2 for the agent's own page because sidebar + self-link).
+After the sed loop, verify ACROSS all 14 files (every `*.html` in `public/` except `viewer.html`):
+```bash
+grep -l 'href="<slug>.html"' BOILER/dashboard/public/*.html | wc -l
+# Expected: 14 (includes the new agent's own page)
+```
+
+This bug bit the My BathRoom Agent setup on 2026-05-06 — `balcony.html` was missed because its own `Balcony Agent` link carried `class="active"` and the over-specific anchor regex didn't match. Failure mode: the user opens the page where the anchor is .active, the new link is missing, the user reports the agent "disappeared."
 
 ## Important Notes
 
