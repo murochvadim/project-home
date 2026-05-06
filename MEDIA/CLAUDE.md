@@ -366,7 +366,7 @@ Four Amazon Alexa devices are integrated via the **Home Assistant `alexa_media_p
 
 | HA entity (= devices.id) | name | room |
 |---|---|---|
-| `media_player.10inch_echo_show`  | 10inch Echo Show    | Living Room |
+| `media_player.10inch_echo_show`  | Alexa Balcony       | Balcony     |
 | `media_player.alexa_my_bathroom` | Alexa My Bathroom   | My BathRoom |
 | `media_player.alexa_maya_bedroom`| Alexa Maya Bedroom  | Bedroom |
 | `media_player.alexa_guy_room`    | Alexa Guy Room      | Guy Room |
@@ -414,6 +414,13 @@ Rule sentences can target Alexa devices via chips (parsed by [`RULES/_display_ch
 | `@<EchoName> play "<phrase>"` | Start playback (always content_type=DEFAULT — see limitation) |
 | `@<EchoName> on` | turn_on |
 | `@<EchoName> off` | turn_off |
+| `@<EchoName> stop` | media_stop |
+| `@<EchoName> pause` | media_pause |
+| `@<EchoName> resume` | media_play (resume already-loaded media) |
+| `@<EchoName> next` | media_next_track |
+| `@<EchoName> prev` | media_previous_track |
+| `@<EchoName> vol <N>` | volume_set (N=0..100, dispatch divides by 100) |
+| `@<EchoName> announce <TemplateName>` | Look up template name in `dashboard_settings.media-agents.alexa_announcements`, apply optional `default_volume`, fire `notify.alexa_media`. Template lookup at fire-time so user edits propagate without rule reload. |
 
 `RULES/rule_engine.py` `_dispatch_alexa()` (called from the protocol='alexa' branch around line 1198) makes a direct `urllib.request.urlopen` POST to `/api/services/<domain>/<service>` with `HA_TOKEN` from environment. Same pattern `boiler_agent.py` already uses for valve control. No `requests` library dependency. Errors logged but never raise.
 
@@ -422,6 +429,12 @@ Rule sentences can target Alexa devices via chips (parsed by [`RULES/_display_ch
 HA_URL=http://192.168.1.110:8123
 HA_TOKEN=<HA long-lived access token>
 ```
+
+### Last-seen via ARP scan (no rule-engine polling)
+
+Each `devices.mac` is populated with the Echo's LAN MAC; `GET /api/devices` LEFT JOINs `net_devices` on `lower(mac)` so `local_ip` and `last_seen` are filled in live from the ARP scanner (5-min cadence on LXC 104). Same pattern Pixoo / HASP / Awtrix already use. **No rule-engine heartbeat poll** for Alexa freshness — an earlier prototype existed but was removed 2026-05-07 once the MAC-link wiring made it redundant. The dashboard's Alexa Devices tab still gets live HA-side state (volume, media_title, etc.) on its own 5 s poll via `/api/alexa/devices`; that's separate from the LAN-presence indicator on the Devices page.
+
+If HA goes down, the Echo is still on the LAN and ARP-scan still says "Online". The dashboard's Alexa Devices tab will show the device as `unavailable` (HA's view) at the same time. That's fine — these are two different indicators.
 
 ### Known limitations
 

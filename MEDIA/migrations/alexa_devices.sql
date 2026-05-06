@@ -8,8 +8,11 @@ INSERT INTO devices (
   dps_labels, dps_config, channel_config
 )
 VALUES
-  ('media_player.10inch_echo_show', '10inch Echo Show', 'Amazon',
-   'media_player', 'alexa', 'Living Room',
+  -- HA entity_id keeps the legacy name `10inch_echo_show` (renaming on the
+  -- HA side risks breaking voice routines). Friendly name + room reflect
+  -- the device's physical location: Balcony.
+  ('media_player.10inch_echo_show', 'Alexa Balcony', 'Amazon',
+   'media_player', 'alexa', 'Balcony',
    true, true, false,
    '{}'::jsonb,
    '{

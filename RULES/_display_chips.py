@@ -16,10 +16,22 @@ Panel chips (device_type='panel' or protocol='hasp', added 2026-05-05):
 
 Alexa media-player chips (protocol='alexa', added 2026-05-06):
 
-    @<EchoName> say "<message>"   → notify.alexa_media announce
-    @<EchoName> play "<phrase>"   → media_player.play_media (DEFAULT type)
-    @<EchoName> on                → media_player.turn_on
-    @<EchoName> off               → media_player.turn_off
+    @<EchoName> say "<message>"            → notify.alexa_media announce
+    @<EchoName> play "<phrase>"            → media_player.play_media (DEFAULT)
+    @<EchoName> on                         → media_player.turn_on
+    @<EchoName> off                        → media_player.turn_off
+
+  Phase 2 (2026-05-07) — transport + saved-template chips:
+
+    @<EchoName> stop                       → media_player.media_stop
+    @<EchoName> pause                      → media_player.media_pause
+    @<EchoName> resume                     → media_player.media_play
+    @<EchoName> next                       → media_player.media_next_track
+    @<EchoName> prev                       → media_player.media_previous_track
+    @<EchoName> vol <N>                    → media_player.volume_set (N=0..100)
+    @<EchoName> announce <TemplateName>    → look up name in
+                                              dashboard_settings.media-agents.alexa_announcements
+                                              → notify.alexa_media (with optional default_volume)
 
 The function still named `parse_display_chip` for back-compat with the
 single existing caller (Evening Lights). Returns a command-dict ready
@@ -36,6 +48,12 @@ _PAGE_RE = re.compile(r"^page\s+(\d+)$")
 _SAY_RE  = re.compile(r"^say\s+(?:\"([^\"]*)\"|'([^']*)')$",  re.IGNORECASE)
 # `@<Echo> play "<phrase>"` — same wrapping.
 _PLAY_RE = re.compile(r"^play\s+(?:\"([^\"]*)\"|'([^']*)')$", re.IGNORECASE)
+# `@<Echo> vol <N>` — integer 0..100 (UI scale, dispatch divides by 100).
+_VOL_RE  = re.compile(r"^vol\s+(\d{1,3})$",                   re.IGNORECASE)
+# `@<Echo> announce <TemplateName>` — bare name, allow spaces. Template
+# lookup happens at fire-time in rule_engine._dispatch_alexa, against
+# dashboard_settings.media-agents.alexa_announcements.
+_ANN_RE  = re.compile(r"^announce\s+(.+?)\s*$",               re.IGNORECASE)
 
 def parse_display_chip(token, devices_by_name):
     """Return a command dict for a display / panel chip, or None.
@@ -97,10 +115,38 @@ def parse_display_chip(token, devices_by_name):
                 "content_id":    phrase,
                 "content_type":  "DEFAULT",
             }
-        if rest_lower == "on":
-            return {"device_id": device_id, "protocol": "alexa", "action": "turn_on"}
-        if rest_lower == "off":
-            return {"device_id": device_id, "protocol": "alexa", "action": "turn_off"}
+        # Bare-word transport / power chips.
+        _ALEXA_BARE = {
+            "on":     "turn_on",
+            "off":    "turn_off",
+            "stop":   "media_stop",
+            "pause":  "media_pause",
+            "resume": "media_play",          # resume already-loaded media
+            "next":   "media_next_track",
+            "prev":   "media_previous_track",
+        }
+        if rest_lower in _ALEXA_BARE:
+            return {"device_id": device_id, "protocol": "alexa",
+                    "action": _ALEXA_BARE[rest_lower]}
+        m = _VOL_RE.match(rest_lower)
+        if m:
+            n = int(m.group(1))
+            if 0 <= n <= 100:
+                return {
+                    "device_id":     device_id,
+                    "protocol":      "alexa",
+                    "action":        "volume_set",
+                    "volume_level":  n / 100.0,
+                }
+            return None
+        m = _ANN_RE.match(rest)  # original case for template-name match
+        if m:
+            return {
+                "device_id":     device_id,
+                "protocol":      "alexa",
+                "action":        "announce_template",
+                "template_name": m.group(1).strip(),
+            }
         return None
 
     # ── Panel: HASP-specific actions (page nav + backlight on/off) ────

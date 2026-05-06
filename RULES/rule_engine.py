@@ -1074,6 +1074,45 @@ class RuleEngine:
                 return
             domain, service = 'media_player', 'volume_set'
             data = {'entity_id': device_id, 'volume_level': max(0.0, min(1.0, lvl))}
+        elif action == 'announce_template':
+            # Look up the template by name in dashboard_settings.media-agents.alexa_announcements
+            # at fire-time (so user edits to template text propagate without rule reload).
+            # Recursive call back into _dispatch_alexa for the actual volume_set + say so all
+            # HA-touching logic stays in one place.
+            name = (cmd.get('template_name') or '').strip().lower()
+            if not name:
+                log.warning("Rule '%s' alexa %s: announce_template missing template_name",
+                            rule_name, device_id)
+                return
+            rows = self.state.db_query(
+                "SELECT value FROM dashboard_settings WHERE key = 'media-agents.alexa_announcements'"
+            )
+            arr = []
+            if rows and rows[0][0] is not None:
+                v = rows[0][0]
+                if isinstance(v, list):
+                    arr = v
+                elif isinstance(v, str):
+                    try: arr = json.loads(v) if v else []
+                    except (TypeError, ValueError): arr = []
+            template = next((t for t in arr
+                             if isinstance(t, dict)
+                             and (t.get('name') or '').strip().lower() == name), None)
+            if not template:
+                log.warning("Rule '%s' alexa %s: announce_template '%s' not found in saved templates",
+                            rule_name, device_id, cmd.get('template_name'))
+                return
+            msg = template.get('message', '')
+            vol = template.get('default_volume')
+            if vol is not None:
+                try:
+                    vol_f = max(0.0, min(1.0, float(vol)))
+                    self._dispatch_alexa({'action': 'volume_set', 'volume_level': vol_f},
+                                         device_id, rule_name)
+                except (TypeError, ValueError):
+                    pass
+            self._dispatch_alexa({'action': 'say', 'message': msg}, device_id, rule_name)
+            return
         else:
             log.warning("Rule '%s' alexa %s: unknown action '%s'", rule_name, device_id, action)
             return

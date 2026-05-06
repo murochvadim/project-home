@@ -8,6 +8,7 @@
   let _devices = [];
   let _pixooPresets = [];
   let _awtrixApps = [];      // saved apps from dashboard_settings.awtrix.messages
+  let _alexaAnns = [];       // saved announcement templates from dashboard_settings.media-agents.alexa_announcements
   let _modal = null;
   let _onPick = null;
 
@@ -150,8 +151,8 @@
           : '';
         extrasHtml = `<div style="padding:2px 8px 6px 24px;">${onBtn}${offBtn}${pushBtns}${emptyHint}</div>`;
       } else if (isAlexa) {
-        // Alexa: on/off (turn_on/turn_off) + say "<message>" with inline input.
-        // Tokens: '@Name on'  /  '@Name off'  /  '@Name say "<message>"'.
+        // Alexa: on/off + say + transport (stop / pause / resume / next / prev / vol)
+        // + announce <SavedTemplate>. Tokens follow _display_chips.py grammar.
         const safeName = (d.name || '').replace(/"/g, '&quot;');
         const onBtn  = `<button data-dp-action="alexa-on"  data-dp-name="${safeName}"
                           style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">on</button>`;
@@ -163,7 +164,26 @@
                               onclick="event.stopPropagation()">
                         <button data-dp-action="alexa-say" data-dp-name="${safeName}" data-dp-input-id="${sayInputId}"
                           style="padding:2px 8px;margin:2px;border:1px solid #2980b9;color:#2980b9;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">say</button>`;
-        extrasHtml = `<div style="padding:2px 8px 6px 24px;">${onBtn}${offBtn}${sayBtn}</div>`;
+        // Transport bare-word buttons.
+        const xpStyle = "padding:2px 8px;margin:2px;border:1px solid #d0cbc4;background:#fafaf7;border-radius:3px;cursor:pointer;font-size:0.72rem;";
+        const xpBtns = ['stop','pause','resume','next','prev'].map(verb =>
+          `<button data-dp-action="alexa-${verb}" data-dp-name="${safeName}" style="${xpStyle}">${verb}</button>`
+        ).join('');
+        const volBtn = `<button data-dp-action="alexa-vol" data-dp-name="${safeName}" style="${xpStyle}">vol…</button>`;
+        // Saved announcement template buttons (one per saved template).
+        const annBtns = (_alexaAnns || []).map(t =>
+          `<button data-dp-action="alexa-announce" data-dp-name="${safeName}"
+                   data-dp-template="${(t.name||'').replace(/"/g,'&quot;')}"
+                   style="padding:2px 8px;margin:2px;border:1px solid #6c4f9f;color:#6c4f9f;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;">announce ${(t.name||'')}</button>`
+        ).join('');
+        const annHint = !(_alexaAnns || []).length
+          ? `<span style="color:#999;font-size:0.7rem;margin-left:4px;">no saved announcements yet</span>`
+          : '';
+        extrasHtml = `<div style="padding:2px 8px 6px 24px;">
+          ${onBtn}${offBtn}${sayBtn}<br>
+          ${xpBtns}${volBtn}<br>
+          ${annBtns}${annHint}
+        </div>`;
       } else if (hasChannels) {
         const channels = channelPairs.map(([key, label]) =>
           `<button data-dp-pick="device:${encodeURIComponent(d.id)}" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-label="${(label||'').replace(/"/g,'&quot;')}"
@@ -262,6 +282,23 @@
         else if (action === 'push')                     token = `@${name} push ${el.dataset.dpPreset || ''}`.trim();
         else if (action === 'alexa-on')                 token = `@${name} on`;
         else if (action === 'alexa-off')                token = `@${name} off`;
+        else if (action === 'alexa-stop')               token = `@${name} stop`;
+        else if (action === 'alexa-pause')              token = `@${name} pause`;
+        else if (action === 'alexa-resume')             token = `@${name} resume`;
+        else if (action === 'alexa-next')               token = `@${name} next`;
+        else if (action === 'alexa-prev')               token = `@${name} prev`;
+        else if (action === 'alexa-vol') {
+          const raw = prompt('Volume 0-100:', '50');
+          if (raw == null) return;
+          const n = parseInt(String(raw).trim(), 10);
+          if (isNaN(n) || n < 0 || n > 100) { alert('Volume must be 0-100'); return; }
+          token = `@${name} vol ${n}`;
+        }
+        else if (action === 'alexa-announce') {
+          const tname = el.dataset.dpTemplate || '';
+          if (!tname) return;
+          token = `@${name} announce ${tname}`;
+        }
         else if (action === 'alexa-say') {
           const inputId = el.dataset.dpInputId;
           const msg = (document.getElementById(inputId)?.value || '').trim();
@@ -346,20 +383,24 @@
     const fresh = !_devices.length || (Date.now() - (_devices._loadedAt || 0)) > 30000;
     if (fresh) {
       try {
-        const [devRes, presRes, awRes] = await Promise.all([
+        const [devRes, presRes, awRes, alexaAnnRes] = await Promise.all([
           fetch('/api/devices').then(r => r.json()),
           fetch('/api/pixoo/presets').then(r => r.json()).catch(() => []),
           fetch('/api/dashboard-settings/awtrix.messages').then(r => r.json()).catch(() => ({ value: [] })),
+          fetch('/api/dashboard-settings/media-agents.alexa_announcements').then(r => r.json()).catch(() => ({ value: [] })),
         ]);
         _devices = Array.isArray(devRes) ? devRes : [];
         _devices._loadedAt = Date.now();
         _pixooPresets = Array.isArray(presRes) ? presRes : [];
         const awVal = awRes && awRes.value;
         _awtrixApps = Array.isArray(awVal) ? awVal : [];
+        const annVal = alexaAnnRes && alexaAnnRes.value;
+        _alexaAnns = Array.isArray(annVal) ? annVal : [];
       } catch (e) {
         _devices = [];
         _pixooPresets = [];
         _awtrixApps = [];
+        _alexaAnns = [];
       }
     }
     _renderTypeFilter();
