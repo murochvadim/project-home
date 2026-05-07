@@ -26,8 +26,15 @@ Bindings cached 30 s.
 
 import json
 import logging
+import os
 import re
+import sys
 import time
+
+_RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RULES_DIR not in sys.path:
+    sys.path.insert(0, _RULES_DIR)
+from _display_chips import build_alexa_cmd as _build_alexa_cmd  # noqa: E402
 
 log = logging.getLogger("rule.my_bathroom_smart_switch_handler")
 
@@ -118,6 +125,11 @@ def _build_commands(slot, state, slot_key):
             continue
         channel = b.get("channel")
         action  = b.get("action", "turn_on")
+        # Alexa speak / play — see _display_chips.build_alexa_cmd
+        alexa_cmd = _build_alexa_cmd(b, action, device_id, "My BathRoom Smart Switch Handler")
+        if alexa_cmd:
+            commands.append(alexa_cmd)
+            continue
         target  = _resolve_target(action, state.devices.get(device_id, {}), channel)
         if not target:
             log.warning("Unknown action '%s' in binding for %s — skipping", action, slot_key)

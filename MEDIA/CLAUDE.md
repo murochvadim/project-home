@@ -445,6 +445,45 @@ Rule sentences can target Alexa devices via chips (parsed by [`RULES/_display_ch
 | `@<EchoName> vol <N>` | volume_set (N=0..100, dispatch divides by 100) |
 | `@<EchoName> speak <TemplateName>` | Look up template name in `dashboard_settings.media-agents.alexa_announcements`, apply optional `default_volume` / `loudness_db`, fire `notify.alexa_media` with the global SSML wrap (rate / voice / loudness). Template lookup at fire-time so user edits propagate without rule reload. **Renamed from `announce` 2026-05-07** per user request — `announce <TemplateName>` is still recognized by the parser as an alias so existing rules keep firing. |
 
+### Bindings — Wallmote / Panel / Smart Switch (since 2026-05-07)
+
+Alexa devices can be bound to button presses across **5 binding pages** (one shared rule pattern, one shared helper):
+
+| Page | Storage | Rule handler |
+|---|---|---|
+| Living Room → Wallmote | `dashboard_settings.living-room.wallmote_bindings` | `RULES/rules/wallmote_handler.py` |
+| Balcony Agent → Panel buttons | `hasp_buttons.bindings` (per-row JSONB, `panel_id` = balcony) | `RULES/rules/balcony_buttons.py` |
+| Balcony Agent → Smart Switch | `dashboard_settings.balcony.smart_switch_bindings` | `RULES/rules/balcony_smart_switch_handler.py` |
+| My BathRoom Agent → Panel buttons | `hasp_buttons.bindings` (panel_id = my-bathroom) | `RULES/rules/my_bathroom_buttons.py` |
+| My BathRoom Agent → Smart Switch | `dashboard_settings.my-bathroom.smart_switch_bindings` | `RULES/rules/my_bathroom_smart_switch_handler.py` |
+
+Each picker, when the user expands an Alexa device row, replaces the standard `turn_on/turn_off/toggle` dropdown with a grouped one:
+
+```
+── Speak ──         (one option per saved announcement template)
+── Play music ──    (one option per saved station)
+── Stop ──          stop
+```
+
+No transport (pause / resume / next / prev) and no power (turn_on / turn_off) — those were dropped at user request 2026-05-07 ("only play muzic or annonce saved thats all"). `stop` was added as the counterpart to `play` so a binding can both start and stop music.
+
+Binding shape on disk extends with two optional fields:
+
+```json
+{ "device_id": "media_player.alexa_balcony", "channel": null,
+  "name": "Alexa Balcony", "label": "",
+  "action": "speak" | "play" | "stop",
+  "template_name": "<saved announcement name>",   // when action='speak'
+  "station_name":  "<saved station name>"         // when action='play'
+}
+```
+
+Lookups happen at **fire time** in the rule handler (not bind time), so renaming a template or station doesn't break existing bindings — same pattern as `speak` chips in rules.
+
+**Shared helper** [`RULES/_display_chips.py:build_alexa_cmd`](../RULES/_display_chips.py) — all 5 rule handlers import it and call it before falling through to their generic toggle/turn_on logic. Returns a fully-formed cmd dict with the right `protocol='alexa'`, `action='announce_template'|'play_station'|'media_stop'`, and the template/station name passed through. The rule engine's `_dispatch_alexa` resolves `play_station` against `dashboard_settings.media-agents.alexa_quick_music` to derive `content_id` + `content_type`, then routes to `play_media`.
+
+**Bug worth knowing**: `living-room.js` originally channel-expanded any device whose `dps_config.<key>` had `action_on` — including Alexa devices' `dps_config.power` (used purely by the Devices page on/off chip). That surfaced "Alexa Balcony — Power" / `alexa · Ch.power` rows in the Wallmote bindings picker. Fixed by gating `actionChans` on `protocol ∈ {'esp','hasp','awtrix'}` so Alexa falls through to the single-row else branch (channel=null). `balcony.js` and `my-bathroom.js` were already gated to `'esp'` only — same effect.
+
 `RULES/rule_engine.py` `_dispatch_alexa()` (called from the protocol='alexa' branch around line 1198) makes a direct `urllib.request.urlopen` POST to `/api/services/<domain>/<service>` with `HA_TOKEN` from environment. Same pattern `boiler_agent.py` already uses for valve control. No `requests` library dependency. Errors logged but never raise.
 
 **Required env on LXC 105** (`/etc/rule-engine.env`):

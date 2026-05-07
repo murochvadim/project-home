@@ -3,7 +3,7 @@
   const WM1_ID = 'e410cc7b-a734-4177-b941-2394dd7a5f7f';
   const WM2_ID = '62f40d30-5c63-4d97-bf55-c602d1e2ee93';
 
-  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display']);
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player']);
   const ACTIONS = [
     { v: 'turn_on',  label: 'Turn On',  tag: 'on'     },
     { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
@@ -12,11 +12,28 @@
   const STORAGE_KEY = 'living-room.wallmote_bindings';
 
   // In-memory bindings state
-  // Shape: { 'wm1:button1:pushed': [{device_id, channel, name, label, action}, ...] }
+  // Shape: { 'wm1:button1:pushed': [{device_id, channel, name, label, action,
+  //          template_name?, station_name?}, ...] }
   let bindings = {};
 
   // Cached device list (built once on load)
   let controllableDevices = [];
+
+  // Saved Alexa announcements + stations — loaded once with the device list
+  // so the bindings picker can offer Speak / Play options for media_players.
+  let _alexaAnnouncements = [];   // [{name, message, default_volume?}]
+  let _alexaStations      = [];   // [{name, content_id, content_type}]
+
+  // Encode/decode the Alexa-action option value used in the picker
+  // dropdown. Format: '<verb>' or '<verb>:<name>'. Trusts that user-
+  // facing names don't contain a colon (validated at save in the form).
+  function alexaOptionValue(action, name) {
+    return name ? `${action}:${name}` : action;
+  }
+  function parseAlexaOptionValue(v) {
+    const i = v.indexOf(':');
+    return i < 0 ? { action: v } : { action: v.slice(0, i), name: v.slice(i + 1) };
+  }
 
   // Active picker context
   let activePicker = null;
@@ -25,10 +42,13 @@
   function defaultActionFor(event) { return event === 'held' ? 'toggle' : 'turn_on'; }
   function actionLabel(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.label : v; }
   function actionTag(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.tag : 'on'; }
-  // Chip-tag for a binding: page-select bindings show `P<n>` so the
-  // user immediately sees which page each press jumps to.
+  // Chip-tag for a binding: page-select bindings show `P<n>`; Alexa speak/play
+  // show the template/station name appended so the user sees the target.
   function bindingTag(b) {
     if (b && b.page_num != null) return `P${b.page_num}`;
+    if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
+    if (b && b.action === 'play'  && b.station_name)  return `play:${b.station_name}`;
+    if (b && b.action === 'stop')                     return 'stop';
     return actionTag(b ? b.action : 'on');
   }
 
@@ -49,10 +69,14 @@
 
   async function loadData() {
     try {
-      const [devs, saved] = await Promise.all([
+      const [devs, saved, anns, stations] = await Promise.all([
         fetch('/api/devices').then(r => r.json()),
         fetch(`/api/dashboard-settings/${encodeURIComponent(STORAGE_KEY)}`).then(r => r.json()).catch(() => ({ value: null })),
+        fetch('/api/dashboard-settings/media-agents.alexa_announcements').then(r => r.json()).catch(() => ({ value: [] })),
+        fetch('/api/dashboard-settings/media-agents.alexa_quick_music').then(r => r.json()).catch(() => ({ value: [] })),
       ]);
+      _alexaAnnouncements = Array.isArray(anns && anns.value) ? anns.value : [];
+      _alexaStations      = Array.isArray(stations && stations.value) ? stations.value : [];
 
       // Wallmote status (both)
       const fmtWm = (devId, prefix) => {
@@ -85,11 +109,16 @@
         // 2) dps_labels with state_l<N> keys (Zigbee multi-gang)
         // 3) dps_config keys with action_on (ESP boards, HASP panel,
         //    Awtrix display — controllable channels declared per-device
-        //    via dps_config.<channel>.action_on/action_off)
+        //    via dps_config.<channel>.action_on/action_off). Gated to
+        //    those protocols so Alexa devices' dps_config.power (used
+        //    only for the Devices-page on/off chip) doesn't get
+        //    surfaced as a "Ch.power" row in the bindings picker.
         const tuyaChans = Object.keys(chanCfg).filter(k => k && !isNaN(parseInt(k))).sort();
         const zigbeeChans = Object.keys(dpsLabels).filter(k => /^state_l\d+$/i.test(k))
           .sort((a, b) => parseInt(a.replace(/\D/g,'')) - parseInt(b.replace(/\D/g,'')));
-        const actionChans = Object.keys(dpsCfg).filter(k => (dpsCfg[k] || {}).action_on);
+        const actionChans = (d.protocol === 'esp' || d.protocol === 'hasp' || d.protocol === 'awtrix')
+          ? Object.keys(dpsCfg).filter(k => (dpsCfg[k] || {}).action_on)
+          : [];
 
         if (tuyaChans.length > 1) {
           for (const ch of tuyaChans) {
@@ -214,6 +243,7 @@
       // binding — rule engine HASP branch translates that to a
       // `command/page` publish.
       const isPageSelect = d.chan_meta && d.chan_meta.type === 'page_select';
+      const isAlexa = d.protocol === 'alexa';
       let dropdownHtml;
       if (isPageSelect) {
         const lo = Number(d.chan_meta.min || 1);
@@ -223,6 +253,28 @@
         for (let n = lo; n <= hi; n++) opts.push(n);
         dropdownHtml = `<select class="picker-page-select">
           ${opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>Page ${n}</option>`).join('')}
+        </select>`;
+      } else if (isAlexa) {
+        // Alexa dropdown: Speak / Play music / Stop only. Other transport
+        // (pause/resume/next/prev) + power were dropped per user request
+        // 2026-05-07. Stop is the counterpart to play — without it a
+        // binding can start music but not stop it from a button press.
+        const curVal = existing
+          ? alexaOptionValue(existing.action,
+              existing.template_name || existing.station_name || null)
+          : 'speak:' + ((_alexaAnnouncements[0] && _alexaAnnouncements[0].name) || '');
+        const speakOpts = (_alexaAnnouncements || []).map(t => {
+          const v = alexaOptionValue('speak', t.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(t.name)}</option>`;
+        }).join('');
+        const playOpts = (_alexaStations || []).map(s => {
+          const v = alexaOptionValue('play', s.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(s.name)}</option>`;
+        }).join('');
+        dropdownHtml = `<select class="picker-action-select">
+          ${speakOpts ? `<optgroup label="Speak">${speakOpts}</optgroup>` : ''}
+          ${playOpts  ? `<optgroup label="Play music">${playOpts}</optgroup>` : ''}
+          <optgroup label="Stop"><option value="stop" ${'stop' === curVal ? 'selected' : ''}>stop</option></optgroup>
         </select>`;
       } else {
         dropdownHtml = `<select class="picker-action-select">
@@ -244,13 +296,13 @@
       item.addEventListener('click', (e) => {
         if (e.target === sel || sel.contains(e.target)) return;  // let the select handle its own clicks
         if (e.target !== cb) cb.checked = !cb.checked;
-        toggleSelection(d, cb.checked, sel.value, isPageSelect);
+        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
       });
       sel.addEventListener('change', (e) => {
         e.stopPropagation();
         // Changing action implicitly selects the device (if not already)
         if (!cb.checked) cb.checked = true;
-        toggleSelection(d, cb.checked, sel.value, isPageSelect);
+        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
       });
       sel.addEventListener('click', (e) => e.stopPropagation());
 
@@ -267,23 +319,36 @@
     updatePickerCount();
   }
 
-  function toggleSelection(dev, checked, action, isPageSelect) {
+  function toggleSelection(dev, checked, action, isPageSelect, isAlexa) {
     if (!activePicker) return;
     const slotKey = key(activePicker.wallmote, activePicker.button, activePicker.event);
     if (!bindings[slotKey]) bindings[slotKey] = [];
     const existingIdx = bindings[slotKey].findIndex(s =>
       s.device_id === dev.device_id && (s.channel || null) === (dev.channel || null));
-    // For page-select channels the dropdown value is a page number
-    // (string). The action stored on the binding is always 'turn_on'
-    // (rule engine resolves via dps_config alias → 'goto_page' →
-    // publishes `page` topic with cmd.page_num).
+    // Decode the dropdown value depending on row type:
+    //   Alexa  → 'speak:<name>' / 'play:<name>' / 'stop' / 'turn_on' / etc.
+    //   page   → just the page number (action stays 'turn_on')
+    //   other  → plain action verb
     const pageNum = isPageSelect ? parseInt(action, 10) : null;
-    const storedAction = isPageSelect ? 'turn_on' : action;
+    let storedAction = isPageSelect ? 'turn_on' : action;
+    let templateName = null, stationName = null;
+    if (isAlexa) {
+      const parsed = parseAlexaOptionValue(action);
+      storedAction = parsed.action;
+      if (parsed.action === 'speak') templateName = parsed.name || '';
+      if (parsed.action === 'play')  stationName  = parsed.name || '';
+    }
     if (checked) {
+      const writeFields = (b) => {
+        b.action = storedAction;
+        if (isPageSelect) b.page_num = pageNum; else delete b.page_num;
+        if (isAlexa) {
+          if (templateName) b.template_name = templateName; else delete b.template_name;
+          if (stationName)  b.station_name  = stationName;  else delete b.station_name;
+        }
+      };
       if (existingIdx >= 0) {
-        bindings[slotKey][existingIdx].action = storedAction;
-        if (isPageSelect) bindings[slotKey][existingIdx].page_num = pageNum;
-        else delete bindings[slotKey][existingIdx].page_num;
+        writeFields(bindings[slotKey][existingIdx]);
       } else {
         const b = {
           device_id: dev.device_id, channel: dev.channel,
@@ -291,6 +356,8 @@
           action: storedAction,
         };
         if (isPageSelect) b.page_num = pageNum;
+        if (isAlexa && templateName) b.template_name = templateName;
+        if (isAlexa && stationName)  b.station_name  = stationName;
         bindings[slotKey].push(b);
       }
     } else if (existingIdx >= 0) {

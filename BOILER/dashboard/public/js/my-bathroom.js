@@ -129,19 +129,29 @@
     { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
     { v: 'toggle',   label: 'Toggle',   tag: 'toggle' },
   ];
-  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display']);
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player']);
 
   let _buttons = [];
   let _controllable = [];
   let _bcActivePicker = null;  // {row_id, snapshot}
+  let _bcAlexaAnnouncements = [];
+  let _bcAlexaStations      = [];
+
+  function bcAlexaOptionValue(action, name) { return name ? `${action}:${name}` : action; }
+  function bcParseAlexaOptionValue(v) {
+    const i = v.indexOf(':');
+    return i < 0 ? { action: v } : { action: v.slice(0, i), name: v.slice(i + 1) };
+  }
 
   function bcActionLabel(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.label : v; }
   function bcActionTag(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.tag : 'toggle'; }
-  // Render-helper for binding chips: page-select bindings show `P<n>`
-  // instead of the generic action tag, so the user immediately sees
-  // which page each button jumps to.
+  // Render-helper for binding chips: page-select bindings show `P<n>`;
+  // Alexa speak/play show the template/station name appended.
   function bcBindingTag(b) {
     if (b && b.page_num != null) return `P${b.page_num}`;
+    if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
+    if (b && b.action === 'play'  && b.station_name)  return `play:${b.station_name}`;
+    if (b && b.action === 'stop')                     return 'stop';
     return bcActionTag(b ? b.action : 'toggle');
   }
   function bcDefaultActionFor(_event) { return 'toggle'; }
@@ -149,7 +159,13 @@
   async function bcLoadControllableDevices() {
     if (_controllable.length) return _controllable;
     try {
-      const devs = await fetch('/api/devices').then(r => r.json());
+      const [devs, anns, stations] = await Promise.all([
+        fetch('/api/devices').then(r => r.json()),
+        fetch('/api/dashboard-settings/media-agents.alexa_announcements').then(r => r.json()).catch(() => ({ value: [] })),
+        fetch('/api/dashboard-settings/media-agents.alexa_quick_music').then(r => r.json()).catch(() => ({ value: [] })),
+      ]);
+      _bcAlexaAnnouncements = Array.isArray(anns && anns.value) ? anns.value : [];
+      _bcAlexaStations      = Array.isArray(stations && stations.value) ? stations.value : [];
       const list = Array.isArray(devs) ? devs : (devs.devices || []);
       _controllable = [];
       for (const d of list) {
@@ -306,6 +322,7 @@
       // page_num: N}` on the binding — the rule engine HASP branch
       // translates that into a `command/page` publish.
       const isPageSelect = d.chan_meta && d.chan_meta.type === 'page_select';
+      const isAlexa = d.protocol === 'alexa';
       let dropdownHtml;
       if (isPageSelect) {
         const lo = Number(d.chan_meta.min || 1);
@@ -315,6 +332,24 @@
         for (let n = lo; n <= hi; n++) opts.push(n);
         dropdownHtml = `<select class="picker-page-select">
           ${opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>Page ${n}</option>`).join('')}
+        </select>`;
+      } else if (isAlexa) {
+        const curVal = existing
+          ? bcAlexaOptionValue(existing.action,
+              existing.template_name || existing.station_name || null)
+          : 'speak:' + ((_bcAlexaAnnouncements[0] && _bcAlexaAnnouncements[0].name) || '');
+        const speakOpts = (_bcAlexaAnnouncements || []).map(t => {
+          const v = bcAlexaOptionValue('speak', t.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(t.name)}</option>`;
+        }).join('');
+        const playOpts = (_bcAlexaStations || []).map(s => {
+          const v = bcAlexaOptionValue('play', s.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(s.name)}</option>`;
+        }).join('');
+        dropdownHtml = `<select class="picker-action-select">
+          ${speakOpts ? `<optgroup label="Speak">${speakOpts}</optgroup>` : ''}
+          ${playOpts  ? `<optgroup label="Play music">${playOpts}</optgroup>` : ''}
+          <optgroup label="Stop"><option value="stop" ${'stop' === curVal ? 'selected' : ''}>stop</option></optgroup>
         </select>`;
       } else {
         dropdownHtml = `<select class="picker-action-select">
@@ -334,12 +369,12 @@
       item.addEventListener('click', (e) => {
         if (e.target === sel || sel.contains(e.target)) return;
         if (e.target !== cb) cb.checked = !cb.checked;
-        bcToggleSelection(d, cb.checked, sel.value, isPageSelect);
+        bcToggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
       });
       sel.addEventListener('change', (e) => {
         e.stopPropagation();
         if (!cb.checked) cb.checked = true;
-        bcToggleSelection(d, cb.checked, sel.value, isPageSelect);
+        bcToggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
       });
       sel.addEventListener('click', (e) => e.stopPropagation());
       list.appendChild(item);
@@ -354,30 +389,41 @@
     bcUpdatePickerCount();
   }
 
-  function bcToggleSelection(dev, checked, action, isPageSelect) {
+  function bcToggleSelection(dev, checked, action, isPageSelect, isAlexa) {
     if (!_bcActivePicker) return;
     const row = _buttons.find(r => r.id === _bcActivePicker.rowId);
     if (!row) return;
     if (!row.bindings) row.bindings = [];
     const idx = row.bindings.findIndex(s =>
       s.device_id === dev.device_id && (s.channel || null) === (dev.channel || null));
-    // For page-select channels, the dropdown's value is the chosen page
-    // number (string). The action stored on the binding is always
-    // 'turn_on' (the rule engine resolves via dps_config alias →
-    // 'goto_page' → publishes `page` topic with cmd.page_num).
     const pageNum = isPageSelect ? parseInt(action, 10) : null;
-    const storedAction = isPageSelect ? 'turn_on' : action;
+    let storedAction = isPageSelect ? 'turn_on' : action;
+    let templateName = null, stationName = null;
+    if (isAlexa) {
+      const parsed = bcParseAlexaOptionValue(action);
+      storedAction = parsed.action;
+      if (parsed.action === 'speak') templateName = parsed.name || '';
+      if (parsed.action === 'play')  stationName  = parsed.name || '';
+    }
     if (checked) {
       if (idx >= 0) {
         row.bindings[idx].action = storedAction;
         if (isPageSelect) row.bindings[idx].page_num = pageNum;
         else delete row.bindings[idx].page_num;
+        if (isAlexa) {
+          if (templateName) row.bindings[idx].template_name = templateName;
+          else delete row.bindings[idx].template_name;
+          if (stationName)  row.bindings[idx].station_name  = stationName;
+          else delete row.bindings[idx].station_name;
+        }
       } else {
         const b = {
           device_id: dev.device_id, channel: dev.channel,
           name: dev.name, label: dev.label, action: storedAction,
         };
         if (isPageSelect) b.page_num = pageNum;
+        if (isAlexa && templateName) b.template_name = templateName;
+        if (isAlexa && stationName)  b.station_name  = stationName;
         row.bindings.push(b);
       }
     } else if (idx >= 0) {
@@ -927,6 +973,30 @@
       }
 
       const sel = selByKey.get(rowKey);
+      const isAlexa = d.protocol === 'alexa';
+      let actionSelectHtml;
+      if (isAlexa) {
+        const curVal = sel
+          ? bcAlexaOptionValue(sel.action, sel.template_name || sel.station_name || null)
+          : 'speak:' + ((_bcAlexaAnnouncements[0] && _bcAlexaAnnouncements[0].name) || '');
+        const speakOpts = (_bcAlexaAnnouncements || []).map(t => {
+          const v = bcAlexaOptionValue('speak', t.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(t.name)}</option>`;
+        }).join('');
+        const playOpts = (_bcAlexaStations || []).map(s2 => {
+          const v = bcAlexaOptionValue('play', s2.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(s2.name)}</option>`;
+        }).join('');
+        actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
+          ${speakOpts ? `<optgroup label="Speak">${speakOpts}</optgroup>` : ''}
+          ${playOpts  ? `<optgroup label="Play music">${playOpts}</optgroup>` : ''}
+          <optgroup label="Stop"><option value="stop" ${'stop' === curVal ? 'selected' : ''}>stop</option></optgroup>
+        </select>`;
+      } else {
+        actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
+          ${ACTIONS.map(a => `<option value="${a.v}" ${(sel?.action || defAct) === a.v ? 'selected' : ''}>${a.label}</option>`).join('')}
+        </select>`;
+      }
       const item = document.createElement('div');
       item.className = 'picker-item';
       const checked = sel ? 'checked' : '';
@@ -934,17 +1004,26 @@
         <input type="checkbox" ${checked} data-sw-item="${escHtml(rowKey)}">
         <span class="picker-item-name">${escHtml(displayName)}</span>
         <span class="picker-item-meta">${escHtml(d.protocol || '')}</span>
-        <select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
-          ${ACTIONS.map(a => `<option value="${a.v}" ${(sel?.action || defAct) === a.v ? 'selected' : ''}>${a.label}</option>`).join('')}
-        </select>
+        ${actionSelectHtml}
       `;
       const cb = item.querySelector('input[type=checkbox]');
       const selEl = item.querySelector('select.picker-action-select');
+      function bindingFromSelect() {
+        if (isAlexa) {
+          const parsed = bcParseAlexaOptionValue(selEl.value);
+          const out = { action: parsed.action };
+          if (parsed.action === 'speak') out.template_name = parsed.name || '';
+          if (parsed.action === 'play')  out.station_name  = parsed.name || '';
+          return out;
+        }
+        return { action: selEl.value || defAct };
+      }
       cb.addEventListener('change', () => {
         if (cb.checked) {
+          const bindFields = bindingFromSelect();
           row.bindings.push({
             device_id: d.device_id, channel: d.channel, name: d.name,
-            label: d.label || '', action: selEl.value || defAct,
+            label: d.label || '', ...bindFields,
           });
           selEl.disabled = false;
         } else {
@@ -954,7 +1033,13 @@
       });
       selEl.addEventListener('change', () => {
         const b = row.bindings.find(s => s.device_id === d.device_id && (s.channel || '') === (d.channel || ''));
-        if (b) b.action = selEl.value;
+        if (!b) return;
+        const fields = bindingFromSelect();
+        b.action = fields.action;
+        if (isAlexa) {
+          if (fields.template_name) b.template_name = fields.template_name; else delete b.template_name;
+          if (fields.station_name)  b.station_name  = fields.station_name;  else delete b.station_name;
+        }
       });
       list.appendChild(item);
     }
@@ -992,13 +1077,20 @@
     // Serialize _swButtons → {slot_key: bindings[]} object expected by the rule.
     const payload = {};
     for (const r of _swButtons) {
-      payload[r.id] = (r.bindings || []).map(b => ({
-        device_id: b.device_id,
-        channel:   b.channel,
-        action:    b.action,
-        name:      b.name,
-        label:     b.label || '',
-      }));
+      payload[r.id] = (r.bindings || []).map(b => {
+        const out = {
+          device_id: b.device_id,
+          channel:   b.channel,
+          action:    b.action,
+          name:      b.name,
+          label:     b.label || '',
+        };
+        // Preserve Alexa speak/play extras for the rule handler's
+        // template / station lookup at fire-time.
+        if (b.template_name) out.template_name = b.template_name;
+        if (b.station_name)  out.station_name  = b.station_name;
+        return out;
+      });
     }
     try {
       const resp = await fetch('/api/dashboard-settings/' + encodeURIComponent(SW_STORAGE_KEY), {

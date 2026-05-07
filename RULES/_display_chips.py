@@ -221,3 +221,57 @@ def build_devices_by_name(state_devices):
         merged["id"] = dev_id
         out[n] = merged
     return out
+
+
+# ── Alexa binding → command dict ──────────────────────────────────────────
+# Shared by wallmote / balcony / my_bathroom button handlers. The bindings
+# UI offers three Alexa actions per user request — saved announcements,
+# saved music stations, and stop:
+#
+#   {action: 'speak', template_name: '<name>'}  → announce_template
+#   {action: 'play',  station_name:  '<name>'}  → play_station (rule_engine
+#                                                  looks up content_id at
+#                                                  fire-time)
+#   {action: 'stop'}                            → media_stop (counterpart
+#                                                  to play — without it a
+#                                                  binding can start music
+#                                                  but not stop it)
+#
+# Returns a fully-formed cmd dict (caller pushes into commands[]) or None
+# if the binding isn't a speak/play/stop row — caller falls through to the
+# generic logic. Other transport verbs (pause/resume/next/prev) + power
+# were considered + dropped 2026-05-07 — only play / announce / stop.
+def build_alexa_cmd(binding, action, device_id, rule_name):
+    if action == "speak":
+        tpl = (binding.get("template_name") or "").strip()
+        if not tpl:
+            return None
+        return {
+            "device_id":     device_id,
+            "protocol":      "alexa",
+            "action":        "announce_template",
+            "template_name": tpl,
+            "rule":          rule_name,
+            "_skip_loop_guard": True,
+        }
+    if action == "play":
+        sname = (binding.get("station_name") or "").strip()
+        if not sname:
+            return None
+        return {
+            "device_id":    device_id,
+            "protocol":     "alexa",
+            "action":       "play_station",
+            "station_name": sname,
+            "rule":         rule_name,
+            "_skip_loop_guard": True,
+        }
+    if action == "stop":
+        return {
+            "device_id": device_id,
+            "protocol":  "alexa",
+            "action":    "media_stop",
+            "rule":      rule_name,
+            "_skip_loop_guard": True,
+        }
+    return None

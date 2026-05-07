@@ -17,8 +17,15 @@ Non-device binding variants supported (less common):
 """
 
 import logging
+import os
 import re
+import sys
 import time
+
+_RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RULES_DIR not in sys.path:
+    sys.path.insert(0, _RULES_DIR)
+from _display_chips import build_alexa_cmd as _build_alexa_cmd  # noqa: E402
 
 log = logging.getLogger("rule.balcony_buttons")
 
@@ -104,6 +111,10 @@ def _build_command(b, state):
             return None
         channel = b.get("channel")
         action = b.get("action", "toggle")
+        # Alexa speak / play / transport — see _display_chips.build_alexa_cmd
+        alexa_cmd = _build_alexa_cmd(b, action, device_id, "Balcony Buttons")
+        if alexa_cmd:
+            return alexa_cmd
         if action == "toggle":
             action = _resolve_toggle(state, device_id, channel)
         cmd = {

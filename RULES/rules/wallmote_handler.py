@@ -14,8 +14,15 @@ Bindings are cached 30 seconds to avoid hitting the DB on every event.
 
 import json
 import logging
+import os
+import sys
 import threading
 import time
+
+_RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RULES_DIR not in sys.path:
+    sys.path.insert(0, _RULES_DIR)
+from _display_chips import build_alexa_cmd as _build_alexa_cmd  # noqa: E402
 
 log = logging.getLogger("rule.wallmote_handler")
 
@@ -165,6 +172,13 @@ def evaluate(event, state):
             continue
         channel = b.get("channel")
         action = b.get("action", "turn_on")
+
+        # Alexa speak / play / transport — see _build_alexa_cmd helper
+        # at module bottom. Returns a fully-formed cmd dict or None.
+        alexa_cmd = _build_alexa_cmd(b, action, device_id, "Wallmote Handler")
+        if alexa_cmd:
+            commands.append(alexa_cmd)
+            continue
 
         if action == "toggle":
             dev_state = state.devices.get(device_id, {}) or {}

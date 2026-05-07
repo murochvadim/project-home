@@ -1095,6 +1095,40 @@ class RuleEngine:
                 return
             domain, service = 'media_player', 'volume_set'
             data = {'entity_id': device_id, 'volume_level': max(0.0, min(1.0, lvl))}
+        elif action == 'play_station':
+            # Look up station by name in dashboard_settings.media-agents.alexa_quick_music
+            # at fire-time → emit play_media with the right content_id /
+            # content_type. Lets bindings store just the station_name so
+            # rename/edit propagates without re-binding.
+            sname = (cmd.get('station_name') or '').strip().lower()
+            if not sname:
+                log.warning("Rule '%s' alexa %s: play_station missing station_name",
+                            rule_name, device_id)
+                return
+            rows = self.state.db_query(
+                "SELECT value FROM dashboard_settings WHERE key = 'media-agents.alexa_quick_music'"
+            )
+            arr = []
+            if rows and rows[0][0] is not None:
+                v = rows[0][0]
+                if isinstance(v, list):
+                    arr = v
+                elif isinstance(v, str):
+                    try: arr = json.loads(v) if v else []
+                    except (TypeError, ValueError): arr = []
+            station = next((s for s in arr
+                            if isinstance(s, dict)
+                            and (s.get('name') or '').strip().lower() == sname), None)
+            if not station:
+                log.warning("Rule '%s' alexa %s: play_station '%s' not found in saved stations",
+                            rule_name, device_id, cmd.get('station_name'))
+                return
+            self._dispatch_alexa({
+                'action':       'play_media',
+                'content_id':   station.get('content_id', ''),
+                'content_type': station.get('content_type') or 'DEFAULT',
+            }, device_id, rule_name)
+            return
         elif action == 'announce_template':
             # Look up the template by name in dashboard_settings.media-agents.alexa_announcements
             # at fire-time (so user edits to template text propagate without rule reload).
