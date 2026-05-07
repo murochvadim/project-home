@@ -1721,19 +1721,18 @@ function _esc(s) {
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+// Per user 2026-05-08:
+//   green dot = online (any reachable state)
+//   grey dot  = unavailable / off / unknown
+// The dot doesn't change colour when playing — that's the NAME's job
+// (handled in _alexaUpdateCard, which paints the name red while the
+// device is `state==='playing'` OR while a dashboard-initiated TTS is
+// still in flight).
 function _alexaStatusDot(haState) {
   if (!haState) return '<span style="color:#aaa;font-size:1.1rem;">●</span>';
   const s = haState.state;
-  const map = {
-    playing:     '#2ecc71',
-    paused:      '#f39c12',
-    idle:        '#7a9ab8',
-    standby:     '#7a9ab8',
-    on:          '#2ecc71',
-    off:         '#e74c3c',
-    unavailable: '#e74c3c',
-  };
-  const c = map[s] || '#aaa';
+  const offline = (s === 'unavailable' || s === 'off');
+  const c = offline ? '#999' : '#2ecc71';
   return `<span style="color:${c};font-size:1.1rem;" title="${_esc(s)}">●</span>`;
 }
 
@@ -1758,7 +1757,7 @@ function _alexaCardHtml(d) {
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
         <span data-alexa-field="dot">${_alexaStatusDot(null)}</span>
         <div style="flex:1;">
-          <div style="font-weight:600; font-size:0.95rem;">${_esc(d.name)}</div>
+          <div data-alexa-field="name" style="font-weight:600; font-size:0.95rem;">${_esc(d.name)}</div>
           <div style="font-size:0.72rem; color:#888;"><span>${_esc(d.room || '—')}</span> · <span data-alexa-field="state">—</span></div>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','turn_on')" title="Wake">On</button>
@@ -1834,6 +1833,14 @@ function _alexaUpdateCard(card, d) {
   set('[data-alexa-field=dot]', _alexaStatusDot(ha));
   text('[data-alexa-field=state]', stateLabel);
   set('[data-alexa-field=title]', title + artist);
+  // Name turns red while the device is actively playing OR while a
+  // dashboard-initiated TTS announcement is still in flight. Alexa's
+  // notify path doesn't transition state to 'playing' for TTS, so the
+  // server marks `d.speaking=true` for an estimated TTS duration on
+  // every /say or /announce call (see speakAlexa() in server.js).
+  const nameEl = card.querySelector('[data-alexa-field=name]');
+  const isActive = (ha.state === 'playing') || !!d.speaking;
+  if (nameEl) nameEl.style.color = isActive ? '#e74c3c' : '';
   // Don't snap-back the volume slider/text if user just touched it.
   if (!_alexaWasTouched(eid, 'vol')) {
     const sl = card.querySelector('[data-alexa-field=vol-slider]');

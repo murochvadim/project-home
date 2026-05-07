@@ -396,6 +396,19 @@ One row in `dashboard_settings.media-agents.alexa_speech` holds three keys, appl
 
 `server.js` and `rule_engine.py` both read settings at fire-time (no cache) so dashboard edits propagate to the next say without restart. Per-call override (`loudness_db` in the request body, `loudness_db` in a rule cmd dict) wins over the global value.
 
+### Card visual semantic (since 2026-05-08)
+
+| Element | State | Meaning |
+|---|---|---|
+| Status dot | green | Device is online (any reachable state — idle / paused / standby / on / playing) |
+| Status dot | grey | Device is `unavailable` or `off` |
+| Device name | red | Device is **actively playing** music (state==='playing') OR a dashboard-initiated TTS announcement is in flight |
+| Device name | default | Anything else |
+
+The dot color **does not** change when audio is active — that's the name's job. Reason: a brief red flash on the dot during a 3 s announcement was the original implementation but the dot color was already busy carrying the online/offline signal, so we split: dot = reachability, name = activity.
+
+**Speaking-state tracking for announcements:** Alexa's `notify.alexa_media` does **not** transition the entity's `state` to `playing` for TTS — it overlays without flipping state. To still show the name red during an announcement, [`speakAlexa()` in server.js](../BOILER/dashboard/server.js) marks every target in `_alexaSpeakingUntil` for an estimated TTS duration (~12 chars/sec + 1.5 s pad). [`/api/alexa/devices`](../BOILER/dashboard/server.js) surfaces a `speaking` boolean per device that the card render OR-combines with `state === 'playing'`. Caveat: only **dashboard-initiated** announcements (Speech Settings test, per-card Speak button, Saved Announcements) flip the flag — rule-fired chips do not (the rule engine doesn't currently signal back to the dashboard's tracker). If we ever want red-name on rule-fired announcements too, the path would be an MQTT pub from `_dispatch_alexa.say` that the dashboard subscribes to.
+
 ### Dashboard tab — Media Agents → Alexa Devices
 
 `BOILER/dashboard/public/media.html` adds a 4th tab. Layout, per Echo:

@@ -3329,13 +3329,17 @@ app.get('/api/alexa/devices', async (_req, res) => {
     const r = await db.query(
       "SELECT id, name, room FROM devices WHERE protocol='alexa' AND enabled=true ORDER BY name"
     );
+    const now = Date.now();
     const states = await Promise.all(r.rows.map(async d => {
+      const speakingUntil = _alexaSpeakingUntil.get(d.id);
+      const speaking      = speakingUntil != null && speakingUntil > now;
       try {
         const sr = await fetch(`${HA_URL}/api/states/${d.id}`,
           { headers: { Authorization: `Bearer ${getHaToken()}` },
             signal: AbortSignal.timeout(4000) });
-        return sr.ok ? { ...d, ha: await sr.json() } : { ...d, ha: null };
-      } catch (_) { return { ...d, ha: null }; }
+        const ha = sr.ok ? await sr.json() : null;
+        return { ...d, ha, speaking };
+      } catch (_) { return { ...d, ha: null, speaking }; }
     }));
     res.json(states);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -3414,6 +3418,22 @@ function wrapAlexaSsml(message, ratePct, voice, loudnessDb) {
   return `<speak>${inner}</speak>`;
 }
 
+// Per-entity "currently speaking" expiry timestamps. Alexa's notify.tts
+// path doesn't transition the media_player entity to state='playing'
+// (announcements overlay without flipping state), so the dashboard's
+// red-dot-while-playing visual misses TTS by default. We track an
+// estimated end-of-speech per call here and surface it through
+// /api/alexa/devices so the card can render red during the window.
+const _alexaSpeakingUntil = new Map();   // entity_id → ms timestamp
+
+function _estimateAlexaTtsMs(plainMessage) {
+  // ~12 chars/sec for Alexa neural TTS at medium rate, + 1.5 s pad
+  // for cloud latency and trailing tone. Same heuristic as in the
+  // earlier ephemeral-volume restore (kept consistent for sanity).
+  const chars = String(plainMessage).length;
+  return (Math.max(2, Math.ceil(chars / 12) + 1) + 1) * 1000;
+}
+
 async function speakAlexa(targets, plainMessage, overrideLoudnessDb) {
   const settings = await getAlexaSpeechSettings();
   let loudnessDb;
@@ -3424,6 +3444,9 @@ async function speakAlexa(targets, plainMessage, overrideLoudnessDb) {
     loudnessDb = settings.loudness_db;
   }
   const ssml = wrapAlexaSsml(plainMessage, settings.rate_pct, settings.voice, loudnessDb);
+  const expiry  = Date.now() + _estimateAlexaTtsMs(plainMessage);
+  const targetArr = Array.isArray(targets) ? targets : [targets];
+  for (const t of targetArr) _alexaSpeakingUntil.set(t, expiry);
   await callHA('notify', 'alexa_media', { target: targets, message: ssml });
 }
 
