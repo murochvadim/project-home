@@ -1044,11 +1044,32 @@ class RuleEngine:
             return
         action = cmd.get('action', '')
         if action == 'say':
+            # Plain TTS for all Alexa devices (standardized 2026-05-07).
+            # SSML wrapping (rate / voice / loudness) only works in TTS
+            # mode, so the earlier per-device announce/tts split was
+            # dropped — see MEDIA/CLAUDE.md "Alexa Devices". Speech
+            # settings (rate, voice, loudness_db) read from
+            # dashboard_settings at fire-time so user edits propagate
+            # without rule reload. Loudness is applied via
+            # <prosody volume="+NdB"> on the announcement only — the
+            # device's hardware volume is never touched, so TV audio
+            # mixed via HDMI ARC stays at its current level instead of
+            # bumping up for ~1 s while waiting for TTS to start.
+            settings = self._get_alexa_speech_settings()
+            plain    = str(cmd.get('message', ''))
+            cmd_db   = cmd.get('loudness_db')
+            try:
+                cmd_db = None if cmd_db is None else int(round(float(cmd_db)))
+            except (TypeError, ValueError):
+                cmd_db = None
+            loud_db = cmd_db if cmd_db is not None else settings['loudness_db']
+            if loud_db is not None:
+                loud_db = max(-20, min(0, int(loud_db)))
+            ssml = self._wrap_alexa_ssml(plain, settings['rate_pct'], settings['voice'], loud_db)
             domain, service = 'notify', 'alexa_media'
             data = {
                 'target':  device_id,
-                'message': str(cmd.get('message', '')),
-                'data':    {'type': 'announce'},
+                'message': ssml,
             }
         elif action in ('turn_on', 'turn_off', 'media_play', 'media_pause',
                         'media_stop', 'media_next_track', 'media_previous_track'):
@@ -1103,15 +1124,23 @@ class RuleEngine:
                             rule_name, device_id, cmd.get('template_name'))
                 return
             msg = template.get('message', '')
-            vol = template.get('default_volume')
-            if vol is not None:
+            say_cmd = {'action': 'say', 'message': msg}
+            # Per-template SSML loudness override (-12..+12 dB delta on
+            # the announcement only). Templates may also still carry a
+            # `default_volume` (0..1); when present, convert to dB delta
+            # using a simple linear map centered at 0.5 → 0 dB so old
+            # template rows keep working.
+            t_db = template.get('loudness_db')
+            if t_db is None and template.get('default_volume') is not None:
                 try:
-                    vol_f = max(0.0, min(1.0, float(vol)))
-                    self._dispatch_alexa({'action': 'volume_set', 'volume_level': vol_f},
-                                         device_id, rule_name)
+                    f = max(0.0, min(1.0, float(template['default_volume'])))
+                    t_db = int(round((f - 0.5) * 24))    # 0.0→-12, 0.5→0, 1.0→+12
                 except (TypeError, ValueError):
-                    pass
-            self._dispatch_alexa({'action': 'say', 'message': msg}, device_id, rule_name)
+                    t_db = None
+            if t_db is not None:
+                try:    say_cmd['loudness_db'] = max(-12, min(12, int(round(float(t_db)))))
+                except (TypeError, ValueError): pass
+            self._dispatch_alexa(say_cmd, device_id, rule_name)
             return
         else:
             log.warning("Rule '%s' alexa %s: unknown action '%s'", rule_name, device_id, action)
@@ -1131,6 +1160,72 @@ class RuleEngine:
         except Exception as e:
             log.warning("Rule '%s' alexa %s.%s on %s failed: %s",
                         rule_name, domain, service, device_id, e)
+
+    # ── Alexa speech settings + SSML wrapping ──
+    # Same wire format as server.js's helpers; both consume
+    # dashboard_settings.media-agents.alexa_speech.
+
+    _ALEXA_VOICES = {'Matthew','Joanna','Salli','Joey','Justin','Kendra',
+                     'Kimberly','Ivy','Brian','Amy'}
+
+    def _get_alexa_speech_settings(self):
+        rows = self.state.db_query(
+            "SELECT value FROM dashboard_settings WHERE key = 'media-agents.alexa_speech'"
+        )
+        v = rows[0][0] if rows and rows[0][0] is not None else {}
+        if isinstance(v, str):
+            try:    v = json.loads(v) if v else {}
+            except: v = {}
+        if not isinstance(v, dict):
+            v = {}
+        voice = v.get('voice') if v.get('voice') in self._ALEXA_VOICES else None
+        loud  = v.get('loudness_db')
+        try:
+            loud = None if loud is None else int(round(float(loud)))
+        except (TypeError, ValueError):
+            loud = None
+        # Attenuate-only — see server.js comment.
+        if loud is not None:
+            loud = max(-20, min(0, loud))
+        pct = v.get('rate_pct')
+        try:
+            pct = 100 if pct is None else int(round(float(pct)))
+        except (TypeError, ValueError):
+            pct = 100
+        pct = max(50, min(100, pct))
+        return {'rate_pct': pct, 'voice': voice, 'loudness_db': loud}
+
+    @staticmethod
+    def _escape_ssml(text):
+        return (str(text)
+                .replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                .replace('"', '&quot;').replace("'", '&apos;'))
+
+    def _wrap_alexa_ssml(self, message, rate_pct, voice, loudness_db):
+        """Wrap text in SSML when rate / voice / loudness diverges from default.
+
+        rate_pct is 50..100 (% of normal speed). 100 = no override.
+        loudness_db is an integer dB delta applied via <prosody volume>.
+        Loudness affects the announcement only — device hardware volume is
+        not touched, so TV audio mixed via HDMI ARC stays at its level.
+        """
+        use_rate  = isinstance(rate_pct, int) and 50 <= rate_pct < 100
+        use_voice = voice in self._ALEXA_VOICES
+        use_loud  = isinstance(loudness_db, int) and loudness_db != 0
+        if not use_rate and not use_voice and not use_loud:
+            return str(message)
+        inner = self._escape_ssml(message)
+        prosody_attrs = []
+        if use_rate:
+            prosody_attrs.append(f'rate="{rate_pct}%"')
+        if use_loud:
+            sign = '+' if loudness_db > 0 else ''
+            prosody_attrs.append(f'volume="{sign}{loudness_db}dB"')
+        if prosody_attrs:
+            inner = f'<prosody {" ".join(prosody_attrs)}>{inner}</prosody>'
+        if use_voice:
+            inner = f'<voice name="{voice}">{inner}</voice>'
+        return f'<speak>{inner}</speak>'
 
     def _awtrix_push_preset(self, cmd, device_id, rule_name):
         preset_name = cmd.get('preset_name', '')

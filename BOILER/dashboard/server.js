@@ -3341,40 +3341,113 @@ app.get('/api/alexa/devices', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /api/alexa/:entity/say   body: { message, volume? }
-// Optionally sets volume first, then calls notify.alexa_media with announce.
+// Global Alexa speech settings (rate, voice, announcement volume). One row
+// in dashboard_settings; applies to every device. Standardized 2026-05-07
+// on plain TTS for all devices — was per-device notify_type='announce' vs
+// 'tts' but SSML (which we need for rate + voice) only works in TTS mode.
+// Echo announce-chime feature was lost in the move; the user did not hear
+// the chime in testing anyway, so the trade is purely a feature gain.
+const ALEXA_SPEECH_KEY = 'media-agents.alexa_speech';
+
+async function getAlexaSpeechSettings() {
+  try {
+    const r = await db.query(
+      "SELECT value FROM dashboard_settings WHERE key = $1", [ALEXA_SPEECH_KEY],
+    );
+    if (!r.rows[0]) return { rate_pct: 100, voice: null, loudness_db: null };
+    let v = r.rows[0].value;
+    if (typeof v === 'string') { try { v = JSON.parse(v); } catch (_) { v = {}; } }
+    // Attenuate-only: Alexa's TTS reference level is the ceiling on this
+    // hardware. Positive dB is silently ignored by Alexa cloud, so we cap
+    // at 0. Range -20..0 lets the user make the announcement quieter than
+    // the device's baseline (e.g. mix at lower level into TV audio).
+    let dbv = v.loudness_db;
+    if (dbv == null || isNaN(Number(dbv))) dbv = null;
+    else { dbv = Math.round(Number(dbv)); if (dbv < -20) dbv = -20; if (dbv > 0) dbv = 0; }
+    let pct = v.rate_pct;
+    if (pct == null || isNaN(Number(pct))) pct = 100;
+    else { pct = Math.round(Number(pct)); if (pct < 50) pct = 50; if (pct > 100) pct = 100; }
+    return {
+      rate_pct:    pct,
+      voice:       v.voice || null,
+      loudness_db: dbv,
+    };
+  } catch (_) {
+    return { rate_pct: 100, voice: null, loudness_db: null };
+  }
+}
+
+function escapeSsml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// Wrap message in SSML when rate / voice / loudness is non-default.
+// `rate_pct` is a percentage (50..100) of normal speed, applied as
+// <prosody rate="XX%">. 100 = normal (default; no attribute emitted).
+// User asked for fine-grained control between very slow and normal —
+// the named "fast"/"x-fast" buckets were dropped 2026-05-07.
+//
+// `loudness_db` is an integer dB delta applied via <prosody volume>.
+// Loudness affects only the announcement audio — the device's hardware
+// volume is never touched, so TV audio (mixed in via HDMI ARC) stays at
+// its own level instead of bumping up for ~1 s before TTS starts.
+const ALEXA_VOICES = new Set([
+  'Matthew','Joanna','Salli','Joey','Justin','Kendra','Kimberly','Ivy','Brian','Amy',
+]);
+
+function wrapAlexaSsml(message, ratePct, voice, loudnessDb) {
+  const useRate  = Number.isInteger(ratePct) && ratePct >= 50 && ratePct < 100;
+  const useVoice = voice && ALEXA_VOICES.has(voice);
+  const useLoud  = loudnessDb != null && Number.isInteger(loudnessDb) && loudnessDb !== 0;
+  if (!useRate && !useVoice && !useLoud) return String(message);
+  let inner = escapeSsml(message);
+  const prosodyAttrs = [];
+  if (useRate) prosodyAttrs.push(`rate="${ratePct}%"`);
+  if (useLoud) {
+    const sign = loudnessDb > 0 ? '+' : '';
+    prosodyAttrs.push(`volume="${sign}${loudnessDb}dB"`);
+  }
+  if (prosodyAttrs.length) inner = `<prosody ${prosodyAttrs.join(' ')}>${inner}</prosody>`;
+  if (useVoice)            inner = `<voice name="${voice}">${inner}</voice>`;
+  return `<speak>${inner}</speak>`;
+}
+
+async function speakAlexa(targets, plainMessage, overrideLoudnessDb) {
+  const settings = await getAlexaSpeechSettings();
+  let loudnessDb;
+  if (overrideLoudnessDb !== undefined && overrideLoudnessDb !== null
+      && !isNaN(Number(overrideLoudnessDb))) {
+    loudnessDb = Math.max(-20, Math.min(0, Math.round(Number(overrideLoudnessDb))));
+  } else {
+    loudnessDb = settings.loudness_db;
+  }
+  const ssml = wrapAlexaSsml(plainMessage, settings.rate_pct, settings.voice, loudnessDb);
+  await callHA('notify', 'alexa_media', { target: targets, message: ssml });
+}
+
+// POST /api/alexa/:entity/say   body: { message, loudness_db? }
+// `loudness_db` is a per-call SSML loudness override (-12..+12 dB) applied
+// to the TTS only — the device's hardware volume is not touched, so TV
+// audio (mixed via ARC) stays at its current level. Global rate + voice
+// from dashboard_settings.media-agents.alexa_speech are always applied.
 app.post('/api/alexa/:entity/say', async (req, res) => {
   try {
-    const { message, volume } = req.body || {};
+    const { message, loudness_db } = req.body || {};
     if (!message) return res.status(400).json({ error: 'message required' });
-    if (volume != null && !isNaN(Number(volume))) {
-      await callHA('media_player', 'volume_set',
-        { entity_id: req.params.entity, volume_level: Number(volume) });
-    }
-    await callHA('notify', 'alexa_media', {
-      target: req.params.entity,
-      message: String(message),
-      data: { type: 'announce' },
-    });
+    await speakAlexa(req.params.entity, message, loudness_db);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /api/alexa/announce  body: { message, targets:[entity_id,...], volume? }
+// POST /api/alexa/announce  body: { message, targets:[entity_id,...], loudness_db? }
 app.post('/api/alexa/announce', async (req, res) => {
   try {
-    const { message, targets, volume } = req.body || {};
+    const { message, targets, loudness_db } = req.body || {};
     if (!message) return res.status(400).json({ error: 'message required' });
     if (!Array.isArray(targets) || !targets.length) return res.status(400).json({ error: 'targets array required' });
-    if (volume != null && !isNaN(Number(volume))) {
-      await Promise.all(targets.map(t => callHA('media_player', 'volume_set',
-        { entity_id: t, volume_level: Number(volume) })));
-    }
-    await callHA('notify', 'alexa_media', {
-      target: targets,
-      message: String(message),
-      data: { type: 'announce' },
-    });
+    await speakAlexa(targets, message, loudness_db);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

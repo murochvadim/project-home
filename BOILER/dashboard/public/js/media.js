@@ -1748,8 +1748,13 @@ function _alexaWasTouched(entity, field, ms = 3000) {
 
 function _alexaCardHtml(d) {
   const eid = d.id;
+  // Mode = announce (TTS, mixes with current audio — default) or sound
+  // (play_media, captures source). Persisted per-device in localStorage.
+  // Default 'announce' so a fresh user never accidentally starts music
+  // playback (which captures the soundbar source until manual restore).
+  const mode = localStorage.getItem(`alexa_mode_${eid}`) || 'announce';
   return `
-    <div class="card" data-alexa-id="${_esc(eid)}" style="flex:1; min-width:280px; max-width:380px;">
+    <div class="card" data-alexa-id="${_esc(eid)}" data-alexa-mode="${mode}" style="flex:1; min-width:280px; max-width:380px;">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
         <span data-alexa-field="dot">${_alexaStatusDot(null)}</span>
         <div style="flex:1;">
@@ -1779,19 +1784,37 @@ function _alexaCardHtml(d) {
         <button class="btn btn-secondary btn-sm" onclick="alexaCmd('${_esc(eid)}','next')" title="Next">⏭</button>
         <span data-alexa-field="title" style="flex:1; font-size:0.72rem; color:#888; padding-left:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
       </div>
-      <div data-alexa-field="stations" style="display:flex; flex-wrap:wrap; gap:0; padding:4px 0; border-top:1px dashed #e8e2da;">
+      <div data-alexa-field="stations" style="display:${mode === 'sound' ? 'flex' : 'none'}; flex-wrap:wrap; gap:0; padding:4px 0; border-top:1px dashed #e8e2da;">
         <span style="color:#888; font-size:0.72rem;">loading stations…</span>
       </div>
-      <div style="display:flex; gap:6px; align-items:center;">
-        <input type="text" placeholder="play radio / song / phrase…"
+      <div style="display:flex; gap:6px; align-items:center; margin-top:6px; font-size:0.72rem;">
+        <span style="color:#666; min-width:38px;">Mode</span>
+        <label style="display:inline-flex; align-items:center; gap:3px; cursor:pointer;">
+          <input type="radio" name="alexa-mode-${_esc(eid)}" value="announce"
+                 ${mode === 'announce' ? 'checked' : ''}
+                 onchange="alexaSetMode('${_esc(eid)}','announce')"
+                 style="margin:0;"> Announcement
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:3px; cursor:pointer;">
+          <input type="radio" name="alexa-mode-${_esc(eid)}" value="sound"
+                 ${mode === 'sound' ? 'checked' : ''}
+                 onchange="alexaSetMode('${_esc(eid)}','sound')"
+                 style="margin:0;"> Sound
+        </label>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
+        <input type="text"
                data-alexa-field="play-input"
+               placeholder="${mode === 'sound' ? 'play radio / song / phrase…' : 'say something…'}"
                onkeydown="if(event.key==='Enter') document.querySelector('[data-alexa-id=\\'${_esc(eid)}\\'] [data-alexa-field=play-btn]').click()"
-               style="flex:1; padding:3px 6px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.78rem;">
+               style="flex:1; min-width:0; padding:3px 6px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.78rem;">
         <button class="btn btn-secondary btn-sm" data-alexa-field="play-btn"
-                onclick="alexaPlayMedia('${_esc(eid)}', this.parentElement.querySelector('[data-alexa-field=play-input]').value)"
-                style="background:#3a7d44; color:#fff;" title="Start playback (one-shot)">▶ Play</button>
-        <button class="btn btn-secondary btn-sm"
+                onclick="alexaPlayOrSay('${_esc(eid)}')"
+                style="background:#3a7d44; color:#fff; flex-shrink:0;"
+                title="${mode === 'sound' ? 'Start playback (captures source)' : 'Speak announcement (overlays current audio)'}">${mode === 'sound' ? '▶ Play' : '▶ Speak'}</button>
+        <button class="btn btn-secondary btn-sm" data-alexa-field="save-btn"
                 onclick="alexaSaveStation('${_esc(eid)}')"
+                style="display:${mode === 'sound' ? 'inline-block' : 'none'}; flex-shrink:0;"
                 title="Save the typed phrase as a station you can reuse">💾 Save</button>
       </div>
     </div>`;
@@ -1859,13 +1882,16 @@ async function loadAlexa() {
       }
     }
 
-    // Templates + saved stations (only on first load — they don't change unless user edits)
+    // Templates + saved stations + speech settings — only on first load
     if (!cards.dataset.tplLoaded) {
       cards.dataset.tplLoaded = '1';
       loadAlexaTemplates();
       await _alexaStationsGet(true);  // populate cache
       _refreshAllStationRows();
+      _alexaSpeechInit();
     }
+    // Test-target dropdown reflects current device list each refresh
+    _alexaSpeechSyncTestTarget(list);
   } catch (e) {
     if (!cards.querySelector('[data-alexa-id]')) {
       cards.innerHTML = `<div style="color:#c0392b; font-size:0.85rem;">Load failed: ${_esc(e.message)}</div>`;
@@ -2028,6 +2054,66 @@ async function alexaPlayMedia(entity, content_id, content_type) {
   }
 }
 
+// Per-card mode selector (Announcement | Sound). Persists in localStorage.
+// Re-renders the affected card to swap input placeholder + button label +
+// stations row visibility — done by patching DOM rather than full reload
+// so the user's typed-but-unsent phrase is preserved across mode flips.
+function alexaSetMode(entity, mode) {
+  if (mode !== 'announce' && mode !== 'sound') return;
+  localStorage.setItem(`alexa_mode_${entity}`, mode);
+  const card = document.querySelector(`#alexa-cards [data-alexa-id="${entity}"]`);
+  if (!card) return;
+  card.setAttribute('data-alexa-mode', mode);
+  const stations = card.querySelector('[data-alexa-field=stations]');
+  const input    = card.querySelector('[data-alexa-field=play-input]');
+  const btn      = card.querySelector('[data-alexa-field=play-btn]');
+  const save     = card.querySelector('[data-alexa-field=save-btn]');
+  if (stations) stations.style.display = mode === 'sound' ? 'flex' : 'none';
+  if (save)     save.style.display     = mode === 'sound' ? 'inline-block' : 'none';
+  if (input) {
+    input.setAttribute('placeholder',
+      mode === 'sound' ? 'play radio / song / phrase…' : 'say something…');
+  }
+  if (btn) {
+    btn.textContent = mode === 'sound' ? '▶ Play' : '▶ Speak';
+    btn.setAttribute('title', mode === 'sound'
+      ? 'Start playback (captures source)'
+      : 'Speak announcement (overlays current audio)');
+  }
+  if (mode === 'sound') _renderAlexaStations(card, entity);
+}
+
+// Single click handler for the input-row button — branches on the card's
+// current mode. Keeps the HTML simple (one button, one onclick).
+function alexaPlayOrSay(entity) {
+  const card  = document.querySelector(`#alexa-cards [data-alexa-id="${entity}"]`);
+  if (!card) return;
+  const mode  = card.getAttribute('data-alexa-mode') || 'announce';
+  const input = card.querySelector('[data-alexa-field=play-input]');
+  const text  = (input && input.value || '').trim();
+  if (!text) { showFeedback(mode === 'sound' ? 'Type a phrase first' : 'Type a message first', false); return; }
+  if (mode === 'sound') {
+    alexaPlayMedia(entity, text, 'DEFAULT');
+  } else {
+    alexaSayOneShot(entity, text);
+  }
+}
+
+async function alexaSayOneShot(entity, message) {
+  try {
+    const r = await fetch(`/api/alexa/${encodeURIComponent(entity)}/say`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'say failed');
+    showFeedback(`🔊 ${entity.replace('media_player.','')} — ${message}`, true);
+  } catch (e) {
+    showFeedback('✗ ' + e.message, false);
+  }
+}
+
 async function _alexaStationsGet(forceRefresh) {
   if (_alexaStations && !forceRefresh) return _alexaStations;
   const r = await fetch(`/api/dashboard-settings/${ALEXA_STATIONS_KEY}`);
@@ -2106,5 +2192,135 @@ async function alexaDeleteStation(stationId) {
   if (!confirm(`Delete "${s.name}"?`)) return;
   await _alexaStationsSave(arr.filter(x => x.id !== stationId));
   _refreshAllStationRows();
+}
+
+// ── Global Speech Settings (rate, voice, announcement volume) ────────────
+const ALEXA_SPEECH_KEY = 'media-agents.alexa_speech';
+
+function _alexaFormatDb(db) {
+  if (db === 0) return '0 dB (full)';
+  return db + ' dB';
+}
+
+function _alexaFormatRate(pct) {
+  if (pct >= 100) return '100% (normal)';
+  return pct + '%';
+}
+
+async function _alexaSpeechInit() {
+  // Hydrate the form from dashboard_settings
+  try {
+    const r = await fetch(`/api/dashboard-settings/${ALEXA_SPEECH_KEY}`);
+    const d = await r.json();
+    const v = (d && typeof d.value === 'object' && d.value) ? d.value : {};
+    const pct   = (v.rate_pct == null) ? 100
+                : Math.max(50, Math.min(100, Math.round(Number(v.rate_pct))));
+    const voice = v.voice || '';
+    const ldb   = (v.loudness_db == null) ? null
+                : Math.max(-20, Math.min(0, Math.round(Number(v.loudness_db))));
+    const rateSlider = document.getElementById('alexa-speech-rate');
+    const rateText   = document.getElementById('alexa-speech-rate-text');
+    if (rateSlider) rateSlider.value = pct;
+    if (rateText)   rateText.textContent = _alexaFormatRate(pct);
+    const voiceSel = document.getElementById('alexa-speech-voice');
+    if (voiceSel) voiceSel.value = voice;
+    const loudSlider = document.getElementById('alexa-speech-loud');
+    const loudText   = document.getElementById('alexa-speech-loud-text');
+    if (loudSlider && loudText) {
+      if (ldb == null) {
+        loudSlider.value = 0;
+        loudSlider.dataset.cleared = '1';
+        loudText.textContent = 'off';
+      } else {
+        loudSlider.value = ldb;
+        delete loudSlider.dataset.cleared;
+        loudText.textContent = _alexaFormatDb(ldb);
+      }
+    }
+  } catch (_) { /* leave defaults */ }
+  // Wire up event handlers
+  const rateSlider = document.getElementById('alexa-speech-rate');
+  const rateText   = document.getElementById('alexa-speech-rate-text');
+  if (rateSlider) rateSlider.addEventListener('input', () => {
+    if (rateText) rateText.textContent = _alexaFormatRate(Number(rateSlider.value));
+  });
+  const loudSlider = document.getElementById('alexa-speech-loud');
+  const loudText   = document.getElementById('alexa-speech-loud-text');
+  if (loudSlider) loudSlider.addEventListener('input', () => {
+    delete loudSlider.dataset.cleared;
+    if (loudText) loudText.textContent = _alexaFormatDb(Number(loudSlider.value));
+  });
+  const clr = document.getElementById('alexa-speech-loud-clear');
+  if (clr) clr.addEventListener('click', () => {
+    if (loudSlider) { loudSlider.value = 0; loudSlider.dataset.cleared = '1'; }
+    if (loudText)   loudText.textContent = 'off';
+  });
+  const saveBtn = document.getElementById('alexa-speech-save');
+  if (saveBtn) saveBtn.addEventListener('click', _alexaSpeechSave);
+  const testBtn = document.getElementById('alexa-speech-test-btn');
+  if (testBtn) testBtn.addEventListener('click', _alexaSpeechTest);
+}
+
+function _alexaSpeechReadForm() {
+  const rateSlider = document.getElementById('alexa-speech-rate');
+  const rate_pct   = rateSlider ? Math.max(50, Math.min(100, Math.round(Number(rateSlider.value)))) : 100;
+  const voice      = (document.getElementById('alexa-speech-voice') || {}).value || null;
+  const loudSlider = document.getElementById('alexa-speech-loud');
+  const cleared    = loudSlider && loudSlider.dataset.cleared === '1';
+  const loudness_db = (cleared || !loudSlider) ? null
+                    : Math.max(-20, Math.min(0, Math.round(Number(loudSlider.value))));
+  return { rate_pct, voice: voice || null, loudness_db };
+}
+
+async function _alexaSpeechSave() {
+  const status = document.getElementById('alexa-speech-status');
+  const v = _alexaSpeechReadForm();
+  try {
+    const r = await fetch(`/api/dashboard-settings/${ALEXA_SPEECH_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: v }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || 'save failed');
+    if (status) { status.textContent = '✓ saved'; status.style.color = '#2e7d32'; setTimeout(() => { status.textContent = ''; }, 2500); }
+  } catch (e) {
+    if (status) { status.textContent = '✗ ' + e.message; status.style.color = '#c0392b'; }
+  }
+}
+
+async function _alexaSpeechTest() {
+  const tgt = (document.getElementById('alexa-speech-test-target') || {}).value || '';
+  const msg = ((document.getElementById('alexa-speech-test-input') || {}).value || '').trim();
+  if (!tgt) { showFeedback('Pick a target Alexa device', false); return; }
+  if (!msg) { showFeedback('Type a test phrase', false); return; }
+  const v = _alexaSpeechReadForm();
+  // Save first so the active settings are what server reads
+  await _alexaSpeechSave();
+  try {
+    const body = { message: msg };
+    if (v.loudness_db != null) body.loudness_db = v.loudness_db;
+    const r = await fetch(`/api/alexa/${encodeURIComponent(tgt)}/say`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'say failed');
+    showFeedback(`🔊 ${tgt.replace('media_player.','')} — ${msg}`, true);
+  } catch (e) {
+    showFeedback('✗ ' + e.message, false);
+  }
+}
+
+function _alexaSpeechSyncTestTarget(list) {
+  const sel = document.getElementById('alexa-speech-test-target');
+  if (!sel) return;
+  const want = list.map(d => d.id);
+  const have = Array.from(sel.options).map(o => o.value);
+  if (want.length !== have.length || !want.every((v, i) => v === have[i])) {
+    const cur = sel.value;
+    sel.innerHTML = list.map(d => `<option value="${_esc(d.id)}">${_esc(d.name)}</option>`).join('');
+    if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
 }
 

@@ -360,18 +360,41 @@ All three media services are registered in the `agents` table and monitored by t
 
 ## Alexa Devices (since 2026-05-06)
 
-Four Amazon Alexa devices are integrated via the **Home Assistant `alexa_media_player`** community integration. They are **NOT** in LXC 100's scope — Echo devices have no local API and are cloud-tied to Amazon. The dashboard tab wraps HA's existing service calls (Path A1 — chosen over direct AlexaPy or Smart Home Skill because HA already has the cookie auth working and adding a parallel Python service would just duplicate work).
+Five Alexa-capable devices are integrated via the **Home Assistant `alexa_media_player`** community integration. They are **NOT** in LXC 100's scope — none have a local API; all are cloud-tied to Amazon. The dashboard tab wraps HA's existing service calls (Path A1 — chosen over direct AlexaPy or Smart Home Skill because HA already has the cookie auth working and adding a parallel Python service would just duplicate work).
 
 ### Device registry (`devices` table, protocol='alexa')
 
-| HA entity (= devices.id) | name | room |
-|---|---|---|
-| `media_player.10inch_echo_show`  | Alexa Balcony       | Balcony     |
-| `media_player.alexa_my_bathroom` | Alexa My Bathroom   | My BathRoom |
-| `media_player.alexa_maya_bedroom`| Alexa Maya Bedroom  | Bedroom |
-| `media_player.alexa_guy_room`    | Alexa Guy Room      | Guy Room |
+| HA entity (= devices.id) | name | room | hardware | notify_type |
+|---|---|---|---|---|
+| `media_player.10inch_echo_show`  | Alexa Balcony       | Balcony     | Amazon Echo Show 10″ | announce (default) |
+| `media_player.alexa_my_bathroom` | Alexa My Bathroom   | My BathRoom | Amazon Echo Dot       | announce (default) |
+| `media_player.alexa_maya_bedroom`| Alexa Maya Bedroom  | Bedroom     | Amazon Echo Dot       | announce (default) |
+| `media_player.alexa_guy_room`    | Alexa Guy Room      | Guy Room    | Amazon Echo Dot       | announce (default) |
+| `media_player.samsung_soundbar_2`| Alexa Living Room   | Living Room | **Samsung 990C Soundbar** (built-in Alexa) | — (uses global Speech Settings) |
 
 Each row carries `dps_config = {power: {action_on:turn_on, action_off:turn_off}, volume: {type:range, min:0, max:100}}` so the Devices page renders the panel and rule chips can pick up actionable channels. Migration: [`MEDIA/migrations/alexa_devices.sql`](migrations/alexa_devices.sql).
+
+### TTS-only (announce-chime dropped 2026-05-07)
+
+Originally a per-device `dps_config.notify_type` flag picked between `'announce'` (Echo chime + broadcast voice) and `'tts'` (plain TTS) — needed because the Samsung soundbar silently drops `data.type='announce'` calls. That whole machinery was removed once the Speech Settings card landed: SSML markup (rate / voice / volume) is **only honored in TTS mode**, so any device that wanted speech control would have had to be on TTS anyway. Standardizing every device on plain TTS makes one notify path, one validation surface, and lets the global speech settings apply uniformly. The user reported they did not actually hear the Echo chime in testing — no UX loss.
+
+### Global Speech Settings (since 2026-05-07)
+
+One row in `dashboard_settings.media-agents.alexa_speech` holds three keys, applied to every Alexa device's notify call (Speak buttons + Saved Announcements + rule chips):
+
+| Key | Range / values | Maps to |
+|---|---|---|
+| `rate_pct` | 50..100 (%) | `<prosody rate="N%">` — 100 omits the attribute (default) |
+| `voice` | one of `Matthew/Joanna/Salli/Joey/Justin/Kendra/Kimberly/Ivy/Brian/Amy` or null | `<voice name="…">` — null omits the tag |
+| `loudness_db` | -20..0 | `<prosody volume="-NdB">` — 0 / null omits the attribute |
+
+**Why speed only goes 50..100 (not 50..200):** user only wanted finer control between Very slow and Normal. Fast / very-fast were dropped per request — a slider step of 1% gives smooth control on the slow side.
+
+**Why loudness is attenuate-only (-20..0 dB):** Alexa's TTS reference level is the **ceiling** for this hardware. SSML `<prosody volume="x-loud">` and `+NdB` deltas are silently ignored by the Samsung soundbar (and likely by Alexa cloud's TTS pipeline more generally). `silent` does work — confirmed by direct test on the soundbar 2026-05-07. So the slider exposes only the working range. To make announcements feel **louder relative to TV audio**, the user lowers TV volume manually; we don't bump device hardware volume because that also raises TV audio mixed via HDMI ARC.
+
+**Why we abandoned `volume_set` save→set→speak→restore:** Alexa's cloud takes ~800-1500 ms between the HTTP POST and the actual TTS audio reaching the device. If we set volume up before the notify, TV audio (mixed in via ARC) gets loud for that gap. Can't time the volume bump to land exactly on the TTS frame. SSML `<prosody volume>` doesn't have this problem because it shapes only the announcement audio inside Alexa's pipeline, not the soundbar's hardware level.
+
+`server.js` and `rule_engine.py` both read settings at fire-time (no cache) so dashboard edits propagate to the next say without restart. Per-call override (`loudness_db` in the request body, `loudness_db` in a rule cmd dict) wins over the global value.
 
 ### Dashboard tab — Media Agents → Alexa Devices
 
@@ -397,8 +420,8 @@ All call HA's REST API via the existing `callHA(domain, service, data)` helper a
 | Endpoint | Calls | Purpose |
 |---|---|---|
 | `GET  /api/alexa/devices` | `GET /api/states/<entity_id>` per device | List 4 devices + live HA state |
-| `POST /api/alexa/:entity/say` body=`{message,volume?}` | `notify.alexa_media` (data.type=announce) + optional `media_player.volume_set` | Speak on one Echo |
-| `POST /api/alexa/announce` body=`{message,targets[],volume?}` | `notify.alexa_media` with array target | Multi-cast announcement |
+| `POST /api/alexa/:entity/say` body=`{message,loudness_db?}` | `notify.alexa_media` (plain TTS, SSML wrap with global rate / voice / loudness) | Speak on one device |
+| `POST /api/alexa/announce` body=`{message,targets[],loudness_db?}` | `notify.alexa_media` with array target | Multi-cast — same SSML applied to all targets |
 | `POST /api/alexa/:entity/volume` body=`{level: 0..1}` | `media_player.volume_set` | |
 | `POST /api/alexa/:entity/mute` body=`{mute: bool}` | `media_player.volume_mute` | |
 | `POST /api/alexa/:entity/play_media` body=`{content_id, content_type?}` | `media_player.play_media` | Start new playback (radio / song / phrase) |
