@@ -158,31 +158,30 @@
                           style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">on</button>`;
         const offBtn = `<button data-dp-action="alexa-off" data-dp-name="${safeName}"
                           style="padding:2px 8px;margin:2px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">off</button>`;
-        const sayInputId = `dp-say-${(d.id || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
-        const sayBtn = `<input type="text" id="${sayInputId}" placeholder="message…"
-                              style="padding:2px 6px;margin:2px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.72rem;width:140px;"
-                              onclick="event.stopPropagation()">
-                        <button data-dp-action="alexa-say" data-dp-name="${safeName}" data-dp-input-id="${sayInputId}"
-                          style="padding:2px 8px;margin:2px;border:1px solid #2980b9;color:#2980b9;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">say</button>`;
         // Transport bare-word buttons.
         const xpStyle = "padding:2px 8px;margin:2px;border:1px solid #d0cbc4;background:#fafaf7;border-radius:3px;cursor:pointer;font-size:0.72rem;";
         const xpBtns = ['stop','pause','resume','next','prev'].map(verb =>
           `<button data-dp-action="alexa-${verb}" data-dp-name="${safeName}" style="${xpStyle}">${verb}</button>`
         ).join('');
         const volBtn = `<button data-dp-action="alexa-vol" data-dp-name="${safeName}" style="${xpStyle}">vol…</button>`;
-        // Saved announcement template buttons (one per saved template).
-        const annBtns = (_alexaAnns || []).map(t =>
-          `<button data-dp-action="alexa-announce" data-dp-name="${safeName}"
+        // Speak — one button per saved announcement template. Click =
+        // direct insert, no extra step. Replaces the older free-form
+        // `say` input + per-template `announce X` button row 2026-05-07
+        // per user request: "change say to speak saved and can choose
+        // which saved". Free-form say chip is still recognized by the
+        // parser for back-compat with existing rules.
+        const speakBtns = (_alexaAnns || []).map(t =>
+          `<button data-dp-action="alexa-speak" data-dp-name="${safeName}"
                    data-dp-template="${(t.name||'').replace(/"/g,'&quot;')}"
-                   style="padding:2px 8px;margin:2px;border:1px solid #6c4f9f;color:#6c4f9f;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;">announce ${(t.name||'')}</button>`
+                   style="padding:2px 8px;margin:2px;border:1px solid #6c4f9f;color:#6c4f9f;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;">speak ${(t.name||'')}</button>`
         ).join('');
-        const annHint = !(_alexaAnns || []).length
-          ? `<span style="color:#999;font-size:0.7rem;margin-left:4px;">no saved announcements yet</span>`
-          : '';
+        const speakRow = !(_alexaAnns || []).length
+          ? `<span style="color:#999;font-size:0.7rem;">No saved announcements yet — add one on the Media Agents page.</span>`
+          : speakBtns;
         extrasHtml = `<div style="padding:2px 8px 6px 24px;">
-          ${onBtn}${offBtn}${sayBtn}<br>
+          ${onBtn}${offBtn}<br>
           ${xpBtns}${volBtn}<br>
-          ${annBtns}${annHint}
+          ${speakRow}
         </div>`;
       } else if (hasChannels) {
         const channels = channelPairs.map(([key, label]) =>
@@ -294,19 +293,10 @@
           if (isNaN(n) || n < 0 || n > 100) { alert('Volume must be 0-100'); return; }
           token = `@${name} vol ${n}`;
         }
-        else if (action === 'alexa-announce') {
+        else if (action === 'alexa-speak') {
           const tname = el.dataset.dpTemplate || '';
           if (!tname) return;
-          token = `@${name} announce ${tname}`;
-        }
-        else if (action === 'alexa-say') {
-          const inputId = el.dataset.dpInputId;
-          const msg = (document.getElementById(inputId)?.value || '').trim();
-          if (!msg) return;   // no message — ignore click
-          // Quotes in the message would break the parser; escape with single
-          // quotes if user types double-quotes, else use double-quotes.
-          const wrap = msg.includes('"') ? "'" : '"';
-          token = `@${name} say ${wrap}${msg}${wrap}`;
+          token = `@${name} speak ${tname}`;
         }
         else if (action === 'esp-on' || action === 'esp-off') {
           const suffix = el.dataset.dpSuffix || '';   // ' <channel>' or ''

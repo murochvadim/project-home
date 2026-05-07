@@ -411,7 +411,7 @@ One row in `dashboard_settings.media-agents.alexa_speech` holds three keys, appl
 
 Storage: `dashboard_settings.media-agents.alexa_quick_music` (JSONB array of `{id, name, content_id, content_type}`). Key name kept after a UI rename so existing data survives.
 
-**Saved Announcements card** below the device cards — TTS templates with target dropdown (single Echo or "All devices"), optional volume override, list of saved messages with Play/Edit/Delete. Storage: `dashboard_settings.media-agents.alexa_announcements`.
+**Saved Announcements card** below the device cards — TTS templates with target dropdown (single Echo or "All devices"), list of saved messages with Speak / Edit / Del. **Inline form** (Name + Message + 💾 Save) is used for both create + edit (since 2026-05-07 — replaced browser `prompt()` which silently failed in some tab states, sometimes returning null without surfacing an error). Volume override field on this card was removed 2026-05-07 — Speech Settings card (rate / voice / loudness) is the single source of truth for speech parameters; per-template loudness can still be carried in the template object's `loudness_db` key (the engine reads it as a per-call override at fire-time). Storage: `dashboard_settings.media-agents.alexa_announcements`.
 
 ### Server endpoints (all in `BOILER/dashboard/server.js`)
 
@@ -433,7 +433,7 @@ Rule sentences can target Alexa devices via chips (parsed by [`RULES/_display_ch
 
 | Token | Result |
 |---|---|
-| `@<EchoName> say "<message>"` | TTS announcement (single or double quotes accepted) |
+| `@<EchoName> say "<message>"` | TTS announcement, free-form text (parser keeps recognizing this but the dashboard device picker no longer surfaces it — saved templates are the supported path; `say` stays for back-compat with existing rules) |
 | `@<EchoName> play "<phrase>"` | Start playback (always content_type=DEFAULT — see limitation) |
 | `@<EchoName> on` | turn_on |
 | `@<EchoName> off` | turn_off |
@@ -443,7 +443,7 @@ Rule sentences can target Alexa devices via chips (parsed by [`RULES/_display_ch
 | `@<EchoName> next` | media_next_track |
 | `@<EchoName> prev` | media_previous_track |
 | `@<EchoName> vol <N>` | volume_set (N=0..100, dispatch divides by 100) |
-| `@<EchoName> announce <TemplateName>` | Look up template name in `dashboard_settings.media-agents.alexa_announcements`, apply optional `default_volume`, fire `notify.alexa_media`. Template lookup at fire-time so user edits propagate without rule reload. |
+| `@<EchoName> speak <TemplateName>` | Look up template name in `dashboard_settings.media-agents.alexa_announcements`, apply optional `default_volume` / `loudness_db`, fire `notify.alexa_media` with the global SSML wrap (rate / voice / loudness). Template lookup at fire-time so user edits propagate without rule reload. **Renamed from `announce` 2026-05-07** per user request — `announce <TemplateName>` is still recognized by the parser as an alias so existing rules keep firing. |
 
 `RULES/rule_engine.py` `_dispatch_alexa()` (called from the protocol='alexa' branch around line 1198) makes a direct `urllib.request.urlopen` POST to `/api/services/<domain>/<service>` with `HA_TOKEN` from environment. Same pattern `boiler_agent.py` already uses for valve control. No `requests` library dependency. Errors logged but never raise.
 

@@ -29,9 +29,11 @@ Alexa media-player chips (protocol='alexa', added 2026-05-06):
     @<EchoName> next                       → media_player.media_next_track
     @<EchoName> prev                       → media_player.media_previous_track
     @<EchoName> vol <N>                    → media_player.volume_set (N=0..100)
-    @<EchoName> announce <TemplateName>    → look up name in
+    @<EchoName> speak <TemplateName>       → look up name in
                                               dashboard_settings.media-agents.alexa_announcements
                                               → notify.alexa_media (with optional default_volume)
+    @<EchoName> announce <TemplateName>    → alias for `speak` (kept for back-compat
+                                              with rules authored before the rename)
 
 The function still named `parse_display_chip` for back-compat with the
 single existing caller (Evening Lights). Returns a command-dict ready
@@ -50,10 +52,13 @@ _SAY_RE  = re.compile(r"^say\s+(?:\"([^\"]*)\"|'([^']*)')$",  re.IGNORECASE)
 _PLAY_RE = re.compile(r"^play\s+(?:\"([^\"]*)\"|'([^']*)')$", re.IGNORECASE)
 # `@<Echo> vol <N>` — integer 0..100 (UI scale, dispatch divides by 100).
 _VOL_RE  = re.compile(r"^vol\s+(\d{1,3})$",                   re.IGNORECASE)
-# `@<Echo> announce <TemplateName>` — bare name, allow spaces. Template
-# lookup happens at fire-time in rule_engine._dispatch_alexa, against
-# dashboard_settings.media-agents.alexa_announcements.
-_ANN_RE  = re.compile(r"^announce\s+(.+?)\s*$",               re.IGNORECASE)
+# `@<Echo> speak <TemplateName>` (or legacy `announce <TemplateName>`) —
+# bare name, allow spaces. Template lookup happens at fire-time in
+# rule_engine._dispatch_alexa, against
+# dashboard_settings.media-agents.alexa_announcements. The dashboard
+# device picker emits `speak` since 2026-05-07; `announce` stays
+# recognized for back-compat with rules authored before the rename.
+_ANN_RE  = re.compile(r"^(?:speak|announce)\s+(.+?)\s*$",     re.IGNORECASE)
 
 def parse_display_chip(token, devices_by_name):
     """Return a command dict for a display / panel chip, or None.

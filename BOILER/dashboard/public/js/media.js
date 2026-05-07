@@ -1923,12 +1923,10 @@ async function alexaCmd(entity, action, value) {
 async function alexaSpeak() {
   const target = document.getElementById('alexa-ann-target').value;
   const msg = (document.getElementById('alexa-ann-msg').value || '').trim();
-  const volRaw = (document.getElementById('alexa-ann-vol').value || '').trim();
   const status = document.getElementById('alexa-ann-status');
   if (!msg) { status.textContent = 'Type a message first.'; status.style.color = '#c0392b'; return; }
   status.textContent = 'Sending…'; status.style.color = '#888';
   try {
-    const volume = volRaw === '' ? undefined : Math.max(0, Math.min(1, Number(volRaw) / 100));
     let r;
     if (target === '__all__') {
       const devs = await fetch('/api/alexa/devices').then(r => r.json());
@@ -1936,13 +1934,13 @@ async function alexaSpeak() {
       r = await fetch('/api/alexa/announce', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, targets, volume }),
+        body: JSON.stringify({ message: msg, targets }),
       });
     } else {
       r = await fetch(`/api/alexa/${encodeURIComponent(target)}/say`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, volume }),
+        body: JSON.stringify({ message: msg }),
       });
     }
     const data = await r.json();
@@ -1984,36 +1982,75 @@ async function _alexaTplGet() {
   return Array.isArray(d.value) ? d.value : [];
 }
 async function _alexaTplSave(arr) {
-  await fetch(`/api/dashboard-settings/${ALEXA_TPL_KEY}`, {
+  const r = await fetch(`/api/dashboard-settings/${ALEXA_TPL_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value: arr }),
   });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || `save failed (HTTP ${r.status})`);
+  }
 }
 
-async function alexaTplNew() {
-  const name = prompt('Template name (short):');
-  if (!name) return;
-  const message = prompt('Message Alexa will speak:');
-  if (!message) return;
-  const arr = await _alexaTplGet();
-  arr.push({ id: 'tpl_' + Date.now().toString(36), name, message });
-  await _alexaTplSave(arr);
-  loadAlexaTemplates();
+// Inline form replaces prompt() — browser prompts are flaky across tabs,
+// especially after the page has been idle, and silently fail without
+// surfacing an error. The form is a single shared element used both for
+// new + edit; `_editingId` carries which row is being edited (null = new).
+let _alexaTplEditingId = null;
+
+function alexaTplFormShow(id) {
+  _alexaTplEditingId = id || null;
+  const form = document.getElementById('alexa-tpl-form');
+  const nameEl = document.getElementById('alexa-tpl-name');
+  const msgEl  = document.getElementById('alexa-tpl-msg');
+  const status = document.getElementById('alexa-tpl-form-status');
+  if (status) status.textContent = '';
+  if (id) {
+    _alexaTplGet().then(arr => {
+      const t = arr.find(x => x.id === id);
+      if (t) { nameEl.value = t.name || ''; msgEl.value = t.message || ''; }
+    });
+  } else {
+    nameEl.value = '';
+    msgEl.value  = '';
+  }
+  if (form) form.style.display = 'block';
+  if (nameEl) nameEl.focus();
 }
 
-async function alexaTplEdit(id) {
-  const arr = await _alexaTplGet();
-  const t = arr.find(x => x.id === id);
-  if (!t) return;
-  const name = prompt('Template name:', t.name);
-  if (name == null) return;
-  const message = prompt('Message:', t.message);
-  if (message == null) return;
-  t.name = name; t.message = message;
-  await _alexaTplSave(arr);
-  loadAlexaTemplates();
+function alexaTplFormCancel() {
+  const form = document.getElementById('alexa-tpl-form');
+  if (form) form.style.display = 'none';
+  _alexaTplEditingId = null;
 }
+
+async function alexaTplFormSave() {
+  const name = (document.getElementById('alexa-tpl-name').value || '').trim();
+  const msg  = (document.getElementById('alexa-tpl-msg').value || '').trim();
+  const status = document.getElementById('alexa-tpl-form-status');
+  if (!name) { status.textContent = 'Name required'; status.style.color = '#c0392b'; return; }
+  if (!msg)  { status.textContent = 'Message required'; status.style.color = '#c0392b'; return; }
+  status.textContent = 'Saving…'; status.style.color = '#888';
+  try {
+    const arr = await _alexaTplGet();
+    if (_alexaTplEditingId) {
+      const t = arr.find(x => x.id === _alexaTplEditingId);
+      if (t) { t.name = name; t.message = msg; }
+    } else {
+      arr.push({ id: 'tpl_' + Date.now().toString(36), name, message: msg });
+    }
+    await _alexaTplSave(arr);
+    alexaTplFormCancel();
+    loadAlexaTemplates();
+  } catch (e) {
+    status.textContent = '✗ ' + e.message; status.style.color = '#c0392b';
+  }
+}
+
+// Backwards-compat shims used by the inline list buttons.
+function alexaTplEdit(id) { alexaTplFormShow(id); }
+function alexaTplNew()    { alexaTplFormShow(); }
 
 async function alexaTplDelete(id) {
   if (!confirm('Delete this template?')) return;

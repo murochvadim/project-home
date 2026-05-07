@@ -588,8 +588,7 @@
         <select id="alexa-ann-target" style="padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem; min-width:200px;">
           <option value="__all__">All devices</option>
         </select>
-        <label style="font-size:0.82rem; color:#666;">Volume override (0-100):</label>
-        <input id="alexa-ann-vol" type="number" min="0" max="100" placeholder="—" style="width:70px; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+        <span style="font-size:0.78rem; color:#888;">Speed / voice / loudness from the <em>Speech Settings</em> card above.</span>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <input id="alexa-ann-msg" type="text" placeholder="What should Alexa say…" style="flex:1; min-width:280px; padding:6px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.9rem;">
@@ -602,8 +601,25 @@
     <div class="card">
       <h2 style="display:flex; justify-content:space-between; align-items:center;">
         Saved announcements
-        <button class="btn btn-secondary btn-sm" onclick="alexaTplNew()">+ New</button>
+        <button class="btn btn-secondary btn-sm" id="alexa-tpl-new-btn" onclick="alexaTplFormShow()">+ New</button>
       </h2>
+      <div id="alexa-tpl-form" style="display:none; padding:8px; margin-bottom:10px; border:1px solid #d0cbc4; border-radius:4px; background:#fafaf8;">
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+          <span style="font-size:0.78rem; color:#666; min-width:60px;">Name:</span>
+          <input type="text" id="alexa-tpl-name" placeholder="short label (e.g. Dinner ready)"
+                 style="flex:1; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+          <span style="font-size:0.78rem; color:#666; min-width:60px;">Message:</span>
+          <input type="text" id="alexa-tpl-msg" placeholder="What Alexa will speak"
+                 style="flex:1; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem;">
+        </div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <span id="alexa-tpl-form-status" style="flex:1; font-size:0.78rem; color:#888;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="alexaTplFormCancel()">Cancel</button>
+          <button class="btn btn-secondary btn-sm" id="alexa-tpl-form-save" onclick="alexaTplFormSave()" style="background:#3a7d44; color:#fff;">💾 Save</button>
+        </div>
+      </div>
       <div id="alexa-tpl-list" style="font-size:0.85rem;">
         <div style="color:#888;">loading…</div>
       </div>
@@ -615,6 +631,6 @@
 
 <script src="js/alerts-monitor.js?v=3"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=68"></script>
+<script src="js/media.js?v=70"></script>
 </body>
 </html>
