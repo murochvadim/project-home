@@ -531,6 +531,13 @@ class DeviceAgent:
                 except (json.JSONDecodeError, ValueError):
                     log.warning(f'Invalid command JSON for {device_id}')
                     return
+                # Visibility on the receive side: pairs with rule_engine's
+                # MQTT loud-fail so a missing 'Command OK' is unambiguous —
+                # if there's no 'cmd recv' line for the same device_id at
+                # the same time, the publish never reached us.
+                log.info('cmd recv %s action=%s channel=%s rule=%s',
+                         device_id, payload.get('action'),
+                         payload.get('channel'), payload.get('rule', ''))
                 # Run in thread to avoid blocking MQTT callback loop
                 threading.Thread(
                     target=self._handle_command, args=(device_id, payload),

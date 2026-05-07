@@ -18,7 +18,7 @@ The Main Agent is the system-wide orchestrator. It monitors all registered agent
 | Unit | Type | Schedule | Role |
 |------|------|----------|------|
 | `main-agent.service` + `main-agent.timer` | oneshot | Every 1h (2 min after boot) | Full run: schedule + errors + SSH + retention + VACUUM |
-| `main-agent-quick.service` + `main-agent-quick.timer` | oneshot | Every 5 min (3 min after boot) | Quick run: schedule + data freshness only (no SSH, no retention) |
+| `main-agent-quick.service` + `main-agent-quick.timer` | oneshot | Every 5 min (3 min after boot) | Quick run: schedule + errors + data freshness (no SSH, no retention) |
 
 Local unit files: `ORCHESTRATOR/main-agent.service`, `ORCHESTRATOR/main-agent.timer`, `ORCHESTRATOR/main-agent-quick.service`, `ORCHESTRATOR/main-agent-quick.timer`
 
@@ -38,9 +38,12 @@ For each registered agent:
 8. **Summary log** — active alert count or "all OK"
 
 ### Quick run (every 5 min) — `--quick` flag
-- Schedule check only (no SSH, no error scan, no retention)
+- Schedule check per agent
+- **Error check per agent** (added 2026-05-07) — symmetric raise/resolve of `agent_hard_errors`. Was full-run-only; moved to quick so the alert auto-resolves within 5 min once `ERR:` rows roll out of the last-10-rows window, instead of waiting up to 60 min for the next full pass. Cost: ~12 small SELECTs every 5 min.
 - Data freshness check (`raw_data`)
 - Weather freshness check (`raw_weather`)
+- Backup freshness check
+- No SSH, no service auto-restart, no retention cleanup
 
 ---
 

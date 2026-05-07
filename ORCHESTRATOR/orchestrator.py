@@ -456,13 +456,18 @@ def main(quick=False):
         agents = cur.fetchall()
 
         if quick:
-            # Lightweight: schedule + service-state + data freshness (no errors, no retention).
+            # Lightweight: schedule + service-state + per-agent errors + data freshness (no retention).
             # check_service was added to the quick run 2026-04-30 so service_down /
             # service_ssh_failed alerts auto-resolve within 5 min instead of 60 min
             # (cost: ~1-2 s SSH per agent × 6 agents = ~6-12 s per quick run).
+            # check_errors was added 2026-05-07 so agent_hard_errors auto-resolves
+            # within 5 min instead of 60 min once conditions clear (the resolve
+            # branch was already symmetric in the function; only the call site
+            # was missing from the quick path). Cost: ~1 small SELECT per agent.
             for agent in agents:
                 check_schedule(cur, agent)
                 check_service(cur, agent)
+                check_errors(cur, agent)
             check_data_freshness(cur)
             check_weather_freshness(cur)
             check_backup_freshness(cur)

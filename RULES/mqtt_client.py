@@ -38,6 +38,19 @@ def _now_iso() -> str:
     return datetime.now(tz=TZ).isoformat()
 
 
+# paho rc → human-readable name (covers the codes we'd actually see).
+_RC_NAMES = {
+    mqtt.MQTT_ERR_SUCCESS:    'success',
+    mqtt.MQTT_ERR_NO_CONN:    'no_connection',
+    mqtt.MQTT_ERR_QUEUE_SIZE: 'queue_full',
+    mqtt.MQTT_ERR_PAYLOAD_SIZE: 'payload_too_big',
+}
+
+
+def _rc_name(rc) -> str:
+    return _RC_NAMES.get(rc, f'unknown_rc_{rc}')
+
+
 class MqttClient:
     """MQTT client for Rule Engine — connect, subscribe, publish commands and computed state."""
 
@@ -52,7 +65,6 @@ class MqttClient:
         self._lwt_topic = f'{TOPIC_PREFIX}/state'
         self._connected = False
         self._enabled = True
-        self._drop_warned = False
 
         # Stored for republish on reconnect
         self._rule_count = 0
@@ -121,7 +133,6 @@ class MqttClient:
         """Called when connection to broker is established."""
         if reason_code == 0:
             self._connected = True
-            self._drop_warned = False
             log.info('MQTT connected to %s:%d', self._broker, self._port)
             # Republish bridge online on every (re)connect
             self.publish_bridge_online(self._rule_count)
@@ -148,18 +159,23 @@ class MqttClient:
     def publish(self, topic: str, payload: dict, retain: bool = False, qos: int = 0):
         """Publish JSON payload to topic. Non-blocking, fire-and-forget.
 
-        If not connected, silently drops. Logs warning on first drop only.
+        Logs at WARN level when paho returns a non-zero rc — used to be
+        first-drop-only which made the loud-fail invisible past the first
+        blip (2026-05-07: the Kitchen-Switch toggle path went silent for
+        ~15 min after a UPS shutdown and we only realized post-hoc).
         """
         if not self._enabled or self._client is None:
             return
         try:
             msg = json.dumps(payload)
-            self._client.publish(topic, msg, qos=qos, retain=retain)
-            log.debug('MQTT pub %s (retain=%s qos=%d)', topic, retain, qos)
+            info = self._client.publish(topic, msg, qos=qos, retain=retain)
+            if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning('MQTT pub %s rc=%s (%s) qos=%d',
+                            topic, info.rc, _rc_name(info.rc), qos)
+            else:
+                log.debug('MQTT pub %s (retain=%s qos=%d)', topic, retain, qos)
         except Exception:
-            if not self._drop_warned:
-                log.warning('MQTT publish failed (first drop)', exc_info=True)
-                self._drop_warned = True
+            log.warning('MQTT publish raised on %s', topic, exc_info=True)
 
     # ------------------------------------------------------------------
     # Subscribe
@@ -195,11 +211,12 @@ class MqttClient:
         if not self._enabled or self._client is None:
             return
         try:
-            self._client.publish(topic, payload_str, qos=1, retain=False)
+            info = self._client.publish(topic, payload_str, qos=1, retain=False)
+            if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                log.warning('MQTT raw pub %s rc=%s (%s)',
+                            topic, info.rc, _rc_name(info.rc))
         except Exception:
-            if not self._drop_warned:
-                log.warning('MQTT raw publish failed (first drop)', exc_info=True)
-                self._drop_warned = True
+            log.warning('MQTT raw publish raised on %s', topic, exc_info=True)
 
     def publish_bridge_online(self, rule_count: int):
         """Publish rule engine state as online (retained, QoS 1).
