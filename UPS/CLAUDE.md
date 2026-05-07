@@ -130,6 +130,8 @@ Independent of the orchestrator (which only fires on BATTERYLEVEL), apcupsd auto
 | commfailure | INSERT `alert_type=ups_commlost`, message `UPS USB cable lost — apcupsd cannot reach the UPS` | active until commok |
 | commok | UPDATE `resolved_at = NOW()` on the active `ups_commlost` row | resolved |
 
+**Symmetric safety net (added 2026-05-07):** `commok` only fires on a transition during a SINGLE running apcupsd process. If apcupsd dies while in `commlost` state and restarts cleanly (e.g. after a manual host reboot), no `commok` event ever fires and the alert stays raised forever. To close that gap, [scripts/ups_poll.py](../scripts/ups_poll.py) on LXC 105 issues an `UPDATE ... SET resolved_at = NOW() WHERE alert_type='ups_commlost' AND resolved_at IS NULL` on every poll where the live `STATUS` is anything other than `COMMLOST`. So even if apcupsd is bounced mid-fault, the alert auto-resolves within 60 s of USB recovery.
+
 **Auth path**: `psql` from PVE → LXC 102 (192.168.1.219:5432) over the existing `192.168.1.0/24` trust subnet (same pattern as the boiler agent on LXC 103 — no DB password file on PVE). All hook scripts wrap the `psql` call in `timeout 5 ... || true` so DB failures (LXC 102 down, LAN blip) never block apcupsd's event handling. Idempotency: each INSERT is gated by `WHERE NOT EXISTS (... resolved_at IS NULL)` so re-firing the same event doesn't create duplicates.
 
 **Dependency**: PVE has `postgresql-client` installed (~25 MB) — provides `psql`. Installed 2026-04-29 during Phase 2A.

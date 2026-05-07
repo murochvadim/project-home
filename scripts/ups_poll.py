@@ -87,6 +87,21 @@ def main():
             """, (now, row['status'], row['battery_pct'], row['runtime_min'],
                   row['line_volt'], row['battery_volt'], row['load_pct'],
                   row['model'], row['serial'], row['last_xfer'], raw_json))
+            # Symmetric safety net for the apcupsd commok hook. The hook
+            # only fires on a transition during a single running process —
+            # if apcupsd dies while in commlost state and restarts cleanly
+            # (e.g. after a manual host reboot), no commok event ever
+            # fires and the alert stays raised forever. Whenever the
+            # poller observes a healthy STATUS, resolve any active
+            # ups_commlost row. Same approach as orchestrator's
+            # check_errors symmetric raise/resolve.
+            if row['status'] and 'COMMLOST' not in row['status'].upper():
+                cur.execute("""
+                    UPDATE system_alerts
+                       SET resolved_at = NOW()
+                     WHERE alert_type = 'ups_commlost'
+                       AND resolved_at IS NULL
+                """)
         conn.commit()
 
     print(f"[ups_poll] {now.isoformat()} status={row['status']} "
