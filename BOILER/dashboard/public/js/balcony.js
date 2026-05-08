@@ -213,7 +213,8 @@
           }
         } else {
           _controllable.push({ device_id: d.id, channel: null, name: d.name, label: '',
-                               room: d.room || '', protocol: d.protocol });
+                               room: d.room || '', protocol: d.protocol,
+                               dps_config: d.dps_config || {} });   // for vacuum verb list
         }
       }
       _controllable.sort((a, b) => (a.room || 'zzz').localeCompare(b.room || 'zzz')
@@ -339,8 +340,13 @@
           ${opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>Page ${n}</option>`).join('')}
         </select>`;
       } else if (isVacuum) {
-        const curVal = existing ? existing.action : 'start';
-        const verbOpts = ['start','stop','dock','locate'].map(verb =>
+        // Vacuum verbs: read from this device's dps_config (Roomba has
+        // 4, Viomi has 3 — locate broken on Viomi's HA integration).
+        const verbs = Object.values(d.dps_config || {})
+          .filter(cfg => cfg && cfg.action_on)
+          .map(cfg => cfg.action_on);
+        const curVal = existing ? existing.action : (verbs[0] || 'start');
+        const verbOpts = verbs.map(verb =>
           `<option value="${verb}" ${verb === curVal ? 'selected' : ''}>${verb}</option>`
         ).join('');
         dropdownHtml = `<select class="picker-action-select">
@@ -996,8 +1002,11 @@
       // plain turn_on/turn_off/toggle dropdown.
       let actionSelectHtml;
       if (isVacuum) {
-        const curVal = sel ? sel.action : 'start';
-        const verbOpts = ['start','stop','dock','locate'].map(verb =>
+        const verbs = Object.values(d.dps_config || {})
+          .filter(cfg => cfg && cfg.action_on)
+          .map(cfg => cfg.action_on);
+        const curVal = sel ? sel.action : (verbs[0] || 'start');
+        const verbOpts = verbs.map(verb =>
           `<option value="${verb}" ${verb === curVal ? 'selected' : ''}>${verb}</option>`
         ).join('');
         actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>

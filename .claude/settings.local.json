@@ -8,7 +8,8 @@
       "Bash(ssh root@192.168.1.227 \"chmod +x /opt/network-agent/arp_scan.py && echo ok\")",
       "Bash(ssh root@192.168.1.138 \"curl -s http://localhost:8765/ && echo '---' && grep -n 'app.post\\\\|app.get\\\\|route\\\\|listen' /opt/media-agent/tv_control.py | head -20\")",
       "Bash(scp \"C:/Users/muroc/project_home/scripts/backup-agent.sh\" root@192.168.1.227:/opt/backup-agent.sh)",
-      "Bash(ssh root@192.168.1.227 \"bash /opt/backup-agent.sh && tail -5 /var/log/backup-agent.log\")"
+      "Bash(ssh root@192.168.1.227 \"bash /opt/backup-agent.sh && tail -5 /var/log/backup-agent.log\")",
+      "Bash(ssh root@192.168.1.114 \"python3 -c 'import py_compile; py_compile.compile\\(\\\\\"/opt/device-agent/ha_api_patched.py\\\\\", doraise=True\\); print\\(\\\\\"OK\\\\\"\\)'\")"
     ]
   },
   "hooks": {

@@ -43,6 +43,31 @@ KEEPALIVE_INTERVAL_SEC = 900
 class HAApiAdapter(DeviceAdapter):
     vendor = 'tuya'
 
+    # ── HA-direct devices (id = entity_id, no identifier mapping) ──
+    # Class-level so both _build_entity_map (registration) and
+    # _fetch_all_states (initial seed allowlist) consume the same source
+    # of truth. Adding a new HA-integrated device = one edit here.
+    #
+    # Each entry maps a devices.id to a list of (entity_id, dp_key)
+    # tuples → ONE devices row pulled from N HA entities. dp_key=None
+    # means "domain-specific multi-attr projection" (handled in
+    # _on_ws_message). Other dp_keys are single-value sensor entities.
+    #
+    # Roomba: state from vacuum.roomba (multi-attr) + battery from
+    # sensor.roomba_battery (Roomba's vacuum entity doesn't expose
+    # battery_level in attributes).
+    # Viomi: state + battery_level both come from the single vacuum
+    # entity's attributes — no auxiliary sensor needed.
+    HA_DIRECT_DEVICES = {
+        'vacuum.roomba': [
+            ('vacuum.roomba',         None),       # main entity, multi-attr
+            ('sensor.roomba_battery', 'battery'),  # aux sensor → 'battery'
+        ],
+        'vacuum.viomi_v6_2b2a_robot_cleaner': [
+            ('vacuum.viomi_v6_2b2a_robot_cleaner', None),  # main entity (battery in attrs)
+        ],
+    }
+
     def __init__(self, devices, on_state_change):
         super().__init__(devices, on_state_change)
         self._stop_event = threading.Event()
@@ -205,25 +230,9 @@ class HAApiAdapter(DeviceAdapter):
         except Exception as e:
             log.error(f'Failed to build SmartThings entity map: {e}')
 
-        # ── HA-direct devices (id = entity_id, no identifier mapping) ──
-        # Used for HA-integrated devices where the dashboard row's id IS
-        # the HA entity_id 1:1, so no SmartThings/Ring identifier
-        # translation is needed. Each entry maps a list of (entity_id,
-        # dp_key) tuples → ONE devices row. The main entity uses
-        # dp_key=None and gets a domain-specific multi-attribute
-        # projection in _on_ws_message; auxiliary sensor entities map
-        # to a single dp_key each.
-        # Roomba: state from vacuum.roomba (multi-attr) + battery from
-        # the separate sensor.roomba_battery entity → both end up in
-        # devices.last_state under the same `vacuum.roomba` row.
-        HA_DIRECT_DEVICES = {
-            'vacuum.roomba': [
-                ('vacuum.roomba',         None),       # main entity, multi-attr
-                ('sensor.roomba_battery', 'battery'),  # aux sensor → 'battery'
-            ],
-        }
+        # ── HA-direct devices — see class-level HA_DIRECT_DEVICES dict ──
         added = 0
-        for tuya_id, ent_specs in HA_DIRECT_DEVICES.items():
+        for tuya_id, ent_specs in self.HA_DIRECT_DEVICES.items():
             if tuya_id not in self._known_ids:
                 continue
             for entity_id, dp_key in ent_specs:
@@ -263,12 +272,15 @@ class HAApiAdapter(DeviceAdapter):
                 tuya_id = self._reverse_map[eid]
                 for ent in self._entity_map.get(tuya_id, []):
                     if ent['entity_id'] == eid:
-                        # Vacuum: project `state` only (bin_full + fan_speed
-                        # dropped 2026-05-08). Battery comes from a separate
-                        # sensor entity registered alongside via
-                        # HA_DIRECT_DEVICES.
+                        # Vacuum: project state + optional battery_level
+                        # (Viomi exposes it in attributes; Roomba doesn't,
+                        # so battery comes via a sibling sensor entity in
+                        # HA_DIRECT_DEVICES).
                         if ent['domain'] == 'vacuum':
                             device_dps.setdefault(tuya_id, {})['state'] = state_val
+                            batt = (s.get('attributes') or {}).get('battery_level')
+                            if isinstance(batt, (int, float)):
+                                device_dps[tuya_id]['battery'] = batt
                         else:
                             val = self._ha_state_to_dps_value(ent['domain'], state_val)
                             device_dps.setdefault(tuya_id, {})[ent['dp_key']] = val
@@ -280,7 +292,7 @@ class HAApiAdapter(DeviceAdapter):
                 # (tcp_push, local_poll) that would be overridden by ha_api's
                 # higher priority on every restart.
                 if dps and (dev_id in self._smartthings_ids
-                            or dev_id == 'vacuum.roomba'):
+                            or dev_id in self.HA_DIRECT_DEVICES):
                     self.on_state_change(dev_id, dps, 'ha_api')
                     count += 1
 
@@ -373,14 +385,20 @@ class HAApiAdapter(DeviceAdapter):
                 if state_val in ('unavailable', 'unknown'):
                     return
 
-                # Vacuum entities project just the state field into dps.
-                # Battery comes from the separate sensor.roomba_battery
-                # entity (registered alongside via HA_DIRECT_DEVICES) and
-                # gets merged into the same devices row by tuya_id.
-                # bin_full + fan_speed were dropped 2026-05-08 per user
-                # request — only state + battery on the dashboard.
+                # Vacuum entities project state + (optional) battery into dps.
+                # Roomba's vacuum entity doesn't expose battery_level in
+                # attributes — battery comes from a separate sensor entity
+                # also registered in HA_DIRECT_DEVICES. Viomi's vacuum
+                # entity DOES carry battery_level in attributes; we read it
+                # here so a single subscription suffices. When absent (e.g.
+                # Roomba), the key is omitted so on_state_change merges
+                # without disturbing the existing battery from the sensor.
                 if ent_info['domain'] == 'vacuum':
-                    self.on_state_change(tuya_id, {'state': state_val}, 'ha_api')
+                    dps = {'state': state_val}
+                    batt = (new_state.get('attributes') or {}).get('battery_level')
+                    if isinstance(batt, (int, float)):
+                        dps['battery'] = batt
+                    self.on_state_change(tuya_id, dps, 'ha_api')
                     return
 
                 # Event entities (buttons): value = "action:timestamp" so rules

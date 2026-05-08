@@ -160,6 +160,7 @@
             device_id: d.id, channel: null,
             name: d.name, label: '',
             room: d.room || '', protocol: d.protocol,
+            dps_config: d.dps_config || {},   // needed for vacuum verb list (which actions this device actually supports)
           });
         }
       }
@@ -260,11 +261,16 @@
           ${opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>Page ${n}</option>`).join('')}
         </select>`;
       } else if (isVacuum) {
-        // Vacuum (Roomba): start / stop / dock / locate. No template /
-        // station name suffix — just verbs. Same minimalist scope as
-        // the Alexa speak/play/stop set.
-        const curVal = existing ? existing.action : 'start';
-        const verbOpts = ['start','stop','dock','locate'].map(verb =>
+        // Vacuum verbs: read from this device's dps_config so each
+        // device exposes only what it actually supports (e.g. Roomba
+        // has start/stop/dock/locate, Viomi has start/stop/dock —
+        // locate is broken on Viomi's HA integration). action_on alias
+        // = the verb the rule engine emits.
+        const verbs = Object.values(d.dps_config || {})
+          .filter(cfg => cfg && cfg.action_on)
+          .map(cfg => cfg.action_on);
+        const curVal = existing ? existing.action : (verbs[0] || 'start');
+        const verbOpts = verbs.map(verb =>
           `<option value="${verb}" ${verb === curVal ? 'selected' : ''}>${verb}</option>`
         ).join('');
         dropdownHtml = `<select class="picker-action-select">
