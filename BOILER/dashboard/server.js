@@ -3531,6 +3531,28 @@ app.post('/api/alexa/:entity/:action', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Vacuum (Roomba etc.) ─ HA-mediated, same callHA() pattern as Alexa ──
+// One endpoint per supported action so the dashboard's Devices page +
+// future bindings code can fire start/stop/pause/dock/locate via plain
+// POST. Mirrors RULES/rule_engine.py:_dispatch_vacuum.
+const _VACUUM_HA_SERVICE = {
+  start:  'start',
+  stop:   'stop',
+  pause:  'pause',
+  dock:   'return_to_base',
+  locate: 'locate',
+};
+
+app.post('/api/vacuum/:entity/:verb', async (req, res) => {
+  try {
+    const verb = String(req.params.verb || '').toLowerCase();
+    const service = _VACUUM_HA_SERVICE[verb];
+    if (!service) return res.status(400).json({ error: `unknown verb '${verb}' (allowed: ${Object.keys(_VACUUM_HA_SERVICE).join(',')})` });
+    await callHA('vacuum', service, { entity_id: req.params.entity });
+    res.json({ ok: true, service });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Proxmox Backups ──────────────────────────────────────────
 app.get('/api/backups/proxmox', async (_req, res) => {
   try {

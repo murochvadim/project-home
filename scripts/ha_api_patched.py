@@ -205,6 +205,28 @@ class HAApiAdapter(DeviceAdapter):
         except Exception as e:
             log.error(f'Failed to build SmartThings entity map: {e}')
 
+        # ── HA-direct devices (id = entity_id, no identifier mapping) ──
+        # Used for HA-integrated devices where the dashboard row's id IS
+        # the HA entity_id 1:1, so no SmartThings/Ring identifier
+        # translation is needed. The state-change handler routes via
+        # _reverse_map → tuya_id (where tuya_id == entity_id) and the
+        # domain-specific branch in _on_ws_message projects attributes
+        # into a flat dps dict.
+        # Currently just `vacuum.roomba`. Add new entries here as more
+        # HA-integrated devices land.
+        HA_DIRECT_IDS = ['vacuum.roomba']
+        for entity_id in HA_DIRECT_IDS:
+            if entity_id not in self._known_ids:
+                continue
+            domain = entity_id.split('.')[0]
+            self._entity_map.setdefault(entity_id, []).append({
+                'entity_id': entity_id,
+                'domain':    domain,
+                'dp_key':    None,   # vacuum branch projects multiple keys at once
+            })
+            self._reverse_map[entity_id] = entity_id
+        log.info(f'HA map (ha_direct): {sum(1 for e in HA_DIRECT_IDS if e in self._known_ids)} devices added')
+
     def _fetch_all_states(self):
         """One-time bulk fetch of all HA states to seed ha_api as source."""
         log.info('Fetching all HA states for initial seed')
@@ -231,17 +253,28 @@ class HAApiAdapter(DeviceAdapter):
                 tuya_id = self._reverse_map[eid]
                 for ent in self._entity_map.get(tuya_id, []):
                     if ent['entity_id'] == eid:
-                        val = self._ha_state_to_dps_value(ent['domain'], state_val)
-                        if tuya_id not in device_dps:
-                            device_dps[tuya_id] = {}
-                        device_dps[tuya_id][ent['dp_key']] = val
+                        # Vacuum gets the same multi-attribute projection as the
+                        # WS handler — keeps initial seed consistent with live
+                        # updates.
+                        if ent['domain'] == 'vacuum':
+                            attrs = s.get('attributes', {}) or {}
+                            device_dps.setdefault(tuya_id, {}).update({
+                                'state':     state_val,
+                                'bin_full':  attrs.get('bin_full', False),
+                                'fan_speed': attrs.get('fan_speed', ''),
+                            })
+                        else:
+                            val = self._ha_state_to_dps_value(ent['domain'], state_val)
+                            device_dps.setdefault(tuya_id, {})[ent['dp_key']] = val
                         break
 
             for dev_id, dps in device_dps.items():
-                # Only seed SmartThings devices on startup. Tuya devices already
-                # have faster sources (tcp_push, local_poll) that would be
-                # overridden by ha_api's higher priority on every restart.
-                if dps and dev_id in self._smartthings_ids:
+                # Seed SmartThings/Ring + ha_direct (vacuum etc.) devices on
+                # startup. Tuya devices already have faster sources
+                # (tcp_push, local_poll) that would be overridden by ha_api's
+                # higher priority on every restart.
+                if dps and (dev_id in self._smartthings_ids
+                            or dev_id == 'vacuum.roomba'):
                     self.on_state_change(dev_id, dps, 'ha_api')
                     count += 1
 
@@ -332,6 +365,21 @@ class HAApiAdapter(DeviceAdapter):
 
                 state_val = new_state.get('state')
                 if state_val in ('unavailable', 'unknown'):
+                    return
+
+                # Vacuum entities project multiple attributes at once into a
+                # flat dps. For the Roomba: `state` (docked/cleaning/...),
+                # `bin_full` (bool), `fan_speed` (Automatic/Eco/Performance).
+                # Battery + bin-full alerts are intentionally Phase 2 — would
+                # require subscribing to separate sensor.roomba_* entities.
+                if ent_info['domain'] == 'vacuum':
+                    attrs = new_state.get('attributes', {}) or {}
+                    dps = {
+                        'state':     state_val,
+                        'bin_full':  attrs.get('bin_full', False),
+                        'fan_speed': attrs.get('fan_speed', ''),
+                    }
+                    self.on_state_change(tuya_id, dps, 'ha_api')
                     return
 
                 # Event entities (buttons): value = "action:timestamp" so rules

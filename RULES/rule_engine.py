@@ -1261,6 +1261,59 @@ class RuleEngine:
             inner = f'<voice name="{voice}">{inner}</voice>'
         return f'<speak>{inner}</speak>'
 
+    # ── Vacuum dispatch (HA-mediated, Roomba etc.) ────────────────
+    # Same urllib pattern as _dispatch_alexa — direct REST call to HA's
+    # vacuum.* services. dps_config carries the action_on alias per
+    # channel (start / stop / pause / dock / locate). cmd may arrive
+    # either as {action: 'turn_on', channel: 'start'} (alias path —
+    # how bindings + rule chips will trigger it once Phase 2 lands) or
+    # as {action: 'start'} (passthrough — used by direct dashboard
+    # button presses through /api/vacuum/<entity>/<verb>).
+    _VACUUM_HA_SERVICE = {
+        'start':  'start',
+        'stop':   'stop',
+        'pause':  'pause',
+        'dock':   'return_to_base',
+        'locate': 'locate',
+    }
+
+    def _dispatch_vacuum(self, cmd, device_id, rule_name):
+        if not HA_TOKEN:
+            log.warning("Rule '%s' vacuum %s: HA_TOKEN not set", rule_name, device_id)
+            return
+        action = cmd.get('action', '')
+        # Resolve alias from dps_config when caller used turn_on/off shape.
+        if action in ('turn_on', 'turn_off'):
+            channel = cmd.get('channel') or ''
+            dev = self.state.devices.get(device_id, {})
+            cfg = (dev.get('dps_config') or {}).get(channel, {}) if channel else {}
+            alias = cfg.get('action_on') if action == 'turn_on' else cfg.get('action_off')
+            if not alias:
+                log.warning("Rule '%s' vacuum %s: no action alias on dps_config[%s]",
+                            rule_name, device_id, channel)
+                return
+            action = alias
+        service = self._VACUUM_HA_SERVICE.get(action)
+        if not service:
+            log.warning("Rule '%s' vacuum %s: unknown action '%s'",
+                        rule_name, device_id, action)
+            return
+        try:
+            req = urllib.request.Request(
+                f'{HA_URL}/api/services/vacuum/{service}',
+                data=json.dumps({'entity_id': device_id}).encode('utf-8'),
+                headers={'Authorization': f'Bearer {HA_TOKEN}',
+                         'Content-Type':  'application/json'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(f'HA returned {resp.status}')
+            log.info("Rule '%s' -> vacuum.%s on %s", rule_name, service, device_id)
+        except Exception as e:
+            log.warning("Rule '%s' vacuum.%s on %s failed: %s",
+                        rule_name, service, device_id, e)
+
     def _awtrix_push_preset(self, cmd, device_id, rule_name):
         preset_name = cmd.get('preset_name', '')
         if not preset_name:
@@ -1432,6 +1485,10 @@ class RuleEngine:
 
         elif protocol == 'alexa':
             self._dispatch_alexa(cmd, device_id, rule_name)
+            return
+
+        elif protocol == 'vacuum':
+            self._dispatch_vacuum(cmd, device_id, rule_name)
             return
 
         elif protocol == 'esp':
