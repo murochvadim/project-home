@@ -170,7 +170,18 @@ def main():
     if proc.returncode != 0:
         sys.exit(f'Failed to update {ENV_FILE}: {proc.stderr}')
 
-    # 3) Restart device-agent
+    # 3) Capture restart timestamp BEFORE restarting so the post-check
+    # filters journal to post-restart entries only. Without this, the
+    # 60-line window often included pre-restart "auth failed" lines
+    # (false-failure) and the loose `sse` filter matched "Events
+    # proce**sse**d" heartbeats (false-success).
+    ts_proc = subprocess.run(
+        ['ssh', LXC, 'date -u +%Y-%m-%dT%H:%M:%S'],
+        capture_output=True, text=True, check=True,
+    )
+    restart_ts = ts_proc.stdout.strip()
+
+    # 4) Restart device-agent
     print('  -> systemctl restart device-agent.service')
     subprocess.run(['ssh', LXC, 'systemctl restart device-agent.service'], check=True)
 
@@ -178,20 +189,23 @@ def main():
     time.sleep(10)
 
     print()
-    print('=== device-agent journal (last 60 lines, home_connect filter) ===')
+    print('=== device-agent post-restart logs (home_connect filter) ===')
     proc = subprocess.run(
-        ['ssh', LXC, "journalctl -u device-agent -n 60 --no-pager | grep -iE 'home.connect|bsh|sse|access token' | tail -20"],
+        ['ssh', LXC,
+         f"journalctl -u device-agent --since '{restart_ts}' --no-pager "
+         f"| grep -iE 'home_connect|access token' || true"],
         capture_output=True, text=True, check=False,
     )
-    print(proc.stdout)
+    print(proc.stdout or '(no home_connect log lines yet)')
 
-    if 'auth failed' in proc.stdout or 'invalid_grant' in proc.stdout:
-        print('*** Still seeing auth errors. Token deploy may not have taken effect. ***')
+    # Decide success/failure based ONLY on post-restart logs.
+    if 'invalid_grant' in proc.stdout or 'auth failed' in proc.stdout:
+        print('*** Auth errors AFTER restart — token deploy did not take effect. ***')
         sys.exit(2)
-    if 'access token refreshed' in proc.stdout or 'SSE' in proc.stdout.lower():
-        print('SUCCESS: SSE stream reconnected.')
+    if 'access token refreshed' in proc.stdout:
+        print('SUCCESS: Home Connect reconnected.')
     else:
-        print('No definitive success/failure marker yet. Check `journalctl -u device-agent -f` if needed.')
+        print('No success marker yet — run `journalctl -u device-agent -f` to verify manually.')
 
 
 if __name__ == '__main__':
