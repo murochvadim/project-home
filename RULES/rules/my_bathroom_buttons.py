@@ -25,7 +25,10 @@ import time
 _RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RULES_DIR not in sys.path:
     sys.path.insert(0, _RULES_DIR)
-from _display_chips import build_alexa_cmd as _build_alexa_cmd  # noqa: E402
+from _display_chips import (  # noqa: E402
+    build_alexa_cmd  as _build_alexa_cmd,
+    build_vacuum_cmd as _build_vacuum_cmd,
+)
 
 log = logging.getLogger("rule.my_bathroom_buttons")
 
@@ -111,10 +114,13 @@ def _build_command(b, state):
             return None
         channel = b.get("channel")
         action = b.get("action", "toggle")
-        # Alexa speak / play / transport — see _display_chips.build_alexa_cmd
-        alexa_cmd = _build_alexa_cmd(b, action, device_id, "My BathRoom Buttons")
-        if alexa_cmd:
-            return alexa_cmd
+        # Alexa / Vacuum bindings — see _display_chips. Pass dev so the
+        # helpers can disambiguate the shared 'stop' action by protocol.
+        dev = state.devices.get(device_id, {}) or {}
+        special_cmd = (_build_alexa_cmd(b, action, device_id, "My BathRoom Buttons", dev)
+                       or _build_vacuum_cmd(b, action, device_id, "My BathRoom Buttons", dev))
+        if special_cmd:
+            return special_cmd
         if action == "toggle":
             action = _resolve_toggle(state, device_id, channel)
         cmd = {

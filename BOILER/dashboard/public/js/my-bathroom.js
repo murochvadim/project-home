@@ -129,7 +129,7 @@
     { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
     { v: 'toggle',   label: 'Toggle',   tag: 'toggle' },
   ];
-  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player']);
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player', 'vacuum']);
 
   let _buttons = [];
   let _controllable = [];
@@ -151,7 +151,10 @@
     if (b && b.page_num != null) return `P${b.page_num}`;
     if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
     if (b && b.action === 'play'  && b.station_name)  return `play:${b.station_name}`;
-    if (b && b.action === 'stop')                     return 'stop';
+    // Vacuum verbs (start/stop/dock/locate) and bare alexa stop both
+    // render as the verb itself — context (device name) disambiguates.
+    if (b && (b.action === 'stop' || b.action === 'start'
+              || b.action === 'dock' || b.action === 'locate')) return b.action;
     return bcActionTag(b ? b.action : 'toggle');
   }
   function bcDefaultActionFor(_event) { return 'toggle'; }
@@ -322,7 +325,8 @@
       // page_num: N}` on the binding — the rule engine HASP branch
       // translates that into a `command/page` publish.
       const isPageSelect = d.chan_meta && d.chan_meta.type === 'page_select';
-      const isAlexa = d.protocol === 'alexa';
+      const isAlexa  = d.protocol === 'alexa';
+      const isVacuum = d.protocol === 'vacuum';
       let dropdownHtml;
       if (isPageSelect) {
         const lo = Number(d.chan_meta.min || 1);
@@ -332,6 +336,14 @@
         for (let n = lo; n <= hi; n++) opts.push(n);
         dropdownHtml = `<select class="picker-page-select">
           ${opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>Page ${n}</option>`).join('')}
+        </select>`;
+      } else if (isVacuum) {
+        const curVal = existing ? existing.action : 'start';
+        const verbOpts = ['start','stop','dock','locate'].map(verb =>
+          `<option value="${verb}" ${verb === curVal ? 'selected' : ''}>${verb}</option>`
+        ).join('');
+        dropdownHtml = `<select class="picker-action-select">
+          <optgroup label="Vacuum">${verbOpts}</optgroup>
         </select>`;
       } else if (isAlexa) {
         const curVal = existing
@@ -369,12 +381,12 @@
       item.addEventListener('click', (e) => {
         if (e.target === sel || sel.contains(e.target)) return;
         if (e.target !== cb) cb.checked = !cb.checked;
-        bcToggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
+        bcToggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum);
       });
       sel.addEventListener('change', (e) => {
         e.stopPropagation();
         if (!cb.checked) cb.checked = true;
-        bcToggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
+        bcToggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum);
       });
       sel.addEventListener('click', (e) => e.stopPropagation());
       list.appendChild(item);
@@ -389,7 +401,7 @@
     bcUpdatePickerCount();
   }
 
-  function bcToggleSelection(dev, checked, action, isPageSelect, isAlexa) {
+  function bcToggleSelection(dev, checked, action, isPageSelect, isAlexa, isVacuum) {
     if (!_bcActivePicker) return;
     const row = _buttons.find(r => r.id === _bcActivePicker.rowId);
     if (!row) return;
@@ -973,9 +985,18 @@
       }
 
       const sel = selByKey.get(rowKey);
-      const isAlexa = d.protocol === 'alexa';
+      const isAlexa  = d.protocol === 'alexa';
+      const isVacuum = d.protocol === 'vacuum';
       let actionSelectHtml;
-      if (isAlexa) {
+      if (isVacuum) {
+        const curVal = sel ? sel.action : 'start';
+        const verbOpts = ['start','stop','dock','locate'].map(verb =>
+          `<option value="${verb}" ${verb === curVal ? 'selected' : ''}>${verb}</option>`
+        ).join('');
+        actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
+          <optgroup label="Vacuum">${verbOpts}</optgroup>
+        </select>`;
+      } else if (isAlexa) {
         const curVal = sel
           ? bcAlexaOptionValue(sel.action, sel.template_name || sel.station_name || null)
           : 'speak:' + ((_bcAlexaAnnouncements[0] && _bcAlexaAnnouncements[0].name) || '');

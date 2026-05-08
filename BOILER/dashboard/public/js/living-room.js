@@ -3,7 +3,7 @@
   const WM1_ID = 'e410cc7b-a734-4177-b941-2394dd7a5f7f';
   const WM2_ID = '62f40d30-5c63-4d97-bf55-c602d1e2ee93';
 
-  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player']);
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player', 'vacuum']);
   const ACTIONS = [
     { v: 'turn_on',  label: 'Turn On',  tag: 'on'     },
     { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
@@ -48,7 +48,11 @@
     if (b && b.page_num != null) return `P${b.page_num}`;
     if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
     if (b && b.action === 'play'  && b.station_name)  return `play:${b.station_name}`;
-    if (b && b.action === 'stop')                     return 'stop';
+    // Vacuum verbs (start/stop/dock/locate) and bare alexa stop both
+    // render as the verb itself — context (device name in the chip)
+    // disambiguates which.
+    if (b && (b.action === 'stop' || b.action === 'start'
+              || b.action === 'dock' || b.action === 'locate')) return b.action;
     return actionTag(b ? b.action : 'on');
   }
 
@@ -243,7 +247,8 @@
       // binding — rule engine HASP branch translates that to a
       // `command/page` publish.
       const isPageSelect = d.chan_meta && d.chan_meta.type === 'page_select';
-      const isAlexa = d.protocol === 'alexa';
+      const isAlexa  = d.protocol === 'alexa';
+      const isVacuum = d.protocol === 'vacuum';
       let dropdownHtml;
       if (isPageSelect) {
         const lo = Number(d.chan_meta.min || 1);
@@ -253,6 +258,17 @@
         for (let n = lo; n <= hi; n++) opts.push(n);
         dropdownHtml = `<select class="picker-page-select">
           ${opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>Page ${n}</option>`).join('')}
+        </select>`;
+      } else if (isVacuum) {
+        // Vacuum (Roomba): start / stop / dock / locate. No template /
+        // station name suffix — just verbs. Same minimalist scope as
+        // the Alexa speak/play/stop set.
+        const curVal = existing ? existing.action : 'start';
+        const verbOpts = ['start','stop','dock','locate'].map(verb =>
+          `<option value="${verb}" ${verb === curVal ? 'selected' : ''}>${verb}</option>`
+        ).join('');
+        dropdownHtml = `<select class="picker-action-select">
+          <optgroup label="Vacuum">${verbOpts}</optgroup>
         </select>`;
       } else if (isAlexa) {
         // Alexa dropdown: Speak / Play music / Stop only. Other transport
@@ -296,13 +312,13 @@
       item.addEventListener('click', (e) => {
         if (e.target === sel || sel.contains(e.target)) return;  // let the select handle its own clicks
         if (e.target !== cb) cb.checked = !cb.checked;
-        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
+        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum);
       });
       sel.addEventListener('change', (e) => {
         e.stopPropagation();
         // Changing action implicitly selects the device (if not already)
         if (!cb.checked) cb.checked = true;
-        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa);
+        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum);
       });
       sel.addEventListener('click', (e) => e.stopPropagation());
 
@@ -319,7 +335,7 @@
     updatePickerCount();
   }
 
-  function toggleSelection(dev, checked, action, isPageSelect, isAlexa) {
+  function toggleSelection(dev, checked, action, isPageSelect, isAlexa, isVacuum) {
     if (!activePicker) return;
     const slotKey = key(activePicker.wallmote, activePicker.button, activePicker.event);
     if (!bindings[slotKey]) bindings[slotKey] = [];

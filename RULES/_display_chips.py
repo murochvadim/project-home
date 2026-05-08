@@ -241,7 +241,19 @@ def build_devices_by_name(state_devices):
 # if the binding isn't a speak/play/stop row — caller falls through to the
 # generic logic. Other transport verbs (pause/resume/next/prev) + power
 # were considered + dropped 2026-05-07 — only play / announce / stop.
-def build_alexa_cmd(binding, action, device_id, rule_name):
+def build_alexa_cmd(binding, action, device_id, rule_name, dev=None):
+    """Map an Alexa binding row → command dict.
+
+    `dev` is the device record from `state.devices` (passed by callers
+    since the vacuum integration in Phase 2 — same `stop` action is
+    valid for both Alexa AND Vacuum but means different things, so we
+    refuse to match if the device's actual protocol isn't alexa). Old
+    callers that don't pass `dev` keep working — no protocol check
+    runs in that case (preserves the old "trust the binding shape"
+    contract).
+    """
+    if dev is not None and dev.get('protocol') != 'alexa':
+        return None
     if action == "speak":
         tpl = (binding.get("template_name") or "").strip()
         if not tpl:
@@ -275,3 +287,33 @@ def build_alexa_cmd(binding, action, device_id, rule_name):
             "_skip_loop_guard": True,
         }
     return None
+
+
+# ── Vacuum binding → command dict ─────────────────────────────────────────
+# Roomba (and future robot vacuums) bindings are simpler than Alexa —
+# just a verb, no template/station name. Picker emits one of:
+#
+#   {action: 'start'}   → vacuum.start
+#   {action: 'stop'}    → vacuum.stop
+#   {action: 'dock'}    → vacuum.return_to_base (alias renamed for the picker)
+#   {action: 'locate'}  → vacuum.locate
+#
+# Returns a cmd dict the rule engine's _dispatch_vacuum branch
+# consumes. `dev` arg is the device record from state.devices — used
+# to gate this helper to vacuum-protocol devices only (since `stop`
+# is also a valid Alexa action).
+_VACUUM_VERBS = {'start', 'stop', 'dock', 'locate'}
+
+
+def build_vacuum_cmd(binding, action, device_id, rule_name, dev=None):
+    if dev is not None and dev.get('protocol') != 'vacuum':
+        return None
+    if action not in _VACUUM_VERBS:
+        return None
+    return {
+        'device_id': device_id,
+        'protocol':  'vacuum',
+        'action':    action,
+        'rule':      rule_name,
+        '_skip_loop_guard': True,
+    }

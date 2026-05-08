@@ -22,7 +22,10 @@ import time
 _RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RULES_DIR not in sys.path:
     sys.path.insert(0, _RULES_DIR)
-from _display_chips import build_alexa_cmd as _build_alexa_cmd  # noqa: E402
+from _display_chips import (  # noqa: E402
+    build_alexa_cmd  as _build_alexa_cmd,
+    build_vacuum_cmd as _build_vacuum_cmd,
+)
 
 log = logging.getLogger("rule.wallmote_handler")
 
@@ -173,11 +176,14 @@ def evaluate(event, state):
         channel = b.get("channel")
         action = b.get("action", "turn_on")
 
-        # Alexa speak / play / transport — see _build_alexa_cmd helper
-        # at module bottom. Returns a fully-formed cmd dict or None.
-        alexa_cmd = _build_alexa_cmd(b, action, device_id, "Wallmote Handler")
-        if alexa_cmd:
-            commands.append(alexa_cmd)
+        # Alexa / Vacuum action helpers — see _display_chips.py. Each
+        # only returns a cmd if the device's protocol matches (passed
+        # via `dev` so they can disambiguate the shared 'stop' action).
+        dev = state.devices.get(device_id, {}) or {}
+        special_cmd = (_build_alexa_cmd(b, action, device_id, "Wallmote Handler", dev)
+                       or _build_vacuum_cmd(b, action, device_id, "Wallmote Handler", dev))
+        if special_cmd:
+            commands.append(special_cmd)
             continue
 
         if action == "toggle":

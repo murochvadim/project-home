@@ -34,7 +34,10 @@ import time
 _RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RULES_DIR not in sys.path:
     sys.path.insert(0, _RULES_DIR)
-from _display_chips import build_alexa_cmd as _build_alexa_cmd  # noqa: E402
+from _display_chips import (  # noqa: E402
+    build_alexa_cmd  as _build_alexa_cmd,
+    build_vacuum_cmd as _build_vacuum_cmd,
+)
 
 log = logging.getLogger("rule.balcony_smart_switch_handler")
 
@@ -123,10 +126,13 @@ def _build_commands(slot, state, slot_key):
             continue
         channel = b.get("channel")
         action  = b.get("action", "turn_on")
-        # Alexa speak / play — see _display_chips.build_alexa_cmd
-        alexa_cmd = _build_alexa_cmd(b, action, device_id, "Balcony Smart Switch Handler")
-        if alexa_cmd:
-            commands.append(alexa_cmd)
+        # Alexa / Vacuum bindings — see _display_chips. Pass dev so the
+        # helpers can disambiguate the shared 'stop' action by protocol.
+        dev = state.devices.get(device_id, {}) or {}
+        special_cmd = (_build_alexa_cmd(b, action, device_id, "Balcony Smart Switch Handler", dev)
+                       or _build_vacuum_cmd(b, action, device_id, "Balcony Smart Switch Handler", dev))
+        if special_cmd:
+            commands.append(special_cmd)
             continue
         target  = _resolve_target(action, state.devices.get(device_id, {}), channel)
         if not target:
