@@ -208,24 +208,34 @@ class HAApiAdapter(DeviceAdapter):
         # ── HA-direct devices (id = entity_id, no identifier mapping) ──
         # Used for HA-integrated devices where the dashboard row's id IS
         # the HA entity_id 1:1, so no SmartThings/Ring identifier
-        # translation is needed. The state-change handler routes via
-        # _reverse_map → tuya_id (where tuya_id == entity_id) and the
-        # domain-specific branch in _on_ws_message projects attributes
-        # into a flat dps dict.
-        # Currently just `vacuum.roomba`. Add new entries here as more
-        # HA-integrated devices land.
-        HA_DIRECT_IDS = ['vacuum.roomba']
-        for entity_id in HA_DIRECT_IDS:
-            if entity_id not in self._known_ids:
+        # translation is needed. Each entry maps a list of (entity_id,
+        # dp_key) tuples → ONE devices row. The main entity uses
+        # dp_key=None and gets a domain-specific multi-attribute
+        # projection in _on_ws_message; auxiliary sensor entities map
+        # to a single dp_key each.
+        # Roomba: state from vacuum.roomba (multi-attr) + battery from
+        # the separate sensor.roomba_battery entity → both end up in
+        # devices.last_state under the same `vacuum.roomba` row.
+        HA_DIRECT_DEVICES = {
+            'vacuum.roomba': [
+                ('vacuum.roomba',         None),       # main entity, multi-attr
+                ('sensor.roomba_battery', 'battery'),  # aux sensor → 'battery'
+            ],
+        }
+        added = 0
+        for tuya_id, ent_specs in HA_DIRECT_DEVICES.items():
+            if tuya_id not in self._known_ids:
                 continue
-            domain = entity_id.split('.')[0]
-            self._entity_map.setdefault(entity_id, []).append({
-                'entity_id': entity_id,
-                'domain':    domain,
-                'dp_key':    None,   # vacuum branch projects multiple keys at once
-            })
-            self._reverse_map[entity_id] = entity_id
-        log.info(f'HA map (ha_direct): {sum(1 for e in HA_DIRECT_IDS if e in self._known_ids)} devices added')
+            for entity_id, dp_key in ent_specs:
+                domain = entity_id.split('.')[0]
+                self._entity_map.setdefault(tuya_id, []).append({
+                    'entity_id': entity_id,
+                    'domain':    domain,
+                    'dp_key':    dp_key,   # None = vacuum-style multi-attr
+                })
+                self._reverse_map[entity_id] = tuya_id
+            added += 1
+        log.info(f'HA map (ha_direct): {added} devices added')
 
     def _fetch_all_states(self):
         """One-time bulk fetch of all HA states to seed ha_api as source."""
@@ -253,16 +263,12 @@ class HAApiAdapter(DeviceAdapter):
                 tuya_id = self._reverse_map[eid]
                 for ent in self._entity_map.get(tuya_id, []):
                     if ent['entity_id'] == eid:
-                        # Vacuum gets the same multi-attribute projection as the
-                        # WS handler — keeps initial seed consistent with live
-                        # updates.
+                        # Vacuum: project `state` only (bin_full + fan_speed
+                        # dropped 2026-05-08). Battery comes from a separate
+                        # sensor entity registered alongside via
+                        # HA_DIRECT_DEVICES.
                         if ent['domain'] == 'vacuum':
-                            attrs = s.get('attributes', {}) or {}
-                            device_dps.setdefault(tuya_id, {}).update({
-                                'state':     state_val,
-                                'bin_full':  attrs.get('bin_full', False),
-                                'fan_speed': attrs.get('fan_speed', ''),
-                            })
+                            device_dps.setdefault(tuya_id, {})['state'] = state_val
                         else:
                             val = self._ha_state_to_dps_value(ent['domain'], state_val)
                             device_dps.setdefault(tuya_id, {})[ent['dp_key']] = val
@@ -367,19 +373,14 @@ class HAApiAdapter(DeviceAdapter):
                 if state_val in ('unavailable', 'unknown'):
                     return
 
-                # Vacuum entities project multiple attributes at once into a
-                # flat dps. For the Roomba: `state` (docked/cleaning/...),
-                # `bin_full` (bool), `fan_speed` (Automatic/Eco/Performance).
-                # Battery + bin-full alerts are intentionally Phase 2 — would
-                # require subscribing to separate sensor.roomba_* entities.
+                # Vacuum entities project just the state field into dps.
+                # Battery comes from the separate sensor.roomba_battery
+                # entity (registered alongside via HA_DIRECT_DEVICES) and
+                # gets merged into the same devices row by tuya_id.
+                # bin_full + fan_speed were dropped 2026-05-08 per user
+                # request — only state + battery on the dashboard.
                 if ent_info['domain'] == 'vacuum':
-                    attrs = new_state.get('attributes', {}) or {}
-                    dps = {
-                        'state':     state_val,
-                        'bin_full':  attrs.get('bin_full', False),
-                        'fan_speed': attrs.get('fan_speed', ''),
-                    }
-                    self.on_state_change(tuya_id, dps, 'ha_api')
+                    self.on_state_change(tuya_id, {'state': state_val}, 'ha_api')
                     return
 
                 # Event entities (buttons): value = "action:timestamp" so rules
