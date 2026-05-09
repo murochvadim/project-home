@@ -3576,7 +3576,17 @@ app.post('/api/curtain/:id/:action', async (req, res) => {
     if (!entity_id) return res.status(400).json({ error: 'dps_config.direction.ha_entity not set' });
     const service = cfg[`action_${action}`] || _CURTAIN_ACTION_TO_DEFAULT_SERVICE[action];
     await callHA('cover', service, { entity_id });
-    res.json({ ok: true, service, entity_id });
+    // Persist assumed state — this hardware doesn't report position,
+    // so the last button click is the only position signal we have.
+    // Survives page reload + visible to rules via /api/devices.
+    await db.query(
+      `UPDATE devices SET dps_config = jsonb_set(
+         jsonb_set(dps_config::jsonb, '{direction,assumed_state}',    $1::jsonb),
+                                       '{direction,assumed_state_ts}', to_jsonb(NOW()::text))
+       WHERE id = $2`,
+      [JSON.stringify(action), req.params.id]
+    );
+    res.json({ ok: true, service, entity_id, assumed_state: action });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

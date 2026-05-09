@@ -5,6 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Project General</title>
   <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* Mini window-with-curtains visual — drives state from data-state="open|close|stop|unknown" */
+    .curtain-vis {
+      position: relative;
+      width: 60px;
+      height: 40px;
+      background: linear-gradient(to bottom, #b3deff 0%, #d6ecff 100%);
+      border: 2px solid #6b5d52;
+      border-radius: 3px;
+      overflow: hidden;
+      flex: 0 0 auto;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4);
+    }
+    /* horizontal sash bar (window crossbar, decorative) */
+    .curtain-vis::before {
+      content: '';
+      position: absolute;
+      top: 50%; left: 0; right: 0;
+      height: 2px;
+      background: rgba(107,93,82,0.45);
+      transform: translateY(-50%);
+      z-index: 1;
+    }
+    .curtain-pane {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 52%;
+      background: repeating-linear-gradient(
+        90deg,
+        #b94a3a 0,
+        #b94a3a 4px,
+        #a8412f 4px,
+        #a8412f 8px
+      );
+      transition: transform 0.45s cubic-bezier(.4, 0, .2, 1);
+      z-index: 2;
+    }
+    .curtain-left  { left: 0;  border-right: 1px solid #7a2d22; }
+    .curtain-right { right: 0; border-left:  1px solid #7a2d22; }
+
+    .curtain-vis[data-state="open"]  .curtain-left  { transform: translateX(-92%); }
+    .curtain-vis[data-state="open"]  .curtain-right { transform: translateX( 92%); }
+    .curtain-vis[data-state="close"] .curtain-left  { transform: translateX(0); }
+    .curtain-vis[data-state="close"] .curtain-right { transform: translateX(0); }
+    .curtain-vis[data-state="stop"]  .curtain-left  { transform: translateX(-46%); }
+    .curtain-vis[data-state="stop"]  .curtain-right { transform: translateX( 46%); }
+    .curtain-vis[data-state="unknown"] .curtain-left  { transform: translateX(-30%); opacity: 0.5; }
+    .curtain-vis[data-state="unknown"] .curtain-right { transform: translateX( 30%); opacity: 0.5; }
+  </style>
 </head>
 <body>
 
@@ -91,25 +140,24 @@ async function loadCurtains() {
       return;
     }
     list.innerHTML = enabled.map(d => {
-      // The state code emitted by the device may be inverted relative to
-      // what the user calls "open" — the per-device dps_config.direction
-      // .reversed flag flips both display and the open/close button polarity.
-      const reversed = !!(d.dps_config && d.dps_config.direction && d.dps_config.direction.reversed);
-      const raw = String((d.last_state || {})['1'] ?? '');
-      let cur = raw;
-      if (reversed) {
-        if (raw === '5' || raw === 'open')  cur = '3';
-        else if (raw === '3' || raw === 'close') cur = '5';
-      }
-      const meta = _CURTAIN_STATE_LABEL[cur] || { text: '—', cls: 'dot-unknown' };
+      // Curtain switches don't report physical position over MQTT/Tuya —
+      // their DPS settles back to "3" after every motion regardless of
+      // where the curtain ended up. So we track the last commanded
+      // action server-side in dps_config.direction.assumed_state, written
+      // by /api/curtain/:id/:action on every button click. Reflects what
+      // the user (or a rule) most recently asked the curtain to do.
+      const dirCfg = (d.dps_config || {}).direction || {};
+      const visState = dirCfg.assumed_state || 'unknown';
+      const isOpen   = visState === 'open';
+      const isStop   = visState === 'stop';
+      const isClosed = visState === 'close';
+      const meta = _CURTAIN_STATE_LABEL[visState] || { text: '—', cls: 'dot-unknown' };
       const room = d.room ? ` · ${pgEsc(d.room)}` : '';
-      const isOpen   = cur === 'open'  || cur === '5';
-      const isStop   = cur === 'stop'  || cur === '4';
-      const isClosed = cur === 'close' || cur === '3';
       return `
         <div class="status-item" style="display:flex; align-items:center; gap:14px; padding:10px 14px; background:#fbf9f5; border-radius:6px;">
-          <div style="flex:0 0 auto;">
-            <span class="dot ${meta.cls}"></span>
+          <div class="curtain-vis" data-state="${visState}" title="${pgEsc(meta.text)}">
+            <div class="curtain-pane curtain-left"></div>
+            <div class="curtain-pane curtain-right"></div>
           </div>
           <div style="flex:1 1 auto; min-width:160px;">
             <div style="font-weight:600;">${pgEsc(d.name)}<span style="color:#888; font-weight:400;">${room}</span></div>
