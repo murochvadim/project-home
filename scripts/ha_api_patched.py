@@ -90,6 +90,18 @@ class HAApiAdapter(DeviceAdapter):
         self._next_msg_id = 1000          # ping ids — disjoint from subscribe_events id=1
         self._watchdog_thread = None
         self._watchdog_stop = threading.Event()
+        # Entity-build health tracking.
+        # `_entity_build_healthy` flips False when a build call returns 0
+        # entities for a category that previously had >0 (regression =
+        # HA was up enough for the WS handshake but not for the template
+        # API; the build "succeeded" with empty results). Both the post-
+        # auth rebuild and the watchdog's condition-2 use this flag
+        # instead of `len(_entity_map)`, because ha_direct devices are
+        # ALWAYS added to the map (hardcoded), so checking emptiness
+        # alone never detects the regression.
+        self._last_good_tuya_count = 0
+        self._last_good_st_count = 0
+        self._entity_build_healthy = False
         self._keepalive_thread = None
         self._keepalive_stop = threading.Event()
 
@@ -246,6 +258,32 @@ class HAApiAdapter(DeviceAdapter):
             added += 1
         log.info(f'HA map (ha_direct): {added} devices added')
 
+        # ── Build-health evaluation ─────────────────────────────────
+        # Compute Tuya device count specifically (the cumulative
+        # _entity_map at this point also contains SmartThings + ha_direct
+        # entries, so subtract them).
+        tuya_count = len(self._entity_map) - len(self._smartthings_ids) - added
+        st_count   = len(self._smartthings_ids)
+        regression = (
+            (self._last_good_tuya_count > 0 and tuya_count == 0) or
+            (self._last_good_st_count   > 0 and st_count   == 0)
+        )
+        if regression:
+            self._entity_build_healthy = False
+            log.warning(
+                'HA map: regression detected — tuya %d→%d, smartthings %d→%d '
+                '(HA likely not fully ready; watchdog will retry)',
+                self._last_good_tuya_count, tuya_count,
+                self._last_good_st_count,   st_count,
+            )
+        else:
+            self._entity_build_healthy = True
+            # Update high-water marks only on healthy builds.
+            if tuya_count > 0:
+                self._last_good_tuya_count = tuya_count
+            if st_count > 0:
+                self._last_good_st_count = st_count
+
     def _fetch_all_states(self):
         """One-time bulk fetch of all HA states to seed ha_api as source."""
         log.info('Fetching all HA states for initial seed')
@@ -348,9 +386,12 @@ class HAApiAdapter(DeviceAdapter):
                 # The initial build in _run() may have run against a briefly-down
                 # HA (connection refused → empty map → silent event drops after
                 # HA comes back). Rebuilding post-auth catches that case.
-                if not self._entity_map:
+                # Use the build-health flag instead of `not self._entity_map`
+                # because ha_direct devices are always present and would mask
+                # a failed Tuya/SmartThings build.
+                if not self._entity_build_healthy:
                     try:
-                        log.info('HA: entity map empty after auth — rebuilding')
+                        log.info('HA: entity build unhealthy after auth — rebuilding')
                         self._build_entity_map()
                         self._fetch_all_states()
                     except Exception as e:
@@ -504,10 +545,15 @@ class HAApiAdapter(DeviceAdapter):
                     pass
                 continue
 
-            # 2) Empty-map detection (only after auth_ok — grace period 60s for initial build)
+            # 2) Unhealthy-build detection (only after auth_ok — grace 60s for initial build)
+            #    Catches the case where _build_entity_map ran against a partially-up HA
+            #    (WS handshake worked but template API returned 0 entities) and silently
+            #    discarded the SmartThings/Tuya entity maps. ha_direct devices are still
+            #    in self._entity_map, so the legacy `not self._entity_map` check missed
+            #    this and the WS stayed connected with a useless empty map.
             if self._last_auth_ok_ts > 0 and (now - self._last_auth_ok_ts) > 60 \
-                    and not self._entity_map:
-                log.warning('HA watchdog: entity map empty >60s after auth — forcing close (map rebuild on next connect)')
+                    and not self._entity_build_healthy:
+                log.warning('HA watchdog: entity build unhealthy >60s after auth — forcing close (rebuild on next connect)')
                 try:
                     ws.close()
                 except Exception:
