@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project General</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html">Project Boards</a>
+  <a href="general.html">Weather</a>
+  <a href="project-general.html" class="active">Project General</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+  <a href="my-bathroom.html">My BathRoom Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Project General</h1>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('curtain', this)">Curtain</button>
+  </div>
+
+  <div class="tab-panel active" id="tab-curtain">
+    <div class="card">
+      <h2>Curtains <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">— state polled every 5 s</span></h2>
+      <div id="curtain-list" style="display:flex; flex-direction:column; gap:12px;">
+        <div style="font-size:0.82rem; color:#aaa; padding:6px 0;">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script src="js/alerts-monitor.js?v=3"></script>
+<script src="js/scroll-stabilizer.js"></script>
+<script>
+function pgEsc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function showTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+const _CURTAIN_STATE_LABEL = {
+  open:  { text: 'Open',    cls: 'dot-on'  },
+  '5':   { text: 'Open',    cls: 'dot-on'  },
+  close: { text: 'Closed',  cls: 'dot-off' },
+  '3':   { text: 'Closed',  cls: 'dot-off' },
+  stop:  { text: 'Stopped', cls: 'dot-on'  },
+  '4':   { text: 'Stopped', cls: 'dot-on'  },
+};
+
+async function loadCurtains() {
+  const list = document.getElementById('curtain-list');
+  if (!list) return;
+  try {
+    const r = await fetch('/api/devices?type=curtain');
+    const all = await r.json();
+    const enabled = (all || []).filter(d => d.device_type === 'curtain'
+        && (d.dps_config || {}).direction
+        && d.show_dashboard !== false);
+    if (!enabled.length) {
+      list.innerHTML = '<div style="font-size:0.82rem; color:#aaa; padding:6px 0;">No curtains configured for control yet.</div>';
+      return;
+    }
+    list.innerHTML = enabled.map(d => {
+      // The state code emitted by the device may be inverted relative to
+      // what the user calls "open" — the per-device dps_config.direction
+      // .reversed flag flips both display and the open/close button polarity.
+      const reversed = !!(d.dps_config && d.dps_config.direction && d.dps_config.direction.reversed);
+      const raw = String((d.last_state || {})['1'] ?? '');
+      let cur = raw;
+      if (reversed) {
+        if (raw === '5' || raw === 'open')  cur = '3';
+        else if (raw === '3' || raw === 'close') cur = '5';
+      }
+      const meta = _CURTAIN_STATE_LABEL[cur] || { text: '—', cls: 'dot-unknown' };
+      const room = d.room ? ` · ${pgEsc(d.room)}` : '';
+      const isOpen   = cur === 'open'  || cur === '5';
+      const isStop   = cur === 'stop'  || cur === '4';
+      const isClosed = cur === 'close' || cur === '3';
+      return `
+        <div class="status-item" style="display:flex; align-items:center; gap:14px; padding:10px 14px; background:#fbf9f5; border-radius:6px;">
+          <div style="flex:0 0 auto;">
+            <span class="dot ${meta.cls}"></span>
+          </div>
+          <div style="flex:1 1 auto; min-width:160px;">
+            <div style="font-weight:600;">${pgEsc(d.name)}<span style="color:#888; font-weight:400;">${room}</span></div>
+            <div style="font-size:0.78rem; color:#888;">${pgEsc(meta.text)}</div>
+          </div>
+          <button onclick="curtainCmd('${pgEsc(d.id)}', 'open')"
+                  style="padding:6px 14px; border:1px solid #27ae60; background:${isOpen ? '#27ae60' : '#fff'}; color:${isOpen ? '#fff' : '#27ae60'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Open</button>
+          <button onclick="curtainCmd('${pgEsc(d.id)}', 'stop')"
+                  style="padding:6px 14px; border:1px solid #888; background:${isStop ? '#888' : '#fff'}; color:${isStop ? '#fff' : '#888'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Stop</button>
+          <button onclick="curtainCmd('${pgEsc(d.id)}', 'close')"
+                  style="padding:6px 14px; border:1px solid #c0392b; background:${isClosed ? '#c0392b' : '#fff'}; color:${isClosed ? '#fff' : '#c0392b'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Close</button>
+          <span id="curtain-msg-${pgEsc(d.id)}" style="font-size:0.75rem; color:#888; min-width:80px;"></span>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = `<div style="color:#c0392b; font-size:0.82rem;">Error: ${pgEsc(e.message)}</div>`;
+  }
+}
+
+async function curtainCmd(id, action) {
+  const msg = document.getElementById('curtain-msg-' + id);
+  if (msg) { msg.textContent = '…'; msg.style.color = '#888'; }
+  try {
+    const r = await fetch(`/api/curtain/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+    const data = await r.json();
+    if (msg) {
+      msg.textContent = data.ok ? '✓ sent' : (data.error || 'failed');
+      msg.style.color = data.ok ? '#27ae60' : '#c0392b';
+    }
+    setTimeout(loadCurtains, 2500);
+  } catch (e) {
+    if (msg) { msg.textContent = e.message; msg.style.color = '#c0392b'; }
+  }
+}
+
+loadCurtains();
+setInterval(loadCurtains, 5000);
+</script>
+</body>
+</html>

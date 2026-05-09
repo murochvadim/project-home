@@ -1347,15 +1347,6 @@ async function loadHistory() {
           + `<button onclick="historyToggle(false,'${ch}')" style="padding:3px 10px;border:1px solid #c0392b;background:${!isOn ? '#c0392b' : '#fff'};color:${!isOn ? '#fff' : '#c0392b'};border-radius:4px;cursor:pointer;font-size:0.78rem;font-weight:600;">OFF</button>`
           + `</span>`;
       }).join('');
-    } else if (dev && dev.device_type === 'curtain') {
-      const cur = String(dev.last_state?.['1'] ?? '');
-      const isOpen   = cur === 'open'  || cur === '5';
-      const isClosed = cur === 'close' || cur === '3';
-      const isStop   = cur === 'stop'  || cur === '4';
-      togglesEl.innerHTML =
-          `<button onclick="historyCurtain('open')"  style="padding:3px 10px;border:1px solid #27ae60;background:${isOpen ? '#27ae60' : '#fff'};color:${isOpen ? '#fff' : '#27ae60'};border-radius:4px;cursor:pointer;font-size:0.78rem;font-weight:600;margin-right:6px;">Open</button>`
-        + `<button onclick="historyCurtain('stop')"  style="padding:3px 10px;border:1px solid #888;background:${isStop ? '#888' : '#fff'};color:${isStop ? '#fff' : '#888'};border-radius:4px;cursor:pointer;font-size:0.78rem;font-weight:600;margin-right:6px;">Stop</button>`
-        + `<button onclick="historyCurtain('close')" style="padding:3px 10px;border:1px solid #c0392b;background:${isClosed ? '#c0392b' : '#fff'};color:${isClosed ? '#fff' : '#c0392b'};border-radius:4px;cursor:pointer;font-size:0.78rem;font-weight:600;">Close</button>`;
     } else {
       togglesEl.innerHTML = '';
     }
@@ -1532,29 +1523,6 @@ async function historyToggle(state, channel) {
       statusEl.style.color = '#c0392b';
     }
     setTimeout(loadHistory, 1500);
-  } catch (e) {
-    statusEl.textContent = escHtml(e.message);
-    statusEl.style.color = '#c0392b';
-  }
-}
-
-async function historyCurtain(action) {
-  const devId = document.getElementById('history-device').value;
-  const statusEl = document.getElementById('history-toggle-status');
-  if (!devId) return;
-  statusEl.textContent = 'Sending...';
-  statusEl.style.color = '#888';
-  try {
-    const r = await fetch(`/api/curtain/${encodeURIComponent(devId)}/${action}`, { method: 'POST' });
-    const data = await r.json();
-    if (data.ok) {
-      statusEl.textContent = `${data.service} → ${escHtml(data.entity_id)}`;
-      statusEl.style.color = '#27ae60';
-    } else {
-      statusEl.textContent = escHtml(data.error || 'Failed');
-      statusEl.style.color = '#c0392b';
-    }
-    setTimeout(loadHistory, 2500);
   } catch (e) {
     statusEl.textContent = escHtml(e.message);
     statusEl.style.color = '#c0392b';
