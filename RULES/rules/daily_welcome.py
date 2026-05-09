@@ -59,6 +59,8 @@ RULE = {
 def evaluate(event, state):
     now_local = datetime.now(LOCAL_TZ)
     now_hhmm  = now_local.strftime("%H:%M")
+    now_min   = now_local.hour * 60 + now_local.minute
+    today_iso = now_local.date().isoformat()
 
     # Wipe time = window end. Reads the live RULE dict, which the engine
     # mutates in place when dashboard overrides are applied, so whatever
@@ -67,13 +69,32 @@ def evaluate(event, state):
     wipe_hhmm = (RULE.get("conditions", {})
                      .get("time", {})
                      .get("before", "23:59"))
+    try:
+        _wh, _wm = wipe_hhmm.split(":")
+        wipe_min = int(_wh) * 60 + int(_wm)
+    except (ValueError, AttributeError):
+        wipe_min = 23 * 60 + 59
 
-    # End-of-day wipe — checked before the push path so it always wins at
-    # the boundary. One-hour cooldown prevents double-fire across the 60s
-    # heartbeats inside the boundary minute.
-    if now_hhmm == wipe_hhmm:
+    # End-of-day wipe — crossing-edge detection on the wipe minute.
+    # Exact equality (`now_hhmm == wipe_hhmm`) silently misses whenever the
+    # 60 s heartbeat tick drifts past the minute boundary (state load takes
+    # ~1 s, pushing datetime.now() one minute past where the tick was
+    # scheduled). Crossing-edge tolerates drift; the daily latch + 1 h
+    # cooldown still prevent double-fire.
+    prev_now_min = state.shared.get("_daily_welcome_last_eval_min")
+    state.shared["_daily_welcome_last_eval_min"] = now_min
+    last_wipe_date = state.shared.get("_daily_welcome_wipe_date", "")
+
+    wipe_crossed = False
+    if isinstance(prev_now_min, int):
+        delta = (now_min - prev_now_min) % 1440
+        if 0 < ((wipe_min - prev_now_min) % 1440) <= delta:
+            wipe_crossed = True
+
+    if wipe_crossed and last_wipe_date != today_iso:
         if state.get_timer("daily_welcome_wipe_cooldown") >= WIPE_COOLDOWN_SEC:
             state.set_timer("daily_welcome_wipe_cooldown")
+            state.shared["_daily_welcome_wipe_date"] = today_iso
             state.emit_virtual_event(
                 virtual_id="virtual:pixoo",
                 dps={
