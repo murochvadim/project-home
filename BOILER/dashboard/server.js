@@ -3553,6 +3553,213 @@ app.post('/api/vacuum/:entity/:verb', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/curtains — list curtain devices + auto-sync position_pct
+// from observed DPS motion+settle pairs. Position is ONLY updated by
+// real motor observations (never predicted from clicks), so dashboard
+// click and wall press are treated identically.
+//
+// Per-device state (in dps_config.direction):
+//   full_run_sec    — manual calibration: full motion duration (sec)
+//   position_pct    — 0=closed, 100=open. Single source of truth.
+//   last_motion_ts  — timestamp of the LATEST processed settle event;
+//                      prevents re-counting the same motion across polls.
+app.get('/api/curtains', async (_req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT id, name, room, protocol, dps_config
+      FROM devices
+      WHERE device_type = 'curtain'
+        AND dps_config->'direction' IS NOT NULL
+        AND show_dashboard != false
+      ORDER BY name
+    `);
+
+    for (const dev of r.rows) {
+      const cfg = (dev.dps_config && dev.dps_config.direction) || {};
+      const fullRunSec = Number(cfg.full_run_sec);
+      if (!Number.isFinite(fullRunSec) || fullRunSec < 1) continue;  // not calibrated → skip
+
+      const evs = await db.query(
+        `SELECT ts, dps->>'1' AS code
+           FROM device_events
+          WHERE device_id = $1
+            AND ts > NOW() - INTERVAL '5 minutes'
+            AND dps->>'1' IN ('3','4','5')
+          ORDER BY ts ASC`,
+        [dev.id],
+      );
+      if (!evs.rows.length) continue;
+
+      const lastProcessed = cfg.last_motion_ts
+        ? new Date(cfg.last_motion_ts).getTime()
+        : 0;
+
+      let curPct = Number.isFinite(Number(cfg.position_pct)) ? Number(cfg.position_pct) : 0;
+      let processedAny = false;
+      let newestSettleTs = lastProcessed;
+
+      // Pair each motion ('5'/'4') with its next settle ('3'); each pair
+      // contributes (duration / full_run_sec) × 100 % in the appropriate
+      // direction. Skip pairs already processed (settle.ts <= last_motion_ts).
+      // Build a list of (motion, settleTs) pairs. A "settle" comes from:
+      //   1. A real "3" event after the motion (Stop pressed)
+      //   2. The next motion event (motor must have stopped to switch
+      //      direction or restart) — virtual settle = next motion's ts
+      //   3. End-of-list, if the orphan is older than full_run_sec —
+      //      the motor reached the physical limit (no "3" emitted on
+      //      hitting limit switches; this is just how this hardware
+      //      works), virtual settle = motion + full_run_sec
+      const pairs = [];
+      let pendingMotion = null;
+      for (const e of evs.rows) {
+        if (e.code === '4' || e.code === '5') {
+          if (pendingMotion) {
+            pairs.push({ motion: pendingMotion, settleTs: new Date(e.ts).getTime() });
+          }
+          pendingMotion = e;
+        } else if (e.code === '3' && pendingMotion) {
+          pairs.push({ motion: pendingMotion, settleTs: new Date(e.ts).getTime() });
+          pendingMotion = null;
+        }
+      }
+      let autoStopTriggered = false;
+      if (pendingMotion) {
+        const motionTs = new Date(pendingMotion.ts).getTime();
+        const age = Date.now() - motionTs;
+        if (age >= fullRunSec * 1000) {
+          pairs.push({ motion: pendingMotion, settleTs: motionTs + fullRunSec * 1000 });
+          autoStopTriggered = true;
+        }
+        // else: motor probably still running; wait for next poll
+      }
+
+      for (const p of pairs) {
+        const motionTs = new Date(p.motion.ts).getTime();
+        const settleTs = p.settleTs;
+        // Both motion AND settle must post-date the last processed
+        // timestamp; otherwise an anchor would be undone by a stale
+        // pre-anchor motion.
+        if (motionTs > lastProcessed && settleTs > lastProcessed) {
+          const durSec = Math.min((settleTs - motionTs) / 1000, fullRunSec);
+          const deltaPct = (durSec / fullRunSec) * 100;
+          curPct = p.motion.code === '5'
+            ? Math.min(100, curPct + deltaPct)
+            : Math.max(0,   curPct - deltaPct);
+          processedAny = true;
+          if (settleTs > newestSettleTs) newestSettleTs = settleTs;
+        }
+      }
+
+      if (processedAny) {
+        const newPct = Math.round(curPct);
+        await db.query(
+          `UPDATE devices SET dps_config = jsonb_set(
+             jsonb_set(dps_config::jsonb, '{direction,position_pct}',   $1::jsonb),
+                                           '{direction,last_motion_ts}', to_jsonb($2::text))
+           WHERE id = $3`,
+          [JSON.stringify(newPct), new Date(newestSettleTs).toISOString(), dev.id],
+        );
+        dev.dps_config.direction.position_pct   = newPct;
+        dev.dps_config.direction.last_motion_ts = new Date(newestSettleTs).toISOString();
+
+        // Auto-Stop dispatch: when an orphan motion was virtual-settled
+        // (no "3" arrived because motor hit the physical limit), send a
+        // stop_cover to clean up the device's relay state. Idempotent —
+        // motor is already stopped physically, this just resets its
+        // internal "in-motion" flag.
+        if (autoStopTriggered && cfg.ha_entity) {
+          try {
+            await callHA('cover', 'stop_cover', { entity_id: cfg.ha_entity });
+          } catch (e) {
+            // Non-fatal; just log
+            console.error(`curtain auto-stop ${dev.id}: ${e.message}`);
+          }
+        }
+      }
+
+      // Gateway-protocol curtains (Zigbee via Tuya gateway, e.g. Guy Room
+      // roller motor) emit DPS as strings ("open"/"closed") not the
+      // numeric "5"/"4"/"3" codes the SCS family uses, so the loop above
+      // skips them. But HA exposes `current_position` (0..100) for these
+      // entities directly — that's a perfect signal we can use instead.
+      if (dev.protocol === 'gateway' && cfg.ha_entity) {
+        try {
+          const tok = getHaToken();
+          if (tok) {
+            const haRes = await fetch(`${HA_URL}/api/states/${encodeURIComponent(cfg.ha_entity)}`,
+              { headers: { Authorization: `Bearer ${tok}` } });
+            if (haRes.ok) {
+              const s = await haRes.json();
+              const pos = s.attributes && Number(s.attributes.current_position);
+              if (Number.isFinite(pos) && pos >= 0 && pos <= 100) {
+                const haPct = Math.round(pos);
+                if (haPct !== Number(cfg.position_pct)) {
+                  await db.query(
+                    `UPDATE devices SET dps_config = jsonb_set(dps_config::jsonb,
+                       '{direction,position_pct}', $1::jsonb)
+                     WHERE id = $2`,
+                    [JSON.stringify(haPct), dev.id],
+                  );
+                  dev.dps_config.direction.position_pct = haPct;
+                }
+              }
+            }
+          }
+        } catch (e) { /* non-fatal */ }
+      }
+    }
+
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /api/curtain/:id/settings — set per-device calibration values.
+// Currently only full_run_sec; more fields can be added with the same shape.
+app.patch('/api/curtain/:id/settings', async (req, res) => {
+  try {
+    const updates = [];
+    const params  = [req.params.id];
+    let pIdx = 1;
+
+    if (req.body && req.body.full_run_sec !== undefined) {
+      const v = Number(req.body.full_run_sec);
+      if (!Number.isFinite(v) || v < 1 || v > 300) {
+        return res.status(400).json({ error: 'full_run_sec must be 1..300' });
+      }
+      pIdx += 1;
+      params.push(Math.round(v));
+      updates.push(`'{direction,full_run_sec}', to_jsonb($${pIdx}::int)`);
+    }
+    if (req.body && req.body.position_pct !== undefined) {
+      const v = Number(req.body.position_pct);
+      if (!Number.isFinite(v) || v < 0 || v > 100) {
+        return res.status(400).json({ error: 'position_pct must be 0..100' });
+      }
+      pIdx += 1;
+      params.push(Math.round(v));
+      updates.push(`'{direction,position_pct}', to_jsonb($${pIdx}::int)`);
+      // Reset last_motion_ts so the auto-sync's drift correction
+      // applies on top of THIS anchor (not on top of stale events
+      // that predate it).
+      pIdx += 1;
+      params.push(new Date().toISOString());
+      updates.push(`'{direction,last_motion_ts}', to_jsonb($${pIdx}::text)`);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'nothing to update' });
+
+    let expr = 'dps_config::jsonb';
+    for (const u of updates) expr = `jsonb_set(${expr}, ${u})`;
+    const r = await db.query(
+      `UPDATE devices SET dps_config = ${expr}
+       WHERE id = $1 AND device_type = 'curtain'
+       RETURNING dps_config->'direction' AS direction`,
+      params,
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'curtain not found' });
+    res.json({ ok: true, direction: r.rows[0].direction });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Curtains / Blinds — HA cover services dispatched per device ────────────
 // Device-agent owns local-TCP state stream; commands go via HA's cover.* services.
 // dps_config.direction.{ha_entity, action_open|stop|close} drives the mapping

@@ -39,20 +39,26 @@
         #a8412f 4px,
         #a8412f 8px
       );
-      transition: transform 0.45s cubic-bezier(.4, 0, .2, 1);
+      transition: transform 0.6s ease-out;
       z-index: 2;
     }
     .curtain-left  { left: 0;  border-right: 1px solid #7a2d22; }
     .curtain-right { right: 0; border-left:  1px solid #7a2d22; }
 
-    .curtain-vis[data-state="open"]  .curtain-left  { transform: translateX(-92%); }
-    .curtain-vis[data-state="open"]  .curtain-right { transform: translateX( 92%); }
-    .curtain-vis[data-state="close"] .curtain-left  { transform: translateX(0); }
-    .curtain-vis[data-state="close"] .curtain-right { transform: translateX(0); }
-    .curtain-vis[data-state="stop"]  .curtain-left  { transform: translateX(-46%); }
-    .curtain-vis[data-state="stop"]  .curtain-right { transform: translateX( 46%); }
-    .curtain-vis[data-state="unknown"] .curtain-left  { transform: translateX(-30%); opacity: 0.5; }
-    .curtain-vis[data-state="unknown"] .curtain-right { transform: translateX( 30%); opacity: 0.5; }
+    /* Pane positions are set inline (transform: translateX(N%)) based on
+       server-tracked position_pct. CSS handles only the unknown state. */
+    .curtain-vis[data-state="unknown"] .curtain-pane { opacity: 0.5; }
+    /* Hide the spinner arrows on curtain row number inputs — clicking
+       them accidentally was causing jumpy values. */
+    #curtain-list input[type="number"]::-webkit-outer-spin-button,
+    #curtain-list input[type="number"]::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    #curtain-list input[type="number"] {
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
   </style>
 </head>
 <body>
@@ -117,63 +123,147 @@ function showTab(name, btn) {
   btn.classList.add('active');
 }
 
-const _CURTAIN_STATE_LABEL = {
-  open:  { text: 'Open',    cls: 'dot-on'  },
-  '5':   { text: 'Open',    cls: 'dot-on'  },
-  close: { text: 'Closed',  cls: 'dot-off' },
-  '3':   { text: 'Closed',  cls: 'dot-off' },
-  stop:  { text: 'Stopped', cls: 'dot-on'  },
-  '4':   { text: 'Stopped', cls: 'dot-on'  },
-};
-
 async function loadCurtains() {
   const list = document.getElementById('curtain-list');
   if (!list) return;
   try {
-    const r = await fetch('/api/devices?type=curtain');
-    const all = await r.json();
-    const enabled = (all || []).filter(d => d.device_type === 'curtain'
-        && (d.dps_config || {}).direction
-        && d.show_dashboard !== false);
+    const r = await fetch('/api/curtains');
+    const enabled = await r.json();
     if (!enabled.length) {
       list.innerHTML = '<div style="font-size:0.82rem; color:#aaa; padding:6px 0;">No curtains configured for control yet.</div>';
       return;
     }
+    // Preserve any values the user has typed into curtain-row inputs;
+    // re-rendering destroys the input elements otherwise.
+    const _preserve = {};
+    document.querySelectorAll('#curtain-list input').forEach(el => {
+      if (el.id) _preserve[el.id] = el.value;
+    });
     list.innerHTML = enabled.map(d => {
-      // Curtain switches don't report physical position over MQTT/Tuya —
-      // their DPS settles back to "3" after every motion regardless of
-      // where the curtain ended up. So we track the last commanded
-      // action server-side in dps_config.direction.assumed_state, written
-      // by /api/curtain/:id/:action on every button click. Reflects what
-      // the user (or a rule) most recently asked the curtain to do.
       const dirCfg = (d.dps_config || {}).direction || {};
-      const visState = dirCfg.assumed_state || 'unknown';
-      const isOpen   = visState === 'open';
-      const isStop   = visState === 'stop';
-      const isClosed = visState === 'close';
-      const meta = _CURTAIN_STATE_LABEL[visState] || { text: '—', cls: 'dot-unknown' };
+      // position_pct is the single source of truth; only set on devices
+      // that have full_run_sec calibrated (currently MyRoom only). Falls
+      // back to 'unknown' visual for the others.
+      const rawPct = Number(dirCfg.position_pct);
+      const havePct = Number.isFinite(rawPct);
+      const pct = havePct ? Math.max(0, Math.min(100, Math.round(rawPct))) : 0;
+      const visStateAttr = havePct ? 'tracked' : 'unknown';
+
+      // Pane translateX: 0 at pct=0 (closed, fully covered), 92% at pct=100.
+      const shift = (pct / 100) * 92;
+
+      // Label:  "Closed 100%" only at exact 0; otherwise "Open NN%".
+      const label = havePct
+        ? (pct === 0 ? 'Closed 100%' : `Open ${pct}%`)
+        : '— (uncalibrated)';
+
+      const isOpenBtn   = havePct && pct >= 95;
+      const isClosedBtn = havePct && pct <= 5;
+      const fullRunSec  = Number(dirCfg.full_run_sec) || '';
+
       const room = d.room ? ` · ${pgEsc(d.room)}` : '';
       return `
         <div class="status-item" style="display:flex; align-items:center; gap:14px; padding:10px 14px; background:#fbf9f5; border-radius:6px;">
-          <div class="curtain-vis" data-state="${visState}" title="${pgEsc(meta.text)}">
-            <div class="curtain-pane curtain-left"></div>
-            <div class="curtain-pane curtain-right"></div>
+          <div class="curtain-vis" data-state="${visStateAttr}" title="${pgEsc(label)}">
+            <div class="curtain-pane curtain-left"  style="transform: translateX(-${shift}%);"></div>
+            <div class="curtain-pane curtain-right" style="transform: translateX( ${shift}%);"></div>
           </div>
           <div style="flex:1 1 auto; min-width:160px;">
             <div style="font-weight:600;">${pgEsc(d.name)}<span style="color:#888; font-weight:400;">${room}</span></div>
-            <div style="font-size:0.78rem; color:#888;">${pgEsc(meta.text)}</div>
+            <div style="font-size:0.78rem; color:#888;">${pgEsc(label)}</div>
           </div>
           <button onclick="curtainCmd('${pgEsc(d.id)}', 'open')"
-                  style="padding:6px 14px; border:1px solid #27ae60; background:${isOpen ? '#27ae60' : '#fff'}; color:${isOpen ? '#fff' : '#27ae60'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Open</button>
+                  style="padding:6px 14px; border:1px solid #27ae60; background:${isOpenBtn ? '#27ae60' : '#fff'}; color:${isOpenBtn ? '#fff' : '#27ae60'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Open</button>
           <button onclick="curtainCmd('${pgEsc(d.id)}', 'stop')"
-                  style="padding:6px 14px; border:1px solid #888; background:${isStop ? '#888' : '#fff'}; color:${isStop ? '#fff' : '#888'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Stop</button>
+                  style="padding:6px 14px; border:1px solid #888; background:#fff; color:#888; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Stop</button>
           <button onclick="curtainCmd('${pgEsc(d.id)}', 'close')"
-                  style="padding:6px 14px; border:1px solid #c0392b; background:${isClosed ? '#c0392b' : '#fff'}; color:${isClosed ? '#fff' : '#c0392b'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Close</button>
+                  style="padding:6px 14px; border:1px solid #c0392b; background:${isClosedBtn ? '#c0392b' : '#fff'}; color:${isClosedBtn ? '#fff' : '#c0392b'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Close</button>
+          <label style="font-size:0.7rem; color:#888; display:flex; align-items:center; gap:4px;">
+            duration
+            <input type="number" min="1" max="300" value="${fullRunSec}" id="curtain-fullrun-${pgEsc(d.id)}"
+                   style="width:48px; padding:3px 5px; font-size:0.78rem; border:1px solid #ccc; border-radius:3px;">s
+          </label>
+          <button onclick="curtainSaveTiming('${pgEsc(d.id)}')"
+                  style="padding:3px 8px; font-size:0.7rem; border:1px solid #5a8ed1; background:#fff; color:#5a8ed1; border-radius:3px; cursor:pointer;">save</button>
+          <label style="font-size:0.7rem; color:#888; display:flex; align-items:center; gap:3px;" title="Anchor position to a known value (0=closed, 100=open, anything in between)">
+            anchor
+            <input type="number" min="0" max="100" placeholder="N" id="curtain-anchor-${pgEsc(d.id)}"
+                   style="width:42px; padding:3px 5px; font-size:0.78rem; border:1px solid #ccc; border-radius:3px;">%
+          </label>
+          <button onclick="curtainAnchorCustom('${pgEsc(d.id)}')"
+                  style="padding:3px 8px; font-size:0.7rem; border:1px solid #5a8ed1; background:#fff; color:#5a8ed1; border-radius:3px; cursor:pointer;">apply</button>
           <span id="curtain-msg-${pgEsc(d.id)}" style="font-size:0.75rem; color:#888; min-width:80px;"></span>
         </div>`;
     }).join('');
+    // Restore typed values that survived the rebuild.
+    for (const [id, v] of Object.entries(_preserve)) {
+      if (v === '') continue;
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    }
   } catch (e) {
     list.innerHTML = `<div style="color:#c0392b; font-size:0.82rem;">Error: ${pgEsc(e.message)}</div>`;
+  }
+}
+
+async function curtainSaveTiming(id) {
+  const input = document.getElementById('curtain-fullrun-' + id);
+  const msg = document.getElementById('curtain-msg-' + id);
+  if (!input || input.value === '') return;
+  const v = Number(input.value);
+  if (!Number.isFinite(v) || v < 1 || v > 300) {
+    if (msg) { msg.textContent = '1..300'; msg.style.color = '#c0392b'; }
+    return;
+  }
+  if (msg) { msg.textContent = '…'; msg.style.color = '#888'; }
+  try {
+    const r = await fetch(`/api/curtain/${encodeURIComponent(id)}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_run_sec: Math.round(v) }),
+    });
+    const data = await r.json();
+    if (msg) {
+      msg.textContent = data.ok ? `✓ ${data.full_run_sec}s` : (data.error || 'failed');
+      msg.style.color = data.ok ? '#27ae60' : '#c0392b';
+    }
+  } catch (e) {
+    if (msg) { msg.textContent = e.message; msg.style.color = '#c0392b'; }
+  }
+}
+
+async function curtainAnchorCustom(id) {
+  const input = document.getElementById('curtain-anchor-' + id);
+  if (!input) return;
+  const v = Number(input.value);
+  if (!Number.isFinite(v) || v < 0 || v > 100) {
+    const msg = document.getElementById('curtain-msg-' + id);
+    if (msg) { msg.textContent = '0..100'; msg.style.color = '#c0392b'; }
+    return;
+  }
+  curtainAnchor(id, Math.round(v));
+}
+
+async function curtainAnchor(id, pct) {
+  // Manually set the current position (use when drift is visible and you
+  // can verify physical position). Resets last_motion_ts on the server
+  // so future motions apply on top of this anchor.
+  const msg = document.getElementById('curtain-msg-' + id);
+  if (msg) { msg.textContent = '…'; msg.style.color = '#888'; }
+  try {
+    const r = await fetch(`/api/curtain/${encodeURIComponent(id)}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position_pct: pct }),
+    });
+    const data = await r.json();
+    if (msg) {
+      msg.textContent = data.ok ? `✓ anchored ${pct}%` : (data.error || 'failed');
+      msg.style.color = data.ok ? '#27ae60' : '#c0392b';
+    }
+    setTimeout(loadCurtains, 600);
+  } catch (e) {
+    if (msg) { msg.textContent = e.message; msg.style.color = '#c0392b'; }
   }
 }
 
