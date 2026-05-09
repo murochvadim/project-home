@@ -342,10 +342,24 @@ def evaluate(event, state):
     if fired and fired_date != today_iso:
         fired = False
 
-    # Scenario A — kick-in: current minute matches any configured sun-event
-    # anchor. Heartbeat is 60 s, so equality on minute-of-day catches it.
+    # Scenario A — anchor kick-in. We detect when we CROSSED any anchor
+    # minute since the previous tick rather than equality on the current
+    # minute. The 60 s heartbeat drifts (state-load takes ~1 s, pushing
+    # datetime.now() past the minute boundary), so an exact-equality check
+    # silently misses the anchor about half of all evenings depending on
+    # how the tick aligns with the wall clock. Crossing-edge detection
+    # tolerates drift while the daily + period latches still prevent
+    # double-firing.
     anchor_minutes = _anchor_minutes(sun_anchors, state)
-    sun_anchor_hit = (now_min in anchor_minutes)
+    prev_now_min = state.shared.get('_evening_lights_last_eval_min')
+    state.shared['_evening_lights_last_eval_min'] = now_min
+    sun_anchor_hit = False
+    if isinstance(prev_now_min, int) and anchor_minutes:
+        delta = (now_min - prev_now_min) % 1440
+        for a in anchor_minutes:
+            if 0 < ((a - prev_now_min) % 1440) <= delta:
+                sun_anchor_hit = True
+                break
 
     # Scenario B — late arrival: home_mode just transitioned to 'home' AND
     # current time_mode is one of the declared time_mode names.
