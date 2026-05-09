@@ -3553,6 +3553,33 @@ app.post('/api/vacuum/:entity/:verb', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Curtains / Blinds — HA cover services dispatched per device ────────────
+// Device-agent owns local-TCP state stream; commands go via HA's cover.* services.
+// dps_config.direction.{ha_entity, action_open|stop|close} drives the mapping
+// so each device id maps to the right HA cover entity.
+const _CURTAIN_ACTION_TO_DEFAULT_SERVICE = {
+  open:  'open_cover',
+  stop:  'stop_cover',
+  close: 'close_cover',
+};
+
+app.post('/api/curtain/:id/:action', async (req, res) => {
+  try {
+    const action = String(req.params.action || '').toLowerCase();
+    if (!_CURTAIN_ACTION_TO_DEFAULT_SERVICE[action]) {
+      return res.status(400).json({ error: `unknown action '${action}' (allowed: open,stop,close)` });
+    }
+    const r = await db.query("SELECT dps_config FROM devices WHERE id = $1", [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'device not found' });
+    const cfg = (r.rows[0].dps_config || {}).direction || {};
+    const entity_id = cfg.ha_entity;
+    if (!entity_id) return res.status(400).json({ error: 'dps_config.direction.ha_entity not set' });
+    const service = cfg[`action_${action}`] || _CURTAIN_ACTION_TO_DEFAULT_SERVICE[action];
+    await callHA('cover', service, { entity_id });
+    res.json({ ok: true, service, entity_id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Proxmox Backups ──────────────────────────────────────────
 app.get('/api/backups/proxmox', async (_req, res) => {
   try {
