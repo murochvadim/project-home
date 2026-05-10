@@ -3575,20 +3575,27 @@ app.get('/api/curtains', async (_req, res) => {
     `);
 
     for (const dev of r.rows) {
+      dev.is_moving = false;
       const cfg = (dev.dps_config && dev.dps_config.direction) || {};
       const fullRunSec = Number(cfg.full_run_sec);
       if (!Number.isFinite(fullRunSec) || fullRunSec < 1) continue;  // not calibrated → skip
 
-      const evs = await db.query(
-        `SELECT ts, dps->>'1' AS code
-           FROM device_events
-          WHERE device_id = $1
-            AND ts > NOW() - INTERVAL '5 minutes'
-            AND dps->>'1' IN ('3','4','5')
-          ORDER BY ts ASC`,
-        [dev.id],
-      );
-      if (!evs.rows.length) continue;
+      // Gateway-protocol curtains (Guy Room) emit "open"/"closed"/"stop"
+      // string codes — they never produce SCS-shaped events. Skip the
+      // motion-pair logic for them and let the gateway HA-fallback
+      // branch below do all the work.
+      const evs = dev.protocol === 'gateway'
+        ? { rows: [] }
+        : await db.query(
+            `SELECT ts, dps->>'1' AS code
+               FROM device_events
+              WHERE device_id = $1
+                AND ts > NOW() - INTERVAL '5 minutes'
+                AND dps->>'1' IN ('3','4','5')
+              ORDER BY ts ASC`,
+            [dev.id],
+          );
+      if (!evs.rows.length && dev.protocol !== 'gateway') continue;
 
       const lastProcessed = cfg.last_motion_ts
         ? new Date(cfg.last_motion_ts).getTime()
@@ -3629,8 +3636,10 @@ app.get('/api/curtains', async (_req, res) => {
         if (age >= fullRunSec * 1000) {
           pairs.push({ motion: pendingMotion, settleTs: motionTs + fullRunSec * 1000 });
           autoStopTriggered = true;
+        } else {
+          // Motor still running — surface a moving flag for the dashboard.
+          dev.is_moving = true;
         }
-        // else: motor probably still running; wait for next poll
       }
 
       for (const p of pairs) {
@@ -3690,9 +3699,26 @@ app.get('/api/curtains', async (_req, res) => {
               { headers: { Authorization: `Bearer ${tok}` } });
             if (haRes.ok) {
               const s = await haRes.json();
+              if (s.state === 'opening' || s.state === 'closing') {
+                dev.is_moving = true;
+              }
+              // Some Tuya integrations skip opening/closing and only
+              // report the final open/closed state. Fallback: treat as
+              // moving for full_run_sec after the last non-stop command.
+              if (!dev.is_moving && cfg.assumed_state && cfg.assumed_state_ts && cfg.assumed_state !== 'stop') {
+                const ageMs = Date.now() - new Date(cfg.assumed_state_ts).getTime();
+                if (ageMs >= 0 && ageMs < fullRunSec * 1000) {
+                  dev.is_moving = true;
+                }
+              }
               const pos = s.attributes && Number(s.attributes.current_position);
               if (Number.isFinite(pos) && pos >= 0 && pos <= 100) {
-                const haPct = Math.round(pos);
+                // Some Tuya covers are wired such that HA's
+                // current_position is inverted relative to our
+                // convention (we use 100=fully open, 0=fully closed).
+                // Per-device flag: dps_config.direction.position_inverted.
+                const inverted = cfg.position_inverted === true;
+                const haPct = Math.round(inverted ? 100 - pos : pos);
                 if (haPct !== Number(cfg.position_pct)) {
                   await db.query(
                     `UPDATE devices SET dps_config = jsonb_set(dps_config::jsonb,

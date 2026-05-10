@@ -50,12 +50,12 @@
     .curtain-vis[data-state="unknown"] .curtain-pane { opacity: 0.5; }
     /* Hide the spinner arrows on curtain row number inputs — clicking
        them accidentally was causing jumpy values. */
-    #curtain-list input[type="number"]::-webkit-outer-spin-button,
-    #curtain-list input[type="number"]::-webkit-inner-spin-button {
+    #tab-curtain input[type="number"]::-webkit-outer-spin-button,
+    #tab-curtain input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
       margin: 0;
     }
-    #curtain-list input[type="number"] {
+    #tab-curtain input[type="number"] {
       -moz-appearance: textfield;
       appearance: textfield;
     }
@@ -103,7 +103,13 @@
   <div class="tab-panel active" id="tab-curtain">
     <div class="card">
       <h2>Curtains <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">— state polled every 5 s</span></h2>
-      <div id="curtain-list" style="display:flex; flex-direction:column; gap:12px;">
+      <div id="curtain-list-curtains" style="display:flex; flex-direction:column; gap:12px;">
+        <div style="font-size:0.82rem; color:#aaa; padding:6px 0;">Loading…</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Blinds <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">— state polled every 5 s</span></h2>
+      <div id="curtain-list-blinds" style="display:flex; flex-direction:column; gap:12px;">
         <div style="font-size:0.82rem; color:#aaa; padding:6px 0;">Loading…</div>
       </div>
     </div>
@@ -123,23 +129,46 @@ function showTab(name, btn) {
   btn.classList.add('active');
 }
 
+function _isCurtainKind(d) {
+  // Devices whose user-facing name includes "Curtain" go in the Curtains
+  // card; everything else (Blinds, etc.) goes in the Blinds card.
+  return (d.name || '').toLowerCase().includes('curtain');
+}
+
 async function loadCurtains() {
-  const list = document.getElementById('curtain-list');
-  if (!list) return;
+  const curtainsList = document.getElementById('curtain-list-curtains');
+  const blindsList   = document.getElementById('curtain-list-blinds');
+  if (!curtainsList || !blindsList) return;
   try {
     const r = await fetch('/api/curtains');
     const enabled = await r.json();
-    if (!enabled.length) {
-      list.innerHTML = '<div style="font-size:0.82rem; color:#aaa; padding:6px 0;">No curtains configured for control yet.</div>';
-      return;
-    }
     // Preserve any values the user has typed into curtain-row inputs;
     // re-rendering destroys the input elements otherwise.
     const _preserve = {};
-    document.querySelectorAll('#curtain-list input').forEach(el => {
+    document.querySelectorAll('#tab-curtain input').forEach(el => {
       if (el.id) _preserve[el.id] = el.value;
     });
-    list.innerHTML = enabled.map(d => {
+    const curtains = enabled.filter(_isCurtainKind);
+    const blinds   = enabled.filter(d => !_isCurtainKind(d));
+    curtainsList.innerHTML = curtains.length
+      ? curtains.map(_renderCurtainRow).join('')
+      : '<div style="font-size:0.82rem; color:#aaa; padding:6px 0;">No curtains configured.</div>';
+    blindsList.innerHTML = blinds.length
+      ? blinds.map(_renderCurtainRow).join('')
+      : '<div style="font-size:0.82rem; color:#aaa; padding:6px 0;">No blinds configured.</div>';
+    // Restore typed values that survived the rebuild.
+    for (const [id, v] of Object.entries(_preserve)) {
+      if (v === '') continue;
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    }
+  } catch (e) {
+    curtainsList.innerHTML = `<div style="color:#c0392b; font-size:0.82rem;">Error: ${pgEsc(e.message)}</div>`;
+    blindsList.innerHTML = '';
+  }
+}
+
+function _renderCurtainRow(d) {
       const dirCfg = (d.dps_config || {}).direction || {};
       // position_pct is the single source of truth; only set on devices
       // that have full_run_sec calibrated (currently MyRoom only). Falls
@@ -160,17 +189,20 @@ async function loadCurtains() {
       const isOpenBtn   = havePct && pct >= 95;
       const isClosedBtn = havePct && pct <= 5;
       const fullRunSec  = Number(dirCfg.full_run_sec) || '';
+      const moving      = !!d.is_moving;
+      const labelColor  = moving ? '#c0392b' : '#888';
+      const labelText   = moving ? `${label} · moving` : label;
 
       const room = d.room ? ` · ${pgEsc(d.room)}` : '';
       return `
         <div class="status-item" style="display:flex; align-items:center; gap:14px; padding:10px 14px; background:#fbf9f5; border-radius:6px;">
-          <div class="curtain-vis" data-state="${visStateAttr}" title="${pgEsc(label)}">
+          <div class="curtain-vis" data-state="${visStateAttr}" title="${pgEsc(labelText)}">
             <div class="curtain-pane curtain-left"  style="transform: translateX(-${shift}%);"></div>
             <div class="curtain-pane curtain-right" style="transform: translateX( ${shift}%);"></div>
           </div>
           <div style="flex:1 1 auto; min-width:160px;">
             <div style="font-weight:600;">${pgEsc(d.name)}<span style="color:#888; font-weight:400;">${room}</span></div>
-            <div style="font-size:0.78rem; color:#888;">${pgEsc(label)}</div>
+            <div style="font-size:0.78rem; color:${labelColor}; font-weight:${moving ? 600 : 400};">${pgEsc(labelText)}</div>
           </div>
           <button onclick="curtainCmd('${pgEsc(d.id)}', 'open')"
                   style="padding:6px 14px; border:1px solid #27ae60; background:${isOpenBtn ? '#27ae60' : '#fff'}; color:${isOpenBtn ? '#fff' : '#27ae60'}; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">Open</button>
@@ -194,16 +226,6 @@ async function loadCurtains() {
                   style="padding:3px 8px; font-size:0.7rem; border:1px solid #5a8ed1; background:#fff; color:#5a8ed1; border-radius:3px; cursor:pointer;">apply</button>
           <span id="curtain-msg-${pgEsc(d.id)}" style="font-size:0.75rem; color:#888; min-width:80px;"></span>
         </div>`;
-    }).join('');
-    // Restore typed values that survived the rebuild.
-    for (const [id, v] of Object.entries(_preserve)) {
-      if (v === '') continue;
-      const el = document.getElementById(id);
-      if (el) el.value = v;
-    }
-  } catch (e) {
-    list.innerHTML = `<div style="color:#c0392b; font-size:0.82rem;">Error: ${pgEsc(e.message)}</div>`;
-  }
 }
 
 async function curtainSaveTiming(id) {
@@ -224,7 +246,8 @@ async function curtainSaveTiming(id) {
     });
     const data = await r.json();
     if (msg) {
-      msg.textContent = data.ok ? `✓ ${data.full_run_sec}s` : (data.error || 'failed');
+      const fr = data.direction && data.direction.full_run_sec;
+      msg.textContent = data.ok ? `✓ ${fr}s` : (data.error || 'failed');
       msg.style.color = data.ok ? '#27ae60' : '#c0392b';
     }
   } catch (e) {
