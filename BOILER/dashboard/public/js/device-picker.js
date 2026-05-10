@@ -34,7 +34,11 @@
   // switches). Display devices use a different sub-row (rendered inline)
   // because they need 'on/off' actions on top of 'push <preset>'.
   function _virtualChannelsFor(d) {
-    if (MULTI_CHANNEL_TYPES.has(d.device_type) && d.dps_labels && Object.keys(d.dps_labels).length > 0) {
+    // Multi-gang only: a single-label device should NOT render a channel
+    // picker (`1: State`) because there's no ambiguity to resolve. Such
+    // devices fall through to either the actionable on/off branch (if
+    // dps_config.<key>.action_on is declared) or the bare-name chip.
+    if (MULTI_CHANNEL_TYPES.has(d.device_type) && d.dps_labels && Object.keys(d.dps_labels).length > 1) {
       return Object.entries(d.dps_labels);
     }
     return null;

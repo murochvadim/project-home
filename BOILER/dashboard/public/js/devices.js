@@ -1559,6 +1559,16 @@ function batteryColor(value, thresholds) {
   return '#8b1a1a';
 }
 
+// Charging signal — currently only vacuums (HA reports state='docked' when
+// on the charge dock). Add new protocols here as they appear.
+function isCharging(device) {
+  if (!device || !device.last_state) return false;
+  if (device.protocol === 'vacuum') {
+    return device.last_state.state === 'docked';
+  }
+  return false;
+}
+
 function groupByRoom(batteryDevices) {
   const rooms = {};
   for (const item of batteryDevices) {
@@ -1585,7 +1595,16 @@ function renderBatteryCard(device, batteryVal, color) {
   const fillH = batteryVal != null ? Math.max(2, batteryVal) : 0;
   const ls = lastSeenText(device.last_seen, false);
   const online = isOnline(device);
-  const cardColor = online ? color : '#999';
+  // Charging overrides the threshold-based color: the card stays RED for the
+  // entire charge cycle so it's clearly "still on the dock" at a glance,
+  // regardless of how full the battery is.
+  const charging = isCharging(device);
+  const cardColor = charging ? '#c0392b' : (online ? color : '#999');
+  // Keep the same last-seen / offline text as every other card — append
+  // "· charging" only when the device is on the dock, so freshness is
+  // always visible.
+  const baseText = online ? ls.text : 'offline';
+  const subText = charging ? `${baseText} · charging` : baseText;
   const battKey = getBatteryKey(device);
   return `<div class="presence-card battery-card" onclick="toggleBatteryChart('${escAttr(device.id)}','${escAttr(battKey)}','${cardColor}')" title="Click for 7-day chart">
     <div style="display:flex;align-items:center;gap:12px;">
@@ -1595,7 +1614,7 @@ function renderBatteryCard(device, batteryVal, color) {
       <div>
         <div class="presence-name">${name}</div>
         <div style="font-size:1.4rem;font-weight:700;color:${cardColor}">${pct}${batteryVal != null ? '%' : ''}</div>
-        <div class="presence-age">${online ? ls.text : 'offline'}</div>
+        <div class="presence-age">${subText}</div>
       </div>
     </div>
   </div>`;
