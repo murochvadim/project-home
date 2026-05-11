@@ -213,6 +213,30 @@ async function loadNetGraph() {
 // ── Network-scoped System Alerts card (mirror of Health page, filtered to network:%) ──
 let netShowResolvedAlerts = false;
 const NET_ALERTS_TBODY_CACHE = '_net_alerts_tbody';
+const NET_ALERTS_COLLAPSED   = '_net_alerts_collapsed';
+
+// Show / hide the alerts body. State persists across page loads via localStorage.
+function netToggleAlertsCard() {
+  const wrap = document.getElementById('net-alerts-body-wrap');
+  const btn  = document.getElementById('net-alerts-toggle');
+  if (!wrap || !btn) return;
+  const isHidden = wrap.style.display === 'none';
+  wrap.style.display = isHidden ? '' : 'none';
+  btn.textContent    = isHidden ? '▾ Hide' : '▸ Show';
+  try { localStorage.setItem(NET_ALERTS_COLLAPSED, isHidden ? '0' : '1'); } catch (e) {}
+}
+
+// Restore collapsed state on first render.
+(function _restoreNetAlertsCollapsed() {
+  try {
+    if (localStorage.getItem(NET_ALERTS_COLLAPSED) === '1') {
+      const wrap = document.getElementById('net-alerts-body-wrap');
+      const btn  = document.getElementById('net-alerts-toggle');
+      if (wrap) wrap.style.display = 'none';
+      if (btn)  btn.textContent    = '▸ Show';
+    }
+  } catch (e) {}
+})();
 function escNet(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function netFmtTs(t) {
   if (!t) return '';
