@@ -153,15 +153,24 @@ def main():
 # "Network Integration" badge.
 # ────────────────────────────────────────────────────────────────────────────
 
-# A `protocol='local'` or `protocol='gateway'` device should have its freshness
-# come from the local stack. If `last_source` flips to a cloud channel and stays
-# there, the local TCP / push is broken — the device is "online" only via the
-# cloud, which masks the failure for HA but breaks rule-engine latency and
-# local-control reliability. This is what bit us with the Kitchen Proximity
-# Switch on 2026-05-11 — it sat for weeks on a different network, controllable
-# via cloud, completely invisible to local checks.
-_LOCAL_PROTOCOLS = ('local', 'gateway')
-_LOCAL_SOURCES   = ('local_poll', 'tcp_push', 'gateway_push', 'initial')
+# A `protocol='local'` device should have its freshness come from the local
+# stack. If `last_source` flips to a cloud channel and stays there, the local
+# TCP / push is broken — the device is "online" only via the cloud, which
+# masks the failure for HA but breaks rule-engine latency and local-control
+# reliability. This is what bit us with the Kitchen Proximity Switch on
+# 2026-05-11 — it sat for weeks on a different network, controllable via
+# cloud, completely invisible to local checks.
+#
+# `protocol='gateway'` is EXCLUDED: Tuya sub-devices behind a Tuya WiFi
+# gateway (Audible Alarms, Boidem Light, Tami 4, Guy Room Curtain) have no
+# direct local TCP path — `cloud_poll` is their normal state, not drift.
+# Only top-level `local` protocol devices have a direct local TCP socket
+# we expect to use, so only they are candidates for this drift alert.
+_LOCAL_PROTOCOLS = ('local',)
+# `keepalive` is the normal source for IR remotes (no DPS to poll) and for
+# BSH SSE KEEP-ALIVE heartbeats — it's the heartbeat working, not drift.
+# `initial` is the boot-time source before any real read lands.
+_LOCAL_SOURCES   = ('local_poll', 'tcp_push', 'gateway_push', 'initial', 'keepalive')
 # Treat very-fresh devices (under 6 h since last_seen) as transient drift —
 # only raise after 6 h continuously cloud-only AND last_seen is via cloud.
 _CLOUD_DRIFT_MIN_AGE_H = 6

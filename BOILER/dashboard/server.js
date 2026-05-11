@@ -1253,6 +1253,11 @@ app.get('/api/health/alerts', async (req, res) => {
   // is built as `<prefix>%` so callers pass the prefix without the wildcard.
   const rawPrefix = (req.query.type_prefix || '').toString();
   const typePrefix = /^[a-z0-9_:]{1,40}$/i.test(rawPrefix) ? rawPrefix : '';
+  // Mirror filter for negative selection — Health page uses
+  // ?type_prefix_exclude=network: so the network alerts only appear on the
+  // Project Network page, not duplicated on Health.
+  const rawExclude = (req.query.type_prefix_exclude || '').toString();
+  const typeExclude = /^[a-z0-9_:]{1,40}$/i.test(rawExclude) ? rawExclude : '';
   try {
     const where = [];
     const params = [];
@@ -1260,6 +1265,10 @@ app.get('/api/health/alerts', async (req, res) => {
     if (typePrefix) {
       params.push(typePrefix + '%');
       where.push(`alert_type LIKE $${params.length}`);
+    }
+    if (typeExclude) {
+      params.push(typeExclude + '%');
+      where.push(`alert_type NOT LIKE $${params.length}`);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const r = await db.query(`
@@ -1281,6 +1290,10 @@ app.get('/api/health/alerts', async (req, res) => {
       if (typePrefix) {
         cParams.push(typePrefix + '%');
         cWhere.push(`alert_type LIKE $${cParams.length}`);
+      }
+      if (typeExclude) {
+        cParams.push(typeExclude + '%');
+        cWhere.push(`alert_type NOT LIKE $${cParams.length}`);
       }
       const cQ = await db.query(`SELECT COUNT(*) AS n FROM system_alerts WHERE ${cWhere.join(' AND ')}`, cParams);
       resolvedCount = cQ.rows[0].n;

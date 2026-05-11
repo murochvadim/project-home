@@ -28,7 +28,12 @@ try {
 
 async function loadAlerts() {
   try {
-    const url = `/api/health/alerts${showResolvedAlerts ? '?include_resolved=true' : ''}`;
+    // Exclude network:* alerts — those have their own home on the Project
+    // Network page (System Alerts card filtered to alert_type LIKE 'network:%').
+    // Showing them in both places was confusing.
+    const qs = new URLSearchParams({ type_prefix_exclude: 'network:' });
+    if (showResolvedAlerts) qs.set('include_resolved', 'true');
+    const url = '/api/health/alerts?' + qs.toString();
     const data = await fetch(url).then(r => r.json());
     const rows = data.rows || [];
     const resolvedCount = parseInt(data.resolved_count) || 0;
