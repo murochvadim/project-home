@@ -221,9 +221,7 @@
     const el = document.getElementById('network-indicator');
     if (!el) return;
     if (count > 0) {
-      el.textContent = count === 1
-        ? 'Network Integration ✗ 1 alert'
-        : `Network Integration ✗ ${count} alerts`;
+      el.textContent = `Network Integration (${count})`;
       el.title = `${count} network alert${count > 1 ? 's' : ''}:\n${(groups || []).join('\n')}\nClick to see Project Network`;
       el.style.background = '#5c0e0e';
       el.style.color = '#fff';

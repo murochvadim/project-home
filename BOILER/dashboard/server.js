@@ -809,7 +809,10 @@ async function runHealthChecks() {
     db.query('SELECT MAX(ts) AS last_ts FROM raw_data').then(r => r.rows[0]?.last_ts).catch(() => null),
     db.query('SELECT MAX(ts) AS last_ts FROM raw_weather').then(r => r.rows[0]?.last_ts).catch(() => null),
     db.query('SELECT ts FROM orchestrator_log ORDER BY ts DESC LIMIT 1').then(r => r.rows[0]?.ts || null).catch(() => null),
-    db.query('SELECT COUNT(*) AS n, MAX(severity) AS worst FROM system_alerts WHERE resolved_at IS NULL')
+    // Excludes network:* alerts — those drive the separate Network Integration badge.
+    // Without this filter, the Health page Status card counted them too and double-fed
+    // the sidebar Status badge from a second source.
+    db.query("SELECT COUNT(*) AS n, MAX(severity) AS worst FROM system_alerts WHERE resolved_at IS NULL AND alert_type NOT LIKE 'network:%'")
       .then(r => ({ n: parseInt(r.rows[0]?.n) || 0, worst: r.rows[0]?.worst || null })).catch(() => ({ n: null, worst: null })),
     Promise.all([
       db.query('SELECT ts, decision FROM agent_boiler_data ORDER BY ts DESC LIMIT 1').catch(() => ({ rows: [] })),
