@@ -210,8 +210,99 @@ async function loadNetGraph() {
 }
 
 // ── Full refresh ──────────────────────────────────────────────
+// ── Network-scoped System Alerts card (mirror of Health page, filtered to network:%) ──
+let netShowResolvedAlerts = false;
+const NET_ALERTS_TBODY_CACHE = '_net_alerts_tbody';
+function escNet(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function netFmtTs(t) {
+  if (!t) return '';
+  try { return new Date(t).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }); }
+  catch (e) { return String(t); }
+}
+try {
+  const c = localStorage.getItem(NET_ALERTS_TBODY_CACHE);
+  if (c) document.getElementById('net-alerts-body').innerHTML = c;
+} catch (e) {}
+
+async function loadNetAlerts() {
+  const tbody  = document.getElementById('net-alerts-body');
+  const badge  = document.getElementById('net-alerts-badge');
+  const histBtn  = document.getElementById('net-alerts-history-btn');
+  const clearBtn = document.getElementById('net-alerts-clear-btn');
+  if (!tbody) return;
+  try {
+    const qs   = new URLSearchParams({ type_prefix: 'network:' });
+    if (netShowResolvedAlerts) qs.set('include_resolved', 'true');
+    const data = await fetch('/api/health/alerts?' + qs.toString()).then(r => r.json());
+    const rows = data.rows || [];
+    const resolvedCount = parseInt(data.resolved_count) || 0;
+    const active = rows.filter(r => !r.resolved_local);
+
+    if (active.length) {
+      badge.textContent = `${active.length} active`;
+      badge.style.display = 'inline';
+      badge.style.background = active.some(a => a.severity === 'critical') ? '#7a2020'
+        : active.some(a => a.severity === 'error') ? '#b55e5e' : '#b8860b';
+      badge.style.color = '#fff';
+    } else {
+      badge.textContent = 'all clear';
+      badge.style.display = 'inline';
+      badge.style.background = '#e8f0e8';
+      badge.style.color = '#5a8a5a';
+    }
+
+    if (resolvedCount > 0) {
+      histBtn.textContent = netShowResolvedAlerts ? 'Hide resolved' : `Show resolved (${resolvedCount})`;
+      histBtn.style.display = 'inline-block';
+      clearBtn.style.display = 'inline-block';
+    } else {
+      histBtn.style.display = 'none';
+      clearBtn.style.display = 'none';
+    }
+
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#aaa; text-align:center; padding:16px;">No active alerts</td></tr>';
+      return;
+    }
+
+    const sevColor = { critical: '#7a2020', error: '#b55e5e', warn: '#b8860b', info: '#5a8a5a' };
+    const sevBg    = { critical: '#fff0f0', error: '#fff5f5', warn: '#fffbf0' };
+    tbody.innerHTML = rows.map(r => {
+      const color = sevColor[r.severity] || '#555';
+      const bg    = r.resolved_local ? 'transparent' : (sevBg[r.severity] || 'transparent');
+      const opac  = r.resolved_local ? 'opacity:0.5;' : '';
+      return `<tr style="background:${bg}; ${opac}">
+        <td style="font-size:0.75rem; color:#888; white-space:nowrap;">${netFmtTs(r.ts_local)}</td>
+        <td style="text-align:center;">
+          <span style="color:${r.resolved_local ? '#5a8a5a' : color}; font-size:0.75rem; font-weight:600;">${r.resolved_local ? '✓' : (r.severity||'').toUpperCase()}</span>
+        </td>
+        <td style="font-size:0.78rem;">${r.affected_agent ? escNet(r.affected_agent) : '<span style="color:#aaa;">all</span>'}</td>
+        <td style="font-size:0.75rem; color:#888;">${escNet(r.alert_type)}</td>
+        <td style="font-size:0.8rem; color:${r.resolved_local ? '#888' : color};">${escNet(r.message)}</td>
+        <td style="font-size:0.75rem; color:#5a8a5a;">${r.resolved_local ? netFmtTs(r.resolved_local) : ''}</td>
+      </tr>`;
+    }).join('');
+    try { localStorage.setItem(NET_ALERTS_TBODY_CACHE, tbody.innerHTML); } catch (e) {}
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:#b55e5e;">Failed to load</td></tr>';
+  }
+}
+
+function netToggleResolvedAlerts() {
+  netShowResolvedAlerts = !netShowResolvedAlerts;
+  loadNetAlerts();
+}
+async function netClearResolvedAlerts() {
+  if (!confirm('Delete all resolved alerts? This cannot be undone.')) return;
+  try {
+    await fetch('/api/health/alerts/resolved', { method: 'DELETE' });
+    netShowResolvedAlerts = false;
+    loadNetAlerts();
+  } catch (e) { alert('Failed: ' + e.message); }
+}
+
 async function refreshAll() {
-  await Promise.all([loadSummary(), loadDevices(), loadPorts(), loadTimers()]);
+  await Promise.all([loadSummary(), loadDevices(), loadPorts(), loadTimers(), loadNetAlerts()]);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
@@ -222,3 +313,5 @@ clearInterval(timerInterval);
 timerInterval = setInterval(tickTimers, 1000);
 // Refresh timers every 5 min to stay accurate
 setInterval(loadTimers, 5 * 60 * 1000);
+// Network alerts refresh — independent 60 s cadence, matches Health page.
+setInterval(loadNetAlerts, 60 * 1000);

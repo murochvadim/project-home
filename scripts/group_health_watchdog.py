@@ -136,8 +136,168 @@ def main():
             if cur.rowcount > 0:
                 log.info('RESOLVED: %s (age=%s min, threshold=%s)', alert_key, f'{age:.0f}', cfg['stale_min'])
 
+    # Per-device network reachability checks (separate alert family: network:*).
+    check_network_reachability(cur)
+
     cur.close()
     conn.close()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Network-Integration checks (alert family: network:*)
+#
+# These are PER-DEVICE checks — different from the GROUP checks above which
+# fire when an entire integration cohort goes silent. They surface "this one
+# device is misbehaving on the LAN" cases that don't move the group needle.
+# Renders on Project Network page → System Alerts card and the sidebar's
+# "Network Integration" badge.
+# ────────────────────────────────────────────────────────────────────────────
+
+# A `protocol='local'` or `protocol='gateway'` device should have its freshness
+# come from the local stack. If `last_source` flips to a cloud channel and stays
+# there, the local TCP / push is broken — the device is "online" only via the
+# cloud, which masks the failure for HA but breaks rule-engine latency and
+# local-control reliability. This is what bit us with the Kitchen Proximity
+# Switch on 2026-05-11 — it sat for weeks on a different network, controllable
+# via cloud, completely invisible to local checks.
+_LOCAL_PROTOCOLS = ('local', 'gateway')
+_LOCAL_SOURCES   = ('local_poll', 'tcp_push', 'gateway_push', 'initial')
+# Treat very-fresh devices (under 6 h since last_seen) as transient drift —
+# only raise after 6 h continuously cloud-only AND last_seen is via cloud.
+_CLOUD_DRIFT_MIN_AGE_H = 6
+# Devices known to be cloud-by-design (no local path at all). Skip them — they
+# legitimately live in ha_api / cloud_poll and aren't a "drift" case.
+_CLOUD_BY_DESIGN_PROTOCOLS = ('cloud', 'zwave', 'ring', 'zigbee', 'esp', 'awtrix',
+                              'hasp', 'pixoo', 'alexa', 'vacuum', 'virtual',
+                              'home_connect', 'mqtt')
+
+
+def check_network_reachability(cur):
+    # 1) network:device_cloud_only — local/gateway devices whose freshness is
+    #    coming via cloud instead of local stack. Requires the alert state to
+    #    have persisted ≥ 6 h to avoid flapping on transient reboots.
+    cur.execute("""
+        SELECT d.id, d.name, d.protocol, d.last_source,
+               EXTRACT(EPOCH FROM (NOW() - d.last_seen)) / 3600 AS hours_since_seen,
+               d.last_seen
+        FROM devices d
+        WHERE d.enabled = TRUE
+          AND d.protocol = ANY(%s)
+          AND (d.last_source IS NULL OR d.last_source NOT IN %s)
+    """, (list(_LOCAL_PROTOCOLS), _LOCAL_SOURCES))
+    candidates = cur.fetchall()
+    drift_seen = set()
+    for dev_id, name, protocol, last_source, hours, last_seen in candidates:
+        alert_key = f'network:device_cloud_only:{dev_id}'
+        # First time we observe a device in the drifted state, just record the
+        # alert (resolved=NULL) so we can measure how long it's been. Subsequent
+        # ticks just leave it alone. We use the existing alert's ts as the
+        # "first detected" anchor — only re-raise / leave-be after threshold.
+        cur.execute("""
+            SELECT id, ts, resolved_at,
+                   EXTRACT(EPOCH FROM (NOW() - ts)) / 3600 AS hours_open
+            FROM system_alerts
+            WHERE alert_type = %s
+            ORDER BY ts DESC LIMIT 1
+        """, (alert_key,))
+        existing = cur.fetchone()
+        message = (
+            f"{name}: protocol='{protocol}' but last_source='{last_source}' — "
+            f"local TCP / push channel broken, device only reachable via cloud. "
+            f"last_seen={hours:.1f} h ago. "
+            f"Action: check WiFi, factory-reset + re-pair on home network."
+        ) if hours is not None else (
+            f"{name}: protocol='{protocol}' but last_source='{last_source}' — "
+            f"local TCP / push channel broken; never seen since last restart."
+        )
+        if existing is None:
+            # First detection — insert pending (no alert raised yet; will mature
+            # after threshold). Severity = 'info' acts as a quiet marker.
+            cur.execute("""
+                INSERT INTO system_alerts
+                    (ts, source, severity, alert_type, affected_agent, message)
+                VALUES (NOW(), %s, 'info', %s, 'device_agent', %s)
+            """, (ALERT_SOURCE, alert_key, '[pending drift detection] ' + message))
+            log.info('PENDING: %s — observed cloud-only state, will mature after %sh',
+                     alert_key, _CLOUD_DRIFT_MIN_AGE_H)
+        else:
+            alert_id, _ts, resolved_at, hours_open = existing
+            if resolved_at is not None:
+                # Was resolved; device drifted again. Re-open with fresh ts.
+                cur.execute("""
+                    UPDATE system_alerts SET resolved_at = NULL, ts = NOW(),
+                           severity = 'info', message = %s
+                    WHERE id = %s
+                """, ('[pending drift detection] ' + message, alert_id))
+                log.info('RE-PENDING: %s (previously resolved)', alert_key)
+            elif hours_open is not None and hours_open >= _CLOUD_DRIFT_MIN_AGE_H:
+                # Has been pending for the threshold — promote to warn-level.
+                # Update message with current hours_since_seen too.
+                cur.execute("""
+                    UPDATE system_alerts SET severity = 'warn', message = %s
+                    WHERE id = %s AND severity != 'warn'
+                """, (message, alert_id))
+                if cur.rowcount > 0:
+                    log.warning('RAISED: %s — drifted for %.1f h', alert_key, hours_open)
+            # else: keep waiting (info-level until threshold)
+        drift_seen.add(alert_key)
+
+    # Auto-resolve any drift alerts for devices that returned to local source.
+    cur.execute("""
+        SELECT id, alert_type FROM system_alerts
+        WHERE alert_type LIKE 'network:device_cloud_only:%' AND resolved_at IS NULL
+    """)
+    for alert_id, alert_type in cur.fetchall():
+        if alert_type not in drift_seen:
+            cur.execute("UPDATE system_alerts SET resolved_at = NOW() WHERE id = %s", (alert_id,))
+            log.info('RESOLVED: %s — device returned to local source', alert_type)
+
+    # 2) network:lan_silent — known device MAC missing from net_devices for > 7 days.
+    #    Detects devices that quietly fell off the LAN entirely (powered off,
+    #    moved to a different network, hardware failure). Excludes cloud-by-design
+    #    devices that don't have a local LAN identity.
+    cur.execute("""
+        SELECT d.id, d.name, d.mac::text, n.last_seen,
+               EXTRACT(EPOCH FROM (NOW() - n.last_seen)) / 86400 AS days_silent
+        FROM devices d
+        LEFT JOIN net_devices n ON LOWER(n.mac::text) = LOWER(d.mac::text)
+        WHERE d.enabled = TRUE
+          AND d.mac IS NOT NULL
+          AND d.protocol != ALL(%s)
+          AND (n.last_seen IS NULL OR n.last_seen < NOW() - INTERVAL '7 days')
+    """, (list(_CLOUD_BY_DESIGN_PROTOCOLS),))
+    silent_seen = set()
+    for dev_id, name, mac, last_seen, days in cur.fetchall():
+        alert_key = f'network:lan_silent:{dev_id}'
+        silent_seen.add(alert_key)
+        message = (
+            f"{name} (MAC {mac}): not seen on LAN for {days:.0f} days. "
+            f"Action: power-cycle device, or check WiFi pairing."
+        ) if days is not None else (
+            f"{name} (MAC {mac}): never seen on LAN. "
+            f"Action: device may have a different MAC after factory reset; verify."
+        )
+        cur.execute("""
+            SELECT id FROM system_alerts
+            WHERE alert_type = %s AND resolved_at IS NULL
+            ORDER BY ts DESC LIMIT 1
+        """, (alert_key,))
+        if cur.fetchone() is None:
+            cur.execute("""
+                INSERT INTO system_alerts
+                    (ts, source, severity, alert_type, affected_agent, message)
+                VALUES (NOW(), %s, 'warn', %s, 'network', %s)
+            """, (ALERT_SOURCE, alert_key, message))
+            log.warning('RAISED: %s — %s', alert_key, message)
+
+    cur.execute("""
+        SELECT id, alert_type FROM system_alerts
+        WHERE alert_type LIKE 'network:lan_silent:%' AND resolved_at IS NULL
+    """)
+    for alert_id, alert_type in cur.fetchall():
+        if alert_type not in silent_seen:
+            cur.execute("UPDATE system_alerts SET resolved_at = NOW() WHERE id = %s", (alert_id,))
+            log.info('RESOLVED: %s — MAC returned to LAN', alert_type)
 
 
 if __name__ == '__main__':

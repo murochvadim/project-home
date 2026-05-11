@@ -212,11 +212,49 @@
     } catch (e) {}
   }
 
+  // ── Network Integration badge (per-device LAN reachability alerts) ───
+  // Sibling to Device Integration. Counts active `network:*` alerts. Click
+  // goes to Project Network where the same alerts render in detail.
+  const NETWORK_STORE = '_network_alert_count';
+
+  function applyNetworkState(count, groups) {
+    const el = document.getElementById('network-indicator');
+    if (!el) return;
+    if (count > 0) {
+      el.textContent = count === 1
+        ? 'Network Integration ✗ 1 alert'
+        : `Network Integration ✗ ${count} alerts`;
+      el.title = `${count} network alert${count > 1 ? 's' : ''}:\n${(groups || []).join('\n')}\nClick to see Project Network`;
+      el.style.background = '#5c0e0e';
+      el.style.color = '#fff';
+    } else {
+      el.textContent = 'Network Integration ✓';
+      el.title = 'All network integrations OK';
+      el.style.background = '#3a7d44';
+      el.style.color = '#fff';
+    }
+  }
+
+  try {
+    const saved = localStorage.getItem(NETWORK_STORE);
+    if (saved !== null) applyNetworkState(parseInt(saved, 10), []);
+  } catch (e) {}
+
+  async function checkNetwork() {
+    try {
+      const r = await fetch('/api/health/network-integrations').then(r => r.json());
+      applyNetworkState(r.count || 0, r.groups || []);
+      try { localStorage.setItem(NETWORK_STORE, r.count || 0); } catch (e) {}
+    } catch (e) {}
+  }
+
   // First check after page settles, then every 60 s
   setTimeout(checkAlerts, 1500);
   setTimeout(checkBattery, 2000);
   setTimeout(checkIntegrations, 2500);
+  setTimeout(checkNetwork, 3000);
   setInterval(checkAlerts, 60000);
   setInterval(checkBattery, 60000);
   setInterval(checkIntegrations, 60000);
+  setInterval(checkNetwork, 60000);
 })();

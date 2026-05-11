@@ -1248,20 +1248,43 @@ app.get('/api/network/timers', async (req, res) => {
 // ─── System Alerts ───────────────────────────────────────────
 app.get('/api/health/alerts', async (req, res) => {
   const includeResolved = req.query.include_resolved === 'true';
+  // Optional type_prefix filter — used by Project Network's System Alerts card
+  // to show only network:* alerts. ASCII-only, max 40 chars; PG `LIKE` pattern
+  // is built as `<prefix>%` so callers pass the prefix without the wildcard.
+  const rawPrefix = (req.query.type_prefix || '').toString();
+  const typePrefix = /^[a-z0-9_:]{1,40}$/i.test(rawPrefix) ? rawPrefix : '';
   try {
+    const where = [];
+    const params = [];
+    if (!includeResolved) where.push('resolved_at IS NULL');
+    if (typePrefix) {
+      params.push(typePrefix + '%');
+      where.push(`alert_type LIKE $${params.length}`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const r = await db.query(`
       SELECT id,
              ts AT TIME ZONE 'Asia/Jerusalem' AS ts_local,
              severity, affected_agent, alert_type, message,
              resolved_at AT TIME ZONE 'Asia/Jerusalem' AS resolved_local
       FROM system_alerts
-      ${includeResolved ? '' : 'WHERE resolved_at IS NULL'}
+      ${whereSql}
       ORDER BY resolved_at NULLS FIRST, ts DESC
       LIMIT 50
-    `);
-    const resolvedCount = includeResolved
-      ? r.rows.filter(x => x.resolved_local).length
-      : (await db.query('SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NOT NULL')).rows[0].n;
+    `, params);
+    let resolvedCount;
+    if (includeResolved) {
+      resolvedCount = r.rows.filter(x => x.resolved_local).length;
+    } else {
+      const cParams = [];
+      const cWhere = ['resolved_at IS NOT NULL'];
+      if (typePrefix) {
+        cParams.push(typePrefix + '%');
+        cWhere.push(`alert_type LIKE $${cParams.length}`);
+      }
+      const cQ = await db.query(`SELECT COUNT(*) AS n FROM system_alerts WHERE ${cWhere.join(' AND ')}`, cParams);
+      resolvedCount = cQ.rows[0].n;
+    }
     res.json({ rows: r.rows, resolved_count: parseInt(resolvedCount) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1273,6 +1296,25 @@ app.get('/api/health/integrations', async (req, res) => {
       SELECT COUNT(*) AS n, COALESCE(json_agg(alert_type), '[]'::json) AS groups
       FROM system_alerts
       WHERE resolved_at IS NULL AND alert_type LIKE 'group_stale:%'
+    `);
+    res.json({ count: parseInt(r.rows[0].n), groups: r.rows[0].groups });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Network health — count of active network:* alerts (per-device LAN reachability problems).
+// Drives the "Network Integration" badge in the sidebar; clicking the badge goes to
+// Project Network where the same alerts are rendered in detail (System Alerts card).
+// Excludes severity='info' — those are "pending drift detection" markers the
+// watchdog uses to track when a device first entered a drifted state; they only
+// promote to severity='warn' (and thus the badge) after the maturity threshold.
+app.get('/api/health/network-integrations', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT COUNT(*) AS n, COALESCE(json_agg(alert_type), '[]'::json) AS groups
+      FROM system_alerts
+      WHERE resolved_at IS NULL
+        AND alert_type LIKE 'network:%'
+        AND severity != 'info'
     `);
     res.json({ count: parseInt(r.rows[0].n), groups: r.rows[0].groups });
   } catch (e) { res.status(500).json({ error: e.message }); }
