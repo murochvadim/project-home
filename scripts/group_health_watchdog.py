@@ -308,6 +308,109 @@ def check_network_reachability(cur):
             cur.execute("UPDATE system_alerts SET resolved_at = NOW() WHERE id = %s", (alert_id,))
             log.info('RESOLVED: %s — MAC returned to LAN', alert_type)
 
+    # 3) network:stale_local — device row claims a local last_source but the
+    #    channel hasn't actually delivered anything in > 6 h. Catches the case
+    #    where last_source is stuck on local_poll/tcp_push/gateway_push from
+    #    long ago but the connection is silently dead now. Distinct from
+    #    `device_cloud_only` because the source HASN'T flipped to cloud —
+    #    it's just frozen. Example: Pentagon light (last_source=local_poll,
+    #    last_seen=26h ago) — looks fine to drift-check but is dead.
+    cur.execute("""
+        SELECT d.id, d.name, d.protocol, d.last_source,
+               EXTRACT(EPOCH FROM (NOW() - d.last_seen)) / 3600 AS hours_stale
+        FROM devices d
+        WHERE d.enabled = TRUE
+          AND d.protocol = 'local'
+          AND d.last_source IN ('local_poll','tcp_push','gateway_push')
+          AND d.last_seen < NOW() - INTERVAL '6 hours'
+    """)
+    stale_seen = set()
+    for dev_id, name, protocol, last_source, hours in cur.fetchall():
+        alert_key = f'network:stale_local:{dev_id}'
+        stale_seen.add(alert_key)
+        message = (
+            f"{name}: claims last_source='{last_source}' but no fresh reading "
+            f"in {hours:.0f} h. Local channel is frozen — re-pair WiFi, check "
+            f"power, or factory-reset."
+        )
+        cur.execute("""
+            SELECT id FROM system_alerts
+            WHERE alert_type = %s AND resolved_at IS NULL
+            ORDER BY ts DESC LIMIT 1
+        """, (alert_key,))
+        if cur.fetchone() is None:
+            cur.execute("""
+                INSERT INTO system_alerts
+                    (ts, source, severity, alert_type, affected_agent, message)
+                VALUES (NOW(), %s, 'warn', %s, 'network', %s)
+            """, (ALERT_SOURCE, alert_key, message))
+            log.warning('RAISED: %s — %s', alert_key, message)
+    cur.execute("""
+        SELECT id, alert_type FROM system_alerts
+        WHERE alert_type LIKE 'network:stale_local:%' AND resolved_at IS NULL
+    """)
+    for alert_id, alert_type in cur.fetchall():
+        if alert_type not in stale_seen:
+            cur.execute("UPDATE system_alerts SET resolved_at = NOW() WHERE id = %s", (alert_id,))
+            log.info('RESOLVED: %s — fresh reading received', alert_type)
+
+    # 4) network:ip_collision — two distinct MACs BOTH seen within the last
+    #    10 minutes at the same IP. Distinct from DHCP-reassignment churn
+    #    (where the previous occupant stops responding within seconds of
+    #    losing its lease) — here we genuinely observe two device radios
+    #    answering for the same IP simultaneously. Symptoms: dropped commands,
+    #    cross-talk, ARP cache thrash.
+    #
+    #    Keyed by IP (not by MAC) — one alert per colliding IP regardless of
+    #    how many MACs collide. Message lists every MAC involved.
+    cur.execute("""
+        WITH fresh AS (
+            SELECT ip, mac::text AS mac,
+                   EXTRACT(EPOCH FROM (NOW() - last_seen))::int AS sec_ago
+            FROM net_devices
+            WHERE last_seen > NOW() - INTERVAL '10 minutes'
+        )
+        SELECT ip::text AS ip,
+               STRING_AGG(mac || ' (' || sec_ago || 's ago)', ', '
+                          ORDER BY sec_ago) AS mac_list
+        FROM fresh
+        GROUP BY ip
+        HAVING COUNT(*) > 1
+    """)
+    collision_seen = set()
+    for ip, mac_list in cur.fetchall():
+        # IP can have ':' in IPv6; we only deal with IPv4 here but normalize to
+        # safe alert-key chars anyway.
+        ip_key = ip.replace(':', '_')
+        alert_key = f'network:ip_collision:{ip_key}'
+        collision_seen.add(alert_key)
+        message = (
+            f"IP {ip}: {mac_list}. Multiple devices answering simultaneously — "
+            f"will cause command drops + cross-talk. Action: identify which "
+            f"device should hold the IP, factory-reset the loser to force a "
+            f"new DHCP lease."
+        )
+        cur.execute("""
+            SELECT id FROM system_alerts
+            WHERE alert_type = %s AND resolved_at IS NULL
+            ORDER BY ts DESC LIMIT 1
+        """, (alert_key,))
+        if cur.fetchone() is None:
+            cur.execute("""
+                INSERT INTO system_alerts
+                    (ts, source, severity, alert_type, affected_agent, message)
+                VALUES (NOW(), %s, 'warn', %s, 'network', %s)
+            """, (ALERT_SOURCE, alert_key, message))
+            log.warning('RAISED: %s — %s', alert_key, message)
+    cur.execute("""
+        SELECT id, alert_type FROM system_alerts
+        WHERE alert_type LIKE 'network:ip_collision:%' AND resolved_at IS NULL
+    """)
+    for alert_id, alert_type in cur.fetchall():
+        if alert_type not in collision_seen:
+            cur.execute("UPDATE system_alerts SET resolved_at = NOW() WHERE id = %s", (alert_id,))
+            log.info('RESOLVED: %s — collision cleared', alert_type)
+
 
 if __name__ == '__main__':
     try:
