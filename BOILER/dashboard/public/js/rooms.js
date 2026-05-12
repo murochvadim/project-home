@@ -2984,7 +2984,13 @@
   };
 
   // ── V5 Device placements ───────────────────────────────────────────────────
-  const DEV_STATE_OFFLINE_MS = 10 * 60 * 1000; // 10 min — single flat threshold
+  // Offline threshold is transport-aware: polled devices advance last_seen on
+  // every poll cycle (~30 s) so 10 min of silence = genuinely offline. Push
+  // devices only advance last_seen on a state change, so an empty quiet room
+  // freezes the timestamp — use 30 min to avoid false grey halos.
+  const DEV_STATE_OFFLINE_MS_POLL = 10 * 60 * 1000;
+  const DEV_STATE_OFFLINE_MS_PUSH = 30 * 60 * 1000;
+  const DEV_PUSH_SOURCES = new Set(['tcp_push', 'ha_api', 'zigbee', 'zwave', 'ring', 'home_connect']);
   const DEV_COLORS = { active: '#d83030', clear: '#27ae60', offline: '#888', disabled: '#e8b43a' };
   const DEV_PRESENCE_TYPES = new Set(['presence', 'motion']);
   // V9 — door sensors are placeable alongside presence/motion. They render as
@@ -3060,7 +3066,11 @@
 
   function _devState(p) {
     const lastSeen = p.last_seen ? new Date(p.last_seen).getTime() : 0;
-    if (!lastSeen || (Date.now() - lastSeen) > DEV_STATE_OFFLINE_MS) return 'offline';
+    if (!lastSeen) return 'offline';
+    const dev = (_allDevices || []).find(d => d.id === p.device_id);
+    const src = dev && dev.last_source;
+    const threshold = DEV_PUSH_SOURCES.has(src) ? DEV_STATE_OFFLINE_MS_PUSH : DEV_STATE_OFFLINE_MS_POLL;
+    if ((Date.now() - lastSeen) > threshold) return 'offline';
     return _devActiveHold(p) ? 'active' : 'clear';
   }
 
