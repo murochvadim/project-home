@@ -180,6 +180,7 @@ function isOnline(dev) {
   if (dev.protocol === 'zigbee') return dev.last_state ? true : ageSec < 600;  // Z2M push on state change only
   if (dev.protocol === 'zwave') return dev.last_state ? true : ageSec < 600;  // HA WebSocket push on state change
   if (dev.protocol === 'ring') return dev.last_state ? true : ageSec < 600;  // HA WebSocket push
+  if (dev.protocol === 'homekit') return dev.last_state ? true : ageSec < 600;  // HomeKit Controller — HA WS push, same sparse pattern as ring/zwave
   // Vacuum (Roomba): same shape as zwave/ring — HA WebSocket pushes on
   // state change only. Idle+docked Roomba can sit hours without an
   // event; treat any non-null last_state as online (matches the

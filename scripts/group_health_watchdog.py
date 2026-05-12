@@ -178,7 +178,7 @@ _CLOUD_DRIFT_MIN_AGE_H = 6
 # legitimately live in ha_api / cloud_poll and aren't a "drift" case.
 _CLOUD_BY_DESIGN_PROTOCOLS = ('cloud', 'zwave', 'ring', 'zigbee', 'esp', 'awtrix',
                               'hasp', 'pixoo', 'alexa', 'vacuum', 'virtual',
-                              'home_connect', 'mqtt')
+                              'home_connect', 'mqtt', 'homekit')
 
 
 def check_network_reachability(cur):
