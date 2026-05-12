@@ -66,6 +66,21 @@ class HAApiAdapter(DeviceAdapter):
         'vacuum.viomi_v6_2b2a_robot_cleaner': [
             ('vacuum.viomi_v6_2b2a_robot_cleaner', None),  # main entity (battery in attrs)
         ],
+        # Aqara FP2 (paired via HomeKit Controller, NOT Tuya). Each zone in
+        # Aqara's app surfaces as its own binary_sensor in HA. The 6 zones
+        # below are the named zones currently set in the Living Room FP2;
+        # if more are added in Aqara, append matching tuples here + extend
+        # devices.dps_labels for fp2_presence_335e.
+        'fp2_presence_335e': [
+            ('binary_sensor.presence_sensor_fp2',                        'presence'),
+            ('sensor.presence_sensor_fp2_335e_light_sensor_light_level', 'illuminance'),
+            ('binary_sensor.presence_sensor_balcony_doorway',            'z_balcony_doorway'),
+            ('binary_sensor.presence_sensor_dining_table',               'z_dining_table'),
+            ('binary_sensor.presence_sensor_kitchen_bar',                'z_kitchen_bar'),
+            ('binary_sensor.presence_sensor_kitchen_cooking',            'z_kitchen_cooking'),
+            ('binary_sensor.presence_sensor_kitchen_walkway',            'z_kitchen_walkway'),
+            ('binary_sensor.presence_sensor_sofa_entertaiment',          'z_sofa_entertaiment'),
+        ],
     }
 
     def __init__(self, devices, on_state_change):
