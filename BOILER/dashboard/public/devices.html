@@ -15,6 +15,8 @@
     #stat-zigbee  .stat-val { color:#e67e22; }
     #stat-zwave   .stat-val { color:#9b59b6; }
     #stat-ring    .stat-val { color:#1a9fff; }
+    #stat-homekit .stat-val { color:#d63384; }
+    #stat-vacuum  .stat-val { color:#16a085; }
     #stat-chip-stale { cursor:pointer; }
     #stat-chip-stale .stat-val { color:var(--danger); }
 
@@ -167,6 +169,8 @@
       <div class="stat-chip" id="stat-zigbee"><span class="stat-val" id="stat-zigbee-val">—</span><span class="stat-lbl">Zigbee</span></div>
       <div class="stat-chip" id="stat-zwave"><span class="stat-val" id="stat-zwave-val">—</span><span class="stat-lbl">Z-Wave</span></div>
       <div class="stat-chip" id="stat-ring"><span class="stat-val" id="stat-ring-val">—</span><span class="stat-lbl">Ring</span></div>
+      <div class="stat-chip" id="stat-homekit"><span class="stat-val" id="stat-homekit-val">—</span><span class="stat-lbl">HomeKit</span></div>
+      <div class="stat-chip" id="stat-vacuum"><span class="stat-val" id="stat-vacuum-val">—</span><span class="stat-lbl">Vacuum</span></div>
       <div style="flex:1"></div>
       <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;color:#888">
         <label for="stale-threshold-input">Stale threshold:</label>
@@ -322,6 +326,8 @@
           <option value="zigbee">Zigbee</option>
           <option value="zwave">Z-Wave</option>
           <option value="ring">Ring</option>
+          <option value="homekit">HomeKit</option>
+          <option value="vacuum">Vacuum</option>
           <option value="hasp">HASP</option>
           <option value="awtrix">Awtrix</option>
           <option value="pixoo">Pixoo</option>
@@ -463,6 +469,6 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=8"></script>
-<script src="js/devices.js?v=20260513a"></script>
+<script src="js/devices.js?v=20260513b"></script>
 </body>
 </html>

@@ -265,6 +265,8 @@ function updateStats() {
   const zigbee    = counted.filter(d => d.protocol === 'zigbee').length;
   const zwave     = counted.filter(d => d.protocol === 'zwave').length;
   const ring      = counted.filter(d => d.protocol === 'ring').length;
+  const homekit   = counted.filter(d => d.protocol === 'homekit').length;
+  const vacuum    = counted.filter(d => d.protocol === 'vacuum').length;
   const stale     = counted.filter(isStale).length;
   const channels  = counted.reduce((sum, d) => {
     const cc = Object.keys(d.channel_config || {}).length;
@@ -283,6 +285,8 @@ function updateStats() {
   document.getElementById('stat-zigbee-val').textContent  = zigbee;
   document.getElementById('stat-zwave-val').textContent   = zwave;
   document.getElementById('stat-ring-val').textContent    = ring;
+  document.getElementById('stat-homekit-val').textContent = homekit;
+  document.getElementById('stat-vacuum-val').textContent  = vacuum;
   document.getElementById('stat-stale').textContent       = stale;
 
   // Blocked count — fetch from API
