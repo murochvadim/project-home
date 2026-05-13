@@ -104,6 +104,15 @@ def evaluate(event, state):
     # ── 1. Event dispatch ──
 
     if dtype in PRESENCE_TYPES:
+        # Multi-zone radar detection: device reports per-zone state via z_* DPS
+        # fields (Aqara FP2 et al.). For those devices, the placement-derived
+        # `primary_zone` would be a phantom — the device's own z_* outputs are
+        # authoritative — so skip the primary-zone branch entirely.
+        dps_labels = device.get('dps_labels') or {}
+        is_multi_zone = any(
+            isinstance(k, str) and k.startswith('z_') for k in dps_labels
+        )
+
         if _presence_active(dps):
             if room:
                 state.set_timer(f'room_active:{room}')
@@ -116,21 +125,21 @@ def evaluate(event, state):
             # `primary_zone` to avoid false-activating adjacent sub-rooms
             # (e.g. Dining Room Presence's cone edge reaching into Kitchen
             # Walkway shouldn't mark the Kitchen sub-room active).
-            info = device_to_zones.get(dev_id) or {}
-            primary_zone = info.get('primary_zone')
-            if primary_zone:
-                state.set_timer(f'zone_active:{primary_zone}')
-                state.shared['last_motion_zone'] = primary_zone
-                # Sub-room activation: only if the primary zone belongs to a sub-room
-                for subroom_name, subinfo in subrooms.items():
-                    if primary_zone in (subinfo.get('zones') or []):
-                        state.set_timer(f'room_active:{subroom_name}')
+            if not is_multi_zone:
+                info = device_to_zones.get(dev_id) or {}
+                primary_zone = info.get('primary_zone')
+                if primary_zone:
+                    state.set_timer(f'zone_active:{primary_zone}')
+                    state.shared['last_motion_zone'] = primary_zone
+                    # Sub-room activation: only if the primary zone belongs to a sub-room
+                    for subroom_name, subinfo in subrooms.items():
+                        if primary_zone in (subinfo.get('zones') or []):
+                            state.set_timer(f'room_active:{subroom_name}')
 
         # Multi-zone radar event dispatch (Aqara FP2 et al.) — independent of
         # the global `_presence_active` check above. Each z_* DPS field in the
         # event lights its own zone; FP2 can fire zone-only updates without
         # raising the global `presence` field.
-        dps_labels = device.get('dps_labels') or {}
         for dpkey, zone_label in dps_labels.items():
             if not isinstance(dpkey, str) or not dpkey.startswith('z_'):
                 continue
@@ -188,6 +197,10 @@ def evaluate(event, state):
             continue
         r = dev.get('room', '')
         dps_now = dev.get('dps') or {}
+        dps_labels = dev.get('dps_labels') or {}
+        is_multi_zone = any(
+            isinstance(k, str) and k.startswith('z_') for k in dps_labels
+        )
 
         if _presence_active(dps_now):
             if r:
@@ -195,10 +208,13 @@ def evaluate(event, state):
             # Use primary_zone only — cone edges can touch adjacent sub-room zones
             # (e.g. Dining Room Presence reaches into Kitchen Walkway) which would
             # falsely activate those sub-rooms in step 2c.
-            info = device_to_zones.get(did) or {}
-            pz = info.get('primary_zone')
-            if pz:
-                active_zones.add(pz)
+            # Multi-zone radars are skipped here: their z_* DPS outputs (below)
+            # are authoritative — the placement primary_zone would be a phantom.
+            if not is_multi_zone:
+                info = device_to_zones.get(did) or {}
+                pz = info.get('primary_zone')
+                if pz:
+                    active_zones.add(pz)
         elif r and state.get_timer(f'room_active:{r}') < hold_off_sec:
             active_rooms.add(r)
 
@@ -209,7 +225,6 @@ def evaluate(event, state):
         # primary_zone / room-presence checks above — a multi-zone radar can
         # light up several zones simultaneously without the device showing
         # global presence.
-        dps_labels = dev.get('dps_labels') or {}
         for dpkey, zone_label in dps_labels.items():
             if not isinstance(dpkey, str) or not dpkey.startswith('z_'):
                 continue
