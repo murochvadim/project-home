@@ -168,34 +168,33 @@ Current virtual devices:
 - **Exterior motion**: Ring Doorbell (camera at Main Door). Same treatment — Tier-1 signal, not counted.
 - **Counted rooms**: Living Room (open-plan parent), Balcony (separate room via sliding door), Bedroom, My BathRoom, Guy Room, DressRoom, Bathroom, Laundry, BedRoom Balcony.
 
-**Main-Door-locked count (2026-04-24 strict v3 — door-event-driven only):** `people_home` changes ONLY on Main Door close events (real or inferred). Between door events the count is locked. No asymmetric UP, no sustain counters, no high-water mark — only door events move it. Three explicit visual states published via `people_count_state`:
+**High-water people count since last Main Door close (2026-05-13 — replaces the prior Constant/Dynamic split):** `people_home` is a **single** value computed as the running maximum of the live sustained-zone count between Main Door close events. Two visual states only:
 
 | state | trigger | dashboard | confidence |
 |---|---|---|---|
 | `transit` | Main Door `open` | `--` (amber italic) | `transit` |
-| `recounting` | Main Door just closed → inside the `door_close_stabilize_sec` window | `**` (amber italic) | `recalculating` |
-| `stable` | window elapsed → `people_home` = live_count snapshot | integer | `high` / `medium` / `low` |
+| `stable` | Main Door closed (normal operation) | integer | `high` / `medium` / `low` |
 
-Flow: Main Door open → state=`transit`, `people_home` stays at previous lock; Main Door close → state=`recounting`, `_post_door_stabilize` timer starts; when timer elapses → snapshot `live_count` → new lock → state=`stable`. Inferred Tier-1↔Tier-3 transit (exterior Corridor / Ring Doorbell ↔ interior Entrance presence, within `transit_sequence_window_sec`) triggers the same recount path — handles a dead Main Door sensor. Initial boot seeds the lock from the first live reading.
+Flow on every event:
+1. Build `sustained_zones` from `state.shared['active_zones']`: drop transit zones (doorways / walkways), drop zones owned by exterior / transit rooms (Corridor / Hallway), require each remaining zone to be continuously active ≥ `zone_sustained_sec` (default 30 s, 15 s flicker tolerance via `ZONE_GAP_TOLERANCE_SEC`).
+2. `live_count = len(sustained_zones)`.
+3. `people_home = max(people_home, live_count)` — monotonic up.
+4. **Only** decrease path: Main Door rising-edge close (open → closed) **after the door was open for ≥ `main_door_min_open_sec`** (default 3 s, filters accidental brief opens). On reset: `people_home = live_count`. Inferred Tier-1↔Tier-3 transit (Corridor / Ring Doorbell ↔ Entrance presence, within `transit_sequence_window_sec`) classified as `exit` triggers the same reset path — handles a dead Main Door sensor.
 
-**Stabilize window is auto-sized (2026-04-24 hold-aware):** each placement carries `hold_s` in `room_device_placements.params` (5 s radar, 15 s motion). The rule reads `hold_s` per counted-room sensor via `state.spatial['device_to_zones']` and computes `auto_stabilize = max(hold_s) + 5 s margin`. `people_home.door_close_stabilize_sec` (Settings knob, default 15 s) is now a **floor** — effective window = `max(knob, auto_stabilize)`. So if a motion sensor has 15 s hold, the recount waits 20 s; user can bump the knob higher if they want, but can't go below the auto-computed minimum. Prevents stale-hold over-counts at recount time.
+The invariant **"the Main Door is the only way to leave the apartment"** is what justifies this design: between Main Door close events the count can ONLY grow (new sustained zones reveal previously-undetected occupants). On door close the apartment is sealed and the live count is, by definition, the ground truth.
 
-**Constant vs Dynamic People count (2026-04-24):** People Home now emits two counts side-by-side for the Main Agent dashboard:
+**Removed in the 2026-05-13 rewrite:** `people_home_dynamic` (was Constant + discoveries), `_people_locked_count`, `_people_lock_zones`, `_recount_max_zones`, `_recalc_pending`, `_post_door_stabilize`, `_people_discovered_*`, `zone_accounted:*` timers, `people_count_state='recounting'`, and the auto-sized stabilize window (no window anymore). Knob `people_home.door_close_stabilize_sec` is no longer read.
 
-- **Constant** (`people_home`) — the locked count. Only changes on Main Door events (real or inferred). Conservative, audit-trustworthy.
-- **Dynamic** (`people_home_dynamic`) — Constant + `discovered_count`. Can ONLY go up between door events; snaps back to Constant at every door event.
+**Aqara FP2 multi-zone integration (same date):** `home_activity.py` gained a multi-zone radar branch that reads any DPS key starting with `z_` (per-zone boolean) and lights up the zone whose `dps_labels` value matches. FP2 publishes 6 such fields (`z_balcony_doorway` / `z_dining_table` / `z_kitchen_bar` / `z_kitchen_cooking` / `z_kitchen_walkway` / `z_sofa_entertaiment`) so it can resolve up to 6 simultaneous occupants across Living Room — the previous `primary_zone` path treated FP2 as a single-zone sensor (only the beam-midpoint zone counted). The branch is generic — any future multi-zone radar with `z_*` DPS fields works the same way without rule code changes. Required matching: each `z_*` dps_label must exactly match a zone name in the room's layout (the FP2 zone "Sofa Entertaiment" was renamed to "Sofa Entertainment" in `devices.dps_labels` to match the layout's spelling).
 
-`discovered_count` climbs when a 4-signal test passes: (1) room NOT in lock-time snapshot (`_people_lock_rooms`), (2) room NOT already accounted via a recent corridor transit (`_people_accounted_rooms` populated when `corridor:A>B` timer fires), (3) room continuously active for ≥ 2 × max(hold_s) for its sensors (rising-edge timer `room_first_active:<room>`), (4) same room was a candidate last tick AND this tick (2-tick sustain filters single-tick glitches). All 4 must pass. Catches slow-wake sleepers / mmWave blind-spot reveals without bumping on same-person walk-in-and-stay.
-
-Dashboard (`main-agent.html` + `main-agent.js`) renders both chips — "Constant People" + "Dynamic People" — both honoring the transit ("--") / recounting ("**") / integer states. Dynamic chip italic to signal "derived."
+Dashboard (`main-agent.html` + `main-agent.js`) shows a single **People** chip (was Constant + Dynamic), honoring the `transit` ("--") / `stable` (integer) states. The italic-Dynamic styling was dropped along with the second chip.
 
 Emitted People Home diagnostic fields (in addition to legacy fields):
-- `people_home` — **locked** count (what the dashboard reads)
-- `people_count_state` — `stable` | `transit` | `recounting` (drives dashboard `--` / `**` / N rendering, read from `state.shared` by dashboard main-agent.js at polling cadence 5 s)
-- `people_count_high_water` — locked count (alias retained for continuity)
-- `people_count_live` — what sensors currently say, pre-lock (diagnostic)
-- `people_count_floored` — `true` when `live != locked` (lock is holding)
-- `people_confidence` ∈ {`high`, `medium`, `low`, `transit`, `recalculating`}
+- `people_home` — the high-water count (what the dashboard reads)
+- `people_count_state` — `stable` | `transit` (drives `--` / N rendering, polled by main-agent.js every 5 s)
+- `people_count_live` — current sustained-zone count (pre-high-water, diagnostic)
+- `sustained_zones` — list of currently sustained zone names
+- `people_confidence` ∈ {`high`, `medium`, `low`, `transit`}
 - `last_transition_source` — `door_sensor` | `inferred_entry` | `inferred_exit`
 
 **Auto-reload on spatial changes:** dashboard writes `_spatial_reload_request='pending'` to `rule_engine_state` on any `POST /api/room-layouts/:slug`, `POST/PATCH/DELETE /api/room-device-placements/...`. The rule-engine heartbeat detects the flag within ≤60s, calls `state.load_from_db()` (rebuilds spatial + devices), and clears the flag. No manual Reload needed after layout edits.

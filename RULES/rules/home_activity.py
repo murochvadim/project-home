@@ -125,6 +125,27 @@ def evaluate(event, state):
                 for subroom_name, subinfo in subrooms.items():
                     if primary_zone in (subinfo.get('zones') or []):
                         state.set_timer(f'room_active:{subroom_name}')
+
+        # Multi-zone radar event dispatch (Aqara FP2 et al.) — independent of
+        # the global `_presence_active` check above. Each z_* DPS field in the
+        # event lights its own zone; FP2 can fire zone-only updates without
+        # raising the global `presence` field.
+        dps_labels = device.get('dps_labels') or {}
+        for dpkey, zone_label in dps_labels.items():
+            if not isinstance(dpkey, str) or not dpkey.startswith('z_'):
+                continue
+            val = dps.get(dpkey)
+            if val is True or val == 1 or val == 'on' or val == '1' or val == 'true' or val == 'True':
+                if zone_label:
+                    state.set_timer(f'zone_active:{zone_label}')
+                    state.shared['last_motion_zone'] = zone_label
+                    state.set_timer('last_motion')
+                    if room:
+                        state.set_timer(f'room_active:{room}')
+                        state.shared['last_motion_room'] = room
+                    for subroom_name, subinfo in subrooms.items():
+                        if zone_label in (subinfo.get('zones') or []):
+                            state.set_timer(f'room_active:{subroom_name}')
         # Clear event: do NOT reset timer — let the hold-off expire naturally
 
     elif dtype in DOOR_TYPES:
@@ -166,8 +187,9 @@ def evaluate(event, state):
         if not dev.get('online', True):
             continue
         r = dev.get('room', '')
+        dps_now = dev.get('dps') or {}
 
-        if _presence_active(dev.get('dps') or {}):
+        if _presence_active(dps_now):
             if r:
                 active_rooms.add(r)
             # Use primary_zone only — cone edges can touch adjacent sub-room zones
@@ -179,6 +201,25 @@ def evaluate(event, state):
                 active_zones.add(pz)
         elif r and state.get_timer(f'room_active:{r}') < hold_off_sec:
             active_rooms.add(r)
+
+        # Multi-zone radar branch (Aqara FP2 et al.) — any DPS key named `z_*`
+        # is an independent per-zone boolean. Activate each zone whose key is
+        # truthy in the current dps payload, mapped to its dps_label (which
+        # must match the room's layout zone name). Independent of the
+        # primary_zone / room-presence checks above — a multi-zone radar can
+        # light up several zones simultaneously without the device showing
+        # global presence.
+        dps_labels = dev.get('dps_labels') or {}
+        for dpkey, zone_label in dps_labels.items():
+            if not isinstance(dpkey, str) or not dpkey.startswith('z_'):
+                continue
+            val = dps_now.get(dpkey)
+            if val is True or val == 1 or val == 'on' or val == '1' or val == 'true' or val == 'True':
+                if zone_label:
+                    active_zones.add(zone_label)
+                    state.set_timer(f'zone_active:{zone_label}')
+                    if r:
+                        active_rooms.add(r)
 
     # 2b. Zone hold-off (a zone stays active for `hold_off_sec` after its last fire)
     for rdata in rooms_by_slug.values():

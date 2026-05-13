@@ -176,7 +176,7 @@
       // Per-rule whitelist — when set, only these keys are shown in the trace.
       // Other rules show every key they emit (default behaviour).
       const ruleKeyWhitelist = {
-        'People Home': ['people_home', 'people_home_dynamic'],
+        'People Home': ['people_home'],
       };
       const whitelist = ruleKeyWhitelist[_traceRuleName] || null;
       const allKeys = [];
@@ -439,30 +439,18 @@
       modeEl.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
       modeEl.className = 'stat-val ' + mode;
 
-      // Constant People = door-locked count. Dynamic People = Constant +
-      // discoveries (monotonic up between door events; snaps back to Constant
-      // on each door event). Both honor transit ("--") + recounting ("**").
+      // Single People count = high-water-mark since last Main Door close.
+      // Honors `transit` (= "--") while the Main Door is open.
       const pstate = s.people_count_state || 'stable';
       const people = parseInt(s.people_home) || 0;
-      const peopleDyn = parseInt(s.people_home_dynamic) || people;
       const peopleEl = document.getElementById('stat-people');
-      const peopleDynEl = document.getElementById('stat-people-dynamic');
       const colorClass = n => (n === 0 ? 'p0' : n === 1 ? 'p1' : 'pm');
       if (pstate === 'transit') {
         peopleEl.textContent    = '--';
         peopleEl.className      = 'stat-val pending';
-        peopleDynEl.textContent = '--';
-        peopleDynEl.className   = 'pending';
-      } else if (pstate === 'recounting') {
-        peopleEl.textContent    = '**';
-        peopleEl.className      = 'stat-val pending';
-        peopleDynEl.textContent = '**';
-        peopleDynEl.className   = 'pending';
       } else {
         peopleEl.textContent    = people;
         peopleEl.className      = 'stat-val ' + colorClass(people);
-        peopleDynEl.textContent = peopleDyn;
-        peopleDynEl.className   = colorClass(peopleDyn);
       }
 
       const activeCount = parseInt(s.active_room_count) || 0;
