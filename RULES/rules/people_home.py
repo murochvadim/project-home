@@ -48,13 +48,14 @@ Preserved (consumers still rely on these):
 - `active_zones`, `active_rooms` (read from Home Activity)
 - `home_mode` — NOT touched here (owned by mode_buttons.py)
 
-Tuning knobs (state.shared):
+Tuning knobs (state.shared, all sentence-controlled via apartment.rule_sentences):
 - people_home.corridor_sec                 — default 15
 - people_home.door_transit_window_sec      — default 10
 - people_home.exit_quiet_window_sec        — default 30
 - people_home.transit_sequence_window_sec  — default 15
 - people_home.zone_sustained_sec           — default 30
-- people_home.main_door_min_open_sec       — default 3  (NEW — anti-bounce)
+- people_home.main_door_min_open_sec       — default 3   (anti-bounce on door cycle)
+- people_home.count_settle_sec             — default 60  (settle window before high-water rises)
 """
 
 from datetime import datetime, timezone
@@ -176,7 +177,7 @@ def _build_zone_to_room(spatial):
 # ─────────────────────────── Rule ───────────────────────────
 
 def evaluate(event, state):
-    # Knobs
+    # Knobs (all sentence-controlled via apartment.rule_sentences → KNOB_PATTERNS).
     try:
         corridor_sec         = int(state.shared.get('people_home.corridor_sec',                15))
         door_transit_window  = int(state.shared.get('people_home.door_transit_window_sec',     10))
@@ -184,10 +185,12 @@ def evaluate(event, state):
         transit_seq_window   = int(state.shared.get('people_home.transit_sequence_window_sec', 15))
         zone_sustained_sec   = int(state.shared.get('people_home.zone_sustained_sec',          30))
         main_door_min_open   = int(state.shared.get('people_home.main_door_min_open_sec',       3))
+        count_settle_sec     = int(state.shared.get('people_home.count_settle_sec',            60))
     except (TypeError, ValueError):
         corridor_sec, door_transit_window = 15, 10
         exit_quiet_window, transit_seq_window = 30, 15
         zone_sustained_sec, main_door_min_open = 30, 3
+        count_settle_sec = 60
 
     exterior_rooms  = set(DEFAULT_EXTERIOR_ROOMS)
     threshold_rooms = set(DEFAULT_THRESHOLD_ROOMS)
@@ -318,25 +321,48 @@ def evaluate(event, state):
                 state.shared['last_exited_via']    = f'{inferred_via} (inferred)'
             state.shared['last_transition_ts'] = _now_iso()
 
-    # ── 6. HIGH-WATER + Main Door reset ──
+    # ── 6. HIGH-WATER + Main Door reset + settle gate ──
     #
-    # Default behaviour: people_home = max(people_home, live_count) every tick.
+    # Default behaviour: people_home rises to live_count only after live_count
+    # has held *above* the current high-water for ≥ count_settle_sec. Filters
+    # transient peaks (e.g. one person walking room-to-room with a tail of
+    # sensor hold-off in the room they just left).
+    #
     # The Main Door close (after a ≥ min_open window) is the ONLY event that
-    # can DECREASE the count. Reset to live_count: whoever's actually inside
-    # right now is the new ground truth.
+    # can DECREASE the count, and it bypasses the settle gate — whoever's
+    # actually inside at the close moment IS who's inside.
     if main_door_was_open_long_enough or (inferred_transit == 'exit'):
-        # Reset to current sustained-zone count. This is the only legal
-        # decrease path.
         new_high_water = live_count
         state.shared['people_home'] = new_high_water
         state.shared['_people_last_reset_ts'] = _now_iso()
+        state.shared['_was_above_high_water'] = False  # clear settle tracking
     else:
         prev_high_water = state.shared.get('people_home')
         if prev_high_water is None:
             # First evaluation after boot — seed from current live count.
             new_high_water = live_count
+            state.shared['_was_above_high_water'] = False
         else:
-            new_high_water = max(int(prev_high_water), live_count)
+            cur = int(prev_high_water)
+            if live_count > cur:
+                # Live exceeds current high-water. Apply settle gate.
+                was_above = bool(state.shared.get('_was_above_high_water', False))
+                if not was_above:
+                    # Rising edge — start the settle timer, don't bump yet.
+                    state.set_timer('_count_above_high_water_since')
+                    state.shared['_was_above_high_water'] = True
+                    new_high_water = cur
+                elif state.get_timer('_count_above_high_water_since') >= count_settle_sec:
+                    # Held above high-water long enough — promote.
+                    new_high_water = live_count
+                    state.shared['_was_above_high_water'] = False
+                else:
+                    # Still inside settle window — wait it out.
+                    new_high_water = cur
+            else:
+                # Live not above high-water — no settle in progress.
+                new_high_water = cur
+                state.shared['_was_above_high_water'] = False
         state.shared['people_home'] = new_high_water
 
     # ── 7. Confidence ──

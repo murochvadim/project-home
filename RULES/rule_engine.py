@@ -86,6 +86,13 @@ KNOB_PATTERNS = [
      'people_home.transit_sequence_window_sec', 'sec'),
     (re.compile(r'people home:.*recount.*?' + _NUM_UNIT + r'.*main door', re.I),
      'people_home.door_close_stabilize_sec', 'sec'),
+    # People Home — high-water algorithm knobs (2026-05-13)
+    (re.compile(r'people home:.*zone\s+sustained.*?' + _NUM_UNIT, re.I),
+     'people_home.zone_sustained_sec', 'sec'),
+    (re.compile(r'people home:.*main\s+door\s+must\s+be\s+open.*?' + _NUM_UNIT + r'.*reset', re.I),
+     'people_home.main_door_min_open_sec', 'sec'),
+    (re.compile(r'people home:.*count\s+settle.*?' + _NUM_UNIT, re.I),
+     'people_home.count_settle_sec', 'sec'),
     # Mode Buttons knob
     (re.compile(r'mode buttons:.*default.*?cooldown.*?' + _NUM_UNIT, re.I),
      'mode_buttons.default_home_cooldown_sec', 'sec'),

@@ -177,9 +177,9 @@ Current virtual devices:
 
 Flow on every event:
 1. Build `sustained_zones` from `state.shared['active_zones']`: drop transit zones (doorways / walkways), drop zones owned by exterior / transit rooms (Corridor / Hallway), require each remaining zone to be continuously active ≥ `zone_sustained_sec` (default 30 s, 15 s flicker tolerance via `ZONE_GAP_TOLERANCE_SEC`).
-2. `live_count = len(sustained_zones)`.
-3. `people_home = max(people_home, live_count)` — monotonic up.
-4. **Only** decrease path: Main Door rising-edge close (open → closed) **after the door was open for ≥ `main_door_min_open_sec`** (default 3 s, filters accidental brief opens). On reset: `people_home = live_count`. Inferred Tier-1↔Tier-3 transit (Corridor / Ring Doorbell ↔ Entrance presence, within `transit_sequence_window_sec`) classified as `exit` triggers the same reset path — handles a dead Main Door sensor.
+2. **Per-room cap of 1:** group `sustained_zones` by owner room and count each room once → `counted_rooms`. `live_count = len(counted_rooms)`. Defends against overlapping FP2 zone polygons (a single person at a zone boundary registers in 2-3 zones simultaneously). Future opt-in `multi_target_rooms` knob (not yet implemented) will disable the cap for rooms with physically-disjoint zones.
+3. **Settle gate before high-water rises:** `people_home` only bumps to a higher value once `live_count` has stayed above the current high-water for ≥ `count_settle_sec` (default 60 s). Tracked via `_was_above_high_water` (bool) + `_count_above_high_water_since` (timer). Filters transient peaks (e.g. one person walking room-to-room — Balcony stays sustained during the hold-off tail while Living Room becomes sustained → live_count momentarily = 2 → without the settle gate, the high-water absorbs 2 and locks until the next door close). The gate makes the algorithm tolerant of normal movement while still catching genuine sustained 2-person scenarios.
+4. **Only** decrease path: Main Door rising-edge close (open → closed) **after the door was open for ≥ `main_door_min_open_sec`** (default 3 s, filters accidental brief opens). On reset: `people_home = live_count` (bypasses the settle gate — the door close re-establishes ground truth). `_was_above_high_water` cleared. Inferred Tier-1↔Tier-3 transit (Corridor / Ring Doorbell ↔ Entrance presence, within `transit_sequence_window_sec`) classified as `exit` triggers the same reset path — handles a dead Main Door sensor.
 
 The invariant **"the Main Door is the only way to leave the apartment"** is what justifies this design: between Main Door close events the count can ONLY grow (new sustained zones reveal previously-undetected occupants). On door close the apartment is sealed and the live count is, by definition, the ground truth.
 
@@ -192,10 +192,26 @@ Dashboard (`main-agent.html` + `main-agent.js`) shows a single **People** chip (
 Emitted People Home diagnostic fields (in addition to legacy fields):
 - `people_home` — the high-water count (what the dashboard reads)
 - `people_count_state` — `stable` | `transit` (drives `--` / N rendering, polled by main-agent.js every 5 s)
-- `people_count_live` — current sustained-zone count (pre-high-water, diagnostic)
-- `sustained_zones` — list of currently sustained zone names
+- `people_count_live` — current per-room count (pre-high-water, diagnostic — already passed through the per-room cap)
+- `sustained_zones` — list of currently sustained zone names (diagnostic; does NOT directly drive the count)
+- `counted_rooms` — rooms with at least one sustained zone (drives `live_count`)
 - `people_confidence` ∈ {`high`, `medium`, `low`, `transit`}
 - `last_transition_source` — `door_sensor` | `inferred_entry` | `inferred_exit`
+
+**People Home knobs — all sentence-controlled** (10 sentences in `r_people_home_knobs` container):
+
+| Knob | Default | Sentence |
+|---|---|---|
+| `people_home.corridor_sec` | 15 | `two rooms within 15 seconds of each other count as the same person` |
+| `people_home.adjacency_dedupe_sec` | 30 | `merge adjacent rooms within 30 seconds as one person` |
+| `people_home.away_after_no_motion_min` | 30 | `home mode becomes 'away' after 30 minutes with no motion` |
+| `people_home.door_transit_window_sec` | 10 | `a door opening followed by presence within 10 seconds counts as an entry` |
+| `people_home.exit_quiet_window_sec` | 30 | `a door opening followed by no motion for 30 seconds counts as an exit` |
+| `people_home.transit_sequence_window_sec` | 15 | `transit sequence window is 15 seconds` |
+| `people_home.zone_sustained_sec` | 30 | `zone sustained window is 30 seconds` (added 2026-05-13) |
+| `people_home.main_door_min_open_sec` | 3 | `main door must be open 3 seconds before reset` (added 2026-05-13) |
+| `people_home.count_settle_sec` | 60 | `count settle window is 60 seconds` (added 2026-05-13) |
+| `people_home.door_close_stabilize_sec` | 60 | `recount 60 seconds after Main Door closes` (legacy — not read by current rule; harmless) |
 
 **Auto-reload on spatial changes:** dashboard writes `_spatial_reload_request='pending'` to `rule_engine_state` on any `POST /api/room-layouts/:slug`, `POST/PATCH/DELETE /api/room-device-placements/...`. The rule-engine heartbeat detects the flag within ≤60s, calls `state.load_from_db()` (rebuilds spatial + devices), and clears the flag. No manual Reload needed after layout edits.
 
