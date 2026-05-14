@@ -55,6 +55,7 @@ void Action_Timer_1(void) {
       publishEspStatusNow();
       break;
 
+
     case STATE_BOTH_REQUEST:
       params.buzzer_flag         = ON;
       params.Total_Seq_Counter   = 0;
@@ -73,11 +74,12 @@ void Action_Timer_1(void) {
       break;
 
     case STATE_OPEN_BARRIER_GATE:
+      
       switch (params.sequence_state) {
         case SEQ_PULSE:
           if (params.Single_Pulse_Counter++ < BARRIER_PULSE_NUM) {
-            Barrier_Pulse();
-            Serial.print("\n Barrier Pulse...");
+            Gate_Pulse();
+            Serial.print("\n Gate Pulse...");
           } else {
             params.Delay_Btw_Counter = 0;
             params.sequence_state    = SEQ_DELAY_BTW;
@@ -97,15 +99,14 @@ void Action_Timer_1(void) {
             } else {
               command = "end-barrier";
               client_Moskuitto.publish(sensor_value_topic.c_str(), command, true);
-              params.machine_1_state    = STATE_IDLE;
-              params.gates_state        = "barrier_done";
-              params.barrier_progress   = 100;
+              params.machine_1_state  = STATE_IDLE;
+              params.gates_state      = "barrier_done";
+              params.barrier_progress = 100;
               publishEspStatusNow();
               publishEspEvent("state", "gates", "barrier", "done");
-              Serial.print("\n Finished BARRIER ONLY...");
-              // Immediately transition to idle and re-publish so the
-              // dashboard / panel clear the corner-label progress
-              // without waiting up to 60 s for the next heartbeat.
+              Serial.print("\n Finished BARRIER...");
+              // Immediately re-publish idle so the panel clears the
+              // corner overlay without waiting on the 60 s heartbeat.
               params.gates_state      = "idle";
               params.barrier_progress = -1;
               publishEspStatusNow();
