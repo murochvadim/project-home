@@ -803,6 +803,14 @@ class RuleEngine:
         'total_dispensed', 'espressos_today',
         # home gates (gates_01) — live progress for HASP/Awtrix/Pixoo display
         'gates_state', 'barrier_progress', 'gates_progress',
+        # face recognition (face_01) — Hi-Link TX-510 V1.00.0006.
+        # Trimmed to commands this firmware actually supports. last_recognition
+        # surfaces "<name> (id)" when name is set, else "user_<id>".
+        # pending_user_name is the name to assign on next register_user click.
+        'screen_state', 'module_state',
+        'last_recognition', 'last_recognition_ts',
+        'enrolled_count', 'pending_user_name', 'enrolment_mode',
+        'users',   # JSON array of {id, name} — rendered as Enrolled Users table on Params tab
     )
 
     def _update_esp_device_dps(self, board_id, status_payload):

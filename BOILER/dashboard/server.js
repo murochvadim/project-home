@@ -33,17 +33,83 @@ const db = new Pool({
 });
 
 // MQTT client for rule engine commands (test, reload).
-// MQTT_RULE_PASS MUST be set in .env — no hardcoded fallback so a
-// misconfigured env fails loudly instead of silently using a compromised
-// default credential that would otherwise be committed to the repo.
+// Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
+// silently retry "Not authorized" forever and every button click that publishes
+// MQTT will look like a success on the API but never reach the broker. We've
+// been bitten by this twice. If it's missing, abort startup with a clear
+// pointer to .env / ecosystem.config.js / pm2 restart so the cause is obvious
+// in pm2 logs instead of buried in mqtt retry noise.
 if (!process.env.MQTT_RULE_PASS) {
-  console.error('FATAL: MQTT_RULE_PASS not set in .env — rule-engine test/reload requires it');
+  console.error('FATAL: MQTT_RULE_PASS not set in environment.');
+  console.error('  Fix: ensure MQTT_RULE_PASS=<pass> is in BOILER/dashboard/.env,');
+  console.error('       then `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`');
+  console.error('       (`pm2 restart` caches old env — always delete + start).');
+  process.exit(1);
 }
-const mqttClient = mqtt.connect('mqtt://192.168.1.189:1883', {
-  username: 'rule_engine', password: process.env.MQTT_RULE_PASS,
-  clientId: 'dashboard-' + process.pid, reconnectPeriod: 5000,
-});
-mqttClient.on('error', (e) => console.error('MQTT error:', e.message));
+
+// MQTT client + auto-heal. Background — mqtt-js v5 has been observed to get
+// stuck in an "Not authorized" reconnect loop after a keepalive timeout (the
+// broker disconnects for inactivity, mqtt-js retries every 5 s but every
+// retry is rejected even though credentials never changed). Python paho
+// clients hitting the same broker never reproduce this. Auto-heal: after 3
+// consecutive auth failures (15 s), tear the stuck client down and create a
+// fresh one. Hard cap of one heal per 30 s prevents a runaway loop in the
+// (unlikely) case the credentials really ARE wrong.
+const MQTT_URL  = 'mqtt://192.168.1.189:1883';
+const MQTT_OPTS = {
+  username:        'rule_engine',
+  password:        process.env.MQTT_RULE_PASS,
+  clientId:        'dashboard-' + process.pid,
+  reconnectPeriod: 5000,
+};
+let mqttClient = null;
+let _mqttAuthFails  = 0;
+let _mqttHealing    = false;
+let _mqttLastHealAt = 0;
+
+function _attachMqttHandlers(c) {
+  c.on('error', (e) => {
+    const msg = e.message || String(e);
+    console.error('MQTT error:', msg);
+    if (!/Not authorized/i.test(msg)) return;
+    _mqttAuthFails++;
+    if (_mqttAuthFails === 3) {
+      console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.error('  MQTT broker rejected dashboard credentials 3 times in a row.');
+      console.error('  Likely cause #1 (transient): mqtt-js stuck after keepalive timeout — auto-healing.');
+      console.error('  Likely cause #2 (real bug):  MQTT_RULE_PASS no longer matches LXC 107.');
+      console.error('  Check #2 by running: ssh root@192.168.1.189 mosquitto_pub -u rule_engine -P "$PASS" -t test -m x');
+      console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    }
+    if (_mqttAuthFails >= 3) _maybeHeal();
+  });
+  c.on('connect', () => {
+    if (_mqttAuthFails > 0) console.log(`MQTT recovered after ${_mqttAuthFails} failed attempts`);
+    _mqttAuthFails = 0;
+    console.log('MQTT connected to 192.168.1.189:1883 as rule_engine');
+  });
+}
+
+function _maybeHeal() {
+  if (_mqttHealing) return;
+  const now = Date.now();
+  if (now - _mqttLastHealAt < 30000) return;   // throttle: at most one heal per 30 s
+  _mqttHealing    = true;
+  _mqttLastHealAt = now;
+  const stale = mqttClient;
+  console.error('MQTT auto-heal: ending stuck client + creating fresh one');
+  try { stale.removeAllListeners('error'); stale.removeAllListeners('connect'); } catch (e) {}
+  try { stale.end(true, {}, () => {}); } catch (e) {}
+  // setImmediate so the close completes before we make a new connection
+  setImmediate(() => {
+    mqttClient = mqtt.connect(MQTT_URL, MQTT_OPTS);
+    _attachMqttHandlers(mqttClient);
+    _mqttHealing = false;
+  });
+}
+
+mqttClient = mqtt.connect(MQTT_URL, MQTT_OPTS);
+_attachMqttHandlers(mqttClient);
 
 // HA config
 const HA_URL = 'http://192.168.1.110:8123';
@@ -2262,14 +2328,17 @@ app.post('/api/esp/boards/:id/command', async (req, res) => {
   try {
     const id = _espBoardId(req.params.id);
     const action = (req.body && req.body.action) ? String(req.body.action).trim() : '';
-    if (!action || !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(action)) {
-      return res.status(400).json({ error: 'invalid action key' });
-    }
+    // Allow optional ":<digits>" suffix so dispatchers like "delete_user:5"
+    // can be published. The base action key is what's validated against the
+    // board schema; the numeric payload is passed through unchanged.
+    const m = action.match(/^([a-zA-Z][a-zA-Z0-9_-]*)(?::([0-9]+))?$/);
+    if (!m) return res.status(400).json({ error: 'invalid action key' });
+    const baseAction = m[1];
     const r = await db.query(`SELECT board_schema FROM esp_boards WHERE id = $1`, [id]);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     const declared = (r.rows[0].board_schema?.actions || []).map(a => a.key);
-    if (!_ESP_BUILTIN_ACTIONS.has(action) && !declared.includes(action)) {
-      return res.status(400).json({ error: `action '${action}' not declared in board schema` });
+    if (!_ESP_BUILTIN_ACTIONS.has(baseAction) && !declared.includes(baseAction)) {
+      return res.status(400).json({ error: `action '${baseAction}' not declared in board schema` });
     }
     mqttClient.publish(`mur/home/esp/${id}/command`, action, { qos: 1 });
     res.json({ ok: true, published: `mur/home/esp/${id}/command`, action });
@@ -2330,8 +2399,11 @@ app.post('/api/esp/boards/:id/ota', espOtaUpload.single('firmware'), async (req,
     const { spawn } = require('child_process');
     // -t 30 raises espota's per-ack timeout from default 10 s → 30 s. Helps
     // on ESP32-C3 boards where BLE + WiFi share the radio and packets
-    // get dropped under contention.
-    const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', otaPassword, '-f', tmpPath, '-r', '-t', '30'];
+    // get dropped under contention. ESP8266 espota.py doesn't recognise
+    // the -t flag (only ESP32 espota.py supports it) so we omit it on
+    // ESP8266 to avoid an "option -t: no such option" failure.
+    const args = [otaPy, '-i', board.ip, '-p', otaPort, '-a', otaPassword, '-f', tmpPath, '-r'];
+    if (isEsp32) args.push('-t', '30');
     const child = spawn('python', args, { windowsHide: true });
 
     res.writeHead(200, {

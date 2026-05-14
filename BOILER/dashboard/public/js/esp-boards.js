@@ -69,6 +69,25 @@ const ACTION_GROUPS = [
   { id: 'pump',     label: 'Pump',          tab: 'simulation', keys: ['smell_start', 'smell_stop', 'smell_auto_start', 'smell_auto_stop'], statusFlag: 'pump_state',   statusLabel: 'Pump' },
   { id: 'coffee',   label: 'Coffee Machine', tab: 'simulation', keys: ['on', 'off', 'brew_espresso', 'brew_coffee', 'brew_2x_espresso', 'brew_2x_coffee', 'hot_water', 'cancel', 'standby'], statusFlag: 'power_state', statusLabel: 'Power' },
   { id: 'gates',    label: 'Gates',          tab: 'simulation', keys: ['open_barrier', 'open_both_gates'], statusFlag: 'gates_state', statusLabel: 'State', progressFields: [{ key: 'barrier_progress', label: 'Barrier' }, { key: 'gates_progress', label: 'Both Gates' }] },
+  // Face recognition (HLK-TX510 modules). Top buttons + live last_recognition
+  // + enrolled_count text labels. The id→name resolution happens on the ESP
+  // (local EEPROM table) because TX-510 firmware doesn't echo names back.
+  { id: 'recognition', label: 'Face Recognition', tab: 'simulation',
+    // delete_user intentionally NOT here — it's surfaced per-row in the Params
+    // tab's Users table, where the user ID is parameterized.
+    keys: ['start_recognition', 'register_user', 'reboot_fr_module'],
+    statusFields: [
+      { key: 'last_recognition', label: 'Last Recognized' },
+      { key: 'enrolled_count',   label: 'Enrolled Users' }
+    ]
+  },
+  // FR module display + flash light controls (DISPL / FLSH).
+  { id: 'face_controls', label: 'Face Module Controls', tab: 'simulation',
+    keys: ['screen_on', 'screen_off', 'flash_on', 'flash_off'],
+    statusFields: [
+      { key: 'screen_state', label: 'Screen' }
+    ]
+  },
 ];
 
 // ─── Load + render ─────────────────────────────────────────────────────
@@ -282,6 +301,19 @@ function renderActionGroup(b, group, opts = {}) {
          ${dotCell(online ? status[group.statusFlag] : null, '<span style="color:#c0392b;">ON</span>', '<span style="color:#888;">off</span>')}
        </div>`
     : '';
+  // Plain text status fields (e.g. last_recognition, enrolled_count). Each
+  // value gets a stable id so updateLiveStatusDom() can patch it in place
+  // when a /status arrives via the WebSocket subscriber.
+  const textStatusRows = (group.statusFields || []).map(sf => {
+    const raw = online && status[sf.key] !== undefined && status[sf.key] !== null
+      ? status[sf.key] : '';
+    const valTxt = (raw === '' ? '—' : String(raw));
+    const valId = `sfield-${b.id}-${sf.key}`;
+    return `<div style="margin-bottom:6px;font-size:0.85rem;display:grid;grid-template-columns:140px 1fr;gap:8px;align-items:center;">
+        <span><strong>${escHtml(sf.label)}:</strong></span>
+        <span id="${valId}" data-sfield-board="${escHtml(b.id)}" data-sfield-key="${escHtml(sf.key)}" style="color:#333;font-variant-numeric:tabular-nums;font-size:1.15rem;font-weight:600;">${escHtml(valTxt)}</span>
+      </div>`;
+  }).join('');
   // Progress-bar rows. Each `progressFields` entry expects an int 0..100
   // (or -1/null when idle). Bar fills proportionally; idle renders an
   // empty grey bar with "—" instead of a percent. IDs let the live MQTT
@@ -314,6 +346,7 @@ function renderActionGroup(b, group, opts = {}) {
     <div class="esp-card">
       <h3 class="esp-card-title">${escHtml(group.label)}</h3>
       ${statusRow}
+      ${textStatusRows}
       ${progressRows}
       <div class="actions-grid">${buttons}</div>
     </div>
@@ -354,7 +387,44 @@ function renderParams(b) {
       <span class="range">${range ? `range ${range}` : ''}</span>
     `;
   }
+  // Optional Enrolled Users table — rendered above the params form whenever
+  // the board publishes a `users` array in /status (FR boards do; others
+  // don't, so we silently skip the section if absent).
+  const users = Array.isArray(b.last_status?.users) ? b.last_status.users : null;
+  let usersTable = '';
+  if (users) {
+    const usersRows = users.length
+      ? users.map(u => `
+          <tr>
+            <td style="padding:4px 8px;font-variant-numeric:tabular-nums;">${escHtml(String(u.id))}</td>
+            <td style="padding:4px 8px;">${escHtml(String(u.name || ''))}</td>
+            <td style="padding:4px 8px;text-align:right;">
+              <button class="btn-delete-user destructive" data-user-id="${escHtml(String(u.id))}"
+                      style="padding:3px 10px;font-size:0.78rem;">🗑 Delete</button>
+            </td>
+          </tr>`).join('')
+      : `<tr><td colspan="3" style="padding:8px;color:#888;font-style:italic;">No users enrolled. Set <code>pending_user_name</code> below + click <code>Register User</code> in Simulation.</td></tr>`;
+    usersTable = `
+      <div style="margin-bottom:18px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <strong style="font-size:0.92rem;">Enrolled Users (${users.length})</strong>
+          <button class="btn-refresh-users" id="btn-refresh-users" style="padding:3px 10px;font-size:0.78rem;">↻ Refresh</button>
+          <span class="users-status" id="users-status" style="font-size:0.78rem;color:#666;"></span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;background:#fbf9f5;border:1px solid #e0dcd4;">
+          <thead style="background:#efeae0;">
+            <tr>
+              <th style="padding:5px 8px;text-align:left;width:60px;">ID</th>
+              <th style="padding:5px 8px;text-align:left;">Name</th>
+              <th style="padding:5px 8px;text-align:right;width:90px;">Action</th>
+            </tr>
+          </thead>
+          <tbody>${usersRows}</tbody>
+        </table>
+      </div>`;
+  }
   return `
+    ${usersTable}
     <div class="params-form">${rowsHtml}</div>
     <button class="btn-save-params" id="btn-save-params">Save Parameters</button>
     <span class="save-status" id="params-save-status"></span>
@@ -409,6 +479,50 @@ function wireParamsForm(board) {
       btn.disabled = false;
     }
   });
+
+  // Refresh button — dashboard-side only. Board auto-publishes /status on
+  // every register/delete + every 60 s, so DB is always within ~60 s. The
+  // button just pulls the latest from DB; no MQTT roundtrip needed.
+  const refreshBtn = document.getElementById('btn-refresh-users');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', async () => {
+      const status = document.getElementById('users-status');
+      status.textContent = 'Refreshing…';
+      try {
+        await loadBoards(true);
+        status.textContent = '✓';
+        setTimeout(() => { status.textContent = ''; }, 1500);
+      } catch (e) {
+        status.textContent = '✗ ' + e.message;
+      }
+    });
+  }
+  // Wire the per-row Delete buttons (only present when the board publishes
+  // a `users` array). Same /command endpoint as Simulation buttons; the
+  // delete payload carries the user ID as a `:N` suffix.
+  document.querySelectorAll('.btn-delete-user').forEach(el => {
+    el.addEventListener('click', async () => {
+      const id = el.dataset.userId;
+      const name = el.closest('tr').querySelector('td:nth-child(2)').textContent.trim();
+      if (!confirm(`Delete user ${id} (${name})? This removes the face data from the FR module + clears the local name.`)) return;
+      const status = document.getElementById('users-status');
+      status.textContent = `Deleting ${id}…`;
+      try {
+        const r = await fetch(`/api/esp/boards/${encodeURIComponent(board.id)}/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: `delete_user:${id}` }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        status.textContent = `✓ Deleted ${id}`;
+        // Board republishes /status after delete → refresh DB-backed view
+        setTimeout(() => loadBoards(true), 1500);
+      } catch (e) {
+        status.textContent = '✗ ' + e.message;
+      }
+    });
+  });
 }
 
 // ─── Sub-panel: Simulation (was Test) ──────────────────────────────────
@@ -421,11 +535,16 @@ function renderSimulation(b) {
     </div>`;
   }
   // Render every Simulation-tab group, then a fallback "Other" card for any
-  // schema actions not assigned to a group above.
+  // schema actions not assigned to a group above. Parameterized actions
+  // (those needing a `:N` suffix at runtime — e.g. `delete_user:5`) are
+  // surfaced via their own UI elsewhere and must NOT appear in "Other",
+  // because a bare click would publish `delete_user` (no id) which the
+  // board would silently drop as unknown.
+  const PARAMETERIZED_ACTIONS = new Set(['delete_user']);
   const groupedKeys = new Set();
   ACTION_GROUPS.forEach(g => g.keys.forEach(k => groupedKeys.add(k)));
   let html = ACTION_GROUPS.filter(g => g.tab === 'simulation').map(g => renderActionGroup(b, g)).join('');
-  const ungrouped = schemaActions.filter(a => !groupedKeys.has(a.key));
+  const ungrouped = schemaActions.filter(a => !groupedKeys.has(a.key) && !PARAMETERIZED_ACTIONS.has(a.key));
   if (ungrouped.length) {
     const buttons = ungrouped.map(a => {
       const cls = DESTRUCTIVE_ACTIONS.has(a.key) ? 'destructive' : '';
@@ -623,6 +742,13 @@ function updateLiveStatusDom(boardId, payloadStr) {
     fillEl.style.background = pct >= 0 ? '#3a7d44' : '#d0cbc4';
     const textEl = document.getElementById(`pbar-${boardId}-${key}-text`);
     if (textEl) textEl.textContent = pct >= 0 ? `${pct}%` : '—';
+  });
+  // Plain text status fields (last_recognition, screen_state, etc.).
+  document.querySelectorAll(`[data-sfield-board="${CSS.escape(boardId)}"]`).forEach(el => {
+    const key = el.getAttribute('data-sfield-key');
+    if (!key || st[key] === undefined) return;
+    const v = st[key];
+    el.textContent = (v === null || v === '' || v === undefined) ? '—' : String(v);
   });
 }
 
