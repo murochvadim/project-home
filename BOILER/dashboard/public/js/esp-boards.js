@@ -75,7 +75,9 @@ const ACTION_GROUPS = [
   { id: 'recognition', label: 'Face Recognition', tab: 'simulation',
     // delete_user intentionally NOT here — it's surfaced per-row in the Params
     // tab's Users table, where the user ID is parameterized.
-    keys: ['start_recognition', 'register_user', 'reboot_fr_module'],
+    // register_user intentionally NOT here — it's surfaced on the Params tab
+    // next to Save Parameters (natural flow: type name → Save → Register).
+    keys: ['start_recognition', 'reboot_fr_module'],
     statusFields: [
       { key: 'last_recognition', label: 'Last Recognized' },
       { key: 'enrolled_count',   label: 'Enrolled Users' }
@@ -403,7 +405,7 @@ function renderParams(b) {
                       style="padding:3px 10px;font-size:0.78rem;">🗑 Delete</button>
             </td>
           </tr>`).join('')
-      : `<tr><td colspan="3" style="padding:8px;color:#888;font-style:italic;">No users enrolled. Set <code>pending_user_name</code> below + click <code>Register User</code> in Simulation.</td></tr>`;
+      : `<tr><td colspan="3" style="padding:8px;color:#888;font-style:italic;">No users enrolled. Set <code>pending_user_name</code> below + click <code>▶ Register User</code>.</td></tr>`;
     usersTable = `
       <div style="margin-bottom:18px;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
@@ -423,10 +425,18 @@ function renderParams(b) {
         </table>
       </div>`;
   }
+  // If the board exposes `register_user` (Face Recognition boards do), render
+  // the button right next to Save Parameters — natural flow is type a name →
+  // Save → Register, all in the same form area instead of switching tabs.
+  const hasRegister = (b.schema?.actions || []).some(a => a.key === 'register_user');
+  const registerBtn = hasRegister
+    ? `<button class="btn-save-params" id="btn-register-user" style="margin-left:8px;background:#1565c0;border-color:#1565c0;">▶ Register User</button>`
+    : '';
   return `
     ${usersTable}
     <div class="params-form">${rowsHtml}</div>
     <button class="btn-save-params" id="btn-save-params">Save Parameters</button>
+    ${registerBtn}
     <span class="save-status" id="params-save-status"></span>
     <p style="margin-top:14px;font-size:0.78rem;color:#888;">
       Save publishes JSON to <code>mur/home/esp/${escHtml(b.id)}/config</code> — board reads it, updates its <code>EspParams</code> struct, and persists to EEPROM.
@@ -480,6 +490,36 @@ function wireParamsForm(board) {
     }
   });
 
+  // Register User button — sends `register_user` to the board's /command.
+  // Same dispatch path as the Simulation-tab equivalent; surfaced here next
+  // to Save Parameters so the natural flow (type name → Save → Register)
+  // stays in one place. Hidden when the board's schema doesn't declare the
+  // action (renderParams gates the button on schema.actions inclusion).
+  const regBtn = document.getElementById('btn-register-user');
+  if (regBtn) {
+    regBtn.addEventListener('click', async () => {
+      const status = document.getElementById('params-save-status');
+      status.className = 'save-status';
+      status.textContent = 'Sending register_user…';
+      regBtn.disabled = true;
+      try {
+        const r = await fetch(`/api/esp/boards/${encodeURIComponent(board.id)}/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'register_user' }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        status.className = 'save-status ok';
+        status.textContent = '✓ Sent — present face to camera';
+      } catch (e) {
+        status.className = 'save-status fail';
+        status.textContent = '✗ ' + e.message;
+      } finally {
+        regBtn.disabled = false;
+      }
+    });
+  }
   // Refresh button — dashboard-side only. Board auto-publishes /status on
   // every register/delete + every 60 s, so DB is always within ~60 s. The
   // button just pulls the latest from DB; no MQTT roundtrip needed.
@@ -535,16 +575,17 @@ function renderSimulation(b) {
     </div>`;
   }
   // Render every Simulation-tab group, then a fallback "Other" card for any
-  // schema actions not assigned to a group above. Parameterized actions
-  // (those needing a `:N` suffix at runtime — e.g. `delete_user:5`) are
-  // surfaced via their own UI elsewhere and must NOT appear in "Other",
-  // because a bare click would publish `delete_user` (no id) which the
-  // board would silently drop as unknown.
-  const PARAMETERIZED_ACTIONS = new Set(['delete_user']);
+  // schema actions not assigned to a group above. Some actions are surfaced
+  // via dedicated UI elsewhere and must NOT appear in "Other":
+  //  - `delete_user` needs a `:N` suffix at runtime — per-row Delete button
+  //    in the Params Users table provides the id
+  //  - `register_user` is surfaced next to Save Parameters on the Params tab
+  //    so the natural flow (type name → Save → Register) stays in one place
+  const SURFACED_ELSEWHERE = new Set(['delete_user', 'register_user']);
   const groupedKeys = new Set();
   ACTION_GROUPS.forEach(g => g.keys.forEach(k => groupedKeys.add(k)));
   let html = ACTION_GROUPS.filter(g => g.tab === 'simulation').map(g => renderActionGroup(b, g)).join('');
-  const ungrouped = schemaActions.filter(a => !groupedKeys.has(a.key) && !PARAMETERIZED_ACTIONS.has(a.key));
+  const ungrouped = schemaActions.filter(a => !groupedKeys.has(a.key) && !SURFACED_ELSEWHERE.has(a.key));
   if (ungrouped.length) {
     const buttons = ungrouped.map(a => {
       const cls = DESTRUCTIVE_ACTIONS.has(a.key) ? 'destructive' : '';
