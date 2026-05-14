@@ -52,21 +52,23 @@
     .rules-table .rule-desc { color:var(--text-muted); font-size:0.8rem; }
     .rules-table .rule-cat { font-size:0.75rem; color:var(--brand-blue); }
 
-    /* Corridor Simulator — manual trigger card styling */
-    .cs-sim-card  { border:1px solid #e0dcd4; background:#fbf9f5; padding:14px; border-radius:6px; display:flex; flex-direction:column; gap:8px; }
-    .cs-sim-title { font-weight:600; font-size:0.95rem; color:#333; }
-    .cs-sim-hint  { color:#777; font-size:0.78rem; line-height:1.4; min-height:2.8em; }
-    .cs-sim-hint code { background:#efeae0; padding:1px 4px; border-radius:3px; font-size:0.74rem; }
-    .cs-sim-row   { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:4px; }
-    .cs-sim-btn   { flex:1 1 0; min-width:0; padding:8px 10px; font-size:0.85rem; font-weight:600; border:none; border-radius:4px; color:#fff; cursor:pointer; transition:filter 0.15s; }
+    /* Corridor Simulator — per-device chain cards (state + actions in one card, single row, compact) */
+    .cs-dev-card  { border:1px solid #e0dcd4; background:#fbf9f5; padding:8px 10px; border-radius:4px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+    .cs-dev-title { font-weight:600; font-size:0.82rem; color:#333; }
+    .cs-dev-state { background:#fff; border:1px solid #e0dcd4; border-radius:3px; padding:5px 7px; font-size:0.82rem; line-height:1.3; }
+    .cs-dev-state .cs-state-line { display:flex; align-items:center; gap:4px; }
+    .cs-dev-state .cs-state-label { color:#777; font-size:0.7rem; min-width:54px; }
+    .cs-dev-state .cs-state-value { font-weight:600; }
+    .cs-dev-state .cs-state-age   { color:#888; font-size:0.68rem; margin-left:auto; }
+    .cs-sim-row   { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+    .cs-sim-btn   { flex:1 1 0; min-width:0; padding:5px 6px; font-size:0.74rem; font-weight:600; border:none; border-radius:3px; color:#fff; cursor:pointer; transition:filter 0.15s; }
     .cs-sim-btn:hover    { filter:brightness(1.1); }
     .cs-sim-btn:disabled { opacity:0.5; cursor:not-allowed; }
     .cs-sim-btn-green { background:#3a7d44; }
     .cs-sim-btn-grey  { background:#888; }
     .cs-sim-btn-blue  { background:#1565c0; }
     .cs-sim-btn-red   { background:#c0392b; }
-    .cs-sim-select    { padding:6px 8px; font-size:0.82rem; border:1px solid #ccc; border-radius:4px; background:#fff; max-width:120px; }
-    .cs-sim-result    { font-size:0.78rem; color:#666; min-height:1.2em; margin-top:auto; }
+    .cs-sim-result    { font-size:0.7rem; color:#666; min-height:1em; margin-top:auto; word-break:break-word; }
   </style>
 </head>
 <body>
@@ -250,19 +252,13 @@
        endpoints in server.js for the back-end. -->
   <div class="tab-panel" id="tab-corridor-sim">
     <div class="card">
-      <h2>Live State</h2>
-      <div id="cs-live-state" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;font-size:0.88rem;">
-        <div>Loading…</div>
-      </div>
-    </div>
+      <h2>Chain Devices <span style="font-size:0.78rem;color:#666;font-weight:normal;">(live state + manual triggers — click any button to publish, watch the chain react in Recent Events below)</span></h2>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;">
 
-    <div class="card">
-      <h2>Manual Simulation</h2>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;font-size:0.85rem;">
-
-        <div class="cs-sim-card">
-          <div class="cs-sim-title">① Corridor Presence</div>
-          <div class="cs-sim-hint">Publishes <code>{"1": &lt;bool&gt;}</code> to <code>mur/home/device/&lt;id&gt;/event</code> — Tuya adapter payload shape.</div>
+        <!-- ① Corridor Presence — Tuya local sensor, publishes presence events -->
+        <div class="cs-dev-card">
+          <div class="cs-dev-title">① Corridor Presence</div>
+          <div class="cs-dev-state" id="cs-state-presence">—</div>
           <div class="cs-sim-row">
             <button class="cs-sim-btn cs-sim-btn-green" id="cs-btn-presence-on">▶ Present</button>
             <button class="cs-sim-btn cs-sim-btn-grey"  id="cs-btn-presence-off">▶ Absent</button>
@@ -270,24 +266,52 @@
           <div class="cs-sim-result" id="cs-presence-result"></div>
         </div>
 
-        <div class="cs-sim-card">
-          <div class="cs-sim-title">② FR Recognition Result</div>
-          <div class="cs-sim-hint">Publishes to <code>mur/home/esp/face_01/event</code> as if the FR module just returned a result.</div>
+        <!-- ② Corridor Switch (light) — Tuya local switch, DPS 1 -->
+        <div class="cs-dev-card">
+          <div class="cs-dev-title">② Corridor Light</div>
+          <div class="cs-dev-state" id="cs-state-switch">—</div>
           <div class="cs-sim-row">
-            <select id="cs-fr-user" class="cs-sim-select"></select>
-            <button class="cs-sim-btn cs-sim-btn-blue" id="cs-btn-fr-identified">▶ Identified</button>
-            <button class="cs-sim-btn cs-sim-btn-red"  id="cs-btn-fr-unknown">▶ Unknown</button>
+            <button class="cs-sim-btn cs-sim-btn-green" id="cs-btn-light-on">▶ ON</button>
+            <button class="cs-sim-btn cs-sim-btn-grey"  id="cs-btn-light-off">▶ OFF</button>
+          </div>
+          <div class="cs-sim-result" id="cs-light-result"></div>
+        </div>
+
+        <!-- ③ Face Recognition — FR board: screen control + recognition triggers -->
+        <div class="cs-dev-card">
+          <div class="cs-dev-title">③ Face Recognition</div>
+          <div class="cs-dev-state" id="cs-state-fr">—</div>
+          <div class="cs-sim-row">
+            <button class="cs-sim-btn cs-sim-btn-green" id="cs-btn-screen-on">▶ Screen On</button>
+            <button class="cs-sim-btn cs-sim-btn-grey"  id="cs-btn-screen-off">▶ Screen Off</button>
+          </div>
+          <div class="cs-sim-row" id="cs-fr-buttons" style="margin-top:4px;">
+            <!-- per-user identified buttons + Unknown — rendered dynamically -->
           </div>
           <div class="cs-sim-result" id="cs-fr-result"></div>
         </div>
 
-        <div class="cs-sim-card">
-          <div class="cs-sim-title">③ Door Unlock (direct)</div>
-          <div class="cs-sim-hint">Bypasses the chain — fires RemoteXY's <code>open_doorlock</code> immediately. Useful for relay sanity-checks.</div>
+        <!-- ④ Door Lock (RemoteXY) — open_doorlock command + dry-run checkbox -->
+        <div class="cs-dev-card">
+          <div class="cs-dev-title">④ Door Lock</div>
+          <div class="cs-dev-state" id="cs-state-door">—</div>
           <div class="cs-sim-row">
             <button class="cs-sim-btn cs-sim-btn-green" id="cs-btn-door">▶ open_doorlock</button>
           </div>
+          <div style="margin-top:4px;font-size:0.74rem;color:#666;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;line-height:1.3;">
+              <input type="checkbox" id="cs-door-real" checked>
+              actually pulse (uncheck for dry-run)
+            </label>
+          </div>
           <div class="cs-sim-result" id="cs-door-result"></div>
+        </div>
+
+        <!-- ⑤ Pixoo64 — display-only. Shows current preset name pushed by rule_engine. -->
+        <div class="cs-dev-card">
+          <div class="cs-dev-title">⑤ Pixoo64</div>
+          <div class="cs-dev-state" id="cs-state-pixoo">—</div>
+          <div style="font-size:0.74rem;color:#888;margin-top:auto;">display-only — current preset on the LED matrix</div>
         </div>
 
       </div>
@@ -324,6 +348,6 @@
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=8"></script>
 <script src="js/device-picker.js?v=11"></script>
-<script src="js/main-agent.js?v=48"></script>
+<script src="js/main-agent.js?v=55"></script>
 </body>
 </html>

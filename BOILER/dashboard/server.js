@@ -1508,6 +1508,60 @@ const CORRIDOR_SIM_IDS = {
   remotexy:   'remoteXY_01',
 };
 
+// ─── Pixoo64 device-direct state (channel + brightness + power) ────────
+// pixoo_service tracks what WE pushed, but doesn't know if the user pressed
+// the physical button to switch to Cloud / Visualizer / Faces. The Pixoo
+// device's own HTTP API does. Cached 5 s — dashboard polls every 1 s, so
+// 1 device call per 5 s in the worst case. ~100 ms response time.
+const PIXOO_HTTP_URL    = 'http://192.168.1.243:80/post';
+const PIXOO_CACHE_MS    = 5000;
+const PIXOO_CHANNEL_NAMES = {
+  0: 'Faces (clock)',
+  1: 'Cloud',
+  2: 'Visualizer (sound)',
+  3: 'Custom scene',
+  4: 'Drawing (custom)',
+};
+let _pixooDeviceCache = { ts: 0, data: null };
+
+async function _fetchPixooDevice() {
+  const now = Date.now();
+  if (_pixooDeviceCache.data && now - _pixooDeviceCache.ts < PIXOO_CACHE_MS) {
+    return _pixooDeviceCache.data;
+  }
+  try {
+    const [idxR, confR] = await Promise.all([
+      fetch(PIXOO_HTTP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ Command: 'Channel/GetIndex' }),
+        signal: AbortSignal.timeout(3000),
+      }).then(r => r.json()),
+      fetch(PIXOO_HTTP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ Command: 'Channel/GetAllConf' }),
+        signal: AbortSignal.timeout(3000),
+      }).then(r => r.json()),
+    ]);
+    const channel_idx  = (idxR && typeof idxR.SelectIndex === 'number') ? idxR.SelectIndex : null;
+    const channel_name = channel_idx != null ? (PIXOO_CHANNEL_NAMES[channel_idx] || `channel ${channel_idx}`) : null;
+    const data = {
+      channel_idx,
+      channel_name,
+      brightness:  confR && typeof confR.Brightness === 'number' ? confR.Brightness : null,
+      power_on:    confR && confR.LightSwitch === 1,
+      cur_clock_id: confR ? confR.CurClockId : null,
+    };
+    _pixooDeviceCache = { ts: now, data };
+    return data;
+  } catch (e) {
+    // Pixoo offline / unreachable — return stale cache if we have one,
+    // otherwise null. Don't update the cache timestamp so we retry next call.
+    return _pixooDeviceCache.data;
+  }
+}
+
 // ─── Server-side MQTT ring buffer for the Corridor Simulator ────────────
 // We tried browser-side WS subscription first — turned out hard for the user
 // to verify (browser tab churn dropped messages, ACL pattern mismatches were
@@ -1582,11 +1636,49 @@ app.get('/api/corridor-sim/state', async (_req, res) => {
     //    captured live by the mqttClient subscription above — covers every
     //    /event /state /status /command for the 4 chain devices regardless
     //    of whether it landed in device_events).
+    // 4) Pixoo currently-displayed content + mode. Single source of truth:
+    //    pixoo_service writes _pixoo_screen on every render — both for
+    //    pushed presets ('screen' = 'preset:<name>') and rotation ticks
+    //    ('screen' = 'clock' / 'weather' / etc). The dashboard parses the
+    //    prefix to display the preset name when one's playing.
+    //    `paused` tells the dashboard whether the rotation is locked
+    //    (paused = pinned to a manual preset) or actively cycling.
+    // Read pixoo state from DB (preset/screen + paused flag) AND from the
+    // Pixoo device's HTTP API (current channel + brightness + power) in
+    // parallel. The two sources serve different questions: DB tells what
+    // we pushed; device tells what's actually on the matrix right now
+    // (covers the case where the user pressed the physical button to
+    // switch to Cloud / Visualizer / Faces).
+    const [pixR, pixDevice] = await Promise.all([
+      db.query(
+        `SELECT key, value, EXTRACT(EPOCH FROM (now() - updated_at))::int AS age_sec
+         FROM rule_engine_state WHERE key IN ('_pixoo_screen','_pixoo_paused')`
+      ).catch(() => ({ rows: [] })),
+      _fetchPixooDevice(),
+    ]);
+    let pixoo = null;
+    if (pixR.rows.length || pixDevice) {
+      const byKey = Object.fromEntries((pixR.rows || []).map(r => [r.key, r]));
+      const screenRow = byKey._pixoo_screen;
+      const pausedRow = byKey._pixoo_paused;
+      const v = (screenRow && screenRow.value) || {};
+      pixoo = {
+        screen:       v.screen || null,
+        ts:           v.ts || null,
+        age_sec:      screenRow ? screenRow.age_sec : null,
+        paused:       pausedRow ? (pausedRow.value === true || pausedRow.value === 'true') : false,
+        channel_idx:  pixDevice ? pixDevice.channel_idx : null,
+        channel_name: pixDevice ? pixDevice.channel_name : null,
+        brightness:   pixDevice ? pixDevice.brightness : null,
+        power_on:     pixDevice ? pixDevice.power_on : null,
+      };
+    }
     res.json({
       presence:   byId[CORRIDOR_SIM_IDS.presence]    || null,
       cor_switch: byId[CORRIDOR_SIM_IDS.cor_switch]  || null,
       fr:         { device: byId[CORRIDOR_SIM_IDS.fr] || null, board: boards[CORRIDOR_SIM_IDS.fr] || null },
       remotexy:   { device: byId[CORRIDOR_SIM_IDS.remotexy] || null, board: boards[CORRIDOR_SIM_IDS.remotexy] || null },
+      pixoo:      pixoo,             // {screen, ts, age_sec} or null
       events:     _corridorSimBuffer.slice(),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }

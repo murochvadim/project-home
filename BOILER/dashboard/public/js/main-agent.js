@@ -1160,6 +1160,11 @@
     return { name: topic, suffix: '', color: '#888' };
   }
 
+  // Update only the .cs-dev-state innerHTML in each device card per poll.
+  // Buttons + result text + checkbox are stable — only the state line in
+  // each card rerenders. This preserves typed/clicked widgets across polls
+  // (e.g. the "actually pulse the relay" checkbox state, in-flight result
+  // messages like "Sending…").
   function renderLiveState(s) {
     const presPresent = !!(s.presence && s.presence.last_state
       && (s.presence.last_state['1'] === true || s.presence.last_state['1'] === 'true' || s.presence.last_state['1'] === 'presence'));
@@ -1171,19 +1176,61 @@
     const rxStatus    = (s.remotexy.board && s.remotexy.board.last_status) || {};
     const doorRelay   = rxStatus.door_relay === true || rxStatus.door_relay === 'true';
 
-    const cell = (title, content, age) => `
-      <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:10px;border-radius:4px;">
-        <div style="font-size:0.74rem;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">${escH(title)}</div>
-        <div style="font-size:1.05rem;font-weight:600;">${content}</div>
-        <div style="font-size:0.74rem;color:#888;margin-top:4px;">${age != null ? ageBadge(age) : '—'}</div>
+    const stateLine = (label, content, age) => `
+      <div class="cs-state-line">
+        <span class="cs-state-label">${escH(label)}</span>
+        <span class="cs-state-value">${content}</span>
+        <span class="cs-state-age">${age != null ? ageBadge(age) : '—'}</span>
       </div>`;
 
-    document.getElementById('cs-live-state').innerHTML =
-      cell('Corridor Presence',         `${dot(presPresent)} ${presPresent ? 'present' : 'idle'}`, s.presence ? s.presence.age_sec : null)
-      + cell('Corridor Switch (light)', `${dot(switchOn)} ${switchOn ? 'ON' : 'off'}`,             s.cor_switch ? s.cor_switch.age_sec : null)
-      + cell('FR camera screen',        `${dot(screenOn)} ${screenOn ? 'on' : 'off'}`,             s.fr.board ? s.fr.board.age_sec : null)
-      + cell('FR last recognition',     escH(lastRecog),                                            s.fr.board ? s.fr.board.age_sec : null)
-      + cell('RemoteXY door relay',     `${dot(doorRelay)} ${doorRelay ? 'PULSING' : 'idle'}`,     s.remotexy.board ? s.remotexy.board.age_sec : null);
+    document.getElementById('cs-state-presence').innerHTML =
+      stateLine('Presence', `${dot(presPresent)} ${presPresent ? 'present' : 'idle'}`, s.presence ? s.presence.age_sec : null);
+
+    document.getElementById('cs-state-switch').innerHTML =
+      stateLine('Light',    `${dot(switchOn)} ${switchOn ? 'ON' : 'off'}`,             s.cor_switch ? s.cor_switch.age_sec : null);
+
+    // FR card has TWO state lines: screen + last recognition
+    document.getElementById('cs-state-fr').innerHTML =
+      stateLine('Screen',   `${dot(screenOn)} ${screenOn ? 'on' : 'off'}`,             s.fr.board ? s.fr.board.age_sec : null)
+      + stateLine('Last',   escH(lastRecog),                                            s.fr.board ? s.fr.board.age_sec : null);
+
+    document.getElementById('cs-state-door').innerHTML =
+      stateLine('Relay',    `${dot(doorRelay)} ${doorRelay ? 'PULSING' : 'idle'}`,     s.remotexy.board ? s.remotexy.board.age_sec : null);
+
+    // Pixoo — two state lines:
+    //   1. ONE of: Preset name (when Pixoo's drawing channel is showing
+    //      a preset we pushed) OR the channel name (when user switched
+    //      the Pixoo to Cloud / Faces / Sound / Custom Scene via the
+    //      physical button, bypassing what we pushed). The drawing
+    //      channel is 4 — anything else means the matrix isn't showing
+    //      our preset right now.
+    //   2. Bright — brightness % + power indicator (LightSwitch).
+    const pix = s.pixoo;
+    const onDrawingChannel = pix && pix.channel_idx === 4;
+    let label = '—', value = '—', ageSec = null;
+    if (pix) {
+      if (onDrawingChannel && pix.screen) {
+        // Our pushed content is actually live on the matrix
+        if (pix.screen.startsWith('preset:')) {
+          label = 'Preset';
+          value = pix.screen.slice('preset:'.length);
+        } else {
+          label = 'Screen';
+          value = pix.screen;
+        }
+        ageSec = pix.age_sec;
+      } else if (pix.channel_name) {
+        // User switched the Pixoo to a built-in channel (or device is off)
+        label = 'Channel';
+        value = pix.channel_name;
+      }
+    }
+    const brightVal = pix && pix.brightness != null
+      ? `${pix.power_on ? '<span style="color:#3a7d44;">●</span>' : '<span style="color:#888;">○</span>'} ${pix.brightness}%`
+      : '—';
+    document.getElementById('cs-state-pixoo').innerHTML =
+      stateLine(label, escH(value), ageSec)
+      + stateLine('Bright', brightVal, null);
   }
 
   function renderEvents(events) {
@@ -1204,16 +1251,36 @@
     }).join('');
   }
 
+  // Render one button per enrolled user + a single Unknown button. Buttons
+  // are dynamic from face_01.last_status.users; if no users are enrolled
+  // yet, falls back to a single "user_0" placeholder. Dataset sig avoids
+  // re-rendering the row on every poll (which would kill click events
+  // mid-handler and reset focus styling).
   function renderFrUserPicker(frUsers) {
-    const sel = document.getElementById('cs-fr-user');
-    if (!sel) return;
-    const list = Array.isArray(frUsers) && frUsers.length ? frUsers : [{ id: 0, name: 'muroch' }];
+    const host = document.getElementById('cs-fr-buttons');
+    if (!host) return;
+    const list = Array.isArray(frUsers) && frUsers.length ? frUsers : [{ id: 0, name: 'user_0' }];
     const sig = list.map(u => `${u.id}|${u.name}`).join(',');
-    if (sel.dataset.sig === sig) return;
-    sel.dataset.sig = sig;
-    sel.innerHTML = list.map(u =>
-      `<option value="${escH(u.id)}|${escH(u.name)}">user ${escH(u.id)} · ${escH(u.name)}</option>`
+    if (host.dataset.sig === sig) return;
+    host.dataset.sig = sig;
+    const userBtns = list.map(u =>
+      `<button class="cs-sim-btn cs-sim-btn-blue" data-fr-user-id="${escH(u.id)}" data-fr-user-name="${escH(u.name)}">▶ ${escH(u.name)}</button>`
     ).join('');
+    host.innerHTML = userBtns + `<button class="cs-sim-btn cs-sim-btn-red" id="cs-btn-fr-unknown">▶ Unknown</button>`;
+    // Wire the freshly-rendered buttons. Per-user buttons share one handler
+    // via the data-fr-user-* attributes.
+    host.querySelectorAll('[data-fr-user-id]').forEach(btn => {
+      btn.onclick = () => {
+        const uid  = btn.dataset.frUserId;
+        const name = btn.dataset.frUserName;
+        trigger('/api/corridor-sim/trigger-fr-event',
+          { kind: 'face_identified', user_id: Number.parseInt(uid, 10), user_name: name },
+          'cs-fr-result',
+          `published face_identified ${name}`);
+      };
+    });
+    document.getElementById('cs-btn-fr-unknown').onclick = () =>
+      trigger('/api/corridor-sim/trigger-fr-event', { kind: 'face_unknown', reason: 'no_match' }, 'cs-fr-result', 'published face_unknown');
   }
 
   function setStatus(text, color) {
@@ -1269,18 +1336,40 @@
       trigger('/api/corridor-sim/trigger-presence', { value: true  }, 'cs-presence-result', 'published "present"');
     document.getElementById('cs-btn-presence-off').onclick = () =>
       trigger('/api/corridor-sim/trigger-presence', { value: false }, 'cs-presence-result', 'published "absent"');
-    document.getElementById('cs-btn-fr-identified').onclick = () => {
-      const v = document.getElementById('cs-fr-user').value || '0|';
-      const [uid, name] = v.split('|');
-      trigger('/api/corridor-sim/trigger-fr-event',
-        { kind: 'face_identified', user_id: Number.parseInt(uid, 10), user_name: name },
-        'cs-fr-result',
-        `published face_identified ${name}`);
+
+    // FR result buttons are wired inside renderFrUserPicker (rendered
+    // dynamically per enrolled user), not here.
+
+    // FR Screen on/off — real commands to the FR board's /command topic.
+    // The board responds with /event ack + /status update reflecting the
+    // new screen_state, both visible in Recent Events.
+    document.getElementById('cs-btn-screen-on').onclick = () =>
+      trigger(`/api/esp/boards/${FR_ID}/command`, { action: 'screen_on' },  'cs-fr-result', 'screen_on sent');
+    document.getElementById('cs-btn-screen-off').onclick = () =>
+      trigger(`/api/esp/boards/${FR_ID}/command`, { action: 'screen_off' }, 'cs-fr-result', 'screen_off sent');
+
+    // Corridor Switch on/off — real HA toggle (no separate "simulator"
+    // shape needed since the switch is a normal device, not a sensor we
+    // need to fake events for). Result is the same as clicking it on the
+    // Devices page.
+    document.getElementById('cs-btn-light-on').onclick = () =>
+      trigger(`/api/devices/${COR_SWITCH_ID}/toggle`, { state: true,  channel: '1' }, 'cs-light-result', 'light ON');
+    document.getElementById('cs-btn-light-off').onclick = () =>
+      trigger(`/api/devices/${COR_SWITCH_ID}/toggle`, { state: false, channel: '1' }, 'cs-light-result', 'light OFF');
+
+    document.getElementById('cs-btn-door').onclick = () => {
+      const reallyFire = document.getElementById('cs-door-real').checked;
+      if (reallyFire) {
+        trigger(`/api/esp/boards/${REMOTEXY_ID}/command`, { action: 'open_doorlock' }, 'cs-door-result', 'open_doorlock sent — relay pulsing');
+      } else {
+        // Dry-run — DON'T publish to MQTT (relay stays put). Just show in UI
+        // that we would have fired. No ring-buffer entry either — the whole
+        // point of dry-run is no broker activity.
+        const el = document.getElementById('cs-door-result');
+        el.style.color = '#e67e22';
+        el.textContent = '⊘ dry-run: would have published open_doorlock — relay NOT pulsed';
+      }
     };
-    document.getElementById('cs-btn-fr-unknown').onclick = () =>
-      trigger('/api/corridor-sim/trigger-fr-event', { kind: 'face_unknown', reason: 'no_match' }, 'cs-fr-result', 'published face_unknown');
-    document.getElementById('cs-btn-door').onclick = () =>
-      trigger(`/api/esp/boards/${REMOTEXY_ID}/command`, { action: 'open_doorlock' }, 'cs-door-result', 'open_doorlock sent');
 
     const stopBtn  = document.getElementById('cs-events-stop');
     const startBtn = document.getElementById('cs-events-start');

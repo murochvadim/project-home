@@ -545,13 +545,16 @@ async function pixooPushPreset(id) {
     const presets = await fetch('/api/pixoo/presets').then(r => r.json());
     const preset = presets.find(p => p.id === id);
     if (!preset) return;
-    const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
-    const items = Array.isArray(content) ? content : (content.items || []);
-    const pixels = content.pixels || {};
-    const r = await fetch('/api/pixoo/push-items', {
+    // Route via /command (named preset push) instead of /push-items
+    // (raw item push). Difference matters: /command goes through
+    // pixoo_service._render_preset which publishes 'preset:<name>' to
+    // _pixoo_screen — keeps any "currently playing" dashboard cards in
+    // sync. /push-items publishes just 'animation' for GIF presets and
+    // the name is lost downstream.
+    const r = await fetch('/api/pixoo/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, pixels, image: preset.image_data }),
+      body: JSON.stringify({ action: 'push_preset', preset_name: preset.name, vars: {} }),
     });
     if (r.ok) { label.textContent = 'Pushed: ' + preset.name; label.style.color = '#27ae60'; }
     else { label.textContent = 'Push failed'; label.style.color = '#c0392b'; }

@@ -820,9 +820,12 @@ class PixooService:
 
         self._paused = True
 
-        # Save preview + screen info
+        # Save preview + screen info. Always include the preset name —
+        # previously animation GIFs were published as just 'animation' and
+        # the preset name was lost, which left dashboard "currently playing"
+        # cards stale when an animated preset (e.g. Daily_Welcome) was up.
         self._screen_items = items
-        screen_type = 'animation' if is_animation else 'preset:' + preset_name
+        screen_type = 'preset:' + preset_name
         self._publish_screen_info(screen_type)
         try:
             from PIL import Image as _PILImg
