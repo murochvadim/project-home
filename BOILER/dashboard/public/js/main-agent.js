@@ -36,6 +36,11 @@
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     document.getElementById('tab-' + id).classList.add('active');
     btn.classList.add('active');
+    // Start the Corridor Simulator polling loop when its tab is first activated.
+    // Cheap to call repeatedly — the loop guards against double-starting.
+    if (id === 'corridor-sim' && typeof window.corridorSim_start === 'function') {
+      window.corridorSim_start();
+    }
   };
 
   // Toggle rule enable/disable
@@ -1094,4 +1099,204 @@
   }
 
   window.addEventListener('DOMContentLoaded', brsLoad);
+})();
+
+// ─── Corridor Simulator tab ────────────────────────────────────────────
+// Monitor (Live State + Pixoo + Recent Events) + trigger buttons that
+// publish to the same MQTT topics real devices publish to. Polling-based,
+// starts on first activation of the tab — no work done while the user is
+// on Rules / Home Activity / Base Rule Settings.
+(function () {
+  let started     = false;
+  let pollTimer   = null;
+  const POLL_MS   = 2000;
+
+  // 4 devices in the chain. IDs match CORRIDOR_SIM_IDS on the server.
+  const PRESENCE_ID   = 'bfbdca138cb1c78c3dlbmc';
+  const COR_SWITCH_ID = 'bfe47a84d7cb783f59inot';
+  const FR_ID         = 'face_01';
+  const REMOTEXY_ID   = 'remoteXY_01';
+
+  function ageBadge(secs) {
+    if (secs == null) return '<span style="color:#888;">—</span>';
+    if (secs < 60)   return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+    return `${Math.floor(secs / 3600)}h ago`;
+  }
+
+  function dot(active) {
+    return active
+      ? '<span style="color:#3a7d44;">●</span>'
+      : '<span style="color:#888;">○</span>';
+  }
+
+  function escH(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function renderLiveState(s) {
+    const presPresent = !!(s.presence && s.presence.last_state && (s.presence.last_state['1'] === true || s.presence.last_state['1'] === 'true'));
+    const switchOn    = !!(s.cor_switch && s.cor_switch.last_state && (s.cor_switch.last_state['1'] === true || s.cor_switch.last_state['1'] === 'true'));
+    const frStatus    = (s.fr.board && s.fr.board.last_status) || {};
+    const screenOn    = frStatus.screen_state === 'on';
+    const lastRecog   = frStatus.last_recognition || '—';
+    const rxStatus    = (s.remotexy.board && s.remotexy.board.last_status) || {};
+    const doorRelay   = rxStatus.door_relay === true || rxStatus.door_relay === 'true';
+
+    const cell = (title, content, age) => `
+      <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:10px;border-radius:4px;">
+        <div style="font-size:0.74rem;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">${escH(title)}</div>
+        <div style="font-size:1.05rem;font-weight:600;">${content}</div>
+        <div style="font-size:0.74rem;color:#888;margin-top:4px;">${age != null ? ageBadge(age) : '—'}</div>
+      </div>`;
+
+    document.getElementById('cs-live-state').innerHTML =
+      cell('Corridor Presence', `${dot(presPresent)} ${presPresent ? 'present' : 'idle'}`,
+           s.presence ? s.presence.age_sec : null)
+      + cell('Corridor Switch (light)', `${dot(switchOn)} ${switchOn ? 'ON' : 'off'}`,
+           s.cor_switch ? s.cor_switch.age_sec : null)
+      + cell('FR camera screen', `${dot(screenOn)} ${screenOn ? 'on' : 'off'}`,
+           s.fr.board ? s.fr.board.age_sec : null)
+      + cell('FR last recognition', escH(lastRecog),
+           s.fr.board ? s.fr.board.age_sec : null)
+      + cell('RemoteXY door relay', `${dot(doorRelay)} ${doorRelay ? 'PULSING' : 'idle'}`,
+           s.remotexy.board ? s.remotexy.board.age_sec : null);
+  }
+
+  function renderPixoo(p) {
+    const img = document.getElementById('cs-pixoo-preview');
+    img.src = p.preview || '';
+    const meta = document.getElementById('cs-pixoo-meta');
+    const items = (p.screen && Array.isArray(p.screen.items)) ? p.screen.items : [];
+    meta.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`
+      + (p.paused ? ' · paused' : '')
+      + (p.screen && p.screen.ts ? ' · ' + new Date(p.screen.ts).toLocaleTimeString() : '');
+    const tbody = document.querySelector('#cs-pixoo-items tbody');
+    if (!items.length) {
+      tbody.innerHTML = `<tr><td colspan="3" style="padding:6px;color:#888;">No items rendered</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = items.map(it => {
+      const r = it.r != null ? it.r : 0, g = it.g != null ? it.g : 0, b = it.b != null ? it.b : 0;
+      return `<tr>
+        <td style="padding:4px 8px;">${escH(it.t || '')}</td>
+        <td style="padding:4px 8px;text-align:right;font-variant-numeric:tabular-nums;">${it.x},${it.y}</td>
+        <td style="padding:4px 8px;text-align:right;">
+          <span style="display:inline-block;width:12px;height:12px;background:rgb(${r},${g},${b});border:1px solid #ccc;vertical-align:middle;"></span>
+          <span style="font-size:0.74rem;color:#666;margin-left:4px;">rgb(${r},${g},${b})</span>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function renderEvents(events) {
+    const tbody = document.querySelector('#cs-events tbody');
+    if (!events || !events.length) {
+      tbody.innerHTML = `<tr><td colspan="4" style="padding:6px;color:#888;">No events yet</td></tr>`;
+      return;
+    }
+    const nameOf = (id) => {
+      if (id === PRESENCE_ID)   return 'Corridor Presence';
+      if (id === COR_SWITCH_ID) return 'Corridor Switch';
+      if (id === FR_ID)         return 'Face Recognition';
+      if (id === REMOTEXY_ID)   return 'RemoteXY';
+      return id;
+    };
+    tbody.innerHTML = events.map(e => {
+      const dpsStr = e.dps && typeof e.dps === 'object'
+        ? JSON.stringify(e.dps)
+        : String(e.dps || '');
+      return `<tr>
+        <td style="padding:4px 8px;font-variant-numeric:tabular-nums;">${new Date(e.ts).toLocaleTimeString()}</td>
+        <td style="padding:4px 8px;">${escH(nameOf(e.device_id))}</td>
+        <td style="padding:4px 8px;color:#555;">${escH(e.source)}</td>
+        <td style="padding:4px 8px;font-family:monospace;font-size:0.78rem;color:#333;">${escH(dpsStr)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Populate the face-event "user" dropdown from face_01.last_status.users.
+  // If empty, fall back to a literal "user 0 · muroch" entry so the picker
+  // is never empty (covers the case where no one's enrolled yet).
+  function renderFrUserPicker(frUsers) {
+    const sel = document.getElementById('cs-fr-user');
+    const list = Array.isArray(frUsers) && frUsers.length
+      ? frUsers
+      : [{ id: 0, name: 'muroch' }];
+    sel.innerHTML = list.map(u =>
+      `<option value="${escH(u.id)}|${escH(u.name)}">user ${escH(u.id)} · ${escH(u.name)}</option>`
+    ).join('');
+  }
+
+  async function loadState() {
+    try {
+      const r = await fetch('/api/corridor-sim/state');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const s = await r.json();
+      renderLiveState(s);
+      renderPixoo(s.pixoo || {});
+      renderEvents(s.events || []);
+      const frUsers = s.fr && s.fr.board && s.fr.board.last_status && s.fr.board.last_status.users;
+      renderFrUserPicker(frUsers);
+    } catch (e) {
+      // Don't spam — just log once per failure
+      console.warn('corridor-sim state load failed:', e.message);
+    }
+  }
+
+  // Trigger helpers — each shows a one-line result message under its button.
+  async function trigger(url, body, resultId, successText) {
+    const el = document.getElementById(resultId);
+    el.style.color = '#666';
+    el.textContent = 'Sending…';
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      el.style.color = '#3a7d44';
+      el.textContent = '✓ ' + successText;
+      // Refresh state quickly so the user sees their action's effect
+      setTimeout(loadState, 500);
+    } catch (e) {
+      el.style.color = '#c0392b';
+      el.textContent = '✗ ' + e.message;
+    }
+  }
+
+  function wireButtons() {
+    document.getElementById('cs-btn-presence-on').onclick = () =>
+      trigger('/api/corridor-sim/trigger-presence', { value: true  }, 'cs-presence-result', 'published "present"');
+    document.getElementById('cs-btn-presence-off').onclick = () =>
+      trigger('/api/corridor-sim/trigger-presence', { value: false }, 'cs-presence-result', 'published "absent"');
+    document.getElementById('cs-btn-fr-identified').onclick = () => {
+      const v = document.getElementById('cs-fr-user').value || '0|';
+      const [uid, name] = v.split('|');
+      trigger('/api/corridor-sim/trigger-fr-event',
+        { kind: 'face_identified', user_id: Number.parseInt(uid, 10), user_name: name },
+        'cs-fr-result',
+        `published face_identified ${name}`);
+    };
+    document.getElementById('cs-btn-fr-unknown').onclick = () =>
+      trigger('/api/corridor-sim/trigger-fr-event', { kind: 'face_unknown', reason: 'no_match' }, 'cs-fr-result', 'published face_unknown');
+    document.getElementById('cs-btn-door').onclick = () =>
+      trigger(`/api/esp/boards/${REMOTEXY_ID}/command`, { action: 'open_doorlock' }, 'cs-door-result', 'open_doorlock sent');
+    document.getElementById('cs-btn-light-on').onclick = () =>
+      trigger(`/api/devices/${COR_SWITCH_ID}/toggle`, { state: true,  channel: '1' }, 'cs-light-result', 'light ON');
+    document.getElementById('cs-btn-light-off').onclick = () =>
+      trigger(`/api/devices/${COR_SWITCH_ID}/toggle`, { state: false, channel: '1' }, 'cs-light-result', 'light OFF');
+  }
+
+  window.corridorSim_start = function () {
+    if (started) return;
+    started = true;
+    wireButtons();
+    loadState();
+    pollTimer = setInterval(loadState, POLL_MS);
+  };
 })();

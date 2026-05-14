@@ -1494,6 +1494,152 @@ app.get('/api/pixoo/status', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Corridor Simulator (Main Agent tab) ────────────────────────────────
+// Three endpoints back the Corridor Simulator UI in main-agent.html:
+//   1. GET  /api/corridor-sim/state           — aggregate live state of the 5 chain pieces
+//   2. POST /api/corridor-sim/trigger-presence — publish a fake Corridor Presence event
+//   3. POST /api/corridor-sim/trigger-fr-event — publish a fake face_identified/face_unknown
+// IDs are hardcoded since the chain is single-purpose: Corridor + face_01 + remoteXY_01.
+const CORRIDOR_SIM_IDS = {
+  presence:   'bfbdca138cb1c78c3dlbmc',
+  cor_switch: 'bfe47a84d7cb783f59inot',
+  fr:         'face_01',
+  remotexy:   'remoteXY_01',
+};
+
+app.get('/api/corridor-sim/state', async (_req, res) => {
+  try {
+    const ids = Object.values(CORRIDOR_SIM_IDS);
+    // 1) device-table state (Corridor Presence + Switch, and the projected ESP DPS for face_01 + remoteXY_01)
+    const dvR = await db.query(
+      `SELECT id, name, last_state, last_seen, last_source,
+              EXTRACT(EPOCH FROM (now() - last_seen))::int AS age_sec
+       FROM devices
+       WHERE id = ANY($1)`,
+      [ids]
+    );
+    const byId = Object.fromEntries(dvR.rows.map(r => [r.id, r]));
+    // 2) esp_boards state for the two ESP boards (richer than the projected DPS — has sketch_version + raw last_status JSON)
+    const ebR = await db.query(
+      `SELECT id, last_status, last_seen, EXTRACT(EPOCH FROM (now() - last_seen))::int AS age_sec
+       FROM esp_boards
+       WHERE id IN ($1, $2)`,
+      [CORRIDOR_SIM_IDS.fr, CORRIDOR_SIM_IDS.remotexy]
+    );
+    const boards = Object.fromEntries(ebR.rows.map(r => [r.id, r]));
+    // 3) Pixoo screen + preview from rule_engine_state
+    const pixR = await db.query(
+      `SELECT key, value FROM rule_engine_state WHERE key IN ('_pixoo_screen','_pixoo_preview','_pixoo_paused')`
+    );
+    const pix = Object.fromEntries(pixR.rows.map(r => [r.key, r.value]));
+    // 4) Last 15 events from device_events filtered to the 4 IDs (real-or-simulated, source tagged)
+    const evR = await db.query(
+      `SELECT ts, device_id, source, dps
+       FROM device_events
+       WHERE device_id = ANY($1)
+       ORDER BY ts DESC
+       LIMIT 15`,
+      [ids]
+    );
+    res.json({
+      presence:   byId[CORRIDOR_SIM_IDS.presence]    || null,
+      cor_switch: byId[CORRIDOR_SIM_IDS.cor_switch]  || null,
+      fr:         { device: byId[CORRIDOR_SIM_IDS.fr] || null, board: boards[CORRIDOR_SIM_IDS.fr] || null },
+      remotexy:   { device: byId[CORRIDOR_SIM_IDS.remotexy] || null, board: boards[CORRIDOR_SIM_IDS.remotexy] || null },
+      pixoo:      { screen: pix._pixoo_screen || null, preview: pix._pixoo_preview || null, paused: pix._pixoo_paused === true || pix._pixoo_paused === 'true' },
+      events:     evR.rows,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Publishes {"1": <bool>} to mur/home/device/<corridor-presence-id>/event AND
+// writes the matching device_events row + updates devices.last_state — same
+// dual-action that device_agent on LXC 103 performs for real events. Without
+// the DB writes, the simulator's monitor (which polls DB) wouldn't reflect
+// the simulated event since rule_engine's update_device is in-memory only.
+// Real subsequent events from device_agent overwrite the simulated state on
+// the next poll, which is the correct behavior.
+app.post('/api/corridor-sim/trigger-presence', async (req, res) => {
+  try {
+    const value = req.body && (req.body.value === true || req.body.value === 'true');
+    const topic = `mur/home/device/${CORRIDOR_SIM_IDS.presence}/event`;
+    const dps = { '1': value };
+    // DB writes first (so the monitor sees it on next poll even if MQTT publish
+    // is slow), MQTT second (to drive rule firing).
+    await db.query(
+      `INSERT INTO device_events (ts, device_id, source, dps) VALUES (now(), $1, 'event', $2::jsonb)`,
+      [CORRIDOR_SIM_IDS.presence, JSON.stringify(dps)]
+    );
+    await db.query(
+      `UPDATE devices SET last_state = COALESCE(last_state,'{}'::jsonb) || $1::jsonb,
+                          last_seen = now(),
+                          last_source = 'event'
+        WHERE id = $2`,
+      [JSON.stringify(dps), CORRIDOR_SIM_IDS.presence]
+    );
+    mqttClient.publish(topic, JSON.stringify(dps), { qos: 1 });
+    res.json({ ok: true, published: topic, payload: dps });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Publishes a face_identified or face_unknown event to mur/home/esp/face_01/event
+// AND mirrors the result into device_events + devices.last_state.
+//
+// The FR board normally publishes face_identified via /event topic, then on
+// next /status heartbeat (60 s) updates last_recognition. We short-circuit by
+// updating last_recognition immediately in the DB so the simulator's monitor
+// reflects the fake event right away. Rule engine's current /event handler
+// (rule_engine.py:778) drops esp /event messages — that's a separate fix
+// needed when the actual rule gets authored. For now the publish is visible
+// on the Project Boards Live MQTT card and the DB write is what drives the
+// simulator's monitor.
+app.post('/api/corridor-sim/trigger-fr-event', async (req, res) => {
+  try {
+    const kind = (req.body && req.body.kind) ? String(req.body.kind) : '';
+    if (kind !== 'face_identified' && kind !== 'face_unknown') {
+      return res.status(400).json({ error: 'kind must be face_identified or face_unknown' });
+    }
+    const ts = Math.floor(Date.now() / 1000);
+    const envelope = { kind, src: 'fr_module', ts };
+    let dbDps = {};
+
+    if (kind === 'face_identified') {
+      const uid = Number.parseInt(req.body.user_id, 10);
+      const name = String(req.body.user_name || '').slice(0, 31).replace(/["\\]/g, '_');
+      if (!Number.isInteger(uid) || uid < 0 || uid > 100) {
+        return res.status(400).json({ error: 'user_id must be 0..100' });
+      }
+      envelope.payload = JSON.stringify({ user_id: uid, user_name: name });
+      dbDps = {
+        last_recognition:    name ? `${name} (${uid})` : `user_${uid}`,
+        last_recognition_ts: ts,
+      };
+    } else {
+      const reason = String(req.body.reason || 'no_match').slice(0, 31);
+      envelope.payload = JSON.stringify({ reason });
+      dbDps = {
+        last_recognition:    `unknown (${reason})`,
+        last_recognition_ts: ts,
+      };
+    }
+
+    await db.query(
+      `INSERT INTO device_events (ts, device_id, source, dps) VALUES (now(), $1, 'esp_event', $2::jsonb)`,
+      [CORRIDOR_SIM_IDS.fr, JSON.stringify(dbDps)]
+    );
+    await db.query(
+      `UPDATE devices SET last_state = COALESCE(last_state,'{}'::jsonb) || $1::jsonb,
+                          last_seen = now(),
+                          last_source = 'esp_event'
+        WHERE id = $2`,
+      [JSON.stringify(dbDps), CORRIDOR_SIM_IDS.fr]
+    );
+    const topic = `mur/home/esp/${CORRIDOR_SIM_IDS.fr}/event`;
+    mqttClient.publish(topic, JSON.stringify(envelope), { qos: 1 });
+    res.json({ ok: true, published: topic, payload: envelope, db_dps: dbDps });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/pixoo/brightness', async (req, res) => {
   try {
     const { value } = req.body;

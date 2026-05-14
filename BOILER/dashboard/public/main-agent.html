@@ -91,6 +91,7 @@
     <button class="tab-btn active" onclick="showTab('rules',this)">Rules</button>
     <button class="tab-btn" onclick="showTab('activity',this)">Home Activity</button>
     <button class="tab-btn" onclick="showTab('base-rules',this)">Base Rule Settings</button>
+    <button class="tab-btn" onclick="showTab('corridor-sim',this)">Corridor Simulator</button>
     <div class="time-mode-bar" id="time-mode-bar">
       <span class="tmb-item"><span class="tmb-label">home mode:</span> <span class="tmb-value" id="tmb-home-mode">—</span></span>
       <span class="tmb-sep">·</span>
@@ -223,11 +224,101 @@
     </div>
   </div>
 
+  <!-- TAB: Corridor Simulator —
+       Monitor + manual-trigger surface for the Corridor approach → FR
+       recognition → RemoteXY door-unlock chain. The trigger buttons
+       publish the same MQTT messages a real device would, so whatever
+       rule eventually consumes them works against both real and
+       simulated events identically. See corridorSim_* functions in
+       main-agent.js for the front-end + the /api/corridor-sim/*
+       endpoints in server.js for the back-end. -->
+  <div class="tab-panel" id="tab-corridor-sim">
+    <div class="card">
+      <h2>Live State</h2>
+      <div id="cs-live-state" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;font-size:0.88rem;">
+        <div>Loading…</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Pixoo Live View</h2>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start;">
+        <div>
+          <img id="cs-pixoo-preview" alt="Pixoo display"
+               style="width:256px;height:256px;image-rendering:pixelated;background:#000;border:1px solid #d0cbc4;border-radius:4px;display:block;">
+          <div id="cs-pixoo-meta" style="font-size:0.78rem;color:#666;margin-top:6px;text-align:center;">—</div>
+        </div>
+        <div>
+          <strong style="font-size:0.88rem;">Items being rendered</strong>
+          <table id="cs-pixoo-items" style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-top:6px;">
+            <thead style="background:#efeae0;">
+              <tr>
+                <th style="padding:4px 8px;text-align:left;">Text</th>
+                <th style="padding:4px 8px;text-align:right;width:60px;">x,y</th>
+                <th style="padding:4px 8px;text-align:right;width:80px;">Color</th>
+              </tr>
+            </thead>
+            <tbody><tr><td colspan="3" style="padding:6px;color:#888;">—</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Manual Simulation</h2>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;font-size:0.85rem;">
+        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
+          <strong>① Trigger Corridor Presence</strong>
+          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Publishes <code>{"1": &lt;bool&gt;}</code> to <code>mur/home/device/&lt;corridor-presence&gt;/event</code> — matches the real Tuya adapter payload shape.</p>
+          <button class="btn-save-params" id="cs-btn-presence-on">▶ Simulate "present"</button>
+          <button class="btn-save-params" id="cs-btn-presence-off" style="margin-left:6px;background:#666;border-color:#666;">▶ Simulate "absent"</button>
+          <div id="cs-presence-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
+        </div>
+        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
+          <strong>② Trigger FR recognition event</strong>
+          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Publishes to <code>mur/home/esp/face_01/event</code> as if the FR module just returned a result. Pick a user from the enrolled list, or simulate an unknown face.</p>
+          <select id="cs-fr-user" style="padding:4px 8px;font-size:0.85rem;"></select>
+          <button class="btn-save-params" id="cs-btn-fr-identified" style="margin-left:6px;background:#1565c0;border-color:#1565c0;">▶ face_identified</button>
+          <button class="btn-save-params" id="cs-btn-fr-unknown" style="margin-left:6px;background:#c0392b;border-color:#c0392b;">▶ face_unknown</button>
+          <div id="cs-fr-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
+        </div>
+        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
+          <strong>③ Manually pulse the door</strong>
+          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Directly fires RemoteXY's <code>open_doorlock</code> — bypasses the chain. Useful for confirming the relay still works.</p>
+          <button class="btn-save-params" id="cs-btn-door" style="background:#3a7d44;border-color:#3a7d44;">▶ open_doorlock</button>
+          <div id="cs-door-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
+        </div>
+        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
+          <strong>④ Toggle Corridor light</strong>
+          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Directly toggles Corridor Switch DPS&nbsp;1 — the main light. Useful for visual verification when standing in the corridor.</p>
+          <button class="btn-save-params" id="cs-btn-light-on">▶ Light ON</button>
+          <button class="btn-save-params" id="cs-btn-light-off" style="margin-left:6px;background:#666;border-color:#666;">▶ Light OFF</button>
+          <div id="cs-light-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Recent Events <span style="font-size:0.78rem;color:#666;font-weight:normal;">(last 15 from all 4 devices)</span></h2>
+      <table id="cs-events" style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+        <thead style="background:#efeae0;">
+          <tr>
+            <th style="padding:4px 8px;text-align:left;width:130px;">Timestamp</th>
+            <th style="padding:4px 8px;text-align:left;width:180px;">Device</th>
+            <th style="padding:4px 8px;text-align:left;width:100px;">Source</th>
+            <th style="padding:4px 8px;text-align:left;">DPS</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="4" style="padding:6px;color:#888;">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
 </main>
 
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=8"></script>
 <script src="js/device-picker.js?v=11"></script>
-<script src="js/main-agent.js?v=40"></script>
+<script src="js/main-agent.js?v=41"></script>
 </body>
 </html>
