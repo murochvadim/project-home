@@ -681,11 +681,37 @@ function liveAppendRow(payloadStr, topic) {
   liveRedraw();
 }
 
-function liveRedraw() {
+// Pre-create the 10 fixed slot <div>s once. Subsequent liveRedraw() calls
+// only rewrite each slot's innerHTML — the parent's child list never
+// changes, so neither the host container nor the page ever reflows when
+// a new event arrives. Empty slots carry &nbsp; so they hold a line of
+// height (keeps the 10-row window visually full from page load).
+function liveEnsureSlots() {
   const host = document.getElementById('live-rows');
+  if (!host) return null;
+  if (host._slotsInitialized) return host;
+  host.innerHTML = '';
+  for (let i = 0; i < LIVE_MAX_ROWS; i++) {
+    const row = document.createElement('div');
+    // Single-line guarantee — long topics get ellipsised instead of
+    // wrapping to a 2nd line (which would visually push later rows down
+    // and break the fixed-height invariant).
+    row.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    row.innerHTML = '&nbsp;';
+    host.appendChild(row);
+  }
+  host._slotsInitialized = true;
+  return host;
+}
+
+function liveRedraw() {
+  const host = liveEnsureSlots();
   if (!host) return;
-  if (!_liveRows.length) { host.innerHTML = '<div style="color:#888;font-style:italic;">awaiting first event…</div>'; return; }
-  host.innerHTML = _liveRows.map(r => {
+  const slots = host.children;
+  for (let i = 0; i < LIVE_MAX_ROWS; i++) {
+    const slot = slots[i];
+    const r = _liveRows[i];
+    if (!r) { if (slot.innerHTML !== '&nbsp;') slot.innerHTML = '&nbsp;'; continue; }
     const kindColor = r.kind === 'rx' ? '#7fc97f'
                     : r.kind === 'ack' ? '#a6cee3'
                     : r.kind === 'sim' ? '#fdc086'
@@ -698,11 +724,15 @@ function liveRedraw() {
     const payload = r.payload != null ? `<span style="color:#fff;">${escHtml(r.payload)}</span>` : '';
     const action = r.action ? `<span style="color:#ffaa00;">${escHtml(r.action)}</span>` : '';
     const extras = [tpc, payload, action].filter(Boolean).join(' ');
-    return `<div><span style="color:#666;">${escHtml(r.time)}</span> ${idChip} ${srcChip} ${kindChip} ${extras}</div>`;
-  }).join('');
+    slot.innerHTML = `<span style="color:#666;">${escHtml(r.time)}</span> ${idChip} ${srcChip} ${kindChip} ${extras}`;
+  }
 }
 
 async function wireLiveStream() {
+  // Reserve all 10 row slots immediately on page load so the card already
+  // shows its full window — no expansion when the first event arrives.
+  liveEnsureSlots();
+
   // Wire the Clear button (idempotent — single page-level element).
   const clearBtn = document.getElementById('live-clear');
   if (clearBtn && !clearBtn._wired) {

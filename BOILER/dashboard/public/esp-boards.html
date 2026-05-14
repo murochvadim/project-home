@@ -140,7 +140,12 @@
         <span id="live-status" style="font-size:0.75rem;color:#aaa;">connecting…</span>
         <button id="live-clear" class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:0.72rem;">Clear</button>
       </div>
-      <div id="live-rows" style="background:#1c1f24;color:#e0e0e0;border-radius:5px;padding:10px;font-family:monospace;font-size:0.78rem;max-height:300px;overflow-y:auto;line-height:1.5;">
+      <!-- Fixed-height 10-row window: 10 rows × (0.78rem × 1.5 line-height) ≈
+           188px + 20px padding = 208px → locked at 215px. JS pre-creates 10 slot
+           <div>s and only rewrites each slot's innerHTML on new events — the
+           parent's child list never changes, so adding an event never reflows
+           the card height or jumps the page. -->
+      <div id="live-rows" style="background:#1c1f24;color:#e0e0e0;border-radius:5px;padding:10px;font-family:monospace;font-size:0.78rem;height:215px;overflow:hidden;line-height:1.5;">
         <div style="color:#888;font-style:italic;">awaiting first event…</div>
       </div>
     </div>
@@ -182,6 +187,6 @@
 
 <script src="js/alerts-monitor.js?v=8"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/esp-boards.js?v=20260505c"></script>
+<script src="js/esp-boards.js?v=20260514a"></script>
 </body>
 </html>
