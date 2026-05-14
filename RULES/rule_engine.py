@@ -809,7 +809,7 @@ class RuleEngine:
         # pending_user_name is the name to assign on next register_user click.
         'screen_state', 'module_state',
         'last_recognition', 'last_recognition_ts',
-        'enrolled_count', 'pending_user_name', 'enrolment_mode',
+        'enrolled_count', 'pending_user_name',
         'users',   # JSON array of {id, name} — rendered as Enrolled Users table on Params tab
     )
 
