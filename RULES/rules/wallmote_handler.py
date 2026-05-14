@@ -170,6 +170,42 @@ def evaluate(event, state):
 
     commands = []
     for b in slot:
+        # Non-device binding variants — same shape the Balcony Buttons rule
+        # supports. Picker writes `type:'pixoo_preset'` + `target:'<name>'`
+        # for a Pixoo preset push; rule engine routes by protocol='pixoo'.
+        btype = b.get("type")
+        if btype == "pixoo_preset":
+            preset_name = b.get("target")
+            if not preset_name:
+                log.warning("pixoo_preset binding in %s missing target", slot_key)
+                continue
+            pcmd = {
+                "device_id": "pixoo",
+                "protocol":  "pixoo",
+                "action":    "push_preset",
+                "preset_name": preset_name,
+                "rule": "Wallmote Handler",
+                "_skip_loop_guard": True,
+            }
+            if b.get("vars"):
+                pcmd["vars"] = b["vars"]
+            commands.append(pcmd)
+            continue
+        if btype == "hasp_command":
+            target = (b.get("target") or "").strip()
+            parts = target.split(" ", 1)
+            path = parts[0]
+            value = parts[1] if len(parts) > 1 else ""
+            commands.append({
+                "device_id": "hasp:balcony",
+                "protocol":  "hasp",
+                "path":      path,
+                "value":     value,
+                "rule":      "Wallmote Handler",
+                "_skip_loop_guard": True,
+            })
+            continue
+
         device_id = b.get("device_id")
         if not device_id:
             continue
@@ -233,9 +269,13 @@ def evaluate(event, state):
             cmd["page_num"] = b["page_num"]
         commands.append(cmd)
 
+    # hasp_command cmds carry `path`/`value` instead of `action`, so use
+    # .get() — a literal subscript here raises KeyError and the rule engine's
+    # try/except eats the whole evaluate() result, dispatching 0 commands.
     log.info(
         "Wallmote %s %s %s → %d commands: %s",
         wm_slug, button, event_type, len(commands),
-        [(c["device_id"], c.get("channel"), c["action"]) for c in commands],
+        [(c["device_id"], c.get("channel"), c.get("action") or c.get("path", "?"))
+         for c in commands],
     )
     return commands

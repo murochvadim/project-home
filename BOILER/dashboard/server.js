@@ -4569,13 +4569,78 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
     const { id } = req.params;
     const { state } = req.body; // true = ON, false = OFF
 
+    // Pull row with dps_config — needed by the per-protocol branches below
+    // that resolve channel → MQTT action key via action_on / action_off
+    // aliases (same pattern the rule engine uses in _dispatch_command).
+    const devR = await db.query('SELECT name, protocol, dps_config FROM devices WHERE id = $1', [id]);
+    const dev = devR.rows[0] || {};
+    const protocol = dev.protocol;
+    const channel = req.body.channel || '';
+    const dpsCfg = dev.dps_config || {};
+    const chCfg  = channel && dpsCfg[channel] ? dpsCfg[channel] : {};
+    const alias  = state ? chCfg.action_on : chCfg.action_off;
+
     // Zigbee devices: toggle via Z2M MQTT (not HA API)
-    const devR = await db.query('SELECT name, protocol FROM devices WHERE id = $1', [id]);
-    if (devR.rows.length && devR.rows[0].protocol === 'zigbee') {
+    if (protocol === 'zigbee') {
       const key = req.body.channel || 'state_l1';
       const payload = JSON.stringify({ [key]: state ? 'ON' : 'OFF' });
-      mqttClient.publish(`zigbee2mqtt/${devR.rows[0].name}/set`, payload);
-      return res.json({ ok: true, entity_id: `z2m:${devR.rows[0].name}`, service: state ? 'ON' : 'OFF' });
+      mqttClient.publish(`zigbee2mqtt/${dev.name}/set`, payload);
+      return res.json({ ok: true, entity_id: `z2m:${dev.name}`, service: state ? 'ON' : 'OFF' });
+    }
+
+    // HASP touch panels — same dispatch logic as rule_engine._dispatch_command.
+    // dps_config.<channel>.action_on/_off carries an alias (e.g. 'backlight_on')
+    // that we translate to (path, value) → publish hasp/<plate>/command/<path>.
+    if (protocol === 'hasp') {
+      const plate = id.startsWith('hasp:') ? id.slice(5).split(':')[0] : dev.name;
+      let path, value;
+      if      (alias === 'backlight_on')  { path = 'backlight'; value = 'on'; }
+      else if (alias === 'backlight_off') { path = 'backlight'; value = 'off'; }
+      else if (alias === 'goto_page') {
+        // page-select bindings need a page number; the test button doesn't
+        // currently send one, so refuse rather than publish a bad payload.
+        const pn = req.body.page_num;
+        if (pn == null) return res.status(400).json({ error: 'goto_page requires page_num — page-select bindings cannot be tested from this endpoint' });
+        path = 'page'; value = String(parseInt(pn, 10));
+      } else {
+        return res.status(400).json({ error: `No HASP alias for channel '${channel}' action_${state?'on':'off'}` });
+      }
+      mqttClient.publish(`hasp/${plate}/command/${path}`, value);
+      return res.json({ ok: true, mqtt_topic: `hasp/${plate}/command/${path}`, mqtt_value: value });
+    }
+
+    // ESP boards — alias is the sketch action key, published as a plain
+    // string to mur/home/esp/<id>/command (rule_engine pattern).
+    if (protocol === 'esp') {
+      if (!alias) return res.status(400).json({ error: `No ESP alias for channel '${channel}' action_${state?'on':'off'}` });
+      mqttClient.publish(`mur/home/esp/${id}/command`, alias);
+      return res.json({ ok: true, mqtt_topic: `mur/home/esp/${id}/command`, mqtt_value: alias });
+    }
+
+    // Awtrix LED matrix — backlight via <id>/power with {power: bool}. Other
+    // channels (push_preset etc.) aren't testable from a turn_on/off button.
+    if (protocol === 'awtrix') {
+      if (alias === 'power_on' || alias === 'power_off') {
+        const payload = JSON.stringify({ power: alias === 'power_on' });
+        mqttClient.publish(`${id}/power`, payload);
+        return res.json({ ok: true, mqtt_topic: `${id}/power`, mqtt_value: payload });
+      }
+      return res.status(400).json({ error: `Awtrix channel '${channel}' alias '${alias}' not supported from this endpoint` });
+    }
+
+    // Vacuum (HA-mediated). Map turn_on/turn_off → start/return_to_base.
+    if (protocol === 'vacuum') {
+      const service = state ? 'start' : 'return_to_base';
+      await callHA('vacuum', service, { entity_id: id });
+      return res.json({ ok: true, entity_id: id, service: `vacuum.${service}` });
+    }
+
+    // Alexa (HA-mediated). Most Alexa bindings are 'speak' / 'play' which
+    // the test button doesn't carry parameters for; only on/off works here.
+    if (protocol === 'alexa') {
+      const service = state ? 'turn_on' : 'turn_off';
+      await callHA('media_player', service, { entity_id: id });
+      return res.json({ ok: true, entity_id: id, service: `media_player.${service}` });
     }
 
     // Look up HA entity for this device via template.
@@ -4593,7 +4658,7 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
       return { entity_id: eid.trim(), state: st?.trim() };
     });
     // Find the matching switchable entity for the requested channel
-    const { channel } = req.body;
+    // (channel was already destructured at the top of the handler).
     const suffix = channel ? `_${channel}` : null;
     // Prefer entities ending with _switch, _switch_1, or the channel suffix
     const switchable = (suffix && entities.find(e => e.entity_id.startsWith('switch.') && e.entity_id.endsWith(suffix)))

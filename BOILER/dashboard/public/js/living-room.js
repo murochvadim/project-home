@@ -23,6 +23,11 @@
   // so the bindings picker can offer Speak / Play options for media_players.
   let _alexaAnnouncements = [];   // [{name, message, default_volume?}]
   let _alexaStations      = [];   // [{name, content_id, content_type}]
+  // Pixoo presets — loaded once so a wallmote button can be bound to push
+  // a specific preset (action 'push_preset' / type 'pixoo_preset'). The
+  // rule engine's wallmote_handler.py reads the `type:'pixoo_preset'` +
+  // `target:<name>` shape and emits the push command.
+  let _pixooPresets = [];         // [{name, ...}] — only `name` is used
 
   // Encode/decode the Alexa-action option value used in the picker
   // dropdown. Format: '<verb>' or '<verb>:<name>'. Trusts that user-
@@ -45,6 +50,7 @@
   // Chip-tag for a binding: page-select bindings show `P<n>`; Alexa speak/play
   // show the template/station name appended so the user sees the target.
   function bindingTag(b) {
+    if (b && b.type === 'pixoo_preset') return `preset:${b.target || '?'}`;
     if (b && b.page_num != null) return `P${b.page_num}`;
     if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
     if (b && b.action === 'play'  && b.station_name)  return `play:${b.station_name}`;
@@ -73,14 +79,16 @@
 
   async function loadData() {
     try {
-      const [devs, saved, anns, stations] = await Promise.all([
+      const [devs, saved, anns, stations, presets] = await Promise.all([
         fetch('/api/devices').then(r => r.json()),
         fetch(`/api/dashboard-settings/${encodeURIComponent(STORAGE_KEY)}`).then(r => r.json()).catch(() => ({ value: null })),
         fetch('/api/dashboard-settings/media-agents.alexa_announcements').then(r => r.json()).catch(() => ({ value: [] })),
         fetch('/api/dashboard-settings/media-agents.alexa_quick_music').then(r => r.json()).catch(() => ({ value: [] })),
+        fetch('/api/pixoo/presets').then(r => r.json()).catch(() => []),
       ]);
       _alexaAnnouncements = Array.isArray(anns && anns.value) ? anns.value : [];
       _alexaStations      = Array.isArray(stations && stations.value) ? stations.value : [];
+      _pixooPresets       = (Array.isArray(presets) ? presets : []).filter(p => p && p.name);
 
       // Wallmote status (both)
       const fmtWm = (devId, prefix) => {
@@ -250,8 +258,20 @@
       const isPageSelect = d.chan_meta && d.chan_meta.type === 'page_select';
       const isAlexa  = d.protocol === 'alexa';
       const isVacuum = d.protocol === 'vacuum';
+      const isPixoo  = d.protocol === 'pixoo';
       let dropdownHtml;
-      if (isPageSelect) {
+      if (isPixoo) {
+        // Pixoo: pick a preset to push. Binding stores
+        // {type:'pixoo_preset', target:'<name>'} — wallmote_handler.py
+        // reads `type` first and routes to the pixoo dispatch path.
+        const curPreset = existing && existing.target ? existing.target : (_pixooPresets[0] && _pixooPresets[0].name) || '';
+        const opts = _pixooPresets.map(p =>
+          `<option value="${escHtml(p.name)}" ${p.name === curPreset ? 'selected' : ''}>${escHtml(p.name)}</option>`
+        ).join('');
+        dropdownHtml = _pixooPresets.length
+          ? `<select class="picker-action-select"><optgroup label="Push preset">${opts}</optgroup></select>`
+          : `<select class="picker-action-select" disabled><option>no presets — create one on Corridor page</option></select>`;
+      } else if (isPageSelect) {
         const lo = Number(d.chan_meta.min || 1);
         const hi = Number(d.chan_meta.max || 12);
         const cur = (existing && existing.page_num) || lo;
@@ -318,13 +338,13 @@
       item.addEventListener('click', (e) => {
         if (e.target === sel || sel.contains(e.target)) return;  // let the select handle its own clicks
         if (e.target !== cb) cb.checked = !cb.checked;
-        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum);
+        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum, isPixoo);
       });
       sel.addEventListener('change', (e) => {
         e.stopPropagation();
         // Changing action implicitly selects the device (if not already)
         if (!cb.checked) cb.checked = true;
-        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum);
+        toggleSelection(d, cb.checked, sel.value, isPageSelect, isAlexa, isVacuum, isPixoo);
       });
       sel.addEventListener('click', (e) => e.stopPropagation());
 
@@ -341,13 +361,14 @@
     updatePickerCount();
   }
 
-  function toggleSelection(dev, checked, action, isPageSelect, isAlexa, isVacuum) {
+  function toggleSelection(dev, checked, action, isPageSelect, isAlexa, isVacuum, isPixoo) {
     if (!activePicker) return;
     const slotKey = key(activePicker.wallmote, activePicker.button, activePicker.event);
     if (!bindings[slotKey]) bindings[slotKey] = [];
     const existingIdx = bindings[slotKey].findIndex(s =>
       s.device_id === dev.device_id && (s.channel || null) === (dev.channel || null));
     // Decode the dropdown value depending on row type:
+    //   Pixoo  → preset name (binding type=pixoo_preset, target=preset)
     //   Alexa  → 'speak:<name>' / 'play:<name>' / 'stop' / 'turn_on' / etc.
     //   page   → just the page number (action stays 'turn_on')
     //   other  → plain action verb
@@ -361,8 +382,47 @@
       if (parsed.action === 'play')  stationName  = parsed.name || '';
     }
     if (checked) {
+      // Pixoo: store the special pixoo_preset shape — rule engine routes
+      // by `type` first, ignoring device_id/channel/action. We keep
+      // device_id+channel populated so the picker's selection-tracking
+      // (lookup by `device_id:channel`) still works for this row.
+      if (isPixoo) {
+        const presetName = action;   // dropdown value IS the preset name
+        // Guard: when no presets are loaded, the dropdown is disabled and
+        // its value falls back to the option's text label (e.g. "no
+        // presets — create one on Corridor page"). Refuse to save garbage
+        // — just deselect and return.
+        if (!presetName || !_pixooPresets.some(p => p.name === presetName)) {
+          if (existingIdx >= 0) bindings[slotKey].splice(existingIdx, 1);
+          updatePickerCount();
+          return;
+        }
+        if (existingIdx >= 0) {
+          const b = bindings[slotKey][existingIdx];
+          b.type = 'pixoo_preset';
+          b.target = presetName;
+          b.label = presetName;
+          // Strip any stale non-pixoo fields left from a previous selection
+          delete b.action; delete b.page_num; delete b.template_name; delete b.station_name;
+        } else {
+          bindings[slotKey].push({
+            type: 'pixoo_preset',
+            target: presetName,
+            device_id: dev.device_id,
+            channel: null,
+            name: dev.name || 'Pixoo',
+            label: presetName,
+          });
+        }
+        updatePickerCount();
+        return;
+      }
       const writeFields = (b) => {
         b.action = storedAction;
+        // Switching this row away from pixoo back to a normal device action —
+        // strip the pixoo-only fields so the rule engine doesn't see a
+        // half-converted binding.
+        delete b.type; delete b.target;
         if (isPageSelect) b.page_num = pageNum; else delete b.page_num;
         if (isAlexa) {
           if (templateName) b.template_name = templateName; else delete b.template_name;
@@ -407,7 +467,10 @@
       const makeTag = (s) =>
         `${escHtml(s.label ? s.name + ':' + s.label : s.name)}<span class="action-tag ${bindingTag(s)}">${bindingTag(s)}</span>`;
       pickerEl.innerHTML = sel.map(makeTag).join(' · ');
-      pickerEl.title = sel.map(s => `${s.name}${s.label?':'+s.label:''} → ${actionLabel(s.action)}`).join('\n');
+      pickerEl.title = sel.map(s => {
+        const verb = s.type === 'pixoo_preset' ? `push preset '${s.target}'` : actionLabel(s.action);
+        return `${s.name}${s.label?':'+s.label:''} → ${verb}`;
+      }).join('\n');
     }
   }
 
@@ -467,8 +530,87 @@
     btn.disabled = true; btn.textContent = '…';
     let ok = 0, fail = 0;
     const errors = [];
+    // Verb whitelists — match the server.js handlers so the test button
+    // exercises the exact same dispatch path a real button press uses
+    // through the rule engine. Without these bypasses, non-on/off actions
+    // (Alexa speak/play, vacuum locate/dock, etc.) would fall through to
+    // /api/devices/:id/toggle with state=undefined and fire the wrong
+    // service — e.g. testing a Roomba 'locate' binding would silently
+    // dispatch return_to_base instead.
+    const VACUUM_VERBS         = new Set(['start','stop','pause','dock','locate']);
+    const ALEXA_TRANSPORT_VERBS = new Set(['play','pause','stop','next','prev','turn_on','turn_off']);
     for (const s of sel) {
       try {
+        const devIsVacuum = (s.device_id || '').startsWith('vacuum.');
+        const devIsAlexa  = (s.device_id || '').startsWith('media_player.');
+
+        // Pixoo presets bypass the generic device-toggle endpoint — the
+        // pixoo dispatch path needs a preset name, which the toggle's
+        // {state, channel} body can't carry. Push directly via the
+        // pixoo_service HTTP proxy instead.
+        if (s.type === 'pixoo_preset') {
+          if (!s.target) throw new Error('no preset name');
+          const r = await fetch('/api/pixoo/command', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'push_preset', preset_name: s.target }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          ok++;
+          continue;
+        }
+
+        // Vacuum verbs → dedicated /api/vacuum/:entity/:verb endpoint.
+        // The toggle endpoint's vacuum branch only knows state→start/dock,
+        // so locate/pause/stop bindings would dispatch the wrong service.
+        if (devIsVacuum && VACUUM_VERBS.has(s.action)) {
+          const r = await fetch(`/api/vacuum/${encodeURIComponent(s.device_id)}/${encodeURIComponent(s.action)}`, { method: 'POST' });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          ok++;
+          continue;
+        }
+
+        // Alexa 'speak' → look up saved template's message, POST to /say.
+        if (devIsAlexa && s.action === 'speak') {
+          const tpl = _alexaAnnouncements.find(t => t && t.name === s.template_name);
+          if (!tpl)         throw new Error(`announcement template '${s.template_name}' not found`);
+          if (!tpl.message) throw new Error(`announcement template '${s.template_name}' has no message`);
+          const body = { message: tpl.message };
+          if (tpl.default_volume != null) body.loudness_db = tpl.default_volume;
+          const r = await fetch(`/api/alexa/${encodeURIComponent(s.device_id)}/say`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          ok++;
+          continue;
+        }
+
+        // Alexa 'play' → look up saved station's content_id, POST to /play_media.
+        if (devIsAlexa && s.action === 'play' && s.station_name) {
+          const st = _alexaStations.find(x => x && x.name === s.station_name);
+          if (!st)            throw new Error(`station '${s.station_name}' not found`);
+          if (!st.content_id) throw new Error(`station '${s.station_name}' has no content_id`);
+          const body = { content_id: st.content_id };
+          if (st.content_type) body.content_type = st.content_type;
+          const r = await fetch(`/api/alexa/${encodeURIComponent(s.device_id)}/play_media`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          ok++;
+          continue;
+        }
+
+        // Alexa transport verbs (stop/pause/next/prev/play with no station/
+        // turn_on/turn_off) → dedicated /api/alexa/:entity/:action endpoint.
+        if (devIsAlexa && ALEXA_TRANSPORT_VERBS.has(s.action)) {
+          const r = await fetch(`/api/alexa/${encodeURIComponent(s.device_id)}/${encodeURIComponent(s.action)}`, { method: 'POST' });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          ok++;
+          continue;
+        }
+
+        // Default path — on/off/toggle through /api/devices/:id/toggle.
         let target;
         if (s.action === 'turn_on') target = true;
         else if (s.action === 'turn_off') target = false;
@@ -480,7 +622,12 @@
         ok++;
       } catch (e) {
         fail++;
-        errors.push(`${s.name}${s.label?':'+s.label:''} ${s.action}: ${e.message}`);
+        const tag = s.type === 'pixoo_preset'
+          ? `push:${s.target}`
+          : (s.action === 'speak' ? `say:${s.template_name||'?'}`
+          : (s.action === 'play'  ? `play:${s.station_name||'?'}`
+          : (s.action || '?')));
+        errors.push(`${s.name}${s.label?':'+s.label:''} ${tag}: ${e.message}`);
       }
     }
     btn.textContent = fail === 0 ? `✓ ${ok}` : `✗ ${fail}/${ok+fail}`;
