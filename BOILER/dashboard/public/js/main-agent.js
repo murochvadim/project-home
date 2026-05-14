@@ -1102,43 +1102,69 @@
 })();
 
 // ─── Corridor Simulator tab ────────────────────────────────────────────
-// Monitor (Live State + Pixoo + Recent Events) + trigger buttons that
-// publish to the same MQTT topics real devices publish to. Polling-based,
-// starts on first activation of the tab — no work done while the user is
-// on Rules / Home Activity / Base Rule Settings.
+// Monitor + trigger surface for the planned Corridor → FR → RemoteXY door
+// chain. Architecture: server.js owns the MQTT client (rule_engine creds,
+// full read access), subscribes to /event /state /status /command for the
+// 4 chain devices, keeps a 50-message ring buffer. Browser just polls
+// /api/corridor-sim/state every 1 s — no MQTT lib, no WS lifecycle, no
+// browser cache surprises. The ring buffer is captured live, so it
+// includes EVERY message on the bus (commands, statuses, events) — not
+// just what gets persisted to device_events.
 (function () {
-  let started     = false;
-  let pollTimer   = null;
-  const POLL_MS   = 2000;
+  let started    = false;
+  let _pollTimer = null;
+  let _paused    = false;
+  let _events    = [];                          // last poll's events (server is source of truth)
+  const POLL_MS = 1000;
 
-  // 4 devices in the chain. IDs match CORRIDOR_SIM_IDS on the server.
   const PRESENCE_ID   = 'bfbdca138cb1c78c3dlbmc';
   const COR_SWITCH_ID = 'bfe47a84d7cb783f59inot';
   const FR_ID         = 'face_01';
   const REMOTEXY_ID   = 'remoteXY_01';
-
-  function ageBadge(secs) {
-    if (secs == null) return '<span style="color:#888;">—</span>';
-    if (secs < 60)   return `${secs}s ago`;
-    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-    return `${Math.floor(secs / 3600)}h ago`;
-  }
-
-  function dot(active) {
-    return active
-      ? '<span style="color:#3a7d44;">●</span>'
-      : '<span style="color:#888;">○</span>';
-  }
 
   function escH(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  function ageBadge(secs) {
+    if (secs == null) return '<span style="color:#888;">—</span>';
+    if (secs < 60)   return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+    return `${Math.floor(secs / 3600)}h ago`;
+  }
+  function dot(on) {
+    return on ? '<span style="color:#3a7d44;">●</span>' : '<span style="color:#888;">○</span>';
+  }
+
+  function topicMeta(topic) {
+    const parts = String(topic || '').split('/');
+    if (parts[0] === 'mur' && parts[1] === 'home' && parts[2] === 'device' && parts.length === 5) {
+      const id = parts[3];
+      const name = id === PRESENCE_ID ? 'Corridor Presence'
+                : id === COR_SWITCH_ID ? 'Corridor Switch' : id;
+      return { name, suffix: parts[4], color: '#3a7d44' };
+    }
+    if (parts[0] === 'mur' && parts[1] === 'home' && parts[2] === 'esp' && parts.length === 5) {
+      const id = parts[3];
+      const name = id === FR_ID ? 'Face Recognition'
+                : id === REMOTEXY_ID ? 'RemoteXY' : id;
+      const suffix = parts[4];
+      let color;
+      if      (suffix === 'command') color = '#e67e22';
+      else if (suffix === 'event')   color = '#8e44ad';
+      else if (suffix === 'status')  color = '#1565c0';
+      else                           color = '#888';
+      return { name, suffix, color };
+    }
+    return { name: topic, suffix: '', color: '#888' };
+  }
 
   function renderLiveState(s) {
-    const presPresent = !!(s.presence && s.presence.last_state && (s.presence.last_state['1'] === true || s.presence.last_state['1'] === 'true'));
-    const switchOn    = !!(s.cor_switch && s.cor_switch.last_state && (s.cor_switch.last_state['1'] === true || s.cor_switch.last_state['1'] === 'true'));
+    const presPresent = !!(s.presence && s.presence.last_state
+      && (s.presence.last_state['1'] === true || s.presence.last_state['1'] === 'true' || s.presence.last_state['1'] === 'presence'));
+    const switchOn    = !!(s.cor_switch && s.cor_switch.last_state
+      && (s.cor_switch.last_state['1'] === true || s.cor_switch.last_state['1'] === 'true'));
     const frStatus    = (s.fr.board && s.fr.board.last_status) || {};
     const screenOn    = frStatus.screen_state === 'on';
     const lastRecog   = frStatus.last_recognition || '—';
@@ -1153,100 +1179,70 @@
       </div>`;
 
     document.getElementById('cs-live-state').innerHTML =
-      cell('Corridor Presence', `${dot(presPresent)} ${presPresent ? 'present' : 'idle'}`,
-           s.presence ? s.presence.age_sec : null)
-      + cell('Corridor Switch (light)', `${dot(switchOn)} ${switchOn ? 'ON' : 'off'}`,
-           s.cor_switch ? s.cor_switch.age_sec : null)
-      + cell('FR camera screen', `${dot(screenOn)} ${screenOn ? 'on' : 'off'}`,
-           s.fr.board ? s.fr.board.age_sec : null)
-      + cell('FR last recognition', escH(lastRecog),
-           s.fr.board ? s.fr.board.age_sec : null)
-      + cell('RemoteXY door relay', `${dot(doorRelay)} ${doorRelay ? 'PULSING' : 'idle'}`,
-           s.remotexy.board ? s.remotexy.board.age_sec : null);
-  }
-
-  function renderPixoo(p) {
-    const img = document.getElementById('cs-pixoo-preview');
-    img.src = p.preview || '';
-    const meta = document.getElementById('cs-pixoo-meta');
-    const items = (p.screen && Array.isArray(p.screen.items)) ? p.screen.items : [];
-    meta.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`
-      + (p.paused ? ' · paused' : '')
-      + (p.screen && p.screen.ts ? ' · ' + new Date(p.screen.ts).toLocaleTimeString() : '');
-    const tbody = document.querySelector('#cs-pixoo-items tbody');
-    if (!items.length) {
-      tbody.innerHTML = `<tr><td colspan="3" style="padding:6px;color:#888;">No items rendered</td></tr>`;
-      return;
-    }
-    tbody.innerHTML = items.map(it => {
-      const r = it.r != null ? it.r : 0, g = it.g != null ? it.g : 0, b = it.b != null ? it.b : 0;
-      return `<tr>
-        <td style="padding:4px 8px;">${escH(it.t || '')}</td>
-        <td style="padding:4px 8px;text-align:right;font-variant-numeric:tabular-nums;">${it.x},${it.y}</td>
-        <td style="padding:4px 8px;text-align:right;">
-          <span style="display:inline-block;width:12px;height:12px;background:rgb(${r},${g},${b});border:1px solid #ccc;vertical-align:middle;"></span>
-          <span style="font-size:0.74rem;color:#666;margin-left:4px;">rgb(${r},${g},${b})</span>
-        </td>
-      </tr>`;
-    }).join('');
+      cell('Corridor Presence',         `${dot(presPresent)} ${presPresent ? 'present' : 'idle'}`, s.presence ? s.presence.age_sec : null)
+      + cell('Corridor Switch (light)', `${dot(switchOn)} ${switchOn ? 'ON' : 'off'}`,             s.cor_switch ? s.cor_switch.age_sec : null)
+      + cell('FR camera screen',        `${dot(screenOn)} ${screenOn ? 'on' : 'off'}`,             s.fr.board ? s.fr.board.age_sec : null)
+      + cell('FR last recognition',     escH(lastRecog),                                            s.fr.board ? s.fr.board.age_sec : null)
+      + cell('RemoteXY door relay',     `${dot(doorRelay)} ${doorRelay ? 'PULSING' : 'idle'}`,     s.remotexy.board ? s.remotexy.board.age_sec : null);
   }
 
   function renderEvents(events) {
     const tbody = document.querySelector('#cs-events tbody');
     if (!events || !events.length) {
-      tbody.innerHTML = `<tr><td colspan="4" style="padding:6px;color:#888;">No events yet</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" style="padding:6px;color:#888;">awaiting first message…</td></tr>`;
       return;
     }
-    const nameOf = (id) => {
-      if (id === PRESENCE_ID)   return 'Corridor Presence';
-      if (id === COR_SWITCH_ID) return 'Corridor Switch';
-      if (id === FR_ID)         return 'Face Recognition';
-      if (id === REMOTEXY_ID)   return 'RemoteXY';
-      return id;
-    };
-    tbody.innerHTML = events.map(e => {
-      const dpsStr = e.dps && typeof e.dps === 'object'
-        ? JSON.stringify(e.dps)
-        : String(e.dps || '');
+    tbody.innerHTML = events.map(r => {
+      const m = topicMeta(r.topic);
+      const payloadStr = (typeof r.payload === 'object') ? JSON.stringify(r.payload) : String(r.payload || '');
       return `<tr>
-        <td style="padding:4px 8px;font-variant-numeric:tabular-nums;">${new Date(e.ts).toLocaleTimeString()}</td>
-        <td style="padding:4px 8px;">${escH(nameOf(e.device_id))}</td>
-        <td style="padding:4px 8px;color:#555;">${escH(e.source)}</td>
-        <td style="padding:4px 8px;font-family:monospace;font-size:0.78rem;color:#333;">${escH(dpsStr)}</td>
+        <td style="padding:4px 8px;font-variant-numeric:tabular-nums;">${new Date(r.ts).toLocaleTimeString()}</td>
+        <td style="padding:4px 8px;">${escH(m.name)}</td>
+        <td style="padding:4px 8px;color:${m.color};font-weight:600;">${escH(m.suffix)}</td>
+        <td style="padding:4px 8px;font-family:monospace;font-size:0.78rem;color:#333;">${escH(payloadStr)}</td>
       </tr>`;
     }).join('');
   }
 
-  // Populate the face-event "user" dropdown from face_01.last_status.users.
-  // If empty, fall back to a literal "user 0 · muroch" entry so the picker
-  // is never empty (covers the case where no one's enrolled yet).
   function renderFrUserPicker(frUsers) {
     const sel = document.getElementById('cs-fr-user');
-    const list = Array.isArray(frUsers) && frUsers.length
-      ? frUsers
-      : [{ id: 0, name: 'muroch' }];
+    if (!sel) return;
+    const list = Array.isArray(frUsers) && frUsers.length ? frUsers : [{ id: 0, name: 'muroch' }];
+    const sig = list.map(u => `${u.id}|${u.name}`).join(',');
+    if (sel.dataset.sig === sig) return;
+    sel.dataset.sig = sig;
     sel.innerHTML = list.map(u =>
       `<option value="${escH(u.id)}|${escH(u.name)}">user ${escH(u.id)} · ${escH(u.name)}</option>`
     ).join('');
   }
 
-  async function loadState() {
+  function setStatus(text, color) {
+    const el = document.getElementById('cs-events-status');
+    if (el) { el.textContent = text; el.style.color = color; }
+  }
+
+  async function poll() {
     try {
       const r = await fetch('/api/corridor-sim/state');
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const s = await r.json();
       renderLiveState(s);
-      renderPixoo(s.pixoo || {});
-      renderEvents(s.events || []);
       const frUsers = s.fr && s.fr.board && s.fr.board.last_status && s.fr.board.last_status.users;
       renderFrUserPicker(frUsers);
+      if (!_paused && Array.isArray(s.events)) {
+        const newKey = s.events.length ? `${s.events[0].ts}|${s.events[0].topic}` : '';
+        const oldKey = _events.length  ? `${_events[0].ts}|${_events[0].topic}` : '';
+        if (newKey !== oldKey) {
+          _events = s.events;
+          renderEvents(_events);
+        }
+      }
+      setStatus(_paused ? '⏸ paused' : '● live', _paused ? '#888' : '#3a7d44');
     } catch (e) {
-      // Don't spam — just log once per failure
-      console.warn('corridor-sim state load failed:', e.message);
+      setStatus('✗ ' + e.message, '#c0392b');
     }
   }
 
-  // Trigger helpers — each shows a one-line result message under its button.
   async function trigger(url, body, resultId, successText) {
     const el = document.getElementById(resultId);
     el.style.color = '#666';
@@ -1261,8 +1257,7 @@
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       el.style.color = '#3a7d44';
       el.textContent = '✓ ' + successText;
-      // Refresh state quickly so the user sees their action's effect
-      setTimeout(loadState, 500);
+      setTimeout(poll, 200);
     } catch (e) {
       el.style.color = '#c0392b';
       el.textContent = '✗ ' + e.message;
@@ -1286,17 +1281,37 @@
       trigger('/api/corridor-sim/trigger-fr-event', { kind: 'face_unknown', reason: 'no_match' }, 'cs-fr-result', 'published face_unknown');
     document.getElementById('cs-btn-door').onclick = () =>
       trigger(`/api/esp/boards/${REMOTEXY_ID}/command`, { action: 'open_doorlock' }, 'cs-door-result', 'open_doorlock sent');
-    document.getElementById('cs-btn-light-on').onclick = () =>
-      trigger(`/api/devices/${COR_SWITCH_ID}/toggle`, { state: true,  channel: '1' }, 'cs-light-result', 'light ON');
-    document.getElementById('cs-btn-light-off').onclick = () =>
-      trigger(`/api/devices/${COR_SWITCH_ID}/toggle`, { state: false, channel: '1' }, 'cs-light-result', 'light OFF');
+
+    const stopBtn  = document.getElementById('cs-events-stop');
+    const startBtn = document.getElementById('cs-events-start');
+    const clearBtn = document.getElementById('cs-events-clear');
+    stopBtn.onclick = () => {
+      _paused = true;
+      stopBtn.style.display  = 'none';
+      startBtn.style.display = '';
+      setStatus('⏸ paused', '#888');
+    };
+    startBtn.onclick = () => {
+      _paused = false;
+      startBtn.style.display = 'none';
+      stopBtn.style.display  = '';
+      setStatus('● live', '#3a7d44');
+    };
+    clearBtn.onclick = async () => {
+      try {
+        await fetch('/api/corridor-sim/clear', { method: 'POST' });
+        _events = [];
+        renderEvents(_events);
+      } catch (e) {}
+    };
   }
 
   window.corridorSim_start = function () {
     if (started) return;
     started = true;
+    console.log('[corridor-sim v48] server-side MQTT capture, 1 s HTTP polling');
     wireButtons();
-    loadState();
-    pollTimer = setInterval(loadState, POLL_MS);
+    poll();
+    _pollTimer = setInterval(poll, POLL_MS);
   };
 })();

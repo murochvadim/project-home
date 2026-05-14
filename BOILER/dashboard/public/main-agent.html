@@ -51,6 +51,22 @@
     .rules-table .rule-name { font-weight:600; color:var(--text-primary); }
     .rules-table .rule-desc { color:var(--text-muted); font-size:0.8rem; }
     .rules-table .rule-cat { font-size:0.75rem; color:var(--brand-blue); }
+
+    /* Corridor Simulator — manual trigger card styling */
+    .cs-sim-card  { border:1px solid #e0dcd4; background:#fbf9f5; padding:14px; border-radius:6px; display:flex; flex-direction:column; gap:8px; }
+    .cs-sim-title { font-weight:600; font-size:0.95rem; color:#333; }
+    .cs-sim-hint  { color:#777; font-size:0.78rem; line-height:1.4; min-height:2.8em; }
+    .cs-sim-hint code { background:#efeae0; padding:1px 4px; border-radius:3px; font-size:0.74rem; }
+    .cs-sim-row   { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:4px; }
+    .cs-sim-btn   { flex:1 1 0; min-width:0; padding:8px 10px; font-size:0.85rem; font-weight:600; border:none; border-radius:4px; color:#fff; cursor:pointer; transition:filter 0.15s; }
+    .cs-sim-btn:hover    { filter:brightness(1.1); }
+    .cs-sim-btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .cs-sim-btn-green { background:#3a7d44; }
+    .cs-sim-btn-grey  { background:#888; }
+    .cs-sim-btn-blue  { background:#1565c0; }
+    .cs-sim-btn-red   { background:#c0392b; }
+    .cs-sim-select    { padding:6px 8px; font-size:0.82rem; border:1px solid #ccc; border-radius:4px; background:#fff; max-width:120px; }
+    .cs-sim-result    { font-size:0.78rem; color:#666; min-height:1.2em; margin-top:auto; }
   </style>
 </head>
 <body>
@@ -241,75 +257,64 @@
     </div>
 
     <div class="card">
-      <h2>Pixoo Live View</h2>
-      <div style="display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start;">
-        <div>
-          <img id="cs-pixoo-preview" alt="Pixoo display"
-               style="width:256px;height:256px;image-rendering:pixelated;background:#000;border:1px solid #d0cbc4;border-radius:4px;display:block;">
-          <div id="cs-pixoo-meta" style="font-size:0.78rem;color:#666;margin-top:6px;text-align:center;">—</div>
-        </div>
-        <div>
-          <strong style="font-size:0.88rem;">Items being rendered</strong>
-          <table id="cs-pixoo-items" style="width:100%;border-collapse:collapse;font-size:0.82rem;margin-top:6px;">
-            <thead style="background:#efeae0;">
-              <tr>
-                <th style="padding:4px 8px;text-align:left;">Text</th>
-                <th style="padding:4px 8px;text-align:right;width:60px;">x,y</th>
-                <th style="padding:4px 8px;text-align:right;width:80px;">Color</th>
-              </tr>
-            </thead>
-            <tbody><tr><td colspan="3" style="padding:6px;color:#888;">—</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
       <h2>Manual Simulation</h2>
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;font-size:0.85rem;">
-        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
-          <strong>① Trigger Corridor Presence</strong>
-          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Publishes <code>{"1": &lt;bool&gt;}</code> to <code>mur/home/device/&lt;corridor-presence&gt;/event</code> — matches the real Tuya adapter payload shape.</p>
-          <button class="btn-save-params" id="cs-btn-presence-on">▶ Simulate "present"</button>
-          <button class="btn-save-params" id="cs-btn-presence-off" style="margin-left:6px;background:#666;border-color:#666;">▶ Simulate "absent"</button>
-          <div id="cs-presence-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;font-size:0.85rem;">
+
+        <div class="cs-sim-card">
+          <div class="cs-sim-title">① Corridor Presence</div>
+          <div class="cs-sim-hint">Publishes <code>{"1": &lt;bool&gt;}</code> to <code>mur/home/device/&lt;id&gt;/event</code> — Tuya adapter payload shape.</div>
+          <div class="cs-sim-row">
+            <button class="cs-sim-btn cs-sim-btn-green" id="cs-btn-presence-on">▶ Present</button>
+            <button class="cs-sim-btn cs-sim-btn-grey"  id="cs-btn-presence-off">▶ Absent</button>
+          </div>
+          <div class="cs-sim-result" id="cs-presence-result"></div>
         </div>
-        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
-          <strong>② Trigger FR recognition event</strong>
-          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Publishes to <code>mur/home/esp/face_01/event</code> as if the FR module just returned a result. Pick a user from the enrolled list, or simulate an unknown face.</p>
-          <select id="cs-fr-user" style="padding:4px 8px;font-size:0.85rem;"></select>
-          <button class="btn-save-params" id="cs-btn-fr-identified" style="margin-left:6px;background:#1565c0;border-color:#1565c0;">▶ face_identified</button>
-          <button class="btn-save-params" id="cs-btn-fr-unknown" style="margin-left:6px;background:#c0392b;border-color:#c0392b;">▶ face_unknown</button>
-          <div id="cs-fr-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
+
+        <div class="cs-sim-card">
+          <div class="cs-sim-title">② FR Recognition Result</div>
+          <div class="cs-sim-hint">Publishes to <code>mur/home/esp/face_01/event</code> as if the FR module just returned a result.</div>
+          <div class="cs-sim-row">
+            <select id="cs-fr-user" class="cs-sim-select"></select>
+            <button class="cs-sim-btn cs-sim-btn-blue" id="cs-btn-fr-identified">▶ Identified</button>
+            <button class="cs-sim-btn cs-sim-btn-red"  id="cs-btn-fr-unknown">▶ Unknown</button>
+          </div>
+          <div class="cs-sim-result" id="cs-fr-result"></div>
         </div>
-        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
-          <strong>③ Manually pulse the door</strong>
-          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Directly fires RemoteXY's <code>open_doorlock</code> — bypasses the chain. Useful for confirming the relay still works.</p>
-          <button class="btn-save-params" id="cs-btn-door" style="background:#3a7d44;border-color:#3a7d44;">▶ open_doorlock</button>
-          <div id="cs-door-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
+
+        <div class="cs-sim-card">
+          <div class="cs-sim-title">③ Door Unlock (direct)</div>
+          <div class="cs-sim-hint">Bypasses the chain — fires RemoteXY's <code>open_doorlock</code> immediately. Useful for relay sanity-checks.</div>
+          <div class="cs-sim-row">
+            <button class="cs-sim-btn cs-sim-btn-green" id="cs-btn-door">▶ open_doorlock</button>
+          </div>
+          <div class="cs-sim-result" id="cs-door-result"></div>
         </div>
-        <div style="border:1px solid #e0dcd4;background:#fbf9f5;padding:12px;border-radius:4px;">
-          <strong>④ Toggle Corridor light</strong>
-          <p style="margin:6px 0;color:#666;font-size:0.78rem;">Directly toggles Corridor Switch DPS&nbsp;1 — the main light. Useful for visual verification when standing in the corridor.</p>
-          <button class="btn-save-params" id="cs-btn-light-on">▶ Light ON</button>
-          <button class="btn-save-params" id="cs-btn-light-off" style="margin-left:6px;background:#666;border-color:#666;">▶ Light OFF</button>
-          <div id="cs-light-result" style="font-size:0.78rem;color:#666;margin-top:6px;"></div>
-        </div>
+
       </div>
     </div>
 
     <div class="card">
-      <h2>Recent Events <span style="font-size:0.78rem;color:#666;font-weight:normal;">(last 15 from all 4 devices)</span></h2>
+      <h2 style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <span>Recent Events
+          <span style="font-size:0.78rem;color:#666;font-weight:normal;">(live MQTT — last 50 messages across 4 devices)</span>
+          <span id="cs-events-status" style="font-size:0.78rem;color:#3a7d44;font-weight:normal;margin-left:8px;">● live</span>
+        </span>
+        <span style="display:flex;gap:6px;">
+          <button id="cs-events-stop"  class="cs-sim-btn cs-sim-btn-grey"  style="padding:5px 12px;font-size:0.78rem;flex:0 0 auto;">⏸ Stop update</button>
+          <button id="cs-events-start" class="cs-sim-btn cs-sim-btn-green" style="padding:5px 12px;font-size:0.78rem;flex:0 0 auto;display:none;">▶ Start update</button>
+          <button id="cs-events-clear" class="cs-sim-btn cs-sim-btn-red"   style="padding:5px 12px;font-size:0.78rem;flex:0 0 auto;">🗑 Clear all</button>
+        </span>
+      </h2>
       <table id="cs-events" style="width:100%;border-collapse:collapse;font-size:0.82rem;">
         <thead style="background:#efeae0;">
           <tr>
             <th style="padding:4px 8px;text-align:left;width:130px;">Timestamp</th>
             <th style="padding:4px 8px;text-align:left;width:180px;">Device</th>
             <th style="padding:4px 8px;text-align:left;width:100px;">Source</th>
-            <th style="padding:4px 8px;text-align:left;">DPS</th>
+            <th style="padding:4px 8px;text-align:left;">Payload</th>
           </tr>
         </thead>
-        <tbody><tr><td colspan="4" style="padding:6px;color:#888;">Loading…</td></tr></tbody>
+        <tbody><tr><td colspan="4" style="padding:6px;color:#888;">awaiting first message…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -319,6 +324,6 @@
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=8"></script>
 <script src="js/device-picker.js?v=11"></script>
-<script src="js/main-agent.js?v=41"></script>
+<script src="js/main-agent.js?v=48"></script>
 </body>
 </html>

@@ -1495,10 +1495,11 @@ app.get('/api/pixoo/status', async (_req, res) => {
 });
 
 // ─── Corridor Simulator (Main Agent tab) ────────────────────────────────
-// Three endpoints back the Corridor Simulator UI in main-agent.html:
-//   1. GET  /api/corridor-sim/state           — aggregate live state of the 5 chain pieces
+// Four endpoints back the Corridor Simulator UI in main-agent.html:
+//   1. GET  /api/corridor-sim/state           — aggregate live state of the 4 chain devices + server's MQTT ring buffer
 //   2. POST /api/corridor-sim/trigger-presence — publish a fake Corridor Presence event
 //   3. POST /api/corridor-sim/trigger-fr-event — publish a fake face_identified/face_unknown
+//   4. POST /api/corridor-sim/clear            — empty the server's ring buffer (backs the "🗑 Clear all" button)
 // IDs are hardcoded since the chain is single-purpose: Corridor + face_01 + remoteXY_01.
 const CORRIDOR_SIM_IDS = {
   presence:   'bfbdca138cb1c78c3dlbmc',
@@ -1506,6 +1507,56 @@ const CORRIDOR_SIM_IDS = {
   fr:         'face_01',
   remotexy:   'remoteXY_01',
 };
+
+// ─── Server-side MQTT ring buffer for the Corridor Simulator ────────────
+// We tried browser-side WS subscription first — turned out hard for the user
+// to verify (browser tab churn dropped messages, ACL pattern mismatches were
+// silent, hard to debug without dev tools). Simpler: server.js's MQTT client
+// (rule_engine creds, full read access) subscribes once at startup, keeps a
+// ring buffer of the last N messages on the 4 chain devices, exposes it via
+// the existing /api/corridor-sim/state endpoint. Browser just polls — no
+// MQTT lib, no WS lifecycle worries.
+const CORRIDOR_SIM_BUFFER_MAX = 50;
+const _corridorSimBuffer = [];                                     // [{ ts, topic, payload }] most-recent first
+const _corridorSimChainIds = new Set(Object.values(CORRIDOR_SIM_IDS));
+
+function _corridorSimRecord(topic, payloadBuf) {
+  const parts = String(topic || '').split('/');
+  if (parts.length !== 5 || parts[0] !== 'mur' || parts[1] !== 'home'
+      || (parts[2] !== 'device' && parts[2] !== 'esp')
+      || !_corridorSimChainIds.has(parts[3])) {
+    return;
+  }
+  let payload;
+  try { payload = JSON.parse(payloadBuf.toString()); } catch (_) { payload = payloadBuf.toString(); }
+  _corridorSimBuffer.unshift({ ts: new Date().toISOString(), topic, payload });
+  if (_corridorSimBuffer.length > CORRIDOR_SIM_BUFFER_MAX) _corridorSimBuffer.length = CORRIDOR_SIM_BUFFER_MAX;
+}
+
+// Subscribe on MQTT connect — and re-subscribe on every reconnect, since
+// mqtt.js v5 clears subscriptions after disconnect. The 'connect' event
+// also fires on reconnect, so this is idempotent.
+mqttClient.on('connect', () => {
+  const topics = [
+    'mur/home/device/+/event',
+    'mur/home/device/+/state',
+    'mur/home/esp/+/event',
+    'mur/home/esp/+/status',
+    'mur/home/esp/+/command',
+  ];
+  topics.forEach(t => mqttClient.subscribe(t, { qos: 0 }, (err) => {
+    if (err) console.warn('corridor-sim broker subscribe failed:', t, err.message);
+  }));
+});
+mqttClient.on('message', (topic, payload) => {
+  _corridorSimRecord(topic, payload);
+});
+
+// Clear the ring buffer — backs the "🗑 Clear all" button in the dashboard.
+app.post('/api/corridor-sim/clear', (_req, res) => {
+  _corridorSimBuffer.length = 0;
+  res.json({ ok: true });
+});
 
 app.get('/api/corridor-sim/state', async (_req, res) => {
   try {
@@ -1527,27 +1578,16 @@ app.get('/api/corridor-sim/state', async (_req, res) => {
       [CORRIDOR_SIM_IDS.fr, CORRIDOR_SIM_IDS.remotexy]
     );
     const boards = Object.fromEntries(ebR.rows.map(r => [r.id, r]));
-    // 3) Pixoo screen + preview from rule_engine_state
-    const pixR = await db.query(
-      `SELECT key, value FROM rule_engine_state WHERE key IN ('_pixoo_screen','_pixoo_preview','_pixoo_paused')`
-    );
-    const pix = Object.fromEntries(pixR.rows.map(r => [r.key, r.value]));
-    // 4) Last 15 events from device_events filtered to the 4 IDs (real-or-simulated, source tagged)
-    const evR = await db.query(
-      `SELECT ts, device_id, source, dps
-       FROM device_events
-       WHERE device_id = ANY($1)
-       ORDER BY ts DESC
-       LIMIT 15`,
-      [ids]
-    );
+    // 3) Recent MQTT messages from the server-side ring buffer (last 50,
+    //    captured live by the mqttClient subscription above — covers every
+    //    /event /state /status /command for the 4 chain devices regardless
+    //    of whether it landed in device_events).
     res.json({
       presence:   byId[CORRIDOR_SIM_IDS.presence]    || null,
       cor_switch: byId[CORRIDOR_SIM_IDS.cor_switch]  || null,
       fr:         { device: byId[CORRIDOR_SIM_IDS.fr] || null, board: boards[CORRIDOR_SIM_IDS.fr] || null },
       remotexy:   { device: byId[CORRIDOR_SIM_IDS.remotexy] || null, board: boards[CORRIDOR_SIM_IDS.remotexy] || null },
-      pixoo:      { screen: pix._pixoo_screen || null, preview: pix._pixoo_preview || null, paused: pix._pixoo_paused === true || pix._pixoo_paused === 'true' },
-      events:     evR.rows,
+      events:     _corridorSimBuffer.slice(),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
