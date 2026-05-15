@@ -718,7 +718,10 @@
           segPart = segCells;
         }
         return `
-        <tr style="border-top:1px solid #e8e3d8;">
+        <tr style="border-top:1px solid #e8e3d8;" data-brs-sent-row data-brs-sent-rule="${rule.id}" data-brs-sent-id="${s.id}">
+          <td style="padding:4px 0;text-align:center;width:20px;vertical-align:middle;">
+            <span draggable="true" data-brs-sent-handle title="Drag to reorder" style="cursor:grab;color:#aaa;font-size:0.95rem;user-select:none;display:inline-block;line-height:1;padding:2px 4px;">⋮⋮</span>
+          </td>
           <td style="padding:4px 6px;text-align:center;width:36px;color:#888;font-size:0.78rem;vertical-align:middle;">${sIdx + 1}.</td>
           <td style="padding:4px 6px;text-align:center;width:40px;vertical-align:middle;">
             <input type="checkbox" ${s.active ? 'checked' : ''} data-brs-rule="${rule.id}" data-brs-sent="${s.id}" data-brs-field="active" style="margin:0;" />
@@ -751,6 +754,7 @@
             <table style="border-collapse:collapse;table-layout:auto;">
               <thead>
                 <tr style="background:#f0ece3;font-size:0.7rem;color:#666;">
+                  <th style="padding:3px 0;width:20px;"></th>
                   <th style="padding:3px 6px;text-align:center;width:36px;">#</th>
                   <th style="padding:3px 6px;text-align:center;width:40px;">Active</th>
                   ${segHeaderRow}
@@ -795,6 +799,62 @@
         if (fromIdx < 0 || toIdx < 0) return;
         const [moved] = brsRules.splice(fromIdx, 1);
         brsRules.splice(toIdx, 0, moved);
+        brsMarkDirty();
+        brsRender();
+      });
+    });
+    // Sentence-row reordering (within a card only).
+    // Drag source is the ⋮⋮ handle span (draggable=true); drop target is the
+    // whole <tr>. Cross-card drops are blocked silently — handle stays grabbed,
+    // cursor reflects no-drop, drop is a no-op.
+    let _dragSentRuleId = null;
+    let _dragSentSentId = null;
+    let _dragSentSourceTr = null;
+    container.querySelectorAll('[data-brs-sent-handle]').forEach(handle => {
+      handle.addEventListener('dragstart', (e) => {
+        const tr = handle.closest('[data-brs-sent-row]');
+        if (!tr) return;
+        _dragSentRuleId = tr.dataset.brsSentRule;
+        _dragSentSentId = tr.dataset.brsSentId;
+        _dragSentSourceTr = tr;
+        tr.style.opacity = '0.4';
+        e.dataTransfer.effectAllowed = 'move';
+        // Required for Firefox — needs SOME data set on the transfer
+        try { e.dataTransfer.setData('text/plain', _dragSentSentId); } catch (_) {}
+      });
+      handle.addEventListener('dragend', () => {
+        if (_dragSentSourceTr) _dragSentSourceTr.style.opacity = '';
+        _dragSentRuleId = null;
+        _dragSentSentId = null;
+        _dragSentSourceTr = null;
+      });
+    });
+    container.querySelectorAll('[data-brs-sent-row]').forEach(tr => {
+      tr.addEventListener('dragover', (e) => {
+        if (!_dragSentRuleId) return;
+        const overRuleId = tr.dataset.brsSentRule;
+        const overSentId = tr.dataset.brsSentId;
+        if (overRuleId !== _dragSentRuleId) return;  // cross-card blocked
+        if (overSentId === _dragSentSentId) return;  // self
+        e.preventDefault();  // only allow drop when in same rule
+        tr.style.borderTop = '3px solid #6c4f9f';
+      });
+      tr.addEventListener('dragleave', () => {
+        tr.style.borderTop = '1px solid #e8e3d8';
+      });
+      tr.addEventListener('drop', (e) => {
+        tr.style.borderTop = '1px solid #e8e3d8';
+        const overRuleId = tr.dataset.brsSentRule;
+        const overSentId = tr.dataset.brsSentId;
+        if (!_dragSentRuleId || overRuleId !== _dragSentRuleId || overSentId === _dragSentSentId) return;
+        e.preventDefault();
+        const rule = brsRules.find(r => r.id === _dragSentRuleId);
+        if (!rule) return;
+        const fromIdx = (rule.sentences || []).findIndex(s => s.id === _dragSentSentId);
+        const toIdx   = (rule.sentences || []).findIndex(s => s.id === overSentId);
+        if (fromIdx < 0 || toIdx < 0) return;
+        const [moved] = rule.sentences.splice(fromIdx, 1);
+        rule.sentences.splice(toIdx, 0, moved);
         brsMarkDirty();
         brsRender();
       });
