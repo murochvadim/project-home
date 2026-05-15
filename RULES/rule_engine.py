@@ -1939,6 +1939,27 @@ class RuleEngine:
                             )
                         except Exception:
                             log.warning('Failed to clear _spatial_reload_request flag', exc_info=True)
+                    # Per-rule runs-counter reset — dashboard "Reset" button sets
+                    # _rule_stats_reset to the rule's name. We zero the count field
+                    # only (avg/max/last_fired stay intact), then clear the flag.
+                    reset_target = self.state.shared.get('_rule_stats_reset')
+                    if reset_target:
+                        try:
+                            stats = self._rule_stats.get(reset_target, {})
+                            if stats:
+                                stats['count']    = 0
+                                stats['total_ms'] = 0  # so avg recomputes from fresh fires
+                                self._rule_stats[reset_target] = stats
+                            log.info("Reset runs counter for rule '%s'", reset_target)
+                        except Exception:
+                            log.warning('Failed to reset rule stats', exc_info=True)
+                        self.state.shared['_rule_stats_reset'] = ''
+                        try:
+                            self.state.db_execute(
+                                "DELETE FROM rule_engine_state WHERE key = '_rule_stats_reset'"
+                            )
+                        except Exception:
+                            log.warning('Failed to clear _rule_stats_reset flag', exc_info=True)
                     # Count rule files on disk for dashboard "new rule" badge
                     rules_dir = os.path.join(os.path.dirname(__file__), 'rules')
                     disk_count = len([f for f in os.listdir(rules_dir)

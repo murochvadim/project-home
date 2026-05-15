@@ -314,6 +314,34 @@
     if (e.target === this) closeRuleTrace();
   });
 
+  // Reset just the Runs counter for one rule. Engine picks up within ≤60s.
+  // The current row's runs cell is updated optimistically; subsequent polls
+  // will reflect the engine-confirmed reset.
+  window.resetRuleRuns = async function (name) {
+    try {
+      const r = await fetch('/api/rule-engine/reset-runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule: name }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // Optimistic UI: zero the Runs cell for this rule's row.
+      document.querySelectorAll('#rules-body tr').forEach(tr => {
+        const nameCell = tr.querySelector('.rule-name');
+        if (nameCell && nameCell.textContent.trim().startsWith(name)) {
+          // Runs is the 6th td (group-dot, name, group, pri, time, runs, ...)
+          // — but with section grouping we now have 11 columns, runs is 7th.
+          // Cell indexing instead: find by the 'text-align:center' cells positioning.
+          const cells = tr.querySelectorAll('td');
+          // Order: dot, name, group, pri, time, runs, avg, max, last_fired, enabled, actions
+          if (cells.length >= 11 && cells[5]) cells[5].textContent = '0';
+        }
+      });
+    } catch (e) {
+      console.warn('reset runs failed:', e.message);
+    }
+  };
+
   window.testRule = async function (name, force) {
     const el = document.getElementById('test-result');
     if (!el) return;
@@ -621,6 +649,7 @@
             <td style="white-space:nowrap;">
               <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',false)" style="font-size:0.68rem;padding:2px 6px;" title="Dry-run test">Test</button>
               <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#7a9ab8;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
+              <button class="btn btn-secondary btn-sm" onclick="resetRuleRuns('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 6px;" title="Zero the Runs counter only (avg/max/last-fired stay) — engine applies within 60 s">↺</button>
             </td>
           </tr>`;
         };

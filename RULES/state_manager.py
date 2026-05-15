@@ -30,7 +30,7 @@ DB_CONFIG = {
 }
 
 # Keys owned by the dashboard — loaded from DB but never overwritten by save
-_DASHBOARD_KEYS = {'_disabled_rules', '_rule_overrides', '_reload_request', '_spatial_reload_request'}
+_DASHBOARD_KEYS = {'_disabled_rules', '_rule_overrides', '_reload_request', '_spatial_reload_request', '_rule_stats_reset'}
 
 
 # ======================================================================

@@ -2090,6 +2090,26 @@ app.post('/api/rule-engine/reload', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Per-rule runs-counter reset. Writes `_rule_stats_reset=<rule_name>` flag;
+// engine heartbeat picks it up within ≤60s, zeros `count` + `total_ms` for
+// that rule (so avg recomputes from fresh fires), clears the flag.
+// avg/max/last_fired are NOT cleared — they remain useful diagnostics.
+app.post('/api/rule-engine/reset-runs', async (req, res) => {
+  const ruleName = req.body && req.body.rule;
+  if (!ruleName || typeof ruleName !== 'string') {
+    return res.status(400).json({ error: 'rule (string) required in body' });
+  }
+  try {
+    await db.query(
+      `INSERT INTO rule_engine_state (key, value, updated_at)
+       VALUES ('_rule_stats_reset', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [JSON.stringify(ruleName)]
+    );
+    res.json({ ok: true, rule: ruleName, note: 'Engine picks up within 60 s on next heartbeat tick' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Flip `_spatial_reload_request='pending'` so the rule-engine heartbeat picks
 // up apartment-layout / placement changes within ≤60s. Non-fatal: if this
 // fails the next midnight refresh still catches the change.
