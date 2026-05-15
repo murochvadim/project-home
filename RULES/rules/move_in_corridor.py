@@ -5,6 +5,7 @@ On Corridor Presence rising edge (DPS '1' transitions 'none' → 'presence'):
   2. WHEN home_mode == 'home' —
        Awtrix preset push (saved app named by `awtrix_preset` sentence)
        Entrance Monitor Switch Ch.2 → ON
+       Face Recognition (face_01 ESP board) screen → ON
   3. AFTER `pixoo_delay_sec` seconds — Pixoo preset push (name from sentence).
 
 Cooldown `cooldown_sec` between fires prevents flicker spam when the mmWave
@@ -52,6 +53,7 @@ CORRIDOR_SWITCH_ID   = 'bfe47a84d7cb783f59inot'
 ENTRANCE_MONITOR_ID  = 'bfb4de883ef1713bfdfdpw'
 AWTRIX_ID            = 'awtrix_05ec2c'
 PIXOO_ID             = 'pixoo'
+FACE_RECOGNITION_ID  = 'face_01'
 
 # Fallback defaults — overridden by container `r_move_in_corridor` if
 # sentences are present and parseable.
@@ -255,6 +257,17 @@ def evaluate(event, state):
             "device_id": ENTRANCE_MONITOR_ID,
             "action":    "turn_on",
             "channel":   "2",
+            "rule":      "Move in Corridor",
+            "_skip_loop_guard": True,
+        })
+        # Face Recognition board: screen on so the camera UI is visible
+        # when someone enters the corridor. Sketch action key resolved via
+        # devices.dps_config.screen.action_on='screen_on' (esp protocol).
+        commands.append({
+            "device_id": FACE_RECOGNITION_ID,
+            "protocol":  "esp",
+            "action":    "turn_on",
+            "channel":   "screen",
             "rule":      "Move in Corridor",
             "_skip_loop_guard": True,
         })
