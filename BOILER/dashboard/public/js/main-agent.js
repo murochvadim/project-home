@@ -1226,6 +1226,14 @@
       else                           color = '#888';
       return { name, suffix, color };
     }
+    // Pixoo command — flat topic, no per-device id.
+    if (parts[0] === 'mur' && parts[1] === 'home' && parts[2] === 'pixoo' && parts.length === 4) {
+      return { name: 'Pixoo', suffix: parts[3], color: '#e67e22' };
+    }
+    // Awtrix — flat topic, device id IS the prefix.
+    if (parts[0] === 'awtrix_05ec2c' && parts.length === 2) {
+      return { name: 'Awtrix', suffix: parts[1], color: '#e67e22' };
+    }
     return { name: topic, suffix: '', color: '#888' };
   }
 
