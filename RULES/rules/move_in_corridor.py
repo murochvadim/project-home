@@ -155,15 +155,22 @@ def _read_knobs(state):
 
 
 def _try_fire_pending_pixoo(state):
-    """If a scheduled Pixoo push is due, return the command and clear state."""
+    """If a scheduled Pixoo push is due, return the command and clear state.
+
+    NOTE: state.shared keys are not deleted via pop() because save_shared_state
+    only UPSERTs (never DELETEs), and load_shared_state restores any DB key
+    that isn't in memory — popping leads to infinite refire every heartbeat.
+    Set falsy sentinels instead so the keys stay in memory as 0/'' and
+    load_shared_state's `if key not in self.shared` branch is skipped.
+    """
     ts = state.shared.get('move_in_corridor.pending_pixoo_ts')
     if not ts:
         return None
     if time.time() < float(ts):
         return None
     preset = state.shared.get('move_in_corridor.pending_pixoo_preset', '')
-    state.shared.pop('move_in_corridor.pending_pixoo_ts', None)
-    state.shared.pop('move_in_corridor.pending_pixoo_preset', None)
+    state.shared['move_in_corridor.pending_pixoo_ts'] = 0
+    state.shared['move_in_corridor.pending_pixoo_preset'] = ''
     if not preset:
         return None
     log.info("Move in Corridor: firing scheduled Pixoo push '%s'", preset)
