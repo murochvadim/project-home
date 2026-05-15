@@ -1,79 +1,72 @@
 """Move in Corridor — corridor presence chain entry rule.
 
 On Corridor Presence rising edge (DPS '1' transitions 'none' → 'presence'):
-  1. ALWAYS — Corridor Switch (DPS '1') → ON
-  2. WHEN home_mode == 'home' —
-       Awtrix preset push (saved app named by `awtrix_preset` sentence)
-       Entrance Monitor Switch Ch.2 → ON
-       Face Recognition (face_01 ESP board) screen → ON
-  3. AFTER `pixoo_delay_sec` seconds — Pixoo preset push (name from sentence).
+  1. ALWAYS — fire chips from the "on presence" sentence.
+  2. WHEN home_mode == 'home' — fire chips from the "when home" sentence(s).
+  3. AFTER `pixoo_delay_sec` seconds — fire chips from the "after delay"
+     sentence (typically a Pixoo preset push).
+
+Everything except the trigger device is sentence-driven via container
+`r_move_in_corridor` on the Main Agent → Base Rule Settings tab. Add
+or remove devices by editing chips in the dashboard — no code changes.
+
+Sentence classification (by text content):
+  - contains 'on presence'  → always bucket (every rising edge)
+  - contains 'when home'    → home-mode bucket (rising edge AND home_mode=home)
+  - contains 'after delay'  → delayed bucket (fired pixoo_delay_sec later)
+  - contains 'delay is N seconds'    → sets pixoo_delay_sec
+  - contains 'cooldown is N seconds' → sets cooldown_sec
 
 Cooldown `cooldown_sec` between fires prevents flicker spam when the mmWave
 sensor flutters on the edge of the cone.
 
 Triggers list includes the presence sensor's id (rising-edge entry path)
-AND `heartbeat` (so the delayed Pixoo push fires within 60 s even if the
-sensor goes silent after the presence event). In practice the mmWave
+AND `heartbeat` so the delayed bucket fires within 60 s even if the
+sensor goes silent after the presence event. In practice the mmWave
 sensor emits DPS updates 1-3×/sec during continued presence, so a 2-second
-delay typically fires within ~1 s of target time. The 60-s heartbeat is
-the safety net.
+delay typically fires within ~1 s of target time.
 
-Sentence-driven knobs (container `r_move_in_corridor`):
-  - s_mic1_light    — chip @Corridor Switch (informational; device id
-                      hardcoded for safety)
-  - s_mic2_monitor  — chip @Entrance Monitor Switch Ch.2 (same)
-  - s_mic3_awtrix   — chip @Awtrix push <preset_name>
-  - s_mic4_delay    — "pixoo delay is N seconds"
-  - s_mic5_pixoo    — chip @Pixoo push <preset_name>
-  - s_mic6_cooldown — "cooldown is N seconds"
-
-The chip-bearing sentences are parsed inline by `_extract_push_preset()`:
-@Awtrix push <name>  → awtrix_preset = <name>
-@Pixoo push <name>   → pixoo_preset  = <name>
-
-The text-only sentences are parsed by regex on the joined-text view.
-
-Defaults below act only as fallbacks if the container is missing or
-sentences can't be parsed — the source of truth is the sentence editor
-under Main Agent → Base Rule Settings.
+Trigger device (CORRIDOR_PRESENCE_ID) stays hardcoded: it's listed in
+RULE['triggers'] which is fixed at module load time; the rule engine
+subscribes to that ID at startup. The 5 output devices used previously
+(Corridor Switch, Entrance Monitor, Awtrix, Pixoo, Face Recognition)
+are now resolved from chips in the sentence container at fire time.
 """
 
 import json
 import logging
+import os
 import re
+import sys
 import time
 
 log = logging.getLogger("rule.move_in_corridor")
 
-# Device IDs hardcoded — these are not the kind of knobs the user will
-# want to tune from a sentence (changing them would mean rewiring the
-# entire chain). The sentences document them via chips for visibility.
+# RULES/ is the parent of rules/ — needed for `import _display_chips` since
+# rule files are loaded via importlib.util but share sys.path with the engine.
+_RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RULES_DIR not in sys.path:
+    sys.path.insert(0, _RULES_DIR)
+from _display_chips import parse_display_chip, build_devices_by_name  # noqa: E402
+
+# Trigger device — must be hardcoded because RULE['triggers'] is fixed at
+# module load and the engine builds its event-routing index from that list.
 CORRIDOR_PRESENCE_ID = 'bfbdca138cb1c78c3dlbmc'
-CORRIDOR_SWITCH_ID   = 'bfe47a84d7cb783f59inot'
-ENTRANCE_MONITOR_ID  = 'bfb4de883ef1713bfdfdpw'
-AWTRIX_ID            = 'awtrix_05ec2c'
-PIXOO_ID             = 'pixoo'
-FACE_RECOGNITION_ID  = 'face_01'
 
-# Fallback defaults — overridden by container `r_move_in_corridor` if
-# sentences are present and parseable.
-DEFAULTS = {
-    'cooldown_sec':    60,
-    'pixoo_delay_sec': 2,
-    'awtrix_preset':   'move_on_main_door',
-    'pixoo_preset':    'Corridor Stage 1',
-}
+# Fallback knob defaults — overridden by container `r_move_in_corridor`.
+DEFAULTS_COOLDOWN_SEC    = 60
+DEFAULTS_PIXOO_DELAY_SEC = 2
 
-# Cache parsed knobs for 30 s to avoid hitting the DB on every event.
+# Cache parsed config for 30 s to avoid hitting the DB on every event.
 # Sentence edits land via dashboard save → 30 s max before the rule
 # picks them up. Same pattern as other sentence-driven rules.
-_knob_cache = {'data': None, 'ts': 0.0}
-_KNOB_TTL_SEC = 30.0
+_config_cache = {'data': None, 'ts': 0.0}
+_CONFIG_TTL_SEC = 30.0
 
 
 RULE = {
     "name": "Move in Corridor",
-    "description": "Corridor presence chain — turn on light, conditional awtrix+monitor, delayed pixoo preset push",
+    "description": "Corridor presence chain — chips in r_move_in_corridor drive all output devices",
     "triggers": [CORRIDOR_PRESENCE_ID, "heartbeat"],
     "controls": [],
     "category": "control",
@@ -88,29 +81,151 @@ RULE = {
 }
 
 
-def _extract_push_preset(sentence, device_marker):
-    """Find a chip segment whose v contains `device_marker` followed by
-    'push <name>' and return <name>. Returns None if absent."""
-    for seg in sentence.get('segments', []):
-        if seg.get('t') != 'dev':
-            continue
-        v = seg.get('v', '')
-        if device_marker not in v:
-            continue
-        m = re.search(r'push\s+(.+?)\s*$', v)
+_CH_N_RE = re.compile(r'^Ch\.(\d+)$', re.IGNORECASE)
+
+
+def _resolve_switch_chip(token, devices_by_name):
+    """Resolve a switch / ESP / multi-channel chip to a command dict.
+    Returns None if the chip is a display chip (caller falls back to
+    parse_display_chip) OR cannot be resolved.
+
+    Format: `@<DeviceName> [<channel-label>] [on|off]`
+      - channel-label: matches channel_config.<key>.name, dps_labels.<key>,
+        dps_config.<key>.name (ESP boards), or literal `Ch.<N>` → "<N>".
+      - on/off: explicit. Defaults to turn_on if omitted.
+    """
+    if not token or not token.startswith('@'):
+        return None
+    body = token[1:].strip()
+    if not body:
+        return None
+    parts = body.split()
+    dev = None
+    rest_parts = []
+    for split_at in range(len(parts), 0, -1):
+        candidate = ' '.join(parts[:split_at])
+        if candidate in devices_by_name:
+            dev = devices_by_name[candidate]
+            rest_parts = parts[split_at:]
+            break
+    if not dev:
+        return None
+
+    # Skip if this is a display device — caller handles via parse_display_chip.
+    protocol = dev.get('protocol', '')
+    dtype    = dev.get('device_type', '')
+    if dtype == 'display' or protocol in ('pixoo', 'awtrix') or dtype == 'panel' or protocol == 'alexa':
+        return None
+
+    # Last word may be 'on'/'off' — explicit action.
+    action = 'turn_on'
+    if rest_parts and rest_parts[-1].lower() == 'on':
+        rest_parts = rest_parts[:-1]
+    elif rest_parts and rest_parts[-1].lower() == 'off':
+        action = 'turn_off'
+        rest_parts = rest_parts[:-1]
+
+    channel_text = ' '.join(rest_parts).strip()
+    channel = None
+
+    if channel_text:
+        m = _CH_N_RE.match(channel_text)
         if m:
-            return m.group(1).strip()
+            channel = m.group(1)
+        else:
+            ch_config = dev.get('channel_config') or {}
+            for k, v in ch_config.items():
+                if isinstance(v, dict) and (v.get('name') or '').lower() == channel_text.lower():
+                    channel = k
+                    break
+            if not channel:
+                dps_labels = dev.get('dps_labels') or {}
+                for k, v in dps_labels.items():
+                    if isinstance(v, str) and v.lower() == channel_text.lower():
+                        channel = k
+                        break
+            if not channel:
+                dps_config = dev.get('dps_config') or {}
+                for k, v in dps_config.items():
+                    if not isinstance(v, dict):
+                        continue
+                    if (v.get('name') or '').lower() == channel_text.lower() or k.lower() == channel_text.lower():
+                        channel = k
+                        break
+
+        if channel is None:
+            log.warning("Move in Corridor: chip %r — channel %r not found on device %s",
+                        token, channel_text, dev.get('id'))
+            return None
+
+    if not channel:
+        channel = '1'  # safe default for single-channel switches
+
+    cmd = {
+        'device_id': dev.get('id'),
+        'action':    action,
+        'channel':   channel,
+        'rule':      'Move in Corridor',
+        '_skip_loop_guard': True,
+    }
+    if protocol == 'esp':
+        cmd['protocol'] = 'esp'
+    elif protocol == 'hasp':
+        cmd['protocol'] = 'hasp'
+    return cmd
+
+
+def _resolve_chip(token, devices_by_name):
+    """Resolve any chip token to a command dict, or None.
+    Tries display/panel/alexa chips first, then generic switch/ESP."""
+    cmd = parse_display_chip(token, devices_by_name)
+    if cmd:
+        # Tag with rule + loop-guard like the local helper does
+        cmd.setdefault('rule', 'Move in Corridor')
+        cmd['_skip_loop_guard'] = True
+        return cmd
+    return _resolve_switch_chip(token, devices_by_name)
+
+
+def _classify_sentence(text):
+    """Return one of: 'always', 'when_home', 'delayed', 'knob_delay',
+    'knob_cooldown', or None."""
+    t = (text or '').lower()
+    if 'cooldown is' in t:
+        return 'knob_cooldown'
+    if 'delay is' in t:
+        return 'knob_delay'
+    if 'after delay' in t:
+        return 'delayed'
+    if 'when home' in t:
+        return 'when_home'
+    if 'on presence' in t:
+        return 'always'
     return None
 
 
-def _read_knobs(state):
-    """Parse the r_move_in_corridor sentence container. Returns dict of
-    knob values, falling back to DEFAULTS on any parse failure."""
+def _read_config(state):
+    """Parse `r_move_in_corridor` and return the live config:
+      {
+        'cooldown_sec':    int,
+        'pixoo_delay_sec': int,
+        'always_cmds':     [cmd, ...],
+        'when_home_cmds':  [cmd, ...],
+        'delayed_cmds':    [cmd, ...],
+      }
+    Chips are resolved at parse time so we cache the resolved commands.
+    """
     now = time.time()
-    if _knob_cache['data'] is not None and (now - _knob_cache['ts']) < _KNOB_TTL_SEC:
-        return _knob_cache['data']
+    if _config_cache['data'] is not None and (now - _config_cache['ts']) < _CONFIG_TTL_SEC:
+        return _config_cache['data']
 
-    knobs = dict(DEFAULTS)
+    cfg = {
+        'cooldown_sec':    DEFAULTS_COOLDOWN_SEC,
+        'pixoo_delay_sec': DEFAULTS_PIXOO_DELAY_SEC,
+        'always_cmds':     [],
+        'when_home_cmds':  [],
+        'delayed_cmds':    [],
+    }
     try:
         rows = state.db_query(
             "SELECT value FROM dashboard_settings WHERE key='apartment.rule_sentences'"
@@ -124,66 +239,82 @@ def _read_knobs(state):
         if not container:
             raise RuntimeError("container r_move_in_corridor not found")
 
+        devices_by_name = build_devices_by_name(state.devices)
+
         for sentence in container.get('sentences', []):
             if not sentence.get('active', True):
                 continue
-            # Reconstruct full text view (text + dev segments)
             full_text = ''.join(seg.get('v', '') for seg in sentence.get('segments', []))
+            kind = _classify_sentence(full_text)
+            if kind is None:
+                log.debug("Move in Corridor: sentence %r unclassified — skipping",
+                          sentence.get('id'))
+                continue
 
-            # Awtrix push preset from chip
-            p = _extract_push_preset(sentence, '@Awtrix')
-            if p:
-                knobs['awtrix_preset'] = p
+            if kind == 'knob_cooldown':
+                m = re.search(r'cooldown is\s+(\d+)\s*seconds?', full_text, re.I)
+                if m:
+                    cfg['cooldown_sec'] = int(m.group(1))
+                continue
+            if kind == 'knob_delay':
+                m = re.search(r'delay is\s+(\d+)\s*seconds?', full_text, re.I)
+                if m:
+                    cfg['pixoo_delay_sec'] = int(m.group(1))
+                continue
 
-            # Pixoo push preset from chip
-            p = _extract_push_preset(sentence, '@Pixoo')
-            if p:
-                knobs['pixoo_preset'] = p
+            # Chip sentence — collect resolved commands
+            sentence_cmds = []
+            for seg in sentence.get('segments', []):
+                if seg.get('t') != 'dev':
+                    continue
+                cmd = _resolve_chip(seg.get('v', ''), devices_by_name)
+                if cmd:
+                    sentence_cmds.append(cmd)
 
-            # Text-only knobs: cooldown + pixoo delay
-            m = re.search(r'cooldown is\s+(\d+)\s*seconds?', full_text, re.I)
-            if m:
-                knobs['cooldown_sec'] = int(m.group(1))
-            m = re.search(r'pixoo delay is\s+(\d+)\s*seconds?', full_text, re.I)
-            if m:
-                knobs['pixoo_delay_sec'] = int(m.group(1))
+            if kind == 'always':
+                cfg['always_cmds'].extend(sentence_cmds)
+            elif kind == 'when_home':
+                cfg['when_home_cmds'].extend(sentence_cmds)
+            elif kind == 'delayed':
+                cfg['delayed_cmds'].extend(sentence_cmds)
 
     except Exception as e:
-        log.warning("Move in Corridor: knob parse failed (%s) — using defaults", e)
+        log.warning("Move in Corridor: config parse failed (%s) — using defaults", e)
 
-    _knob_cache['data'] = knobs
-    _knob_cache['ts'] = now
-    return knobs
+    _config_cache['data'] = cfg
+    _config_cache['ts'] = now
+    return cfg
 
 
-def _try_fire_pending_pixoo(state):
-    """If a scheduled Pixoo push is due, return the command and clear state.
+def _try_fire_pending(state):
+    """If a scheduled delayed command set is due, return the list and
+    clear the pending state.
 
-    NOTE: state.shared keys are not deleted via pop() because save_shared_state
-    only UPSERTs (never DELETEs), and load_shared_state restores any DB key
-    that isn't in memory — popping leads to infinite refire every heartbeat.
-    Set falsy sentinels instead so the keys stay in memory as 0/'' and
+    state.shared keys are NOT pop()'d — save_shared_state only UPSERTs
+    (never DELETEs), and load_shared_state restores any DB key not in
+    memory. Popping leads to infinite refire every heartbeat. Set
+    falsy sentinels instead so the keys stay in memory as 0/'' and
     load_shared_state's `if key not in self.shared` branch is skipped.
     """
-    ts = state.shared.get('move_in_corridor.pending_pixoo_ts')
+    ts = state.shared.get('move_in_corridor.pending_ts')
     if not ts:
-        return None
+        return []
     if time.time() < float(ts):
-        return None
-    preset = state.shared.get('move_in_corridor.pending_pixoo_preset', '')
-    state.shared['move_in_corridor.pending_pixoo_ts'] = 0
-    state.shared['move_in_corridor.pending_pixoo_preset'] = ''
-    if not preset:
-        return None
-    log.info("Move in Corridor: firing scheduled Pixoo push '%s'", preset)
-    return {
-        "device_id":   PIXOO_ID,
-        "protocol":    "pixoo",
-        "action":      "push_preset",
-        "preset_name": preset,
-        "rule":        "Move in Corridor",
-        "_skip_loop_guard": True,
-    }
+        return []
+    payload = state.shared.get('move_in_corridor.pending_cmds', '')
+    state.shared['move_in_corridor.pending_ts'] = 0
+    state.shared['move_in_corridor.pending_cmds'] = ''
+    if not payload:
+        return []
+    try:
+        cmds = json.loads(payload) if isinstance(payload, str) else payload
+        if not isinstance(cmds, list):
+            return []
+        log.info("Move in Corridor: firing %d scheduled command(s)", len(cmds))
+        return cmds
+    except Exception as e:
+        log.warning("Move in Corridor: pending cmd decode failed (%s)", e)
+        return []
 
 
 def evaluate(event, state):
@@ -191,11 +322,9 @@ def evaluate(event, state):
     dev_id = event.get('device_id', '')
 
     # On every wake-up (any of this rule's triggers), check whether the
-    # delayed Pixoo push is due. Both heartbeat and presence-sensor events
+    # delayed command set is due. Both heartbeat and presence-sensor events
     # fire frequently enough to give sub-second-to-60-s precision.
-    pending = _try_fire_pending_pixoo(state)
-    if pending:
-        commands.append(pending)
+    commands.extend(_try_fire_pending(state))
 
     # Only the Corridor Presence sensor itself triggers the chain entry.
     if dev_id != CORRIDOR_PRESENCE_ID:
@@ -220,67 +349,37 @@ def evaluate(event, state):
     if last_pres == 'presence':
         return commands  # already in presence; no rising edge
 
-    # Cooldown — prevents the chain from firing repeatedly if presence
-    # flickers on the cone edge.
-    knobs = _read_knobs(state)
+    cfg = _read_config(state)
     cooldown = state.get_timer('move_in_corridor_cooldown')
-    if cooldown < knobs['cooldown_sec']:
+    if cooldown < cfg['cooldown_sec']:
         log.info("Move in Corridor: rising edge but cooldown (%ds < %ds) — skipping",
-                 cooldown, knobs['cooldown_sec'])
+                 cooldown, cfg['cooldown_sec'])
         return commands
     state.set_timer('move_in_corridor_cooldown')
 
-    log.info("Move in Corridor: rising edge — firing chain (knobs=%s)", knobs)
+    log.info("Move in Corridor: rising edge — firing chain "
+             "(always=%d, when_home=%d, delayed=%d, cooldown=%ds, delay=%ds)",
+             len(cfg['always_cmds']), len(cfg['when_home_cmds']),
+             len(cfg['delayed_cmds']), cfg['cooldown_sec'], cfg['pixoo_delay_sec'])
 
-    # 1. ALWAYS — Corridor light ON
-    commands.append({
-        "device_id": CORRIDOR_SWITCH_ID,
-        "action":    "turn_on",
-        "channel":   "1",
-        "rule":      "Move in Corridor",
-        "_skip_loop_guard": True,
-    })
+    # 1. ALWAYS bucket
+    commands.extend(cfg['always_cmds'])
 
-    # 2. WHEN home_mode == 'home' — Awtrix + Monitor Ch.2
+    # 2. WHEN home_mode == 'home' bucket
     home_mode = state.shared.get('home_mode', 'away')
     if home_mode == 'home':
-        if knobs.get('awtrix_preset'):
-            commands.append({
-                "device_id":   AWTRIX_ID,
-                "protocol":    "awtrix",
-                "action":      "push_preset",
-                "preset_name": knobs['awtrix_preset'],
-                "rule":        "Move in Corridor",
-                "_skip_loop_guard": True,
-            })
-        commands.append({
-            "device_id": ENTRANCE_MONITOR_ID,
-            "action":    "turn_on",
-            "channel":   "2",
-            "rule":      "Move in Corridor",
-            "_skip_loop_guard": True,
-        })
-        # Face Recognition board: screen on so the camera UI is visible
-        # when someone enters the corridor. Sketch action key resolved via
-        # devices.dps_config.screen.action_on='screen_on' (esp protocol).
-        commands.append({
-            "device_id": FACE_RECOGNITION_ID,
-            "protocol":  "esp",
-            "action":    "turn_on",
-            "channel":   "screen",
-            "rule":      "Move in Corridor",
-            "_skip_loop_guard": True,
-        })
+        commands.extend(cfg['when_home_cmds'])
     else:
-        log.info("Move in Corridor: home_mode='%s' (not home) — skipping awtrix+monitor", home_mode)
+        log.info("Move in Corridor: home_mode='%s' (not home) — skipping when-home bucket", home_mode)
 
-    # 3. Schedule delayed Pixoo push. Stored in state.shared so heartbeat
-    #    AND subsequent presence-sensor events both poll for it.
-    if knobs.get('pixoo_preset') and knobs['pixoo_delay_sec'] > 0:
-        fire_at = time.time() + knobs['pixoo_delay_sec']
-        state.shared['move_in_corridor.pending_pixoo_ts'] = fire_at
-        state.shared['move_in_corridor.pending_pixoo_preset'] = knobs['pixoo_preset']
-        log.info("Move in Corridor: scheduled Pixoo '%s' in %ds",
-                 knobs['pixoo_preset'], knobs['pixoo_delay_sec'])
+    # 3. Schedule delayed bucket (no gate — fires regardless of home_mode).
+    #    Stored as JSON-serialized command list so heartbeat AND subsequent
+    #    presence-sensor events both poll for it.
+    if cfg['delayed_cmds'] and cfg['pixoo_delay_sec'] > 0:
+        fire_at = time.time() + cfg['pixoo_delay_sec']
+        state.shared['move_in_corridor.pending_ts']   = fire_at
+        state.shared['move_in_corridor.pending_cmds'] = json.dumps(cfg['delayed_cmds'])
+        log.info("Move in Corridor: scheduled %d delayed command(s) in %ds",
+                 len(cfg['delayed_cmds']), cfg['pixoo_delay_sec'])
 
     return commands
