@@ -28,7 +28,18 @@ log = logging.getLogger('tuya_adapter')
 HEARTBEAT_INTERVAL = 12    # seconds — Tuya drops connection after ~20s without heartbeat
 RECONNECT_DELAY    = 5     # seconds — initial reconnect wait
 RECONNECT_MAX      = 60    # seconds — maximum reconnect wait
-SOCKET_TIMEOUT     = 5     # seconds — receive timeout (must be < heartbeat interval)
+SOCKET_TIMEOUT     = 15    # seconds — receive timeout (> heartbeat interval)
+KEEPALIVE_INTERVAL = 3600  # seconds — update last_seen for devices with no DPS (IR remotes etc.)
+
+# ─── Per-device silent-freeze watchdog ──────────────────────────────────────
+# A per-device TCP thread can sit silently for days if it's in a reconnect
+# loop where status()/receive() keeps timing out without raising. The
+# watchdog detects this by tracking last-active timestamps and forces a
+# reconnect when a thread goes silent — the alternative is a manual
+# device-agent restart, which froze Entrance Monitor Switch for 36 days
+# (2026-04-08 → 2026-05-15) before being noticed.
+WATCHDOG_INTERVAL_SEC = 300        # check every 5 min
+SILENT_FREEZE_SEC     = 3600       # 1 h with zero data = thread considered stuck
 
 from .tuya_config import API_REGION, API_KEY, API_SECRET
 
@@ -41,13 +52,33 @@ class TuyaAdapter(DeviceAdapter):
         self._threads    = []
         self._stop_event = threading.Event()
 
-        # Split devices by how we reach them
-        self._local   = [d for d in devices if d['protocol'] == 'local' and d.get('local_ip') and d.get('local_key')]
-        self._gateway = [d for d in devices if d['protocol'] == 'gateway']
+        # ─── Per-device watchdog state ─────────────────────────────────────
+        # Updated on every successful data read (push or poll) by the
+        # per-device thread; consulted by _watchdog_loop to detect frozen
+        # threads. Force-reconnect events let the watchdog poke a stuck
+        # thread without having to kill+respawn it.
+        self._per_dev_last_active:      dict[str, float]            = {}
+        self._per_dev_force_reconnect:  dict[str, threading.Event]  = {}
+        self._watchdog_thread = None
 
-        # Find gateway hub device (device_type='gateway', has local_ip)
+        # Find gateway hub device (device_type='gateway', has local_ip) FIRST
+        # so we can exclude it from the per-device-thread list below. Without
+        # the exclusion, a Tuya gateway with protocol='local' (which all of
+        # ours are) ends up in BOTH self._local AND self._gateway_dev — two
+        # TCP threads competing for the same device session, producing
+        # recurring Err 914 / 904 every ~90 s as one thread wins the
+        # handshake and the other gets rejected. async pushes still flow
+        # (so state stayed fresh and the bug was silent for months) but the
+        # error spam masks real problems. See audit 2026-05-15.
         gw = next((d for d in devices if d['device_type'] == 'gateway' and d.get('local_ip')), None)
         self._gateway_dev = gw
+        gw_id = gw['id'] if gw else None
+
+        # Split devices by how we reach them. Exclude _gateway_dev from
+        # _local — _gateway_thread will own its TCP connection exclusively.
+        self._local   = [d for d in devices if d['protocol'] == 'local' and d.get('local_ip') and d.get('local_key')
+                         and d['id'] != gw_id]
+        self._gateway = [d for d in devices if d['protocol'] == 'gateway']
 
         # node_id (short Zigbee ID from gateway push cid field) → full Tuya device_id
         # Populated once at startup by _bootstrap_gateway()
@@ -159,6 +190,16 @@ class TuyaAdapter(DeviceAdapter):
                         if dps:
                             self.on_state_change(dev['id'], dps, 'cloud_poll')
                         consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        log.warning(f'Gateway poll API error for {dev["name"]}: {r.get("msg", r)}')
+                        if consecutive_failures >= 10:
+                            log.warning('Gateway poll: 10 consecutive API failures — recreating Cloud session')
+                            try:
+                                cloud = tinytuya.Cloud(apiRegion=API_REGION, apiKey=API_KEY, apiSecret=API_SECRET)
+                                consecutive_failures = 0
+                            except Exception as ce:
+                                log.error(f'Gateway poll: Cloud reconnect failed: {ce}')
                     time.sleep(0.5)
                 except Exception as e:
                     consecutive_failures += 1
@@ -170,6 +211,66 @@ class TuyaAdapter(DeviceAdapter):
                             consecutive_failures = 0
                         except Exception as ce:
                             log.error(f'Gateway poll: Cloud reconnect failed: {ce}')
+
+    # ─── Per-device freeze watchdog ─────────────────────────────────────────
+
+    def _watchdog_loop(self):
+        """Detect frozen per-device threads (no data > SILENT_FREEZE_SEC)
+        and signal them to reopen their TCP connection.
+
+        Prior incident: Entrance Monitor Switch silent for 36 days because
+        a single per-device thread got stuck in a reconnect loop where
+        status()/receive() kept timing out, but the inner-loop `except:
+        break` was silent (no log). Service restart was the only recovery.
+
+        This watchdog runs in its own thread, scans every WATCHDOG_INTERVAL_SEC,
+        and force-reconnects any per-device thread that hasn't reported
+        activity within SILENT_FREEZE_SEC. The force-reconnect path is
+        cooperative — the per-device thread checks `force_event` each
+        iteration and breaks out of the inner loop cleanly when set, then
+        the outer loop opens a fresh TCP socket.
+
+        If the underlying issue is a rotated local_key (re-pair) or a
+        truly offline device, this won't fix it — but it WILL produce a
+        stream of loud reconnect-failure logs every 60 s instead of going
+        silent for weeks. That's the observability gain.
+        """
+        log.info(f'Tuya watchdog: scanning every {WATCHDOG_INTERVAL_SEC}s for threads silent > {SILENT_FREEZE_SEC}s')
+        while not self._stop_event.is_set():
+            if self._stop_event.wait(WATCHDOG_INTERVAL_SEC):
+                break
+            now = time.monotonic()
+            # Iterate all watched threads: per-device locals AND the gateway
+            # hub (which has its own silent-freeze pattern via half-dead TCP
+            # — d.receive() returning None forever without raising).
+            watched = list(self._local)
+            if self._gateway_dev:
+                watched.append(self._gateway_dev)
+            for dev in watched:
+                dev_id = dev['id']
+                last = self._per_dev_last_active.get(dev_id)
+                if last is None:
+                    # Thread hasn't registered itself yet — skip
+                    continue
+                silent_for = now - last
+                if silent_for < SILENT_FREEZE_SEC:
+                    continue
+                event = self._per_dev_force_reconnect.get(dev_id)
+                if event is None:
+                    continue
+                if event.is_set():
+                    # Previous force-reconnect not consumed yet — don't pile up
+                    continue
+                name = dev.get('name', dev_id)[:30]
+                log.warning(
+                    f'Tuya watchdog: {name} silent for {silent_for/3600:.1f}h '
+                    f'(> {SILENT_FREEZE_SEC/3600:.0f}h threshold) — forcing reconnect'
+                )
+                event.set()
+                # Push last_active forward so we don't trigger again in 5 min
+                # if the thread takes a moment to react. The thread itself
+                # resets this on its next successful read.
+                self._per_dev_last_active[dev_id] = now
 
     # ─── Adapter lifecycle ─────────────────────────────────────────────────
 
@@ -192,6 +293,13 @@ class TuyaAdapter(DeviceAdapter):
             t.start()
             self._threads.append(t)
 
+        # Per-device silent-freeze watchdog (one thread, monitors all locals
+        # AND the gateway hub if present).
+        if self._local or self._gateway_dev:
+            self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True, name='tuya-watchdog')
+            self._watchdog_thread.start()
+            self._threads.append(self._watchdog_thread)
+
         log.info(f'Started {len(self._threads)} device threads')
 
     def stop(self):
@@ -204,6 +312,12 @@ class TuyaAdapter(DeviceAdapter):
         If push arrives → instant update (tcp_push).
         If no push → poll every 15s catches state changes (local_poll).
         Keepalive every 5 min so connected devices never appear stale.
+
+        Self-healing: per-device watchdog (_watchdog_loop) tracks each
+        thread's last successful read via _per_dev_last_active. If a
+        thread sits silent > SILENT_FREEZE_SEC, the watchdog sets the
+        thread's force_reconnect event; this loop checks it each
+        iteration and breaks out of the inner loop to reconnect.
         """
         dev_id = dev['id']
         ip     = dev['local_ip']
@@ -213,25 +327,49 @@ class TuyaAdapter(DeviceAdapter):
         delay  = RECONNECT_DELAY
         POLL_INTERVAL = 15  # seconds between status polls
 
+        # Register watchdog state for this device. Initial timestamp = now
+        # so a brand-new thread isn't immediately flagged as stale before
+        # it gets its first data.
+        force_event = self._per_dev_force_reconnect.setdefault(dev_id, threading.Event())
+        self._per_dev_last_active[dev_id] = time.monotonic()
+        log.info(f'{name} ({ip}): per-device thread started')
+
         while not self._stop_event.is_set():
+            if force_event.is_set():
+                force_event.clear()
+                log.info(f'{name}: watchdog requested reconnect — opening fresh TCP')
+
             d = None
             try:
                 d = tinytuya.Device(dev_id, ip, key, version=ver)
                 d.set_socketPersistent(True)
                 d.set_socketTimeout(SOCKET_TIMEOUT)
 
-                delay = RECONNECT_DELAY  # reset backoff on successful connect
-
                 # Get initial state
                 status = d.status()
                 if status and 'dps' in status:
                     self.on_state_change(dev_id, status['dps'], 'initial')
+                    self._per_dev_last_active[dev_id] = time.monotonic()
+                    delay = RECONNECT_DELAY
+                elif status and status.get('Error'):
+                    # Loud: spell out the error so a recurring failure
+                    # (e.g. Err 904 = stale local_key after re-pair) is
+                    # immediately diagnosable in the journal.
+                    log.warning(f'{name}: initial status error: {status}')
 
                 last_heartbeat  = time.time()
                 last_poll       = time.time()
                 last_push       = 0  # timestamp of last tcp_push received
+                last_keepalive  = time.time()
+                has_dps         = bool(status and 'dps' in status)
 
                 while not self._stop_event.is_set():
+                    # Watchdog wants us to reopen the socket — break out
+                    # cleanly so the outer loop reconnects fresh.
+                    if force_event.is_set():
+                        log.info(f'{name}: force-reconnect requested mid-loop')
+                        break
+
                     now = time.time()
 
                     if now - last_heartbeat >= HEARTBEAT_INTERVAL:
@@ -245,9 +383,26 @@ class TuyaAdapter(DeviceAdapter):
                             ps = d.status()
                             if ps and 'dps' in ps:
                                 self.on_state_change(dev_id, ps['dps'], 'local_poll')
-                        except Exception:
+                                self._per_dev_last_active[dev_id] = time.monotonic()
+                                has_dps = True
+                            elif ps and ps.get('Error'):
+                                # Loud — this was silently swallowed before
+                                # (catch-all `except: break` with no log).
+                                # Frozen-thread observability lives or dies
+                                # here.
+                                log.warning(f'{name}: poll returned error: {ps}')
+                                break  # reopen socket
+                        except Exception as poll_err:
+                            log.warning(f'{name}: poll exception ({type(poll_err).__name__}): {poll_err}')
                             break  # connection likely dead
                         last_poll = time.time()
+
+                    # Keepalive for devices that never report DPS (IR remotes etc.)
+                    # Updates last_seen so they don't show stale on dashboard
+                    if not has_dps and now - last_keepalive >= KEEPALIVE_INTERVAL:
+                        self.on_state_change(dev_id, {}, 'keepalive')
+                        self._per_dev_last_active[dev_id] = time.monotonic()
+                        last_keepalive = now
 
                     data = d.receive()
                     if data is None:
@@ -256,13 +411,16 @@ class TuyaAdapter(DeviceAdapter):
                     if isinstance(data, dict):
                         if 'dps' in data and data['dps']:
                             self.on_state_change(dev_id, data['dps'], 'tcp_push')
+                            self._per_dev_last_active[dev_id] = time.monotonic()
                             last_push = time.time()
                         elif data.get('Error'):
                             log.warning(f'{name}: device error: {data}')
                             break
 
             except Exception as e:
-                log.warning(f'{name} ({ip}): {e} — reconnecting in {delay}s')
+                # Was already logged here, but include the exception type
+                # so 904/timeout/network-down are easy to grep apart.
+                log.warning(f'{name} ({ip}): {type(e).__name__}: {e} — reconnecting in {delay}s')
             finally:
                 try:
                     if d:
@@ -271,20 +429,50 @@ class TuyaAdapter(DeviceAdapter):
                     pass
 
             if not self._stop_event.is_set():
-                time.sleep(delay)
+                self._stop_event.wait(delay)
                 delay = min(delay * 2, RECONNECT_MAX)
+
+        log.warning(f'{name}: per-device thread exiting (stop_event set)')
 
     # ─── Gateway thread (Zigbee sub-devices via TCP push) ──────────────────
 
     def _gateway_thread(self):
+        """Persistent TCP to the Tuya gateway hub — receives pushes for the
+        hub's own DPS (e.g. Multi-Mode Gateway's built-in buttons) AND for
+        Zigbee sub-devices behind it (routed by `cid` → node_id → device_id).
+
+        Self-healing: same watchdog pattern as _device_thread. A common
+        silent-freeze mode for this thread is a half-dead TCP socket
+        where d.receive() keeps returning None for 15 s (its timeout)
+        forever without raising — outer try/except never fires, no log
+        line, thread looks alive but does nothing. The watchdog tracks
+        per-thread activity (push received → last_active updated) and
+        force-reconnects if silent > SILENT_FREEZE_SEC.
+
+        Note: sub-device state still gets refreshed via `_poll_gateway`
+        (60 s cloud poll) when this thread is frozen, so the visible
+        impact is mostly the hub's own buttons + real-time push latency.
+        """
         gw      = self._gateway_dev
         dev_id  = gw['id']
         ip      = gw['local_ip']
         key     = gw['local_key']
         ver     = float(gw.get('version') or 3.4)
+        name    = gw.get('name', dev_id)[:30]
         delay   = RECONNECT_DELAY
 
+        # Register watchdog state for the gateway hub. Initial timestamp
+        # so the watchdog gives the freshly-started thread a full
+        # SILENT_FREEZE_SEC grace period before flagging it.
+        force_event = self._per_dev_force_reconnect.setdefault(dev_id, threading.Event())
+        self._per_dev_last_active[dev_id] = time.monotonic()
+        log.info(f'{name} ({ip}): gateway thread started')
+
         while not self._stop_event.is_set():
+            if force_event.is_set():
+                force_event.clear()
+                log.info(f'{name}: watchdog requested reconnect — opening fresh TCP')
+
             d = None
             try:
                 d = tinytuya.Device(dev_id, ip, key, version=ver)
@@ -295,11 +483,20 @@ class TuyaAdapter(DeviceAdapter):
                 status = d.status()
                 if status and 'dps' in status:
                     self.on_state_change(dev_id, status['dps'], 'initial')
+                    self._per_dev_last_active[dev_id] = time.monotonic()
                     delay = RECONNECT_DELAY
+                elif status and status.get('Error'):
+                    log.warning(f'{name}: gateway initial status error: {status}')
 
                 last_heartbeat = time.time()
 
                 while not self._stop_event.is_set():
+                    # Watchdog wants us to reopen the socket — cooperative
+                    # break so the outer loop reconnects fresh.
+                    if force_event.is_set():
+                        log.info(f'{name}: force-reconnect requested mid-loop')
+                        break
+
                     if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
                         d.heartbeat(nowait=True)
                         last_heartbeat = time.time()
@@ -310,6 +507,11 @@ class TuyaAdapter(DeviceAdapter):
 
                     if not isinstance(data, dict) or not data.get('dps'):
                         continue
+
+                    # Any valid dps push from the gateway TCP socket counts
+                    # as activity — even sub-device pushes prove the socket
+                    # is alive end-to-end. This is what the watchdog reads.
+                    self._per_dev_last_active[dev_id] = time.monotonic()
 
                     cid = data.get('cid')
                     if cid:
@@ -324,7 +526,9 @@ class TuyaAdapter(DeviceAdapter):
                         self.on_state_change(dev_id, data['dps'], 'gateway_push')
 
             except Exception as e:
-                log.warning(f'Gateway ({ip}): {e} — reconnecting in {delay}s')
+                # Include exception type so timeout/904/network-down are
+                # easy to grep apart (matches _device_thread pattern).
+                log.warning(f'{name} ({ip}): {type(e).__name__}: {e} — reconnecting in {delay}s')
             finally:
                 try:
                     if d:
@@ -333,8 +537,10 @@ class TuyaAdapter(DeviceAdapter):
                     pass
 
             if not self._stop_event.is_set():
-                time.sleep(delay)
+                self._stop_event.wait(delay)
                 delay = min(delay * 2, RECONNECT_MAX)
+
+        log.warning(f'{name}: gateway thread exiting (stop_event set)')
 
     # ─── Direct state control ───────────────────────────────────────────────
 
