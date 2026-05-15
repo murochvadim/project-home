@@ -21,7 +21,7 @@ All files in `DEVICE/agent/adapters/` are the **canonical repo source** for the 
 | `__init__.py` | package marker | stable |
 | `base.py` | `DeviceAdapter` abstract base class | stable |
 | `tuya.py` | Local Tuya TCP per-device threads + gateway Zigbee hub. Watchdog respawns silent threads (since 2026-05-15). | active development |
-| `tuya_cloud.py` | Tuya Cloud API client | stable |
+| `tuya_cloud.py` | Tuya Cloud API client. **Keepalive branch for `device_type='remote'`** (since 2026-05-15) bumps `last_seen` on a successful empty-DPS poll — handles the Tuya `wnykq` IR-hub class whose cloud spec has zero DPS, so a normal poll returns `{}` and the original `if dps:` would skip on_state_change. Scoped to remotes; other cloud-poll devices unaffected. | active development |
 | `tuya_config.py` | API_REGION / API_KEY / API_SECRET constants | stable |
 | `tuya_push.py` | Tuya cloud Pulsar push receiver (real-time cloud events) | **HAS UNDEPLOYED WORK** — see below |
 | `ha_api.py` | Home Assistant WebSocket adapter (SmartThings, Ring, vacuums, HomeKit FP2, BSH). Multi-thread watchdog auto-heals stuck WS. | active development |
