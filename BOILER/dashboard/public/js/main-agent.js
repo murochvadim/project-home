@@ -535,7 +535,44 @@
       if (rules.length === 0) {
         rulesBody.innerHTML = '<tr><td colspan="11" style="color:#aaa">No rules loaded</td></tr>';
       } else {
-        rulesBody.innerHTML = rules.map(r => {
+        // Group rules into the same 5 sections used by Base Rule Settings.
+        // Mapping is by rule NAME (since 'info' group covers both Layer 0 and
+        // Activity rules — name-level granularity is needed). Unmapped rules
+        // fall into a section named after their group capitalized.
+        const RULE_NAME_TO_SECTION = {
+          'Home Time Periods':       'Apartment (Layer 0)',
+          'Mode Buttons':            'Apartment (Layer 0)',
+          'Apartment Location':      'Apartment (Layer 0)',
+          'Home Activity':           'Activity',
+          'People Home':             'Activity',
+          'Evening Lights':          'Lighting',
+          'Morning Lights':          'Lighting',
+          'Start Away Mode':         'Mode transitions',
+          'Move in Corridor':        'Corridor',
+          'Face Recognition Loop':   'Corridor',
+          'Daily_Welcome':           'Pixoo',
+          'Wallmote Handler':        'Living Room',
+          'Boiler Consumption Classify': 'Boiler',
+        };
+        const SECTION_ORDER = [
+          'Apartment (Layer 0)', 'Activity', 'Lighting', 'Mode transitions',
+          'Corridor', 'Living Room', 'Balcony', 'My BathRoom', 'Boiler', 'Pixoo', 'Other',
+        ];
+        const cap = s => s ? (s.charAt(0).toUpperCase() + s.slice(1).replace('-', ' ')) : 'Other';
+        const sectionOf = r => RULE_NAME_TO_SECTION[r.name] || cap(r.group);
+
+        // Bucket rules by section
+        const buckets = {};
+        rules.forEach(r => {
+          const sec = sectionOf(r);
+          (buckets[sec] = buckets[sec] || []).push(r);
+        });
+        const orderedSections = [
+          ...SECTION_ORDER.filter(s => buckets[s]),
+          ...Object.keys(buckets).filter(s => !SECTION_ORDER.includes(s)).sort(),
+        ];
+
+        const renderRule = r => {
           const enabled = !disabledRules.has(r.name);
           const st = r.stats || {};
           const runs = st.count || 0;
@@ -587,6 +624,18 @@
               <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#7a9ab8;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
             </td>
           </tr>`;
+        };
+
+        // Render sections — each gets a header row + its rules.
+        rulesBody.innerHTML = orderedSections.map(sec => {
+          const sectionRules = buckets[sec];
+          const header = `<tr style="background:#efe9dc;">
+            <td colspan="12" style="padding:6px 10px;border-left:4px solid #6c4f9f;">
+              <strong style="color:#3b2766;font-size:0.85rem;">${escHtml(sec)}</strong>
+              <span style="color:#888;font-size:0.72rem;margin-left:6px;">(${sectionRules.length} ${sectionRules.length === 1 ? 'rule' : 'rules'})</span>
+            </td>
+          </tr>`;
+          return header + sectionRules.map(renderRule).join('');
         }).join('');
       }
 
