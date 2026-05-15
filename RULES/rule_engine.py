@@ -1939,21 +1939,28 @@ class RuleEngine:
                             )
                         except Exception:
                             log.warning('Failed to clear _spatial_reload_request flag', exc_info=True)
-                    # Per-rule runs-counter reset — dashboard "Reset" button sets
-                    # _rule_stats_reset to the rule's name. We zero the count field
-                    # only (avg/max/last_fired stay intact), then clear the flag.
-                    reset_target = self.state.shared.get('_rule_stats_reset')
-                    if reset_target:
-                        try:
-                            stats = self._rule_stats.get(reset_target, {})
-                            if stats:
-                                stats['count']    = 0
-                                stats['total_ms'] = 0  # so avg recomputes from fresh fires
-                                self._rule_stats[reset_target] = stats
-                            log.info("Reset runs counter for rule '%s'", reset_target)
-                        except Exception:
-                            log.warning('Failed to reset rule stats', exc_info=True)
-                        self.state.shared['_rule_stats_reset'] = ''
+                    # Per-rule runs-counter reset — dashboard "Reset" buttons
+                    # append rule names to _rule_stats_reset (a JSON array).
+                    # We process every name in the queue, zero count + total_ms
+                    # for each (max/last_fired stay intact), then clear the
+                    # queue. Accepting a list (was a single string) lets the
+                    # user click reset on multiple rules in rapid succession
+                    # without losing all but the last click.
+                    reset_targets = self.state.shared.get('_rule_stats_reset')
+                    if isinstance(reset_targets, str) and reset_targets:
+                        reset_targets = [reset_targets]  # back-compat with old single-string writes
+                    if isinstance(reset_targets, list) and reset_targets:
+                        for name in reset_targets:
+                            try:
+                                stats = self._rule_stats.get(name, {})
+                                if stats:
+                                    stats['count']    = 0
+                                    stats['total_ms'] = 0  # so avg recomputes from fresh fires
+                                    self._rule_stats[name] = stats
+                                log.info("Reset runs counter for rule '%s'", name)
+                            except Exception:
+                                log.warning("Failed to reset rule stats for '%s'", name, exc_info=True)
+                        self.state.shared['_rule_stats_reset'] = []
                         try:
                             self.state.db_execute(
                                 "DELETE FROM rule_engine_state WHERE key = '_rule_stats_reset'"

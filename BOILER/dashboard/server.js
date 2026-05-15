@@ -2107,11 +2107,23 @@ app.post('/api/rule-engine/reset-runs', async (req, res) => {
   }
   try {
     // 1. Set the flag so the engine eventually resets its in-memory counter.
+    //    Flag value is a JSON ARRAY of pending rule names — appending on each
+    //    click ensures multiple clicks queue up rather than overwrite each
+    //    other (the original single-string design lost all but the last click).
+    //    Engine processes every queued rule on next heartbeat, then clears.
+    const cur = await db.query("SELECT value FROM rule_engine_state WHERE key = '_rule_stats_reset'");
+    let queue = [];
+    if (cur.rows.length) {
+      const v = cur.rows[0].value;
+      if (Array.isArray(v)) queue = v;
+      else if (typeof v === 'string' && v) queue = [v]; // back-compat with old single-string writes
+    }
+    if (!queue.includes(ruleName)) queue.push(ruleName);
     await db.query(
       `INSERT INTO rule_engine_state (key, value, updated_at)
        VALUES ('_rule_stats_reset', $1::jsonb, NOW())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-      [JSON.stringify(ruleName)]
+      [JSON.stringify(queue)]
     );
     // 2. Patch _rules JSONB so dashboard polls see count=0 immediately.
     //    Iterates the rules array, sets stats.count + stats.total_ms = 0
