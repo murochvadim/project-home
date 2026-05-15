@@ -19,6 +19,46 @@ let _pixooMode = 'text';     // 'text' or 'pixel'
 let _pixooLoadedPresetId = null; // currently loaded preset ID for update
 let _pixooDrawing = false;   // mouse held down for pixel drawing
 
+// Dashboard-side canvas-update pause. Stops loadPixoo() from repainting
+// the canvas with live device state so the user can edit without their
+// work being overwritten — covers the "starting from blank" gap that the
+// existing editorActive guard doesn't (editorActive=false when editor is
+// empty, so live updates would otherwise paint over a fresh blank canvas
+// the moment the user clears or just-opened the page).
+//
+// SCOPE: pure frontend; only affects this dashboard. The Pixoo physical
+// device may still be updated by rules — pause is about NOT showing those
+// updates in the editor's canvas. Compare to the device-side `_pixoo_paused`
+// flag (rule_engine_state DB), which is unrelated: that pauses the device's
+// rotation cycle so a pushed preset stays pinned. Two different concepts
+// that happen to share the word "pause".
+//
+// Persisted in sessionStorage (matches Corridor Simulator's Stop pattern):
+// survives tab navigation, resets on browser close. Single-tab scope by
+// design — different tabs can have different pause state.
+const PIXOO_PAUSE_KEY = 'corridor.pixooPauseUpdates';
+let _pixooPauseUpdates = (function(){
+  try { return sessionStorage.getItem(PIXOO_PAUSE_KEY) === '1'; }
+  catch (_) { return false; }
+})();
+
+function pixooApplyPauseVisual() {
+  // Yellow canvas border while paused so the user has unambiguous
+  // feedback that live updates are off. Reverts to the normal grey.
+  const canvas = document.getElementById('pixoo-canvas');
+  if (!canvas) return;
+  canvas.style.borderColor = _pixooPauseUpdates ? '#e67e22' : '#d0cbc4';
+}
+
+window.pixooTogglePauseUpdates = function (el) {
+  _pixooPauseUpdates = !!el.checked;
+  try {
+    if (_pixooPauseUpdates) sessionStorage.setItem(PIXOO_PAUSE_KEY, '1');
+    else sessionStorage.removeItem(PIXOO_PAUSE_KEY);
+  } catch (_) {}
+  pixooApplyPauseVisual();
+};
+
 // Attach canvas handlers once DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
   const c = document.getElementById('pixoo-canvas');
@@ -28,6 +68,14 @@ document.addEventListener('DOMContentLoaded', () => {
   c.addEventListener('mousemove', (e) => { if (_pixooDrawing) pixooDrawPixelAt(e); });
   c.addEventListener('mouseup', () => { _pixooDrawing = false; });
   c.addEventListener('mouseleave', () => { _pixooDrawing = false; });
+
+  // Sync the pause-updates checkbox to the persisted state (sessionStorage)
+  // and apply the orange-border visual if paused — runs before pixooPlay()
+  // starts the 5s poll, so the very first poll already respects the flag.
+  const pauseBox = document.getElementById('pixoo-pause-updates');
+  if (pauseBox) pauseBox.checked = _pixooPauseUpdates;
+  pixooApplyPauseVisual();
+
   // Auto-load on page open + start the 5s poll so live tokens
   // ({{time}}/{{countdown}}) visibly tick on the preview canvas.
   pixooPlay();
@@ -106,14 +154,17 @@ async function loadPixoo() {
 
     // Skip canvas redraw while the user is editing — live device state
     // would otherwise overwrite the in-progress preset every 5 s. Resumes
-    // automatically once the editor is empty (Clear/New).
+    // automatically once the editor is empty (Clear/New). The
+    // `_pixooPauseUpdates` flag is an ADDITIONAL manual override for the
+    // "starting from blank" gap — editor empty but user wants the canvas
+    // to stay clean (e.g. to draw fresh after Clear).
     const editorActive =
       _pixooLoadedPresetId !== null ||
       (_pixooEditorItems && _pixooEditorItems.length > 0) ||
       (_pixooPixels && Object.keys(_pixooPixels).length > 0) ||
       !!_pixooBgBase64;
 
-    if (!editorActive) {
+    if (!editorActive && !_pixooPauseUpdates) {
       // Draw canvas
       const preview = r.preview;
       const screenId = screen.screen || '';
@@ -477,6 +528,74 @@ async function pixooSavePreset() {
     loadPixooPresets();
   } catch (e) { console.error('Pixoo save preset error:', e); }
 }
+
+// Save As New — always creates a new preset entry, regardless of whether
+// a preset is currently loaded. Lets the user clone-and-modify: load A,
+// edit, change the name, click Save As New → B exists with the changes,
+// A is untouched. If the user didn't change the name, auto-append
+// " (copy)" so we never silently duplicate names. After saving, the new
+// preset becomes the "loaded" one so subsequent Save clicks update it,
+// not the original.
+async function pixooSaveAsNew() {
+  const nameInput = document.getElementById('pixoo-preset-name');
+  let name = nameInput.value.trim();
+  if (!name) return alert('Enter a preset name');
+  const hasPixels = Object.keys(_pixooPixels).length > 0;
+  if (_pixooEditorItems.length === 0 && !_pixooBgBase64 && !hasPixels) return alert('Add content first');
+
+  // Fetch the current preset list ONCE so the auto-append-(copy) check
+  // and the collision check share the same data. Fail-silent: if the
+  // fetch breaks we skip the niceties and let the POST proceed with the
+  // user's exact name (worst case: a duplicate-name entry the user can
+  // rename or delete afterwards).
+  let presets = [];
+  try { presets = await fetch('/api/pixoo/presets').then(r => r.json()); } catch (_) {}
+
+  // Auto-append " (copy)" if the name still matches what's loaded — keeps
+  // the preset list unambiguous (no two presets with identical names).
+  if (_pixooLoadedPresetId) {
+    const loadedPreset = presets.find(p => p.id === _pixooLoadedPresetId);
+    if (loadedPreset && loadedPreset.name === name) {
+      name = name + ' (copy)';
+      nameInput.value = name;
+    }
+  }
+
+  // Collision check applies to BOTH cases (loaded preset and new). Save As
+  // New's whole purpose is to clone with a different name — if the user
+  // typed a name that matches some OTHER preset, confirm intent before
+  // creating a duplicate-name entry. Skip the loaded preset's own row
+  // (it would match itself, which is fine).
+  const collision = presets.find(p => p.name === name && p.id !== _pixooLoadedPresetId);
+  if (collision) {
+    if (!confirm(`Preset "${name}" already exists. Save as a new copy anyway?\n\nClick OK to create a duplicate-name preset, Cancel to abort.`)) {
+      return;
+    }
+  }
+
+  try {
+    const type = _pixooBgBase64 ? 'image' : hasPixels ? 'pixel' : 'text';
+    const payload = { name, type, content: { items: _pixooEditorItems, pixels: _pixooPixels }, image_data: _pixooBgBase64 };
+    const r = await fetch('/api/pixoo/presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const created = await r.json();
+    // Adopt the new id so future Save clicks update the clone, not the
+    // original. If the API doesn't return the new id, leave the loaded id
+    // alone — user can re-Load the new preset from the list manually.
+    if (created && typeof created.id === 'number') {
+      _pixooLoadedPresetId = created.id;
+    }
+    loadPixooPresets();
+  } catch (e) {
+    console.error('Pixoo save-as-new error:', e);
+    alert('Save As New failed: ' + e.message);
+  }
+}
+window.pixooSaveAsNew = pixooSaveAsNew;
 
 async function loadPixooPresets() {
   try {

@@ -59,6 +59,10 @@
       <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
         <span style="font-size:0.72rem;color:#888;" id="pixoo-screen-label">Click canvas to set XY</span>
         <span style="flex:1"></span>
+        <label title="Pauses live preview only. Push / Channel / Power buttons still affect the device. Canvas turns orange while paused." style="font-size:0.72rem;color:#888;display:flex;align-items:center;gap:3px;cursor:pointer;">
+          <input type="checkbox" id="pixoo-pause-updates" onchange="pixooTogglePauseUpdates(this)" style="margin:0;">
+          Pause live updates
+        </label>
         <span style="font-size:0.72rem;color:#888;">Zoom:</span>
         <button class="btn btn-secondary btn-sm" onclick="pixooZoom(320)" style="padding:2px 8px;font-size:0.7rem;">1x</button>
         <button class="btn btn-secondary btn-sm" onclick="pixooZoom(448)" style="padding:2px 8px;font-size:0.7rem;">1.5x</button>
@@ -183,7 +187,8 @@
         <h2>Presets</h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
           <input type="text" id="pixoo-preset-name" placeholder="Name..." style="flex:1;padding:4px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.82rem;">
-          <button class="btn btn-secondary btn-sm" onclick="pixooSavePreset()" style="background:#3a5a8a;color:#fff;">Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="pixooSavePreset()" title="Save changes (overwrites loaded preset)" style="background:#3a5a8a;color:#fff;">Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="pixooSaveAsNew()" title="Save as a NEW preset (clones the current work — original preset stays untouched)" style="background:#27ae60;color:#fff;">Save As New</button>
         </div>
         <div id="pixoo-presets-list" style="font-size:0.78rem;"></div>
       </div>
@@ -195,7 +200,7 @@
 
 </main>
 
-<script src="js/corridor.js?v=2"></script>
+<script src="js/corridor.js?v=3"></script>
 <script src="js/alerts-monitor.js?v=9"></script>
 </body>
 </html>
