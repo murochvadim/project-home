@@ -133,23 +133,32 @@ def _resolve_switch_chip(token, devices_by_name):
         if m:
             channel = m.group(1)
         else:
-            ch_config = dev.get('channel_config') or {}
-            for k, v in ch_config.items():
-                if isinstance(v, dict) and (v.get('name') or '').lower() == channel_text.lower():
+            # ORDER MATTERS — check controllable channels FIRST.
+            # dps_config keys are controllable (action_on/action_off);
+            # channel_config keys are Tuya multi-gang switch channels;
+            # dps_labels keys are READABLE status fields (e.g. ESP boards
+            # publish 'screen_state' as a status DPS but the controllable
+            # channel is 'screen' in dps_config — those must NOT be
+            # confused or you'll dispatch on the wrong channel).
+            dps_config = dev.get('dps_config') or {}
+            for k, v in dps_config.items():
+                if not isinstance(v, dict):
+                    continue
+                if (v.get('name') or '').lower() == channel_text.lower() or k.lower() == channel_text.lower():
                     channel = k
                     break
             if not channel:
-                dps_labels = dev.get('dps_labels') or {}
-                for k, v in dps_labels.items():
-                    if isinstance(v, str) and v.lower() == channel_text.lower():
+                ch_config = dev.get('channel_config') or {}
+                for k, v in ch_config.items():
+                    if isinstance(v, dict) and (v.get('name') or '').lower() == channel_text.lower():
                         channel = k
                         break
             if not channel:
-                dps_config = dev.get('dps_config') or {}
-                for k, v in dps_config.items():
-                    if not isinstance(v, dict):
-                        continue
-                    if (v.get('name') or '').lower() == channel_text.lower() or k.lower() == channel_text.lower():
+                # Fallback: status-field labels. Last resort because matching
+                # a readable field name might pick a non-controllable key.
+                dps_labels = dev.get('dps_labels') or {}
+                for k, v in dps_labels.items():
+                    if isinstance(v, str) and v.lower() == channel_text.lower():
                         channel = k
                         break
 
