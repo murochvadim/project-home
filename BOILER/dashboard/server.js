@@ -1576,12 +1576,24 @@ const _corridorSimBuffer = [];                                     // [{ ts, top
 const _corridorSimChainIds = new Set(Object.values(CORRIDOR_SIM_IDS));
 
 function _corridorSimRecord(topic, payloadBuf) {
-  const parts = String(topic || '').split('/');
-  // Accept three topic shapes:
-  //   mur/home/device/<id>/{event,state}          (length 5, id ∈ chain set)
-  //   mur/home/esp/<id>/{event,status,command}    (length 5, id ∈ chain set)
-  //   mur/home/pixoo/command                      (length 4, no per-device id)
-  if (parts.length < 4 || parts[0] !== 'mur' || parts[1] !== 'home') return;
+  const t = String(topic || '');
+  const parts = t.split('/');
+  // Accept these topic shapes:
+  //   mur/home/device/<id>/{event,state}        (length 5, id ∈ chain set)
+  //   mur/home/esp/<id>/{event,status,command}  (length 5, id ∈ chain set)
+  //   mur/home/pixoo/command                    (length 4, flat — no per-device id)
+  //   awtrix_05ec2c/{notify,power}              (length 2, flat — device id is the prefix)
+  if (parts.length < 2) return;
+  const isAwtrix = (parts.length === 2 && parts[0] === 'awtrix_05ec2c'
+                    && (parts[1] === 'notify' || parts[1] === 'power'));
+  if (isAwtrix) {
+    let payload;
+    try { payload = JSON.parse(payloadBuf.toString()); } catch (_) { payload = payloadBuf.toString(); }
+    _corridorSimBuffer.unshift({ ts: new Date().toISOString(), topic: t, payload });
+    if (_corridorSimBuffer.length > CORRIDOR_SIM_BUFFER_MAX) _corridorSimBuffer.length = CORRIDOR_SIM_BUFFER_MAX;
+    return;
+  }
+  if (parts[0] !== 'mur' || parts[1] !== 'home') return;
   const pixooMatch = (parts.length === 4 && parts[2] === 'pixoo' && parts[3] === 'command');
   const chainMatch = (parts.length === 5
     && (parts[2] === 'device' || parts[2] === 'esp')
@@ -1589,7 +1601,7 @@ function _corridorSimRecord(topic, payloadBuf) {
   if (!pixooMatch && !chainMatch) return;
   let payload;
   try { payload = JSON.parse(payloadBuf.toString()); } catch (_) { payload = payloadBuf.toString(); }
-  _corridorSimBuffer.unshift({ ts: new Date().toISOString(), topic, payload });
+  _corridorSimBuffer.unshift({ ts: new Date().toISOString(), topic: t, payload });
   if (_corridorSimBuffer.length > CORRIDOR_SIM_BUFFER_MAX) _corridorSimBuffer.length = CORRIDOR_SIM_BUFFER_MAX;
 }
 
@@ -1604,6 +1616,8 @@ mqttClient.on('connect', () => {
     'mur/home/esp/+/status',
     'mur/home/esp/+/command',
     'mur/home/pixoo/command',
+    'awtrix_05ec2c/notify',
+    'awtrix_05ec2c/power',
   ];
   topics.forEach(t => mqttClient.subscribe(t, { qos: 0 }, (err) => {
     if (err) console.warn('corridor-sim broker subscribe failed:', t, err.message);
