@@ -229,10 +229,15 @@ Emitted People Home diagnostic fields (in addition to legacy fields):
 - Scaling → prefer specific `triggers=["device_id", ...]` over wildcard `["*"]`; for wildcard rules, filter + early-return in first 2 lines
 
 **Rule groups:**
+- `info` — Home Time Periods, Mode Buttons, Home Activity, People Home (global aggregators / Layer 0)
 - `boiler` — Boiler Consumption Classify and future boiler rules
-- `info` — Home Activity, People Home (global aggregators)
-- `living-room` — Wallmote Handler and future Living Room automations (bindings stored in `dashboard_settings.living-room.*`)
+- `lighting` — Evening Lights, Morning Lights (sentence-driven sun-anchor + time-mode kick-ins)
+- `away` — Start Away Mode (2-phase rule on `home_mode → away` transition)
 - `pixoo` — Daily_Welcome (always-on default, priority 90) and future Pixoo64 display rules (alarms, notifications, status banners — use a smaller priority number so they override the welcome screen)
+- `living-room` — Wallmote Handler and future Living Room automations (bindings stored in `dashboard_settings.living-room.*`)
+- `balcony` — Balcony Buttons, Balcony Button Mirror, Balcony Displays, Balcony Smart Switch Handler, Gates Button Progress (HASP panel + scene-remote + gates-board bindings)
+- `my-bathroom` — My BathRoom Buttons, My BathRoom Button Mirror, My BathRoom Displays, My BathRoom Smart Switch Handler (parallel to balcony group, isolated DB rows + topics)
+- `corridor` — Move in Corridor (presence chain: light → conditional awtrix + monitor → delayed Pixoo preset)
 
 **Display chips in sentences (Awtrix + Pixoo, added 2026-05-02):** the dashboard's `+Dev` device picker (shared `device-picker.js`) renders action sub-buttons when the picked device is `device_type='display'`: `[on] [off] [push <preset>]`. Tokens emitted: `@Awtrix on`, `@Pixoo push Welcome`, etc. Awtrix saved-app list comes from `dashboard_settings.awtrix.messages`; Pixoo presets from `/api/pixoo/presets`. **Rule engine dispatch**: `protocol='awtrix'` branch in `rule_engine._dispatch_command` routes `power_on`/`power_off` → `<device_id>/power` and `push_preset` → loads template from `dashboard_settings.awtrix.messages`, substitutes `{{var}}` (cmd.vars first, then state.shared), publishes `<device_id>/notify`. **Float values rounded to 1 decimal** in the substitution (added 2026-05-03) — same `_fmt` helper as `balcony_displays.py` — so `{{outdoor_temp}}` renders as `21.0` instead of the raw float `21.039999961853` that some sensors emit. **Shared parser**: `RULES/_display_chips.py` exposes `parse_display_chip(token, devices_by_name)` → command-dict-or-None, used by Evening Lights (s_el1 device list) and Start Away Mode (s_sa4/s_sa5 preset chips) so the same chip syntax works in both rules. Recognizes legacy `@Pixoo Start Away` + new `@Pixoo push Welcome` / `@Awtrix push Notify`. Required ACL on LXC 107: `rule_engine` has `topic write awtrix_05ec2c/{power,notify}` (added 2026-05-02 alongside existing `awtrix/+/custom` and `awtrix/+/notify`).
 
@@ -316,7 +321,16 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - Runs on LXC 105 as `rule-engine.service` with orphan guard (`ExecStartPre=/opt/main-agent/kill-orphans.sh`)
 - Global DAG sort for depends_on, load-error alerts, stats persistence, save-failure alerts, db_execute single retry on failure
 - Test button: honors RULE["test_event"], state_updated status for info rules
-- Current rules: Home Time Periods, Mode Buttons, Home Activity, People Home, Boiler Consumption Classify, Wallmote Handler, Evening Lights, Start Away Mode, Daily_Welcome (pixoo)
+- Current rules (20 total, by group):
+  - **info** — Home Time Periods, Mode Buttons, Home Activity, People Home
+  - **boiler** — Boiler Consumption Classify
+  - **lighting** — Evening Lights, Morning Lights
+  - **away** — Start Away Mode
+  - **pixoo** — Daily_Welcome
+  - **living-room** — Wallmote Handler
+  - **balcony** — Balcony Buttons, Balcony Button Mirror, Balcony Displays, Balcony Smart Switch Handler, Gates Button Progress
+  - **my-bathroom** — My BathRoom Buttons, My BathRoom Button Mirror, My BathRoom Displays, My BathRoom Smart Switch Handler
+  - **corridor** — Move in Corridor
 - **Live RULE dict pattern:** the engine mutates each rule's `module.RULE['conditions']` in place when applying dashboard DB overrides (`_rule_overrides` key in `rule_engine_state`) — so reading e.g. `RULE.get('conditions',{}).get('time',{}).get('before')` at eval time automatically reflects the current override. Use this instead of redefining the value as a second constant. `Daily_Welcome` derives its end-of-day wipe time from the live window `before` so the dashboard's time-window editor moves the wipe too (single source of truth).
 - External converter: `/opt/zigbee2mqtt/data/external_converters/tuya_scene_switch.js` (DPs 24/25/26)
 - **Heartbeat tick (2026-04-23):** `RuleEngine._heartbeat_loop` emits a synthetic `{device_id:'heartbeat', source:'tick'}` event once per 60s and dispatches it through the normal rule-firing path. Rules declare `triggers=["heartbeat"]` to fire on the tick — used by time-based rules (e.g. Layer 0 `home_time_periods.py` time-mode + sun event derivation) to re-evaluate boundaries during quiet periods when no real device events fire. A `_dispatch_lock` serializes rule-firing between the paho callback thread and the heartbeat thread to keep group-active tracking + shared-state mutations consistent.

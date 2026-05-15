@@ -14,7 +14,7 @@ This file is the index. All artifacts live in canonical locations:
 | Dashboard JS | `BOILER/dashboard/public/js/corridor.js` |
 | Dashboard API endpoints | `BOILER/dashboard/server.js` — 9 endpoints under `/api/pixoo/*` (brightness, wipe, restart, noise, power, channel, custom, status) |
 | Pixoo service (LXC 100) | `/opt/media-agent/pixoo_service.py` — registered in `agents` table as `name='pixoo'` |
-| Rules | `RULES/rules/` — none today; future pixoo-triggered rules use `group='pixoo'` and `RULE['controls']` with pixoo actions |
+| Rules | `RULES/rules/move_in_corridor.py` (`group='corridor'`) — corridor presence chain entry: light ON → conditional Awtrix preset + Entrance Monitor Ch.2 ON when `home_mode=home` → Pixoo preset push after delay. Knobs (cooldown, pixoo delay, preset names) sentence-driven via `r_move_in_corridor` container in `apartment.rule_sentences`. Hardware IDs hardcoded for safety. |
 | DB preset storage | `pixoo_presets` table (managed by pixoo service + dashboard editor) |
 | Rule-engine-owned pixoo state | `rule_engine_state` keys prefixed `_pixoo_` (paused flag, etc.) |
 | MQTT user | `pixoo_service` on LXC 107 (mosquitto ACL) |
