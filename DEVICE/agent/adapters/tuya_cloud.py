@@ -89,6 +89,17 @@ class TuyaCloudAdapter(DeviceAdapter):
                 dps = self._poll_device(dev)
                 if dps:
                     self.on_state_change(dev['id'], dps, 'cloud_poll')
+                elif dps is not None and dev.get('device_type') == 'remote':
+                    # IR remote class (Tuya `wnykq` category) — has zero DPS
+                    # in its cloud spec, so _poll_device returns {} on a
+                    # successful HTTP call. Without this branch the
+                    # `if dps:` above would skip and last_seen would never
+                    # advance for these devices, making the dashboard show
+                    # them as perma-offline. The device_type='remote' guard
+                    # narrows the new branch to this specific class so no
+                    # other cloud-poll device's behaviour can change. See
+                    # 2026-05-15 investigation of Maya Bedroom Remote.
+                    self.on_state_change(dev['id'], {}, 'cloud_poll')
                 time.sleep(BATCH_DELAY)
             # Wait remaining time before next round
             self._stop.wait(max(0, POLL_INTERVAL - len(self.devices) * BATCH_DELAY))
