@@ -1502,10 +1502,11 @@ app.get('/api/pixoo/status', async (_req, res) => {
 //   4. POST /api/corridor-sim/clear            — empty the server's ring buffer (backs the "🗑 Clear all" button)
 // IDs are hardcoded since the chain is single-purpose: Corridor + face_01 + remoteXY_01.
 const CORRIDOR_SIM_IDS = {
-  presence:   'bfbdca138cb1c78c3dlbmc',
-  cor_switch: 'bfe47a84d7cb783f59inot',
-  fr:         'face_01',
-  remotexy:   'remoteXY_01',
+  presence:         'bfbdca138cb1c78c3dlbmc',
+  cor_switch:       'bfe47a84d7cb783f59inot',
+  entrance_monitor: 'bfb4de883ef1713bfdfdpw',   // Tuya local switch, Ch.2 — added 2026-05-15
+  fr:               'face_01',
+  remotexy:         'remoteXY_01',
 };
 
 // ─── Pixoo64 device-direct state (channel + brightness + power) ────────
@@ -1674,12 +1675,13 @@ app.get('/api/corridor-sim/state', async (_req, res) => {
       };
     }
     res.json({
-      presence:   byId[CORRIDOR_SIM_IDS.presence]    || null,
-      cor_switch: byId[CORRIDOR_SIM_IDS.cor_switch]  || null,
-      fr:         { device: byId[CORRIDOR_SIM_IDS.fr] || null, board: boards[CORRIDOR_SIM_IDS.fr] || null },
-      remotexy:   { device: byId[CORRIDOR_SIM_IDS.remotexy] || null, board: boards[CORRIDOR_SIM_IDS.remotexy] || null },
-      pixoo:      pixoo,             // {screen, ts, age_sec} or null
-      events:     _corridorSimBuffer.slice(),
+      presence:         byId[CORRIDOR_SIM_IDS.presence]         || null,
+      cor_switch:       byId[CORRIDOR_SIM_IDS.cor_switch]       || null,
+      entrance_monitor: byId[CORRIDOR_SIM_IDS.entrance_monitor] || null,
+      fr:               { device: byId[CORRIDOR_SIM_IDS.fr] || null, board: boards[CORRIDOR_SIM_IDS.fr] || null },
+      remotexy:         { device: byId[CORRIDOR_SIM_IDS.remotexy] || null, board: boards[CORRIDOR_SIM_IDS.remotexy] || null },
+      pixoo:            pixoo,         // {screen, ts, age_sec, channel_idx, channel_name, brightness, power_on} or null
+      events:           _corridorSimBuffer.slice(),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -1123,10 +1123,11 @@
   let _events    = [];                          // last poll's events (server is source of truth)
   const POLL_MS = 1000;
 
-  const PRESENCE_ID   = 'bfbdca138cb1c78c3dlbmc';
-  const COR_SWITCH_ID = 'bfe47a84d7cb783f59inot';
-  const FR_ID         = 'face_01';
-  const REMOTEXY_ID   = 'remoteXY_01';
+  const PRESENCE_ID         = 'bfbdca138cb1c78c3dlbmc';
+  const COR_SWITCH_ID       = 'bfe47a84d7cb783f59inot';
+  const ENTRANCE_MONITOR_ID = 'bfb4de883ef1713bfdfdpw';   // Ch.2 — added 2026-05-15
+  const FR_ID               = 'face_01';
+  const REMOTEXY_ID         = 'remoteXY_01';
 
   function escH(s) {
     return String(s == null ? '' : s)
@@ -1147,8 +1148,10 @@
     const parts = String(topic || '').split('/');
     if (parts[0] === 'mur' && parts[1] === 'home' && parts[2] === 'device' && parts.length === 5) {
       const id = parts[3];
-      const name = id === PRESENCE_ID ? 'Corridor Presence'
-                : id === COR_SWITCH_ID ? 'Corridor Switch' : id;
+      const name = id === PRESENCE_ID         ? 'Corridor Presence'
+                : id === COR_SWITCH_ID       ? 'Corridor Switch'
+                : id === ENTRANCE_MONITOR_ID ? 'Entrance Monitor'
+                : id;
       return { name, suffix: parts[4], color: '#3a7d44' };
     }
     if (parts[0] === 'mur' && parts[1] === 'home' && parts[2] === 'esp' && parts.length === 5) {
@@ -1176,6 +1179,9 @@
       && (s.presence.last_state['1'] === true || s.presence.last_state['1'] === 'true' || s.presence.last_state['1'] === 'presence'));
     const switchOn    = !!(s.cor_switch && s.cor_switch.last_state
       && (s.cor_switch.last_state['1'] === true || s.cor_switch.last_state['1'] === 'true'));
+    // Entrance Monitor is a 3-gang switch; only Ch.2 is exposed in the simulator.
+    const emonOn      = !!(s.entrance_monitor && s.entrance_monitor.last_state
+      && (s.entrance_monitor.last_state['2'] === true || s.entrance_monitor.last_state['2'] === 'true'));
     const frStatus    = (s.fr.board && s.fr.board.last_status) || {};
     const screenOn    = frStatus.screen_state === 'on';
     const lastRecog   = frStatus.last_recognition || '—';
@@ -1194,6 +1200,9 @@
 
     document.getElementById('cs-state-switch').innerHTML =
       stateLine('Light',    `${dot(switchOn)} ${switchOn ? 'ON' : 'off'}`,             s.cor_switch ? s.cor_switch.age_sec : null);
+
+    document.getElementById('cs-state-emon').innerHTML =
+      stateLine('Ch.2',     `${dot(emonOn)} ${emonOn ? 'ON' : 'off'}`,                 s.entrance_monitor ? s.entrance_monitor.age_sec : null);
 
     // FR card has TWO state lines: screen + last recognition
     document.getElementById('cs-state-fr').innerHTML =
@@ -1363,6 +1372,14 @@
     document.getElementById('cs-btn-light-off').onclick = () =>
       trigger(`/api/devices/${COR_SWITCH_ID}/toggle`, { state: false, channel: '1' }, 'cs-light-result', 'light OFF');
 
+    // Entrance Monitor — same toggle path Corridor Light uses (Tuya local
+    // device, HA-mediated turn_on/off via the device-toggle endpoint's
+    // tuya-template fallback). Channel '2' is the only exposed gang.
+    document.getElementById('cs-btn-emon-on').onclick = () =>
+      trigger(`/api/devices/${ENTRANCE_MONITOR_ID}/toggle`, { state: true,  channel: '2' }, 'cs-emon-result', 'entrance monitor ON');
+    document.getElementById('cs-btn-emon-off').onclick = () =>
+      trigger(`/api/devices/${ENTRANCE_MONITOR_ID}/toggle`, { state: false, channel: '2' }, 'cs-emon-result', 'entrance monitor OFF');
+
     document.getElementById('cs-btn-door').onclick = () => {
       const reallyFire = document.getElementById('cs-door-real').checked;
       if (reallyFire) {
@@ -1415,7 +1432,7 @@
   window.corridorSim_start = function () {
     if (started) return;
     started = true;
-    console.log('[corridor-sim v48] server-side MQTT capture, 1 s HTTP polling');
+    console.log('[corridor-sim v49] server-side MQTT capture, 1 s HTTP polling, 6 chain devices');
     wireButtons();
     poll();
     _pollTimer = setInterval(poll, POLL_MS);
