@@ -603,7 +603,6 @@
           const errorBadge = isAutoDisabled ? ' <span style="font-size:0.65rem;color:#e74c3c;font-weight:600;">AUTO-DISABLED</span>'
             : hasError ? ` <span style="font-size:0.65rem;color:#e67e22;">${r.errors} err</span>` : '';
           return `<tr style="${rowStyle}">
-            <td style="text-align:center;color:#888;font-size:0.75rem;">#${r.id || ''}</td>
             <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${dotColor};" title="${escHtml(group)}"></span></td>
             <td class="rule-name"><span style="cursor:pointer;text-decoration:underline;" onclick="showRuleTrace('${escHtml(r.name)}')">${escHtml(r.name)}</span>${errorBadge}</td>
             <td style="font-size:0.78rem;color:#555;font-weight:500;">${escHtml(group)}</td>
@@ -630,7 +629,7 @@
         rulesBody.innerHTML = orderedSections.map(sec => {
           const sectionRules = buckets[sec];
           const header = `<tr style="background:#efe9dc;">
-            <td colspan="12" style="padding:6px 10px;border-left:4px solid #6c4f9f;">
+            <td colspan="11" style="padding:6px 10px;border-left:4px solid #6c4f9f;">
               <strong style="color:#3b2766;font-size:0.85rem;">${escHtml(sec)}</strong>
               <span style="color:#888;font-size:0.72rem;margin-left:6px;">(${sectionRules.length} ${sectionRules.length === 1 ? 'rule' : 'rules'})</span>
             </td>
