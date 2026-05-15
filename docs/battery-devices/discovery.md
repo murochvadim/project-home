@@ -25,7 +25,7 @@ There is no dedicated battery view, no visual battery icons, and no configurable
 | Shared CSS | `BOILER/dashboard/public/css/style.css` | `.stat-chip`, `.device-stats`, `.toggle`, CSS variables |
 | Page CSS | `BOILER/dashboard/public/devices.html` `<style>` | `.presence-card`, `.presence-grid`, `.filter-bar`, page-specific overrides |
 | Server endpoints | `BOILER/dashboard/server.js` | `GET /api/devices` (line 2625) returns full `devices` rows including `last_state` JSONB |
-| HA data bridge | `scripts/ha_api_patched.py` | Maps HA entities to DPS keys; `battery` in entity_id -> dp_key `battery` (line 149-150) |
+| HA data bridge | `DEVICE/agent/adapters/ha_api.py` (canonical since 2026-05-15; was `scripts/ha_api_patched.py`) | Maps HA entities to DPS keys; `battery` in entity_id -> dp_key `battery` |
 | Add-device skill | `.claude/skills/add-device/SKILL.md` | Documents that battery stays in `dps_config`, not `channel_config` |
 
 ## 3. Infrastructure Map
