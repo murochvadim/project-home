@@ -1596,10 +1596,45 @@ function groupByRoom(batteryDevices) {
 
 function renderBatteryCard(device, batteryVal, color) {
   const name = escHtml(device.name);
-  const pct = batteryVal != null ? batteryVal : '--';
-  const fillH = batteryVal != null ? Math.max(2, batteryVal) : 0;
   const ls = lastSeenText(device.last_seen, false);
   const online = isOnline(device);
+  const hasBattery = batteryVal != null;
+
+  // ── Non-battery devices (e.g. IR remote hubs) — alive/offline only ──
+  //
+  // Same battery-icon shape as the battery devices so the grid stays
+  // visually uniform, but rendered without a percentage: 'alive' (green)
+  // when isOnline() passes, 'offline' (grey) when it fails. Sub-text is
+  // still `lastSeenText()` for freshness like every other card. No click
+  // handler — there's no battery history to chart. Filter extension in
+  // renderBatteryTab brings these in via device_type='remote' so wall-
+  // powered IR hubs (Maya Bedroom, Balcony Remote 1/2, etc.) get
+  // connectivity tracking alongside the actual battery devices.
+  if (!hasBattery) {
+    const stateColor = online ? '#1a5c2a' : '#999';
+    const stateText  = online ? 'alive' : 'offline';
+    // Fill the battery rectangle visually too — full (green) when alive,
+    // empty (grey outline) when offline — so the icon reinforces the
+    // alive/offline message. The big text reads "alive" / "offline" (not
+    // a number), so the full-fill icon won't be misread as "100%".
+    const fillH = online ? 100 : 0;
+    return `<div class="presence-card battery-card no-click" title="No battery — alive/offline status only">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="battery-icon" style="border-color:${stateColor}">
+          <div class="battery-fill" style="height:${fillH}%;background:${stateColor}"></div>
+        </div>
+        <div>
+          <div class="presence-name">${name}</div>
+          <div style="font-size:1.4rem;font-weight:700;color:${stateColor}">${stateText}</div>
+          <div class="presence-age">${ls.text}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── Battery devices — original rendering ──
+  const pct = batteryVal;
+  const fillH = Math.max(2, batteryVal);
   // Charging overrides the threshold-based color: the card stays RED for the
   // entire charge cycle so it's clearly "still on the dock" at a glance,
   // regardless of how full the battery is.
@@ -1618,7 +1653,7 @@ function renderBatteryCard(device, batteryVal, color) {
       </div>
       <div>
         <div class="presence-name">${name}</div>
-        <div style="font-size:1.4rem;font-weight:700;color:${cardColor}">${pct}${batteryVal != null ? '%' : ''}</div>
+        <div style="font-size:1.4rem;font-weight:700;color:${cardColor}">${pct}%</div>
         <div class="presence-age">${subText}</div>
       </div>
     </div>
@@ -1630,8 +1665,17 @@ async function renderBatteryTab() {
   const grid = document.getElementById('battery-grid');
   const empty = document.getElementById('battery-empty');
 
+  // Include actual battery devices AND a hand-picked allowlist of
+  // non-battery devices for which we still want connectivity visibility
+  // (alive/offline + last_seen). The renderBatteryCard function branches
+  // internally on whether batteryVal is present. To add another device,
+  // append its id to this set — keeping it narrow (not by device_type)
+  // so the grid doesn't get cluttered with every wall-powered remote.
+  const FORCE_BATT_DEVICES = new Set([
+    'bf96fc9abc525374913juz',  // Maya Bedroom Remote (Tuya ZCZK IR hub — no battery DPS, just alive/offline)
+  ]);
   const battDevices = allDevices
-    .filter(d => d.enabled !== false && getBatteryKey(d))
+    .filter(d => d.enabled !== false && (getBatteryKey(d) || FORCE_BATT_DEVICES.has(d.id)))
     .map(d => ({
       device: d,
       batteryVal: getBatteryValue(d),

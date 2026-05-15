@@ -84,6 +84,10 @@
     .battery-grid { display:grid; grid-template-columns:repeat(auto-fill, 200px); gap:12px; }
     .battery-card { cursor:pointer; transition:border-color 0.15s; width:200px; }
     .battery-card:hover { border-color:var(--brand-blue); }
+    /* No-battery cards (IR hubs etc.) — render same shell but disable
+       the click+hover affordances since there's no 7-day chart to show. */
+    .battery-card.no-click { cursor:default; }
+    .battery-card.no-click:hover { border-color:#e0dcd4; }
     .battery-icon { width:28px; height:46px; border:2px solid; border-radius:4px; position:relative; flex-shrink:0; }
     .battery-icon::before { content:''; position:absolute; top:-5px; left:50%; transform:translateX(-50%); width:10px; height:4px; border-radius:2px 2px 0 0; border:2px solid inherit; border-bottom:none; background:var(--bg-body); }
     .battery-fill { position:absolute; bottom:2px; left:2px; right:2px; border-radius:1px; transition:height 0.3s; }
@@ -468,7 +472,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/alerts-monitor.js?v=8"></script>
-<script src="js/devices.js?v=20260513b"></script>
+<script src="js/alerts-monitor.js?v=9"></script>
+<script src="js/devices.js?v=20260515a"></script>
 </body>
 </html>

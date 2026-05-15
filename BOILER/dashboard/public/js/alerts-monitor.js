@@ -154,6 +154,16 @@
     if (saved !== null) applyBattState(parseInt(saved, 10));
   } catch (e) {}
 
+  // Devices that appear in the Batt Devices grid by allowlist (no battery
+  // DPS, just connectivity tracking). Must mirror the FORCE_BATT_DEVICES
+  // set in devices.js → renderBatteryTab(). When one is stale (no fresh
+  // last_seen in NON_BATT_STALE_SEC) it counts toward the Batt Low badge
+  // so the badge stays consistent with the grid's red-filled offline icon.
+  const FORCE_BATT_DEVICES = new Set([
+    'bf96fc9abc525374913juz',  // Maya Bedroom Remote (Tuya ZCZK IR hub)
+  ]);
+  const NON_BATT_STALE_SEC = 7200;  // 2h — matches IR-hub keepalive cadence (hourly)
+
   async function checkBattery() {
     try {
       const [devRes, settRes] = await Promise.all([
@@ -169,9 +179,19 @@
         for (const [k, v] of Object.entries(labels)) {
           if (typeof v === 'string' && v.toLowerCase() === 'battery') { battKey = k; break; }
         }
-        if (!battKey) continue;
-        const val = (d.last_state || {})[battKey];
-        if (val == null || (typeof val === 'number' && val < thresh.low)) lowCount++;
+        if (battKey) {
+          // Real battery device: low or missing value counts as bad.
+          const val = (d.last_state || {})[battKey];
+          if (val == null || (typeof val === 'number' && val < thresh.low)) lowCount++;
+        } else if (FORCE_BATT_DEVICES.has(d.id)) {
+          // Non-battery device tracked for connectivity only: count if stale.
+          if (!d.last_seen) {
+            lowCount++;
+          } else {
+            const ageSec = (Date.now() - new Date(d.last_seen)) / 1000;
+            if (ageSec > NON_BATT_STALE_SEC) lowCount++;
+          }
+        }
       }
       applyBattState(lowCount);
       try { localStorage.setItem(BATT_STORE, lowCount); } catch (e) {}
