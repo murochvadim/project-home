@@ -31,6 +31,34 @@ Ask:
 
 Generate a snake_case filename from the name (e.g., `kitchen_light_auto.py`).
 
+## Step 1b: Design Model (REQUIRED — never assume)
+
+Ask the user which pattern the rule should follow. The three real patterns in this codebase, plus what they cost to change later:
+
+- **Sentence-driven (CANONICAL — recommended default)** — all output devices come from chips in a sentence container `r_<rule>_init` in `dashboard_settings.apartment.rule_sentences`. Adding / removing a device is a dashboard edit + Reload (~30 sec). User-friendly. Matches: `evening_lights`, `morning_lights`, `mode_buttons`, `start_away_mode`, `home_time_periods`, `move_in_corridor` (since the 2026-05-15 refactor). Trigger device stays hardcoded in `RULE['triggers']` because that's fixed at module load — the rest is sentence-driven.
+
+- **Binding-table-driven** — output devices come from JSON in `dashboard_settings.<scope>.<key>` edited via a per-room dashboard UI card (e.g. wallmote bindings, panel button bindings, smart switch bindings). User-friendly within the dedicated UI. Matches: `wallmote_handler`, `balcony_buttons`, `balcony_smart_switch_handler`, `my_bathroom_*`. Use this only when the rule is companion to an existing per-room agent that has its own binding-editor UI; do NOT invent a new binding table for a fresh rule.
+
+- **Hardcoded** — output device IDs in Python constants. Changing any wired device requires a code edit + git commit + Deploy + Reload (~3-5 min). High-friction for the user. Justified only for: (a) single-device-scoped rules where the device IS the rule's identity (e.g. `boiler_consumption_classify` scoped to the boiler, `gates_button_progress` scoped to the gates board); (b) rules where wrong-device fire would be dangerous AND the device set genuinely never changes. **Default away from this pattern.** History note: `move_in_corridor` was originally hardcoded "for safety" but the user pushed back — it shipped chip-driven instead. Don't repeat that mistake.
+
+### Ask the user via AskUserQuestion
+
+```
+Question: "Which design model should this rule follow?"
+Options:
+  1. Sentence-driven — chips in a sentence container drive output devices; user edits in dashboard (Recommended)
+  2. Binding-table-driven — bindings in dashboard_settings.<scope>.<key> JSON via a per-room UI card
+  3. Hardcoded — output device IDs in Python constants; user must edit code to change wiring
+```
+
+Default to option 1 unless the user explicitly states a different need. If they pick hardcoded, ask WHY (single-device scope? safety-critical?) so the rationale is recorded in the file's docstring.
+
+### Implications for downstream steps
+
+- Sentence-driven → Step 9b's "Auto-create sentence container" applies (you create it). Devices are NOT collected in Step 4-5; user picks them via the dashboard's `+Dev` chip picker after deploy.
+- Binding-table-driven → no sentence container needed. Step 9b is SKIPPED. Bindings flow from the existing per-room UI; rule reads them with TTL cache.
+- Hardcoded → Step 4-5 collects device IDs that get baked into the rule. Step 9b is SKIPPED. Document the rationale at the top of the rule file so the next person knows why.
+
 ## Step 2: Trigger Type
 
 Ask which trigger type:
