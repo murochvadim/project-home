@@ -645,6 +645,45 @@
   let brsRules = [];
   let brsDirty = false;
 
+  // Visual grouping of containers in Base Rule Settings (since 2026-05-16).
+  // Maps container id → section label. Containers not listed fall into
+  // "Other". Section render order is determined by BRS_SECTION_ORDER.
+  // Collapsed/expanded state persists in localStorage per section.
+  const BRS_RULE_GROUPS = {
+    'r_timemode_init':              'Apartment (Layer 0)',
+    'r_modebuttons_init':           'Apartment (Layer 0)',
+    'r_apartment_location_init':    'Apartment (Layer 0)',
+    'r_home_activity_knobs':        'Activity',
+    'r_people_home_knobs':          'Activity',
+    'r_evening_lights_init':        'Lighting',
+    'r_morning_lights_init':        'Lighting',
+    'r_start_away_init':            'Mode transitions',
+    'r_move_in_corridor':           'Corridor',
+    'r_face_recognition_loop_init': 'Corridor',
+  };
+  const BRS_SECTION_ORDER = [
+    'Apartment (Layer 0)',
+    'Activity',
+    'Lighting',
+    'Mode transitions',
+    'Corridor',
+    'Balcony',
+    'My BathRoom',
+    'Living Room',
+    'Other',
+  ];
+  function brsSectionFor(ruleId) { return BRS_RULE_GROUPS[ruleId] || 'Other'; }
+  function brsSectionCollapsed(label) {
+    return localStorage.getItem(`brs_section_${label}`) === 'collapsed';
+  }
+  function brsSectionToggle(label) {
+    const key = `brs_section_${label}`;
+    if (localStorage.getItem(key) === 'collapsed') localStorage.removeItem(key);
+    else localStorage.setItem(key, 'collapsed');
+    brsRender();
+  }
+  window.brsSectionToggle = brsSectionToggle;
+
   function brsMarkDirty() {
     brsDirty = true;
     const b = document.getElementById('brs-dirty-badge');
@@ -684,7 +723,35 @@
       return;
     }
     container.innerHTML = '';
+
+    // Group rules by section. Each rule retains its global brsRules index
+    // so card.dataset.brsRuleCard + drag-reorder still work unchanged.
+    const sectionMap = {};
     brsRules.forEach((rule, idx) => {
+      const label = brsSectionFor(rule.id);
+      (sectionMap[label] = sectionMap[label] || []).push({ rule, idx });
+    });
+    // Section render order: known labels first, then any unknown sections
+    // (just in case BRS_SECTION_ORDER is out of date) in alphabetical order.
+    const orderedLabels = [
+      ...BRS_SECTION_ORDER.filter(l => sectionMap[l]),
+      ...Object.keys(sectionMap).filter(l => !BRS_SECTION_ORDER.includes(l)).sort(),
+    ];
+
+    orderedLabels.forEach(label => {
+      const items = sectionMap[label];
+      const collapsed = brsSectionCollapsed(label);
+      // Section header — collapsible. Click anywhere on the header toggles.
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;align-items:center;gap:8px;margin:14px 0 6px;padding:6px 10px;background:#efe9dc;border-left:4px solid #6c4f9f;border-radius:3px;cursor:pointer;user-select:none;';
+      header.onclick = () => brsSectionToggle(label);
+      header.innerHTML = `
+        <span style="color:#6c4f9f;font-size:0.95rem;width:14px;display:inline-block;text-align:center;">${collapsed ? '▶' : '▼'}</span>
+        <strong style="color:#3b2766;font-size:0.92rem;">${label}</strong>
+        <span style="color:#888;font-size:0.78rem;">(${items.length} ${items.length === 1 ? 'container' : 'containers'})</span>`;
+      container.appendChild(header);
+      if (collapsed) return;
+      items.forEach(({ rule, idx }) => {
       const ruleNum = idx + 1;
       const card = document.createElement('div');
       card.draggable = true;
@@ -768,6 +835,7 @@
           </div>` : '<div style="padding:8px 4px;color:#999;font-size:0.78rem;font-style:italic;">No sentences — click <b>+ Sentence</b> to add one.</div>'}
       `;
       container.appendChild(card);
+    });
     });
     container.querySelectorAll('[data-brs-rule]').forEach(el => {
       el.addEventListener('change', () => brsHandleEdit(el));
