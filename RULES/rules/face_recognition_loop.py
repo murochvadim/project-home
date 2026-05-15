@@ -55,7 +55,8 @@ log = logging.getLogger("rule.face_recognition_loop")
 _RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RULES_DIR not in sys.path:
     sys.path.insert(0, _RULES_DIR)
-from _display_chips import parse_display_chip, build_devices_by_name  # noqa: E402
+from _display_chips import build_devices_by_name  # noqa: E402
+from _chip_resolver import resolve_chip  # noqa: E402
 
 # Trigger device — hardcoded because RULE['triggers'] is fixed at module load.
 FACE_01_ID = 'face_01'
@@ -85,102 +86,6 @@ RULE = {
         "dps":       {"kind": "face_unknown", "reason": "test"},
     },
 }
-
-
-_CH_N_RE = re.compile(r'^Ch\.(\d+)$', re.IGNORECASE)
-
-
-def _resolve_switch_chip(token, devices_by_name):
-    """Resolve a generic switch / ESP chip.
-    Same pattern as move_in_corridor — dps_config first, channel_config,
-    dps_labels last. Display chips fall back to parse_display_chip.
-    """
-    if not token or not token.startswith('@'):
-        return None
-    body = token[1:].strip()
-    if not body:
-        return None
-    parts = body.split()
-    dev = None
-    rest_parts = []
-    for split_at in range(len(parts), 0, -1):
-        candidate = ' '.join(parts[:split_at])
-        if candidate in devices_by_name:
-            dev = devices_by_name[candidate]
-            rest_parts = parts[split_at:]
-            break
-    if not dev:
-        return None
-
-    protocol = dev.get('protocol', '')
-    dtype    = dev.get('device_type', '')
-    if dtype == 'display' or protocol in ('pixoo', 'awtrix') or dtype == 'panel' or protocol == 'alexa':
-        return None
-
-    action = 'turn_on'
-    if rest_parts and rest_parts[-1].lower() == 'on':
-        rest_parts = rest_parts[:-1]
-    elif rest_parts and rest_parts[-1].lower() == 'off':
-        action = 'turn_off'
-        rest_parts = rest_parts[:-1]
-
-    channel_text = ' '.join(rest_parts).strip()
-    channel = None
-
-    if channel_text:
-        m = _CH_N_RE.match(channel_text)
-        if m:
-            channel = m.group(1)
-        else:
-            dps_config = dev.get('dps_config') or {}
-            for k, v in dps_config.items():
-                if not isinstance(v, dict):
-                    continue
-                if (v.get('name') or '').lower() == channel_text.lower() or k.lower() == channel_text.lower():
-                    channel = k
-                    break
-            if not channel:
-                ch_config = dev.get('channel_config') or {}
-                for k, v in ch_config.items():
-                    if isinstance(v, dict) and (v.get('name') or '').lower() == channel_text.lower():
-                        channel = k
-                        break
-            if not channel:
-                dps_labels = dev.get('dps_labels') or {}
-                for k, v in dps_labels.items():
-                    if isinstance(v, str) and v.lower() == channel_text.lower():
-                        channel = k
-                        break
-
-        if channel is None:
-            log.warning("Face Recognition Loop: chip %r — channel %r not found on device %s",
-                        token, channel_text, dev.get('id'))
-            return None
-
-    if not channel:
-        channel = '1'
-
-    cmd = {
-        'device_id': dev.get('id'),
-        'action':    action,
-        'channel':   channel,
-        'rule':      'Face Recognition Loop',
-        '_skip_loop_guard': True,
-    }
-    if protocol == 'esp':
-        cmd['protocol'] = 'esp'
-    elif protocol == 'hasp':
-        cmd['protocol'] = 'hasp'
-    return cmd
-
-
-def _resolve_chip(token, devices_by_name):
-    cmd = parse_display_chip(token, devices_by_name)
-    if cmd:
-        cmd.setdefault('rule', 'Face Recognition Loop')
-        cmd['_skip_loop_guard'] = True
-        return cmd
-    return _resolve_switch_chip(token, devices_by_name)
 
 
 def _classify_sentence(text):
@@ -247,7 +152,7 @@ def _read_config(state):
                 for seg in sentence.get('segments', []):
                     if seg.get('t') != 'dev':
                         continue
-                    cmd = _resolve_chip(seg.get('v', ''), devices_by_name)
+                    cmd = resolve_chip(seg.get('v', ''), devices_by_name, 'Face Recognition Loop')
                     if cmd:
                         cfg['unlock_cmds'].append(cmd)
 
