@@ -1577,11 +1577,16 @@ const _corridorSimChainIds = new Set(Object.values(CORRIDOR_SIM_IDS));
 
 function _corridorSimRecord(topic, payloadBuf) {
   const parts = String(topic || '').split('/');
-  if (parts.length !== 5 || parts[0] !== 'mur' || parts[1] !== 'home'
-      || (parts[2] !== 'device' && parts[2] !== 'esp')
-      || !_corridorSimChainIds.has(parts[3])) {
-    return;
-  }
+  // Accept three topic shapes:
+  //   mur/home/device/<id>/{event,state}          (length 5, id ∈ chain set)
+  //   mur/home/esp/<id>/{event,status,command}    (length 5, id ∈ chain set)
+  //   mur/home/pixoo/command                      (length 4, no per-device id)
+  if (parts.length < 4 || parts[0] !== 'mur' || parts[1] !== 'home') return;
+  const pixooMatch = (parts.length === 4 && parts[2] === 'pixoo' && parts[3] === 'command');
+  const chainMatch = (parts.length === 5
+    && (parts[2] === 'device' || parts[2] === 'esp')
+    && _corridorSimChainIds.has(parts[3]));
+  if (!pixooMatch && !chainMatch) return;
   let payload;
   try { payload = JSON.parse(payloadBuf.toString()); } catch (_) { payload = payloadBuf.toString(); }
   _corridorSimBuffer.unshift({ ts: new Date().toISOString(), topic, payload });
@@ -1598,6 +1603,7 @@ mqttClient.on('connect', () => {
     'mur/home/esp/+/event',
     'mur/home/esp/+/status',
     'mur/home/esp/+/command',
+    'mur/home/pixoo/command',
   ];
   topics.forEach(t => mqttClient.subscribe(t, { qos: 0 }, (err) => {
     if (err) console.warn('corridor-sim broker subscribe failed:', t, err.message);
