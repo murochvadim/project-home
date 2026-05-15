@@ -2090,9 +2090,15 @@ app.post('/api/rule-engine/reload', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Per-rule runs-counter reset. Writes `_rule_stats_reset=<rule_name>` flag;
-// engine heartbeat picks it up within ≤60s, zeros `count` + `total_ms` for
-// that rule (so avg recomputes from fresh fires), clears the flag.
+// Per-rule runs-counter reset. Two-part operation:
+//   1. Write `_rule_stats_reset=<rule_name>` flag — engine heartbeat picks
+//      it up within ≤60s and zeros count + total_ms in its in-memory
+//      _rule_stats dict (so subsequent fires count from 1, avg recomputes).
+//   2. Immediately patch the _rules JSON array in DB to set this rule's
+//      stats.count=0 and stats.total_ms=0. Without this the dashboard's
+//      next 5s poll would read the OLD count from _rules (engine only
+//      refreshes _rules on the 60s heartbeat tick), causing the visual
+//      count to revert seconds after the click.
 // avg/max/last_fired are NOT cleared — they remain useful diagnostics.
 app.post('/api/rule-engine/reset-runs', async (req, res) => {
   const ruleName = req.body && req.body.rule;
@@ -2100,13 +2106,34 @@ app.post('/api/rule-engine/reset-runs', async (req, res) => {
     return res.status(400).json({ error: 'rule (string) required in body' });
   }
   try {
+    // 1. Set the flag so the engine eventually resets its in-memory counter.
     await db.query(
       `INSERT INTO rule_engine_state (key, value, updated_at)
        VALUES ('_rule_stats_reset', $1::jsonb, NOW())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
       [JSON.stringify(ruleName)]
     );
-    res.json({ ok: true, rule: ruleName, note: 'Engine picks up within 60 s on next heartbeat tick' });
+    // 2. Patch _rules JSONB so dashboard polls see count=0 immediately.
+    //    Iterates the rules array, sets stats.count + stats.total_ms = 0
+    //    on the matching rule only, leaves others untouched.
+    await db.query(
+      `UPDATE rule_engine_state
+       SET value = (
+         SELECT jsonb_agg(
+           CASE WHEN r->>'name' = $1
+             THEN jsonb_set(
+                    jsonb_set(r, '{stats,count}',    '0'::jsonb, true),
+                    '{stats,total_ms}', '0'::jsonb, true)
+             ELSE r
+           END
+         )
+         FROM jsonb_array_elements(value) AS r
+       ),
+       updated_at = NOW()
+       WHERE key = '_rules'`,
+      [ruleName]
+    );
+    res.json({ ok: true, rule: ruleName, note: 'Dashboard shows 0 immediately; engine confirms within 60 s' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
