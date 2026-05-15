@@ -706,6 +706,7 @@
   let _awMessages   = [];   // array of {name, template, color, scroll_speed, text_case, duration_s}
   let _awPrevTimer  = null;
   let _awLastStats  = {};   // most recent stats payload (used by Clear display to know current app)
+  let _awEditingName = null; // name of the saved app currently loaded in the editor (null = new)
 
   function awSetOnline(connected) {
     const dot  = document.getElementById('aw-online-dot');
@@ -919,10 +920,17 @@
     if (!_awMqtt || !_awMqtt.connected) { awSetMsg('MQTT not connected', true); return; }
     const form = awGetForm();
     if (!form.text) { awSetMsg('Type a sentence first', true); return; }
-    const name = (prompt('Name for this app (lowercase, no spaces):', '') || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-    if (!name) return;
+    const rawName = (document.getElementById('aw-name')?.value || '').trim();
+    const name = rawName.toLowerCase().replace(/[^a-z0-9_]/g, '');
+    if (!name) { awSetMsg('Name required (lowercase, no spaces)', true); return; }
     if (['time', 'temperature', 'humidity', 'battery', 'date'].includes(name)) {
       awSetMsg(`"${name}" collides with a built-in — pick another`, true); return;
+    }
+    // Duplicate-name guard: warn if the typed name targets a different existing
+    // app while editing (renamed edit → conflict).
+    const existingIdx = _awMessages.findIndex(m => m.name === name);
+    if (existingIdx >= 0 && _awEditingName && _awEditingName !== name) {
+      if (!confirm(`"${name}" already exists. Overwrite it?`)) return;
     }
     const row = {
       name, template: form.text, color: form.color,
@@ -930,8 +938,11 @@
       blink_ms: form.blinkMs, sound: form.sound, priority: form.priority,
       clear_after: form.clearAfter,
     };
-    const idx = _awMessages.findIndex(m => m.name === name);
-    if (idx >= 0) _awMessages[idx] = row; else _awMessages.push(row);
+    // If editing AND name unchanged → update in place.
+    // If editing AND name changed → save under new name (the old name's row stays).
+    // If creating new → push.
+    if (existingIdx >= 0) _awMessages[existingIdx] = row;
+    else _awMessages.push(row);
     await awSaveMessages();
     // Push retained custom app (persistent in rotation)
     const payload = awBuildPayload(form, true);
@@ -939,9 +950,28 @@
       if (err) awSetMsg('Saved DB but MQTT failed: ' + err.message, true);
       else     awSetMsg(`Saved "${name}" + pushed to device`);
     });
+    _awEditingName = name;  // future Saves overwrite this row by default
     awRenderSaved();
   }
   window.awSaveAsApp = awSaveAsApp;
+
+  function awClearEditor() {
+    _awEditingName = null;
+    const fields = ['aw-name', 'aw-text', 'aw-sound-val'];
+    fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const colorEl = document.getElementById('aw-color');    if (colorEl) colorEl.value = '#FFFFFF';
+    const speedEl = document.getElementById('aw-speed');    if (speedEl) speedEl.value = 80;
+    const caseEl  = document.getElementById('aw-case');     if (caseEl)  caseEl.value  = '0';
+    const durEl   = document.getElementById('aw-duration'); if (durEl)   durEl.value   = 6;
+    const blinkEl = document.getElementById('aw-blink');    if (blinkEl) blinkEl.checked = false;
+    const blinkMs = document.getElementById('aw-blink-ms'); if (blinkMs) blinkMs.value = 500;
+    const soundEl = document.getElementById('aw-sound');    if (soundEl) soundEl.checked = false;
+    const prioEl  = document.getElementById('aw-priority'); if (prioEl)  prioEl.value  = 'normal';
+    const clearEl = document.getElementById('aw-clear');    if (clearEl) clearEl.checked = false;
+    awPreview();
+    awSetMsg('New app — fill in name and message');
+  }
+  window.awClearEditor = awClearEditor;
 
   async function awSaveMessages() {
     await fetch(`/api/dashboard-settings/${encodeURIComponent(AW_STORAGE_KEY)}`, {
@@ -998,6 +1028,8 @@
   function awEdit(name) {
     const m = _awMessages.find(x => x.name === name);
     if (!m) return;
+    _awEditingName = name;
+    const nameEl = document.getElementById('aw-name'); if (nameEl) nameEl.value = name;
     document.getElementById('aw-text').value     = m.template;
     document.getElementById('aw-color').value    = m.color;
     document.getElementById('aw-speed').value    = m.scroll_speed;
@@ -1010,7 +1042,7 @@
     document.getElementById('aw-priority').value = m.priority || 'normal';
     document.getElementById('aw-clear').checked  = !!m.clear_after;
     awPreview();
-    awSetMsg(`Loaded "${name}" — edit, then Save as app to overwrite`);
+    awSetMsg(`Editing "${name}" — Save to update, or change the name to save as new`);
   }
   window.awEdit = awEdit;
 

@@ -334,10 +334,14 @@
           <span style="display:inline-flex;align-items:center;gap:6px;padding-bottom:4px;min-height:28px;" title="Save-as-app: when on, the custom app auto-removes itself after `duration` seconds (lifetime). When off (default), it stays in rotation until you Delete it.">
             <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="aw-clear"> Clear after run</label>
           </span>
+          <label style="width:180px;" title="App name (lowercase, no spaces, a-z 0-9 _). Required to Save. Pre-fills when you click Edit on a saved row.">Name
+            <input type="text" id="aw-name" placeholder="e.g. move_on_main_door" style="width:100%;padding:4px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;box-sizing:border-box;display:block;margin-top:2px;font-family:monospace;">
+          </label>
           <span id="aw-msg" style="font-size:0.78rem;color:#666;flex:1;min-width:0;text-align:right;padding-bottom:6px;"></span>
+          <button class="btn-test" onclick="awClearEditor()" title="Clear all fields + drop edit-state, so the next Save creates a fresh app." style="margin-right:8px;">New</button>
           <button class="btn-test" onclick="awClearDisplay()" title="Dismisses notification + if a saved custom app is currently shown, REMOVES it permanently from the device rotation. Built-in apps (Time/Temp/etc.) just get skipped." style="margin-right:14px;">Clear display</button>
           <button class="btn-save" onclick="awPushNotify()" style="background:#7a9ab8;border-color:#7a9ab8;">Show now</button>
-          <button class="btn-save" onclick="awSaveAsApp()">Save as app</button>
+          <button class="btn-save" onclick="awSaveAsApp()">Save</button>
         </div>
       </div>
     </div>
@@ -393,6 +397,6 @@
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/device-picker.js?v=11"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/living-room.js?v=45"></script>
+<script src="js/living-room.js?v=46"></script>
 </body>
 </html>
