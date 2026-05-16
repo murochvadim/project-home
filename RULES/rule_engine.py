@@ -583,15 +583,11 @@ class RuleEngine:
                             'action': commands[0].get('action', ''),
                             'ts': time.time(),
                         }
-                    stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
-                    stats['last_fired'] = datetime.now(tz=TZ).isoformat()
-                    self._rule_stats[rule_name] = stats
+                    self._record_rule_fire(rule_name, elapsed)
                 elif changed_keys:
                     result = '; '.join(f'{k}={self.state.shared[k]}' for k in changed_keys[:5])
                     self._log_rule_event(rule_name, device_id, source, 'state_changed', result, elapsed)
-                    stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
-                    stats['last_fired'] = datetime.now(tz=TZ).isoformat()
-                    self._rule_stats[rule_name] = stats
+                    self._record_rule_fire(rule_name, elapsed)
 
             self._maybe_publish_computed()
 
@@ -940,6 +936,26 @@ class RuleEngine:
 
     _MAX_CONSECUTIVE_ERRORS = 3
 
+    def _record_rule_fire(self, rule_name, elapsed_ms):
+        """Record a successful action-firing rule eval — increment count,
+        accumulate total_ms, update max_ms and last_fired in one place.
+
+        Called from _fire_rules_for_event after the caller has detected
+        the rule did real work (returned commands OR changed state.shared
+        keys). See the 2026-05-16 incident: previously count was bumped
+        in _evaluate_rule's `finally` block on every eval, which made
+        wildcard rules' counts regrow instantly after a Reset-Runs click
+        because the engine sees ~100-300 device events per second and
+        wildcards early-return on most of them.
+        """
+        stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+        stats['count']    += 1
+        stats['total_ms'] += elapsed_ms
+        if elapsed_ms > stats.get('max_ms', 0):
+            stats['max_ms'] = elapsed_ms
+        stats['last_fired'] = datetime.now(tz=TZ).isoformat()
+        self._rule_stats[rule_name] = stats
+
     def _evaluate_rule(self, rule, event):
         """Call rule.evaluate() safely, return list of command dicts.
         Auto-disables rule after _MAX_CONSECUTIVE_ERRORS consecutive failures.
@@ -985,18 +1001,15 @@ class RuleEngine:
         if not isinstance(result, list):
             log.warning("Rule '%s' returned non-list: %s", name, type(result).__name__)
             return []
-        # Empty list = rule evaluated but emitted no commands. Don't count.
-        if not result:
-            return result
-
-        # Action-firing eval — update stats
+        # Always track _last_ms (informational — caller reads it for log
+        # messages). Count / total_ms / max_ms are NOT updated here —
+        # the caller in _fire_rules_for_event has the "did real work"
+        # signal (commands OR state.shared changed) and increments those
+        # stats only when work happened. See the matching block alongside
+        # last_fired updates.
         elapsed_ms = (time.time() - t0) * 1000
         stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
-        stats['count']    += 1
-        stats['total_ms'] += elapsed_ms
-        stats['_last_ms']  = elapsed_ms
-        if elapsed_ms > stats['max_ms']:
-            stats['max_ms'] = elapsed_ms
+        stats['_last_ms'] = elapsed_ms
         self._rule_stats[name] = stats
         return result
 
