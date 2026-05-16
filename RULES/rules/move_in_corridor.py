@@ -5,15 +5,21 @@ On Corridor Presence rising edge (DPS '1' transitions 'none' → 'presence'):
   2. WHEN home_mode == 'home' — fire chips from the "when home" sentence(s).
   3. AFTER `after_delay_sec` seconds — fire chips from the "after delay"
      sentence (Pixoo preset + Face Recognition start_recognition).
+  4. AT cooldown end (T + cooldown_sec) — fire chips from the
+     "on cooldown end" sentence(s) (screen_off + restore Pixoo).
+     Pixoo `push_preset` is auto-substituted with `wipe` if the cleanup
+     fire-time falls outside Daily_Welcome's operating window — so the
+     LED matrix stays dark overnight instead of holding a stale preset.
 
 Everything except the trigger device is sentence-driven via container
 `r_move_in_corridor` on the Main Agent → Base Rule Settings tab. Add
 or remove devices by editing chips in the dashboard — no code changes.
 
 Sentence classification (by text content):
-  - contains 'on presence'  → always bucket (every rising edge)
-  - contains 'when home'    → home-mode bucket (rising edge AND home_mode=home)
-  - contains 'after delay'  → delayed bucket (fired after_delay_sec later)
+  - contains 'on presence'      → always bucket (every rising edge)
+  - contains 'when home'        → home-mode bucket (rising edge AND home_mode=home)
+  - contains 'after delay'      → delayed bucket (fired after_delay_sec later)
+  - contains 'on cooldown end'  → cleanup bucket (fired cooldown_sec later)
   - contains 'delay is N seconds'    → sets after_delay_sec
   - contains 'cooldown is N seconds' → sets cooldown_sec
 
@@ -45,6 +51,10 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+LOCAL_TZ = ZoneInfo("Asia/Jerusalem")
 
 log = logging.getLogger("rule.move_in_corridor")
 
@@ -89,13 +99,16 @@ RULE = {
 
 
 def _classify_sentence(text):
-    """Return one of: 'always', 'when_home', 'delayed', 'knob_delay',
-    'knob_cooldown', or None."""
+    """Return one of: 'always', 'when_home', 'delayed', 'cleanup',
+    'knob_delay', 'knob_cooldown', or None."""
     t = (text or '').lower()
     if 'cooldown is' in t:
         return 'knob_cooldown'
     if 'delay is' in t:
         return 'knob_delay'
+    # 'on cooldown end' must be checked before 'on presence' (substring match)
+    if 'on cooldown end' in t:
+        return 'cleanup'
     if 'after delay' in t:
         return 'delayed'
     if 'when home' in t:
@@ -103,6 +116,46 @@ def _classify_sentence(text):
     if 'on presence' in t:
         return 'always'
     return None
+
+
+def _in_daily_welcome_window(at_time):
+    """Returns True if `at_time` (datetime, local TZ) is inside the
+    Daily_Welcome rule's operating window. Reads daily_welcome.RULE
+    live from sys.modules so DB overrides take effect at evaluation
+    time. Falls back to 08:00-23:59 if Daily_Welcome isn't loaded.
+
+    Window may wrap midnight (e.g. after=22:00, before=06:00) — handled
+    by the `after_min > before_min` branch.
+    """
+    after_hhmm = '08:00'
+    before_hhmm = '23:59'
+    for mod in sys.modules.values():
+        if mod is None:
+            continue
+        try:
+            r = getattr(mod, 'RULE', None)
+            if isinstance(r, dict) and r.get('name') == 'Daily_Welcome':
+                t = r.get('conditions', {}).get('time', {}) or {}
+                after_hhmm = t.get('after', after_hhmm)
+                before_hhmm = t.get('before', before_hhmm)
+                break
+        except Exception:
+            continue
+
+    try:
+        ah, am = (int(x) for x in after_hhmm.split(':'))
+        bh, bm = (int(x) for x in before_hhmm.split(':'))
+    except (ValueError, AttributeError):
+        return False
+
+    at_min     = at_time.hour * 60 + at_time.minute
+    after_min  = ah * 60 + am
+    before_min = bh * 60 + bm
+
+    if after_min <= before_min:
+        return after_min <= at_min < before_min
+    # Window wraps midnight
+    return at_min >= after_min or at_min < before_min
 
 
 def _read_config(state):
@@ -126,6 +179,7 @@ def _read_config(state):
         'always_cmds':     [],
         'when_home_cmds':  [],
         'delayed_cmds':    [],
+        'cleanup_cmds':    [],
     }
     try:
         rows = state.db_query(
@@ -178,6 +232,8 @@ def _read_config(state):
                 cfg['when_home_cmds'].extend(sentence_cmds)
             elif kind == 'delayed':
                 cfg['delayed_cmds'].extend(sentence_cmds)
+            elif kind == 'cleanup':
+                cfg['cleanup_cmds'].extend(sentence_cmds)
 
     except Exception as e:
         log.warning("Move in Corridor: config parse failed (%s) — using defaults", e)
@@ -248,5 +304,35 @@ def evaluate(event, state):
             commands.append(deferred)
         log.info("Move in Corridor: scheduled %d delayed command(s) via engine deferred dispatch in %ds",
                  len(cfg['delayed_cmds']), cfg['after_delay_sec'])
+
+    # 4. Cleanup bucket — fires `cooldown_sec` after rising edge to
+    #    restore the corridor to its idle state (FR screen off + Pixoo
+    #    back to Daily_Welcome). For pixoo `push_preset` chips: substitute
+    #    a `wipe` if the projected fire-time falls OUTSIDE Daily_Welcome's
+    #    operating window (its `conditions.time.after..before`). Without
+    #    this substitution, the LED matrix would hold a stale Daily_Welcome
+    #    preset overnight after the last corridor walk-in before bedtime.
+    if cfg['cleanup_cmds'] and cfg['cooldown_sec'] > 0:
+        fire_at = datetime.now(LOCAL_TZ) + timedelta(seconds=cfg['cooldown_sec'])
+        in_window = _in_daily_welcome_window(fire_at)
+        n_pushed_subst = 0
+        for cmd in cfg['cleanup_cmds']:
+            cleanup = dict(cmd)
+            if (cleanup.get('protocol') == 'pixoo'
+                and cleanup.get('action') == 'push_preset'
+                and not in_window):
+                cleanup = {
+                    'device_id': 'pixoo',
+                    'protocol':  'pixoo',
+                    'action':    'wipe',
+                    'rule':      'Move in Corridor',
+                }
+                n_pushed_subst += 1
+            cleanup['_delay_sec'] = cfg['cooldown_sec']
+            commands.append(cleanup)
+        log.info("Move in Corridor: scheduled %d cleanup command(s) at T+%ds — Daily_Welcome window: %s%s",
+                 len(cfg['cleanup_cmds']), cfg['cooldown_sec'],
+                 'inside' if in_window else 'outside',
+                 f' ({n_pushed_subst} push→wipe)' if n_pushed_subst else '')
 
     return commands
