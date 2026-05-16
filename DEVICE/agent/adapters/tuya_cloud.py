@@ -18,6 +18,17 @@ from .tuya_config import API_REGION, API_KEY, API_SECRET
 POLL_INTERVAL = 60   # seconds between polls per device
 BATCH_DELAY   = 1.0  # seconds between individual API calls (rate limit)
 
+# For battery-powered IR-hub class (Tuya `wnykq`, device_type='remote'):
+# the status API always returns success=True even when the device is
+# unreachable (because there's no DPS to lift). Cloud's `online` flag
+# is also stale — observed `online: True` for a device whose battery
+# died 10 hours earlier. The honest signal is `update_time` from the
+# device-info API (`/v1.0/devices/<id>`). If the device hasn't checked
+# in for longer than this many seconds, we skip the on_state_change
+# bump and let `last_seen` age naturally so the dashboard's 2-hour
+# offline threshold can fire.
+REMOTE_UPDATE_TIME_STALE_SEC = 30 * 60   # 30 minutes
+
 
 class TuyaCloudAdapter(DeviceAdapter):
     vendor = 'tuya'
@@ -74,6 +85,34 @@ class TuyaCloudAdapter(DeviceAdapter):
             log.error(f'Cloud poll error for {dev["name"]}: {e}')
             return None
 
+    def _remote_recently_active(self, dev: dict) -> bool:
+        """For IR-remote class, check if the device has checked in to Tuya
+        cloud within REMOTE_UPDATE_TIME_STALE_SEC. Reads `update_time` from
+        the device info API — `online` and the status API are both stale
+        when the device dies (see 2026-05-16 Maya Bedroom Remote incident).
+        Returns False on any error so we err on the side of NOT bumping
+        last_seen (lets the dashboard's offline threshold fire honestly).
+        """
+        device_id = dev['id']
+        try:
+            r = self._cloud.cloudrequest(f'/v1.0/devices/{device_id}')
+            if not r.get('success'):
+                log.warning(f'Device info failed for {dev["name"]}: {r.get("msg")}')
+                return False
+            result = r.get('result') or {}
+            ut = result.get('update_time')
+            if not isinstance(ut, (int, float)):
+                log.warning(f'No update_time for {dev["name"]} — skipping keepalive')
+                return False
+            age_sec = time.time() - float(ut)
+            if age_sec > REMOTE_UPDATE_TIME_STALE_SEC:
+                log.info(f'{dev["name"]}: stale update_time ({int(age_sec/60)}m ago) — skipping keepalive')
+                return False
+            return True
+        except Exception as e:
+            log.error(f'update_time check failed for {dev["name"]}: {e}')
+            return False
+
     def _run(self):
         self._connect()
         log.info(f'TuyaCloudAdapter: building DPS maps for {len(self.devices)} devices')
@@ -90,16 +129,21 @@ class TuyaCloudAdapter(DeviceAdapter):
                 if dps:
                     self.on_state_change(dev['id'], dps, 'cloud_poll')
                 elif dps is not None and dev.get('device_type') == 'remote':
-                    # IR remote class (Tuya `wnykq` category) — has zero DPS
-                    # in its cloud spec, so _poll_device returns {} on a
-                    # successful HTTP call. Without this branch the
-                    # `if dps:` above would skip and last_seen would never
-                    # advance for these devices, making the dashboard show
-                    # them as perma-offline. The device_type='remote' guard
-                    # narrows the new branch to this specific class so no
-                    # other cloud-poll device's behaviour can change. See
-                    # 2026-05-15 investigation of Maya Bedroom Remote.
-                    self.on_state_change(dev['id'], {}, 'cloud_poll')
+                    # IR remote class (Tuya `wnykq` category) — zero DPS in
+                    # cloud spec, so _poll_device returns {} on a successful
+                    # HTTP call. The status API returns success=True even
+                    # when the device is unreachable, so we CAN'T use it
+                    # alone as proof of life. Make a secondary call to the
+                    # device-info API and read `update_time` — that's the
+                    # actual last cloud check-in timestamp from the device.
+                    # Only bump last_seen if the device has checked in
+                    # within REMOTE_UPDATE_TIME_STALE_SEC. Otherwise let
+                    # last_seen age naturally so the dashboard's 2-hour
+                    # offline threshold can fire when the battery dies.
+                    # See 2026-05-16 incident: Maya Bedroom Remote showed
+                    # Alive for 10 h after battery death.
+                    if self._remote_recently_active(dev):
+                        self.on_state_change(dev['id'], {}, 'cloud_poll')
                 time.sleep(BATCH_DELAY)
             # Wait remaining time before next round
             self._stop.wait(max(0, POLL_INTERVAL - len(self.devices) * BATCH_DELAY))
