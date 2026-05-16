@@ -18,17 +18,6 @@ from .tuya_config import API_REGION, API_KEY, API_SECRET
 POLL_INTERVAL = 60   # seconds between polls per device
 BATCH_DELAY   = 1.0  # seconds between individual API calls (rate limit)
 
-# For battery-powered IR-hub class (Tuya `wnykq`, device_type='remote'):
-# the status API always returns success=True even when the device is
-# unreachable (because there's no DPS to lift). Cloud's `online` flag
-# is also stale — observed `online: True` for a device whose battery
-# died 10 hours earlier. The honest signal is `update_time` from the
-# device-info API (`/v1.0/devices/<id>`). If the device hasn't checked
-# in for longer than this many seconds, we skip the on_state_change
-# bump and let `last_seen` age naturally so the dashboard's 2-hour
-# offline threshold can fire.
-REMOTE_UPDATE_TIME_STALE_SEC = 30 * 60   # 30 minutes
-
 
 class TuyaCloudAdapter(DeviceAdapter):
     vendor = 'tuya'
@@ -86,12 +75,23 @@ class TuyaCloudAdapter(DeviceAdapter):
             return None
 
     def _remote_recently_active(self, dev: dict) -> bool:
-        """For IR-remote class, check if the device has checked in to Tuya
-        cloud within REMOTE_UPDATE_TIME_STALE_SEC. Reads `update_time` from
-        the device info API — `online` and the status API are both stale
-        when the device dies (see 2026-05-16 Maya Bedroom Remote incident).
-        Returns False on any error so we err on the side of NOT bumping
-        last_seen (lets the dashboard's offline threshold fire honestly).
+        """For IR-remote class (Tuya `wnykq`), check if the cloud thinks
+        the device is online. Tuya's API does NOT expose a real "last
+        check-in" timestamp for this class:
+          - `update_time` is the device-record metadata-update time
+            (changes when DPS spec / name / etc. change). Never advances
+            on heartbeat.
+          - `active_time` is the original activation date.
+          - `shadow/properties[*].time` is the last DPS publish time
+            (IR hubs almost never publish DPS — typically years old).
+          - Pulsar push `dp_report` events don't include heartbeats for
+            zero-DPS devices.
+        Tuya's `online` flag is the ONLY reliable signal — it lags by
+        hours when devices die (Tuya's own offline detection cadence),
+        but it's the same signal the Tuya app uses. Better than my
+        previous bet on update_time which never advances and made
+        every dead-and-alive IR hub permanently offline (see 2026-05-16
+        investigation log for the exhaustive endpoint scan).
         """
         device_id = dev['id']
         try:
@@ -100,17 +100,13 @@ class TuyaCloudAdapter(DeviceAdapter):
                 log.warning(f'Device info failed for {dev["name"]}: {r.get("msg")}')
                 return False
             result = r.get('result') or {}
-            ut = result.get('update_time')
-            if not isinstance(ut, (int, float)):
-                log.warning(f'No update_time for {dev["name"]} — skipping keepalive')
-                return False
-            age_sec = time.time() - float(ut)
-            if age_sec > REMOTE_UPDATE_TIME_STALE_SEC:
-                log.info(f'{dev["name"]}: stale update_time ({int(age_sec/60)}m ago) — skipping keepalive')
+            online = result.get('online')
+            if not online:
+                log.info(f'{dev["name"]}: cloud online=false — skipping keepalive')
                 return False
             return True
         except Exception as e:
-            log.error(f'update_time check failed for {dev["name"]}: {e}')
+            log.error(f'online check failed for {dev["name"]}: {e}')
             return False
 
     def _run(self):
