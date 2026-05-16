@@ -455,10 +455,17 @@ class PixooService:
             'time': _now.strftime('%H:%M'),
             'date': _now.strftime('%a %d %b'),
         }
-        # Resolve {{countdown}} from vars_dict['countdown_end_ts'] if present.
+        # Resolve {{countdown}} from vars_dict['countdown_end_ts'] OR the
+        # historical `countdown` key (both accepted as of 2026-05-16 — the
+        # Start Away Mode rule has always sent `countdown` and rule authors
+        # / the dashboard simulator naturally type `countdown` since that's
+        # the placeholder name in the preset; treating both as equivalent
+        # avoids a silent rendering failure when the keys don't match).
         countdown_str = ''
         if vars_dict:
             end_ts_raw = vars_dict.get('countdown_end_ts')
+            if end_ts_raw is None:
+                end_ts_raw = vars_dict.get('countdown')
             if end_ts_raw is not None:
                 try:
                     end_ts = float(end_ts_raw)
@@ -476,10 +483,10 @@ class PixooService:
             text = text.replace('{{countdown}}', countdown_str)
             if vars_dict:
                 for key, val in vars_dict.items():
-                    # Skip countdown_end_ts — already consumed above, and
-                    # substituting its raw epoch value into text would look
-                    # nonsense if the author also wrote {{countdown_end_ts}}.
-                    if key == 'countdown_end_ts':
+                    # Skip both countdown-key aliases — already consumed
+                    # above as the live MM:SS render; substituting their
+                    # raw epoch value would render as a useless huge number.
+                    if key in ('countdown_end_ts', 'countdown'):
                         continue
                     text = text.replace('{{' + key + '}}', str(val))
             text = _re.sub(r'\{\{[^}]*\}\}', '', text)
@@ -504,10 +511,16 @@ class PixooService:
     def _pick_ticker_cadence(self, items, vars_dict):
         """1-second cadence while an active (unfired) {{countdown}} is on
         screen; 60 seconds otherwise. Used by each _start_ticker call-site
-        so only countdown presets pay the per-second render cost."""
+        so only countdown presets pay the per-second render cost.
+
+        Reads both `countdown_end_ts` and the historical `countdown` key
+        (kept aligned with _substitute_live_tokens — see its doc for why
+        both are accepted as of 2026-05-16)."""
         if not vars_dict:
             return 60
         end_ts_raw = vars_dict.get('countdown_end_ts')
+        if end_ts_raw is None:
+            end_ts_raw = vars_dict.get('countdown')
         if end_ts_raw is None:
             return 60
         try:
@@ -728,20 +741,53 @@ class PixooService:
         items = list(content.get('items', []))
         pixels = content.get('pixels', {})
 
+        # ── Merge preset-baked default_vars with caller vars ─────────
+        # Caller-supplied keys win, missing keys fall back to defaults.
+        # Auto-convert "countdown"-named values: an integer < 1e9 is
+        # treated as "seconds from now" and translated to a unix epoch
+        # so the same render path (which expects an epoch end-time)
+        # works whether the caller supplied an epoch directly, the
+        # preset baked in `60`, or a future caller passes `5` minutes
+        # as the override.
+        preset_defaults = content.get('default_vars', {}) or {}
+        merged_vars = dict(preset_defaults)
+        if vars_dict:
+            merged_vars.update(vars_dict)
+
+        def _maybe_epoch(key, val):
+            if not isinstance(key, str) or 'countdown' not in key.lower():
+                return val
+            try:
+                n = int(val)
+            except (TypeError, ValueError):
+                return val
+            # < 1e9 → seconds-from-now; >= 1e9 → already a unix epoch
+            return (int(time.time()) + n) if n < 1_000_000_000 else n
+
+        merged_vars = {k: _maybe_epoch(k, v) for k, v in merged_vars.items()}
+        vars_dict = merged_vars if merged_vars else None
+
         # Snapshot unsubstituted items for the cadence picker — _substitute
         # mutates `items` in place, so after the call the literal {{countdown}}
         # token is gone and we can't detect it any more.
         items_pre_subst = [dict(it) for it in items]
         has_live = self._substitute_live_tokens(items, vars_dict)
 
-        # Stop any running sequence/GIF, then render
+        # Stop any running sequence/GIF, then render.
+        # SKIP this block on ticker re-renders — the 300 ms sleep + channel
+        # reset cause every static element (e.g. "AWAY STARTED" above a
+        # countdown) to visibly flicker once per second. Only the initial
+        # user-/rule-initiated push needs to ensure we're on the custom
+        # channel and any prior animation is cleared; subsequent ticks
+        # just need clear+draw+push for a clean frame update.
         import requests as _req
-        try:
-            self.pixoo.set_channel(4)
-            _req.post(f'http://{PIXOO_IP}:80/post', json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
-            time.sleep(0.3)
-        except Exception:
-            pass
+        if not _from_ticker:
+            try:
+                self.pixoo.set_channel(4)
+                _req.post(f'http://{PIXOO_IP}:80/post', json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                time.sleep(0.3)
+            except Exception:
+                pass
 
         self.pixoo.clear()
         is_animation = False

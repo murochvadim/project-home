@@ -134,6 +134,10 @@
               <button class="btn btn-secondary btn-sm" onclick="pixooAddText()" style="font-size:0.72rem;">Add</button>
             </div>
             <div id="pixoo-ed-items" style="font-size:0.68rem;color:#888;margin-bottom:4px;max-height:50px;overflow-y:auto;"></div>
+            <div id="pixoo-defaults-section" style="display:none;border-top:1px dashed #e0dcd6;padding-top:6px;margin-top:6px;">
+              <div style="font-size:0.72rem;font-weight:600;color:#888;margin-bottom:3px;">DEFAULT VALUES</div>
+              <div id="pixoo-defaults-list"></div>
+            </div>
           </div>
           <div style="border-top:1px solid #e0dcd6;padding-top:8px;">
             <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">
@@ -156,7 +160,6 @@
                 <option value="">— preset —</option>
               </select>
               <button class="btn btn-secondary btn-sm" onclick="simPushPreset()" style="background:#27ae60;color:#fff;padding:3px 10px;font-size:0.72rem;">Push</button>
-              <button class="btn btn-secondary btn-sm" onclick="simResume()" style="padding:3px 10px;font-size:0.72rem;">Resume</button>
               <button class="btn btn-secondary btn-sm" onclick="simWipe()" style="background:#c0392b;color:#fff;padding:3px 10px;font-size:0.72rem;">Wipe</button>
             </div>
             <div id="sim-vars" style="font-size:0.78rem;"></div>
@@ -200,7 +203,7 @@
 
 </main>
 
-<script src="js/corridor.js?v=3"></script>
+<script src="js/corridor.js?v=7"></script>
 <script src="js/alerts-monitor.js?v=9"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@ function showTab(name, btn) {
 // ── Pixoo state ──
 let _pixooTimer = null;
 let _pixooEditorItems = [];
+let _pixooDefaultVars = {};   // baked-in defaults for {{var}} placeholders
 let _pixooPixels = {};       // "x,y" → {r,g,b}
 let _pixooPixelHistory = []; // stack of keys for undo
 let _pixooCrosshair = null;
@@ -405,7 +406,7 @@ function pixooAddText() {
 function pixooRenderItemsList() {
   const el = document.getElementById('pixoo-ed-items');
   if (!el) return;
-  if (_pixooEditorItems.length === 0) { el.innerHTML = ''; return; }
+  if (_pixooEditorItems.length === 0) { el.innerHTML = ''; pixooRenderDefaults(); return; }
   el.innerHTML = _pixooEditorItems.map((it, i) =>
     `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">` +
     `<span style="color:rgb(${it.r},${it.g},${it.b});">"${it.t}"</span>` +
@@ -413,6 +414,63 @@ function pixooRenderItemsList() {
     `<button onclick="pixooRemoveItem(${i})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.75rem;padding:0;">&#10005;</button>` +
     `</div>`
   ).join('');
+  pixooRenderDefaults();
+}
+
+// Scan all editor items for {{var}} placeholders. For each unique var,
+// render an input field in the DEFAULT VALUES panel, prefilled with the
+// currently loaded preset's default (if any). Hides the panel when no
+// placeholders are present.
+function pixooRenderDefaults() {
+  const section = document.getElementById('pixoo-defaults-section');
+  const list    = document.getElementById('pixoo-defaults-list');
+  if (!section || !list) return;
+  const vars = new Set();
+  for (const item of _pixooEditorItems) {
+    const matches = (item.t || '').match(/\{\{(\w+)\}\}/g);
+    if (matches) matches.forEach(m => vars.add(m.slice(2, -2)));
+  }
+  // Exclude built-in live tokens that the service handles automatically.
+  vars.delete('time');
+  vars.delete('date');
+  if (vars.size === 0) { section.style.display = 'none'; list.innerHTML = ''; return; }
+  section.style.display = '';
+  let html = '';
+  for (const v of Array.from(vars)) {
+    const isCountdown = v.toLowerCase().includes('countdown');
+    const hint        = isCountdown ? ' (seconds)' : '';
+    const placeholder = isCountdown ? 'e.g. 60' : `${v}...`;
+    const current     = _pixooDefaultVars[v] != null ? String(_pixooDefaultVars[v]) : '';
+    html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">`;
+    html += `<span style="font-size:0.68rem;color:#888;min-width:90px;">{{${v}}}${hint}</span>`;
+    html += `<input type="text" id="pixoo-default-${v}" value="${current.replace(/"/g, '&quot;')}" placeholder="${placeholder}" style="flex:1;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">`;
+    html += `</div>`;
+  }
+  list.innerHTML = html;
+}
+
+// Read the DEFAULT VALUES inputs into a plain JSON object — called at
+// save time. Returns null when no defaults are set (so the preset stays
+// backward-compatible: an absent `default_vars` field is identical to
+// not having defaults). Numeric values are parsed; non-numeric kept as
+// string. Empty inputs are omitted.
+function pixooCollectDefaults() {
+  const out = {};
+  const vars = new Set();
+  for (const item of _pixooEditorItems) {
+    const matches = (item.t || '').match(/\{\{(\w+)\}\}/g);
+    if (matches) matches.forEach(m => vars.add(m.slice(2, -2)));
+  }
+  vars.delete('time');
+  vars.delete('date');
+  for (const v of Array.from(vars)) {
+    const inp = document.getElementById('pixoo-default-' + v);
+    if (!inp) continue;
+    const raw = inp.value.trim();
+    if (raw === '') continue;
+    out[v] = /^\d+$/.test(raw) ? parseInt(raw, 10) : raw;
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 function pixooRemoveItem(index) {
@@ -450,6 +508,7 @@ function pixooClearCanvas() {
   _pixooEditorItems = [];
   _pixooPixels = {};
   _pixooPixelHistory = [];
+  _pixooDefaultVars = {};
   _pixooCrosshair = null;
   _pixooLoadedPresetId = null;
   _pixooBgImage = null;
@@ -511,7 +570,10 @@ async function pixooSavePreset() {
   if (_pixooEditorItems.length === 0 && !_pixooBgBase64 && !hasPixels) return alert('Add content first');
   try {
     const type = _pixooBgBase64 ? 'image' : hasPixels ? 'pixel' : 'text';
-    const payload = { name, type, content: { items: _pixooEditorItems, pixels: _pixooPixels }, image_data: _pixooBgBase64 };
+    const defaults = pixooCollectDefaults();
+    const content  = { items: _pixooEditorItems, pixels: _pixooPixels };
+    if (defaults) content.default_vars = defaults;
+    const payload = { name, type, content, image_data: _pixooBgBase64 };
     if (_pixooLoadedPresetId) {
       await fetch('/api/pixoo/presets/' + _pixooLoadedPresetId, {
         method: 'PATCH',
@@ -574,8 +636,11 @@ async function pixooSaveAsNew() {
   }
 
   try {
-    const type = _pixooBgBase64 ? 'image' : hasPixels ? 'pixel' : 'text';
-    const payload = { name, type, content: { items: _pixooEditorItems, pixels: _pixooPixels }, image_data: _pixooBgBase64 };
+    const type     = _pixooBgBase64 ? 'image' : hasPixels ? 'pixel' : 'text';
+    const defaults = pixooCollectDefaults();
+    const content  = { items: _pixooEditorItems, pixels: _pixooPixels };
+    if (defaults) content.default_vars = defaults;
+    const payload  = { name, type, content, image_data: _pixooBgBase64 };
     const r = await fetch('/api/pixoo/presets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -631,6 +696,7 @@ async function pixooLoadPreset(id) {
     const content = typeof preset.content === 'string' ? JSON.parse(preset.content) : (preset.content || {});
     _pixooEditorItems = Array.isArray(content) ? content : (content.items || []);
     _pixooPixels = content.pixels || {};
+    _pixooDefaultVars = content.default_vars || {};
     _pixooPixelHistory = Object.keys(_pixooPixels);
     _pixooCrosshair = null;
     if (preset.image_data) {
@@ -716,8 +782,11 @@ function simPresetChanged() {
   }
   let html = '';
   for (const v of Array.from(vars)) {
-    html += `<div style="font-size:0.68rem;color:#888;">{{${v}}}</div>`;
-    html += `<input type="text" id="sim-var-${v}" placeholder="${v}..." style="width:100%;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;box-sizing:border-box;margin-bottom:6px;">`;
+    const isCountdown = v.toLowerCase().includes('countdown');
+    const labelHint   = isCountdown ? ' (seconds from now)' : '';
+    const placeholder = isCountdown ? '60 = 60 sec from now' : `${v}...`;
+    html += `<div style="font-size:0.68rem;color:#888;">{{${v}}}${labelHint}</div>`;
+    html += `<input type="text" id="sim-var-${v}" placeholder="${placeholder}" style="width:100%;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;box-sizing:border-box;margin-bottom:6px;">`;
   }
   el.innerHTML = html;
 }
@@ -736,7 +805,11 @@ async function simPushPreset() {
     if (matches) matches.forEach(m => {
       const key = m.slice(2, -2);
       const input = document.getElementById('sim-var-' + key);
-      if (input && input.value) vars[key] = input.value;
+      if (!input || !input.value) return;
+      // pixoo_service handles the seconds→epoch conversion for any
+      // "*countdown*" var (since 2026-05-16) — see _maybe_epoch in
+      // pixoo_service.py. Send the raw value here.
+      vars[key] = input.value.trim();
     });
   }
   try {
@@ -757,23 +830,6 @@ async function simPushPreset() {
   }
 }
 
-async function simResume() {
-  if (window._simSeqRefresh) { clearInterval(window._simSeqRefresh); window._simSeqRefresh = null; }
-  const status = document.getElementById('sim-status');
-  try {
-    if (status) { status.textContent = 'Resuming...'; status.style.color = '#888'; }
-    await fetch('/api/pixoo/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'resume' }),
-    });
-    if (status) { status.textContent = 'Rotation resumed'; status.style.color = '#27ae60'; }
-    setTimeout(loadPixoo, 2000);
-  } catch (e) {
-    if (status) { status.textContent = 'Connection error'; status.style.color = '#c0392b'; }
-  }
-}
-
 async function simWipe() {
   if (window._simSeqRefresh) { clearInterval(window._simSeqRefresh); window._simSeqRefresh = null; }
   const status = document.getElementById('sim-status');
@@ -784,6 +840,13 @@ async function simWipe() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'wipe' }),
     });
+    // Reset the simulator card: drop the preset selection + any var inputs
+    // so the card returns to its idle "— preset —" state. Wipe is conceptually
+    // "clear everything related to the current push," not just the LED.
+    const sel = document.getElementById('sim-preset');
+    if (sel) sel.value = '';
+    const varsEl = document.getElementById('sim-vars');
+    if (varsEl) varsEl.innerHTML = '';
     if (status) { status.textContent = 'Wiped'; status.style.color = '#27ae60'; }
     setTimeout(loadPixoo, 1000);
   } catch (e) {
