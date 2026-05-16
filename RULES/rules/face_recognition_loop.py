@@ -3,27 +3,38 @@
 Listens to events from the face_01 ESP board (HLK TX-510 + ESP8266
 bridge) and drives the post-corridor-entry recognition loop:
 
-  • On face_unknown   — increment retry count. If < max_retries, schedule
-                        another `start_recognition` after retry_delay_sec.
+  • On face_unknown   — increment retry count. If < max_retries, emit
+                        TWO commands: `screen_on` immediately and
+                        `start_recognition` deferred by retry_delay_sec
+                        (engine's `_delay_sec` Timer). The screen_on is
+                        required because the FR board's display auto-
+                        turns-off after each recognition cycle; without
+                        it, the next start_recognition reaches a board
+                        with no display and silently returns face_unknown.
                         If ≥ max_retries, clear state and give up.
 
   • On face_identified — clear retry state, dispatch unlock chips from
                          the s_frl1_unlock sentence (typically a chip
                          targeting the RemoteXY door-lock board).
 
-  • On heartbeat       — check the pending-retry timestamp; if due, fire
-                         the scheduled start_recognition.
-
 The FIRST `start_recognition` is NOT fired by this rule — Move in
 Corridor's `s_mic5_pixoo` delayed bucket already includes a
-`@Face Recognition recognition on` chip that kicks off the chain 2 s
-after corridor presence. From there, the FR board publishes either
-face_identified (→ this rule unlocks) or face_unknown (→ this rule
-retries up to N times).
+`@Face Recognition recognition on` chip that kicks off the chain
+N seconds after corridor presence (N from `s_mic4_delay`). From there,
+the FR board publishes either face_identified (→ this rule unlocks)
+or face_unknown (→ this rule retries up to N times).
 
-Decoupling from Move in Corridor lets other entry points reuse the
-same recognition retry + unlock chain in the future (e.g. doorbell-
-triggered recognition, manual dashboard kick-off).
+On face_unknown the rule schedules the next start_recognition with
+`_delay_sec=<retry_delay>` so the engine's deferred-dispatch Timer
+fires the MQTT publish that many seconds later — gives the FR board
+time to complete its current cycle (screen on → scan → result →
+screen off → ready) before the next command arrives. Non-blocking;
+does NOT wait for the 60 s heartbeat.
+
+Total attempts = 1 (external trigger from Move in Corridor) + N
+(retries from this rule on face_unknown). With N=2 and delay=3 s
+the full chain spans ~15 s end-to-end, then gives up if no
+face_identified.
 
 Sentence-driven knobs in container `r_face_recognition_loop_init`:
   • s_frl1_unlock   — chip(s) to fire on face_identified. Empty by
@@ -31,14 +42,8 @@ Sentence-driven knobs in container `r_face_recognition_loop_init`:
   • s_frl2_retries  — "Face Loop: retry recognition N times"
   • s_frl3_delay    — "Face Loop: retry delay is N seconds"
 
-Trigger device (FACE_01_ID) is hardcoded because RULE['triggers'] is
-fixed at module load. start_recognition target is the same device
-(face_01) so it's also hardcoded. Output devices (door, future
-auxiliary actions) are sentence-driven.
-
 state.shared keys owned by this rule:
   • face_recognition_loop.retry_count        — int, 0..max_retries
-  • face_recognition_loop.pending_retry_ts   — float epoch, 0 = no pending
   • face_recognition_loop.last_face_event_ts — float epoch (debug only)
 """
 
@@ -62,8 +67,8 @@ from _chip_resolver import resolve_chip  # noqa: E402
 FACE_01_ID = 'face_01'
 
 # Defaults — overridden by container `r_face_recognition_loop_init`.
-DEFAULTS_MAX_RETRIES     = 3
-DEFAULTS_RETRY_DELAY_SEC = 2
+DEFAULTS_MAX_RETRIES     = 2
+DEFAULTS_RETRY_DELAY_SEC = 3
 
 # Cache parsed config for 30 s. Same pattern as other sentence-driven rules.
 _config_cache = {'data': None, 'ts': 0.0}
@@ -72,8 +77,8 @@ _CONFIG_TTL_SEC = 30.0
 
 RULE = {
     "name": "Face Recognition Loop",
-    "description": "Retry start_recognition on face_unknown; unlock door on face_identified — chips drive the unlock target",
-    "triggers": [FACE_01_ID, "heartbeat"],
+    "description": "Retry start_recognition immediately on face_unknown; unlock door on face_identified — chips drive the unlock target",
+    "triggers": [FACE_01_ID],
     "controls": [],
     "category": "control",
     "group": "corridor",
@@ -164,37 +169,10 @@ def _read_config(state):
     return cfg
 
 
-def _try_fire_pending_retry(state):
-    """If a scheduled retry is due, return the start_recognition command.
-    Uses falsy sentinels (not pop) — same pattern as move_in_corridor.
-    """
-    ts = state.shared.get('face_recognition_loop.pending_retry_ts')
-    if not ts:
-        return None
-    if time.time() < float(ts):
-        return None
-    state.shared['face_recognition_loop.pending_retry_ts'] = 0
-    log.info("Face Recognition Loop: firing scheduled retry start_recognition")
-    return {
-        "device_id": FACE_01_ID,
-        "protocol":  "esp",
-        "action":    "turn_on",
-        "channel":   "recognition",
-        "rule":      "Face Recognition Loop",
-        "_skip_loop_guard": True,
-    }
-
-
 def evaluate(event, state):
     commands = []
     dev_id = event.get('device_id', '')
 
-    # Fire scheduled retry on any wake-up (heartbeat or face_01 event).
-    pending = _try_fire_pending_retry(state)
-    if pending:
-        commands.append(pending)
-
-    # Only face_01's own events drive the state machine.
     if dev_id != FACE_01_ID:
         return commands
 
@@ -202,17 +180,14 @@ def evaluate(event, state):
     kind = dps.get('kind', '')
 
     if kind not in ('face_unknown', 'face_identified'):
-        # Other face_01 events (ack, fr_ack, status, etc.) — ignore.
         return commands
 
     cfg = _read_config(state)
     state.shared['face_recognition_loop.last_face_event_ts'] = time.time()
 
     if kind == 'face_identified':
-        # Success — clear retry state and dispatch unlock chips.
         prev_count = state.shared.get('face_recognition_loop.retry_count', 0)
-        state.shared['face_recognition_loop.retry_count']     = 0
-        state.shared['face_recognition_loop.pending_retry_ts'] = 0
+        state.shared['face_recognition_loop.retry_count'] = 0
         user = dps.get('user_name') or dps.get('payload') or '?'
         if cfg['unlock_cmds']:
             log.info("Face Recognition Loop: face_identified (%s) after %d retries — dispatching %d unlock command(s)",
@@ -223,7 +198,7 @@ def evaluate(event, state):
                      user, prev_count)
         return commands
 
-    # kind == 'face_unknown' — schedule a retry, up to max_retries.
+    # kind == 'face_unknown' — schedule retry: screen_on now + start_recognition deferred.
     count = int(state.shared.get('face_recognition_loop.retry_count', 0))
     count += 1
     state.shared['face_recognition_loop.retry_count'] = count
@@ -231,12 +206,33 @@ def evaluate(event, state):
     if count > cfg['max_retries']:
         log.info("Face Recognition Loop: face_unknown — gave up after %d attempts (max=%d)",
                  count - 1, cfg['max_retries'])
-        state.shared['face_recognition_loop.retry_count']      = 0
-        state.shared['face_recognition_loop.pending_retry_ts'] = 0
+        state.shared['face_recognition_loop.retry_count'] = 0
         return commands
 
-    fire_at = time.time() + cfg['retry_delay_sec']
-    state.shared['face_recognition_loop.pending_retry_ts'] = fire_at
-    log.info("Face Recognition Loop: face_unknown — scheduling retry %d/%d in %ds",
+    log.info("Face Recognition Loop: face_unknown — scheduling retry %d/%d "
+             "(screen_on now + start_recognition in %ds)",
              count, cfg['max_retries'], cfg['retry_delay_sec'])
+
+    # Screen turns off after each recognition cycle on the FR board; without
+    # an explicit screen_on the next start_recognition reaches a board with
+    # no display and returns face_unknown immediately. Fire screen_on first
+    # (immediate), then defer start_recognition so the screen has time to
+    # wake up before scanning.
+    commands.append({
+        "device_id":         FACE_01_ID,
+        "protocol":          "esp",
+        "action":            "turn_on",
+        "channel":           "screen",
+        "rule":              "Face Recognition Loop",
+        "_skip_loop_guard":  True,
+    })
+    commands.append({
+        "device_id":         FACE_01_ID,
+        "protocol":          "esp",
+        "action":            "turn_on",
+        "channel":           "recognition",
+        "rule":              "Face Recognition Loop",
+        "_skip_loop_guard":  True,
+        "_delay_sec":        cfg['retry_delay_sec'],
+    })
     return commands

@@ -772,11 +772,27 @@ class RuleEngine:
             return
 
         if suffix == 'event':
-            # Acks + ad-hoc events. Dashboard Test sub-tab (Phase 4) consumes
-            # acks via direct browser-MQTT subscribe; rule engine doesn't
-            # persist them (would need rate limiting and they'd dilute the
-            # device_events table).
+            # Acks + ad-hoc events from the board's sketch (face_01 kinds:
+            # ack, fr_ack, face_identified, face_unknown; gates_01 acks;
+            # smell board acks; etc.). Dashboard Test sub-tab (Phase 4)
+            # consumes acks via direct browser-MQTT subscribe.
+            #
+            # NOT persisted to device_events — events arrive at unbounded
+            # rate during board chatter and would dilute the events table.
+            # Rules filter by kind themselves (face_recognition_loop.py
+            # accepts only kind in {face_identified, face_unknown}; others
+            # ignored). Fix landed 2026-05-16 after Face Recognition Loop
+            # silently broke: events arrived at broker but the engine
+            # short-circuited here without routing them, so face_identified
+            # never reached the rule.
             log.debug('ESP event from %s: %s', board_id, parsed_payload)
+            if isinstance(parsed_payload, dict):
+                self._fire_rules_for_event({
+                    'device_id': board_id,
+                    'dps':       parsed_payload,
+                    'source':    'esp_event',
+                    'ts':        datetime.now(tz=TZ).isoformat(),
+                })
             return
 
         log.debug('ESP message: unknown suffix %s for board %s', suffix, board_id)
@@ -1427,7 +1443,15 @@ class RuleEngine:
                  rule_name, preset_name, device_id, text)
 
     def _dispatch_command(self, cmd, rule_name):
-        """Route a command dict to the correct MQTT topic."""
+        """Route a command dict to the correct MQTT topic.
+
+        Generic deferred-dispatch: if cmd carries `_delay_sec` > 0, schedule
+        a threading.Timer that re-enters _dispatch_command after the delay
+        (with `_delay_sec` stripped so we don't re-schedule). Lets rules
+        emit "fire this command in N seconds" without blocking evaluate()
+        or waiting for the 60 s heartbeat. The Timer thread is daemonized
+        so it doesn't keep the engine alive on shutdown.
+        """
         if not isinstance(cmd, dict):
             return
 
@@ -1436,6 +1460,16 @@ class RuleEngine:
 
         if not device_id:
             log.warning("Rule '%s' returned command without device_id", rule_name)
+            return
+
+        delay_sec = cmd.get('_delay_sec', 0) or 0
+        if delay_sec > 0:
+            deferred = {k: v for k, v in cmd.items() if k != '_delay_sec'}
+            t = threading.Timer(float(delay_sec), self._dispatch_command, args=(deferred, rule_name))
+            t.daemon = True
+            t.start()
+            log.info("Rule '%s' -> deferred dispatch in %ss: %s %s",
+                     rule_name, delay_sec, device_id, action)
             return
 
         # Pixoo is a virtual device — route directly to pixoo command topic

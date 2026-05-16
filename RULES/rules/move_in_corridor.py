@@ -3,8 +3,8 @@
 On Corridor Presence rising edge (DPS '1' transitions 'none' → 'presence'):
   1. ALWAYS — fire chips from the "on presence" sentence.
   2. WHEN home_mode == 'home' — fire chips from the "when home" sentence(s).
-  3. AFTER `pixoo_delay_sec` seconds — fire chips from the "after delay"
-     sentence (typically a Pixoo preset push).
+  3. AFTER `after_delay_sec` seconds — fire chips from the "after delay"
+     sentence (Pixoo preset + Face Recognition start_recognition).
 
 Everything except the trigger device is sentence-driven via container
 `r_move_in_corridor` on the Main Agent → Base Rule Settings tab. Add
@@ -13,18 +13,24 @@ or remove devices by editing chips in the dashboard — no code changes.
 Sentence classification (by text content):
   - contains 'on presence'  → always bucket (every rising edge)
   - contains 'when home'    → home-mode bucket (rising edge AND home_mode=home)
-  - contains 'after delay'  → delayed bucket (fired pixoo_delay_sec later)
-  - contains 'delay is N seconds'    → sets pixoo_delay_sec
+  - contains 'after delay'  → delayed bucket (fired after_delay_sec later)
+  - contains 'delay is N seconds'    → sets after_delay_sec
   - contains 'cooldown is N seconds' → sets cooldown_sec
 
 Cooldown `cooldown_sec` between fires prevents flicker spam when the mmWave
 sensor flutters on the edge of the cone.
 
-Triggers list includes the presence sensor's id (rising-edge entry path)
-AND `heartbeat` so the delayed bucket fires within 60 s even if the
-sensor goes silent after the presence event. In practice the mmWave
-sensor emits DPS updates 1-3×/sec during continued presence, so a 2-second
-delay typically fires within ~1 s of target time.
+Delayed-bucket dispatch uses the engine's `_delay_sec` Timer mechanism
+(see rule_engine._dispatch_command). The rule emits each delayed command
+with `_delay_sec=<after_delay_sec>` and the engine schedules a
+threading.Timer to publish the MQTT command after that wall-clock delay
+— no heartbeat polling, no waiting for the next sensor event. Exact
+2/3/N-second timing regardless of mmWave silence.
+
+The `after-delay is N seconds` value is also the gap between
+`@Face Recognition screen on` (immediate, when-home bucket) and
+`@Face Recognition recognition on` (delayed bucket) — gives the FR
+display + module time to wake up before recognition scans.
 
 Trigger device (CORRIDOR_PRESENCE_ID) stays hardcoded: it's listed in
 RULE['triggers'] which is fixed at module load time; the rule engine
@@ -56,7 +62,7 @@ CORRIDOR_PRESENCE_ID = 'bfbdca138cb1c78c3dlbmc'
 
 # Fallback knob defaults — overridden by container `r_move_in_corridor`.
 DEFAULTS_COOLDOWN_SEC    = 60
-DEFAULTS_PIXOO_DELAY_SEC = 2
+DEFAULTS_AFTER_DELAY_SEC = 3
 
 # Cache parsed config for 30 s to avoid hitting the DB on every event.
 # Sentence edits land via dashboard save → 30 s max before the rule
@@ -67,8 +73,8 @@ _CONFIG_TTL_SEC = 30.0
 
 RULE = {
     "name": "Move in Corridor",
-    "description": "Corridor presence chain — chips in r_move_in_corridor drive all output devices",
-    "triggers": [CORRIDOR_PRESENCE_ID, "heartbeat"],
+    "description": "Corridor presence chain — chips in r_move_in_corridor drive all output devices; delayed bucket uses engine deferred dispatch",
+    "triggers": [CORRIDOR_PRESENCE_ID],
     "controls": [],
     "category": "control",
     "group": "corridor",
@@ -103,7 +109,7 @@ def _read_config(state):
     """Parse `r_move_in_corridor` and return the live config:
       {
         'cooldown_sec':    int,
-        'pixoo_delay_sec': int,
+        'after_delay_sec': int,
         'always_cmds':     [cmd, ...],
         'when_home_cmds':  [cmd, ...],
         'delayed_cmds':    [cmd, ...],
@@ -116,7 +122,7 @@ def _read_config(state):
 
     cfg = {
         'cooldown_sec':    DEFAULTS_COOLDOWN_SEC,
-        'pixoo_delay_sec': DEFAULTS_PIXOO_DELAY_SEC,
+        'after_delay_sec': DEFAULTS_AFTER_DELAY_SEC,
         'always_cmds':     [],
         'when_home_cmds':  [],
         'delayed_cmds':    [],
@@ -154,7 +160,7 @@ def _read_config(state):
             if kind == 'knob_delay':
                 m = re.search(r'delay is\s+(\d+)\s*seconds?', full_text, re.I)
                 if m:
-                    cfg['pixoo_delay_sec'] = int(m.group(1))
+                    cfg['after_delay_sec'] = int(m.group(1))
                 continue
 
             # Chip sentence — collect resolved commands
@@ -181,45 +187,9 @@ def _read_config(state):
     return cfg
 
 
-def _try_fire_pending(state):
-    """If a scheduled delayed command set is due, return the list and
-    clear the pending state.
-
-    state.shared keys are NOT pop()'d — save_shared_state only UPSERTs
-    (never DELETEs), and load_shared_state restores any DB key not in
-    memory. Popping leads to infinite refire every heartbeat. Set
-    falsy sentinels instead so the keys stay in memory as 0/'' and
-    load_shared_state's `if key not in self.shared` branch is skipped.
-    """
-    ts = state.shared.get('move_in_corridor.pending_ts')
-    if not ts:
-        return []
-    if time.time() < float(ts):
-        return []
-    payload = state.shared.get('move_in_corridor.pending_cmds', '')
-    state.shared['move_in_corridor.pending_ts'] = 0
-    state.shared['move_in_corridor.pending_cmds'] = ''
-    if not payload:
-        return []
-    try:
-        cmds = json.loads(payload) if isinstance(payload, str) else payload
-        if not isinstance(cmds, list):
-            return []
-        log.info("Move in Corridor: firing %d scheduled command(s)", len(cmds))
-        return cmds
-    except Exception as e:
-        log.warning("Move in Corridor: pending cmd decode failed (%s)", e)
-        return []
-
-
 def evaluate(event, state):
     commands = []
     dev_id = event.get('device_id', '')
-
-    # On every wake-up (any of this rule's triggers), check whether the
-    # delayed command set is due. Both heartbeat and presence-sensor events
-    # fire frequently enough to give sub-second-to-60-s precision.
-    commands.extend(_try_fire_pending(state))
 
     # Only the Corridor Presence sensor itself triggers the chain entry.
     if dev_id != CORRIDOR_PRESENCE_ID:
@@ -253,9 +223,9 @@ def evaluate(event, state):
     state.set_timer('move_in_corridor_cooldown')
 
     log.info("Move in Corridor: rising edge — firing chain "
-             "(always=%d, when_home=%d, delayed=%d, cooldown=%ds, delay=%ds)",
+             "(always=%d, when_home=%d, delayed=%d, cooldown=%ds, after_delay=%ds)",
              len(cfg['always_cmds']), len(cfg['when_home_cmds']),
-             len(cfg['delayed_cmds']), cfg['cooldown_sec'], cfg['pixoo_delay_sec'])
+             len(cfg['delayed_cmds']), cfg['cooldown_sec'], cfg['after_delay_sec'])
 
     # 1. ALWAYS bucket
     commands.extend(cfg['always_cmds'])
@@ -267,14 +237,16 @@ def evaluate(event, state):
     else:
         log.info("Move in Corridor: home_mode='%s' (not home) — skipping when-home bucket", home_mode)
 
-    # 3. Schedule delayed bucket (no gate — fires regardless of home_mode).
-    #    Stored as JSON-serialized command list so heartbeat AND subsequent
-    #    presence-sensor events both poll for it.
-    if cfg['delayed_cmds'] and cfg['pixoo_delay_sec'] > 0:
-        fire_at = time.time() + cfg['pixoo_delay_sec']
-        state.shared['move_in_corridor.pending_ts']   = fire_at
-        state.shared['move_in_corridor.pending_cmds'] = json.dumps(cfg['delayed_cmds'])
-        log.info("Move in Corridor: scheduled %d delayed command(s) in %ds",
-                 len(cfg['delayed_cmds']), cfg['pixoo_delay_sec'])
+    # 3. Delayed bucket — emit each command with `_delay_sec` so the
+    #    engine's deferred-dispatch Timer fires the MQTT publish at
+    #    exact wall-clock time. No pending_ts, no heartbeat polling,
+    #    not sensitive to mmWave silence after the rising edge.
+    if cfg['delayed_cmds'] and cfg['after_delay_sec'] > 0:
+        for cmd in cfg['delayed_cmds']:
+            deferred = dict(cmd)
+            deferred['_delay_sec'] = cfg['after_delay_sec']
+            commands.append(deferred)
+        log.info("Move in Corridor: scheduled %d delayed command(s) via engine deferred dispatch in %ds",
+                 len(cfg['delayed_cmds']), cfg['after_delay_sec'])
 
     return commands
