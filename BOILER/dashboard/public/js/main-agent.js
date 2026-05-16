@@ -414,6 +414,36 @@
     el.innerHTML += `<button onclick="this.parentElement.style.display='none'" style="position:absolute;top:6px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:1rem;" title="Close">&times;</button>`;
   };
 
+  window.saveManualPeople = async function () {
+    const inp = document.getElementById('manual-people-input');
+    const btn = document.getElementById('manual-people-save');
+    if (!inp) return;
+    const raw = inp.value.trim();
+    const orig = btn ? btn.textContent : 'Save';
+    try {
+      if (btn) { btn.textContent = '...'; btn.disabled = true; }
+      const body = raw === '' ? { value: null } : { value: parseInt(raw, 10) };
+      const r = await fetch('/api/main-agent/manual-people', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        if (btn) { btn.textContent = '✗'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500); }
+        console.warn('saveManualPeople error:', data.error);
+        return;
+      }
+      if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1000); }
+      // Trigger an immediate re-fetch so the chip + input update.
+      inp.blur();
+      if (typeof loadState === 'function') loadState();
+    } catch (e) {
+      console.error('saveManualPeople failed:', e);
+      if (btn) { btn.textContent = '✗'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500); }
+    }
+  };
+
   window.reloadRules = async function () {
     const btn = document.querySelector('[onclick="reloadRules()"]');
     try {
@@ -484,6 +514,26 @@
       } else {
         peopleEl.textContent    = people;
         peopleEl.className      = 'stat-val ' + colorClass(people);
+      }
+
+      // Manual people count — latest row in manual_people_log. NULL row
+      // = cleared (door transition or user clear) → display "—".
+      // Skipped while the input is focused so we don't overwrite typing.
+      const manualInput = document.getElementById('manual-people-input');
+      if (!manualInput || document.activeElement !== manualInput) {
+        fetch('/api/main-agent/manual-people').then(r => r.json()).then(mp => {
+          const mEl = document.getElementById('stat-manual-people');
+          const inp = document.getElementById('manual-people-input');
+          if (mp && mp.value !== null && mp.value !== undefined) {
+            mEl.textContent = mp.value;
+            mEl.className   = 'stat-val ' + colorClass(parseInt(mp.value) || 0);
+            if (inp) inp.value = mp.value;
+          } else {
+            mEl.textContent = '—';
+            mEl.className   = 'stat-val pending';
+            if (inp) inp.value = '';
+          }
+        }).catch(() => { /* best-effort */ });
       }
 
       const activeCount = parseInt(s.active_room_count) || 0;

@@ -1494,6 +1494,59 @@ app.get('/api/pixoo/status', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Manual People Count (Main Agent tab bar) ───────────────────────────
+// Latest row in `manual_people_log` is the current effective manual value.
+// `value=NULL` rows represent "cleared" (either user cleared, or a door
+// transition cleared it). The dashboard displays `Manual: —` for NULL.
+// Future AI calibration consumes the full history (source + door_event +
+// calculated_count fields) to compare manual ground truth vs People Home.
+app.get('/api/main-agent/manual-people', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT value, ts AT TIME ZONE 'Asia/Jerusalem' AS ts, source,
+              door_event, calculated_count
+       FROM manual_people_log ORDER BY ts DESC LIMIT 1`
+    );
+    if (r.rows.length === 0) {
+      res.json({ value: null, ts: null, source: null, calculated_count: null });
+    } else {
+      res.json(r.rows[0]);
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/main-agent/manual-people', async (req, res) => {
+  try {
+    const raw = req.body && req.body.value;
+    let value = null;
+    if (raw !== '' && raw !== null && raw !== undefined) {
+      const n = parseInt(raw, 10);
+      if (Number.isNaN(n) || n < 0 || n > 20) {
+        return res.status(400).json({ error: 'value must be integer 0..20 or null' });
+      }
+      value = n;
+    }
+    // Capture current people_home from rule engine state for AI comparison.
+    let calculated = null;
+    try {
+      const calcR = await db.query(
+        "SELECT value FROM rule_engine_state WHERE key = 'people_home'"
+      );
+      if (calcR.rows.length > 0) {
+        const v = calcR.rows[0].value;
+        calculated = typeof v === 'number' ? v : parseInt(String(v), 10);
+        if (Number.isNaN(calculated)) calculated = null;
+      }
+    } catch (_) { /* best-effort */ }
+    await db.query(
+      `INSERT INTO manual_people_log (value, source, door_event, calculated_count)
+       VALUES ($1, 'user', NULL, $2)`,
+      [value, calculated]
+    );
+    res.json({ ok: true, value, calculated_count: calculated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Corridor Simulator (Main Agent tab) ────────────────────────────────
 // Four endpoints back the Corridor Simulator UI in main-agent.html:
 //   1. GET  /api/corridor-sim/state           — aggregate live state of the 4 chain devices + server's MQTT ring buffer

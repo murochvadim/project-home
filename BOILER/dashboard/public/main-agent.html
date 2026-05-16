@@ -203,6 +203,17 @@
       <div class="device-stats">
         <div class="stat-chip"><span class="stat-val" id="stat-mode-val">—</span><span class="stat-lbl">Home</span></div>
         <div class="stat-chip"><span class="stat-val" id="stat-people">—</span><span class="stat-lbl">People</span></div>
+        <div class="stat-chip" id="stat-chip-manual" style="min-width:170px;">
+          <span class="stat-val" id="stat-manual-people">—</span>
+          <span class="stat-lbl">Manual</span>
+          <div style="display:flex;gap:4px;align-items:center;margin-top:4px;">
+            <input type="number" id="manual-people-input" min="0" max="20"
+                   placeholder="—" title="Real number of people now"
+                   style="width:50px;font-size:0.8rem;padding:2px 4px;text-align:center;">
+            <button onclick="saveManualPeople()" id="manual-people-save"
+                    style="font-size:0.72rem;padding:2px 8px;cursor:pointer;">Save</button>
+          </div>
+        </div>
         <div class="stat-chip"><span class="stat-val" id="stat-active-rooms">—</span><span class="stat-lbl">Active Rooms</span></div>
         <div class="stat-chip"><span class="stat-val" id="stat-last-room">—</span><span class="stat-lbl">Last Motion</span></div>
         <div class="stat-chip"><span class="stat-val" id="stat-motion-ago">—</span><span class="stat-lbl">Ago</span></div>
@@ -362,6 +373,6 @@
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/device-picker.js?v=11"></script>
-<script src="js/main-agent.js?v=64"></script>
+<script src="js/main-agent.js?v=65"></script>
 </body>
 </html>

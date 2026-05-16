@@ -243,6 +243,29 @@ def evaluate(event, state):
         state.get_timer('_main_door_open_ts') >= main_door_min_open
     )
 
+    # ── 2a-bis. Manual people count auto-clear ──
+    # On EITHER Main Door transition (open or close), insert a NULL row in
+    # manual_people_log so the dashboard's "Manual: N" chip reverts to
+    # "Manual: —". Dedupe: skip if the last row is already NULL (e.g. user
+    # already cleared manually) so we don't spam the table on every door
+    # cycle. `calculated_count` captures people_home at clear time for
+    # future AI calibration consumers.
+    if main_door_opened_now or main_door_closed_now:
+        door_event_label = 'open' if main_door_opened_now else 'close'
+        try:
+            last_manual = state.db_query(
+                "SELECT value FROM manual_people_log ORDER BY ts DESC LIMIT 1"
+            )
+            if last_manual and last_manual[0][0] is not None:
+                calc_now = int(state.shared.get('people_home', 0))
+                state.db_execute(
+                    "INSERT INTO manual_people_log (value, source, door_event, calculated_count) "
+                    "VALUES (NULL, 'door_clear', %s, %s)",
+                    (door_event_label, calc_now),
+                )
+        except Exception:
+            pass  # best-effort; never breaks the rule
+
     # ── 2b. Tier-1 / Tier-3 transit signals (entry/exit inference) ──
     if dtype in PRESENCE_TYPES and _presence_active(dps):
         if room in exterior_rooms:
