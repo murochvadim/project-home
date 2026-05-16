@@ -942,7 +942,23 @@ class RuleEngine:
 
     def _evaluate_rule(self, rule, event):
         """Call rule.evaluate() safely, return list of command dicts.
-        Auto-disables rule after _MAX_CONSECUTIVE_ERRORS consecutive failures."""
+        Auto-disables rule after _MAX_CONSECUTIVE_ERRORS consecutive failures.
+
+        Stats semantics (since 2026-05-16): count / total_ms / max_ms /
+        _last_ms track only ACTION-FIRING evals — evaluations where the
+        rule returned a non-empty list of commands. Previously the stats
+        were updated in a `finally` block, which meant wildcard rules
+        (triggers=["*"]) inflated count on every device event even when
+        they early-returned doing nothing. Under the new semantics:
+          count    = number of times the rule actually fired commands
+          total_ms = time spent on those action-firing fires only
+          avg      = total_ms / count = average time per real fire
+          max_ms   = longest action-firing eval observed
+        Empty-list returns are skipped (the rule's short-circuit /
+        no-action path doesn't pollute the metric). Reset-runs button
+        becomes meaningful for wildcards — count no longer regrows
+        instantly from early-return traffic.
+        """
         name = rule.RULE['name']
         t0 = time.time()
         try:
@@ -960,15 +976,6 @@ class RuleEngine:
             if self._rule_errors[name] >= self._MAX_CONSECUTIVE_ERRORS:
                 self._auto_disable_rule(name, str(e))
             return []
-        finally:
-            elapsed_ms = (time.time() - t0) * 1000
-            stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
-            stats['count'] += 1
-            stats['total_ms'] += elapsed_ms
-            stats['_last_ms'] = elapsed_ms
-            if elapsed_ms > stats['max_ms']:
-                stats['max_ms'] = elapsed_ms
-            self._rule_stats[name] = stats
 
         # Success — reset error counter
         self._rule_errors[name] = 0
@@ -978,6 +985,19 @@ class RuleEngine:
         if not isinstance(result, list):
             log.warning("Rule '%s' returned non-list: %s", name, type(result).__name__)
             return []
+        # Empty list = rule evaluated but emitted no commands. Don't count.
+        if not result:
+            return result
+
+        # Action-firing eval — update stats
+        elapsed_ms = (time.time() - t0) * 1000
+        stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+        stats['count']    += 1
+        stats['total_ms'] += elapsed_ms
+        stats['_last_ms']  = elapsed_ms
+        if elapsed_ms > stats['max_ms']:
+            stats['max_ms'] = elapsed_ms
+        self._rule_stats[name] = stats
         return result
 
     def _auto_disable_rule(self, rule_name, error_msg):
