@@ -1766,6 +1766,35 @@ app.get('/api/corridor-sim/state', async (_req, res) => {
 // the simulated event since rule_engine's update_device is in-memory only.
 // Real subsequent events from device_agent overwrite the simulated state on
 // the next poll, which is the correct behavior.
+// Home State Simulator — physically toggles the matching 8 Gang Switch
+// channel ON (HOME=ch4, AWAY=ch8, ABROAD=ch3 — matches the Mode Buttons
+// rule's r_modebuttons_init container). Just delegates to the existing
+// /api/devices/:id/toggle endpoint so the relay actually latches like a
+// real wall-switch press. The Mode Buttons rule then reacts to the real
+// device event the 8 Gang Switch emits, sets state.shared['home_mode'],
+// and fires its own mutual-exclusivity turn_off for the previously-active
+// channel — same chain as a real human press. Mode persists indefinitely
+// (until another mode button is pressed) because the relay is latched ON.
+const HOME_MODE_BUTTON = {
+  device_id: 'bf85e819855d686918q6hz',          // 8 Gang Switch (Entrance)
+  channels:  { home: '4', away: '8', abroad: '3' },
+};
+app.post('/api/corridor-sim/set-home-mode', async (req, res) => {
+  try {
+    const mode = (req.body && req.body.mode) ? String(req.body.mode).toLowerCase() : '';
+    if (!['home', 'away', 'abroad'].includes(mode)) {
+      return res.status(400).json({ error: 'mode must be home|away|abroad' });
+    }
+    const channel = HOME_MODE_BUTTON.channels[mode];
+    const r = await fetch(`http://127.0.0.1:3000/api/devices/${HOME_MODE_BUTTON.device_id}/toggle`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ state: true, channel }),
+    }).then(r => r.json());
+    res.json({ ok: true, mode, channel, toggle_result: r });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/corridor-sim/trigger-presence', async (req, res) => {
   try {
     const value = req.body && (req.body.value === true || req.body.value === 'true');

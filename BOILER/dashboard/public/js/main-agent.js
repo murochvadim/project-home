@@ -414,6 +414,33 @@
     el.innerHTML += `<button onclick="this.parentElement.style.display='none'" style="position:absolute;top:6px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:1rem;" title="Close">&times;</button>`;
   };
 
+  window.setHomeMode = async function (mode) {
+    const resultEl = document.getElementById('hsm-result');
+    try {
+      if (resultEl) { resultEl.textContent = '...'; resultEl.style.color = '#888'; }
+      const r = await fetch('/api/corridor-sim/set-home-mode', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mode }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        if (resultEl) { resultEl.textContent = '✗ ' + (data.error || 'failed'); resultEl.style.color = '#c0392b'; }
+        return;
+      }
+      if (resultEl) {
+        resultEl.textContent = `✓ ${mode} simulated`;
+        resultEl.style.color = '#27ae60';
+        setTimeout(() => { if (resultEl.textContent.startsWith('✓')) resultEl.textContent = ''; }, 3000);
+      }
+      // Force-refresh state poll so hsm-current updates quickly.
+      if (typeof loadState === 'function') loadState();
+    } catch (e) {
+      console.error('setHomeMode failed:', e);
+      if (resultEl) { resultEl.textContent = '✗ connection error'; resultEl.style.color = '#c0392b'; }
+    }
+  };
+
   window.saveManualPeople = async function () {
     const inp = document.getElementById('manual-people-input');
     const btn = document.getElementById('manual-people-save');
@@ -564,6 +591,17 @@
       if (tmEl) tmEl.textContent = s.time_mode || '—';
       if (srEl) srEl.textContent = fmtSunHM(s.next_sunrise);
       if (ssEl) ssEl.textContent = fmtSunHM(s.next_sunset);
+
+      // Home State Simulator current-mode display (Corridor Simulator tab).
+      // Color-codes the mode so user can spot at a glance.
+      const hsmEl = document.getElementById('hsm-current');
+      if (hsmEl) {
+        hsmEl.textContent = s.home_mode || '—';
+        hsmEl.style.color = s.home_mode === 'home'   ? '#27ae60'
+                          : s.home_mode === 'away'   ? '#e67e22'
+                          : s.home_mode === 'abroad' ? '#c0392b'
+                          : '#888';
+      }
 
       // ── Engine status row ──
       const heartbeatAge = hb.ts ? (Date.now() - new Date(hb.ts).getTime()) / 1000 : Infinity;

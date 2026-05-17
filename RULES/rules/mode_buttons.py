@@ -291,9 +291,12 @@ def evaluate(event, state):
         state.shared['_mode_buttons_all_off_armed'] = False
         h_dev, h_dps = bindings['home']
         cmd = {
-            'device_id': h_dev,
-            'action':    'turn_on',
-            'rule':      'Mode Buttons',
+            'device_id':        h_dev,
+            'action':           'turn_on',
+            'rule':             'Mode Buttons',
+            # Rule reacts to human button input — opt out of the engine's
+            # loop-detection so rapid intentional presses can't disable us.
+            '_skip_loop_guard': True,
         }
         if h_dps is not None:
             cmd['channel'] = h_dps
@@ -329,8 +332,16 @@ def evaluate(event, state):
         # ── Exactly one ON → that mode wins ──
         active_mode = on_modes[0]
     else:
-        # ── Multiple ON → most-recent transition wins ──
-        # Pick the mode whose button's last transition was most recent.
+        # ── Multiple ON — pick deterministically + fall through to mutual-exclusivity ──
+        # Priority: most-recent transition wins (the "natural" winner).
+        # Fallback for no transition history at all: prefer the previously-
+        # stored home_mode if it's still ON (preserves state across restarts),
+        # else first in canonical order. SAFETY NET — must NOT bail with
+        # `return []` here even when ambiguous: leaving multiple buttons ON
+        # would persist the multi-on state indefinitely (mutual-exclusivity
+        # only runs after this point). Worst case we pick the "wrong"
+        # winner — default-to-HOME corrects within 30 s of all-off if no
+        # one re-presses.
         latest_age = float('inf')
         active_mode = None
         for m in on_modes:
@@ -339,9 +350,13 @@ def evaluate(event, state):
                 latest_age = age
                 active_mode = m
         if active_mode is None:
-            # Couldn't disambiguate; don't write — leave previous value.
-            log.debug("mode_buttons: ambiguous (multiple buttons on, no transition history)")
-            return []
+            prev = state.shared.get('home_mode')
+            active_mode = prev if prev in on_modes else on_modes[0]
+            log.warning(
+                "mode_buttons: multi-on with no transition history — falling back to "
+                "deterministic winner=%s (on_modes=%s, prev=%s)",
+                active_mode, ', '.join(on_modes), prev,
+            )
 
     # ── Write only on transition ──
     prev = state.shared.get('home_mode')
@@ -362,9 +377,14 @@ def evaluate(event, state):
         b_dev, b_dps = bindings[mode]
         if _is_button_on(state, b_dev, b_dps):
             cmd = {
-                'device_id': b_dev,
-                'action':    'turn_off',
-                'rule':      'Mode Buttons',
+                'device_id':        b_dev,
+                'action':           'turn_off',
+                'rule':             'Mode Buttons',
+                # Cleanup commands aren't a runaway — they're intentional
+                # mutual-exclusivity enforcement. Skip loop-guard counter
+                # so rapid user button presses (each triggering 1-2 turn_off
+                # cleanups) don't accumulate toward the 4-in-10s threshold.
+                '_skip_loop_guard': True,
             }
             if b_dps is not None:
                 cmd['channel'] = b_dps
