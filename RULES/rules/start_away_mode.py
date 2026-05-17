@@ -1,6 +1,6 @@
 """Start Away Mode — staged actions when home_mode transitions to 'away'.
 
-Sentence-driven via the dashboard "Start Away Mode" container. Five sentences:
+Sentence-driven via the dashboard "Start Away Mode" container. Six sentences:
 
   s_sa1: Start Away: turn off all lights and tvs
          (which device-type families to switch OFF on entry)
@@ -16,6 +16,13 @@ Sentence-driven via the dashboard "Start Away Mode" container. Five sentences:
 
   s_sa5: Start Away: final preset is <PresetName>
          (Pixoo preset pushed when X elapses)
+
+  s_sa6: Start Away: do not turn off @<Chip1>, @<Chip2>, …
+         (device IDs to PROTECT from Phase 1's bulk-OFF, e.g. fridge,
+          security camera, router. Per-device granularity — a chip on
+          one channel of a multi-gang switch excludes the whole device.
+          Empty/missing sentence = no exclusions, identical to legacy
+          5-sentence behavior.)
 
 State machine (per home period):
 
@@ -72,6 +79,11 @@ _DURATION_RE  = re.compile(
 )
 _INIT_RE      = re.compile(r'start\s+away:\s*initial\s+preset\s+is\s+(.+)', re.IGNORECASE)
 _FINAL_RE     = re.compile(r'start\s+away:\s*final\s+preset\s+is\s+(.+)', re.IGNORECASE)
+# Exclude sentence — chips listed after the phrase get protected from the
+# Phase 1 bulk-OFF. Match phrasing flexibly: "do not turn off" / "don't
+# turn off" / "do not touch" / "do not switch off". One device chip is
+# enough to activate; multiple chips comma-separated all get excluded.
+_EXCLUDE_RE   = re.compile(r"start\s+away:\s*do(?:n['']t|\s+not)\s+(?:turn\s+off|switch\s+off|touch)", re.IGNORECASE)
 
 
 RULE = {
@@ -169,6 +181,7 @@ def _parse_config(state, container):
     """Parse the 4 (or fewer) sentences. Returns dict; missing fields → None."""
     cfg = {
         'off_types':       set(),
+        'exclude_ids':     set(),
         'keep_on_target':  None,
         'keep_on_sec':     None,
         'initial_preset':  None,
@@ -188,6 +201,18 @@ def _parse_config(state, container):
             for w in re.findall(r'[a-z_]+', rest):
                 if w in DEVICE_TYPE_ALIASES:
                     cfg['off_types'].update(DEVICE_TYPE_ALIASES[w])
+            continue
+
+        # Exclude sentence: any chip(s) here are added to the per-device
+        # protection set so Phase 1's bulk-OFF loop skips them. Checked
+        # BEFORE _DEVICE_RE because both sentences carry @<chip> segments
+        # — without the explicit early branch, an excluded-device chip
+        # would be misread as the keep-on target.
+        if _EXCLUDE_RE.search(text):
+            for chip in _iter_dev_chips(s):
+                parsed = _parse_dev_chip(chip, devices_by_name_desc)
+                if parsed:
+                    cfg['exclude_ids'].add(parsed[0])
             continue
 
         # Device-set-ON sentence: any chip in the sentence is the keep-on target.
@@ -291,9 +316,14 @@ def evaluate(event, state):
         keep_dev_id, keep_dps = cfg['keep_on_target']
 
         # Turn OFF every device whose device_type matches the s_sa1 set,
-        # except the kept-on device itself.
+        # EXCEPT (1) the keep-on device itself and (2) any device id listed
+        # in the s_sa6 exclude sentence (e.g. fridge, security cameras).
+        skipped = []
         for dev_id, dev in state.devices.items():
             if dev_id == keep_dev_id:
+                continue
+            if dev_id in cfg['exclude_ids']:
+                skipped.append(dev.get('name') or dev_id)
                 continue
             if (dev.get('device_type') or '') in cfg['off_types']:
                 commands.append({
@@ -301,6 +331,9 @@ def evaluate(event, state):
                     'action':    'turn_off',
                     'rule':      'Start Away Mode',
                 })
+        if skipped:
+            log.info("start_away_mode: phase1 excluded %d device(s) from bulk-off: %s",
+                     len(skipped), ', '.join(skipped))
 
         # Turn ON the keep-on target.
         cmd = {
