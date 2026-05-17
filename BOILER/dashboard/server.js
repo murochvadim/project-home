@@ -1785,13 +1785,35 @@ app.post('/api/corridor-sim/set-home-mode', async (req, res) => {
     if (!['home', 'away', 'abroad'].includes(mode)) {
       return res.status(400).json({ error: 'mode must be home|away|abroad' });
     }
-    const channel = HOME_MODE_BUTTON.channels[mode];
-    const r = await fetch(`http://127.0.0.1:3000/api/devices/${HOME_MODE_BUTTON.device_id}/toggle`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ state: true, channel }),
-    }).then(r => r.json());
-    res.json({ ok: true, mode, channel, toggle_result: r });
+    const targetChannel = HOME_MODE_BUTTON.channels[mode];
+    // Pre-cleanup: turn OFF the two non-target channels BEFORE turning ON
+    // the target. Without this, the brief HA→Tuya-cloud→device roundtrip
+    // for the Mode Buttons rule's mutual-exclusivity cleanup (~1 s) leaves
+    // a visible multi-on window where the previously-active button is
+    // still latched while the new target is already ON. Sending turn_off
+    // first (in parallel for speed) ensures other channels are commanded
+    // off BEFORE the new one is commanded on — single-mode invariant
+    // holds even momentarily.
+    const toggle = (channel, state) => fetch(
+      `http://127.0.0.1:3000/api/devices/${HOME_MODE_BUTTON.device_id}/toggle`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ state, channel }),
+      }
+    ).then(r => r.json());
+
+    const offChannels = Object.values(HOME_MODE_BUTTON.channels).filter(c => c !== targetChannel);
+    const offResults  = await Promise.all(offChannels.map(c => toggle(c, false)));
+    const onResult    = await toggle(targetChannel, true);
+    res.json({
+      ok:           true,
+      mode,
+      channel:      targetChannel,
+      cleared_off:  offChannels,
+      off_results:  offResults,
+      on_result:    onResult,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

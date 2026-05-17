@@ -587,20 +587,27 @@
       const tmEl = document.getElementById('tmb-time-mode');
       const srEl = document.getElementById('tmb-next-sunrise');
       const ssEl = document.getElementById('tmb-next-sunset');
-      if (hmEl) hmEl.textContent = s.home_mode || '—';
+      // Mode color palette shared between the tab-bar `home mode:` chip
+      // and the Corridor Simulator's Home State Simulator card so visual
+      // identity is consistent across the page.
+      const modeColor = (m) => (m === 'home'   ? '#27ae60'
+                              : m === 'away'   ? '#e67e22'
+                              : m === 'abroad' ? '#c0392b'
+                              : '#888');
+      if (hmEl) {
+        hmEl.textContent = s.home_mode || '—';
+        hmEl.style.color = modeColor(s.home_mode);
+        hmEl.style.fontWeight = '600';
+      }
       if (tmEl) tmEl.textContent = s.time_mode || '—';
       if (srEl) srEl.textContent = fmtSunHM(s.next_sunrise);
       if (ssEl) ssEl.textContent = fmtSunHM(s.next_sunset);
 
       // Home State Simulator current-mode display (Corridor Simulator tab).
-      // Color-codes the mode so user can spot at a glance.
       const hsmEl = document.getElementById('hsm-current');
       if (hsmEl) {
         hsmEl.textContent = s.home_mode || '—';
-        hsmEl.style.color = s.home_mode === 'home'   ? '#27ae60'
-                          : s.home_mode === 'away'   ? '#e67e22'
-                          : s.home_mode === 'abroad' ? '#c0392b'
-                          : '#888';
+        hsmEl.style.color = modeColor(s.home_mode);
       }
 
       // ── Engine status row ──
