@@ -376,10 +376,21 @@ def run_retention(cur):
             if (now - last_cleaned).total_seconds() / 3600.0 < p['clean_interval_hours']:
                 continue
 
+        # Pick the row-timestamp column to age rows on. Priority: ts > detected_at > started_at.
+        # `started_at` added 2026-05-18 so backup_log (which has no `ts` / `detected_at`,
+        # only `started_at`) actually gets cleaned — before this, its retention_policies
+        # row was honored by config but silently skipped here, leaving last_cleaned_at NULL forever.
         cur.execute("""
             SELECT column_name FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s AND column_name IN ('ts','detected_at')
-            ORDER BY ordinal_position LIMIT 1
+            WHERE table_schema = 'public' AND table_name = %s
+              AND column_name IN ('ts','detected_at','started_at')
+            ORDER BY
+              CASE column_name
+                WHEN 'ts' THEN 1
+                WHEN 'detected_at' THEN 2
+                WHEN 'started_at' THEN 3
+              END
+            LIMIT 1
         """, (p['table_name'],))
         col_row = cur.fetchone()
         if not col_row:
