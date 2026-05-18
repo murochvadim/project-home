@@ -317,6 +317,10 @@ async function loadMiniDlna() {
 async function loadVolumes() {
   try {
     const rows = await fetch('/api/health/db-volumes').then(r => r.json());
+    // Sort small → large so the most-trafficked tables sink to the bottom and
+    // the small/idle tables surface at the top. Same order is mirrored in the
+    // Retention Policies card below for at-a-glance correlation.
+    rows.sort((a, b) => a.row_count - b.row_count);
     const tbody = document.getElementById('volumes-body');
     setHTML(tbody, rows.map(r => {
       const fragColor = r.frag_pct >= 20 ? '#c0392b' : r.frag_pct >= 5 ? '#e67e22' : '#2ecc71';
@@ -370,7 +374,18 @@ async function vacuumTable(tableName, btn) {
 // ── Retention Policies ───────────────────────────────────────
 async function loadRetention() {
   try {
-    const rows = await fetch('/api/health/retention').then(r => r.json());
+    // Fetch volumes in parallel so we can sort retention rows by row_count to
+    // match the DB Volumes card's ordering — operator sees the two cards in
+    // the same order, scanning a table in one card finds it at the same
+    // height in the other.
+    const [rows, vols] = await Promise.all([
+      fetch('/api/health/retention').then(r => r.json()),
+      fetch('/api/health/db-volumes').then(r => r.json()).catch(() => []),
+    ]);
+    const rowCountByName = Object.fromEntries(vols.map(v => [v.table_name, v.row_count]));
+    rows.sort((a, b) =>
+      (rowCountByName[a.table_name] ?? Infinity) - (rowCountByName[b.table_name] ?? Infinity)
+    );
     const tbody = document.getElementById('retention-body');
     setHTML(tbody, rows.map(p => `
       <tr id="row-${p.table_name}">
