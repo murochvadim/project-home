@@ -9,7 +9,7 @@ Cross-protocol device aggregator running on LXC 103 as `device-agent.service`. U
 | Service unit (deployed to `/etc/systemd/system/`) | [`DEVICE/device-agent.service`](device-agent.service) |
 | Main loop | [`DEVICE/agent/device_agent.py`](agent/device_agent.py) |
 | **Adapters (canonical repo source)** | [`DEVICE/agent/adapters/`](agent/adapters/) |
-| Deploy target on LXC 103 | `/opt/device-agent/agent.py` + `/opt/device-agent/adapters/*.py` |
+| Deploy target on LXC 103 | `/opt/device-agent/device_agent.py` + `/opt/device-agent/adapters/*.py` (systemd `ExecStart=/opt/device-agent/venv/bin/python3 /opt/device-agent/device_agent.py`; the older `/opt/device-agent/agent.py` is orphaned and NOT executed — deploying to it silently no-ops) |
 | Memory | [`memory/project_context.md`](../.claude/projects/c--Users-muroc-project-home/memory/project_context.md) (general project context) |
 
 ## Adapter inventory
@@ -68,6 +68,10 @@ Allows the adapter to start when the env var isn't set but in-memory state has t
 ```bash
 # Single adapter
 scp DEVICE/agent/adapters/<adapter>.py root@192.168.1.114:/opt/device-agent/adapters/<adapter>.py
+ssh root@192.168.1.114 'systemctl restart device-agent'
+
+# Main loop (device_agent.py — note systemd runs device_agent.py, NOT agent.py)
+scp DEVICE/agent/device_agent.py root@192.168.1.114:/opt/device-agent/device_agent.py
 ssh root@192.168.1.114 'systemctl restart device-agent'
 
 # Verify post-deploy
