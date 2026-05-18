@@ -193,18 +193,18 @@ class DeviceAgent:
                     elif 'illum' in kl or 'lux' in kl:
                         dps[k] = round(v)
                     continue
-                # Tuya 3-phase AC-breaker RAW DPS: base64 of an 8-byte payload
-                # (V×10 BE / mA BE / W BE). User only cares about loaded/not-
-                # loaded, so collapse to bool — dashboard renders ON/OFF
-                # automatically, rules can gate on it natively. All-zero
-                # bytes = no load; anything else = loaded. Conservative
-                # pattern: exactly 12 chars, 11 base64 + '=' padding.
+                # Tuya 3-phase AC-breaker RAW DPS: base64 of 8 bytes
+                # [0..1]=V×10 BE, [2..4]=mA BE, [5..7]=W BE. Collapse to
+                # bool "has load on this phase". Check ONLY current+power
+                # bytes (2..7) — voltage stays ~230V on a connected phase
+                # even with the breaker open, so testing bytes 0..1 would
+                # always mark loaded. Pattern: 12 chars, 11 base64 + '='.
                 if isinstance(v, str) and len(v) == 12 and v.endswith('='):
                     try:
                         import base64 as _b64
                         raw_bytes = _b64.b64decode(v)
                         if len(raw_bytes) == 8:
-                            dps[k] = any(b != 0 for b in raw_bytes)
+                            dps[k] = any(b != 0 for b in raw_bytes[2:8])
                     except Exception:
                         pass
 
