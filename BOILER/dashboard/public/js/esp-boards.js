@@ -408,10 +408,18 @@ function renderParams(b) {
       : `<tr><td colspan="3" style="padding:8px;color:#888;font-style:italic;">No users enrolled. Set <code>pending_user_name</code> below + click <code>▶ Register User</code>.</td></tr>`;
     usersTable = `
       <div style="margin-bottom:18px;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
           <strong style="font-size:0.92rem;">Enrolled Users (${users.length})</strong>
           <button class="btn-refresh-users" id="btn-refresh-users" style="padding:3px 10px;font-size:0.78rem;">↻ Refresh</button>
-          <span class="users-status" id="users-status" style="font-size:0.78rem;color:#666;"></span>
+          <span style="margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-size:0.78rem;color:#666;">
+            Delete by ID:
+            <input id="del-by-id-input" type="number" min="0" max="99" placeholder="0–99"
+                   style="width:70px;padding:3px 6px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
+            <button class="btn-del-by-id destructive" id="btn-del-by-id"
+                    style="padding:3px 10px;font-size:0.78rem;background:#c0392b;color:#fff;border-color:#c0392b;"
+                    title="Delete any user-ID slot from the FR module (use for orphan IDs not shown above — e.g. when EXIST 0x09 blocks re-registration)">🗑 Delete</button>
+          </span>
+          <span class="users-status" id="users-status" style="font-size:0.78rem;color:#666;flex-basis:100%;"></span>
         </div>
         <table style="width:100%;border-collapse:collapse;font-size:0.85rem;background:#fbf9f5;border:1px solid #e0dcd4;">
           <thead style="background:#efeae0;">
@@ -532,6 +540,49 @@ function wireParamsForm(board) {
         await loadBoards(true);
         status.textContent = '✓';
         setTimeout(() => { status.textContent = ''; }, 1500);
+      } catch (e) {
+        status.textContent = '✗ ' + e.message;
+      }
+    });
+  }
+  // "Delete by ID" — covers the case where a user is enrolled in the FR
+  // module's hardware memory but NOT in the ESP's users[] list (e.g. after
+  // a sketch flash that wiped the ESP's id→name table but not the module's
+  // own face storage). Registration then returns EXIST 0x09 and the user
+  // has no row to click. Manually entering the ID (0..99) sends the same
+  // delete_user:<id> payload as the per-row button.
+  const delByIdBtn = document.getElementById('btn-del-by-id');
+  if (delByIdBtn) {
+    delByIdBtn.addEventListener('click', async () => {
+      const input = document.getElementById('del-by-id-input');
+      const raw = (input.value || '').trim();
+      const id = parseInt(raw, 10);
+      const status = document.getElementById('users-status');
+      if (Number.isNaN(id) || id < 0 || id > 99) {
+        status.textContent = '✗ Enter an ID between 0 and 99';
+        return;
+      }
+      // Safety: refuse if the ID belongs to a REGISTERED user (visible in
+      // the table). Registered users have their own 🗑 button per row — this
+      // input is strictly for ORPHAN slots that don't appear in users[].
+      const registered = (board.last_status?.users || []).find(u => Number(u.id) === id);
+      if (registered) {
+        status.textContent = `✗ ID ${id} is registered (${registered.name}). Use its row's 🗑 Delete button instead — this input only clears orphan slots.`;
+        return;
+      }
+      if (!confirm(`Delete orphan ID ${id} from FR module memory? (Use this to clear a slot that's blocking re-registration with EXIST 0x09.)`)) return;
+      status.textContent = `Deleting orphan ID ${id}…`;
+      try {
+        const r = await fetch(`/api/esp/boards/${encodeURIComponent(board.id)}/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: `delete_user:${id}` }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        status.textContent = `✓ Sent delete_user:${id} (FR module ack expected in serial monitor)`;
+        input.value = '';
+        setTimeout(() => loadBoards(true), 1500);
       } catch (e) {
         status.textContent = '✗ ' + e.message;
       }
