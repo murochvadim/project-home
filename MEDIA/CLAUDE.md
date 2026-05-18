@@ -233,10 +233,17 @@ The active queue's `shuffle` and `repeat` flags can be toggled mid-playback via 
 | `GET  /api/queue/status` | Active queue state — playlist name, current idx, shuffle/repeat, Cast volume + position + duration + state |
 | `POST /api/queue/next` | Manual next → `_play_queue_item_cast(cur+1)` (no Stop+wait needed; Cast handles transitions) |
 | `POST /api/queue/prev` | Manual prev |
-| `POST /api/queue/stop` | Clear `_play_queue`, `cast.media_controller.stop()`, also UPnP Stop on TV (in case video was running) |
+| `POST /api/queue/pause` | Toggle Cast pause/resume — reads `mc.status.player_state` and flips PLAYING ↔ PAUSED. No-op when idle. Drives the ⏸ Pause / ▶ Resume button in the Now Playing strip |
+| `POST /api/queue/stop` | Clear `_play_queue`, `cast.media_controller.stop()`, UPnP Stop on TV (in case video was running), **also `_soundbar_off()`** so the listening session ends cleanly — soundbar powers down via HA's `switch.samsung_soundbar` |
 | `POST /api/queue/mode` body=`{shuffle?,repeat?,playlist_id?}` | Toggle active queue's flags; `playlist_id` filter prevents Card A's toggle from clobbering Card B's running queue |
 | `GET  /api/cast/volume` | `{level, preset}` — current + saved |
 | `POST /api/cast/volume` body=`{level, save?}` | Set Cast app volume on soundbar; `save:true` persists as preset |
+
+### Soundbar power — HA-direct, not via tv_control.py
+
+`_soundbar_off()` calls HA's `switch.samsung_soundbar` turn_off service directly (`http://192.168.1.110:8123/api/services/switch/turn_off`). Bypasses `tv_control.py` because that path uses a SmartThings Personal Access Token in `/etc/environment` that **expires periodically** — when it does, `st_cmd()` returns False but the dashboard endpoint discards the return value, so the soundbar stays on without any error surfacing. HA's own SmartThings integration stays authenticated via OAuth refresh.
+
+The auto-off runs ONLY on `/api/queue/stop` (manual user click). It is fail-silent: a soundbar offline / HA outage doesn't fail the Stop call.
 
 ---
 
@@ -334,7 +341,7 @@ The active queue's `shuffle` and `repeat` flags can be toggled mid-playback via 
   - Toggles also patch the active queue (via `POST /api/queue/mode`) so flipping mid-playback takes immediate effect
   - Click anywhere else on the card → opens detail modal (track list with drag-reorder, ✕ remove per track, rename, delete playlist)
 - **Now Playing strip** (since 2026-05-18): appears above the QNAP Media card when a queue is active. 3 rows:
-  - **Title row**: 🔊 playlist name · `N/total · via Soundbar` + track title + (📺 TV On · 📺 TV Off · `|` · ⏮ Prev · ⏭ Next · ⏹ Stop) on the right
+  - **Title row**: 🔊 playlist name · `N/total · via Soundbar` + track title + (📺 TV On · 📺 TV Off · `|` · ⏮ Prev · ⏭ Next · ⏸ Pause / ▶ Resume · ⏹ Stop) on the right. Pause button label flips with Cast `player_state` (`PLAYING` → ⏸ Pause, `PAUSED` → ▶ Resume). Clicking ⏹ Stop also powers the soundbar off via `_soundbar_off()` so the listening session ends cleanly.
   - **Progress row**: `M:SS / M:SS` with a green bar; server reports Cast position+duration on the 5 s poll, client interpolates between polls every 1 s; restart-aware (server position drop > 30 s = real new track, not stale reading)
   - **Volume row**: full-width 0..100 % slider + 💾 Save preset button; slider drives `cast.set_volume()` (Cast-app level, not soundbar hardware); ⚠ remote-pressed volume buttons kick soundbar off Cast — adjust via this slider only while audio is playing
 - Cache-bust on `js/media.js` query string bumped at every meaningful UI change so browser cache doesn't serve a stale version

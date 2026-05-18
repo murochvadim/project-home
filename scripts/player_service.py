@@ -1916,6 +1916,52 @@ def queue_prev():
     return jsonify({'ok': True, 'current_idx': cur - 1})
 
 
+@app.route('/api/queue/pause', methods=['POST'])
+def queue_pause():
+    """Toggle Cast pause/resume on the soundbar. Reads current Cast state
+    and flips: PLAYING → pause, PAUSED → play. No-op when idle / loading."""
+    try:
+        cast = _get_cast()
+    except Exception as e:
+        return jsonify({'error': f'cast unavailable: {e}'}), 503
+    mc = cast.media_controller
+    state = getattr(mc.status, 'player_state', None)
+    try:
+        if state == 'PLAYING':
+            mc.pause()
+            return jsonify({'ok': True, 'action': 'paused'})
+        elif state == 'PAUSED':
+            mc.play()
+            return jsonify({'ok': True, 'action': 'resumed'})
+        else:
+            return jsonify({'ok': True, 'action': 'noop', 'state': state})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _soundbar_off():
+    """Power the Samsung 990C soundbar off via HA's switch.samsung_soundbar.
+    Used by /api/queue/stop so clicking Stop ends the listening session
+    cleanly. HA's SmartThings integration stays authenticated via OAuth,
+    unlike the raw SmartThings PAT in tv_control.py which expires. Fail-
+    silent so a soundbar offline / HA outage doesn't break Stop."""
+    import urllib.request as ureq
+    ha_token = os.environ.get('HA_TOKEN', '')
+    if not ha_token:
+        return
+    try:
+        req = ureq.Request(
+            'http://192.168.1.110:8123/api/services/switch/turn_off',
+            data=json.dumps({'entity_id': 'switch.samsung_soundbar'}).encode(),
+            headers={'Authorization': f'Bearer {ha_token}', 'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with ureq.urlopen(req, timeout=5) as r:
+            log.info(f"soundbar off via HA: HTTP {r.status}")
+    except Exception:
+        log.exception('soundbar off')
+
+
 @app.route('/api/queue/stop', methods=['POST'])
 def queue_stop():
     with _queue_lock:
@@ -1933,6 +1979,9 @@ def queue_stop():
         dlna_soap('Stop', body)
     except Exception:
         pass
+    # Auto-power the soundbar off — playlist stop = "done listening".
+    # Fail-silent so soundbar/HA being unreachable doesn't fail Stop.
+    _soundbar_off()
     return jsonify({'ok': True})
 
 

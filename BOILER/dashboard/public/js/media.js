@@ -927,6 +927,7 @@ function renderQueueStrip(q) {
         <span style="width:1px; height:30px; background:rgba(255,255,255,0.25); margin:0 6px;"></span>
         <button onclick="queuePrev()" title="Previous track" style="${btnStyle} background:rgba(255,255,255,0.15);"><span style="font-size:1.2rem;">⏮</span> Prev</button>
         <button onclick="queueNext()" title="Next track" style="${btnStyle} background:rgba(255,255,255,0.15);"><span style="font-size:1.2rem;">⏭</span> Next</button>
+        <button onclick="queuePauseToggle()" title="${q.cast_state === 'PAUSED' ? 'Resume' : 'Pause'}" style="${btnStyle} background:rgba(255,255,255,0.15);"><span style="font-size:1.2rem;">${q.cast_state === 'PAUSED' ? '▶' : '⏸'}</span> ${q.cast_state === 'PAUSED' ? 'Resume' : 'Pause'}</button>
         <button onclick="queueStop()" title="Stop playlist" style="${btnStyle} background:#c0392b; border-color:#c0392b;"><span style="font-size:1.2rem;">⏹</span> Stop</button>
       </div>
     </div>
@@ -1049,6 +1050,15 @@ async function queueStop() {
     await fetch(`${MEDIA_API}/api/queue/stop`, { method: 'POST' });
     loadQueueStatus();
   } catch (e) { alert('Stop failed: ' + (e.message || e)); }
+}
+
+async function queuePauseToggle() {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/queue/pause`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) alert('Pause failed: ' + (d.error || `HTTP ${r.status}`));
+    loadQueueStatus();
+  } catch (e) { alert('Pause failed: ' + (e.message || e)); }
 }
 
 // TV power — proxies through player_service to tv_control.py (WoL magic
