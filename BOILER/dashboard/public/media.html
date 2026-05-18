@@ -406,6 +406,7 @@
         <h2 style="margin:0;">QNAP Media</h2>
         <div style="display:flex; gap:6px;">
           <button class="btn btn-secondary btn-sm" id="media-select-btn" onclick="toggleSelectMode()">☑ Select</button>
+          <button class="btn btn-secondary btn-sm" id="media-unassigned-btn" onclick="openUnassignedDialog()" title="Find files in Music/ that are not in any playlist">🔍 Unassigned</button>
           <button class="btn btn-secondary btn-sm" onclick="loadMediaBrowser()">↺ Refresh</button>
         </div>
       </div>
@@ -471,6 +472,42 @@
         <button class="btn btn-secondary btn-sm" onclick="closePlaylistDetail()">Cancel</button>
         <button class="btn btn-secondary btn-sm" style="color:#c0392b; border-color:#e0b0ad;" onclick="deletePlaylistFromModal()">Delete Playlist</button>
         <button class="btn btn-success btn-sm" onclick="savePlaylistDetail()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Unassigned Files Modal — scans Music/ for files not in any playlist,
+       lets the user uncheck items they don't want, then adds the rest to
+       a chosen playlist. -->
+  <div id="unassigned-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:24px; width:720px; max-width:calc(100vw - 32px); max-height:calc(100vh - 64px); overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.18); position:relative;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+        <div style="font-size:1rem; font-weight:600;">🔍 Unassigned files in Music/</div>
+        <span id="unassigned-status" style="font-size:0.75rem; color:#aaa;"></span>
+      </div>
+
+      <div style="font-size:0.82rem; color:#555; margin-bottom:10px;">
+        Files under <code>/mnt/media/Music</code> that are not in any existing playlist. Click a folder to drill in; tick files; selections persist across folders. Pick a target playlist, click <b>Add</b>.
+      </div>
+
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; font-size:0.82rem; color:#555; flex-wrap:wrap;">
+        <span><span id="unassigned-count">0</span> selected of <span id="unassigned-total">0</span> found</span>
+        <button class="btn btn-secondary btn-sm" onclick="unassignedCheckAll(true)">Check all</button>
+        <button class="btn btn-secondary btn-sm" onclick="unassignedCheckAll(false)">Uncheck all</button>
+      </div>
+
+      <div id="unassigned-list" style="border:1px solid #ece8e2; border-radius:6px; padding:4px 8px; max-height:380px; overflow-y:auto; background:#faf8f5; font-size:0.85rem;">
+        <div style="color:#aaa; padding:14px; text-align:center;">Scanning…</div>
+      </div>
+
+      <div id="unassigned-msg" style="font-size:0.8rem; min-height:1.4em; margin-top:12px;"></div>
+
+      <div style="display:flex; gap:8px; margin-top:16px; align-items:center; justify-content:flex-end; flex-wrap:wrap;">
+        <select id="unassigned-target" style="padding:5px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem; margin-right:auto;">
+          <option value="">— Add to playlist —</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="closeUnassignedDialog()">Cancel</button>
+        <button class="btn btn-success btn-sm" id="unassigned-add-btn" onclick="addUnassignedToPlaylist()" disabled>+ Add</button>
       </div>
     </div>
   </div>
@@ -693,6 +730,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=98"></script>
+<script src="js/media.js?v=103"></script>
 </body>
 </html>

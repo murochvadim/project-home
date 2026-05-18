@@ -354,6 +354,278 @@ async function addSelectedToPlaylist() {
   }
 }
 
+// ── Unassigned scan ────────────────────────────────────────────────
+// Walk /mnt/media/Music server-side, diff against the union of paths
+// already in any playlist, then present a navigable folder tree of
+// the remainder. User drills folder-by-folder, ticking files at each
+// level. Selections accumulate across the whole navigation so the
+// final Add posts everything that was checked anywhere.
+const _unassigned = {
+  files:   [],            // flat list of every orphan with {name, path, folder, ext}
+  checked: new Set(),     // accumulated selection (full paths)
+  rootPath: 'Music',      // navigation root — relative to /mnt/media
+  curPath:  'Music',      // current folder being shown
+};
+
+async function openUnassignedDialog() {
+  const overlay = document.getElementById('unassigned-modal-overlay');
+  const list    = document.getElementById('unassigned-list');
+  const status  = document.getElementById('unassigned-status');
+  const msg     = document.getElementById('unassigned-msg');
+  const target  = document.getElementById('unassigned-target');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  msg.textContent = '';
+  status.textContent = '';
+  list.innerHTML = '<div style="color:#aaa; padding:14px; text-align:center;">Scanning Music folder…</div>';
+  _unassigned.files = [];
+  _unassigned.checked = new Set();
+  _unassigned.curPath = _unassigned.rootPath;
+  updateUnassignedCounts();
+
+  // Populate playlist dropdown.
+  target.innerHTML = '<option value="">— Add to playlist —</option>';
+  try {
+    const pr   = await fetch(`${MEDIA_API}/api/playlists`);
+    const pls  = await pr.json();
+    if (!pr.ok) throw new Error(pls.error || 'Playlists fetch failed');
+    for (const p of pls) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.name} (${p.item_count})`;
+      target.appendChild(opt);
+    }
+    const newOpt = document.createElement('option');
+    newOpt.value = '__new__';
+    newOpt.textContent = '+ New playlist…';
+    target.appendChild(newOpt);
+    target.onchange = updateUnassignedAddState;
+
+    // Walk Music/ (recursive flat list).
+    const wr   = await fetch(`${MEDIA_API}/api/media/walk?path=${encodeURIComponent(_unassigned.rootPath)}`);
+    const walk = await wr.json();
+    if (!wr.ok) throw new Error(walk.error || 'Walk failed');
+
+    // Build set of all paths in any playlist.
+    const used = new Set();
+    for (const p of pls) {
+      if (!Array.isArray(p.items)) continue;
+      for (const it of p.items) if (it && it.path) used.add(it.path);
+    }
+
+    const orphans = (walk.files || []).filter(f => !used.has(f.path));
+    _unassigned.files = orphans;
+    renderUnassignedList();
+    status.textContent = `${orphans.length} orphans · ${walk.count} total · ${used.size} in playlists`;
+  } catch (e) {
+    list.innerHTML = `<div style="color:#c0392b; padding:14px;">Scan failed: ${e.message || e}</div>`;
+  }
+}
+
+// Compute direct sub-folder names (and recursive orphan counts) for the
+// current path from the flat walk result.
+function _unassignedFolderView(curPath) {
+  const prefix = curPath + '/';
+  const filesHere = [];
+  const subRecCount = new Map(); // first-segment name → count of orphans under it
+  for (const f of _unassigned.files) {
+    if (f.folder === curPath) {
+      filesHere.push(f);
+    } else if (f.folder.startsWith(prefix)) {
+      const rest = f.folder.slice(prefix.length);
+      const seg  = rest.split('/')[0];
+      subRecCount.set(seg, (subRecCount.get(seg) || 0) + 1);
+    }
+  }
+  const subFolders = Array.from(subRecCount.keys()).sort((a, b) => a.localeCompare(b));
+  filesHere.sort((a, b) => a.name.localeCompare(b.name));
+  return { filesHere, subFolders, subRecCount };
+}
+
+function _unassignedBreadcrumb(curPath, rootPath) {
+  // Returns clickable breadcrumb segments. Root segment label uses the
+  // folder name itself ("Music"). Anything deeper appends below it.
+  const segs = curPath.split('/').filter(Boolean);
+  const rootSegs = rootPath.split('/').filter(Boolean);
+  const html = [];
+  let acc = '';
+  for (let i = 0; i < segs.length; i++) {
+    acc = acc ? (acc + '/' + segs[i]) : segs[i];
+    const isLast = i === segs.length - 1;
+    // Only segments that are ancestors of (or at) the navigation root are clickable.
+    const navigable = i >= rootSegs.length - 1;
+    if (i > 0) html.push(`<span style="color:#aaa;">/</span>`);
+    if (isLast || !navigable) {
+      html.push(`<span style="color:#2e2e2e; font-weight:600;">${escHtmlSafe(segs[i])}</span>`);
+    } else {
+      html.push(`<a href="#" onclick="event.preventDefault(); unassignedNavigate('${escAttr(acc)}')" style="color:#2980b9; text-decoration:none;">${escHtmlSafe(segs[i])}</a>`);
+    }
+  }
+  return html.join(' ');
+}
+
+function renderUnassignedList() {
+  const list = document.getElementById('unassigned-list');
+  if (!list) return;
+  if (_unassigned.files.length === 0) {
+    list.innerHTML = '<div style="color:#27ae60; padding:14px; text-align:center;">✓ Nothing unassigned — every file in Music/ is already in a playlist.</div>';
+    updateUnassignedCounts();
+    return;
+  }
+
+  const { filesHere, subFolders, subRecCount } = _unassignedFolderView(_unassigned.curPath);
+  const parts = [];
+
+  // Breadcrumb + Up.
+  const isRoot = _unassigned.curPath === _unassigned.rootPath;
+  parts.push(`<div style="display:flex; align-items:center; gap:10px; padding:6px 4px 8px; border-bottom:1px solid #ece8e2; margin-bottom:6px; font-size:0.85rem;">`);
+  if (!isRoot) {
+    const parent = _unassigned.curPath.replace(/\/[^/]+$/, '') || _unassigned.rootPath;
+    parts.push(`<a href="#" onclick="event.preventDefault(); unassignedNavigate('${escAttr(parent)}')" style="color:#2980b9; text-decoration:none;">↑ Up</a>`);
+  }
+  parts.push(`<span>${_unassignedBreadcrumb(_unassigned.curPath, _unassigned.rootPath)}</span>`);
+  parts.push(`</div>`);
+
+  if (subFolders.length === 0 && filesHere.length === 0) {
+    parts.push(`<div style="color:#27ae60; padding:14px; text-align:center;">✓ No unassigned files in this folder.</div>`);
+  } else {
+    // Sub-folders first.
+    for (const sub of subFolders) {
+      const child = _unassigned.curPath + '/' + sub;
+      const cnt = subRecCount.get(sub) || 0;
+      parts.push(`<a href="#" onclick="event.preventDefault(); unassignedNavigate('${escAttr(child)}')" style="display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:3px; color:#2e2e2e; text-decoration:none;" onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background=''">
+        <span style="font-size:1.05rem; flex-shrink:0;">📁</span>
+        <span style="flex:1; font-weight:500;">${escHtmlSafe(sub)}</span>
+        <span style="color:#888; font-size:0.78rem;">${cnt} unassigned</span>
+      </a>`);
+    }
+    // Direct files at this level.
+    if (filesHere.length > 0) {
+      if (subFolders.length > 0) {
+        parts.push(`<div style="font-size:0.7rem; color:#aaa; text-transform:uppercase; letter-spacing:0.04em; padding:10px 4px 4px;">Files</div>`);
+      }
+      for (const f of filesHere) {
+        const isChecked = _unassigned.checked.has(f.path);
+        parts.push(`<label style="display:flex; align-items:center; gap:8px; padding:3px 8px; cursor:pointer; border-radius:3px;" onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background=''">
+          <input type="checkbox" data-path="${escAttr(f.path)}" ${isChecked ? 'checked' : ''} onchange="onUnassignedToggle(this)">
+          <span style="font-family:monospace; font-size:0.82rem; color:#2e2e2e;">${escHtmlSafe(f.name)}</span>
+        </label>`);
+      }
+    }
+  }
+  list.innerHTML = parts.join('');
+  updateUnassignedCounts();
+}
+
+function unassignedNavigate(path) {
+  _unassigned.curPath = path;
+  renderUnassignedList();
+}
+
+function onUnassignedToggle(cb) {
+  const p = cb.dataset.path;
+  if (cb.checked) _unassigned.checked.add(p);
+  else _unassigned.checked.delete(p);
+  updateUnassignedCounts();
+}
+
+// Check/Uncheck All now applies ONLY to direct files in the current folder
+// view — never the entire library, so a single click doesn't sweep up
+// thousands of files across many sub-folders by accident.
+function unassignedCheckAll(on) {
+  const { filesHere } = _unassignedFolderView(_unassigned.curPath);
+  for (const f of filesHere) {
+    if (on) _unassigned.checked.add(f.path);
+    else _unassigned.checked.delete(f.path);
+  }
+  // Update visible checkboxes in place without full re-render.
+  const cbs = document.querySelectorAll('#unassigned-list input[type=checkbox]');
+  cbs.forEach(cb => { cb.checked = on; });
+  updateUnassignedCounts();
+}
+
+function updateUnassignedCounts() {
+  const c = document.getElementById('unassigned-count');
+  const t = document.getElementById('unassigned-total');
+  if (c) c.textContent = _unassigned.checked.size;
+  if (t) t.textContent = _unassigned.files.length;
+  updateUnassignedAddState();
+}
+
+function updateUnassignedAddState() {
+  const btn    = document.getElementById('unassigned-add-btn');
+  const target = document.getElementById('unassigned-target');
+  if (!btn || !target) return;
+  btn.disabled = (_unassigned.checked.size === 0 || !target.value);
+}
+
+function closeUnassignedDialog() {
+  const overlay = document.getElementById('unassigned-modal-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+async function addUnassignedToPlaylist() {
+  const target = document.getElementById('unassigned-target');
+  const msg    = document.getElementById('unassigned-msg');
+  if (!target || !target.value || _unassigned.checked.size === 0) return;
+  msg.textContent = '';
+
+  // Build item list from the checked paths.
+  const byPath = new Map(_unassigned.files.map(f => [f.path, f]));
+  const items = Array.from(_unassigned.checked).map(p => {
+    const f = byPath.get(p) || {};
+    const ext = (f.ext || '').toLowerCase();
+    const type = AUDIO_EXTS && AUDIO_EXTS.has(ext) ? 'audio'
+               : VIDEO_EXTS && VIDEO_EXTS.has(ext) ? 'video' : 'file';
+    return { path: p, title: f.name || p.split('/').pop(), type };
+  });
+
+  try {
+    let playlistId;
+    if (target.value === '__new__') {
+      const name = prompt('New playlist name:');
+      if (!name || !name.trim()) return;
+      const cr = await fetch(`${MEDIA_API}/api/playlists`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ name: name.trim(), items }),
+      });
+      const crd = await cr.json();
+      if (!cr.ok || crd.error) throw new Error(crd.error || `HTTP ${cr.status}`);
+      playlistId = crd.id;
+    } else {
+      playlistId = parseInt(target.value, 10);
+      const gr   = await fetch(`${MEDIA_API}/api/playlists`);
+      const all  = await gr.json();
+      const pl   = all.find(p => p.id === playlistId);
+      const existing = (pl && Array.isArray(pl.items)) ? pl.items : [];
+      const existingPaths = new Set(existing.map(it => it.path));
+      const merged = existing.concat(items.filter(it => !existingPaths.has(it.path)));
+      const pr = await fetch(`${MEDIA_API}/api/playlists/${playlistId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ items: merged }),
+      });
+      const prd = await pr.json();
+      if (!pr.ok || prd.error) throw new Error(prd.error || `HTTP ${pr.status}`);
+    }
+    msg.style.color = '#27ae60';
+    msg.textContent = `✓ Added ${items.length} items.`;
+    loadPlaylists();
+    setTimeout(closeUnassignedDialog, 900);
+  } catch (e) {
+    msg.style.color = '#c0392b';
+    msg.textContent = 'Add failed: ' + (e.message || e);
+  }
+}
+
+function escHtmlSafe(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
 function renderGrid(entries, currentPath) {
   const grid = document.getElementById('media-grid');
   entries = entries.filter(e => !HIDDEN_ENTRIES.has(e.name));
@@ -805,6 +1077,107 @@ function loadPlayer() {
   }
 }
 
+// Per-playlist Shuffle/Repeat preferences are remembered locally so they
+// survive page navigation. Key shape: { "<pid>": { shuffle: 0|1, repeat: 0|1 } }.
+const PLAYLIST_MODES_KEY = 'media.playlistModes';
+
+function _loadPlaylistModes() {
+  try {
+    return JSON.parse(localStorage.getItem(PLAYLIST_MODES_KEY) || '{}') || {};
+  } catch (_) { return {}; }
+}
+function _savePlaylistMode(pid, mode, on) {
+  const all = _loadPlaylistModes();
+  const cur = all[pid] || { shuffle: 0, repeat: 0 };
+  cur[mode] = on ? 1 : 0;
+  all[pid] = cur;
+  try { localStorage.setItem(PLAYLIST_MODES_KEY, JSON.stringify(all)); } catch (_) {}
+}
+
+// Drag-and-drop reordering for playlist cards.
+let _plDragId = null;            // playlist id being dragged (string)
+let _plDragInProgress = false;   // suppresses the synthetic click after drop
+
+function wirePlaylistDragReorder(grid) {
+  const cards = Array.from(grid.querySelectorAll('.playlist-card'));
+  cards.forEach(card => {
+    const handle = card.querySelector('[data-pl-drag-handle]');
+    if (handle) {
+      handle.addEventListener('mousedown', (e) => e.stopPropagation());
+      handle.addEventListener('dragstart', (e) => {
+        _plDragId = card.dataset.pid;
+        _plDragInProgress = true;
+        card.style.opacity = '0.4';
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', _plDragId); } catch (_) {}
+      });
+      handle.addEventListener('dragend', () => {
+        card.style.opacity = '';
+        _plDragId = null;
+        // Clear right after the event loop so the click handler still sees true.
+        setTimeout(() => { _plDragInProgress = false; }, 50);
+      });
+    }
+    card.addEventListener('dragover', (e) => {
+      if (!_plDragId) return;
+      e.preventDefault();
+      if (card.dataset.pid === _plDragId) return;
+      card.style.outline = '3px solid #6c4f9f';
+      card.style.outlineOffset = '-3px';
+    });
+    card.addEventListener('dragleave', () => {
+      card.style.outline = '';
+      card.style.outlineOffset = '';
+    });
+    card.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      card.style.outline = '';
+      card.style.outlineOffset = '';
+      if (!_plDragId || card.dataset.pid === _plDragId) return;
+      const targetPid = card.dataset.pid;
+      // Compute the new order by walking the current DOM order and
+      // moving _plDragId to immediately before targetPid.
+      const current = Array.from(grid.querySelectorAll('.playlist-card'))
+                           .map(c => c.dataset.pid);
+      const moved   = _plDragId;
+      const fromIdx = current.indexOf(moved);
+      if (fromIdx >= 0) current.splice(fromIdx, 1);
+      const toIdx = current.indexOf(targetPid);
+      current.splice(toIdx, 0, moved);
+      const numericOrder = current.map(s => parseInt(s, 10)).filter(n => !Number.isNaN(n));
+      try {
+        const r = await fetch(`${MEDIA_API}/api/playlists/reorder`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ order: numericOrder }),
+        });
+        const data = await r.json();
+        if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+        loadPlaylists();   // re-render in the new server-confirmed order
+      } catch (err) {
+        alert('Reorder failed: ' + (err.message || err));
+      }
+    });
+  });
+}
+
+function applyStoredPlaylistModes() {
+  const all = _loadPlaylistModes();
+  document.querySelectorAll('.playlist-card').forEach(card => {
+    const pid = parseInt(card.dataset.pid, 10);
+    const pref = all[pid] || { shuffle: 0, repeat: 0 };
+    for (const mode of ['shuffle', 'repeat']) {
+      const v = pref[mode] ? '1' : '0';
+      card.setAttribute('data-' + mode, v);
+      const label = card.querySelector(`[data-state-for="${mode}"]`);
+      if (label) {
+        label.textContent = v === '1' ? 'ON' : 'OFF';
+        label.style.color = v === '1' ? '#27ae60' : '#999';
+      }
+    }
+  });
+}
+
 function togglePlaylistMode(btn, mode) {
   const card = btn.closest('.playlist-card');
   if (!card) return;
@@ -822,10 +1195,12 @@ function togglePlaylistMode(btn, mode) {
       label.style.color = '#999';
     }
   }
-  // Also patch the currently-playing queue if it's THIS playlist, so the
-  // toggle takes effect immediately (not only on the next Play click).
   const pid = parseInt(card.dataset.pid, 10);
   const isOn = (next === '1');
+  // Persist the new value so it survives page navigation.
+  _savePlaylistMode(pid, mode, isOn);
+  // Also patch the currently-playing queue if it's THIS playlist, so the
+  // toggle takes effect immediately (not only on the next Play click).
   fetch(`${MEDIA_API}/api/queue/mode`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -860,7 +1235,27 @@ async function loadQueueStatus() {
     const r = await fetch(`${MEDIA_API}/api/queue/status`);
     const q = await r.json();
     renderQueueStrip(q);
+    paintPlayingPlaylistCard((q && q.active) ? q.playlist_id : null);
   } catch (_) { /* ignore */ }
+}
+
+// Highlight the playlist card matching the currently-playing playlist_id.
+// Called from the 5-s queue poll and re-applied after loadPlaylists() so
+// the marker survives card re-renders.
+function paintPlayingPlaylistCard(playingId) {
+  const cards = document.querySelectorAll('.playlist-card');
+  cards.forEach(card => {
+    const pid = parseInt(card.dataset.pid, 10);
+    if (playingId != null && pid === playingId) {
+      card.style.background = '#fff8b3';                  // yellow highlight
+      card.style.borderColor = '#e6c200';
+      card.style.boxShadow = '0 0 0 2px rgba(230,194,0,0.45)';
+    } else {
+      card.style.background = '#faf8f5';                  // default card bg
+      card.style.borderColor = '';
+      card.style.boxShadow = '';
+    }
+  });
 }
 
 function renderQueueStrip(q) {
@@ -1098,8 +1493,9 @@ async function loadPlaylists() {
       const shufColor = empty ? '#aaa' : '#1565c0';
       const repColor  = empty ? '#aaa' : '#8e44ad';
       return `
-      <div class="card playlist-card" data-pid="${p.id}" data-shuffle="0" data-repeat="0" style="margin:0; padding:14px; background:#faf8f5; cursor:pointer;" title="Click to view items">
-        <div style="font-weight:700; font-size:1.05rem; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(p.name)}</div>
+      <div class="card playlist-card" data-pid="${p.id}" data-shuffle="0" data-repeat="0" style="margin:0; padding:14px; background:#faf8f5; cursor:pointer; position:relative;" title="Click to view items">
+        <span data-pl-drag-handle="1" draggable="true" title="Drag to reorder" style="position:absolute; top:6px; right:8px; cursor:grab; color:#aaa; font-size:0.95rem; user-select:none; line-height:1; padding:2px 4px;">⋮⋮</span>
+        <div style="font-weight:700; font-size:1.05rem; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:18px;">${escapeHtml(p.name)}</div>
         <div style="font-size:0.82rem; color:#888; margin-bottom:10px;">${p.item_count} item${p.item_count === 1 ? '' : 's'}</div>
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;" onclick="event.stopPropagation()">
           <div></div>
@@ -1112,12 +1508,29 @@ async function loadPlaylists() {
       </div>
     `;}).join('');
     // Whole-card click also opens the detail modal (Items button shortcut).
+    // Stop a click from firing right after a drag (Chrome dispatches a stray
+    // synthetic click on dragend for the drop target).
     grid.querySelectorAll('.playlist-card').forEach(card => {
-      card.addEventListener('click', () => {
+      card.addEventListener('click', (ev) => {
+        if (_plDragInProgress) return;
+        if (ev.target.closest('[data-pl-drag-handle]')) return;
         const pid = parseInt(card.dataset.pid, 10);
         if (!Number.isNaN(pid)) openPlaylistDetail(pid);
       });
     });
+    // Drag-to-reorder. Handle = the ⋮⋮ chip; drop target = whole card.
+    // Mirrors the rule-card pattern in main-agent.js. Server persists the
+    // new order via POST /api/playlists/reorder.
+    wirePlaylistDragReorder(grid);
+    // Restore per-card Shuffle / Repeat preferences from localStorage so
+    // the toggles survive page navigation.
+    applyStoredPlaylistModes();
+    // Re-paint the currently-playing highlight on top of the fresh render.
+    try {
+      const qr = await fetch(`${MEDIA_API}/api/queue/status`);
+      const q  = await qr.json();
+      paintPlayingPlaylistCard((q && q.active) ? q.playlist_id : null);
+    } catch (_) { /* highlight is best-effort */ }
   } catch (e) {
     grid.innerHTML = `<div style="color:#c0392b; font-size:0.85rem; padding:14px;">Failed to load playlists: ${escapeHtml(String(e.message || e))}</div>`;
   }

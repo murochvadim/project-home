@@ -1123,6 +1123,43 @@ def browse():
         return jsonify({'error': str(e)}), 400
 
 
+# ── GET /api/media/walk ──────────────────────────────────────────
+# Recursive flat listing under a relative path. Used by the dashboard's
+# "🔍 Unassigned" feature to find files not present in any playlist.
+# Returns every regular file under <MEDIA_MOUNT>/<rel_path> (depth ∞),
+# skipping hidden entries (".*") and not following symlinks.
+@app.route('/api/media/walk')
+def walk_dir():
+    rel_path = (request.args.get('path') or '').strip('/')
+    try:
+        full_path = safe_path(rel_path) if rel_path else os.path.realpath(MEDIA_MOUNT)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not os.path.isdir(full_path):
+        return jsonify({'error': 'not a directory'}), 400
+    base = os.path.realpath(MEDIA_MOUNT)
+    files = []
+    try:
+        for root, dirs, fns in os.walk(full_path, followlinks=False):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for fn in fns:
+                if fn.startswith('.'):
+                    continue
+                full = os.path.join(root, fn)
+                rel  = os.path.relpath(full, base).replace(os.sep, '/')
+                fold = os.path.relpath(root, base).replace(os.sep, '/')
+                files.append({
+                    'name':   fn,
+                    'path':   '/mnt/media/' + rel,
+                    'folder': fold,
+                    'ext':    os.path.splitext(fn)[1].lower(),
+                })
+        files.sort(key=lambda x: (x['folder'].lower(), x['name'].lower()))
+        return jsonify({'path': rel_path, 'count': len(files), 'files': files})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
 # ── GET /api/media/stream/<path> ─────────────────────────────────
 @app.route('/api/media/stream/<path:rel_path>')
 def stream_file(rel_path):
@@ -1415,15 +1452,45 @@ def results_image():
 @app.route('/api/playlists', methods=['GET'])
 def playlists_list():
     try:
+        # User-controlled order: explicit sort_order wins; rows that have
+        # never been dragged fall back to updated_at DESC so the old
+        # "newest first" behavior still works for fresh playlists.
         rows = db_query(
             "SELECT id, name, description, items, "
             "  jsonb_array_length(items) AS item_count, "
             "  created_at, updated_at "
-            "FROM media_playlists ORDER BY updated_at DESC"
+            "FROM media_playlists "
+            "ORDER BY sort_order ASC NULLS LAST, updated_at DESC, id ASC"
         )
         return jsonify(rows)
     except Exception as e:
         log.exception('playlists_list')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/playlists/reorder', methods=['POST'])
+def playlists_reorder():
+    """Body: {"order": [id1, id2, ...]} — sets sort_order = index. Unlisted
+    rows get sort_order = NULL so they fall back to updated_at ordering."""
+    body = request.get_json(silent=True) or {}
+    order = body.get('order')
+    if not isinstance(order, list) or not all(isinstance(x, int) for x in order):
+        return jsonify({'error': 'order must be a list of playlist ids'}), 400
+    try:
+        # Wipe all positions first so a re-order that drops a row from the
+        # list properly demotes it back to "auto" instead of keeping a
+        # stale index. fetch=False because UPDATE without RETURNING has
+        # no result set — calling fetchall() on it raises ProgrammingError.
+        db_query("UPDATE media_playlists SET sort_order = NULL", fetch=False)
+        for idx, pid in enumerate(order):
+            db_query(
+                "UPDATE media_playlists SET sort_order = %s WHERE id = %s",
+                (idx, pid),
+                fetch=False,
+            )
+        return jsonify({'ok': True, 'count': len(order)})
+    except Exception as e:
+        log.exception('playlists_reorder')
         return jsonify({'error': str(e)}), 500
 
 
