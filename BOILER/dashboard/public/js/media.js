@@ -445,6 +445,10 @@ function _unassignedFolderView(curPath) {
 function _unassignedBreadcrumb(curPath, rootPath) {
   // Returns clickable breadcrumb segments. Root segment label uses the
   // folder name itself ("Music"). Anything deeper appends below it.
+  // Navigation is wired in renderUnassignedList() via [data-uan-nav]
+  // addEventListener AFTER innerHTML so paths with ' " \ & — common in
+  // music libraries — don't need to survive a JS-in-onclick-attribute
+  // round trip.
   const segs = curPath.split('/').filter(Boolean);
   const rootSegs = rootPath.split('/').filter(Boolean);
   const html = [];
@@ -452,13 +456,12 @@ function _unassignedBreadcrumb(curPath, rootPath) {
   for (let i = 0; i < segs.length; i++) {
     acc = acc ? (acc + '/' + segs[i]) : segs[i];
     const isLast = i === segs.length - 1;
-    // Only segments that are ancestors of (or at) the navigation root are clickable.
     const navigable = i >= rootSegs.length - 1;
     if (i > 0) html.push(`<span style="color:#aaa;">/</span>`);
     if (isLast || !navigable) {
       html.push(`<span style="color:#2e2e2e; font-weight:600;">${escHtmlSafe(segs[i])}</span>`);
     } else {
-      html.push(`<a href="#" onclick="event.preventDefault(); unassignedNavigate('${escAttr(acc)}')" style="color:#2980b9; text-decoration:none;">${escHtmlSafe(segs[i])}</a>`);
+      html.push(`<a href="#" data-uan-nav="${escHtmlSafe(acc)}" style="color:#2980b9; text-decoration:none;">${escHtmlSafe(segs[i])}</a>`);
     }
   }
   return html.join(' ');
@@ -481,7 +484,7 @@ function renderUnassignedList() {
   parts.push(`<div style="display:flex; align-items:center; gap:10px; padding:6px 4px 8px; border-bottom:1px solid #ece8e2; margin-bottom:6px; font-size:0.85rem;">`);
   if (!isRoot) {
     const parent = _unassigned.curPath.replace(/\/[^/]+$/, '') || _unassigned.rootPath;
-    parts.push(`<a href="#" onclick="event.preventDefault(); unassignedNavigate('${escAttr(parent)}')" style="color:#2980b9; text-decoration:none;">↑ Up</a>`);
+    parts.push(`<a href="#" data-uan-nav="${escHtmlSafe(parent)}" style="color:#2980b9; text-decoration:none;">↑ Up</a>`);
   }
   parts.push(`<span>${_unassignedBreadcrumb(_unassigned.curPath, _unassigned.rootPath)}</span>`);
   parts.push(`</div>`);
@@ -493,7 +496,7 @@ function renderUnassignedList() {
     for (const sub of subFolders) {
       const child = _unassigned.curPath + '/' + sub;
       const cnt = subRecCount.get(sub) || 0;
-      parts.push(`<a href="#" onclick="event.preventDefault(); unassignedNavigate('${escAttr(child)}')" style="display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:3px; color:#2e2e2e; text-decoration:none;" onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background=''">
+      parts.push(`<a href="#" data-uan-nav="${escHtmlSafe(child)}" style="display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:3px; color:#2e2e2e; text-decoration:none;" onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background=''">
         <span style="font-size:1.05rem; flex-shrink:0;">📁</span>
         <span style="flex:1; font-weight:500;">${escHtmlSafe(sub)}</span>
         <span style="color:#888; font-size:0.78rem;">${cnt} unassigned</span>
@@ -507,13 +510,24 @@ function renderUnassignedList() {
       for (const f of filesHere) {
         const isChecked = _unassigned.checked.has(f.path);
         parts.push(`<label style="display:flex; align-items:center; gap:8px; padding:3px 8px; cursor:pointer; border-radius:3px;" onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background=''">
-          <input type="checkbox" data-path="${escAttr(f.path)}" ${isChecked ? 'checked' : ''} onchange="onUnassignedToggle(this)">
+          <input type="checkbox" data-path="${escHtmlSafe(f.path)}" ${isChecked ? 'checked' : ''} onchange="onUnassignedToggle(this)">
           <span style="font-family:monospace; font-size:0.82rem; color:#2e2e2e;">${escHtmlSafe(f.name)}</span>
         </label>`);
       }
     }
   }
   list.innerHTML = parts.join('');
+  // Wire navigation handlers. Done here (post-innerHTML) instead of inline
+  // onclick attributes so paths with ' " \ — common in music libraries —
+  // don't have to round-trip through HTML-attribute-as-JS-source, which
+  // would break the inline JS the moment a folder name contains an
+  // apostrophe (HTML entities are decoded before the handler body parses).
+  list.querySelectorAll('[data-uan-nav]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      unassignedNavigate(el.getAttribute('data-uan-nav'));
+    });
+  });
   updateUnassignedCounts();
 }
 
@@ -619,11 +633,10 @@ async function addUnassignedToPlaylist() {
   }
 }
 
+// Escapes &, <, >, " — covers both text and double-quoted-attribute contexts
+// in one helper, so callers don't have to pick the right escape per call site.
 function escHtmlSafe(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function escAttr(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function renderGrid(entries, currentPath) {
