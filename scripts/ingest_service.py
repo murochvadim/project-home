@@ -57,6 +57,7 @@ def _get_pool():
 def db_query(sql, params=None, fetch=True):
     pool = _get_pool()
     conn = pool.getconn()
+    bad = False
     try:
         with conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -65,16 +66,26 @@ def db_query(sql, params=None, fetch=True):
                     return [dict(r) for r in cur.fetchall()]
                 return None
     except Exception:
-        pool.putconn(conn, close=True)
+        bad = True
         raise
-    else:
-        pool.putconn(conn)
+    finally:
+        # try/except/else here would never reach `else` (returns happen inside
+        # try) — that's the bug that exhausted the pool after ~5 calls.
+        pool.putconn(conn, close=bad)
 
 
 # ── Path safety helper ───────────────────────────────────────────
 def safe_path(rel, base=MEDIA_MOUNT):
     real_base = os.path.realpath(base)
-    full = os.path.realpath(os.path.join(base, rel.lstrip('/')))
+    # Callers send either a path relative to MEDIA_MOUNT (legacy upload flow)
+    # or a full path already under it (dashboard edit/delete modal). Detect
+    # which and avoid double-prefixing — the previous join('/mnt/media',
+    # '/mnt/media/...'.lstrip('/')) yielded '/mnt/media/mnt/media/...' and
+    # silently broke DELETE / PATCH for any file referenced by full path.
+    if os.path.isabs(rel):
+        full = os.path.realpath(rel)
+    else:
+        full = os.path.realpath(os.path.join(base, rel.lstrip('/')))
     if full != real_base and not full.startswith(real_base + '/'):
         raise ValueError(f'Path traversal attempt: {rel!r}')
     return full
@@ -197,6 +208,14 @@ def upload():
     if ext not in SUPPORTED_EXTS:
         return jsonify({'error': f'Unsupported file type: {ext!r}'}), 400
     target_dir = (request.form.get('targetPath') or '').strip('/')
+    if not target_dir:
+        # Auto-route by extension when caller didn't supply targetPath.
+        # Keeps root clean — uploads land in Music/Videos/Photos by type.
+        # Type-based routing matches the 2026-05-17 migration that split
+        # the legacy flat /mnt/media/ layout into 3 typed top-level folders.
+        if ext in AUDIO_EXTS:   target_dir = 'Music'
+        elif ext in VIDEO_EXTS: target_dir = 'Videos'
+        elif ext in IMAGE_EXTS: target_dir = 'Photos'
     combined   = os.path.join(target_dir, rel_file) if target_dir else rel_file
     try:
         remote_path = safe_path(combined)

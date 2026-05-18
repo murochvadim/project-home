@@ -41,7 +41,7 @@ The Alexa Devices tab on the same Media Agents page is **NOT served by LXC 100**
 | `/opt/media-agent/gen_results.py` | Generates search result image (JPEG) for TV display via DLNA |
 | `/opt/media-agent/face_register.py` | Extracts 512-dim ArcFace embedding from a photo; server.js spawns it and inserts result into `face_registry` |
 | `/opt/media-agent/face_recognize.py` | Matches faces in image/video against `face_registry`; cosine similarity ≥ 0.5; 1 frame/120s for video |
-| `/opt/media-agent/venv/` | Python venv: InsightFace, psycopg2, flask, numpy, cv2, flask-cors |
+| `/opt/media-agent/venv/` | Python venv: InsightFace, psycopg2, flask, numpy, cv2, flask-cors, **pychromecast** (audio playlist routing to soundbar) |
 
 ## Deploy Commands
 ```bash
@@ -167,17 +167,76 @@ Dashboard: user labels clusters → person_embeddings updated
 
 ### Playback flow
 
-> ⛔ **HARD RULE: Video ALWAYS uses MiniDLNA. Never replace the MiniDLNA URL for video.**
-> Samsung TV requires DLNA-specific response headers (`contentFeatures.dlna.org`, `transferMode.dlna.org`) that only MiniDLNA provides. Bypassing MiniDLNA for video causes the TV to accept the SOAP command but silently refuse to render the stream.
+> ⛔ **HARD RULE: Video ALWAYS uses MiniDLNA → TV. Audio ALWAYS uses Cast → Soundbar.**
+> Samsung TV requires DLNA-specific response headers (`contentFeatures.dlna.org`, `transferMode.dlna.org`) that only MiniDLNA provides; bypassing MiniDLNA for video causes the TV to accept SetAVTransportURI but silently refuse to render the stream. The TV's UPnP music app is broken for mid-queue switching — many days of UPnP workarounds (KEY_RETURN, session reset, etc.) produced no reliable solution. **Audio routes through the Samsung 990C soundbar's built-in Chromecast** (port 8009), which has native gapless queue support and zero music-app weirdness.
 
-- **Video**: `minidlna_id()` looks up file in MiniDLNA SQLite DB → stream URL is `http://192.168.1.138:8200/MediaItems/{id}.{ext}` → Samsung UPnP `SetAVTransportURI` + `Play` SOAP call. This must never be changed to a direct Flask endpoint.
-- **Audio**: token URL generated per play session — `_stream_tokens[hex_token] = full_path` → `http://192.168.1.138:8766/api/media/token/{token}` (pure ASCII). Required because Samsung TV rejects `SetAVTransportURI` if the URL contains non-ASCII or spaces, even when percent-encoded. Token route supports full Range requests.
+- **Video** (`device_type=video`): `minidlna_id()` looks up file in MiniDLNA SQLite DB → stream URL is `http://192.168.1.138:8200/MediaItems/{id}.{ext}` → Samsung UPnP `SetAVTransportURI` + `Play` SOAP call to TV at `192.168.1.129:9197/upnp/control/AVTransport1`. This must never be changed to a direct Flask endpoint. The `_wake_and_play` helper handles the full sequence: TV-on (WoL via tv_control.py if needed) → wait for UPnP ready → Stop → wait STOPPED → SetAVTransportURI (with `protocolInfo="http-get:*:<mime>:*"` on `<res>`) → wait STOPPED → Play with 3-retry → verify PLAYING. Generation counter (`_play_gen` / `_is_play_gen_current`) ensures only the latest call's SOAP commands hit the TV when rapid Next clicks queue up.
+- **Audio** (`device_type=audio`): single `pychromecast` connection to the soundbar (cached module-level in `_cast_obj`, reconnects automatically). `_cast_play_url(url, title)` calls `mc.play_media(url, 'audio/mpeg', title=...)`. The default media receiver (`CC1AD845`) launches on the soundbar and plays the stream. Stream URL prefers MiniDLNA library path (`http://192.168.1.138:8200/MediaItems/{id}.{ext}`); falls back to Flask token endpoint when not indexed.
 - **Search results image**: `gen_results.py` generates PNG → served by player_service via `/api/media/results-image`
 - MiniDLNA SIGHUP: `os.kill(int(pid_file), signal.SIGHUP)` — no shell subprocess
-- Samsung TV: IP `192.168.1.129`, port 9197, path `/upnp/control/AVTransport1`
-- TV control proxied through `tv_control.py` on port 8765 (LXC 100 local)
-- DIDL-Lite `<res>` element **must include** `protocolInfo="http-get:*:<mime>:*"` — Samsung rejects SetAVTransportURI without it
-- `_current_duration` global: set from `media_library.duration_sec` when play starts; used by `/api/media/position` as fallback when TV returns duration=0 (enabling dashboard progress bar)
+- DIDL-Lite `<res>` element on video calls **must include** `protocolInfo="http-get:*:<mime>:*"` — Samsung TV rejects SetAVTransportURI without it
+- `_current_duration` global: set from `media_library.duration_sec` when play starts; used by `/api/media/position` as fallback when TV returns duration=0 (enabling dashboard progress bar — video path only; audio uses Cast's native position reporting)
+
+---
+
+## Audio Playlists via Cast → Soundbar (since 2026-05-18)
+
+This is the audio playback architecture that replaced ~3 days of failed UPnP workarounds. Single source of truth for audio playlist + queue management.
+
+### Why Cast not UPnP
+
+Samsung's TV music-app DLNA renderer:
+- Accepts `SetAVTransportURI` for a 2nd audio track but **never issues a GET request** to fetch the new stream
+- Stays in `TRANSITIONING` state forever or silently drops to `STOPPED`
+- Does HEAD probes but no GET
+- Works for the FIRST audio track only — mid-session swap is unrecoverable
+
+We tried (and removed): unique DIDL item IDs, empty SetAVTransportURI to reset, `protocolInfo` profiles, custom `contentFeatures.dlna.org` headers, KEY_EXIT / KEY_RETURN / KEY_HOME to close the music overlay, `videoItem` class re-tagging, 60 s sustained-PLAYING gates on a polling watcher, position-near-end verification. None were reliable. The whole UPnP audio path is gone — see [`MEDIA/media_audit_punch_list.md`](media_audit_punch_list.md) for the audit trail.
+
+The Samsung 990C soundbar at `192.168.1.149` runs **Google Cast** natively (Chromecast build `1.56.310669`, default media receiver app id `CC1AD845`). Discovery confirmed via SSDP + `http://192.168.1.149:8008/setup/eureka_info`. Cast handles audio queue and gapless playback at the protocol level — no application-level state machine needed.
+
+### Components
+
+| Piece | Location |
+|---|---|
+| `pychromecast 13.x` | installed in `/opt/media-agent/venv/` |
+| Persistent Cast connection (`_cast_obj`) | `player_service.py` module-level, lazy via `_get_cast()` with auto-reconnect |
+| `_CastStatusListener` | listens for `player_state` transitions; advances queue only on `PLAYING (for current idx) → IDLE (FINISHED)` |
+| `_play_queue_item_cast(idx)` | dispatches one queue item — audio via `_cast_play_url`, video via `_wake_and_play` (kept for mixed playlists) |
+| `_cast_advance_queue()` | handles end-of-track: advances `current_idx`, loops on `repeat=true`, clears queue otherwise |
+| Preset volume | `dashboard_settings.media.cast_preset_volume` (float 0.0..1.0, default 0.3); applied at every `/api/playlists/<id>/play` start |
+| File-missing auto-skip | inside `_play_queue_item_cast` — stale playlist refs skip to next instead of stalling the queue |
+
+### Avoiding false-advance race
+
+The listener uses `_saw_playing_for_idx` to gate advances:
+- On status update with `player_state=PLAYING`: record current queue idx as "confirmed playing"
+- On status update with `player_state=IDLE` + `idle_reason=FINISHED`: advance **only if** `_saw_playing_for_idx == current idx`, then disarm
+
+This prevents the rapid spurious advances that plagued the earlier UPnP watcher (where transient PLAYING blips between track loads were misread as track-completes and burned through the queue in seconds).
+
+### Volume — Cast-app level, not soundbar hardware
+
+`cast.set_volume(0.0..1.0)` operates on the Cast media receiver's audio mix. **Adjusting physical soundbar volume buttons or remote kicks the soundbar off Cast input back to its primary source (HDMI/digital), ending the Cast session.** That's a one-way trip — the soundbar will not re-launch the Cast app on its own. So the dashboard's Now Playing strip slider drives `cast.set_volume()` exclusively; remote-pressed volume buttons should be considered a session-ender (informational, not a bug).
+
+EQ / bass / treble are not reachable from any available API (SmartThings supported_features = 21901 has no `SELECT_SOUND_MODE` flag, soundbar's local HTTP on ports 8080/8443 returns 403). Use the physical remote or SmartThings phone app.
+
+### Mid-queue mode toggles
+
+The active queue's `shuffle` and `repeat` flags can be toggled mid-playback via `POST /api/queue/mode`. The dashboard's playlist-card toggle buttons call this endpoint with the card's playlist id; the server ignores the call if the active queue is for a different playlist. So toggling Repeat ON during track 3 means the queue will loop at end-of-last-track, instead of clearing.
+
+### Endpoints
+
+| Endpoint | Role |
+|---|---|
+| `POST /api/playlists/<int:pid>/play` body=`{shuffle?,repeat?,start_idx?}` | Apply preset volume on Cast, init `_play_queue` from `media_playlists.items`, dispatch first track |
+| `GET  /api/queue/status` | Active queue state — playlist name, current idx, shuffle/repeat, Cast volume + position + duration + state |
+| `POST /api/queue/next` | Manual next → `_play_queue_item_cast(cur+1)` (no Stop+wait needed; Cast handles transitions) |
+| `POST /api/queue/prev` | Manual prev |
+| `POST /api/queue/stop` | Clear `_play_queue`, `cast.media_controller.stop()`, also UPnP Stop on TV (in case video was running) |
+| `POST /api/queue/mode` body=`{shuffle?,repeat?,playlist_id?}` | Toggle active queue's flags; `playlist_id` filter prevents Card A's toggle from clobbering Card B's running queue |
+| `GET  /api/cast/volume` | `{level, preset}` — current + saved |
+| `POST /api/cast/volume` body=`{level, save?}` | Set Cast app volume on soundbar; `save:true` persists as preset |
 
 ---
 
@@ -192,8 +251,8 @@ Dashboard: user labels clusters → person_embeddings updated
 | `/api/media/library` | GET | Paginated library list (filter by type, unrecognized) |
 | `/api/media/library/<path>` | GET | Single file record |
 | `/api/media/browse` | GET | Directory browser |
-| `/api/media/stream/<path>` | GET | Range-request audio streaming (direct path — use token for DLNA) |
-| `/api/media/token/<token>` | GET | Range-request streaming via ASCII token (used for DLNA playback) |
+| `/api/media/stream/<path>` | GET | Range-request audio streaming — Cast pulls audio from here (or from MiniDLNA port 8200 when indexed) |
+| `/api/media/token/<token>` | GET | Range-request streaming via ASCII token (legacy — was needed for UPnP audio path before Cast pivot) |
 | `/api/media/results-image` | GET | Serve `/mnt/media/tmp/search_results.png` to TV |
 | `/api/media/thumb` | GET | Image thumbnail (LRU cache, 200 items) |
 | `/api/media/play` | POST | Play file on TV (by relPath) |
@@ -265,10 +324,20 @@ Dashboard: user labels clusters → person_embeddings updated
 
 #### Player Agent tab
 - Media feedback bar (animated, shows play status)
-- Playback bar: title, time, progress, ⏪30s / ⏸Pause / 30s⏩ / ⏹Stop, seek ±30s
-- Playback bar **auto-restores on page load/navigation** — on init, `GET /api/media/position` is called; if duration>0 and position<duration, playback bar is shown immediately (fixes disappearing controls when navigating away and back)
-- QNAP Media browser: grid of files/folders, breadcrumb navigation, play on click
+- Playback bar (legacy video controls): title, time, progress, ⏪30s / ⏸Pause / 30s⏩ / ⏹Stop, seek ±30s — auto-restores on page load via `GET /api/media/position`
+- QNAP Media browser: grid of files/folders, breadcrumb navigation, play on click; multi-select mode for bulk add-to-playlist
 - Edit metadata modal: event, year, location, people fields, Save + Delete buttons
+- **Playlists card** (since 2026-05-18): grid of playlist cards; each card has 3 colored buttons in one row:
+  - **▶ Play** (green) — starts the queue with current Shuffle/Repeat toggle state
+  - **🔀 Shuffle** (blue) — toggle; ON state shown as "ON" label above the button, OFF as "OFF"
+  - **🔁 Repeat** (purple) — toggle; same label pattern
+  - Toggles also patch the active queue (via `POST /api/queue/mode`) so flipping mid-playback takes immediate effect
+  - Click anywhere else on the card → opens detail modal (track list with drag-reorder, ✕ remove per track, rename, delete playlist)
+- **Now Playing strip** (since 2026-05-18): appears above the QNAP Media card when a queue is active. 3 rows:
+  - **Title row**: 🔊 playlist name · `N/total · via Soundbar` + track title + (📺 TV On · 📺 TV Off · `|` · ⏮ Prev · ⏭ Next · ⏹ Stop) on the right
+  - **Progress row**: `M:SS / M:SS` with a green bar; server reports Cast position+duration on the 5 s poll, client interpolates between polls every 1 s; restart-aware (server position drop > 30 s = real new track, not stale reading)
+  - **Volume row**: full-width 0..100 % slider + 💾 Save preset button; slider drives `cast.set_volume()` (Cast-app level, not soundbar hardware); ⚠ remote-pressed volume buttons kick soundbar off Cast — adjust via this slider only while audio is playing
+- Cache-bust on `js/media.js` query string bumped at every meaningful UI change so browser cache doesn't serve a stale version
 
 #### Settings tab
 - **Auto Mode**: auto_enabled, auto_frame_interval (sec), auto_face_score_min (%), auto_cluster_every (N files)

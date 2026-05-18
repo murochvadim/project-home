@@ -404,7 +404,21 @@
     <div class="card">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
         <h2 style="margin:0;">QNAP Media</h2>
-        <button class="btn btn-secondary btn-sm" onclick="loadMediaBrowser()">↺ Refresh</button>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary btn-sm" id="media-select-btn" onclick="toggleSelectMode()">☑ Select</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadMediaBrowser()">↺ Refresh</button>
+        </div>
+      </div>
+      <!-- Action bar — shown only while in select mode. Updated dynamically by selectionUpdated(). -->
+      <div id="media-select-bar" style="display:none; align-items:center; gap:10px; padding:8px 12px; background:#f5f3ee; border:1px solid #e0dcd2; border-radius:6px; margin-bottom:12px; flex-wrap:wrap;">
+        <span id="media-select-count" style="font-size:0.85rem; color:#555; font-weight:600;">0 selected</span>
+        <select id="media-add-target" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;">
+          <option value="">— Add to playlist —</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" id="media-add-btn" onclick="addSelectedToPlaylist()" style="background:#27ae60; color:#fff;" disabled>+ Add</button>
+        <span style="flex:1"></span>
+        <button class="btn btn-secondary btn-sm" onclick="clearSelection()">Clear</button>
+        <button class="btn btn-secondary btn-sm" onclick="toggleSelectMode()">✕ Cancel</button>
       </div>
       <div id="media-breadcrumb" style="font-size:0.82rem; color:#555; margin-bottom:12px; display:flex; align-items:center; flex-wrap:wrap; gap:4px;"></div>
       <div id="media-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px;">
@@ -412,7 +426,54 @@
       </div>
     </div>
 
+    <!-- Playlists card (added 2026-05-17) — CRUD only in Phase 1.
+         Phase 2 adds playback wiring; Phase 3 adds multi-select add-to-playlist
+         from the browser above. -->
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Playlists</h2>
+        <button class="btn btn-secondary btn-sm" onclick="createPlaylist()" style="background:#27ae60; color:#fff;">+ New Playlist</button>
+      </div>
+      <div id="playlists-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:10px;">
+        <div style="color:#aaa; font-size:0.85rem; padding:14px;">Loading…</div>
+      </div>
+    </div>
+
   </div><!-- /tab-player -->
+
+  <!-- Playlist Detail Modal — view + edit + delete items, rename. Opens
+       when a playlist card is clicked. Adding new items is done via the
+       QNAP Media browser's Select mode (current playlist offered in the
+       Add-to dropdown). -->
+  <div id="playlist-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:24px; width:600px; max-width:calc(100vw - 32px); max-height:calc(100vh - 64px); overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.18); position:relative;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+        <div style="font-size:1rem; font-weight:600;">Playlist</div>
+        <span id="playlist-modal-status" style="font-size:0.75rem; color:#aaa;"></span>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:0.78rem; color:#555; display:block; margin-bottom:4px;">Name</label>
+        <input id="playlist-modal-name" type="text" style="width:100%; padding:6px 10px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.92rem; box-sizing:border-box;">
+      </div>
+
+      <div style="font-size:0.78rem; color:#555; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between;">
+        <span>Items (<span id="playlist-modal-count">0</span>)</span>
+        <span style="color:#888; font-size:0.72rem;">drag to reorder · ✕ to remove</span>
+      </div>
+      <div id="playlist-modal-items" style="border:1px solid #ece8e2; border-radius:6px; padding:4px; max-height:300px; overflow-y:auto; background:#faf8f5;">
+        <div style="color:#aaa; font-size:0.85rem; padding:14px; text-align:center;">No items yet — close this dialog, click ☑ Select in QNAP Media, pick files, choose this playlist from the dropdown.</div>
+      </div>
+
+      <div id="playlist-modal-msg" style="font-size:0.8rem; min-height:1.4em; margin-top:12px;"></div>
+
+      <div style="display:flex; gap:8px; margin-top:16px; justify-content:flex-end;">
+        <button class="btn btn-secondary btn-sm" onclick="closePlaylistDetail()">Cancel</button>
+        <button class="btn btn-secondary btn-sm" style="color:#c0392b; border-color:#e0b0ad;" onclick="deletePlaylistFromModal()">Delete Playlist</button>
+        <button class="btn btn-success btn-sm" onclick="savePlaylistDetail()">Save</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Edit Metadata Modal -->
   <div id="edit-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
@@ -632,6 +693,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=72"></script>
+<script src="js/media.js?v=97"></script>
 </body>
 </html>

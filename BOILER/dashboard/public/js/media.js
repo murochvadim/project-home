@@ -230,6 +230,130 @@ function renderBreadcrumb(path) {
 
 const HIDDEN_ENTRIES = new Set(['.faces', 'tmp']);
 
+// ── Multi-select state for add-to-playlist (Phase 3) ──────────────
+// _selectMode: when true, file cells are click-to-select instead of
+//              click-to-play. Folder navigation still works regardless.
+// _selectedPaths: Set of full '/mnt/media/...' paths currently checked.
+// _selectedMeta:  Map<path, {title, type}> — kept alongside paths so
+//              we can POST item objects without re-fetching browse info.
+let _selectMode = false;
+const _selectedPaths = new Set();
+const _selectedMeta  = new Map();
+
+function toggleSelectMode() {
+  _selectMode = !_selectMode;
+  if (!_selectMode) {
+    _selectedPaths.clear();
+    _selectedMeta.clear();
+  }
+  const bar = document.getElementById('media-select-bar');
+  const btn = document.getElementById('media-select-btn');
+  if (bar) bar.style.display = _selectMode ? 'flex' : 'none';
+  if (btn) {
+    btn.textContent      = _selectMode ? '✕ Exit Select' : '☑ Select';
+    btn.style.background = _selectMode ? '#3a5a8a' : '';
+    btn.style.color      = _selectMode ? '#fff' : '';
+  }
+  if (_selectMode) {
+    refreshPlaylistDropdown();
+  }
+  selectionUpdated();
+  // Re-render the grid to show / hide selection visuals
+  loadMediaBrowser();
+}
+
+function clearSelection() {
+  _selectedPaths.clear();
+  _selectedMeta.clear();
+  selectionUpdated();
+  loadMediaBrowser();
+}
+
+function selectionUpdated() {
+  const countEl = document.getElementById('media-select-count');
+  const addBtn  = document.getElementById('media-add-btn');
+  const target  = document.getElementById('media-add-target');
+  const n = _selectedPaths.size;
+  if (countEl) countEl.textContent = n + ' selected';
+  if (addBtn) addBtn.disabled = (n === 0 || !target || !target.value);
+}
+
+async function refreshPlaylistDropdown() {
+  const sel = document.getElementById('media-add-target');
+  if (!sel) return;
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists`);
+    const data = await r.json();
+    sel.innerHTML = '<option value="">— Add to playlist —</option>';
+    for (const p of data) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.name} (${p.item_count})`;
+      sel.appendChild(opt);
+    }
+    const newOpt = document.createElement('option');
+    newOpt.value = '__new__';
+    newOpt.textContent = '+ New playlist…';
+    sel.appendChild(newOpt);
+    sel.onchange = selectionUpdated;
+  } catch (_) { /* leave existing options */ }
+}
+
+async function addSelectedToPlaylist() {
+  const target = document.getElementById('media-add-target');
+  if (!target || !target.value || _selectedPaths.size === 0) return;
+  const items = Array.from(_selectedPaths).map(p => {
+    const meta = _selectedMeta.get(p) || {};
+    return { path: p, title: meta.title || p.split('/').pop(), type: meta.type || 'file' };
+  });
+  try {
+    let playlistId;
+    if (target.value === '__new__') {
+      const name = prompt('New playlist name:');
+      if (!name || !name.trim()) return;
+      const cr = await fetch(`${MEDIA_API}/api/playlists`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ name: name.trim(), items }),
+      });
+      const crd = await cr.json();
+      if (!cr.ok || crd.error) {
+        alert('Create failed: ' + (crd.error || `HTTP ${cr.status}`));
+        return;
+      }
+      playlistId = crd.id;
+    } else {
+      playlistId = parseInt(target.value, 10);
+      // Append: GET existing → merge unique paths → PATCH
+      const gr   = await fetch(`${MEDIA_API}/api/playlists`);
+      const all  = await gr.json();
+      const pl   = all.find(p => p.id === playlistId);
+      const existing = (pl && Array.isArray(pl.items)) ? pl.items : [];
+      const existingPaths = new Set(existing.map(it => it.path));
+      const merged = existing.concat(items.filter(it => !existingPaths.has(it.path)));
+      const pr = await fetch(`${MEDIA_API}/api/playlists/${playlistId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ items: merged }),
+      });
+      const prd = await pr.json();
+      if (!pr.ok || prd.error) {
+        alert('Add failed: ' + (prd.error || `HTTP ${pr.status}`));
+        return;
+      }
+    }
+    // Success — clear selection, refresh playlists, exit select mode.
+    _selectedPaths.clear();
+    _selectedMeta.clear();
+    selectionUpdated();
+    await refreshPlaylistDropdown();
+    loadPlaylists();
+    toggleSelectMode();   // exit select mode
+  } catch (e) {
+    alert('Add failed: ' + (e.message || e));
+  }
+}
+
 function renderGrid(entries, currentPath) {
   const grid = document.getElementById('media-grid');
   entries = entries.filter(e => !HIDDEN_ENTRIES.has(e.name));
@@ -246,15 +370,41 @@ function renderGrid(entries, currentPath) {
     const isAudio = AUDIO_EXTS.has(e.ext);
 
     const cell = document.createElement('div');
+    const fullPath = e.type === 'file'
+      ? '/mnt/media/' + (relPath.startsWith('/') ? relPath.slice(1) : relPath)
+      : '';
+    const isSelected = e.type === 'file' && _selectedPaths.has(fullPath);
+    const clickable  = e.type === 'dir' || (_selectMode && e.type === 'file');
     cell.style.cssText = `text-align:center;padding:10px;border-radius:6px;
-      cursor:${e.type === 'dir' ? 'pointer' : 'default'};
-      background:#faf8f5;border:1px solid #ece8e2;transition:background 0.15s;`;
+      cursor:${clickable ? 'pointer' : 'default'};
+      background:${isSelected ? '#dceefb' : '#faf8f5'};
+      border:${isSelected ? '2px solid #3a5a8a' : '1px solid #ece8e2'};
+      transition:background 0.15s, border 0.15s;`;
     cell.title = e.name;
-    if (e.type === 'file') cell.dataset.filePath = '/mnt/media/' + (relPath.startsWith('/') ? relPath.slice(1) : relPath);
-    cell.addEventListener('mouseover', () => { cell.style.background = '#f0ede8'; });
-    cell.addEventListener('mouseout',  () => { cell.style.background = '#faf8f5'; });
+    if (e.type === 'file') cell.dataset.filePath = fullPath;
+    cell.addEventListener('mouseover', () => { if (!isSelected) cell.style.background = '#f0ede8'; });
+    cell.addEventListener('mouseout',  () => { if (!isSelected) cell.style.background = '#faf8f5'; });
     if (e.type === 'dir') {
       cell.addEventListener('click', () => loadMediaBrowser(relPath));
+    } else if (_selectMode) {
+      // In select mode, the WHOLE cell toggles selection for files.
+      cell.addEventListener('click', (ev) => {
+        // Don't toggle if the click was on a button inside the cell.
+        if (ev.target.closest('button')) return;
+        if (_selectedPaths.has(fullPath)) {
+          _selectedPaths.delete(fullPath);
+          _selectedMeta.delete(fullPath);
+        } else {
+          _selectedPaths.add(fullPath);
+          _selectedMeta.set(fullPath, {
+            title: e.name,
+            type:  isVideo ? 'video' : isAudio ? 'audio' : (e.type === 'file' ? 'file' : 'other'),
+          });
+        }
+        selectionUpdated();
+        // Re-render to flip the visual on the clicked cell.
+        loadMediaBrowser();
+      });
     }
 
     // Thumbnail or icon
@@ -526,7 +676,9 @@ async function uploadFiles(files) {
       const fd = new FormData();
       fd.append('file', file, file.name);
       fd.append('relativePath', relPath);
-      fd.append('targetPath', _currentPath);
+      // targetPath intentionally omitted — server auto-routes by extension
+      // (Music / Videos / Photos). Sending _currentPath here forced every
+      // file into whichever folder the Player browser was last viewing.
       const r = await fetch(`${INGEST_API}/api/media/upload`, { method: 'POST', body: fd });
       if (!r.ok) { const d = await r.json(); errors.push(`${relPath}: ${d.error}`); }
     } catch (e) { errors.push(`${relPath}: ${e.message}`); }
@@ -644,6 +796,491 @@ function loadPlayer() {
   if (window._playerLoaded) return;
   window._playerLoaded = true;
   loadMediaBrowser('');
+  loadPlaylists();
+  // Queue status drives the Now Playing strip. Audio plays through the
+  // soundbar via Cast (Chromecast) — auto-advance is native, no watcher.
+  loadQueueStatus();
+  if (!window._queuePollTimer) {
+    window._queuePollTimer = setInterval(loadQueueStatus, 5000);
+  }
+}
+
+function togglePlaylistMode(btn, mode) {
+  const card = btn.closest('.playlist-card');
+  if (!card) return;
+  const attr = 'data-' + mode;
+  const on = card.getAttribute(attr) === '1';
+  const next = on ? '0' : '1';
+  card.setAttribute(attr, next);
+  const label = card.querySelector(`[data-state-for="${mode}"]`);
+  if (label) {
+    if (next === '1') {
+      label.textContent = 'ON';
+      label.style.color = '#27ae60';
+    } else {
+      label.textContent = 'OFF';
+      label.style.color = '#999';
+    }
+  }
+  // Also patch the currently-playing queue if it's THIS playlist, so the
+  // toggle takes effect immediately (not only on the next Play click).
+  const pid = parseInt(card.dataset.pid, 10);
+  const isOn = (next === '1');
+  fetch(`${MEDIA_API}/api/queue/mode`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ playlist_id: pid, [mode]: isOn }),
+  }).catch(() => { /* silent — no active queue means no patch needed */ });
+}
+
+function playPlaylistFromCard(btn) {
+  const card = btn.closest('.playlist-card');
+  if (!card) return;
+  const pid = parseInt(card.dataset.pid, 10);
+  const shuffle = card.getAttribute('data-shuffle') === '1';
+  const repeat = card.getAttribute('data-repeat') === '1';
+  playPlaylist(pid, shuffle, repeat);
+}
+
+async function playPlaylist(id, shuffle, repeat) {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists/${id}/play`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ shuffle: !!shuffle, repeat: !!repeat }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) alert('Play failed: ' + (data.error || `HTTP ${r.status}`));
+    loadQueueStatus();
+  } catch (e) { alert('Play failed: ' + (e.message || e)); }
+}
+
+async function loadQueueStatus() {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/queue/status`);
+    const q = await r.json();
+    renderQueueStrip(q);
+  } catch (_) { /* ignore */ }
+}
+
+function renderQueueStrip(q) {
+  let strip = document.getElementById('now-playing-strip');
+  if (!q || !q.active) {
+    if (strip) strip.remove();
+    return;
+  }
+  if (!strip) {
+    strip = document.createElement('div');
+    strip.id = 'now-playing-strip';
+    strip.className = 'card';
+    strip.style.cssText = 'background:linear-gradient(135deg, #2c3e50, #34495e); color:#fff; padding:16px 20px; margin-bottom:12px; border:none;';
+    const browser = document.querySelector('#tab-player .card');
+    if (browser) browser.parentNode.insertBefore(strip, browser);
+  }
+  const cur = q.current_item || {};
+  const title = cur.title || (cur.path || '').split('/').pop() || '?';
+  const btnStyle = 'color:#fff; border:1px solid rgba(255,255,255,0.3); padding:10px 18px; font-size:0.95rem; font-weight:600; display:inline-flex; align-items:center; gap:6px; border-radius:6px; cursor:pointer;';
+  // Don't clobber the slider while the user is dragging — the 5-s poll
+  // would otherwise snap it back to whatever the server last reported.
+  const vol = q.cast_volume == null ? 0.3 : q.cast_volume;
+  const volPct = Math.round(vol * 100);
+  const dragging = strip && strip.dataset.volDragging === '1';
+  // Stash position + duration on the strip so the interpolation timer can
+  // read them and advance the bar between server polls. Only adopt the
+  // server's position if it's MEANINGFULLY ahead of where the client is
+  // already showing — otherwise stale 0 readings would reset the bar.
+  const srvPos = q.cast_position == null ? 0 : q.cast_position;
+  const dur = q.cast_duration == null ? 0 : q.cast_duration;
+  const prevPos = parseFloat(strip.dataset.castPos || '0');
+  const prevStamp = parseInt(strip.dataset.castStamp || '0', 10);
+  const prevState = strip.dataset.castState || '';
+  const prevDur = parseFloat(strip.dataset.castDur || '0');
+  const clientInterpPos = prevState === 'PLAYING' && prevStamp
+    ? Math.min(prevDur || 0, prevPos + (Date.now() - prevStamp) / 1000)
+    : prevPos;
+  const trackChanged = (q.current_item && q.current_item.path !== strip.dataset.castPath);
+  let basePos = srvPos;
+  if (!trackChanged && srvPos < clientInterpPos - 1 && srvPos > clientInterpPos - 30) {
+    // Server reading is a few seconds behind client — stale GET_STATUS
+    // cache, keep the client's interpolated value so the bar doesn't snap
+    // backwards. A drop > 30 s is treated as a real restart (e.g. repeat
+    // looped back to the same track) and the server value is adopted.
+    basePos = clientInterpPos;
+  }
+  strip.dataset.castPos = String(basePos);
+  strip.dataset.castDur = String(dur);
+  strip.dataset.castState = q.cast_state || '';
+  strip.dataset.castStamp = String(Date.now());
+  strip.dataset.castPath = (q.current_item && q.current_item.path) || '';
+  // Use basePos (not srvPos) for the initial render so the bar doesn't flash.
+  const pos = basePos;
+  strip.innerHTML = `
+    <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+      <span style="font-size:1.6rem;">🔊</span>
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:0.82rem; opacity:0.75; margin-bottom:4px;">${escapeHtml(q.playlist_name || 'Playlist')} · ${q.current_idx + 1}/${q.total} · via Soundbar</div>
+        <div style="font-weight:700; font-size:1.1rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(cur.path || '')}">${escapeHtml(title)}</div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button onclick="tvCommand('turn_on')" title="TV on" style="${btnStyle} background:rgba(255,255,255,0.15);"><span style="font-size:1.1rem;">📺</span> TV On</button>
+        <button onclick="tvCommand('turn_off')" title="TV off" style="${btnStyle} background:rgba(255,255,255,0.15);"><span style="font-size:1.1rem;">📺</span> TV Off</button>
+        <span style="width:1px; height:30px; background:rgba(255,255,255,0.25); margin:0 6px;"></span>
+        <button onclick="queuePrev()" title="Previous track" style="${btnStyle} background:rgba(255,255,255,0.15);"><span style="font-size:1.2rem;">⏮</span> Prev</button>
+        <button onclick="queueNext()" title="Next track" style="${btnStyle} background:rgba(255,255,255,0.15);"><span style="font-size:1.2rem;">⏭</span> Next</button>
+        <button onclick="queueStop()" title="Stop playlist" style="${btnStyle} background:#c0392b; border-color:#c0392b;"><span style="font-size:1.2rem;">⏹</span> Stop</button>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px; margin-top:14px;">
+      <span id="cast-pos-label" style="font-size:0.78rem; opacity:0.85; min-width:42px; font-variant-numeric:tabular-nums;">${_fmtMMSS(pos)}</span>
+      <div style="flex:1; height:6px; background:rgba(255,255,255,0.18); border-radius:3px; overflow:hidden;">
+        <div id="cast-pos-fill" style="height:100%; background:#27ae60; width:${dur > 0 ? Math.min(100, pos/dur*100) : 0}%; transition:width 0.4s linear;"></div>
+      </div>
+      <span id="cast-dur-label" style="font-size:0.78rem; opacity:0.85; min-width:42px; text-align:right; font-variant-numeric:tabular-nums;">${_fmtMMSS(dur)}</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.12);">
+      <span style="font-size:1.1rem; flex-shrink:0;" title="Volume">🔉</span>
+      <input id="cast-vol-slider" type="range" min="0" max="100" step="1" value="${volPct}" style="flex:1; cursor:pointer; height:6px;" title="Cast volume on soundbar">
+      <span id="cast-vol-label" style="font-size:0.9rem; opacity:0.9; min-width:44px; text-align:right; font-weight:600;">${volPct}%</span>
+      <button onclick="saveCastVolumePreset()" title="Save current volume as preset (used at start of next playlist)" style="background:rgba(255,255,255,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3); padding:6px 12px; font-size:0.82rem; border-radius:6px; cursor:pointer; flex-shrink:0;">💾 Save preset</button>
+    </div>
+  `;
+  // 1-s interpolation tick so the progress bar advances smoothly between
+  // 5-s server polls. Re-uses position+duration we just stashed on the strip.
+  if (!window._castProgTimer) {
+    window._castProgTimer = setInterval(_tickCastProgress, 1000);
+  }
+  // Wire the slider — POST cast volume on every change. Mark dragging so
+  // the 5-s status poll doesn't snap the slider back mid-drag.
+  const sl = document.getElementById('cast-vol-slider');
+  const lbl = document.getElementById('cast-vol-label');
+  if (sl) {
+    sl.addEventListener('input', () => {
+      strip.dataset.volDragging = '1';
+      lbl.textContent = sl.value + '%';
+    });
+    sl.addEventListener('change', async () => {
+      const level = parseInt(sl.value, 10) / 100;
+      try {
+        await fetch(`${MEDIA_API}/api/cast/volume`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ level }),
+        });
+      } catch (_) {}
+      // Release the drag-lock after a moment so the next poll can update.
+      setTimeout(() => { delete strip.dataset.volDragging; }, 1500);
+    });
+  }
+  if (dragging && sl) {
+    // Restore the dragging flag we just consumed in innerHTML replacement.
+    strip.dataset.volDragging = '1';
+  }
+}
+
+function _fmtMMSS(s) {
+  s = Math.max(0, Math.floor(Number(s) || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${r.toString().padStart(2, '0')}`;
+}
+
+function _tickCastProgress() {
+  const strip = document.getElementById('now-playing-strip');
+  if (!strip) {
+    if (window._castProgTimer) { clearInterval(window._castProgTimer); window._castProgTimer = null; }
+    return;
+  }
+  const dur = parseFloat(strip.dataset.castDur || '0');
+  if (!dur) return;
+  const state = strip.dataset.castState || '';
+  // Only advance when Cast says PLAYING — otherwise hold the last position.
+  if (state !== 'PLAYING') return;
+  const basePos = parseFloat(strip.dataset.castPos || '0');
+  const stampMs = parseInt(strip.dataset.castStamp || '0', 10);
+  const elapsed = (Date.now() - stampMs) / 1000;
+  const pos = Math.min(dur, basePos + elapsed);
+  const fill = document.getElementById('cast-pos-fill');
+  const lbl = document.getElementById('cast-pos-label');
+  if (fill) fill.style.width = (pos / dur * 100) + '%';
+  if (lbl) lbl.textContent = _fmtMMSS(pos);
+}
+
+async function saveCastVolumePreset() {
+  const sl = document.getElementById('cast-vol-slider');
+  if (!sl) return;
+  const level = parseInt(sl.value, 10) / 100;
+  try {
+    const r = await fetch(`${MEDIA_API}/api/cast/volume`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ level, save: true }),
+    });
+    const d = await r.json();
+    if (r.ok && !d.error) {
+      // Tiny inline confirmation — temporarily flash the button.
+      const btn = document.querySelector('#now-playing-strip button[onclick^="saveCastVolumePreset"]');
+      if (btn) { const t = btn.textContent; btn.textContent = '✓'; setTimeout(() => { btn.textContent = t; }, 1200); }
+    } else {
+      alert('Save preset failed: ' + (d.error || `HTTP ${r.status}`));
+    }
+  } catch (e) { alert('Save preset failed: ' + (e.message || e)); }
+}
+
+async function queueNext() {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/queue/next`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) alert('Next failed: ' + (d.error || `HTTP ${r.status}`));
+    loadQueueStatus();
+  } catch (e) { alert('Next failed: ' + (e.message || e)); }
+}
+
+async function queuePrev() {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/queue/prev`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) alert('Prev failed: ' + (d.error || `HTTP ${r.status}`));
+    loadQueueStatus();
+  } catch (e) { alert('Prev failed: ' + (e.message || e)); }
+}
+
+async function queueStop() {
+  try {
+    await fetch(`${MEDIA_API}/api/queue/stop`, { method: 'POST' });
+    loadQueueStatus();
+  } catch (e) { alert('Stop failed: ' + (e.message || e)); }
+}
+
+// TV power — proxies through player_service to tv_control.py (WoL magic
+// packet for turn_on, KEY_POWER over WebSocket for turn_off).
+async function tvCommand(cmd) {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/command`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ entity: 'tv', command: cmd }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) alert('TV ' + cmd + ' failed: ' + (d.error || `HTTP ${r.status}`));
+  } catch (e) { alert('TV ' + cmd + ' failed: ' + (e.message || e)); }
+}
+
+
+// ── Playlists CRUD (Phase 1) ──────────────────────────────────────
+// All calls go to player_service.py on LXC 100:8766 directly. Phase 1 covers
+// list/create/delete; Phase 2 will add play/queue endpoints; Phase 3 will
+// hook into the QNAP Media browser for add-to-playlist from selected items.
+async function loadPlaylists() {
+  const grid = document.getElementById('playlists-grid');
+  if (!grid) return;
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists`);
+    const data = await r.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      grid.innerHTML = '<div style="color:#aaa; font-size:0.85rem; padding:14px;">No playlists yet — click "+ New Playlist" to create one.</div>';
+      return;
+    }
+    const btnStyle = 'color:#fff; border:none; padding:10px 8px; font-size:0.85rem; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:4px; border-radius:6px; cursor:pointer; white-space:nowrap;';
+    const statusLabel = 'font-size:0.7rem; font-weight:600; text-align:center; padding-bottom:2px; color:#999;';
+    grid.innerHTML = data.map(p => {
+      const empty = p.item_count === 0;
+      const playColor = empty ? '#aaa' : '#27ae60';
+      const shufColor = empty ? '#aaa' : '#1565c0';
+      const repColor  = empty ? '#aaa' : '#8e44ad';
+      return `
+      <div class="card playlist-card" data-pid="${p.id}" data-shuffle="0" data-repeat="0" style="margin:0; padding:14px; background:#faf8f5; cursor:pointer;" title="Click to view items">
+        <div style="font-weight:700; font-size:1.05rem; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(p.name)}</div>
+        <div style="font-size:0.82rem; color:#888; margin-bottom:10px;">${p.item_count} item${p.item_count === 1 ? '' : 's'}</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;" onclick="event.stopPropagation()">
+          <div></div>
+          <div data-state-for="shuffle" style="${statusLabel}">OFF</div>
+          <div data-state-for="repeat" style="${statusLabel}">OFF</div>
+          <button onclick="playPlaylistFromCard(this)" ${empty ? 'disabled' : ''} title="Play with current Shuffle/Repeat settings" style="${btnStyle} background:${playColor};"><span style="font-size:1.05rem;">▶</span> Play</button>
+          <button data-toggle="shuffle" onclick="togglePlaylistMode(this, 'shuffle')" ${empty ? 'disabled' : ''} title="Toggle shuffle" style="${btnStyle} background:${shufColor};"><span style="font-size:1.05rem;">🔀</span> Shuffle</button>
+          <button data-toggle="repeat" onclick="togglePlaylistMode(this, 'repeat')" ${empty ? 'disabled' : ''} title="Toggle repeat (loop playlist)" style="${btnStyle} background:${repColor};"><span style="font-size:1.05rem;">🔁</span> Repeat</button>
+        </div>
+      </div>
+    `;}).join('');
+    // Whole-card click also opens the detail modal (Items button shortcut).
+    grid.querySelectorAll('.playlist-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const pid = parseInt(card.dataset.pid, 10);
+        if (!Number.isNaN(pid)) openPlaylistDetail(pid);
+      });
+    });
+  } catch (e) {
+    grid.innerHTML = `<div style="color:#c0392b; font-size:0.85rem; padding:14px;">Failed to load playlists: ${escapeHtml(String(e.message || e))}</div>`;
+  }
+}
+
+async function createPlaylist() {
+  const name = prompt('Playlist name:');
+  if (!name || !name.trim()) return;
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), items: [] }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      alert('Create failed: ' + (data.error || `HTTP ${r.status}`));
+      return;
+    }
+    loadPlaylists();
+  } catch (e) {
+    alert('Create failed: ' + (e.message || e));
+  }
+}
+
+// ── Playlist detail modal ─────────────────────────────────────────
+// Shows current items, allows rename, remove items, reorder via HTML5
+// drag, and Delete Playlist (also accessible from the card's ✕ button).
+// Adding new items remains in the QNAP Media browser's Select mode.
+let _modalPlaylist = null;   // {id, name, items: [...]} — local working copy
+
+async function openPlaylistDetail(id) {
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists`);
+    const all = await r.json();
+    const pl = all.find(p => p.id === id);
+    if (!pl) { alert('Playlist not found'); return; }
+    _modalPlaylist = {
+      id:    pl.id,
+      name:  pl.name,
+      items: Array.isArray(pl.items) ? pl.items.slice() : [],
+    };
+    document.getElementById('playlist-modal-name').value = pl.name;
+    document.getElementById('playlist-modal-status').textContent = `id #${pl.id}`;
+    document.getElementById('playlist-modal-msg').textContent = '';
+    renderModalItems();
+    document.getElementById('playlist-modal-overlay').style.display = 'flex';
+  } catch (e) {
+    alert('Load failed: ' + (e.message || e));
+  }
+}
+
+function renderModalItems() {
+  const wrap = document.getElementById('playlist-modal-items');
+  const count = document.getElementById('playlist-modal-count');
+  if (!wrap || !count) return;
+  count.textContent = String(_modalPlaylist.items.length);
+  if (_modalPlaylist.items.length === 0) {
+    wrap.innerHTML = '<div style="color:#aaa; font-size:0.85rem; padding:14px; text-align:center;">No items yet — close this dialog, click ☑ Select in QNAP Media, pick files, choose this playlist from the dropdown.</div>';
+    return;
+  }
+  wrap.innerHTML = _modalPlaylist.items.map((it, i) => `
+    <div class="pl-item" draggable="true" data-idx="${i}" style="display:flex; align-items:center; gap:8px; padding:6px 8px; background:#fff; border:1px solid #ece8e2; border-radius:4px; margin-bottom:3px; cursor:grab;">
+      <span style="color:#aaa; font-size:0.9rem; cursor:grab;" title="drag to reorder">⋮⋮</span>
+      <span style="color:#888; font-size:0.78rem; min-width:24px;">${i + 1}.</span>
+      <span style="font-size:0.86rem; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(it.path || '')}">${escapeHtml(it.title || (it.path || '').split('/').pop() || '(no title)')}</span>
+      <span style="font-size:0.7rem; color:#aaa; text-transform:uppercase;">${escapeHtml(it.type || '')}</span>
+      <button class="btn btn-secondary btn-sm" onclick="removeModalItem(${i})" style="background:#c0392b; color:#fff; padding:1px 7px; font-size:0.76rem;" title="Remove from playlist">✕</button>
+    </div>
+  `).join('');
+  // HTML5 drag-and-drop reorder
+  wrap.querySelectorAll('.pl-item').forEach(row => {
+    row.addEventListener('dragstart', ev => {
+      ev.dataTransfer.setData('text/plain', row.dataset.idx);
+      row.style.opacity = '0.4';
+    });
+    row.addEventListener('dragend', () => { row.style.opacity = '1'; });
+    row.addEventListener('dragover', ev => { ev.preventDefault(); });
+    row.addEventListener('drop', ev => {
+      ev.preventDefault();
+      const fromIdx = parseInt(ev.dataTransfer.getData('text/plain'), 10);
+      const toIdx   = parseInt(row.dataset.idx, 10);
+      if (Number.isNaN(fromIdx) || Number.isNaN(toIdx) || fromIdx === toIdx) return;
+      const arr = _modalPlaylist.items;
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      renderModalItems();
+    });
+  });
+}
+
+function removeModalItem(idx) {
+  if (!_modalPlaylist) return;
+  _modalPlaylist.items.splice(idx, 1);
+  renderModalItems();
+}
+
+async function savePlaylistDetail() {
+  if (!_modalPlaylist) return;
+  const newName = document.getElementById('playlist-modal-name').value.trim();
+  if (!newName) { alert('Name cannot be empty'); return; }
+  const msg = document.getElementById('playlist-modal-msg');
+  msg.textContent = 'Saving…'; msg.style.color = '#888';
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists/${_modalPlaylist.id}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name: newName, items: _modalPlaylist.items }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      msg.textContent = 'Save failed: ' + (data.error || `HTTP ${r.status}`);
+      msg.style.color = '#c0392b';
+      return;
+    }
+    msg.textContent = '✓ Saved'; msg.style.color = '#27ae60';
+    loadPlaylists();
+    setTimeout(closePlaylistDetail, 600);
+  } catch (e) {
+    msg.textContent = 'Save failed: ' + (e.message || e);
+    msg.style.color = '#c0392b';
+  }
+}
+
+function closePlaylistDetail() {
+  document.getElementById('playlist-modal-overlay').style.display = 'none';
+  _modalPlaylist = null;
+}
+
+async function deletePlaylistFromModal() {
+  if (!_modalPlaylist) return;
+  if (!confirm(`Delete playlist "${_modalPlaylist.name}"? This cannot be undone.`)) return;
+  await deletePlaylist(_modalPlaylist.id, _modalPlaylist.name);
+  closePlaylistDetail();
+}
+
+async function renamePlaylist(id, currentName) {
+  const newName = prompt('New playlist name:', currentName);
+  if (!newName || !newName.trim() || newName === currentName) return;
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      alert('Rename failed: ' + (data.error || `HTTP ${r.status}`));
+      return;
+    }
+    loadPlaylists();
+  } catch (e) {
+    alert('Rename failed: ' + (e.message || e));
+  }
+}
+
+async function deletePlaylist(id, name) {
+  if (!confirm(`Delete playlist "${name}"? This cannot be undone.`)) return;
+  try {
+    const r = await fetch(`${MEDIA_API}/api/playlists/${id}`, { method: 'DELETE' });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      alert('Delete failed: ' + (data.error || `HTTP ${r.status}`));
+      return;
+    }
+    loadPlaylists();
+  } catch (e) {
+    alert('Delete failed: ' + (e.message || e));
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 
