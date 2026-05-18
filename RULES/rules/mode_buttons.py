@@ -212,8 +212,16 @@ def _last_change_age(state, dev_id, dps_key):
     from datetime import datetime, timezone
     now_dt = datetime.now(timezone.utc)
     try:
-        ts = state.get_last_transition_before(dev_id, dps_key, now_dt)
+        transition = state.get_last_transition_before(dev_id, dps_key, now_dt)
     except Exception:
+        return float('inf')
+    if transition is None:
+        return float('inf')
+    # state_manager returns (transition_ts, from_value, to_value). We only
+    # need the timestamp — unpack defensively in case the contract evolves.
+    try:
+        ts = transition[0]
+    except (TypeError, IndexError):
         return float('inf')
     if ts is None:
         return float('inf')
