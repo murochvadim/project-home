@@ -215,8 +215,81 @@ Behavior:
 
 ---
 
+## Use case 2 — Ambient / nature sounds (rain, birds, forest)
+
+Same pipeline, different content type. YouTube is the natural fit for ambient because the **8-12 hour continuous track format** is essentially a YouTube native — dedicated channels publish single videos that long specifically for sleep / focus / background use. One download = one file = one playlist entry that plays for a whole night.
+
+### Why YouTube over royalty-free libraries for this
+
+| | YouTube ambient | Pixabay / BBC sound archives |
+|---|---|---|
+| Typical length | 8-12 hour continuous tracks | 3-10 min loops |
+| Bedtime workflow | Hit Play once → runs all night | Need Repeat ON + audible loop seam |
+| Library size | Massive ("rain on tent" / "rain on roof" / "rain in forest" / …) | Curated, smaller |
+| Quality | Best channels (Relaxing White Noise, Calmed by Nature, Sleep Tube) are pro | Pro by default |
+| Library shape | One big file per mood | Many small files to assemble + loop |
+
+Pixabay / BBC remain useful for **short stings** (single bird chirp, single thunderclap) when authoring something compositionally, but not for "leave it running while I sleep."
+
+### Recommended ambient channels (single videos, 8h+, no copyright issues)
+
+| Channel | Vibe | Search terms |
+|---|---|---|
+| **Relaxing White Noise** | Rain / thunderstorm / fan / brown noise | `10 hours heavy rain thunder` |
+| **Calmed by Nature** | Forest / birds / streams / wind | `8 hour forest birds dawn` |
+| **Sleep Tube** | Ocean / rain / fireplace | `10 hours ocean waves` |
+| **Nature Sounds for Sleeping** | Mixed nature | `12 hour gentle rain forest` |
+
+These channels publish under "no copyright" / royalty-free terms; their videos have no music, no voice intros, no watermarks.
+
+### Phase A — manual one-shot per track (once LXC 100 has yt-dlp)
+
+Pick a video from any of those channels. On LXC 100:
+
+```bash
+mkdir -p /mnt/media/Music/Ambient
+python3 -m yt_dlp --no-playlist -f bestaudio \
+  -o '/mnt/media/Music/Ambient/%(title)s.%(ext)s' \
+  '<YouTube video URL>'
+```
+
+Output: one `.m4a` file (typically 80-200 MB for a 10-hour track) in `Music/Ambient/`. Open Media tab → 🔍 Unassigned → drill into `Ambient/` → tick → ✓ Add to playlist.
+
+### Phase B — bundled "Ambient" playlist
+
+End state to aim for:
+
+1. **`/mnt/media/Music/Ambient/`** folder with ~5-10 long ambient files (rain, forest, ocean, thunderstorm, fireplace, brown noise, …)
+2. **Project playlist "Ambient"** containing all of them
+3. **🔁 Repeat ON** (state persists in localStorage per the 2026-05-18 work)
+4. **Optional: 🔀 Shuffle ON** so consecutive nights aren't always rain-then-forest in the same order
+
+Single click on the project Playlist card's ▶ Play → soundbar runs all night. Stop button + auto-off-on-stop powers down the soundbar cleanly when you're done in the morning.
+
+### Phase C — dashboard form should expose this naturally
+
+When the Phase 1 dashboard form lands (URL input → ▶ Download), no separate UI needed for ambient — same form handles single videos OR playlists. Workflow becomes:
+
+1. Find an 8-hour rain video on YouTube
+2. Paste its URL into the Media tab's "Download from YouTube" form
+3. Folder name: `Ambient`
+4. ▶ Download → file lands in `Music/Ambient/`
+5. Project playlist auto-updated (if "Create project playlist when done" was checked, OR add manually via 🔍 Unassigned)
+
+### Tradeoffs to remember
+
+- **File sizes**: 10-hour `.m4a` is ~150 MB. 10 of them = 1.5 GB on the QNAP. Not a concern (Music share has TB of space) but worth knowing.
+- **Cookies not needed**: ambient channels are all public — no `cookies.txt` required for this use case.
+- **Same yt-dlp install** as the music-playlist use case: one Phase 0 install on LXC 100 unlocks both flows.
+- **Loop seam**: yt-dlp gets a perfect cut from the video; Repeat-mode loop is silent when the source file is clean. Choose channels that don't fade in/out.
+
+---
+
 ## Where to pick up
 
 1. Read this file
 2. Quit Chrome → re-test cookie path on laptop to confirm playlist `PLB38FEB8BC8C1E8CE` enumerates
-3. Tell me to proceed with Phase 0
+3. Tell me to proceed with Phase 0 — installs yt-dlp on LXC 100, then we test BOTH use cases:
+   - Your music playlist (`PLB38FEB8BC8C1E8CE`, needs cookies)
+   - One ambient track (e.g. 10-hour rain, no cookies needed)
+4. If Phase 0 looks good, decide on Phase 1 dashboard button
