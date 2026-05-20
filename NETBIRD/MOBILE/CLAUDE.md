@@ -283,6 +283,25 @@ Total: ~7-10 hours, shippable in phases. After Phase 2 you have a working button
 
 Start with Phase 1, escalate if family/guest scenarios emerge.
 
+## Do I still need an MQTT client app on the phone?
+
+Short: **No for daily use, yes as a developer / debug tool.**
+
+| Use case | MQTT client app | Cockpit PWA |
+|---|---|---|
+| Daily "open gates / see boiler" | overkill | ✓ designed for this |
+| Test a new MQTT topic (debugging) | ✓ best tool | ✗ would need to edit Connection tab first |
+| Subscribe to wildcards (`mur/home/#`) to watch live traffic | ✓ best tool | ✗ not built for this |
+| Emergency manual control if cockpit / mobile-api breaks | ✓ direct to broker, simpler stack | ✗ more moving parts |
+| Reading raw MQTT JSON messages | ✓ | ✗ |
+
+Recommendation:
+- **Keep the MQTT client installed** on the phone (free, lightweight)
+- **Don't use it daily** — cockpit is the daily driver
+- **Pull it out for debugging** — quick topic test, watching broker live, ad-hoc command that the cockpit doesn't have a button for
+
+Both tools benefit from the same Phase 0 work (NetBird Linux client on LXC + advertise route to `192.168.1.0/24`) — once that's done, both the cockpit AND the MQTT client work from outside the home network.
+
 ## Caveats to remember
 
 - **PWA cache**: Service worker aggressively caches static files for offline. When pushing a new PWA version, bump a version string in `service-worker.js` to force a refresh on phone next launch.
