@@ -302,6 +302,47 @@ Recommendation:
 
 Both tools benefit from the same Phase 0 work (NetBird Linux client on LXC + advertise route to `192.168.1.0/24`) — once that's done, both the cockpit AND the MQTT client work from outside the home network.
 
+## Phone sensor data — what app handles what
+
+Owntracks (decided 2026-05-21) is the always-on location source — runs in background, publishes GPS to MQTT. But Owntracks is **purpose-built for location only**. For other phone sensors (battery, charging, WiFi BSSID, Bluetooth connections, screen state, etc.) the right tool is **HA Companion app** — it publishes through the existing HA on LXC 101, which the device_agent already subscribes to.
+
+### Two-app combo
+
+| Tool | Role | Publishes via |
+|---|---|---|
+| **Owntracks** | GPS / location / geofence enter-leave / velocity / battery | MQTT direct to LXC 107 broker on `owntracks/<user>/<device>` topic |
+| **HA Companion** | All other phone sensors (charging, WiFi BSSID, Bluetooth, screen, audio mode, alarm time, NFC tags, motion/activity, step count, focus mode, …) | HA WebSocket → existing device_agent → `devices` table |
+| **Cockpit PWA** (planned) | Primary daily UI — buttons + tiles + foreground "live tracking" mode | Direct HTTP to mobile-api on LXC 105 |
+| **Generic MQTT client** (already installed) | Debug / emergency control / topic exploration | Direct MQTT |
+
+All four are complementary — none replaces another. Owntracks is best at one thing (location, efficiently); HA Companion is best at everything else (because HA's sensor infrastructure already exists in the stack).
+
+### Phone sensor data unlocks (future automations)
+
+When HA Companion is set up, these become trivial sentence-driven rules:
+
+| Sensor → trigger | Rule example |
+|---|---|
+| `wifi_bssid = home` | "If phone connects to home WiFi, set home_mode is home" |
+| `bluetooth_connection = <car>` | "If phone Bluetooth connects to car, log driving session start" |
+| `is_charging = false AND battery_pct < 20` | "If phone battery low and not charging, Alexa: charge me" |
+| `audio_mode = silent` AND home_mode = home | "If phone on silent at home, route notifications to Telegram only" |
+| `last_scanned_tag = home_nfc` | "If NFC tag tapped, trigger HOME mode" |
+| `next_alarm_time` | "30 min before alarm, start pre-warming bedroom heater" |
+| `pedometer_steps_today` | "Daily steps glance on Awtrix in the morning" |
+
+GPS through Owntracks unlocks:
+- "Distance from home < 200m → auto-home_mode = home"
+- "Distance from home > 500m for 10 min → auto-home_mode = away"
+- "Phone enters office region → push: 'Vadim arrived at work'"
+- Trip history on dashboard map
+
+### Setup priority
+
+1. **Phase 5a — Owntracks** (when LXC NetBird gateway + MQTT user created): GPS pipeline live
+2. **Phase 5b — HA Companion** (separate, can be done before or after Owntracks): all phone sensors flowing
+3. Both publish to existing infrastructure — no new schema beyond `phone_locations` for GPS history
+
 ## Caveats to remember
 
 - **PWA cache**: Service worker aggressively caches static files for offline. When pushing a new PWA version, bump a version string in `service-worker.js` to force a refresh on phone next launch.
