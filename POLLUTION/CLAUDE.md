@@ -19,27 +19,43 @@ Same pattern as the existing weather ingest (`collect_weather.py` on LXC 103) �
 - **Free tier**: 1,000 requests/day per token, no expiration
 - **Coverage in Israel**: **21 stations** verified (2026-05-21) — Tel Aviv, Haifa, Jerusalem, Ashdod, Pardes Hanna, Gush Dan train stations (Yoseftal/Komemiyut/Peace/Haganah/Levinsky), Antokolski, Bnei Atarot, Cedar (southern coast), Wipe Eastern, Yad Binyamin, "One of the Nation" Gush Dan, Jerusalem Central Bus Station, Ashkelon, Rishon Lezion, Kfar Masaryk, plus mobile railway stations
 
-## Live data verified (2026-05-21 08:00 local)
+## Live data verified (2026-05-21 local)
 
-Smoke test pulled successfully:
+Smoke test pulled successfully.
+
+**For Hod Hasharon — geo:32.156;34.892 → resolved to Ra'anana** (closest active, ~2.5 km away):
 
 ```
-Tel Aviv (uid 5783)
-  AQI: 52  (Moderate — sensitive groups affected)
+Ra'anana (uid 2955) — 09:00 reading
+  AQI: 41  (Good)
   Dominant pollutant: PM2.5
 
-  PM2.5:    52
-  PM10:     17
-  NO2:      2.9
-  O3:       38.8
-  SO2:      1.3
-  Temp:     21°C
-  Humidity: 60%
-  Wind:     7.2 m/s
-  Pressure: 1012 hPa
+  PM2.5:    41
+  NO2:      6.3
+  Temp:     21.3°C
+  Humidity: 64.4%
+  Wind:     9.5 m/s
+  Pressure: 1008 hPa
 ```
 
-The geo query `geo:32.085;34.781` resolved to "Antokolski Gush Dan" station — auto-picks the closest, no need to hardcode station ID. Recommend this approach.
+**Stations available for Hod Hasharon area:**
+
+| Station | UID | Distance from HH center | Status |
+|---|---|---|---|
+| Kfar Saba | 9986 | ~1 km east — IDEAL | ✗ no current data (sensor offline) |
+| "Hint" (in Hod Hasharon) | 2964 | within city | ✓ active, AQI 40 |
+| Ra'anana | 2955 | ~2.5 km north | ✓ active, AQI 41 (geo lookup picks this) |
+| Pardes Hanna | 5782 | ~25 km north | ✓ active, AQI 36 |
+
+Geo lookup automatically chooses the closest with valid data — no need to hardcode. If Kfar Saba comes back online, it'll be picked next poll.
+
+**For Tel Aviv reference** (also tested 08:00):
+
+```
+Tel Aviv (uid 5783) — AQI 52 (Moderate), PM2.5 dominant
+```
+
+The geo query `geo:32.156;34.892` (Hod Hasharon center) auto-resolves to the closest active station — currently **Ra'anana** (uid 2955, ~2.5 km north, AQI 41 right now). When **Kfar Saba** (uid 9986, ~1 km east, currently offline) is back online, geo lookup will switch to it automatically without config change. **Hod Hasharon's own station "Hint"** (uid 2964) sits within the city — also a candidate; currently reporting AQI 40. Geo lookup beats hardcoding a UID because station availability shifts over time.
 
 ## API access
 
@@ -175,7 +191,7 @@ In **Main Agent → Base Rule Settings**, new container "Air Quality Alerts":
 
 | Sentence | What it does |
 |---|---|
-| `air quality station is geo:32.085;34.781` | Picks the station (lat/lon-based, auto-resolves to closest) |
+| `air quality station is geo:32.156;34.892` | Picks the station (lat/lon-based, auto-resolves to closest) |
 | `air quality poll interval is 30 minutes` | Matches the cron — surfaces the knob if user wants to change |
 | `when air_quality.aqi > 100 push @Pixoo Air_Warning` | Pixoo banner on rising-edge |
 | `when air_quality.aqi > 150 say "Air quality unhealthy, close windows" on Alexa @active_rooms` | Alexa announcement in occupied rooms |
