@@ -10,7 +10,7 @@ You are managing an ESP8266 or ESP32 board for the Project Boards dashboard. Fol
 The subsystem is documented in:
 - Root `CLAUDE.md` (Dashboard Pages → Project Boards row + DB Tables → `esp_boards`)
 - `BOILER/dashboard/docs/esp_boards.md` (onboarding cookbook)
-- Existing reference sketch: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_ver13\` (uses `Main.h` + `Esp_Base.ino` pattern)
+- Existing reference sketch: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_Claude\` (uses `Main.h` + `Esp_Base.ino` pattern)
 
 Topic convention every board uses:
 - `mur/home/esp/<id>/availability` — board → broker (LWT: `online`/`offline`)
@@ -154,7 +154,7 @@ The main sketch file. Must include:
   ```
 
 #### `Esp_Base.ino`
-This is the BOARD-AGNOSTIC base block. Copy from `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_ver13\Esp_Base.ino` and adapt:
+This is the BOARD-AGNOSTIC base block. Copy from `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_Claude\Esp_Base.ino` and adapt:
 - **Schema JSON in PROGMEM** — generate from C3 + C4 inputs. Format as a single-line raw string `R"json(...)json"`. Include all parameters with full metadata + all actions.
 - **EEPROM layout** — magic byte at `ESP_PARAMS_ADDR` (32). Pack scalar params in order. Strings get dedicated offsets (track explicitly). Bump magic when struct changes.
 - **`loadEspParams` / `saveEspParams`** — generate read/write code per parameter (use `EEPROM.put(addr, val)` for ints, byte-by-byte for strings).
@@ -333,7 +333,7 @@ Render as markdown table. Highlight offline boards (last_seen NULL or > 180 s ag
 - **DB**: 192.168.1.219 (LXC 102) — PostgreSQL `home_data`, user `postgres` (trust auth from 192.168.1.0/24)
 - **Rule engine**: 192.168.1.187 (LXC 105) — ingests `mur/home/esp/+/+`
 - **Dashboard**: `http://127.0.0.1:3000` (Windows pm2)
-- **Reference sketch**: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_ver13\`
+- **Reference sketch**: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_Claude\`
 - **espota.py paths**:
   - ESP8266: `C:\Users\muroc\AppData\Local\Arduino15\packages\esp8266\hardware\esp8266\<ver>\tools\espota.py` (port 8266)
   - ESP32: `C:\Users\muroc\AppData\Local\Arduino15\packages\esp32\hardware\esp32\<ver>\tools\espota.py` (port 3232)

@@ -1,7 +1,7 @@
 /*
  * Esp_Base.ino — ESP base for Home_Gates_Device (Phase 2 onboarding).
  *
- * Same shape as the reference RemoteXY_ESP8266_ver13/Esp_Base.ino:
+ * Same shape as the reference RemoteXY_ESP8266_Claude/Esp_Base.ino:
  *   mur/home/esp/<id>/availability   board → broker (online / offline LWT)
  *   mur/home/esp/<id>/schema         board → broker (parameters + actions, retained)
  *   mur/home/esp/<id>/status         board → broker (60 s heartbeat + on every state change)

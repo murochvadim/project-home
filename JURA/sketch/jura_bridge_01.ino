@@ -9,7 +9,7 @@
  *   Jura_BLE.ino — driven once per loop tick from juraBleLoop().
  *
  *   Reference sketches: My_Bathroom_Smell_6 (the closest sibling), and
- *   RemoteXY_ESP8266_ver13 (the original ESP base pattern).
+ *   RemoteXY_ESP8266_Claude (the original ESP base pattern).
  */
 
 #include <Arduino.h>

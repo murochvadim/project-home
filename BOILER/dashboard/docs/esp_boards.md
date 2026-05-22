@@ -40,7 +40,7 @@ get a confirm dialog before sending.
 ### 1. Sketch side
 
 Reference sketches:
-- ESP8266: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_ver13\` (full HiveMQ-bridge example)
+- ESP8266: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_Claude\` (full HiveMQ-bridge example)
 - ESP32-C3: `C:\Users\muroc\Arduino_Projects\My_Bathroom_Smell_6\` (minimal Mosquitto-only example with AUTO-cycle pump state machine)
 
 Copy the appropriate `Esp_Base.ino` into your new sketch folder (Arduino IDE
