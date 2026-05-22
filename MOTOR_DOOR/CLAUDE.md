@@ -271,11 +271,11 @@ This lets the device be addressable from rule sentences (`@Mosquito Net Door ope
 
 ## Status
 
-🟢 **Sketch written + compiles** (2026-05-21). Verified via arduino-cli (`esp32:esp32:esp32` FQBN): **79% flash, 16% RAM**. All 9 files exist at `C:\Users\muroc\Arduino_Projects\door_motor_claude\`:
+🟢 **Sketch written + compiles** (2026-05-21). Verified via arduino-cli (`esp32:esp32:esp32` FQBN): **79% flash, 16% RAM**. All 9 files exist at `C:\Users\muroc\Arduino_Projects\Door_Motor_Claude\`:
 
 | File | Lines | Role |
 |---|---|---|
-| `door_motor_claude.ino` | ~205 | Main entry — WiFi/MQTT, HTTP /set_ip, OTA serve, panel slider listener |
+| `Door_Motor_Claude.ino` | ~205 | Main entry — WiFi/MQTT, HTTP /set_ip, OTA serve, panel slider listener |
 | `Main.h` | ~165 | Pin map, MQTT config, EspParams + params struct, EEPROM layout, forward decls |
 | `Esp_Base.ino` | ~245 | esp_boards framework — schema, topics, OTA, status, /config + /command dispatcher |
 | `MotorDriver.ino` | ~110 | LEDC PWM dispatch, soft max-dist limit, post-stop AutoDoor flags |
@@ -285,7 +285,7 @@ This lets the device be addressable from rule sentences (`@Mosquito Net Door ope
 | `LD2420.ino` | ~70 | UART2 line parser ("Range NNN" / "Range OFF"), 1.5 s /event publish |
 | `Monitor.ino` | ~135 | Real-time tick diagnostic + HASP balcony panel pushes (p7b1..p7b15) |
 
-**Note on folder/sketch name**: user-chosen verbatim `door_motor_claude` (lowercase, snake_case — different from the earlier `Toilet_ToTo_Claude` PascalCase pattern). Device ID is `door_motor_01` to match.
+**Note on folder/sketch name**: user-chosen verbatim `Door_Motor_Claude` (PascalCase, matches the `Face_Recognition_Claude` / `Toilet_ToTo_Claude` convention). Device ID is `door_motor_01`.
 
 Ready for Phases 2-7 (on-site flashing + calibration + auto-mode verify + panel page 7 binding + project rule-engine integration) when you're back home.
 
