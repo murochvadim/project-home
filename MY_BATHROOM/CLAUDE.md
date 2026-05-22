@@ -69,6 +69,15 @@ Future:
 | `My Bathroom Switch` | local (Tuya) | switch | |
 | `My Bathroom Presence sens` | local (Tuya) | presence | |
 
+## Pending integration: TOTO toilet IR bridge
+
+The HASP panel sits on the wall right next to the user's TOTO Washlet. See [TOTO_TOILET/CLAUDE.md](../TOTO_TOILET/CLAUDE.md) for the sketch + Phase 2 panel integration plan. Five panel buttons will trigger TOTO functions (flush, open lid 1/2, light on/off — light identity TBD); remaining TOTO actions will reflect on the panel as visual feedback when the user presses the physical remote.
+
+Pending Phase 2 work touches this folder via:
+- New rule `RULES/rules/my_bathroom_toilet_reflect.py` (subscribes `mur/home/esp/toilet_01/event` → publishes `hasp/my-bathroom/command/<obj>.<prop>` updates)
+- New entries in `dashboard_settings.my-bathroom.button_bindings` with `type: esp_command, target: toilet_01, action: <key>`
+- Panel page geometry for the 5 control buttons + reflection objects added via `Sync from panel` after editing on the HASP web UI
+
 ## When you pair a TS0044 for this room
 
 1. Pair via Z2M with friendly name `My BathRoom Smart Switch` (or any name — note the IEEE address).

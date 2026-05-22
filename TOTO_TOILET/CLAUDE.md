@@ -88,6 +88,68 @@ mosquitto_pub -h 192.168.1.189 -u esp_boards -P '=N!9ioNYZWH-8Rz+y+6n' \
 
 Or use the dashboard Project Boards page → `toilet_01` tab → auto-generated action buttons.
 
+## Phase 2 — My BathRoom HASP panel integration
+
+The user has a HASP touch panel mounted on the wall right next to the TOTO toilet (the [my-bathroom panel](../MY_BATHROOM/CLAUDE.md), Sunton ESP32-S3 4848S040 at 192.168.1.220, MQTT prefix `hasp/my-bathroom/`). Once Phase 1 is live (codes captured + ir_tx_enabled=true), Phase 2 wires that panel into the toilet two ways: **control** and **reflection**.
+
+### Direction A — Control (panel → TOTO)
+
+5 panel buttons trigger TOTO/ambient actions. **4 are TOTO IR actions on `toilet_01`**, 1 is a non-toilet device.
+
+| Panel button (TBD page/object) | Triggers | Implementation |
+|---|---|---|
+| **Flush** | `mur/home/esp/toilet_01/command` ← `flush_full` | Existing my_bathroom_buttons rule, `type: esp_command` binding |
+| **Open Lid 1** | `toilet_01/command` ← `open_lid_1` (NEW action — to capture) | Same |
+| **Open Lid 2** | `toilet_01/command` ← `open_lid_2` (NEW action — to capture) | Same |
+| **Light On** | (depends on light identity — see open question) | Either HA `light.turn_on` or another esp_command |
+| **Light Off** | (depends on light identity) | Same |
+
+Two new action keys to add to the sketch when the codes are captured:
+- `open_lid_1` — first-stage lid open (likely cover-only on a 2-stage TOTO lid)
+- `open_lid_2` — second-stage lid open (cover + seat). May share the seat_toggle hardware button on the remote (cycle states) — to be confirmed.
+
+These add to TOTO_BUTTONS[] in `Process_States.ino` + `ESP_SCHEMA_JSON` actions in `Esp_Base.ino` + the action-dispatch `if` chain. Same shape as the existing 9.
+
+### Direction B — Reflection (TOTO event → panel display)
+
+The remaining TOTO actions (the ones NOT given dedicated panel control buttons) reflect on the panel as visual feedback when the user presses them on the physical remote:
+
+- `flush_light` — light flush
+- `clean_ass` — rear wash
+- `osc` — oscillating wash
+- `air_drying` — warm air dry
+- `pulse` — pulse wash
+- `wand_clean` — self-clean wand
+- `stop` — cancel current action
+- `seat_toggle` — if not consumed by Lid 1/Lid 2
+
+Implementation: a new rule (`my_bathroom_toilet_reflect.py`, sibling of `my_bathroom_displays.py`) subscribes to `mur/home/esp/toilet_01/event` and publishes `hasp/my-bathroom/command/<obj>.<prop>` updates per the event payload. The HASP page renders the animation.
+
+Animation style: TBD with user (text flash on a status line / per-action icon highlight / pulsing indicator / "Last: <action> · Ns ago" text). Easiest is the **text flash** — one label updates with the action name, fades to default 5 s later.
+
+### Open questions (to resolve when user is home)
+
+1. **Which "Light" does the panel control?**
+   - (a) TOTO's built-in seat / night light (if remote has the button) → new IR action
+   - (b) The bathroom ceiling light → HA-mediated, not in the toilet sketch
+   - (c) A separate fixture → tell me which device
+2. **"Open lid 1" vs "Open lid 2"** — different IR buttons on the remote, or `seat_toggle` pressed 1× vs 2×?
+3. **Page + button object IDs** on the my-bathroom panel for the 5 controls.
+4. **Animation style** for reflective objects (text flash / icon highlight / status line).
+
+Once those four are answered, Phase 2 is straightforward:
+- Add 2 (or fewer) new TOTO action keys to the sketch + capture codes
+- Add 5 button bindings to `dashboard_settings.my-bathroom.button_bindings`
+- Write the new `my_bathroom_toilet_reflect.py` rule
+- Add the HASP page geometry to `MY_BATHROOM/pages.jsonl`
+- All committed under the existing per-room agent pattern
+
+### Phase 2 dependencies
+
+- Phase 1 complete (codes captured for the 9 current buttons + ir_tx_enabled=true verified)
+- Two more codes captured if open_lid_1 / open_lid_2 turn out to be distinct IR buttons
+- The 4 open questions resolved
+
 ## Known limitations / future work
 
 ### IRAM utilization at 94%
