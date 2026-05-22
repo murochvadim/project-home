@@ -54,7 +54,7 @@ const int   mqtt_port_moskuitto   = 1883;
 
 // ─── Sketch identity ─────────────────────────────────────────────────────
 const char* device_id      = "gates_01";
-const char* sketch_name    = "Home_Gates_Device";   // dashboard chip-detection treats this as ESP32 (esp32 OTA on port 3232)
+const char* sketch_name    = "Home_Gates_Device_Claude";   // dashboard chip-detection: name contains no "ESP8266" substring → defaults to ESP32 OTA on port 3232 (correct for this ESP32 board)
 const char* sketch_version = "v11";
 const char* build_ts       = __DATE__ " " __TIME__;
 
