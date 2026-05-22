@@ -271,9 +271,23 @@ This lets the device be addressable from rule sentences (`@Mosquito Net Door ope
 
 ## Status
 
-📝 **Doc only — sketch not yet written.** Comprehensive plan captured from the v1 sketch's 8 files + the existing esp_boards framework pattern. Next step: write `Motor_Door_Claude/` 9-file sketch following this plan, verify compile, then resume on-site for Phases 2-7.
+🟢 **Sketch written + compiles** (2026-05-21). Verified via arduino-cli (`esp32:esp32:esp32` FQBN): **79% flash, 16% RAM**. All 9 files exist at `C:\Users\muroc\Arduino_Projects\door_motor_claude\`:
 
-When you're ready, say **"resume MOTOR_DOOR — write the sketch"** and I'll generate the 9 files.
+| File | Lines | Role |
+|---|---|---|
+| `door_motor_claude.ino` | ~205 | Main entry — WiFi/MQTT, HTTP /set_ip, OTA serve, panel slider listener |
+| `Main.h` | ~165 | Pin map, MQTT config, EspParams + params struct, EEPROM layout, forward decls |
+| `Esp_Base.ino` | ~245 | esp_boards framework — schema, topics, OTA, status, /config + /command dispatcher |
+| `MotorDriver.ino` | ~110 | LEDC PWM dispatch, soft max-dist limit, post-stop AutoDoor flags |
+| `Encoder.ino` | ~125 | Hall ISR + stall (130 ms) + glide (200 ms, tunable threshold) detectors |
+| `Calib.ino` | ~115 | Two-phase calibration state machine + EEPROM persistence |
+| `AutoDoor.ino` | ~70 | LD2420 presence → auto-open / auto-close with post-stop gate |
+| `LD2420.ino` | ~70 | UART2 line parser ("Range NNN" / "Range OFF"), 1.5 s /event publish |
+| `Monitor.ino` | ~135 | Real-time tick diagnostic + HASP balcony panel pushes (p7b1..p7b15) |
+
+**Note on folder/sketch name**: user-chosen verbatim `door_motor_claude` (lowercase, snake_case — different from the earlier `Toilet_ToTo_Claude` PascalCase pattern). Device ID is `door_motor_01` to match.
+
+Ready for Phases 2-7 (on-site flashing + calibration + auto-mode verify + panel page 7 binding + project rule-engine integration) when you're back home.
 
 ## References
 
