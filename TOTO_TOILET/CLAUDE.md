@@ -27,7 +27,7 @@ Four-file structure, mirrors [Face_Recognition_Claude](../../../Arduino_Projects
 |---|---|---|
 | `Main.h` | ~115 | Pin map, MQTT config (LXC 107 plain), sketch identity, params struct, forward decls |
 | `Esp_Base.ino` | ~190 | esp_boards framework — topics, schema, OTA, action dispatcher with safety gates |
-| `Process_States.ino` | ~150 | IR receive (duration-match, 6 buttons) + IR send framework (rawData pending capture) |
+| `Process_States.ino` | ~150 | IR receive (TOTO protocol decoder, 9 buttons) + IR send via `sendToto()` |
 | `Toilet_ToTo_Claude.ino` | ~250 | WiFi/MQTT plumbing, HTTP /set_ip fallback, OTA serving |
 
 ### MQTT topic schema (esp_boards framework)
@@ -44,7 +44,7 @@ mur/home/esp/toilet_01/event          — board → broker — JSON button_press
 ### Self-declared schema (announced on every reconnect)
 
 **Actions:**
-- `flush_full`, `flush_light`, `seat_toggle`, `stop`, `clean_ass`, `osc` — TOTO buttons (the 6 that disambiguate cleanly on duration)
+- `flush_full`, `flush_light`, `seat_toggle`, `stop`, `clean_ass`, `osc`, `air_drying`, `pulse`, `wand_clean` — TOTO buttons (all 9 disambiguate cleanly thanks to protocol-correct decoding)
 - `restart`, `clear_eeprom`, `factory_reset`, `reset_wifi` — standard esp_boards housekeeping
 
 **Parameters (dashboard-tunable):**
@@ -61,15 +61,17 @@ mur/home/esp/toilet_01/event          — board → broker — JSON button_press
 
 ## What's pending — to wire up the SEND side
 
-### Step 1 — Capture raw IR codes (per button, ~20 min total)
+### Step 1 — Capture TOTO codes (per button, ~5 min total)
+
+Much simpler than the prior IRremote / rawData approach — protocol-correct decoding gives a clean `uint64_t` per button instead of a 100-entry timing array.
 
 Per-button procedure:
-1. Flash the existing `Sniffer_IR_ToTo` sketch (already in `Arduino_Projects/`) — it prints raw timings.
-2. Point TOTO remote at the TSOP38238, press one button.
-3. Serial Monitor outputs a comma-separated `uint16_t` array (the `Send with:` block from `IrReceiver.printIRResultRawFormatted`).
-4. Copy that array into the corresponding `const uint16_t raw_*[] PROGMEM` slot at the top of `Process_States.ino`.
-5. Update the `TOTO_BUTTONS[]` table: set `rawData = raw_flush_full` and `rawDataLen = sizeof(raw_flush_full)/sizeof(uint16_t)`.
-6. Repeat for each of the 6 working buttons.
+1. Flash THIS sketch (`Toilet_ToTo_Claude`) — the receiver is already TOTO-aware.
+2. Open Serial Monitor at 115200. Initially every press will print:
+   `IR TOTO: UNKNOWN code=0xXXXXXXXX — paste into TOTO_BUTTONS[]`
+3. Copy that hex value into the matching slot in `Process_States.ino`'s `TOTO_BUTTONS[]` table (replace the `0` placeholder).
+4. Repeat for each of the 9 declared buttons.
+5. Re-flash. The receiver now matches each press to its name; the transmitter can replay them via `sendToto(code, kTotoBits, repeats)`.
 
 ### Step 2 — Re-flash + open the gate
 
@@ -88,21 +90,9 @@ Or use the dashboard Project Boards page → `toilet_01` tab → auto-generated 
 
 ## Known limitations / future work
 
-### Duration-matching collisions (6 → ~10 buttons)
+### IRAM utilization at 94%
 
-Current sketch uses **total IR pulse train duration** (µs) as the discriminator. Reliable for 6 buttons that have unique durations. Doesn't work for:
-
-| Button | Duration | Conflicts with |
-|---|---|---|
-| `Btn_Air_Drying` | ~59,850 µs | `Btn_Osc` (57,700 µs) — within tolerance |
-| `Btn_Pulse` | ~62,200 µs | `Btn_Full_Flush` (62,250 µs) |
-| `Btn_Wand_Clean` | ~60,000 µs | `Btn_Light_Flush` (60,000 µs) |
-
-**Fix path**: migrate from `IRremote` library to **`IRremoteESP8266`**, which has a **built-in TOTO protocol decoder** (verified by ESPHome's `transmit_toto` / `on_toto` actions). That gives clean `rc_code_1` + `rc_code_2` integers per button → no duration collisions. Migration touches: include line, `IrReceiver` API differences, button table format. ~1 hour work.
-
-### IRAM utilization at 93%
-
-The IRremote library's ISR is IRAM-heavy. Current sketch sits at 93% IRAM. If another IRAM-heavy feature is added later (radio, more interrupts), link will fail. Mitigation: `IRremoteESP8266` is more IRAM-frugal — another reason to migrate.
+Tight ESP8266 IRAM budget. If another IRAM-heavy feature is added later (radio, more interrupts), link may fail. Mitigation if it bites: `#define DISABLE_*` for unused protocols in IRremoteESP8266's config to shrink the decoder table.
 
 ### OTA caveat (sketch_name doesn't contain "ESP8266")
 
@@ -126,20 +116,20 @@ Possible automations once the chip works:
 | What | Where |
 |---|---|
 | Sketch | `C:\Users\muroc\Arduino_Projects\Toilet_ToTo_Claude\` |
-| Sniffer (for code capture) | `C:\Users\muroc\Arduino_Projects\Sniffer_IR_ToTo\` |
+| Legacy duration-based sniffer | `C:\Users\muroc\Arduino_Projects\Sniffer_IR_ToTo\` (superseded — this sketch now does its own TOTO capture via UNKNOWN-code prints) |
 | Reference framework | `C:\Users\muroc\Arduino_Projects\Face_Recognition_Claude\` (Esp_Base.ino pattern) |
 | This doc | `c:\Users\muroc\project_home\TOTO_TOILET\CLAUDE.md` |
 | Sibling room agent | [`MY_BATHROOM/CLAUDE.md`](../MY_BATHROOM/CLAUDE.md) |
 
 ## Status
 
-🟡 **Sketch written + compiles** (verified 2026-05-21 via arduino-cli, ESP8266 NodeMCU FQBN). Receive side fully functional once flashed.
-⏳ **TX side blocked on raw IR code capture** — one-time hardware procedure when user is at the toilet.
+🟡 **Sketch written + compiles** (verified 2026-05-21 via arduino-cli, ESP8266 NodeMCU FQBN, IRremoteESP8266 library, 35% flash / 40% RAM / 94% IRAM). Receive side fully functional once flashed.
+⏳ **TX side blocked on TOTO code capture** — one-time hardware procedure when user is at the toilet (~5 min: press each button, copy hex code from Serial Monitor into `TOTO_BUTTONS[]`).
 ⏳ **Dashboard surface** in My BathRoom — not yet built. Action buttons will appear in the auto-generated Project Boards `toilet_01` tab immediately on first connect (esp_boards framework auto-renders from declared schema), but the cleaner My BathRoom tab presentation is a separate step.
 
 ## References
 
-- [ESPHome `transmit_toto` / `on_toto`](https://esphome.io/components/remote_transmitter/) — TOTO has a custom IR protocol (not NEC), 2× 4-bit codes, 3× repeat at 36 ms intervals
-- [IRremoteESP8266 library](https://github.com/crankyoldgit/IRremoteESP8266) — has built-in TOTO support (preferred migration target)
-- [Arduino IRremote library](https://github.com/Arduino-IRremote/Arduino-IRremote) — current sketch's library, duration-match fallback
+- [IRremoteESP8266 library](https://github.com/crankyoldgit/IRremoteESP8266) — current sketch's library, has built-in TOTO protocol decode + encode
+- [IRremoteESP8266 ir_Toto.cpp source](https://github.com/crankyoldgit/IRremoteESP8266/blob/master/src/ir_Toto.cpp) — TOTO protocol constants (kTotoBits, kTotoDefaultRepeat, bit-mark 600 µs, one-space 1634 µs, zero-space 516 µs, gap 38 ms, prefix 0x0802)
+- [ESPHome `transmit_toto` / `on_toto`](https://esphome.io/components/remote_transmitter/) — cross-check that the TOTO protocol implementation matches
 - [Memory: user-chosen names verbatim](../../.claude/projects/c--Users-muroc-project-home/memory/feedback_user_chosen_names.md) — `sketch_name` decision
