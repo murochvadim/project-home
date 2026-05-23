@@ -2,6 +2,15 @@
 
 **Status as of 2026-05-20:** concept agreed, NOT YET BUILT. NetBird transport layer is partially set up (see `../CLAUDE.md`). This doc is the design + 4-phase rollout for the smartphone app itself.
 
+## Decisions log (2026-05-23)
+
+Settled this session — capture here so future-me doesn't re-litigate:
+
+- **PWA over native Android.** Considered building a full native Android app (Kotlin + foreground service + HiveMQ MQTT client + WebView wrapping the dashboard) to absorb every phone-side role into one APK. Rejected as **over-engineered for actual needs**: user wants ~5 buttons + ~5 info tiles, NOT the full dashboard mirrored on the phone. PWA cockpit (HTML/JS, "Add to Home Screen") + Owntracks (background location, separate pre-built app) cover everything at <1 day of effort vs 2-3 weeks for the native path. Native app stays available as a Phase-5+ option only if the PWA approach hits a hard limit later.
+- **No Tasker / MacroDroid.** Phone-side automation framework not needed — the rule engine on LXC 105 holds all logic. The phone is a thin client surface (buttons + tiles + Owntracks).
+- **No standalone MQTT debug client app.** Earlier draft of this doc recommended keeping a generic MQTT client app installed for debugging. Dropped — the Cockpit PWA + the dashboard's existing Live MQTT Events card are sufficient for normal use, and ad-hoc debugging can install one on demand.
+- **Cockpit page is small + phone-tailored.** Explicitly NOT a mobile-rendered copy of the full Windows dashboard. ~5 buttons + ~5 tiles, glanceable, one-handed. The full dashboard stays on Windows + tablet.
+
 ## Goal
 
 A custom smartphone "app" tailored exactly to user's wishes:
@@ -283,39 +292,19 @@ Total: ~7-10 hours, shippable in phases. After Phase 2 you have a working button
 
 Start with Phase 1, escalate if family/guest scenarios emerge.
 
-## Do I still need an MQTT client app on the phone?
-
-Short: **No for daily use, yes as a developer / debug tool.**
-
-| Use case | MQTT client app | Cockpit PWA |
-|---|---|---|
-| Daily "open gates / see boiler" | overkill | ✓ designed for this |
-| Test a new MQTT topic (debugging) | ✓ best tool | ✗ would need to edit Connection tab first |
-| Subscribe to wildcards (`mur/home/#`) to watch live traffic | ✓ best tool | ✗ not built for this |
-| Emergency manual control if cockpit / mobile-api breaks | ✓ direct to broker, simpler stack | ✗ more moving parts |
-| Reading raw MQTT JSON messages | ✓ | ✗ |
-
-Recommendation:
-- **Keep the MQTT client installed** on the phone (free, lightweight)
-- **Don't use it daily** — cockpit is the daily driver
-- **Pull it out for debugging** — quick topic test, watching broker live, ad-hoc command that the cockpit doesn't have a button for
-
-Both tools benefit from the same Phase 0 work (NetBird Linux client on LXC + advertise route to `192.168.1.0/24`) — once that's done, both the cockpit AND the MQTT client work from outside the home network.
-
 ## Phone sensor data — what app handles what
 
 Owntracks (decided 2026-05-21) is the always-on location source — runs in background, publishes GPS to MQTT. But Owntracks is **purpose-built for location only**. For other phone sensors (battery, charging, WiFi BSSID, Bluetooth connections, screen state, etc.) the right tool is **HA Companion app** — it publishes through the existing HA on LXC 101, which the device_agent already subscribes to.
 
-### Two-app combo
+### Three-app combo
 
 | Tool | Role | Publishes via |
 |---|---|---|
-| **Owntracks** | GPS / location / geofence enter-leave / velocity / battery | MQTT direct to LXC 107 broker on `owntracks/<user>/<device>` topic |
-| **HA Companion** | All other phone sensors (charging, WiFi BSSID, Bluetooth, screen, audio mode, alarm time, NFC tags, motion/activity, step count, focus mode, …) | HA WebSocket → existing device_agent → `devices` table |
-| **Cockpit PWA** (planned) | Primary daily UI — buttons + tiles + foreground "live tracking" mode | Direct HTTP to mobile-api on LXC 105 |
-| **Generic MQTT client** (already installed) | Debug / emergency control / topic exploration | Direct MQTT |
+| **Cockpit PWA** (planned, this module) | Primary daily UI — ~5 buttons + ~5 info tiles | Direct HTTP to mobile-api on LXC 105 |
+| **Owntracks** (pre-built, install + configure) | GPS / location / geofence enter-leave / velocity / battery | MQTT direct to LXC 107 broker on `owntracks/<user>/<device>` topic |
+| **HA Companion** (pre-built, install + configure) | All other phone sensors (charging, WiFi BSSID, Bluetooth, screen, audio mode, alarm time, NFC tags, motion/activity, step count, focus mode, …) | HA WebSocket → existing device_agent → `devices` table |
 
-All four are complementary — none replaces another. Owntracks is best at one thing (location, efficiently); HA Companion is best at everything else (because HA's sensor infrastructure already exists in the stack).
+All three are complementary, all pre-built or tiny — zero native Android development. Owntracks is best at one thing (location, efficiently, with proper Android foreground service). HA Companion is best at the long tail of phone sensors. Cockpit PWA is what you actually look at when you pick up the phone.
 
 ### Phone sensor data unlocks (future automations)
 
