@@ -60,7 +60,7 @@ Future:
 | Device | Protocol | Type | Notes |
 |---|---|---|---|
 | `hasp:my-bathroom` (panel) | hasp | panel | Controllable from rules via `dps_config` aliases (`backlight`, `page`) |
-| `My Bathroom Smell` (`My_Bathroom_Smell_6`) | esp | esp_board | Pump + auto-mode controllable from rules via `dps_config.auto_enabled.action_on='smell_auto_start'` |
+| `My Bathroom Smell` (`My_Bathroom_Smell_Claude`) | esp | esp_board | Pump + auto-mode controllable from rules via `dps_config.auto_enabled.action_on='smell_auto_start'`. Renamed from `My_Bathroom_Smell_6` 2026-05-23 (sketch + device_id + DB row). |
 | `My Bathroom Door` | zwave | door_sensor | Aeotec; battery 42% |
 | `My Bathroom Damper` | local (Tuya) | circuit_breaker | |
 | `Smart Toilet AC breaker` | local (Tuya) | circuit_breaker | |

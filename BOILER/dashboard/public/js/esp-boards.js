@@ -145,7 +145,7 @@ function renderSummary() {
 // dark text on the page's light card background. Per-board overrides win
 // over the hash so specific boards can claim well-known colors.
 const _BOARD_LABEL_COLOR_OVERRIDES = {
-  'My_Bathroom_Smell_6': '#0d2f6b',  // dark blue
+  'My_Bathroom_Smell_Claude': '#0d2f6b',  // dark blue
   'jura_bridge_01':      '#5a2a0a',  // dark coffee brown
 };
 function _boardLabelColor(id) {
