@@ -41,7 +41,7 @@ get a confirm dialog before sending.
 
 Reference sketches:
 - ESP8266: `C:\Users\muroc\Arduino_Projects\RemoteXY_ESP8266_Claude\` (full HiveMQ-bridge example)
-- ESP32-C3: `C:\Users\muroc\Arduino_Projects\My_Bathroom_Smell_6\` (minimal Mosquitto-only example with AUTO-cycle pump state machine)
+- ESP32-C3: `C:\Users\muroc\Arduino_Projects\My_Bathroom_Smell_Claude\` (minimal Mosquitto-only example with AUTO-cycle pump state machine; sketch folder was renamed from `My_Bathroom_Smell_6` 2026-05-23, but the internal `device_id` constant + DB `esp_boards.id` + MQTT topic prefix all remain `My_Bathroom_Smell_6`)
 
 Copy the appropriate `Esp_Base.ino` into your new sketch folder (Arduino IDE
 merges all `.ino` files in the folder before compiling). Then in your `Main.h`:

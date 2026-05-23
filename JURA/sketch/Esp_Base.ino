@@ -1,7 +1,7 @@
 /*
  * Esp_Base.ino — ESP base for jura_bridge_01 (ESP32-C3).
  *
- * Same shape as the My_Bathroom_Smell_6 base block — pulls per-board
+ * Same shape as the My_Bathroom_Smell_Claude base block — pulls per-board
  * specifics from Main.h, owns the schema/avail/status/config/command/event
  * MQTT plumbing. Status payload publishes the JuraState struct fields so the
  * rule engine projects them into devices.last_state.dps.

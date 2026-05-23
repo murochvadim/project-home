@@ -8,7 +8,7 @@
  *   reconnect, HTTP /set_ip recovery, 1 Hz tick). BLE communication is in
  *   Jura_BLE.ino — driven once per loop tick from juraBleLoop().
  *
- *   Reference sketches: My_Bathroom_Smell_6 (the closest sibling), and
+ *   Reference sketches: My_Bathroom_Smell_Claude (the closest sibling), and
  *   RemoteXY_ESP8266_Claude (the original ESP base pattern).
  */
 
