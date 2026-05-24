@@ -146,6 +146,30 @@ CREATE INDEX power_attribution_ts ON power_attribution (ts DESC);
 
 Written by the Attribution rule on each Shelly reading (or downsampled). For the dashboard's "stacked bar by device" + "per-device daily kWh." Retention: **30 days, auto_clean** — derived from raw data + power_devices, can be rebuilt.
 
+### `power_billing_periods` — billing cycle history + bill reconciliation
+```sql
+CREATE TABLE power_billing_periods (
+  id                BIGSERIAL PRIMARY KEY,
+  start_ts          TIMESTAMPTZ NOT NULL,
+  end_ts            TIMESTAMPTZ,                -- NULL while current period is open
+  start_kwh_p1      NUMERIC,                    -- meter snapshot at period start
+  start_kwh_p2      NUMERIC,
+  start_kwh_p3      NUMERIC,
+  end_kwh_p1        NUMERIC,                    -- meter snapshot at period end
+  end_kwh_p2        NUMERIC,
+  end_kwh_p3        NUMERIC,
+  period_kwh        NUMERIC,                    -- (end - start) summed across phases (computed at close)
+  est_cost_ils      NUMERIC,                    -- our dashboard estimate using configured tariff
+  bill_received_ils NUMERIC,                    -- actual IEC bill amount (user enters when bill arrives)
+  bill_period_kwh   NUMERIC,                    -- kWh reported on actual IEC bill (sanity check)
+  source            TEXT,                       -- 'auto_rolled' | 'manual_synced_with_bill'
+  notes             TEXT
+);
+CREATE INDEX power_billing_periods_start ON power_billing_periods (start_ts DESC);
+```
+
+Written by the Power Billing Period Roll rule on heartbeat (60s). Captures the Shelly's cumulative kWh meter reading at each billing-cycle boundary. When the user receives their actual IEC bill, they enter `bill_received_ils` + `bill_period_kwh` via the dashboard — gives a feedback loop on whether our tariff config is accurate (estimate vs reality). Retention: **forever, low volume** (6 rows/year for a 2-month cycle).
+
 ### Virtual devices
 
 Registered in the existing `devices` table (`device_type='virtual'`, `protocol='virtual'`) so they appear like any other device + rules can subscribe to them:
@@ -313,12 +337,59 @@ Table of `power_devices`: device name, phase, samples, mean_w (or "cyclic"), con
 ### Card 5 — Active Anomaly Alerts
 Standard pattern (matches Project Health page): list of unresolved alerts where `alert_type LIKE 'power:%'`. Click an alert to expand for details.
 
-### Card 6 — Cost (optional)
-If user provides tariff config in `dashboard_settings.power.tariff`, show:
-- Daily / monthly estimated cost
-- Per-device cost breakdown (from per-device kWh × ₪/kWh)
-- If TAOZ (Israel time-of-use) tariff: peak vs off-peak split
-- Solar export credit (when/if PV is added — handled by `kwh_returned` field which Shelly already reports)
+### Card 6 — Cost + Billing Cycle
+
+#### Settings sub-card (collapsed by default, editable)
+- **Tariff type** — `flat` (single rate) or `taoz` (time-of-use peak/shoulder/off-peak)
+- **Flat rate** — `₪ per kWh` (Israel residential standard ≈ 0.66 ₪/kWh as of 2026; updates yearly via IEC publication)
+- **TAOZ rates** (if `type = taoz`) — peak / shoulder / off-peak rates + their hourly windows
+- **Fixed monthly fee** — `₪` (IEC residential ≈ 12 ₪/month; appears on every bill regardless of consumption)
+- **VAT %** — Israel standard 17%
+- **Green energy levy** — usually 0 for standard residential; populate if applicable
+- **Billing period length** — `months` (Israel residential default: **2**)
+- **Billing cycle start day** — day-of-month the cycle starts per the user's IEC reading schedule (varies by customer; on the bill it's listed as "תאריך קריאה")
+- **Current period start date** — auto-populated by the rollover rule; user can override once if needed to align with their actual IEC cycle
+
+Stored as `dashboard_settings.power.tariff` + `dashboard_settings.power.billing`.
+
+#### Current period sub-card
+```
+┌────────────────────────────────────────────────────────────┐
+│  Current Billing Period                                     │
+├────────────────────────────────────────────────────────────┤
+│  2026-04-15 → 2026-06-15  (day 38 of 60, 63% elapsed)      │
+│                                                             │
+│  Consumption so far:       312 kWh                          │
+│  Estimated cost so far:    ₪240.71  (incl. VAT + fixed fee)│
+│  Projected period cost:    ₪382 (linear extrapolation)     │
+│                                                             │
+│  Per-phase split:                                           │
+│    Phase 1: 187 kWh  (60%)                                  │
+│    Phase 2:  98 kWh  (31%)                                  │
+│    Phase 3:  27 kWh   (9%)                                  │
+└────────────────────────────────────────────────────────────┘
+```
+
+Color the "projected period cost" based on history — green if below avg of last 3 periods, amber within ±10%, red > 10% higher (helps spot a high-consumption period before the bill arrives).
+
+#### Top consumers this period sub-card
+Top 5 devices/categories by attributed kWh + ₪ cost this period. Lets the user see what's actually driving the bill.
+
+#### History + reconciliation sub-card
+Past billing periods table:
+
+| Period | Days | kWh | Est. ₪ | Actual ₪ (IEC bill) | Diff |
+|---|---|---|---|---|---|
+| 2026-02-15 → 2026-04-15 | 60 | 645 | ₪498.16 | ₪487.00 (entered manually) | -2.2% ✓ |
+| 2025-12-15 → 2026-02-15 | 62 | 712 | ₪549.84 | — | (no bill yet) |
+
+**Bill reconciliation:** when the IEC bill arrives, user enters the bill total + reported kWh on the row. The dashboard:
+- Shows estimate-vs-actual diff (validates the tariff config)
+- If diff > 10% consistently across 2+ periods → flag the tariff settings for review (IEC may have updated rates)
+- Optionally auto-suggest a corrected `flat_rate_ils_per_kwh` based on `bill_received_ils ÷ bill_period_kwh`
+
+#### Solar export (future)
+If/when PV panels are added, Shelly 3EM already reports `kwh_returned` (negative power = export to grid). The same data plumbing handles it; the cost card adds a "Net cost" row that nets credit against consumption per Israel's net-metering scheme. Not in scope today; baked into the schema so it lands naturally later.
 
 ## Rule engine integration
 
@@ -332,6 +403,7 @@ If user provides tariff config in `dashboard_settings.power.tariff`, show:
 | **Power Imbalance** | `power` | heartbeat (60 s) | Emits `power:phase_imbalance` alert when sustained imbalance detected |
 | **Power Phantom Load** | `power` | heartbeat (60 s) | Emits `power:phantom_load_spike` when background bucket too high |
 | **Power Device Mismatch** | `power` | wildcard (device events) | Emits `power:device_state_mismatch` |
+| **Power Billing Period Roll** | `power` | heartbeat (60 s) | When `now() > current_period.start_ts + period_months`: close current `power_billing_periods` row (snapshot end-kWh + compute period_kwh + compute est_cost_ils) and open the next one (snapshot start-kWh, NULL end_ts). Idempotent — only acts on the period boundary. |
 
 All rules sentence-tunable via Main Agent → Base Rule Settings — thresholds (`min_delta_w`, `voltage_low_v`, `voltage_high_v`, `imbalance_pct`, `phantom_load_w`, `mismatch_pct`, etc.) lifted out of Python and into authorable sentences.
 
@@ -350,7 +422,7 @@ All rules sentence-tunable via Main Agent → Base Rule Settings — thresholds 
 | 9 | CREATE `power_consumption` / `power_devices` / `power_attribution` tables + retention policies | LXC 102 | ⏳ |
 | 10 | Write Power Ingest rule (LXC 105) | RULES/rules/ | ⏳ |
 | 11 | Write Power Phase Discovery rule | RULES/rules/ | ⏳ |
-| 12 | Write remaining 6 power rules | RULES/rules/ | ⏳ |
+| 12 | Write remaining 7 power rules (incl. Power Billing Period Roll for P6) | RULES/rules/ | ⏳ |
 | 13 | Build Project Consumption page on dashboard | BOILER/dashboard/public/ | ⏳ |
 | 14 | Add sidebar link + status badge wiring | BOILER/dashboard/public/sidebar | ⏳ |
 
@@ -363,7 +435,7 @@ All rules sentence-tunable via Main Agent → Base Rule Settings — thresholds 
 | **P3 — Attribution** | ~1-2 days | Power Attribution rule + Card 2 (stacked bar) + Card 3 (daily kWh). End state: per-device live + historical consumption visible. |
 | **P4 — 3-Phase + Cyclic refinement** | ~1 day | Special rules for hob/AC1/AC2 and cyclic devices. End state: 3-phase appliances correctly attributed; washing machine / dishwasher / oven contribution dynamically tracked across cycle. |
 | **P5 — Alerts** | ~1 day | 5 power-quality + anomaly rules + Card 5 (alerts on Power page). End state: voltage / imbalance / phantom-load / device-mismatch monitoring live. |
-| **P6 — Cost** | ~0.5 day | Tariff config + Card 6. End state: daily / monthly ₪ visible. Optional. |
+| **P6 — Cost + Billing Cycle** | ~1-1.5 days | Tariff config + Israel 2-month billing cycle + `power_billing_periods` table + Power Billing Period Roll rule + Card 6 (settings + current period + top consumers + history with bill reconciliation). End state: live cost-so-far visible, projected period cost, ability to enter actual IEC bills for estimate-vs-reality feedback loop. |
 
 Total: ~6-7 days spread over a few weeks. Each phase is independently shippable + commits separately. P1 alone is a useful win (live 3-phase numbers on dashboard) even without the rest.
 
@@ -379,11 +451,12 @@ Total: ~6-7 days spread over a few weeks. Each phase is independently shippable 
 
 ## Open decisions
 
-1. **Tariff structure** — does user have TAOZ (time-of-use)? Single flat ₪/kWh? Affects Card 6 design. Defer to P6.
-2. **Cyclic-device auto-classification threshold** — `stddev_w / mean_w > 0.4`? Or stricter? Tune in P4 based on observed data.
-3. **Discovery confidence promotion thresholds** — what triggers 'none' → 'low' → 'medium' → 'high'? Suggest: 1+ samples = low, 5+ with stddev/mean < 0.3 = medium, 20+ with stddev/mean < 0.2 = high. Tune in P2.
-4. **Whether to skip Shelly Cloud entirely** — recommended but not required. User's choice.
-5. **Solar future-proofing** — Shelly 3EM reports `kwh_returned` (negative power = export). When PV gets added later, the same data plumbing works; just need a dashboard mode that shows generation vs consumption separately. Not a blocker; baked into the data model already.
+1. **Tariff structure** — locked: settings card supports both flat and TAOZ. Defaults: flat `0.66 ₪/kWh` (Israel residential standard ≈ 2026), fixed monthly fee `12 ₪`, VAT `17%`. User enters their actual rate from their last IEC bill at P6 build time.
+2. **Billing cycle** — locked: Israel residential **2-month cycle**, configurable start day. User enters the cycle start day from their last IEC bill (it's the "תאריך קריאה" / reading date on the bill). The Power Billing Period Roll rule handles cycle rollover automatically thereafter.
+3. **Cyclic-device auto-classification threshold** — `stddev_w / mean_w > 0.4`? Or stricter? Tune in P4 based on observed data.
+4. **Discovery confidence promotion thresholds** — what triggers 'none' → 'low' → 'medium' → 'high'? Suggest: 1+ samples = low, 5+ with stddev/mean < 0.3 = medium, 20+ with stddev/mean < 0.2 = high. Tune in P2.
+5. **Whether to skip Shelly Cloud entirely** — recommended but not required. User's choice.
+6. **Solar future-proofing** — Shelly 3EM reports `kwh_returned` (negative power = export). When PV gets added later, the same data plumbing works; just need a dashboard mode that shows generation vs consumption separately. Not a blocker; baked into the data model already.
 
 ## File / location index
 
