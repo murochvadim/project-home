@@ -225,6 +225,121 @@ On device state change (any device):
 - When hob/AC1/AC2 state changes, all three phases' deltas summed and attributed proportionally to that device
 - Doesn't go through `power_devices.phase` (which stays NULL)
 
+## Manual / unmanaged devices (no HA state, not in the rule engine)
+
+**The problem.** Plenty of devices in a real home consume meaningful power but have NO smart-control surface and NO state in `devices.last_state`:
+
+- **Fridge** — cycles compressor 24/7, no smart entity. ~60-120W when on, 0W when off, duty cycle ~25%.
+- **Wine fridge** — same shape. ~25-40W avg.
+- **Routers / modems / mesh APs** — always on. ~15-30W each, three or four of them in a typical home.
+- **Aquarium pump / heater** — always on.
+- **Phone chargers, USB hubs, plug adapters** — small individually but cumulative.
+- **TV/displays in standby** — small but always.
+- **Hair dryer, vacuum, blender** — intermittent, user-triggered, no automation.
+
+User reports observed ~350 W consumption while away (`home_mode='abroad'`) — that's all unmanaged. Without registering them, the entire 350 W sits in the `virtual:phase_<n>_background` bucket and the dashboard says "I have no idea what's going on" — exactly the situation the project is trying to fix.
+
+**The solution — manual device registry that slots into the existing pattern.**
+
+### Three categories of unmanaged device
+
+| Category | Examples | Power signature | How attribution treats it |
+|---|---|---|---|
+| **Always-on (continuous)** | Routers, modems, fish-tank pump, fridge LED, smoke detectors | Constant wattage 24/7 | Subtract `continuous_w` from the phase residual continuously |
+| **Cyclic (autonomous on/off)** | Fridge compressor, wine fridge, dehumidifier, water-circulation pump | Oscillates: peak_w when on, 0 when off, with rough duty cycle % | Subtract `time_avg_w = peak_w × duty_cycle_pct / 100` from the phase residual continuously. Approximate but stable over minutes. |
+| **Intermittent (user-triggered)** | Hair dryer, vacuum, blender, microwave | High peak when used (sometimes 1500-2500 W) but rare | Don't auto-subtract. User can mark which device caused a phase spike retroactively via the dashboard; rare enough that automated handling isn't worth the complexity. |
+
+### Storage pattern — leverage existing `devices` + `power_devices` tables
+
+For each manual entry, insert one row into the existing `devices` table:
+
+```sql
+INSERT INTO devices (id, name, protocol, device_type, dps_labels, dps_config)
+VALUES (
+  'manual_fridge',
+  'Fridge',
+  'virtual',                                            -- new virtual peer
+  'unmanaged_load',                                     -- NEW device_type value (alongside light, switch, presence, etc.)
+  '{"nominal_w":"Nominal W","duty_cycle":"Duty Cycle %","time_avg_w":"Time-avg W"}'::jsonb,
+  '{"phase":1,"load_type":"cyclic","peak_w":120,"duty_cycle_pct":25,"notes":"kitchen, single-door"}'::jsonb
+);
+```
+
+And a matching `power_devices` row:
+```sql
+INSERT INTO power_devices (device_id, phase, source, confidence, mean_w, notes)
+VALUES (
+  'manual_fridge',
+  1,
+  'manual_unmanaged',                                   -- NEW source value
+  'high',                                                -- manual entries treated as high-confidence by definition
+  30,                                                    -- time-averaged contribution (peak_w * duty_cycle / 100)
+  'Phase 1, cycle ~25% — avg 30W, peak 120W'
+);
+```
+
+Naming convention: `manual_<slug>` for the `devices.id`. Lowercase snake_case slug. Examples: `manual_fridge`, `manual_wine_fridge`, `manual_router_main`, `manual_router_office`, `manual_aquarium_pump`.
+
+### Why not just a free-text label?
+
+Putting these in `devices` (instead of, say, a separate `manual_loads` table) means:
+- They appear in the existing Device Agent's `devices.html` page like any other device
+- The attribution rule needs zero special-case code — just treats them as static devices with their `mean_w` (or `time_avg_w` for cyclics)
+- Rule sentences can reference them via `@Fridge` chip if you ever want a rule like "if fridge avg consumption changes by 30% → alert: door left open?"
+- Future: if user upgrades the fridge to a smart-plug, just flip `protocol='local'` and `device_type='power_plug'` — same row stays
+
+### Dashboard — manual entry UX
+
+Card 4 (Discovery Status Table) gets a new "+ Add Unmanaged Device" button next to the auto-discovered entries.
+
+Form fields:
+- **Name** (required, free text — becomes both display name + the auto-generated slug for `devices.id`)
+- **Phase** (1 / 2 / 3 — required)
+- **Load type** (always-on / cyclic / intermittent — required)
+- **Always-on wattage** (W) — shown if load type is always-on
+- **Peak wattage** (W) + **Duty cycle** (%) — shown if load type is cyclic
+- **Notes** (optional)
+
+Save creates the `devices` row + `power_devices` row in one transaction.
+
+Edit existing manual devices inline (click row → edit panel).
+
+### Phase residual after manual + auto entries
+
+```
+phase_observed_w   = e.g. 145 W (right now, while home_mode='abroad')
+
+minus all known managed devices on this phase that are ON   (e.g. nothing, since user is away)
+minus all manual always-on devices on this phase            (e.g. router 25 W + modem 15 W = 40 W)
+minus all manual cyclic devices' time_avg_w on this phase   (e.g. fridge 30 W)
+                                                              ─────
+                                                              70 W subtracted
+
+phase_background_w = 145 − 70 = 75 W       ← still unattributed
+```
+
+If `phase_background_w` is still high (e.g. 75 W on phase 1 while everything known is OFF), the user has more unmanaged devices to register. Iterative process.
+
+### Sanity check + alert: "still too much background"
+
+New alert (variant of `power:phantom_load_spike`):
+- **`power:unaccounted_background`** — when `virtual:phase_<n>_background > N W` sustained > 30 min AND `home_mode IN ('away','abroad')`
+- Severity: `info` (it's a forensic prompt, not an emergency)
+- Message: *"Phase N has X W of unaccounted load while you're away. Likely an unmanaged device that hasn't been registered yet."*
+- Threshold N is tunable per phase via sentence (default 50 W per phase)
+
+This is the productive feedback loop: every time the user finds and registers another unmanaged device, the background shrinks and the attribution becomes more accurate.
+
+### Migration path when a manual device becomes smart later
+
+If you eventually plug the fridge into a smart plug (Shelly Plug, Tuya plug, etc.):
+
+1. The smart plug gets its own `devices` row when it joins HA / device_agent
+2. Delete the `manual_fridge` row from `devices` (cascades to `power_devices`)
+3. Auto-discovery takes over for the smart-plugged fridge — measures actual wattage on each ON/OFF transition, no estimate needed
+
+No special migration code; just remove the manual entry when the device gains a smart surface.
+
 ## Tiny-draw devices (below Shelly's noise floor ~5-10 W)
 
 Three layered strategies:
@@ -331,8 +446,19 @@ Categories (mapped via the existing `device_type` field):
 - Always-on (router, modems, switches, background)
 - Other / unknown
 
-### Card 4 — Discovery Status Table
-Table of `power_devices`: device name, phase, samples, mean_w (or "cyclic"), confidence. Sortable. Highlights devices with `confidence='none'` or `'low'` (need more transitions). Manual-override button per row (lets the user force phase + mean_w if auto-discovery is stuck).
+### Card 4 — Discovery Status Table + Manual Device Registry
+Table of `power_devices`: device name, phase, source (`auto_discovered` / `manual_seed` / `manual_unmanaged`), samples, mean_w (or "cyclic"), confidence. Sortable.
+
+**Two action buttons at the top:**
+- **+ Add Unmanaged Device** — opens form to register a manual device (fridge, router, etc.) — see "Manual / unmanaged devices" section for the form fields + load types.
+- **+ Manual seed (known device)** — opens form to manually set phase + mean_w for an existing `devices` row that auto-discovery can't see (e.g. always-on smart device below noise floor).
+
+**Per-row actions:**
+- Edit (manual entries) — change wattage estimate or duty cycle if you observe drift
+- Delete (manual entries only — auto-discovered entries are managed by the engine)
+- Manual override (any row) — force phase + mean_w if auto-discovery is stuck
+
+Highlights devices with `confidence='none'` or `'low'` to flag where attribution is shaky.
 
 ### Card 5 — Active Anomaly Alerts
 Standard pattern (matches Project Health page): list of unresolved alerts where `alert_type LIKE 'power:%'`. Click an alert to expand for details.
@@ -404,6 +530,7 @@ If/when PV panels are added, Shelly 3EM already reports `kwh_returned` (negative
 | **Power Phantom Load** | `power` | heartbeat (60 s) | Emits `power:phantom_load_spike` when background bucket too high |
 | **Power Device Mismatch** | `power` | wildcard (device events) | Emits `power:device_state_mismatch` |
 | **Power Billing Period Roll** | `power` | heartbeat (60 s) | When `now() > current_period.start_ts + period_months`: close current `power_billing_periods` row (snapshot end-kWh + compute period_kwh + compute est_cost_ils) and open the next one (snapshot start-kWh, NULL end_ts). Idempotent — only acts on the period boundary. |
+| **Power Unaccounted Background** | `power` | heartbeat (60 s) | When `virtual:phase_<n>_background > threshold_w` sustained > 30 min AND `home_mode IN ('away','abroad')`: emit `power:unaccounted_background` alert (severity info). Threshold per-phase, sentence-tunable. Prompts user to register more unmanaged devices. |
 
 All rules sentence-tunable via Main Agent → Base Rule Settings — thresholds (`min_delta_w`, `voltage_low_v`, `voltage_high_v`, `imbalance_pct`, `phantom_load_w`, `mismatch_pct`, etc.) lifted out of Python and into authorable sentences.
 
@@ -422,7 +549,7 @@ All rules sentence-tunable via Main Agent → Base Rule Settings — thresholds 
 | 9 | CREATE `power_consumption` / `power_devices` / `power_attribution` tables + retention policies | LXC 102 | ⏳ |
 | 10 | Write Power Ingest rule (LXC 105) | RULES/rules/ | ⏳ |
 | 11 | Write Power Phase Discovery rule | RULES/rules/ | ⏳ |
-| 12 | Write remaining 7 power rules (incl. Power Billing Period Roll for P6) | RULES/rules/ | ⏳ |
+| 12 | Write remaining 8 power rules (incl. Power Billing Period Roll for P6 + Power Unaccounted Background for P5) | RULES/rules/ | ⏳ |
 | 13 | Build Project Consumption page on dashboard | BOILER/dashboard/public/ | ⏳ |
 | 14 | Add sidebar link + status badge wiring | BOILER/dashboard/public/sidebar | ⏳ |
 
@@ -431,13 +558,16 @@ All rules sentence-tunable via Main Agent → Base Rule Settings — thresholds 
 | Phase | Effort | What ships |
 |---|---|---|
 | **P1 — Ingest + Live Status** | ~1 day | Steps 5-9 + Card 1 on dashboard. End state: live 3-phase numbers visible on Project Consumption page; raw `power_consumption` time-series populating. No attribution yet. |
-| **P2 — Phase Discovery** | ~2 days | Steps 10-11 + Card 4 (discovery status table). End state: `power_devices` self-populating over the next week as devices toggle. |
-| **P3 — Attribution** | ~1-2 days | Power Attribution rule + Card 2 (stacked bar) + Card 3 (daily kWh). End state: per-device live + historical consumption visible. |
-| **P4 — 3-Phase + Cyclic refinement** | ~1 day | Special rules for hob/AC1/AC2 and cyclic devices. End state: 3-phase appliances correctly attributed; washing machine / dishwasher / oven contribution dynamically tracked across cycle. |
-| **P5 — Alerts** | ~1 day | 5 power-quality + anomaly rules + Card 5 (alerts on Power page). End state: voltage / imbalance / phantom-load / device-mismatch monitoring live. |
-| **P6 — Cost + Billing Cycle** | ~1-1.5 days | Tariff config + Israel 2-month billing cycle + `power_billing_periods` table + Power Billing Period Roll rule + Card 6 (settings + current period + top consumers + history with bill reconciliation). End state: live cost-so-far visible, projected period cost, ability to enter actual IEC bills for estimate-vs-reality feedback loop. |
+| **P2 — Manual Device Registry** | ~1 day | Card 4's "+ Add Unmanaged Device" form (always-on / cyclic / intermittent categories) + the `devices` row + `power_devices` row creation flow. User registers every known unmanaged device they're aware of (fridge, wine fridge, routers, modems, aquarium pump, etc.). End state: the always-on + cyclic baseline of the home is captured in `power_devices` BEFORE any auto-discovery starts. Iterative — user keeps registering devices as they realize they exist. |
+| **P3 — Auto-Discovery Rule** | ~2 days | Power Phase Discovery rule on LXC 105 + the discovery-status portion of Card 4 (auto-discovered rows). Now starts with the manual baseline in place, so per-device delta measurements are clean (fridge cycles already subtracted via time-averaged contribution). End state: `power_devices` self-populating over the next week as smart devices toggle. |
+| **P4 — Attribution** | ~1 day | Power Attribution rule + Card 2 (stacked bar) + Card 3 (daily kWh). Combines manual + auto-discovered entries. End state: per-device live + historical consumption visible. |
+| **P5 — 3-Phase + Cyclic refinement** | ~1 day | Special rules for hob/AC1/AC2 and cyclic devices. End state: 3-phase appliances correctly attributed; washing machine / dishwasher / oven contribution dynamically tracked across cycle. |
+| **P6 — Alerts** | ~1 day | 6 power-quality + anomaly rules (incl. unaccounted-background) + Card 5 (alerts on Power page). End state: voltage / imbalance / phantom-load / device-mismatch / unaccounted-background monitoring live. The unaccounted-background alert is what drives the iterative loop back to P2 ("still 200 W I can't see → register more"). |
+| **P7 — Cost + Billing Cycle** | ~1-1.5 days | Tariff config + Israel 2-month billing cycle + `power_billing_periods` table + Power Billing Period Roll rule + Card 6 (settings + current period + top consumers + history with bill reconciliation). End state: live cost-so-far visible, projected period cost, ability to enter actual IEC bills for estimate-vs-reality feedback loop. |
 
-Total: ~6-7 days spread over a few weeks. Each phase is independently shippable + commits separately. P1 alone is a useful win (live 3-phase numbers on dashboard) even without the rest.
+Total: ~7-8 days spread over a few weeks. Each phase is independently shippable + commits separately. P1 alone is a useful win (live 3-phase numbers on dashboard) even without the rest.
+
+**Why P2 (manual registry) comes before P3 (auto-discovery):** auto-discovery measures per-phase delta when smart devices toggle. If unmanaged cyclics (fridge compressor, wine fridge) cycle randomly during a smart device's transition window, they contaminate the measurement — the smart device gets credited for the fridge's 120 W. Registering manual cyclics first means their time-averaged contribution is already subtracted from each measurement → auto-discovery deltas are clean from sample #1. Also, P2 alone is useful: after P2 the dashboard's Card 4 lists all your known devices and you can see the registered baseline even before any auto-discovery runs.
 
 ## Integration with existing project
 
