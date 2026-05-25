@@ -83,25 +83,26 @@ A custom smartphone "app" tailored exactly to user's wishes:
 
 ## Lifecycle scenarios
 
-### Button press (e.g. "Open Gates", laptop off, user at the office)
+### Button press (e.g. v1's "Boiler Valve" toggle, laptop off, user at the office)
 
 ```
 Phone PWA
-  → POST http://<LXC-105-IP>:8089/api/mobile/action {"action_id": "open_gates"}
+  → POST http://<LXC-105-IP>:8089/api/mobile/action {"action_id": "boiler_valve_toggle"}
   (encrypted NetBird tunnel)
   →
 LXC 105 mobile-api
   → looks up action_id in dashboard_settings.connection.cockpit_buttons
-  → finds: protocol=esp, topic=mur/home/esp/gates_01/command, payload=gates_toggle
-  → publishes MQTT to LXC 107
+  → finds: action.type='ha_toggle', entity='switch.boiler_valve_switch_switch_1'
+  → reads current state from HA REST GET /api/states/switch.boiler_valve_switch_switch_1
+  → fires opposite via HA REST POST /api/services/switch/turn_{on,off}
   →
-LXC 107 mosquitto
-  → fans out to gates_01 ESP board
+HA on LXC 101
+  → driver dispatches the switch service to the boiler valve
   →
-Hardware: gates open
+Hardware: boiler valve flips state
 ```
 
-Laptop never touched.
+Laptop never touched. (The boiler agent may re-evaluate on its next run — see "Boiler valve manual toggle" safety note below.)
 
 ### Tile refresh (every 5 sec poll)
 
@@ -178,61 +179,92 @@ connection.telegram_rules    JSONB
 connection.mobile_api_auth   TEXT  (optional bearer token if we add token-auth)
 ```
 
-### `cockpit_buttons` shape
+### `cockpit_buttons` shape — v1
 
 ```json
 [
   {
-    "id": "open_gates",
-    "label": "Open Gates",
-    "icon": "🚪",
-    "color": "#27ae60",
-    "action": {
-      "type": "mqtt",
-      "topic": "mur/home/esp/gates_01/command",
-      "payload": "gates_toggle"
-    },
-    "order": 1
-  },
-  {
-    "id": "unlock_door",
-    "label": "Unlock Door",
-    "icon": "🔓",
+    "id": "boiler_valve_toggle",
+    "label": "Boiler Valve",
+    "icon": "🔥",
     "color": "#e67e22",
     "action": {
-      "type": "http",
-      "method": "POST",
-      "url": "http://192.168.1.187:3000/api/devices/face_01/command",
-      "body": {"action": "unlock_door"}
+      "type": "ha_toggle",
+      "entity": "switch.boiler_valve_switch_switch_1"
     },
-    "order": 2
-  },
-  …
+    "state_source": {"type": "ha_state", "entity": "switch.boiler_valve_switch_switch_1"},
+    "order": 1
+  }
 ]
 ```
 
-### `cockpit_tiles` shape
+Notes:
+- `action.type='ha_toggle'` is a new dispatch type mobile-api will handle: read current state of the HA entity, then call `switch.turn_on` or `switch.turn_off` accordingly. Single endpoint, no separate ON/OFF buttons needed.
+- `state_source` lets the button render its current state (e.g. lit green when valve is ON, grey when OFF) — read from HA's state for that entity on every cockpit poll.
+- Future button types: `mqtt` (publish to a topic), `http` (POST to a dashboard endpoint), `ha_service` (named HA service call with arbitrary `data`). All handled in mobile-api dispatch.
+
+### `cockpit_tiles` shape — v1
 
 ```json
 [
+  {
+    "id": "total_power",
+    "label": "Power",
+    "source": {"type": "db_field", "device_id": "shelly_3em_main", "dps": "total_w"},
+    "format": "{val} W",
+    "color_threshold": [{"max": 1000, "color": "green"}, {"max": 3000, "color": "amber"}, {"color": "red"}],
+    "order": 1
+  },
+  {
+    "id": "home_state",
+    "label": "Home",
+    "source": {"type": "shared_state", "key": "home_mode"},
+    "format": "{val|upper}",
+    "color_map": {"home": "#27ae60", "away": "#e67e22", "abroad": "#c0392b"},
+    "order": 2
+  },
+  {
+    "id": "people_count",
+    "label": "People",
+    "source": {"type": "db_field", "device_id": "virtual:people_home", "dps": "people_home"},
+    "fallback_value": "—",
+    "fallback_when": {"shared_state": "people_count_state", "equals": "transit"},
+    "format": "{val}",
+    "order": 3
+  },
+  {
+    "id": "last_room",
+    "label": "Last Motion",
+    "source": {"type": "db_field", "device_id": "virtual:home_activity", "dps": "last_motion_room"},
+    "format": "{val} · {ago}",
+    "order": 4
+  },
   {
     "id": "boiler_temp",
     "label": "Boiler",
     "source": {"type": "db", "query": "SELECT boiler_temp FROM raw_data ORDER BY ts DESC LIMIT 1"},
     "format": "{val:.1f}°C",
     "color_threshold": [{"max": 35, "color": "red"}, {"max": 45, "color": "amber"}, {"color": "green"}],
-    "order": 1
+    "order": 5
   },
   {
-    "id": "people_home",
-    "label": "People",
-    "source": {"type": "shared_state", "key": "people_home"},
-    "format": "{val}",
-    "order": 2
-  },
-  …
+    "id": "car_distance",
+    "label": "Car Distance",
+    "source": {"type": "db_field", "device_id": "virtual:phone_vadim", "dps": "distance_from_home_m"},
+    "format_dynamic": "if val < 1000 then '{val} m' else '{val/1000:.1f} km'",
+    "fallback_value": "Home",
+    "fallback_when": {"source_field": "at_home_zone", "equals": true},
+    "order": 6
+  }
 ]
 ```
+
+Notes:
+- `db_field` source type reads `last_state->>'<dps>'` from `devices` table where `id=<device_id>`. New helper to add in mobile-api.
+- `shared_state` source type reads from `rule_engine_state` table.
+- `db` source type runs an arbitrary read-only query (whitelist-validated by mobile-api).
+- `format_dynamic` for the car-distance tile lets the same field render as either meters or km depending on magnitude — implemented in cockpit.html JavaScript at render time.
+- `fallback_when` + `fallback_value` lets a tile show a chip ("Home" / "—") instead of a numeric value under specific conditions.
 
 ## Open decisions
 
@@ -242,28 +274,66 @@ connection.mobile_api_auth   TEXT  (optional bearer token if we add token-auth)
 | 2 | Which port? | 8089 | Must avoid existing ports |
 | 3 | Auth model | Trust NetBird (anyone with NetBird account access can reach LXC 105) | Phase 1: trust-net. Phase 2: add bearer token if multi-user |
 | 4 | Notifications channel | Telegram bot (Phase 4) | Web Push possible but iOS-fragile |
-| 5 | Buttons in v1 | TBD by user | See draft list below |
-| 6 | Tiles in v1 | TBD by user | See draft list below |
+| 5 | Buttons in v1 | **Locked 2026-05-24** — see v1 list below | — |
+| 6 | Tiles in v1 | **Locked 2026-05-24** — see v1 list below | — |
 
-## Draft button + tile lists for v1 (seed for the Connection tab)
+## v1 button + tile lists (locked 2026-05-24)
 
-Buttons (user can edit/reorder):
-1. Open Gates
-2. Unlock Door (FR-board action)
-3. Vacuum Roomba start
-4. Vacuum Roomba dock
-5. Music ▶ Play (current playlist)
-6. Music ⏹ Stop
-7. AWAY mode (toggle)
-8. HOME mode (toggle)
+### Tiles (6) — info surface
 
-Tiles:
-1. Boiler temp (°C)
-2. Panel temp (°C) — with valve state badge
-3. Home mode (HOME / AWAY / ABROAD)
-4. People home (count)
-5. Active rooms (csv)
-6. Time mode (morning / day / evening / night / late_night)
+| # | Tile | Source | Format |
+|---|---|---|---|
+| 1 | **Total Power Consumption** | `devices.last_state.total_w` for `shelly_3em_main` (depends on `POWER` module P1 — Shelly 3EM via HA → device_agent → devices table) | `{val} W` or `{val/1000} kW`, color-coded by threshold |
+| 2 | **Home State** | `rule_engine_state` shared key `home_mode` (managed by Mode Buttons rule) | Chip: `HOME` (green) / `AWAY` (orange) / `ABROAD` (red) — same palette as the existing Main Agent home-mode chip |
+| 3 | **People Count** | `devices.last_state.people_home` for virtual device `virtual:people_home` | Integer, or `—` when `people_count_state='transit'` |
+| 4 | **Last Room Seen** | `devices.last_state.last_motion_room` for `virtual:home_activity` (rule: Home Activity; falls back to `last_motion_zone` for apartment-vision V8+) | Room/zone name + relative timestamp (e.g. "Bedroom · 3 min ago") |
+| 5 | **Boiler Temp** | `SELECT boiler_temp FROM raw_data ORDER BY ts DESC LIMIT 1` | `{val:.1f}°C`, color-coded by threshold (red < 35°C cold, amber < 45°C, green ≥ 45°C — same palette as existing boiler agent surface) |
+| 6 | **Car Distance from Home** | New virtual device `virtual:phone_<user>` populated by a new "Owntracks Distance" rule (see implementation note below). Reads home lat/lon from `dashboard_settings.apartment.location` (already exists, same row that drives sun events for Home Time Periods rule). | `{val} m` if < 1 km, `{val/1000:.1f} km` otherwise, OR `Home` chip if inside home geofence radius |
+
+### Buttons (1) — control surface
+
+| # | Button | Action | Notes |
+|---|---|---|---|
+| 1 | **Boiler Valve On/Off** | Toggle HA entity `switch.boiler_valve_switch_switch_1` via mobile-api → HA REST. Cockpit shows current valve state + flips on click. | **Safety note below — boiler agent may re-evaluate and override.** |
+
+This is v1. Additional buttons/tiles (gates, door unlock, vacuum, music, etc. — from the earlier draft list) are deferred until v1 is shipped + working. Cockpit's whole architecture supports adding more later via the Connection tab UI; the Connection tab UI doesn't have to ship in v1 (`cockpit_buttons` + `cockpit_tiles` JSONB can be hand-edited in `dashboard_settings` for v1).
+
+### Implementation note 1 — Car distance tile (new piece)
+
+Tile 6 ("Car Distance from Home") is the only locked tile that doesn't already have a data source. Needs a small piece of plumbing:
+
+**New rule: `Owntracks Distance`** (group=`info`, triggers=`["*"]` with fast early-return for non-Owntracks events):
+
+- Subscribes to MQTT topic `owntracks/<user>/<device>` (published by Owntracks Android app once the user installs + configures it per the existing setup-priority "Phase 5a" in this doc).
+- On each location update, reads `lat` + `lon` from the payload.
+- Reads home `lat` + `lon` from `dashboard_settings.apartment.location` (existing — already used by `Home Time Periods` rule for sun events).
+- Reads home zone radius from a new knob sentence `Car Distance: home zone radius is N meters` (default 100 m, sentence-tunable in Main Agent → Base Rule Settings).
+- Computes haversine distance in meters.
+- Emits virtual event to `virtual:phone_<user>` device with:
+  - `distance_from_home_m` (int, meters)
+  - `at_home_zone` (bool — true if distance ≤ home_zone_radius_m)
+  - `last_location_ts`
+  - `lat`, `lon` (for future map view)
+- Registers `virtual:phone_<user>` in the existing `devices` table with `device_type='virtual'`, `protocol='virtual'`.
+
+Effort: ~1 hour. Boilerplate-shaped rule, no new infrastructure.
+
+Once Owntracks is installed and this rule lives on LXC 105, the cockpit tile reads `virtual:phone_vadim.last_state.distance_from_home_m` and renders it.
+
+### Implementation note 2 — Boiler valve manual toggle (safety)
+
+The boiler valve has an **autonomous agent** (`boiler-agent.service` on LXC 103, see `BOILER/CLAUDE.md`) that opens/closes the valve based on temperature trends + solar logic every N minutes. Manual toggle via the cockpit button fires an HA service call directly — same as if you'd toggled the switch in HA's UI.
+
+**Practical implication:** if you turn the valve ON manually via cockpit, the boiler agent will re-evaluate on its next run (typically 5-15 min later) and may turn it OFF if its decision logic disagrees (e.g. panel cooler than boiler). And vice-versa.
+
+The manual button is therefore useful for:
+- **Emergency turn-off** (regardless of agent state — safety override always wins)
+- **Temporary override** during agent's "no_action" / "disabled" / "hold" decision states
+- **Forced ON for testing** even though the agent would say no
+
+**Not in v1 scope but worth noting:** future enhancement could couple the manual toggle with a "pause boiler agent for N minutes" command — the cockpit toggle could send BOTH the valve-state change AND a `dashboard_settings.boiler.agent_paused_until=<timestamp>` write, which the agent checks before each run. Defer to v2.
+
+For v1: the button just toggles the HA entity. User is aware the agent owns the long-term state.
 
 ## Phase rollout
 
