@@ -4,13 +4,14 @@
 
 ## Purpose
 
-Bench rig that **captures, names, stores, and validates** wireless control signals across three protocol families, then makes the captured codes available to the rest of the project for future blaster boards.
+Bench rig that **captures, names, stores, and validates** wireless control signals across three protocol families + provides a **spectrum analyzer view** for diagnostics. Makes the captured codes available to the rest of the project for future blaster boards.
 
 | Mode | What it does | Underlying protocol concept |
 |---|---|---|
 | **IR** | Listen for any 38 kHz IR remote → decode → save with a name | Capture-and-replay (fixed codes, decoded by protocol — NEC, Sony, Daikin AC, Samsung TV, etc.) |
 | **RF** (433.92 MHz) | Listen for 433 MHz ASK/OOK transmissions → decode or save raw → name | Capture-and-replay (fixed codes — PT2262, EV1527, garage doors, doorbells, weather stations, simple remotes) |
 | **Somfy RTS** (433.42 MHz) | **NOT capture-and-replay** — Somfy uses rolling counters with AES-like encryption. Instead: **pair the rig as a NEW virtual remote** with each motor (one-time dance), then send up/down/stop commands from the assigned address. | Pair-then-control (rolling code, address-bound) |
+| **Spectrum** (387-464 MHz sweep) | Sweep the CC1101 across the entire 433 MHz band reading RSSI at each step; build a live frequency-vs-amplitude chart + optional waterfall. Diagnostic only — no decoding, just amplitude. | Tune-and-measure (CC1101's built-in RSSI register, swept across frequencies via PLL retune) |
 
 After save + validate, captured codes (IR + RF) and paired motors (Somfy) live in DB tables. Future blaster ESP boards consume from these tables via the existing `esp_boards` framework — no per-board code-storage logic.
 
@@ -72,7 +73,7 @@ Slots into the standard pattern documented in root `CLAUDE.md` → "Project Boar
 | `mur/home/esp/ir_rf_somfy_01/status` | board → broker | 60 s heartbeat + on-change (current mode, last captured frame summary, free heap, etc.) |
 | `mur/home/esp/ir_rf_somfy_01/event` | board → broker | **Each captured frame** (IR / RF / Somfy) — published as JSON for dashboard to consume |
 | `mur/home/esp/ir_rf_somfy_01/config` | broker → board | Parameter writes (e.g. switch mode, set Somfy frequency) |
-| `mur/home/esp/ir_rf_somfy_01/command` | broker → board | Action dispatch (`start_capture_ir`, `start_capture_rf`, `start_capture_somfy`, `transmit_ir <code_id>`, `transmit_rf <code_id>`, `somfy_pair <motor_id>`, `somfy_send <motor_id> <up|down|stop|my>`) |
+| `mur/home/esp/ir_rf_somfy_01/command` | broker → board | Action dispatch (`start_capture_ir`, `start_capture_rf`, `start_capture_somfy`, `start_spectrum_sweep <freq_start_hz> <freq_end_hz> <step_hz>`, `stop_spectrum_sweep`, `transmit_ir <code_id>`, `transmit_rf <code_id>`, `somfy_pair <motor_id>`, `somfy_send <motor_id> <up|down|stop|my>`) |
 
 Board ID convention: `ir_rf_somfy_01` (the `_01` allows future variants if needed). Sketch name: must contain "ESP32" so dashboard's OTA path detection picks port 3232 → `sketch_name = "IR_RF_Somfy_Tool_ESP32"`.
 
@@ -131,7 +132,7 @@ Retention: **forever** (~5-15 rows lifetime — one per motor in the home).
 
 ## Dashboard surface — new sub-tab on Project Boards page
 
-Inside the existing Project Boards page (`BOILER/dashboard/public/esp-boards.html`), when the user selects this rig's tab (`ir_rf_somfy_01`), four sub-tabs (mode selector is here):
+Inside the existing Project Boards page (`BOILER/dashboard/public/esp-boards.html`), when the user selects this rig's tab (`ir_rf_somfy_01`), five sub-tabs (mode selector is here):
 
 ### Sub-tab 1 — Capture / Pair (mode-selector)
 
@@ -139,8 +140,9 @@ Top of the sub-tab: **Mode picker** (radio buttons or segmented control):
 - **IR** (default)
 - **RF 433.92 MHz**
 - **Somfy 433.42 MHz**
+- **Spectrum 387-464 MHz** (diagnostic only — see sub-tab 5 for the actual chart UI; selecting "Spectrum" here just opens that sub-tab)
 
-Picking a mode sends a `command` MQTT message to the rig (`start_capture_ir`, `start_capture_rf`, `start_capture_somfy`). Rig reconfigures CC1101 frequency / disables CC1101 / enables TSOP38238 listening / etc. as appropriate.
+Picking a mode sends a `command` MQTT message to the rig (`start_capture_ir`, `start_capture_rf`, `start_capture_somfy`, `start_spectrum_sweep ...`). Rig reconfigures CC1101 frequency / disables CC1101 / enables TSOP38238 listening / starts sweep loop / etc. as appropriate. Only one mode active at a time (mutual-exclusive — CC1101 can't simultaneously sweep AND demod a fixed channel).
 
 **IR + RF modes** show:
 - Live "waiting for transmission..." indicator (animated dot)
@@ -193,6 +195,42 @@ For any `ir_rf_codes` row that isn't yet validated:
 
 Same workflow runs for Somfy motors implicitly: a motor's first successful Up/Down/Stop command after pairing counts as validation (`paired=true` already covers this).
 
+### Sub-tab 5 — Spectrum (diagnostic)
+
+Live frequency-vs-amplitude chart spanning the CC1101's accessible band on this PCB. Used purely for **diagnostics** — finding interference, confirming a transmitter is alive, locating off-spec carrier frequencies, watching channel utilization.
+
+**Controls at the top:**
+- **Sweep range:** start / end frequencies, default `425 MHz → 450 MHz` (covers standard 433 + Somfy 433.42 with margin). User can narrow (`433.0 → 434.0` MHz for zoomed-in view of standard 433 traffic) or widen (`387 → 464` for full PCB-accessible range).
+- **Step size:** default 100 kHz; finer (50 kHz, ~512 samples per sweep) or coarser (200 kHz, ~125 samples) configurable. Finer = better frequency resolution, slower sweep rate.
+- **Start sweep** / **Stop sweep** buttons.
+- **Mode:** **Line** (instantaneous spectrum, one trace per sweep) OR **Waterfall** (time × frequency × amplitude rendered as a scrolling heatmap, last ~60 s of sweeps stacked).
+- **Peak hold** toggle — keeps the max amplitude seen at each frequency since sweep started (useful for catching brief transmissions).
+- **Markers:** click anywhere on the chart to place a vertical marker showing the exact frequency + amplitude at that point. Common preset markers: 433.42 MHz (Somfy), 433.92 MHz (standard RF).
+
+**Chart rendering:**
+- Y-axis: amplitude in dBm (typically -110 dBm noise floor → -30 dBm strong signal, ~80 dB dynamic range)
+- X-axis: frequency in MHz
+- Line trace: current sweep (updates ~5-7 Hz)
+- Peak-hold trace: lighter color overlay
+- Waterfall (when enabled): below the line chart, scrolling heatmap with color = amplitude (blue cold = low, red hot = high)
+
+**Data flow:**
+- Rig publishes per-sweep amplitude array to `mur/home/esp/ir_rf_somfy_01/event` with `kind=spectrum_sweep` payload containing `{freq_start, freq_end, step, amplitudes_dbm[]}`
+- Dashboard subscribes via the existing browser MQTT WebSocket (port 9001), renders with Chart.js
+- ~5-7 sweeps/sec = ~25-50 KB/s of MQTT traffic. Manageable but worth noting if Mosquitto is under load.
+
+**Practical workflow examples:**
+- *"Why isn't my Somfy command working?"* → Switch to Spectrum, narrow range to 433.0-434.0 MHz. Press Somfy remote — see a burst at 433.42 ± a few kHz. Confirms TX is alive. Switch back to Somfy mode + retry pair-and-control.
+- *"Is there 433 MHz interference at this site?"* → Sweep full 425-450 MHz with Peak Hold enabled for 5 minutes. Identify any persistent peaks (a weather station, an alarm sensor, neighbor's gate). Tells you which devices you're competing with.
+- *"What frequency does this unknown remote transmit on?"* → Press the remote button while watching the spectrum. The peak frequency on the chart IS its carrier. Then narrow the sweep there + switch to RF capture mode.
+
+**Limitations (called out clearly so user doesn't expect lab-grade behavior):**
+- **PCB band-locked to 387-464 MHz** — your module can't sweep 315 or 868 MHz even though the CC1101 chip CAN; the matching network only resonates in the 433 band
+- **Sweep speed: ~5-7 Hz full sweep** — fast transient signals (sub-100 ms transmissions, rare for home remotes but common for some protocols) may be missed between sweeps. Use Peak Hold to catch them.
+- **Resolution bandwidth: ~58-812 kHz** — two narrow signals within ~100 kHz of each other will smear together
+- **Single channel at a time** — not a true wideband SDR; the chip tunes to one frequency, reads RSSI, tunes to next. SDR-class devices (HackRF, RTL-SDR) sweep millions of points per second; this is hundreds per second.
+- **Amplitude only, no demodulation** — Spectrum mode does NOT capture data. To actually read what's transmitting, switch to RF or Somfy capture mode.
+
 ## Capture flow — protocol detail
 
 ### IR capture
@@ -227,6 +265,19 @@ Same workflow runs for Somfy motors implicitly: a motor's first successful Up/Do
 3. Counter incremented + persisted to NVS + DB
 4. CC1101 tunes to 433.42 MHz, transmits
 5. Motor responds (move up/stop/down/preset position "My")
+
+### Spectrum sweep
+1. User enters Spectrum sub-tab, sets sweep range + step size, clicks **Start sweep**
+2. Dashboard sends `start_spectrum_sweep <freq_start_hz> <freq_end_hz> <step_hz>` command
+3. Rig configures CC1101 for RX mode at first frequency, reads RSSI register, retunes to next frequency, repeats until end of range
+4. After full sweep complete (~150-200 ms for default 425-450 MHz @ 100 kHz step): rig publishes amplitude array via `/event` topic with `kind=spectrum_sweep`
+5. Rig immediately starts next sweep (continuous loop) until `stop_spectrum_sweep` received
+6. Dashboard accumulates sweeps for waterfall display + renders current sweep as line trace
+7. User clicks **Stop sweep** → rig stops loop, returns to idle (CC1101 sleeps)
+
+**Implementation note:** the sweep loop runs on the ESP32's main loop alongside MQTT/WiFi handling. Each `CC1101.setFrequency()` + RSSI read takes ~150 µs (settle time + 1 SPI register read). 770-step sweep across 387-464 MHz at 100 kHz steps takes ~115 ms. Plus MQTT publish overhead. Comfortable 5-7 Hz frame rate to dashboard. ESP32 stays responsive to other tasks (WiFi keepalive, MQTT subscribe, OTA).
+
+**Mutual exclusivity:** Spectrum mode is incompatible with simultaneous RF or Somfy capture (CC1101 is sweeping, not demodulating). IR capture still works in parallel (separate hardware path — TSOP38238 is independent of CC1101). So you can have Spectrum running while still capturing IR remote presses if needed.
 
 ## Validation flow
 
@@ -277,10 +328,11 @@ Defer this decision to when the first Somfy blaster board is built. For the benc
 | **P1 — Sketch + IR-only mode** | ~2 days | ESP32 + TSOP38238 + IR LED wired. Sketch boots, joins WiFi+MQTT, captures IR frames, publishes to `/event`. Dashboard sub-tab shows live captures with name + save form. First IR code in DB. |
 | **P2 — RF 433.92 MHz mode** | ~1-2 days | CC1101 wired + tuned to 433.92 MHz. Mode-selector + RF capture flow. First RF code in DB (test target: any cheap doorbell). |
 | **P3 — Somfy 433.42 MHz mode + pairing dance** | ~2 days | Somfy library integrated. `somfy_motors` table active. Dashboard Somfy sub-tab with add-motor + pair flow. First real motor paired + driving up/down. |
-| **P4 — Validate flow + dashboard polish** | ~1 day | Validate sub-tab. Edit/delete on saved codes. Filter + sort on saved codes. Pretty rendering of decoded codes (showing AC parameters for Daikin etc.). |
-| **P5 (later) — Build first dedicated blaster board** | varies | Separate sketch (e.g. `Maya_AC_Blaster_Claude`), consumes from `ir_rf_codes`. Phase 5 is a separate module per blaster, not part of this spec. |
+| **P4 — Spectrum analyzer mode** | ~1-2 days | CC1101 sweep loop + RSSI read + amplitude-array MQTT publish. Dashboard 5th sub-tab "Spectrum" with Chart.js line chart + waterfall mode + peak hold + markers. Useful diagnostic for the rest of the tool — recommend doing this BEFORE the rest if Somfy pairing or RF capture proves flaky, because spectrum is the right tool to see "is the device even transmitting?". |
+| **P5 — Validate flow + dashboard polish** | ~1 day | Validate sub-tab. Edit/delete on saved codes. Filter + sort on saved codes. Pretty rendering of decoded codes (showing AC parameters for Daikin etc.). |
+| **P6 (later) — Build first dedicated blaster board** | varies | Separate sketch (e.g. `Maya_AC_Blaster_Claude`), consumes from `ir_rf_codes`. Phase 6 is a separate module per blaster, not part of this spec. |
 
-Total bench tool effort: ~6-7 days spread over a few weeks. Each phase independently shippable. P1 alone is useful (IR capture working end-to-end).
+Total bench tool effort: ~7-9 days spread over a few weeks. Each phase independently shippable. P1 alone is useful (IR capture working end-to-end). **Tip:** if P3 (Somfy pairing) gives trouble, jump ahead to P4 (Spectrum) first — being able to see the actual RF activity on the band makes debugging a stuck pairing dance much easier than debugging blind.
 
 ## Open decisions
 
