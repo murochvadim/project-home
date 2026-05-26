@@ -1818,6 +1818,17 @@ app.post('/api/corridor-sim/set-home-mode', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Auto falling-edge delay — when value=true, the endpoint schedules a synthetic
+// "no presence" event this many ms later. Reason: the simulator publishes
+// directly to MQTT, bypassing device-agent. Device-agent never sees the
+// synthetic "presence", so when the real sensor reports its identical "none"
+// (which it already was), device-agent's dedup drops the event silently.
+// The rule engine never sees a falling-edge → move_in_corridor.last_presence
+// stays at 'presence' forever → next simulator click is silently swallowed.
+// Auto-firing a synthetic "none" closes the loop so each press is a complete
+// rising+falling cycle. 5 s matches a brief real-life walk-through.
+const CORRIDOR_SIM_AUTO_FALLING_EDGE_MS = 5000;
+
 app.post('/api/corridor-sim/trigger-presence', async (req, res) => {
   try {
     const value = req.body && (req.body.value === true || req.body.value === 'true');
@@ -1837,7 +1848,33 @@ app.post('/api/corridor-sim/trigger-presence', async (req, res) => {
       [JSON.stringify(dps), CORRIDOR_SIM_IDS.presence]
     );
     mqttClient.publish(topic, JSON.stringify(dps), { qos: 1 });
-    res.json({ ok: true, published: topic, payload: dps });
+
+    // Schedule the falling-edge if we just fired a rising-edge. No-op for the
+    // manual "Absent" button — that already IS a falling-edge.
+    if (value === true) {
+      setTimeout(async () => {
+        try {
+          const fallingDps = { '1': 'none' };
+          await db.query(
+            `INSERT INTO device_events (ts, device_id, source, dps) VALUES (now(), $1, 'event', $2::jsonb)`,
+            [CORRIDOR_SIM_IDS.presence, JSON.stringify(fallingDps)]
+          );
+          await db.query(
+            `UPDATE devices SET last_state = COALESCE(last_state,'{}'::jsonb) || $1::jsonb,
+                                last_seen = now(),
+                                last_source = 'event'
+              WHERE id = $2`,
+            [JSON.stringify(fallingDps), CORRIDOR_SIM_IDS.presence]
+          );
+          mqttClient.publish(topic, JSON.stringify(fallingDps), { qos: 1 });
+          console.log(`corridor-sim: auto falling-edge fired (T+${CORRIDOR_SIM_AUTO_FALLING_EDGE_MS}ms after rising-edge)`);
+        } catch (e) {
+          console.error('corridor-sim: auto falling-edge failed:', e.message);
+        }
+      }, CORRIDOR_SIM_AUTO_FALLING_EDGE_MS);
+    }
+
+    res.json({ ok: true, published: topic, payload: dps, auto_falling_edge_ms: value === true ? CORRIDOR_SIM_AUTO_FALLING_EDGE_MS : null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
