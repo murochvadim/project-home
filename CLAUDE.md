@@ -42,6 +42,7 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - Do NOT look for pm2 or ecosystem.config.js on any LXC
 - **Batch all server.js changes before restarting — restart once at the end, never after each edit**
 - `HA_TOKEN` auto-refreshed from `.env` with 5-min TTL cache (`getHaToken()`) — no restart needed after token update
+- **Windows-boot auto-start (PERMANENT FIX 2026-05-26):** the file `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\pm2-start.vbs` runs at user logon and does `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js` — re-reads `.env` FRESH every boot. **Do NOT revert this to `pm2 resurrect`** — `resurrect` reads from `~/.pm2/dump.pm2` which is a stale snapshot of env vars from whenever `pm2 save` was last run (typically weeks/months old), causing recurring crash-loops with "FATAL: <KEY> not set in environment" after any `.env` change followed by a Windows reboot. Repo-tracked copy at `BOILER/dashboard/pm2-start.vbs` — if the Startup-folder VBS is ever broken or corrupted, copy from there to restore. Boot log: `%USERPROFILE%\.pm2\startup.log`. See [[incident_pm2_resurrect_stale_env]] memory for full diagnosis history.
 
 ### Dashboard Pages (all served from `BOILER/dashboard/public/`)
 | Page | File | Purpose |
