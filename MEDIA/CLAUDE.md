@@ -30,8 +30,9 @@ The Alexa Devices tab on the same Media Agents page is **NOT served by LXC 100**
 | `scripts/ingest_service.py` | `/opt/media-agent/ingest_service.py` |
 | `scripts/embed_crop.py` | `/opt/media-agent/embed_crop.py` |
 | `scripts/auto_scan.sh` | `/opt/media-agent/auto_scan.sh` |
+| **`MEDIA/agent/analyzer.py`** (since 2026-05-26) | `/opt/media-agent/analyzer.py` |
 
-`analyzer.py` is **patched directly on LXC 100** — no local copy is source of truth. After any patch: `systemctl restart analyzer` required (it's a persistent process).
+**analyzer.py is now in repo (since 2026-05-26).** Previously it was patched directly on LXC 100 with no version-controlled source — that drift caused fixes to be lost across reinstalls and made bug triage harder. Pulled into repo + deployed during the 2026-05-26 NFS-permission-self-heal patch. After any patch: `scp MEDIA/agent/analyzer.py root@192.168.1.138:/opt/media-agent/analyzer.py && ssh root@192.168.1.138 'systemctl restart analyzer'`.
 
 ## Supporting Scripts on LXC 100 (not in local repo)
 

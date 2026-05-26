@@ -279,18 +279,29 @@ class HAApiAdapter(DeviceAdapter):
         # entries, so subtract them).
         tuya_count = len(self._entity_map) - len(self._smartthings_ids) - added
         st_count   = len(self._smartthings_ids)
-        regression = (
+        # `both_empty` catches the first-build-after-fresh-restart-while-HA-still-loading
+        # case, where _last_good_* are both 0 (initial state) and tuya_count + st_count
+        # are both 0 → the regression check below would incorrectly mark the build healthy
+        # because there's no high-water mark to compare against. Without this guard, a
+        # device-agent restart that lands during HA's boot results in a permanently
+        # bricked bridge (zero entities mapped, watchdog never triggers) — the exact
+        # failure mode that caused the 2026-05-18 to 2026-05-26 silent zwave/Ring/Tuya
+        # outage. Marking 0+0 as unhealthy makes the watchdog force a reconnect after 60s,
+        # at which point HA is reliably up and the rebuild succeeds.
+        both_empty = (tuya_count == 0 and st_count == 0)
+        regression = both_empty or (
             (self._last_good_tuya_count > 0 and tuya_count == 0) or
             (self._last_good_st_count   > 0 and st_count   == 0)
         )
         if regression:
             self._entity_build_healthy = False
-            log.warning(
-                'HA map: regression detected — tuya %d→%d, smartthings %d→%d '
-                '(HA likely not fully ready; watchdog will retry)',
-                self._last_good_tuya_count, tuya_count,
-                self._last_good_st_count,   st_count,
+            reason = 'both empty (HA likely still loading)' if both_empty else (
+                'tuya %d→%d, smartthings %d→%d' % (
+                    self._last_good_tuya_count, tuya_count,
+                    self._last_good_st_count,   st_count,
+                )
             )
+            log.warning('HA map: build unhealthy — %s (watchdog will retry)', reason)
         else:
             self._entity_build_healthy = True
             # Update high-water marks only on healthy builds.
