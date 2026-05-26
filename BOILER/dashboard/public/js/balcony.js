@@ -1162,3 +1162,241 @@
     bcLoadDisplays();
   });
 })();
+
+// ════════════════════════════════════════════════════════════════════════════
+// Star Projector tab — direct Tuya local DPS via POST /api/devices/:id/dps
+// Self-contained IIFE; does not touch the panel/smart-switch module above.
+// ════════════════════════════════════════════════════════════════════════════
+(function () {
+  'use strict';
+
+  const SP_DEVICE_NAME = 'Star Projector';
+  let SP_DEVICE_ID = null;        // resolved on first init
+  let SP_STATE = {};              // last_state cached from /api/devices
+  let SP_LAST_SEEN = null;        // ISO string from /api/devices
+  let SP_IP = null;
+  let SP_BRIGHT_TOUCH_TS = 0;     // debounce for live slider repaint
+  let SP_POLL_TIMER = null;
+  let SP_INITED = false;
+
+  // Tuya Cloud "WIFI Star Projector 2" datapoints — labels mirror dps_labels:
+  //   20 Power (bool), 21 Mode (enum: white|colour|scene|music),
+  //   22 Brightness (int 10..1000), 24 Colour (hex string HHHHSSSSVVVV),
+  //   25 Scene (string id), 26 Timer (int seconds), 101/102/103 (unknown).
+
+  const SP_MODES   = ['white', 'colour', 'scene', 'music'];
+  const SP_SCENES  = [
+    // From Tuya cloud scene presets (id ordering matches Tuya app). Names are
+    // guesses; the cloud `scene_data` for this product is a multi-segment HSV
+    // payload — for now we let the device use its built-in scene by id.
+    { id: '1',  label: 'Aurora' },
+    { id: '2',  label: 'Galaxy' },
+    { id: '3',  label: 'Ocean' },
+    { id: '4',  label: 'Forest' },
+    { id: '5',  label: 'Sunset' },
+    { id: '6',  label: 'Party' },
+    { id: '7',  label: 'Pulse' },
+    { id: '8',  label: 'Calm' },
+  ];
+
+  // ── helpers ────────────────────────────────────────────────────────────
+  async function spFetchDevice() {
+    const r = await fetch('/api/devices');
+    if (!r.ok) throw new Error('GET /api/devices ' + r.status);
+    const list = await r.json();
+    const dev = list.find(d => d.name === SP_DEVICE_NAME);
+    if (!dev) throw new Error(`Device "${SP_DEVICE_NAME}" not in /api/devices`);
+    SP_DEVICE_ID = dev.id;
+    SP_STATE     = dev.last_state || {};
+    SP_LAST_SEEN = dev.last_seen || null;
+    SP_IP        = dev.local_ip || null;
+    return dev;
+  }
+
+  async function spSendDps(dpsObj) {
+    if (!SP_DEVICE_ID) await spFetchDevice();
+    const r = await fetch(`/api/devices/${SP_DEVICE_ID}/dps`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ dps: dpsObj }),
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error(`POST /dps failed (${r.status}): ${txt}`);
+    }
+    // Optimistic repaint — actual state lands within ~2 s via poll.
+    Object.assign(SP_STATE, dpsObj);
+    spRender();
+    return r.json();
+  }
+
+  // ── colour conversion (browser RGB hex ↔ Tuya HSV 12-hex) ──────────────
+  // Tuya HSV string: 4 hex chars H (0–360) + 4 hex chars S (0–1000) + 4 hex chars V (0–1000)
+  function rgbToHsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, v = max;
+    const d = max - min;
+    s = max === 0 ? 0 : d / max;
+    if (max === min) h = 0;
+    else {
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        case b: h = (r - g) / d + 4; break;
+      }
+      h /= 6;
+    }
+    return { h: Math.round(h * 360), s: Math.round(s * 1000), v: Math.round(v * 1000) };
+  }
+  function hsvToRgb(h, s, v) {
+    h /= 360; s /= 1000; v /= 1000;
+    let r, g, b;
+    const i = Math.floor(h * 6);
+    const f = h * 6 - i;
+    const p = v * (1 - s);
+    const q = v * (1 - f * s);
+    const t = v * (1 - (1 - f) * s);
+    switch (i % 6) {
+      case 0: r = v; g = t; b = p; break;
+      case 1: r = q; g = v; b = p; break;
+      case 2: r = p; g = v; b = t; break;
+      case 3: r = p; g = q; b = v; break;
+      case 4: r = t; g = p; b = v; break;
+      case 5: r = v; g = p; b = q; break;
+    }
+    return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+  }
+  function hex4(n) { return n.toString(16).padStart(4, '0'); }
+  function tuyaHsvFromHex(hex) {
+    // hex = "#rrggbb"
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const { h, s, v } = rgbToHsv(r, g, b);
+    return hex4(h) + hex4(s) + hex4(v);
+  }
+  function hexFromTuyaHsv(s) {
+    if (!s || s.length < 12) return null;
+    const h = parseInt(s.slice(0, 4),  16);
+    const sat = parseInt(s.slice(4, 8),  16);
+    const v = parseInt(s.slice(8, 12), 16);
+    const { r, g, b } = hsvToRgb(h, sat, v);
+    return '#' + [r, g, b].map(n => n.toString(16).padStart(2, '0')).join('');
+  }
+
+  // ── render ─────────────────────────────────────────────────────────────
+  function fmtAge(iso) {
+    if (!iso) return '—';
+    const ageSec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (ageSec < 60)   return ageSec + 's ago';
+    if (ageSec < 3600) return Math.floor(ageSec / 60) + ' min ago';
+    if (ageSec < 86400) return Math.floor(ageSec / 3600) + ' h ago';
+    return Math.floor(ageSec / 86400) + ' d ago';
+  }
+  function spRender() {
+    const dot     = document.getElementById('sp-online-dot');
+    const txt     = document.getElementById('sp-online-text');
+    const ipEl    = document.getElementById('sp-ip');
+    const seenEl  = document.getElementById('sp-last-seen');
+    if (ipEl)   ipEl.textContent   = SP_IP || '—';
+    if (seenEl) seenEl.textContent = fmtAge(SP_LAST_SEEN);
+    const fresh = SP_LAST_SEEN && (Date.now() - new Date(SP_LAST_SEEN).getTime()) < 10 * 60 * 1000;
+    if (dot) dot.style.color = fresh ? '#3a7d44' : '#c0392b';
+    if (txt) { txt.textContent = fresh ? 'online' : 'offline'; txt.style.color = fresh ? '#3a7d44' : '#c0392b'; }
+
+    // Mode buttons — highlight active
+    const mode = String(SP_STATE['21'] || '').toLowerCase();
+    document.querySelectorAll('#sp-mode-row .sp-mode').forEach(b => {
+      if (b.dataset.mode === mode) { b.style.background = '#3a7d44'; b.style.color = '#fff'; b.style.borderColor = '#3a7d44'; }
+      else { b.style.background = ''; b.style.color = ''; b.style.borderColor = ''; }
+    });
+
+    // Brightness — repaint slider only if user isn't actively dragging
+    if (Date.now() - SP_BRIGHT_TOUCH_TS > 3000) {
+      const v = parseInt(SP_STATE['22'], 10);
+      if (Number.isFinite(v)) {
+        const s = document.getElementById('sp-bright');
+        const o = document.getElementById('sp-bright-val');
+        if (s) s.value = v;
+        if (o) o.textContent = v;
+      }
+    }
+
+    // Colour preview
+    const rawColour = SP_STATE['24'];
+    const hex = rawColour ? hexFromTuyaHsv(rawColour) : null;
+    const pv = document.getElementById('sp-colour-preview');
+    const hx = document.getElementById('sp-colour-hex');
+    if (pv && hex) pv.style.background = hex;
+    if (hx) hx.textContent = rawColour || '—';
+    const picker = document.getElementById('sp-colour-picker');
+    if (picker && hex && document.activeElement !== picker) picker.value = hex;
+
+  }
+
+  function spRenderScenes() {
+    const row = document.getElementById('sp-scene-row');
+    if (!row) return;
+    row.innerHTML = SP_SCENES.map(s =>
+      `<button class="btn-test" onclick="spSetScene('${s.id}')">${s.label}</button>`
+    ).join('');
+  }
+
+  // ── public click handlers (window-scoped for inline onclick) ───────────
+  window.spPower = async (on) => {
+    try { await spSendDps({ '20': !!on }); }
+    catch (e) { alert('Power failed: ' + e.message); }
+  };
+  window.spSetMode = async (mode) => {
+    if (!SP_MODES.includes(mode)) return;
+    try { await spSendDps({ '21': mode }); }
+    catch (e) { alert('Mode failed: ' + e.message); }
+  };
+  window.spOnBrightInput = (val) => {
+    SP_BRIGHT_TOUCH_TS = Date.now();
+    const o = document.getElementById('sp-bright-val');
+    if (o) o.textContent = val;
+  };
+  window.spSetBrightness = async (val) => {
+    SP_BRIGHT_TOUCH_TS = Date.now();
+    const v = Math.max(10, Math.min(1000, parseInt(val, 10) || 500));
+    try { await spSendDps({ '22': v }); }
+    catch (e) { alert('Brightness failed: ' + e.message); }
+  };
+  window.spSetColourFromPicker = async (hex) => {
+    const tuyaHsv = tuyaHsvFromHex(hex);
+    try { await spSendDps({ '21': 'colour', '24': tuyaHsv }); }
+    catch (e) { alert('Colour failed: ' + e.message); }
+  };
+  window.spSetScene = async (id) => {
+    try { await spSendDps({ '21': 'scene', '25': id }); }
+    catch (e) { alert('Scene failed: ' + e.message); }
+  };
+  // ── init + poll ────────────────────────────────────────────────────────
+  async function spInit() {
+    if (SP_INITED) return;
+    SP_INITED = true;
+    spRenderScenes();
+    try {
+      await spFetchDevice();
+      spRender();
+    } catch (e) {
+      console.error('[star-projector] init failed:', e);
+      const txt = document.getElementById('sp-online-text');
+      if (txt) { txt.textContent = 'init failed: ' + e.message; txt.style.color = '#c0392b'; }
+    }
+    SP_POLL_TIMER = setInterval(async () => {
+      try { await spFetchDevice(); spRender(); }
+      catch (_) { /* swallow transient failures */ }
+    }, 5000);
+  }
+
+  // Hook into showTab: lazy-init when user first opens the tab.
+  const _prevShowTab = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTab === 'function') _prevShowTab(name, btn);
+    if (name === 'star-projector') spInit();
+  };
+})();
+

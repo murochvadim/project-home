@@ -97,6 +97,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('panel', this)">Panel</button>
     <button class="tab-btn" onclick="showTab('smart-switch', this)">Balcony Smart Switch</button>
+    <button class="tab-btn" onclick="showTab('star-projector', this)">Star Projector</button>
   </div>
 
   <div class="tab-panel active" id="tab-panel">
@@ -205,6 +206,72 @@
     </div>
 
   </div>
+
+  <!-- ════════════════════════════════════════════════════ -->
+  <!-- TAB: Star Projector — Tuya WIFI Star Projector 2 (direct DPS) -->
+  <!-- ════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-star-projector">
+
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">Star Projector <span id="sp-online-dot" title="freshness" style="font-size:0.85rem;color:#aaa;">●</span> <span id="sp-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">loading…</span></h2>
+        <span style="font-size:0.82rem;color:#666;">IP <b id="sp-ip">—</b></span>
+        <span style="font-size:0.82rem;color:#666;">Last seen: <b id="sp-last-seen">—</b></span>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="spPower(true)">On</button>
+          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="spPower(false)">Off</button>
+        </div>
+      </div>
+      <div style="font-size:0.78rem;color:#777;margin-top:6px;">
+        Tuya WIFI Star Projector 2 · local TCP · all controls write to <code>/api/devices/&lt;id&gt;/dps</code>
+      </div>
+    </div>
+
+    <!-- Mode -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.0rem;">Mode <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 21)</span></h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;" id="sp-mode-row">
+        <button class="btn-test sp-mode" data-mode="white"  onclick="spSetMode('white')">White</button>
+        <button class="btn-test sp-mode" data-mode="colour" onclick="spSetMode('colour')">Colour</button>
+        <button class="btn-test sp-mode" data-mode="scene"  onclick="spSetMode('scene')">Scene</button>
+        <button class="btn-test sp-mode" data-mode="music"  onclick="spSetMode('music')">Music</button>
+      </div>
+    </div>
+
+    <!-- Brightness -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.0rem;">Brightness <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 22, 10–1000)</span></h2>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <input type="range" id="sp-bright" min="10" max="1000" step="10" value="500" oninput="spOnBrightInput(this.value)" onchange="spSetBrightness(this.value)" style="flex:1;">
+        <span id="sp-bright-val" style="min-width:48px;font-family:monospace;font-size:0.85rem;color:#444;">500</span>
+      </div>
+    </div>
+
+    <!-- Colour (HSV) -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.0rem;">Colour <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 24, HSV)</span></h2>
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <label style="font-size:0.82rem;color:#555;display:flex;align-items:center;gap:8px;">
+          Pick <input type="color" id="sp-colour-picker" value="#ff0000" onchange="spSetColourFromPicker(this.value)" style="width:48px;height:32px;border:1px solid #d0cbc4;border-radius:4px;background:#fff;cursor:pointer;">
+        </label>
+        <div id="sp-colour-preview" style="width:36px;height:36px;border-radius:50%;background:#ff0000;border:2px solid #d0cbc4;"></div>
+        <span style="font-size:0.78rem;color:#888;font-family:monospace;">DPS raw: <span id="sp-colour-hex">—</span></span>
+        <span style="margin-left:auto;font-size:0.78rem;color:#888;">Sent on release. Best with mode = Colour.</span>
+      </div>
+    </div>
+
+    <!-- Scene -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.0rem;">Scene <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 25)</span></h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;" id="sp-scene-row">
+        <!-- populated by spRenderScenes() -->
+      </div>
+      <div style="font-size:0.78rem;color:#888;margin-top:8px;">
+        Sending a scene auto-switches mode to Scene.
+      </div>
+    </div>
+
+  </div>
 </main>
 
 <!-- Device picker popover (shared with bindings UI) -->
@@ -230,6 +297,6 @@
 
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=9"></script>
-<script src="js/balcony.js?v=20260508c"></script>
+<script src="js/balcony.js?v=20260526c"></script>
 </body>
 </html>

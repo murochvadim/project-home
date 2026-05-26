@@ -467,6 +467,32 @@ class DeviceAgent:
                 self._mqtt.publish(resp_topic, {'ok': False, 'error': 'Missing action', 'rule': rule})
                 return
 
+            # Direct Tuya local DPS write — bypasses HA entirely. Used by dashboards
+            # to set arbitrary device-specific datapoints (mode/scene/HSV color/timer/etc.)
+            # that aren't exposed as HA entities.
+            if action == 'set_dps':
+                dps = payload.get('dps')
+                if not isinstance(dps, dict) or not dps:
+                    self._mqtt.publish(resp_topic, {
+                        'ok': False, 'error': 'set_dps requires non-empty dps dict', 'rule': rule,
+                    })
+                    return
+                # Local Tuya adapter is keyed under just 'tuya' (see _start_adapters:
+                # `key = f'{vendor}:cloud' if proto == 'cloud' else vendor`). Don't
+                # use the :cloud or :push adapters here — they can't write to local TCP.
+                tuya_local = self.adapters.get('tuya')
+                if not tuya_local:
+                    self._mqtt.publish(resp_topic, {
+                        'ok': False, 'error': 'tuya local adapter not loaded', 'rule': rule,
+                    })
+                    return
+                ok = tuya_local.set_state(device_id, dps)
+                log.info(f'set_dps {device_id} dps={dps} ok={ok} rule={rule}')
+                self._mqtt.publish(resp_topic, {
+                    'ok': ok, 'dps': dps, 'rule': rule,
+                })
+                return
+
             channel = payload.get('channel')
             entity = self._resolve_entity(device_id, channel)
             if not entity:

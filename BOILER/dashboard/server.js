@@ -4864,6 +4864,30 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Direct Tuya local DPS write ────────────────────────────────────────────
+// Bypasses HA — dashboard widgets that drive device-specific DPS values (mode,
+// scene, HSV colour, timer, vendor-specific 101/102/103, …) call this and the
+// device_agent on LXC 103 sets them on the device via tuya local TCP.
+// Payload: { dps: { "<dps_key>": <value>, ... } }
+// Scope:   protocol='local' only (Tuya local TCP). Other protocols 400.
+app.post('/api/devices/:id/dps', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dps } = req.body || {};
+    if (!dps || typeof dps !== 'object' || Array.isArray(dps) || !Object.keys(dps).length) {
+      return res.status(400).json({ error: 'dps required (non-empty object)' });
+    }
+    const devR = await db.query('SELECT protocol FROM devices WHERE id = $1', [id]);
+    if (!devR.rows[0]) return res.status(404).json({ error: 'device not found' });
+    if (devR.rows[0].protocol !== 'local') {
+      return res.status(400).json({ error: `dps endpoint only supports protocol=local (got '${devR.rows[0].protocol}')` });
+    }
+    const payload = JSON.stringify({ action: 'set_dps', dps, rule: 'dashboard' });
+    mqttClient.publish(`mur/home/device/${id}/command`, payload);
+    return res.json({ ok: true, dps });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Dashboard Settings ─────────────────────────────────────────────────────
 app.get('/api/dashboard-settings/:key', async (req, res) => {
   try {
