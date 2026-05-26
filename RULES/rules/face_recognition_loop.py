@@ -37,10 +37,15 @@ the full chain spans ~15 s end-to-end, then gives up if no
 face_identified.
 
 Sentence-driven knobs in container `r_face_recognition_loop_init`:
-  • s_frl1_unlock   — chip(s) to fire on face_identified. Empty by
-                      default; user adds e.g. `@RemoteXY Gate Door on`.
-  • s_frl2_retries  — "Face Loop: retry recognition N times"
-  • s_frl3_delay    — "Face Loop: retry delay is N seconds"
+  • s_frl1_unlock         — chip(s) to fire on face_identified. Empty by
+                            default; user adds e.g. `@RemoteXY Gate Door on`.
+  • s_frl2_retries        — "Face Loop: retry recognition N times"
+  • s_frl3_delay          — "Face Loop: retry delay is N seconds"
+  • (any id)              — "Face Loop: door unlock is enabled" (or
+                            "disabled"). Gate that prevents unlock chips
+                            from firing on face_identified WITHOUT having
+                            to remove the chips. Default: enabled. Use
+                            "disabled" during testing / away mode.
 
 state.shared keys owned by this rule:
   • face_recognition_loop.retry_count        — int, 0..max_retries
@@ -99,6 +104,13 @@ def _classify_sentence(text):
         return 'knob_retries'
     if 'retry delay is' in t:
         return 'knob_delay'
+    # "door unlock is enabled" / "door unlock is disabled" — gate that
+    # controls whether the unlock chips fire on face_identified. Default
+    # ENABLED (matches pre-2026-05-26 behavior). Add the "disabled" sentence
+    # to suppress unlock during testing / away mode without removing the
+    # chips themselves.
+    if 'door unlock is' in t:
+        return 'knob_unlock_enabled'
     if 'on recognized' in t:
         return 'unlock'
     return None
@@ -116,6 +128,7 @@ def _read_config(state):
         'max_retries':     DEFAULTS_MAX_RETRIES,
         'retry_delay_sec': DEFAULTS_RETRY_DELAY_SEC,
         'unlock_cmds':     [],
+        'unlock_enabled':  True,   # gate — see _classify_sentence 'knob_unlock_enabled'
     }
     try:
         rows = state.db_query(
@@ -151,6 +164,17 @@ def _read_config(state):
                 m = re.search(r'retry delay is\s+(\d+)\s*seconds?', full_text, re.I)
                 if m:
                     cfg['retry_delay_sec'] = int(m.group(1))
+                continue
+            if kind == 'knob_unlock_enabled':
+                # Match the token after "door unlock is" — enabled/on/true → True,
+                # disabled/off/false → False. Anything else → keep default True.
+                m = re.search(r'door unlock is\s+(\w+)', full_text, re.I)
+                if m:
+                    tok = m.group(1).lower()
+                    if tok in ('enabled', 'on', 'true', 'yes'):
+                        cfg['unlock_enabled'] = True
+                    elif tok in ('disabled', 'off', 'false', 'no'):
+                        cfg['unlock_enabled'] = False
                 continue
 
             if kind == 'unlock':
@@ -189,13 +213,17 @@ def evaluate(event, state):
         prev_count = state.shared.get('face_recognition_loop.retry_count', 0)
         state.shared['face_recognition_loop.retry_count'] = 0
         user = dps.get('user_name') or dps.get('payload') or '?'
-        if cfg['unlock_cmds']:
-            log.info("Face Recognition Loop: face_identified (%s) after %d retries — dispatching %d unlock command(s)",
-                     user, prev_count, len(cfg['unlock_cmds']))
-            commands.extend(cfg['unlock_cmds'])
-        else:
+        if not cfg['unlock_cmds']:
             log.info("Face Recognition Loop: face_identified (%s) after %d retries — but no unlock chips configured (empty s_frl1_unlock)",
                      user, prev_count)
+            return commands
+        if not cfg['unlock_enabled']:
+            log.info("Face Recognition Loop: face_identified (%s) after %d retries — UNLOCK DISABLED via sentence ('door unlock is disabled') — dropping %d command(s)",
+                     user, prev_count, len(cfg['unlock_cmds']))
+            return commands
+        log.info("Face Recognition Loop: face_identified (%s) after %d retries — dispatching %d unlock command(s)",
+                 user, prev_count, len(cfg['unlock_cmds']))
+        commands.extend(cfg['unlock_cmds'])
         return commands
 
     # kind == 'face_unknown' — schedule retry: screen_on now + start_recognition deferred.
