@@ -86,6 +86,20 @@ Ask for:
 
 ## Step 4: DPS Configuration
 
+**FIRST decide whether `dps_labels` is needed for this device.** A populated `dps_labels` makes the All Devices grid render **one row per labeled DPS** — fine for multi-gang switches, ugly bloat for single-physical devices. The wrong choice here silently breaks the UI; the user's first sight of the regression is the broken-looking grid. See memory entry `feedback_dps_labels_expansion` for the full incident (Star Projector 2026-05-26 — 9 DPS labels rendered as 9 rows).
+
+| Device shape | `dps_labels` | `channel_config` |
+|---|---|---|
+| Single-state switch / sensor (one boolean DPS) | leave `{}` | `{}` |
+| Single-physical device with a dedicated dashboard tab (Star Projector → Balcony tab, vacuum → action buttons, FP2 → internal zones) | leave `{}` | `{}` |
+| Multi-gang physical switch (4-gang circuit_breaker, TS0044 scene remote, etc.) | leave `{}` | per-channel `{name, room, enabled, show_dashboard}` |
+| Multi-sensor appliance (BSH oven: temp + door + program) | populate per-sensor | `{}` |
+
+Optional 5th case — single-physical with a dedicated tab AND you want the Set Devices DPS button to inspect raw values: populate `dps_labels` but set `dps_config.<key>.show_dashboard = false` on each so the All Devices grid stays a single row while Set Devices DPS view still works.
+
+If `dps_labels` stays `{}` → skip the per-DPS block below and go to Step 5.
+If `dps_labels` is needed → continue:
+
 Ask the user what data points the device exposes. For Zigbee TS0601 devices, DPS must match the external converter mapping.
 
 For each DPS:

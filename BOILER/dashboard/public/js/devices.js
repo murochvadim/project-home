@@ -687,6 +687,7 @@ function applySettingsFilters() {
       <td></td>
       <td></td>
       <td></td>
+      <td></td>
     </tr>`);
     }
 
@@ -715,14 +716,22 @@ function applySettingsFilters() {
         : (raw === false || raw === 0) ? 'dot-off'
         : (typeof raw === 'number' && raw < 0) ? 'dot-off'   // idle progress
         : 'dot-on';
+      // Set Devices header has 10 columns: Name|Room|Type|Protocol|Enabled|
+      // Dashboard|Poll|Notes|(44px)|(44px). The DPS sub-row used to emit an
+      // extra leading <td> for the status indicator (a leftover from the All
+      // Devices layout where column 1 IS "Status"), which shifted every
+      // subsequent cell one column to the right — the misalignment got
+      // worse the more labeled-DPS devices appeared. Now: merge the status
+      // dot + value into the Name cell so column 1 stays the Name column.
       rows.push(`
     <tr class="dps-attr-row" data-parent-id="${escHtml(d.id)}" data-dps="${k}">
-      <td style="padding-left:28px;color:var(--muted);font-size:0.8rem;" title="${escHtml(k)}">
-        <span class="chan-indicator ${dot}"></span>${escHtml(valTxt)}
+      <td class="editable-cell dps-attr-name" data-field="name" style="padding-left:28px;" title="${escHtml(k)}">
+        <span class="chan-indicator ${dot}"></span>
+        <span style="color:var(--muted);font-size:0.78rem;margin-right:6px;">${escHtml(valTxt)}</span>${escHtml(attrName)}
       </td>
-      <td class="editable-cell dps-attr-name" data-field="name">${escHtml(attrName)}</td>
       <td class="editable-cell dps-attr-room" data-field="room">${escHtml(attrRoom)}</td>
       <td><span style="font-size:0.72rem;color:var(--muted)" title="${escHtml(k)}">dps ${k.includes('.') ? escHtml(k.split('.').pop()) : k}</span></td>
+      <td></td>
       <td style="text-align:center">
         <label class="toggle"><input type="checkbox" class="dps-attr-toggle" data-parent-id="${escHtml(d.id)}" data-dps="${k}" data-field="enabled" ${enabled ? 'checked' : ''}>
           <span class="slider"></span></label>
@@ -733,7 +742,8 @@ function applySettingsFilters() {
       </td>
       <td></td>
       <td></td>
-      <td colspan="1"></td>
+      <td></td>
+      <td></td>
     </tr>`);
     }
 
