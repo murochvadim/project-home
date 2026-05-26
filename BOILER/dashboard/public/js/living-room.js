@@ -723,6 +723,41 @@
     if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000);
   }
 
+  // Reflect Awtrix LED-matrix power state on chip + active button.
+  // Persists across page navigations via localStorage so the chip shows
+  // last-known state immediately on reload instead of waiting for the
+  // next /stats MQTT push.
+  const AW_POWER_KEY = 'living-room.aw.power';
+  function awRenderPower(on) {
+    const chip = document.getElementById('aw-power-chip');
+    if (chip) {
+      if (on === true) {
+        chip.textContent = 'power: ON';
+        chip.style.background = '#3a7d44'; chip.style.color = '#fff'; chip.style.borderColor = '#3a7d44';
+      } else if (on === false) {
+        chip.textContent = 'power: OFF';
+        chip.style.background = '#c0392b'; chip.style.color = '#fff'; chip.style.borderColor = '#c0392b';
+      } else {
+        chip.textContent = 'power: —';
+        chip.style.background = '#eee'; chip.style.color = '#888'; chip.style.borderColor = '#d0cbc4';
+      }
+    }
+    const bOn  = document.getElementById('aw-btn-on');
+    const bOff = document.getElementById('aw-btn-off');
+    if (bOn)  { bOn.style.background  = on === true  ? '#3a7d44' : ''; bOn.style.color  = on === true  ? '#fff' : '#3a7d44'; }
+    if (bOff) { bOff.style.background = on === false ? '#c0392b' : ''; bOff.style.color = on === false ? '#fff' : '#c0392b'; }
+    try {
+      if (on === true || on === false) localStorage.setItem(AW_POWER_KEY, on ? '1' : '0');
+    } catch (_) {}
+  }
+  function awRestoreCachedPower() {
+    try {
+      const v = localStorage.getItem(AW_POWER_KEY);
+      if (v === '1') awRenderPower(true);
+      else if (v === '0') awRenderPower(false);
+    } catch (_) {}
+  }
+
   function awUpdateStatus(stats) {
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
     set('aw-bat',  stats.bat ?? '—');
@@ -731,6 +766,9 @@
     set('aw-app',  stats.app ?? '—');
     set('aw-temp', stats.temp ?? '—');
     set('aw-hum',  stats.hum ?? '—');
+    // `/stats` payload's `matrix` field is the LED-matrix power state.
+    if (typeof stats.matrix === 'boolean')      awRenderPower(stats.matrix);
+    else if (typeof stats.matrix === 'number')  awRenderPower(!!stats.matrix);
   }
 
   async function awLoadState() {
@@ -859,6 +897,8 @@
       if (err) awSetMsg('Power failed: ' + err.message, true);
       else     awSetMsg(`Display ${on ? 'on' : 'off'}`);
     });
+    // Optimistic flip — `/stats` echoes the new `matrix` field within a few seconds.
+    awRenderPower(!!on);
   }
   window.awPower = awPower;
 
@@ -1083,6 +1123,7 @@
   async function awInit() {
     if (_awInited) return;
     _awInited = true;
+    awRestoreCachedPower();
     if (typeof mqtt === 'undefined') { awSetMsg('mqtt.js library missing', true); return; }
 
     let pass;

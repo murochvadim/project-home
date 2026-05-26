@@ -47,6 +47,41 @@
     return `${m} m`;
   }
 
+  // Reflect current backlight power state on the chip + active button.
+  // Accepts true / false / null (= unknown). Persists across page navigations
+  // via localStorage so the chip shows last-known state immediately on reload
+  // instead of waiting for the first MQTT statusupdate roundtrip.
+  const HP_POWER_KEY = 'balcony.hp.power';
+  function hpRenderPower(on) {
+    const chip = document.getElementById('hp-power-chip');
+    if (chip) {
+      if (on === true) {
+        chip.textContent = 'power: ON';
+        chip.style.background = '#3a7d44'; chip.style.color = '#fff'; chip.style.borderColor = '#3a7d44';
+      } else if (on === false) {
+        chip.textContent = 'power: OFF';
+        chip.style.background = '#c0392b'; chip.style.color = '#fff'; chip.style.borderColor = '#c0392b';
+      } else {
+        chip.textContent = 'power: —';
+        chip.style.background = '#eee'; chip.style.color = '#888'; chip.style.borderColor = '#d0cbc4';
+      }
+    }
+    const bOn  = document.getElementById('hp-btn-on');
+    const bOff = document.getElementById('hp-btn-off');
+    if (bOn)  { bOn.style.background  = on === true  ? '#3a7d44' : ''; bOn.style.color  = on === true  ? '#fff' : '#3a7d44'; }
+    if (bOff) { bOff.style.background = on === false ? '#c0392b' : ''; bOff.style.color = on === false ? '#fff' : '#c0392b'; }
+    try {
+      if (on === true || on === false) localStorage.setItem(HP_POWER_KEY, on ? '1' : '0');
+    } catch (_) {}
+  }
+  function hpRestoreCachedPower() {
+    try {
+      const v = localStorage.getItem(HP_POWER_KEY);
+      if (v === '1') hpRenderPower(true);
+      else if (v === '0') hpRenderPower(false);
+    } catch (_) {}
+  }
+
   function hpUpdateStatus(s) {
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
     set('hp-uptime', hpFmtUptime(s.uptime));
@@ -54,6 +89,9 @@
     const page = s.page ?? null;
     const num  = s.numPages ?? null;
     set('hp-page', page != null ? (num != null ? `${page} / ${num}` : `${page}`) : '—');
+    // Note: OpenHASP firmware 0.7.0-rc12 statusupdate does NOT include the
+    // backlight state — see the dedicated state/backlight subscription in
+    // hpInit() for power tracking.
     // Populate page selector once (numPages reported by the panel)
     const sel = document.getElementById('hp-page-select');
     if (sel && num && sel.options.length <= 1) {
@@ -75,6 +113,11 @@
     // hard-cuts the LED rail. Use both: backlight on/off + a sensible dim.
     _hpMqtt.publish(`hasp/${HP_PLATE}/command/backlight`, on ? 'on' : 'off');
     if (on) _hpMqtt.publish(`hasp/${HP_PLATE}/command/dim`, '100');
+    // Optimistic UI flip + force a quick statusupdate so the real state
+    // (echoed back from the panel) confirms in ~1 s instead of waiting
+    // for the 30 s status poll.
+    hpRenderPower(!!on);
+    setTimeout(() => _hpMqtt.publish(`hasp/${HP_PLATE}/command/statusupdate`, ''), 500);
   };
   window.hpGotoPage = function (n) {
     if (!_hpMqtt || !_hpMqtt.connected || n === '') return;
@@ -102,6 +145,10 @@
     _hpMqtt.on('connect', () => {
       hpSetOnline(false, 'broker connected, awaiting panel…');
       _hpMqtt.subscribe(`hasp/${HP_PLATE}/state/statusupdate`, { qos: 0 });
+      // state/backlight publishes whenever the backlight changes — the
+      // statusupdate JSON does NOT carry the backlight field on firmware
+      // 0.7.0-rc12. Subscribe directly to this topic to track power state.
+      _hpMqtt.subscribe(`hasp/${HP_PLATE}/state/backlight`, { qos: 0 });
       _hpMqtt.subscribe(`hasp/${HP_PLATE}/LWT`, { qos: 0 });
       // OpenHASP firmware doesn't auto-push statusupdate periodically — it
       // only responds when asked. Request once now + every 30 s after.
@@ -118,6 +165,14 @@
         hpSetOnline(payload.toString() === 'online');
       } else if (topic === `hasp/${HP_PLATE}/state/statusupdate`) {
         try { hpUpdateStatus(JSON.parse(payload.toString())); } catch (_) {}
+      } else if (topic === `hasp/${HP_PLATE}/state/backlight`) {
+        // Payload shape: {"state":"on"|"off","brightness":<0-255>}
+        try {
+          const o = JSON.parse(payload.toString());
+          if (o && typeof o.state === 'string') {
+            hpRenderPower(o.state.toLowerCase() === 'on');
+          }
+        } catch (_) {}
       }
     });
   }
@@ -1157,6 +1212,7 @@
 
   window.addEventListener('DOMContentLoaded', () => {
     refreshPage();
+    hpRestoreCachedPower();
     hpInit();
     bcLoadButtons();
     bcLoadDisplays();
@@ -1286,6 +1342,37 @@
   }
 
   // ── render ─────────────────────────────────────────────────────────────
+  const SP_POWER_KEY = 'balcony.sp.power';
+  function spRenderPower(power) {
+    const chip = document.getElementById('sp-power-chip');
+    if (chip) {
+      if (power === true) {
+        chip.textContent = 'power: ON';
+        chip.style.background = '#3a7d44'; chip.style.color = '#fff'; chip.style.borderColor = '#3a7d44';
+      } else if (power === false) {
+        chip.textContent = 'power: OFF';
+        chip.style.background = '#c0392b'; chip.style.color = '#fff'; chip.style.borderColor = '#c0392b';
+      } else {
+        chip.textContent = 'power: —';
+        chip.style.background = '#eee'; chip.style.color = '#888'; chip.style.borderColor = '#d0cbc4';
+      }
+    }
+    const bOn  = document.getElementById('sp-btn-on');
+    const bOff = document.getElementById('sp-btn-off');
+    if (bOn)  { bOn.style.background  = power === true  ? '#3a7d44' : ''; bOn.style.color  = power === true  ? '#fff' : '#3a7d44'; }
+    if (bOff) { bOff.style.background = power === false ? '#c0392b' : ''; bOff.style.color = power === false ? '#fff' : '#c0392b'; }
+    try {
+      if (power === true || power === false) localStorage.setItem(SP_POWER_KEY, power ? '1' : '0');
+    } catch (_) {}
+  }
+  function spRestoreCachedPower() {
+    try {
+      const v = localStorage.getItem(SP_POWER_KEY);
+      if (v === '1') spRenderPower(true);
+      else if (v === '0') spRenderPower(false);
+    } catch (_) {}
+  }
+
   function fmtAge(iso) {
     if (!iso) return '—';
     const ageSec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -1304,6 +1391,8 @@
     const fresh = SP_LAST_SEEN && (Date.now() - new Date(SP_LAST_SEEN).getTime()) < 10 * 60 * 1000;
     if (dot) dot.style.color = fresh ? '#3a7d44' : '#c0392b';
     if (txt) { txt.textContent = fresh ? 'online' : 'offline'; txt.style.color = fresh ? '#3a7d44' : '#c0392b'; }
+
+    spRenderPower(SP_STATE['20']);
 
     // Mode buttons — highlight active
     const mode = String(SP_STATE['21'] || '').toLowerCase();
@@ -1377,6 +1466,7 @@
   async function spInit() {
     if (SP_INITED) return;
     SP_INITED = true;
+    spRestoreCachedPower();
     spRenderScenes();
     try {
       await spFetchDevice();

@@ -33,7 +33,7 @@ Dashboard-only agent (no dedicated LXC service). Sibling of [Balcony Agent](../B
 
 ## Dashboard Tabs
 
-- **Panel** — full Balcony-equivalent UI (info card / status card / sync from panel / button bindings (wallmote-style picker) / display templates).
+- **Panel** — full Balcony-equivalent UI (info card / status card / sync from panel / button bindings (wallmote-style picker) / display templates). **Power chip + On/Off button highlight (added 2026-05-26)** matches the Balcony pattern — state source is `hasp/my-bathroom/state/backlight` (`{state:"on"|"off", brightness:<n>}`), since OpenHASP 0.7.0-rc12's `statusupdate` JSON does NOT include the backlight field. Cached to `localStorage['my-bathroom.hp.power']` for persistence across page navigations. See [BALCONY/CLAUDE.md](../BALCONY/CLAUDE.md) for the full pattern reference.
 - **Smart Switch** — Balcony-equivalent wallmote-style binding UI for the TS0044 scene remote (single-press only, hold doesn't fire on this firmware variant). Empty until hardware is paired.
 
 ## Rules (group=`my-bathroom`, 4 files)

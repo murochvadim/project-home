@@ -115,12 +115,13 @@
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
         <h2 style="margin:0;font-size:1.05rem;">HASP Balcony <span id="hp-online-dot" title="MQTT" style="font-size:0.85rem;color:#aaa;">●</span> <span id="hp-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">connecting…</span></h2>
+        <span id="hp-power-chip" style="font-size:0.78rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">power: —</span>
         <span style="font-size:0.82rem;color:#666;">Uptime: <b id="hp-uptime">—</b></span>
         <span style="font-size:0.82rem;color:#666;">Signal: <b id="hp-rssi">—</b> dBm</span>
         <span style="font-size:0.82rem;color:#666;">Current page: <b id="hp-page">—</b></span>
         <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
-          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="hpPower(true)" title="backlight on + dim 100">On</button>
-          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="hpPower(false)" title="backlight off (hard cut)">Off</button>
+          <button id="hp-btn-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="hpPower(true)" title="backlight on + dim 100">On</button>
+          <button id="hp-btn-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="hpPower(false)" title="backlight off (hard cut)">Off</button>
           <span style="font-size:0.78rem;color:#666;margin-left:10px;">Page</span>
           <select id="hp-page-select" onchange="hpGotoPage(this.value)" style="padding:3px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;" title="Jump panel to this page">
             <option value="">— go to —</option>
@@ -215,11 +216,12 @@
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
         <h2 style="margin:0;font-size:1.05rem;">Star Projector <span id="sp-online-dot" title="freshness" style="font-size:0.85rem;color:#aaa;">●</span> <span id="sp-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">loading…</span></h2>
+        <span id="sp-power-chip" style="font-size:0.78rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">power: —</span>
         <span style="font-size:0.82rem;color:#666;">IP <b id="sp-ip">—</b></span>
         <span style="font-size:0.82rem;color:#666;">Last seen: <b id="sp-last-seen">—</b></span>
         <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
-          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="spPower(true)">On</button>
-          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="spPower(false)">Off</button>
+          <button id="sp-btn-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="spPower(true)">On</button>
+          <button id="sp-btn-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="spPower(false)">Off</button>
         </div>
       </div>
       <div style="font-size:0.78rem;color:#777;margin-top:6px;">
@@ -297,6 +299,6 @@
 
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=9"></script>
-<script src="js/balcony.js?v=20260526c"></script>
+<script src="js/balcony.js?v=20260526g"></script>
 </body>
 </html>
