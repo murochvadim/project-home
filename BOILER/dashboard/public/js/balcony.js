@@ -1241,19 +1241,12 @@
   //   25 Scene (string id), 26 Timer (int seconds), 101/102/103 (unknown).
 
   const SP_MODES   = ['white', 'colour', 'scene', 'music'];
-  const SP_SCENES  = [
-    // From Tuya cloud scene presets (id ordering matches Tuya app). Names are
-    // guesses; the cloud `scene_data` for this product is a multi-segment HSV
-    // payload — for now we let the device use its built-in scene by id.
-    { id: '1',  label: 'Aurora' },
-    { id: '2',  label: 'Galaxy' },
-    { id: '3',  label: 'Ocean' },
-    { id: '4',  label: 'Forest' },
-    { id: '5',  label: 'Sunset' },
-    { id: '6',  label: 'Party' },
-    { id: '7',  label: 'Pulse' },
-    { id: '8',  label: 'Calm' },
-  ];
+  // Captured scenes — array of {name, scene_data} where scene_data is the
+  // raw hex string DPS 25 emits. Stored in dashboard_settings under
+  // 'balcony.star_projector.scenes'. Built via capture-replay (the Tuya
+  // cloud does not list factory scene presets — only the JSON schema).
+  const SP_SCENES_KEY = 'balcony.star_projector.scenes';
+  let SP_SCENES = [];
 
   // ── helpers ────────────────────────────────────────────────────────────
   async function spFetchDevice() {
@@ -1422,14 +1415,59 @@
     const picker = document.getElementById('sp-colour-picker');
     if (picker && hex && document.activeElement !== picker) picker.value = hex;
 
+    // Re-render scenes list so the "PLAYING" highlight tracks live state
+    // (power off, mode change, scene switch from Tuya app, etc.)
+    spRenderScenes();
   }
 
   function spRenderScenes() {
     const row = document.getElementById('sp-scene-row');
     if (!row) return;
-    row.innerHTML = SP_SCENES.map(s =>
-      `<button class="btn-test" onclick="spSetScene('${s.id}')">${s.label}</button>`
-    ).join('');
+    if (!SP_SCENES.length) {
+      row.innerHTML = '<div style="font-size:0.85rem;color:#999;font-style:italic;padding:6px 0;">No scenes captured yet. Switch to a scene in the Tuya app, type a name above, click Capture.</div>';
+      return;
+    }
+    // Highlight the row whose scene_data matches the device's current DPS 25
+    // value AND the device is in scene mode. If mode is white/colour/music,
+    // nothing is "playing" — no highlight.
+    const liveData = SP_STATE['25'];
+    const liveMode = String(SP_STATE['21'] || '').toLowerCase();
+    const power    = SP_STATE['20'];
+    const playingIdx = (power === true && liveMode === 'scene' && typeof liveData === 'string')
+      ? SP_SCENES.findIndex(s => s.scene_data === liveData)
+      : -1;
+    row.innerHTML = SP_SCENES.map((s, i) => {
+      const safeName = s.name.replace(/"/g, '&quot;');
+      const playing = i === playingIdx;
+      const bg     = playing ? '#3a7d44' : '#f8f5f1';
+      const fg     = playing ? '#fff'    : '#3a7d44';
+      const border = playing ? '#3a7d44' : '#3a7d44';
+      const badge  = playing
+        ? '<span style="font-size:0.7rem;font-weight:600;padding:2px 6px;border-radius:8px;background:#fff;color:#3a7d44;">● PLAYING</span>'
+        : '';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:${playing ? '#eafbef' : '#f8f5f1'};border-radius:4px;${playing ? 'outline:2px solid #3a7d44;' : ''}">
+        <button class="btn-test" style="background:${bg};color:${fg};border-color:${border};flex:1;text-align:left;" onclick="spApplyScene(${i})" title="Apply scene">▶ ${safeName}</button>
+        ${badge}
+        <span style="font-size:0.72rem;color:#aaa;font-family:monospace;" title="DPS 25 raw value">${s.scene_data.slice(0, 16)}…</span>
+        <button class="btn-test" style="border-color:#c0392b;color:#c0392b;padding:2px 8px;" onclick="spDeleteScene(${i})" title="Delete scene">×</button>
+      </div>`;
+    }).join('');
+  }
+
+  async function spLoadScenes() {
+    try {
+      const r = await fetch(`/api/dashboard-settings/${SP_SCENES_KEY}`).then(r => r.json());
+      const v = r && r.value;
+      SP_SCENES = Array.isArray(v) ? v.filter(x => x && x.name && x.scene_data) : [];
+    } catch (_) { SP_SCENES = []; }
+    spRenderScenes();
+  }
+  async function spSaveScenes() {
+    await fetch(`/api/dashboard-settings/${SP_SCENES_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: SP_SCENES }),
+    });
   }
 
   // ── public click handlers (window-scoped for inline onclick) ───────────
@@ -1458,9 +1496,42 @@
     try { await spSendDps({ '21': 'colour', '24': tuyaHsv }); }
     catch (e) { alert('Colour failed: ' + e.message); }
   };
-  window.spSetScene = async (id) => {
-    try { await spSendDps({ '21': 'scene', '25': id }); }
-    catch (e) { alert('Scene failed: ' + e.message); }
+  window.spApplyScene = async (i) => {
+    const s = SP_SCENES[i];
+    if (!s) return;
+    try { await spSendDps({ '21': 'scene', '25': s.scene_data }); }
+    catch (e) { alert('Apply scene failed: ' + e.message); }
+  };
+  window.spCaptureScene = async () => {
+    const nameEl = document.getElementById('sp-scene-name');
+    const name = (nameEl && nameEl.value || '').trim();
+    if (!name) return alert('Type a scene name first.');
+    // Pull fresh state in case the user just switched scene in the Tuya app.
+    try { await spFetchDevice(); spRender(); } catch (_) {}
+    const sd = SP_STATE['25'];
+    if (!sd || typeof sd !== 'string' || sd.length < 4) {
+      return alert('No scene_data on device yet — switch to a scene in the Tuya app first, wait ~3 s, then capture.');
+    }
+    if (SP_SCENES.some(x => x.name === name)) {
+      if (!confirm(`Overwrite existing "${name}"?`)) return;
+      SP_SCENES = SP_SCENES.filter(x => x.name !== name);
+    }
+    SP_SCENES.push({ name, scene_data: sd });
+    try {
+      await spSaveScenes();
+      if (nameEl) nameEl.value = '';
+      spRenderScenes();
+    } catch (e) { alert('Save failed: ' + e.message); }
+  };
+  window.spDeleteScene = async (i) => {
+    const s = SP_SCENES[i];
+    if (!s) return;
+    if (!confirm(`Delete scene "${s.name}"?`)) return;
+    SP_SCENES.splice(i, 1);
+    try {
+      await spSaveScenes();
+      spRenderScenes();
+    } catch (e) { alert('Delete failed: ' + e.message); }
   };
   // ── init + poll ────────────────────────────────────────────────────────
   async function spInit() {
@@ -1468,6 +1539,7 @@
     SP_INITED = true;
     spRestoreCachedPower();
     spRenderScenes();
+    spLoadScenes();
     try {
       await spFetchDevice();
       spRender();

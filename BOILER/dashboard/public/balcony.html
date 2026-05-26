@@ -229,17 +229,6 @@
       </div>
     </div>
 
-    <!-- Mode -->
-    <div class="card" style="padding:14px;margin-bottom:16px;">
-      <h2 style="margin-top:0;font-size:1.0rem;">Mode <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 21)</span></h2>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;" id="sp-mode-row">
-        <button class="btn-test sp-mode" data-mode="white"  onclick="spSetMode('white')">White</button>
-        <button class="btn-test sp-mode" data-mode="colour" onclick="spSetMode('colour')">Colour</button>
-        <button class="btn-test sp-mode" data-mode="scene"  onclick="spSetMode('scene')">Scene</button>
-        <button class="btn-test sp-mode" data-mode="music"  onclick="spSetMode('music')">Music</button>
-      </div>
-    </div>
-
     <!-- Brightness -->
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <h2 style="margin-top:0;font-size:1.0rem;">Brightness <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 22, 10–1000)</span></h2>
@@ -249,28 +238,48 @@
       </div>
     </div>
 
-    <!-- Colour (HSV) -->
-    <div class="card" style="padding:14px;margin-bottom:16px;">
-      <h2 style="margin-top:0;font-size:1.0rem;">Colour <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 24, HSV)</span></h2>
-      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <label style="font-size:0.82rem;color:#555;display:flex;align-items:center;gap:8px;">
-          Pick <input type="color" id="sp-colour-picker" value="#ff0000" onchange="spSetColourFromPicker(this.value)" style="width:48px;height:32px;border:1px solid #d0cbc4;border-radius:4px;background:#fff;cursor:pointer;">
-        </label>
-        <div id="sp-colour-preview" style="width:36px;height:36px;border-radius:50%;background:#ff0000;border:2px solid #d0cbc4;"></div>
-        <span style="font-size:0.78rem;color:#888;font-family:monospace;">DPS raw: <span id="sp-colour-hex">—</span></span>
-        <span style="margin-left:auto;font-size:0.78rem;color:#888;">Sent on release. Best with mode = Colour.</span>
-      </div>
-    </div>
+    <!-- Mode + Colour + Scene — same row, each its own card -->
+    <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;align-items:stretch;">
 
-    <!-- Scene -->
-    <div class="card" style="padding:14px;margin-bottom:16px;">
-      <h2 style="margin-top:0;font-size:1.0rem;">Scene <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 25)</span></h2>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;" id="sp-scene-row">
-        <!-- populated by spRenderScenes() -->
+      <!-- Mode -->
+      <div class="card" style="padding:14px;flex:1 1 200px;min-width:200px;">
+        <h2 style="margin-top:0;font-size:1.0rem;">Mode <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 21)</span></h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;" id="sp-mode-row">
+          <button class="btn-test sp-mode" data-mode="white"  onclick="spSetMode('white')">White</button>
+          <button class="btn-test sp-mode" data-mode="colour" onclick="spSetMode('colour')">Colour</button>
+          <button class="btn-test sp-mode" data-mode="scene"  onclick="spSetMode('scene')">Scene</button>
+          <button class="btn-test sp-mode" data-mode="music"  onclick="spSetMode('music')">Music</button>
+        </div>
       </div>
-      <div style="font-size:0.78rem;color:#888;margin-top:8px;">
-        Sending a scene auto-switches mode to Scene.
+
+      <!-- Colour (HSV) -->
+      <div class="card" style="padding:14px;flex:1 1 240px;min-width:240px;">
+        <h2 style="margin-top:0;font-size:1.0rem;">Colour <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 24, HSV)</span></h2>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <label style="font-size:0.82rem;color:#555;display:flex;align-items:center;gap:8px;">
+            Pick <input type="color" id="sp-colour-picker" value="#ff0000" onchange="spSetColourFromPicker(this.value)" style="width:48px;height:32px;border:1px solid #d0cbc4;border-radius:4px;background:#fff;cursor:pointer;">
+          </label>
+          <div id="sp-colour-preview" style="width:32px;height:32px;border-radius:50%;background:#ff0000;border:2px solid #d0cbc4;"></div>
+          <span style="font-size:0.74rem;color:#888;font-family:monospace;">DPS: <span id="sp-colour-hex">—</span></span>
+        </div>
+        <div style="font-size:0.72rem;color:#999;margin-top:6px;">Sent on release. Best with mode = Colour.</div>
       </div>
+
+      <!-- Scene -->
+      <div class="card" style="padding:14px;flex:2 1 340px;min-width:340px;">
+        <h2 style="margin-top:0;font-size:1.0rem;">Scene <span style="font-size:0.78rem;color:#888;font-weight:normal;">(DPS 25 — capture-replay)</span></h2>
+        <div style="font-size:0.74rem;color:#777;margin-bottom:8px;line-height:1.45;">
+          Switch scene in Tuya app → wait ~3 s → name → 🎬 Capture. Click a row to apply.
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          <input type="text" id="sp-scene-name" placeholder="scene name (e.g. Aurora)" style="flex:1;min-width:140px;padding:4px 8px;font-size:0.85rem;border:1px solid #d0cbc4;border-radius:3px;">
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="spCaptureScene()">🎬 Capture</button>
+        </div>
+        <div id="sp-scene-row" style="display:flex;flex-direction:column;gap:6px;">
+          <!-- populated by spRenderScenes() -->
+        </div>
+      </div>
+
     </div>
 
   </div>
@@ -299,6 +308,6 @@
 
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=9"></script>
-<script src="js/balcony.js?v=20260526g"></script>
+<script src="js/balcony.js?v=20260526j"></script>
 </body>
 </html>
