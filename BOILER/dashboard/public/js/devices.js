@@ -1000,11 +1000,17 @@ function toggleDpsPanel(id, btn) {
         if (typeof raw === 'number' && lbl.includes('x0.1')) {
           display = `${(raw / 10).toFixed(1)}°C`;
         }
+        // Truncate long raw values (e.g. Tuya scene_data_v2 162-char hex blobs)
+        // so the DPS panel grid stays readable. Full value preserved on hover.
+        const rawDisplay = display;
+        const truncated = display.length > 24
+          ? display.slice(0, 12) + '…' + display.slice(-6) + ` (${display.length}b)`
+          : display;
         // Shorten BSH keys for display: BSH.Common.Status.DoorState → DoorState
         const shortKey = k.includes('.') ? k.split('.').pop() : k;
         return `
         <span class="dps-key" title="${escHtml(k)}">${escHtml(shortKey)}</span>
-        <span class="dps-val">${escHtml(display)}</span>
+        <span class="dps-val" title="${escHtml(rawDisplay)}">${escHtml(truncated)}</span>
         <input class="dps-lbl" data-dps="${k}" value="${escHtml(lbl)}" placeholder="label…">
         <span></span>`;
       }).join('')}

@@ -1420,6 +1420,14 @@
     spRenderScenes();
   }
 
+  // Decode Tuya scene_data_v2 binary hex to a tiny tag: just "#N" (scene_num).
+  // Full hex still available on hover via the title attribute.
+  function spSceneSummary(hex) {
+    if (!hex || typeof hex !== 'string') return '—';
+    const sceneNum = parseInt(hex.slice(0, 2), 16);
+    return Number.isFinite(sceneNum) ? `#${sceneNum}` : '?';
+  }
+
   function spRenderScenes() {
     const row = document.getElementById('sp-scene-row');
     if (!row) return;
@@ -1448,7 +1456,7 @@
       return `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:${playing ? '#eafbef' : '#f8f5f1'};border-radius:4px;${playing ? 'outline:2px solid #3a7d44;' : ''}">
         <button class="btn-test" style="background:${bg};color:${fg};border-color:${border};flex:1;text-align:left;" onclick="spApplyScene(${i})" title="Apply scene">▶ ${safeName}</button>
         ${badge}
-        <span style="font-size:0.72rem;color:#aaa;font-family:monospace;" title="DPS 25 raw value">${s.scene_data.slice(0, 16)}…</span>
+        <span style="font-size:0.72rem;color:#aaa;" title="DPS 25 raw: ${s.scene_data}">${spSceneSummary(s.scene_data)}</span>
         <button class="btn-test" style="border-color:#c0392b;color:#c0392b;padding:2px 8px;" onclick="spDeleteScene(${i})" title="Delete scene">×</button>
       </div>`;
     }).join('');
