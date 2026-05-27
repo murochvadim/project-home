@@ -1443,6 +1443,398 @@ def results_image():
     return send_file(png_path, mimetype='image/png')
 
 
+# ── yt-dlp integration — download YouTube playlists/videos to Music ──
+# Phase 1 (since 2026-05-27). Three endpoints:
+#   POST /api/media/yt-dlp/probe      — quick metadata fetch (no download)
+#   POST /api/media/yt-dlp/start      — spawn yt-dlp subprocess, return job_id
+#   GET  /api/media/yt-dlp/status/:id — poll job state + per-track status
+# Auto-creates a media_playlists row when create_playlist=true on completion.
+#
+# Canonical yt-dlp command line (proven Phase 0):
+#   python3 -m yt_dlp -f "bestaudio[ext=m4a]/bestaudio"
+#     --extract-audio --audio-format m4a --newline
+#     -o "/mnt/media/Music/<folder>/%(playlist_index)03d - %(title)s.%(ext)s" <url>
+# `--newline` forces yt-dlp to emit '\n' between [download] lines instead of
+# '\r' overwrites, so line-based stdout parsing works.
+
+_yt_jobs      = {}                          # uuid → job dict
+_yt_jobs_lock = threading.Lock()
+_YT_CMD       = ['python3', '-m', 'yt_dlp']
+_YT_FOLDER_RE = re.compile(r'[^a-zA-Z0-9 _\-À-￿]')   # allow unicode names
+_YT_DEST_RE   = re.compile(r'\[download\] Destination:\s+(.+?)\s*$')
+_YT_DONE_RE   = re.compile(r'\[download\]\s+100%\s+of\s')
+
+# Timestamp matcher for description-based auto-split. Captures H:MM:SS,
+# MM:SS, or M:SS — covers both bare timestamps ("17:18") and parenthesized
+# ones ("(17:18)"). The bounding `\b` keeps it from matching dates etc.
+_YT_TS_RE     = re.compile(r'\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b')
+# Filename sanitizer — strip filesystem-illegal chars but keep unicode.
+_YT_FNAME_RE  = re.compile(r'[<>:"/\\|?*\n\r\t]')
+
+
+def _yt_sanitize_folder(name):
+    """Allow letters / digits / spaces / underscore / hyphen plus any non-ASCII
+    (so Russian / Hebrew / Chinese playlist titles work). Strip and clamp."""
+    s = (name or '').strip().strip('.')
+    s = _YT_FOLDER_RE.sub('_', s)[:100].strip().strip('_')
+    return s or 'YouTube_Download'
+
+
+@app.route('/api/media/yt-dlp/probe', methods=['POST'])
+def yt_dlp_probe():
+    """Return {type, title, track_count, suggested_folder} without downloading.
+    Lets the dashboard auto-fill the folder field once the user pastes a URL."""
+    url = (request.get_json(silent=True) or {}).get('url', '').strip()
+    if not url or not url.startswith(('http://', 'https://')):
+        return jsonify({'error': 'invalid url'}), 400
+    try:
+        out = subprocess.check_output(
+            _YT_CMD + ['--flat-playlist', '--skip-download',
+                       '--print', '%(playlist_title|webpage_url_basename)s|%(title)s',
+                       url],
+            stderr=subprocess.PIPE, text=True, timeout=30,
+            env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+        )
+        # Split safely — output is full lines, NOT prefixed with the URL.
+        lines = [l for l in out.splitlines() if l.strip() and '|' in l]
+        if not lines:
+            return jsonify({'error': 'no tracks found at URL'}), 400
+        first_pl_title, first_track_title = lines[0].split('|', 1)
+        # Single video: just one row, and the "playlist_title" column falls
+        # back to webpage_url_basename which yt-dlp fills with the video id.
+        if len(lines) == 1:
+            return jsonify({
+                'type': 'video',
+                'title': first_track_title,
+                'track_count': 1,
+                'suggested_folder': _yt_sanitize_folder(first_track_title),
+            })
+        return jsonify({
+            'type': 'playlist',
+            'title': first_pl_title,
+            'track_count': len(lines),
+            'suggested_folder': _yt_sanitize_folder(first_pl_title),
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'probe timeout (>30s)'}), 504
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or '').strip().splitlines()[-1][:200] if e.stderr else 'unknown error'
+        return jsonify({'error': f'yt-dlp probe failed: {err}'}), 502
+    except Exception as e:
+        log.exception('yt_dlp_probe')
+        return jsonify({'error': str(e)}), 500
+
+
+def _yt_parse_timestamps(description, total_sec=None):
+    """Extract sorted, deduped track list from a YouTube video description.
+    Handles common compilation-video layouts (the timestamp can be at line
+    start, end, or wrapped in parens/brackets). Returns list of
+    {start_sec, title} dicts. `total_sec`, if given, filters out timestamps
+    that exceed the video duration (avoids picking up text like "see at
+    10:00 PM PST" as a track marker)."""
+    if not description:
+        return []
+    candidates = []
+    for line in description.splitlines():
+        for m in _YT_TS_RE.finditer(line):
+            h, mm, ss = m.groups()
+            if ss is None:
+                start = int(h) * 60 + int(mm)         # MM:SS
+            else:
+                start = int(h) * 3600 + int(mm) * 60 + int(ss)  # HH:MM:SS
+            if total_sec and start > total_sec + 5:
+                continue
+            # Title = everything else on the line, minus the timestamp.
+            title = (line[:m.start()] + ' ' + line[m.end():]).strip()
+            # Strip wrapping punctuation, leading track-number prefix.
+            title = title.strip('()[]-—:.,•· \t')
+            title = re.sub(r'^\d+[\.\)]\s*', '', title).strip()
+            title = title.strip('()[]-—:.,•· \t')
+            if len(title) < 3:
+                continue
+            candidates.append({'start_sec': start, 'title': title})
+    # Dedupe by start_sec (description often repeats the tracklist twice).
+    seen, unique = set(), []
+    for c in sorted(candidates, key=lambda x: x['start_sec']):
+        if c['start_sec'] in seen:
+            continue
+        seen.add(c['start_sec'])
+        unique.append(c)
+    return unique
+
+
+def _yt_probe_duration_sec(m4a_path):
+    """Get audio duration via ffprobe. Returns float seconds or None on failure."""
+    try:
+        out = subprocess.check_output(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1', m4a_path],
+            text=True, timeout=15,
+        )
+        return float(out.strip())
+    except Exception as e:
+        log.warning('ffprobe failed for %s: %s', m4a_path, e)
+        return None
+
+
+def _yt_split_m4a_by_tracks(m4a_path, tracks, target_dir):
+    """Use ffmpeg `-c copy` (lossless, no re-encoding) to split one .m4a
+    into N files based on the parsed tracks. End time of track N is the
+    start of track N+1; the last track runs to end-of-file. Returns the
+    list of created file paths."""
+    if len(tracks) < 2:
+        return []
+    created = []
+    for idx, track in enumerate(tracks):
+        start = track['start_sec']
+        nxt   = tracks[idx + 1]['start_sec'] if idx + 1 < len(tracks) else None
+        safe_title = _YT_FNAME_RE.sub('_', track['title'])[:120].strip()
+        out_name   = f"{idx + 1:03d} - {safe_title}.m4a"
+        out_path   = os.path.join(target_dir, out_name)
+        cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+               '-i', m4a_path, '-ss', str(start)]
+        if nxt is not None:
+            cmd.extend(['-to', str(nxt)])
+        cmd.extend(['-c', 'copy', '-avoid_negative_ts', 'make_zero', out_path])
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if proc.returncode != 0:
+                log.warning('ffmpeg split failed track %d (%s): %s',
+                            idx + 1, safe_title, (proc.stderr or '')[:200])
+                continue
+            created.append(out_path)
+        except Exception as e:
+            log.warning('ffmpeg split exception track %d: %s', idx + 1, e)
+    return created
+
+
+def _yt_try_split(job_id):
+    """Walk the job's target_dir for .m4a + .description pairs. For each
+    pair, parse the description for timestamps; if 2+ tracks found, split
+    the m4a with ffmpeg and remove the original. The auto-playlist step
+    will then pick up the split files naturally on its next dir walk."""
+    with _yt_jobs_lock:
+        job        = _yt_jobs[job_id]
+        target_dir = job['target_dir']
+    split_summary = []                        # for the job state
+    try:
+        for fname in sorted(os.listdir(target_dir)):
+            if not fname.lower().endswith('.m4a'):
+                continue
+            m4a_path  = os.path.join(target_dir, fname)
+            # yt-dlp writes the description with the same stem + .description
+            base, _   = os.path.splitext(m4a_path)
+            desc_path = base + '.description'
+            if not os.path.isfile(desc_path):
+                continue
+            with open(desc_path, 'r', encoding='utf-8', errors='replace') as fh:
+                desc = fh.read()
+            duration = _yt_probe_duration_sec(m4a_path)
+            tracks   = _yt_parse_timestamps(desc, total_sec=duration)
+            if len(tracks) < 2:
+                continue
+            log.info('yt-dlp[%s] auto-split %s: %d tracks',
+                     job_id[:8], fname, len(tracks))
+            created = _yt_split_m4a_by_tracks(m4a_path, tracks, target_dir)
+            if not created:
+                continue
+            # Replace the original full file with the splits.
+            try:
+                os.remove(m4a_path)
+                os.remove(desc_path)
+            except Exception as e:
+                log.warning('cleanup after split (%s): %s', m4a_path, e)
+            split_summary.append({
+                'original': fname,
+                'parts':    len(created),
+            })
+    except Exception as e:
+        log.exception('yt_try_split[%s]', job_id[:8])
+    # Update the job's tracks list to reflect the new files.
+    if split_summary:
+        with _yt_jobs_lock:
+            j = _yt_jobs[job_id]
+            j['tracks'] = [
+                {'name': fn, 'status': 'done'}
+                for fn in sorted(os.listdir(target_dir))
+                if fn.lower().endswith('.m4a')
+            ]
+            j['split_summary'] = split_summary
+
+
+def _yt_reader(job_id):
+    """Background thread: read yt-dlp stdout line-by-line, update tracks.
+    On clean exit, optionally create a playlist row with all .m4a files in
+    the target dir."""
+    job  = _yt_jobs[job_id]
+    proc = job['process']
+    try:
+        for raw in iter(proc.stdout.readline, ''):
+            line = raw.rstrip('\n')
+            log.debug('yt-dlp[%s] %s', job_id[:8], line)
+            m = _YT_DEST_RE.search(line)
+            if m:
+                name = os.path.basename(m.group(1).strip())
+                with _yt_jobs_lock:
+                    # New track row only if name not already tracked. The
+                    # ExtractAudio post-processor also emits a Destination
+                    # line for the same file — we keep the earlier 'downloading'
+                    # row instead of duplicating.
+                    if not any(t['name'] == name for t in job['tracks']):
+                        job['tracks'].append({'name': name, 'status': 'downloading'})
+                continue
+            if _YT_DONE_RE.search(line):
+                with _yt_jobs_lock:
+                    for t in reversed(job['tracks']):
+                        if t['status'] == 'downloading':
+                            t['status'] = 'done'
+                            break
+                continue
+        rc = proc.wait()
+        with _yt_jobs_lock:
+            job['state']        = 'done' if rc == 0 else 'error'
+            job['completed_at'] = time.time()
+            if rc != 0:
+                job['error'] = f'yt-dlp exited with rc={rc}'
+        # Auto-split compilation videos before playlist creation, so the
+        # playlist gets the split files instead of the long original.
+        if rc == 0 and job.get('auto_split'):
+            _yt_try_split(job_id)
+        if rc == 0 and job.get('create_playlist'):
+            _yt_auto_create_playlist(job_id)
+    except Exception as e:
+        log.exception('yt-dlp reader[%s]', job_id[:8])
+        with _yt_jobs_lock:
+            job['state']        = 'error'
+            job['error']        = str(e)
+            job['completed_at'] = time.time()
+
+
+def _yt_auto_create_playlist(job_id):
+    """Walk job's target_dir, build items array, INSERT into media_playlists."""
+    with _yt_jobs_lock:
+        job = _yt_jobs[job_id]
+        target = job['target_dir']
+        folder = job['folder']
+    try:
+        items = []
+        for fname in sorted(os.listdir(target)):
+            if fname.lower().endswith(('.m4a', '.mp3', '.opus', '.aac')):
+                items.append({
+                    'path':  os.path.join(target, fname),
+                    'type':  'audio',
+                    'title': fname,
+                })
+        if not items:
+            log.warning('yt-dlp[%s] no audio files in %s — skipping playlist creation',
+                        job_id[:8], target)
+            return
+        rows = db_query(
+            "INSERT INTO media_playlists (name, items) "
+            "VALUES (%s, %s::jsonb) RETURNING id",
+            (folder, json.dumps(items)),
+        )
+        pid = rows[0]['id'] if rows else None
+        with _yt_jobs_lock:
+            _yt_jobs[job_id]['playlist_id'] = pid
+        log.info('yt-dlp[%s] created playlist id=%s name=%r with %d tracks',
+                 job_id[:8], pid, folder, len(items))
+    except Exception as e:
+        log.exception('yt-dlp auto-playlist[%s]', job_id[:8])
+        with _yt_jobs_lock:
+            _yt_jobs[job_id]['playlist_error'] = str(e)
+
+
+@app.route('/api/media/yt-dlp/start', methods=['POST'])
+def yt_dlp_start():
+    body            = request.get_json(silent=True) or {}
+    url             = (body.get('url') or '').strip()
+    folder_raw      = body.get('folder') or ''
+    create_playlist = bool(body.get('create_playlist', True))
+    auto_split      = bool(body.get('auto_split', True))   # default ON
+
+    if not url or not url.startswith(('http://', 'https://')):
+        return jsonify({'error': 'invalid url'}), 400
+    folder = _yt_sanitize_folder(folder_raw)
+    try:
+        target_dir = safe_path(f'Music/{folder}')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    os.makedirs(target_dir, exist_ok=True)
+
+    out_template = os.path.join(
+        target_dir, '%(playlist_index)03d - %(title)s.%(ext)s'
+    )
+    cmd = _YT_CMD + [
+        '-f', 'bestaudio[ext=m4a]/bestaudio',
+        '--extract-audio', '--audio-format', 'm4a',
+        '--newline',
+        '-o', out_template,
+        url,
+    ]
+    if auto_split:
+        # Save the YouTube description as .description sidecar — used
+        # post-download to parse timestamps for chapter-less compilations.
+        cmd.insert(-1, '--write-description')
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+        )
+    except Exception as e:
+        log.exception('yt_dlp_start spawn')
+        return jsonify({'error': f'spawn failed: {e}'}), 500
+
+    import uuid as _uuid
+    job_id = _uuid.uuid4().hex
+    with _yt_jobs_lock:
+        _yt_jobs[job_id] = {
+            'url':             url,
+            'folder':          folder,
+            'target_dir':      target_dir,
+            'create_playlist': create_playlist,
+            'auto_split':      auto_split,
+            'process':         proc,
+            'tracks':          [],
+            'started_at':      time.time(),
+            'completed_at':    None,
+            'state':           'running',
+            'error':           None,
+            'playlist_id':     None,
+            'playlist_error':  None,
+            'split_summary':   None,
+        }
+    threading.Thread(target=_yt_reader, args=(job_id,), daemon=True).start()
+    return jsonify({
+        'job_id':     job_id,
+        'folder':     folder,
+        'target_dir': target_dir,
+    })
+
+
+@app.route('/api/media/yt-dlp/status/<job_id>')
+def yt_dlp_status(job_id):
+    with _yt_jobs_lock:
+        job = _yt_jobs.get(job_id)
+        if not job:
+            return jsonify({'error': 'job not found'}), 404
+        elapsed = (job['completed_at'] or time.time()) - job['started_at']
+        return jsonify({
+            'state':          job['state'],
+            'tracks':         list(job['tracks']),
+            'elapsed_sec':    round(elapsed, 1),
+            'error':          job['error'],
+            'folder':         job['folder'],
+            'playlist_id':    job.get('playlist_id'),
+            'playlist_error': job.get('playlist_error'),
+            'split_summary':  job.get('split_summary'),
+        })
+
+
 # ── Playlists CRUD (Phase 1) ─────────────────────────────────────
 # User-created playlists of /mnt/media items. Items stored as JSONB
 # array of {path, title, type, duration_sec?}. Playback wiring lives

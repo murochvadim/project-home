@@ -367,6 +367,177 @@ const _unassigned = {
   curPath:  'Music',      // current folder being shown
 };
 
+// ── yt-dlp Download from YouTube card (Phase 1, since 2026-05-27) ────────
+// Backend: 3 endpoints on player_service.py — probe (metadata only),
+// start (spawn yt-dlp), status (poll job state). See youtube_playlist_integration.md.
+
+const YT_API = MEDIA_API + '/api/media/yt-dlp';
+let _ytPollTimer = null;
+let _ytCurrentJob = null;
+let _ytDetectInflight = false;
+
+function ytSetMeta(text, color) {
+  const el = document.getElementById('yt-meta');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = color || '#888';
+}
+
+async function ytUrlChanged() {
+  // Lightweight side-effect: clear stale meta when user edits the URL field.
+  ytSetMeta('', '#888');
+}
+
+async function ytDetect() {
+  const url = document.getElementById('yt-url').value.trim();
+  if (!url) { ytSetMeta('✗ paste a URL first', '#c0392b'); return; }
+  if (_ytDetectInflight) return;
+  _ytDetectInflight = true;
+  const btn = document.getElementById('yt-detect-btn');
+  if (btn) btn.disabled = true;
+  ytSetMeta('🔄 probing…', '#888');
+  try {
+    const r = await fetch(YT_API + '/probe', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ url }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      ytSetMeta('✗ ' + (data.error || `HTTP ${r.status}`), '#c0392b');
+      return;
+    }
+    // Auto-fill the folder field with the suggested name.
+    const folderEl = document.getElementById('yt-folder');
+    if (folderEl && !folderEl.value.trim()) folderEl.value = data.suggested_folder;
+    const noun = data.type === 'playlist'
+      ? `playlist · ${data.track_count} tracks`
+      : 'single video';
+    ytSetMeta(`✓ ${noun} · ${data.title.slice(0, 60)}${data.title.length > 60 ? '…' : ''}`, '#27ae60');
+  } catch (e) {
+    ytSetMeta('✗ ' + (e.message || 'fetch error'), '#c0392b');
+  } finally {
+    _ytDetectInflight = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function ytStartDownload() {
+  const url        = document.getElementById('yt-url').value.trim();
+  const folder     = document.getElementById('yt-folder').value.trim();
+  const create     = document.getElementById('yt-create-playlist').checked;
+  const auto_split = document.getElementById('yt-auto-split').checked;
+  if (!url) { ytSetMeta('✗ paste a URL first', '#c0392b'); return; }
+  if (!folder) { ytSetMeta('✗ enter a folder name (or click Detect)', '#c0392b'); return; }
+  if (_ytCurrentJob) {
+    if (!confirm('A download is already in progress. Start a new one anyway?')) return;
+    if (_ytPollTimer) { clearInterval(_ytPollTimer); _ytPollTimer = null; }
+    _ytCurrentJob = null;
+  }
+  const btn = document.getElementById('yt-download-btn');
+  if (btn) btn.disabled = true;
+  ytSetMeta('🔄 starting…', '#888');
+  try {
+    const r = await fetch(YT_API + '/start', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ url, folder, create_playlist: create, auto_split }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      ytSetMeta('✗ ' + (data.error || `HTTP ${r.status}`), '#c0392b');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    _ytCurrentJob = data.job_id;
+    ytSetMeta(`▶ downloading to ${data.target_dir}`, '#888');
+    // Reveal progress area + start polling
+    const prog = document.getElementById('yt-progress');
+    if (prog) prog.style.display = 'block';
+    document.getElementById('yt-tracks').innerHTML =
+      '<div style="color:#aaa; font-size:0.78rem;">Waiting for first track…</div>';
+    document.getElementById('yt-state-pill').textContent = 'running';
+    document.getElementById('yt-state-pill').style.background = '#3498db';
+    document.getElementById('yt-state-pill').style.color = '#fff';
+    document.getElementById('yt-summary').textContent = '';
+    ytPollStatus();
+    _ytPollTimer = setInterval(ytPollStatus, 1500);
+  } catch (e) {
+    ytSetMeta('✗ ' + (e.message || 'fetch error'), '#c0392b');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function ytPollStatus() {
+  if (!_ytCurrentJob) return;
+  try {
+    const r = await fetch(YT_API + '/status/' + _ytCurrentJob);
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      // Job might have been cleared on server restart — stop polling.
+      if (_ytPollTimer) { clearInterval(_ytPollTimer); _ytPollTimer = null; }
+      _ytCurrentJob = null;
+      ytSetMeta('✗ ' + (data.error || `HTTP ${r.status}`), '#c0392b');
+      return;
+    }
+    // Render tracks
+    const tracksEl = document.getElementById('yt-tracks');
+    if (tracksEl) {
+      if (!data.tracks || !data.tracks.length) {
+        tracksEl.innerHTML = '<div style="color:#aaa; font-size:0.78rem;">Waiting for first track…</div>';
+      } else {
+        tracksEl.innerHTML = data.tracks.map(t => {
+          const pillBg = t.status === 'done'        ? '#27ae60'
+                       : t.status === 'downloading' ? '#3498db'
+                       : '#888';
+          return `<div style="display:flex; align-items:center; gap:8px; font-size:0.82rem;">
+            <span style="background:${pillBg}; color:#fff; padding:1px 6px; border-radius:8px; font-size:0.72rem; font-weight:600; min-width:74px; text-align:center;">${t.status}</span>
+            <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(t.name || '').replace(/"/g,'&quot;')}">${t.name || '?'}</span>
+          </div>`;
+        }).join('');
+      }
+    }
+    // Elapsed
+    const elapsedEl = document.getElementById('yt-elapsed');
+    if (elapsedEl) elapsedEl.textContent = `${data.elapsed_sec}s elapsed`;
+    // Terminal state
+    if (data.state === 'done' || data.state === 'error') {
+      if (_ytPollTimer) { clearInterval(_ytPollTimer); _ytPollTimer = null; }
+      _ytCurrentJob = null;
+      const pill = document.getElementById('yt-state-pill');
+      if (pill) {
+        pill.textContent = data.state;
+        pill.style.background = data.state === 'done' ? '#27ae60' : '#c0392b';
+      }
+      const sum = document.getElementById('yt-summary');
+      if (sum) {
+        if (data.state === 'done') {
+          const n = (data.tracks || []).length;
+          let txt = `✓ Downloaded ${n} track${n === 1 ? '' : 's'}`;
+          if (data.split_summary && data.split_summary.length) {
+            const totalParts = data.split_summary.reduce((s, r) => s + r.parts, 0);
+            txt += ` (auto-split ${data.split_summary.length} compilation → ${totalParts} tracks)`;
+          }
+          if (data.playlist_id) txt += ` · created playlist "${data.folder}" (id=${data.playlist_id})`;
+          else if (data.playlist_error) txt += ` · playlist creation failed: ${data.playlist_error}`;
+          sum.textContent = txt;
+          sum.style.color = '#27ae60';
+          // Refresh playlists card so the new playlist appears
+          if (typeof loadPlaylists === 'function') loadPlaylists();
+        } else {
+          sum.textContent = '✗ ' + (data.error || 'failed');
+          sum.style.color = '#c0392b';
+        }
+      }
+      const btn = document.getElementById('yt-download-btn');
+      if (btn) btn.disabled = false;
+      ytSetMeta('', '#888');
+    }
+  } catch (e) {
+    console.warn('ytPollStatus error:', e);
+  }
+}
+
 async function openUnassignedDialog() {
   const overlay = document.getElementById('unassigned-modal-overlay');
   const list    = document.getElementById('unassigned-list');

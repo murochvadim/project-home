@@ -1,6 +1,6 @@
 # YouTube Playlist → Media Player Integration
 
-**Status as of 2026-05-18:** concept agreed, yt-dlp installed on laptop for proof-of-concept, blocked on private-playlist cookies. Pick up here when next at the system.
+**Status as of 2026-05-27:** ✅ Phase 0 complete — yt-dlp installed on LXC 100, test public video downloaded as `.m4a`, verified end-to-end through 🔍 Unassigned → playlist → Cast → soundbar. Phase 1 (dashboard URL→download form) is the next milestone. Cookie path for private playlists still pending (Phase 1.5).
 
 ---
 
@@ -84,9 +84,21 @@ Quality risk: top hit isn't always the right version (could be cover, karaoke, l
 | Component | Where | Status |
 |---|---|---|
 | yt-dlp 2026.03.17 | Laptop (Windows), `pip install --user` | ✓ installed, works |
-| ffmpeg | nowhere | ✗ not installed — only needed for MP3 conversion or video+audio merge. `.m4a` (default) works fine through Player's existing Cast path. |
-| yt-dlp on LXC 100 | LXC 100 | ✗ not yet — Phase 0 will install |
+| **yt-dlp 2026.03.17** | **LXC 100, `pip3 install --user`** | ✅ **installed 2026-05-27 — Phase 0 verified** |
+| **ffmpeg** | **LXC 100, already system-installed** | ✅ **present out of the box on LXC 100 — Phase 2 MP3 conversion + m4a FixupM4a both unlocked** |
 | Cookie file | nowhere | ✗ blocker for private playlists — see below |
+
+## What was actually installed on LXC 100 (2026-05-27)
+
+```bash
+ssh root@192.168.1.138 'pip3 install --user --upgrade yt-dlp'
+ssh root@192.168.1.138 'mkdir -p /mnt/media/Music/_yt_test'
+```
+
+Versions confirmed:
+- Python 3.10.12 + pip 22.0.2 (system)
+- yt-dlp 2026.03.17 (in `/root/.local/bin/yt-dlp` — but always invoke via `python3 -m yt_dlp` to dodge the PATH-warning)
+- ffmpeg (system-installed, found at `/usr/bin/ffmpeg`)
 
 **Test artifact**: one file in `C:\Users\muroc\Downloads\Несчастный случай： Снежинка (Квартирник у Маргулиса).webm` from the test command. Plays in VLC / Chrome / Edge (Opus codec, .webm container). Not in Windows Media Player.
 
@@ -131,10 +143,29 @@ The LXC has no browser → must use a **file-based cookie**:
 
 | Phase | Effort | What it gives you |
 |---|---|---|
-| **0 — proof on LXC** | 10 min | `pip install yt-dlp` on LXC 100; SSH-trigger manual download to `/mnt/media/Music/test/`; confirm 🔍 Unassigned picks it up and Cast plays it |
+| **0 — proof on LXC** | ✅ done 2026-05-27 | `pip3 install --user yt-dlp` on LXC 100; manual download of test video to `/mnt/media/Music/_yt_test/`; verified 🔍 Unassigned shows it, Cast → soundbar plays it. End-to-end chain confirmed. |
 | **1 — dashboard button** | ~1-2 h | New endpoint `POST /api/media/yt-dlp` on player_service.py; new card on Media tab with URL input + Download button + simple progress display |
 | **1.5 — cookie upload** | ~30 min | Form to upload `cookies.txt` once; server stores in `/etc/yt-dlp/cookies.txt`; every download uses it. Re-upload when expired. |
-| **2 — niceties** | later | ffmpeg install for MP3 conversion; weekly cron `pip install -U yt-dlp`; text-list input mode (mode B); auto-add to project playlist on completion; re-run-to-sync mode (downloads only new tracks via `--download-archive`) |
+| **2 — niceties** | later | Weekly cron `pip install -U yt-dlp`; text-list input mode (mode B); auto-add to project playlist on completion; re-run-to-sync mode (downloads only new tracks via `--download-archive`). Note: ffmpeg requirement for MP3 conversion already satisfied — was system-installed on LXC 100. |
+
+## ⭐ Canonical yt-dlp invocation (m4a, no re-encoding)
+
+Phase 0 confirmed the right format-selector combo. `bestaudio` defaults to format 251 (Opus / WebM) which the MEDIA library doesn't recognize (`.webm` is NOT in its supported audio list). To get a clean `.m4a` AAC file with no re-encoding, use this command shape for every download:
+
+```bash
+python3 -m yt_dlp \
+  --no-playlist \
+  -f "bestaudio[ext=m4a]/bestaudio" \
+  --extract-audio --audio-format m4a \
+  -o "/mnt/media/Music/<folder>/%(playlist_index)03d - %(title)s.%(ext)s" \
+  "<URL>"
+```
+
+- `bestaudio[ext=m4a]/bestaudio` — first try the m4a-container stream (format 140, AAC), fall back to anything if YouTube didn't publish one.
+- `--extract-audio --audio-format m4a` — even when the source is m4a-native (format 140), yt-dlp runs ffmpeg's **FixupM4a** to clean up the container metadata before writing. Output: "Not converting audio; file is already in target format m4a" — fast, lossless.
+- For single videos (ambient / one-off tracks): use `--no-playlist`. For playlists: drop that flag and `%(playlist_index)03d - %(title)s.%(ext)s` produces `001 - Title.m4a`, `002 - Title.m4a`, etc.
+
+This is the format the Phase 1 endpoint will use by default.
 
 ---
 
@@ -287,9 +318,12 @@ When the Phase 1 dashboard form lands (URL input → ▶ Download), no separate 
 
 ## Where to pick up
 
-1. Read this file
-2. Quit Chrome → re-test cookie path on laptop to confirm playlist `PLB38FEB8BC8C1E8CE` enumerates
-3. Tell me to proceed with Phase 0 — installs yt-dlp on LXC 100, then we test BOTH use cases:
-   - Your music playlist (`PLB38FEB8BC8C1E8CE`, needs cookies)
-   - One ambient track (e.g. 10-hour rain, no cookies needed)
-4. If Phase 0 looks good, decide on Phase 1 dashboard button
+1. ✅ ~~Read this file~~ (done)
+2. ✅ ~~Phase 0 — install yt-dlp on LXC 100 + verify single-video end-to-end through Cast~~ (done 2026-05-27)
+3. **Phase 1 — design + implement dashboard URL→download form.** Open questions for that pass:
+   - URL input only, or also a multi-line "search list" textarea (mode B)?
+   - Per-download folder name field, or always `Music/<YouTube-playlist-title>/`?
+   - Progress display: full SSE stream (yt-dlp's `[download] xx%` lines) or just a coarse `pending → downloading → done` summary per track?
+   - Auto-create project playlist on completion: default ON, or always ask?
+4. **Cookie path** (Phase 1.5) — separate test session. Quit Chrome / Edge cleanly, run the laptop test against `PLB38FEB8BC8C1E8CE`; OR install **"Get cookies.txt LOCALLY"** extension, export, upload to LXC 100 via the Phase 1.5 upload form.
+5. **Phase 2 niceties** — text-list input mode B, weekly auto-update cron, `--download-archive` for incremental sync.

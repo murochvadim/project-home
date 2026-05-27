@@ -427,6 +427,53 @@
       </div>
     </div>
 
+    <!-- Download from YouTube card (added 2026-05-27, Phase 1) — paste a
+         playlist or single-video URL, picks bestaudio[ext=m4a] via yt-dlp on
+         LXC 100, drops files into /mnt/media/Music/<folder>/. Auto-creates a
+         project playlist when the checkbox is on. See youtube_playlist_integration.md. -->
+    <div class="card">
+      <h2 style="margin:0 0 10px 0; cursor:help;"
+          title="Paste a YouTube URL → file lands in /mnt/media/Music/<folder>/&#10;&#10;Create playlist = also add a ▶ Play card to the Playlists row&#10;Auto-split = if the URL is a compilation (one long video with timestamped songs), chop it into one .m4a per song">Download from YouTube</h2>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="text" id="yt-url" placeholder="https://www.youtube.com/playlist?list=… or watch?v=…"
+                 style="flex:1; padding:6px 8px; font-size:0.9rem;"
+                 oninput="ytUrlChanged()" onblur="ytUrlChanged()">
+          <button class="btn btn-secondary btn-sm" id="yt-detect-btn" onclick="ytDetect()" title="Fetch playlist/video title">🔍 Detect</button>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <label for="yt-folder" style="font-size:0.85rem; min-width:90px;">Folder:</label>
+          <input type="text" id="yt-folder" placeholder="(auto-fills after Detect, or type your own)"
+                 style="flex:1; padding:6px 8px; font-size:0.9rem;">
+          <span style="font-size:0.78rem; color:#888;">in&nbsp;<code>/mnt/media/Music/</code></span>
+        </div>
+        <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+          <label style="font-size:0.85rem; display:flex; align-items:center; gap:6px;">
+            <input type="checkbox" id="yt-create-playlist" checked>
+            Create playlist after download
+          </label>
+          <label style="font-size:0.85rem; display:flex; align-items:center; gap:6px;"
+                 title="If the video has chapter markers OR a timestamped tracklist in its description, ffmpeg splits the single file into one .m4a per song after download. No-op when no timestamps are detected.">
+            <input type="checkbox" id="yt-auto-split" checked>
+            Auto-split compilations
+          </label>
+          <button class="btn btn-success btn-sm" id="yt-download-btn" onclick="ytStartDownload()">▶ Download</button>
+          <span id="yt-meta" style="font-size:0.82rem; color:#888;"></span>
+        </div>
+        <!-- Progress area (hidden until first job starts) -->
+        <div id="yt-progress" style="display:none; margin-top:6px; padding:10px; background:#fafafa; border:1px solid #e6e1d6; border-radius:4px;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
+            <span id="yt-state-pill" style="padding:2px 8px; border-radius:10px; font-size:0.78rem; font-weight:600;">running</span>
+            <span id="yt-elapsed" style="font-size:0.78rem; color:#888;"></span>
+            <span id="yt-summary" style="font-size:0.82rem;"></span>
+          </div>
+          <div id="yt-tracks" style="display:flex; flex-direction:column; gap:4px; max-height:200px; overflow-y:auto;">
+            <div style="color:#aaa; font-size:0.78rem;">Waiting for first track…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Playlists card (added 2026-05-17) — CRUD only in Phase 1.
          Phase 2 adds playback wiring; Phase 3 adds multi-select add-to-playlist
          from the browser above. -->
@@ -730,6 +777,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=104"></script>
+<script src="js/media.js?v=107"></script>
 </body>
 </html>
