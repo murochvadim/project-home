@@ -405,9 +405,14 @@
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
         <h2 style="margin:0;">QNAP Media</h2>
         <div style="display:flex; gap:6px;">
+          <!-- Group 1 (default grey): file curation — Select tracks for bulk add to playlist + Unassigned modal -->
           <button class="btn btn-secondary btn-sm" id="media-select-btn" onclick="toggleSelectMode()">☑ Select</button>
           <button class="btn btn-secondary btn-sm" id="media-unassigned-btn" onclick="openUnassignedDialog()" title="Find files in Music/ that are not in any playlist">🔍 Unassigned</button>
-          <button class="btn btn-secondary btn-sm" onclick="loadMediaBrowser()">↺ Refresh</button>
+          <!-- Gap between groups -->
+          <span style="width:18px; display:inline-block;"></span>
+          <!-- Group 2 (orange): library refresh — Rescan rebuilds MiniDLNA DB, Refresh re-renders the file grid -->
+          <button class="btn btn-secondary btn-sm" id="media-rescan-btn" onclick="rescanMiniDLNA()" title="Force a full MiniDLNA library rebuild. Use this if you just copied files to the QNAP and they don't appear in the TV's media library or you get 'Not indexed by MiniDLNA' errors. Takes ~30 sec." style="background:#e67e22; color:#fff;">🔄 Rescan</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadMediaBrowser()" style="background:#e67e22; color:#fff;">↺ Refresh</button>
         </div>
       </div>
       <!-- Action bar — shown only while in select mode. Updated dynamically by selectionUpdated(). -->
@@ -777,6 +782,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=107"></script>
+<script src="js/media.js?v=110"></script>
 </body>
 </html>

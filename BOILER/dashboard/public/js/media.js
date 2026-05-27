@@ -367,6 +367,42 @@ const _unassigned = {
   curPath:  'Music',      // current folder being shown
 };
 
+// ── MiniDLNA Rescan button (since 2026-05-27) ─────────────────────────
+// Recovery path for "Not indexed by MiniDLNA" errors. Stops the daemon,
+// wipes /var/cache/minidlna/files.db, restarts → forces a full rescan.
+// Typical runtime: ~30 sec for a 1500-file library.
+
+async function rescanMiniDLNA() {
+  const btn = document.getElementById('media-rescan-btn');
+  const original = btn ? btn.textContent : '🔄 Rescan';
+  if (!confirm('Full MiniDLNA library rebuild?\n\nThis stops the daemon, wipes the index, restarts. Takes ~30 sec. Use when files don\'t appear in TV media library or you got a "Not indexed" error.')) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Rescanning…'; }
+  try {
+    const r = await fetch(MEDIA_API + '/api/media/minidlna/rescan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      alert('Rescan failed: ' + (data.error || `HTTP ${r.status}`));
+      return;
+    }
+    const c = data.counts || {};
+    const note = data.note || '';
+    alert(
+      `✓ MiniDLNA rescan complete in ${data.elapsed_sec}s\n\n` +
+      `Indexed: ${c.total ?? '?'} total\n` +
+      `  Videos:  ${c.videos ?? 0}\n` +
+      `  Music:   ${c.music ?? 0}\n` +
+      `  Photos:  ${c.photos ?? 0}\n\n` +
+      (note ? note : '')
+    );
+  } catch (e) {
+    alert('Rescan request failed: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+
 // ── yt-dlp Download from YouTube card (Phase 1, since 2026-05-27) ────────
 // Backend: 3 endpoints on player_service.py — probe (metadata only),
 // start (spawn yt-dlp), status (poll job state). See youtube_playlist_integration.md.

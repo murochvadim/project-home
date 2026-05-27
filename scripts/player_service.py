@@ -1443,6 +1443,84 @@ def results_image():
     return send_file(png_path, mimetype='image/png')
 
 
+# ── MiniDLNA library rebuild — recovery from stale/incomplete DB ──────
+# MiniDLNA only knows about files it scanned at startup OR caught via
+# inotify. Files added via QNAP/SMB (NFS mount client doesn't propagate
+# inotify) silently never get indexed → `Not indexed by MiniDLNA` errors.
+# SIGHUP does only an incremental rescan that can't recover from a stale
+# DB. The full-rebuild path is: stop service → rm files.db → start
+# service. Triggered from the dashboard 🔄 Rescan button (added 2026-05-27).
+
+@app.route('/api/media/minidlna/rescan', methods=['POST'])
+def minidlna_rescan():
+    """Force a full MiniDLNA database rebuild. Stops the daemon, deletes
+    `/var/cache/minidlna/files.db`, starts the daemon, waits for the scan
+    to make visible progress (count > 0). Returns the final counts.
+
+    Idempotent — safe to click repeatedly. Typical runtime: ~30 sec for
+    a 1500-file library. NOT exposed via UI as a "fast" rescan because
+    SIGHUP-style incremental rescans don't reliably catch missed files;
+    the full-rebuild is the only reliable recovery."""
+    log.info('minidlna_rescan: starting full DB rebuild')
+    try:
+        # Stop daemon (gracefully) — 5 sec timeout.
+        subprocess.run(['systemctl', 'stop', 'minidlna'], check=True, timeout=15)
+        # Wipe DB
+        for f in ('/var/cache/minidlna/files.db', '/var/cache/minidlna/art_cache'):
+            if os.path.isdir(f):
+                # art_cache: keep dir, just clear contents
+                for inner in os.listdir(f):
+                    try: os.remove(os.path.join(f, inner))
+                    except IsADirectoryError: pass
+                    except Exception as e: log.debug('art cache cleanup: %s', e)
+            elif os.path.isfile(f):
+                os.remove(f)
+        # Start daemon — kicks off a full scan
+        subprocess.run(['systemctl', 'start', 'minidlna'], check=True, timeout=15)
+        # Poll until the DB has SOME entries (scan made visible progress)
+        # or 60 sec timeout. Scan continues in background after this returns.
+        t0 = time.time()
+        total = 0
+        while time.time() - t0 < 60:
+            try:
+                conn = sqlite3.connect(MINIDLNA_DB)
+                cur  = conn.execute('SELECT COUNT(*) FROM details')
+                total = cur.fetchone()[0]
+                conn.close()
+                if total > 0:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        # Final stats — split by section
+        try:
+            conn = sqlite3.connect(MINIDLNA_DB)
+            row  = conn.execute(
+                "SELECT COUNT(*) AS total, "
+                "       SUM(CASE WHEN path LIKE '%/Videos/%' THEN 1 ELSE 0 END) AS videos, "
+                "       SUM(CASE WHEN path LIKE '%/Music/%' THEN 1 ELSE 0 END) AS music, "
+                "       SUM(CASE WHEN path LIKE '%/Photos/%' THEN 1 ELSE 0 END) AS photos "
+                "FROM details"
+            ).fetchone()
+            conn.close()
+            counts = {'total': row[0] or 0, 'videos': row[1] or 0, 'music': row[2] or 0, 'photos': row[3] or 0}
+        except Exception as e:
+            counts = {'error': str(e)}
+        log.info('minidlna_rescan: done — counts=%s elapsed=%.1fs', counts, time.time() - t0)
+        return jsonify({
+            'ok':         True,
+            'counts':     counts,
+            'elapsed_sec': round(time.time() - t0, 1),
+            'note':       'scan continues in background; counts may grow further',
+        })
+    except subprocess.CalledProcessError as e:
+        log.exception('minidlna_rescan systemctl failed')
+        return jsonify({'error': f'systemctl failed: {e}'}), 500
+    except Exception as e:
+        log.exception('minidlna_rescan')
+        return jsonify({'error': str(e)}), 500
+
+
 # ── yt-dlp integration — download YouTube playlists/videos to Music ──
 # Phase 1 (since 2026-05-27). Three endpoints:
 #   POST /api/media/yt-dlp/probe      — quick metadata fetch (no download)
