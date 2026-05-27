@@ -548,6 +548,16 @@ app.get('/api/power/status', async (req, res) => {
       "SELECT last_seen, last_state, NOW() - last_seen AS age FROM devices WHERE id = 'shelly_3em_main'"
     );
     if (!r.rows.length) return res.status(404).json({ error: 'shelly_3em_main not found' });
+    // Baseline always-on power = sum of mean_w across all power_devices rows.
+    // Includes manual always-on devices (their nominal_w) AND manual cyclic
+    // devices' time-averaged contribution (their peak × duty/100). P3 auto-
+    // discovered devices land here too once they exist. Surfaced under
+    // "Total Power" on the LCD card so the user can see what fraction of
+    // current draw is the unmovable baseline vs variable.
+    const aoR = await db.query(
+      "SELECT COALESCE(SUM(mean_w), 0)::int AS w FROM power_devices WHERE mean_w IS NOT NULL"
+    );
+    const always_on_w = aoR.rows[0]?.w ?? 0;
     const row = r.rows[0];
     const s = row.last_state || {};
     const phase = (p) => ({
@@ -589,8 +599,168 @@ app.get('/api/power/status', async (req, res) => {
       total_kwh,
       system_pf,
       imbalance_pct,
+      always_on_w,
       frequency_hz: 50,  // Israel grid standard — Shelly Gen 1 doesn't expose frequency via HA
     });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── POWER P2 — Manual Device Registry ────────────────────────
+// Pattern: register unmanaged loads (fridge, routers, modems, etc.) so
+// their time-averaged contribution is subtracted from each phase BEFORE
+// P3 auto-discovery starts measuring deltas on real device transitions.
+// Without this baseline, fridge compressor cycles randomly during a
+// smart device's ON/OFF transition window contaminate the measurement.
+//
+// Two-row pattern per entry — see POWER/CLAUDE.md "Manual / unmanaged
+// devices" section:
+//   * devices row: id=manual_<slug>, protocol='virtual',
+//     device_type='unmanaged_load', dps_config holds the form fields.
+//   * power_devices row: phase + mean_w (= nominal for always-on, or
+//     peak*duty/100 for cyclic, or 0 for intermittent),
+//     source='manual_unmanaged', confidence='high'.
+function slugify(name) {
+  return String(name).toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+}
+function timeAvgW(loadType, peakW, dutyPct, nominalW) {
+  if (loadType === 'always_on') return Number(nominalW) || 0;
+  if (loadType === 'cyclic')    return Math.round((Number(peakW) || 0) * (Number(dutyPct) || 0) / 100);
+  return 0;  // intermittent — not auto-subtracted
+}
+
+app.get('/api/power/devices', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT pd.device_id, pd.phase, pd.is_three_phase, pd.is_cyclic,
+             pd.samples_count, pd.mean_w, pd.stddev_w, pd.cycle_max_w,
+             pd.cycle_typical_kwh, pd.confidence, pd.last_observed_at,
+             pd.source, pd.notes, pd.updated_at,
+             d.name, d.device_type, d.protocol, d.room, d.dps_config
+      FROM power_devices pd
+      JOIN devices d ON d.id = pd.device_id
+      ORDER BY pd.phase ASC NULLS LAST, d.name ASC
+    `);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/power/devices', async (req, res) => {
+  const { name, phase, load_type, peak_w, duty_cycle_pct, nominal_w, room, notes } = req.body || {};
+
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
+  if (!['R','S','T'].includes(phase)) return res.status(400).json({ error: 'phase must be R / S / T' });
+  if (!['always_on','cyclic','intermittent'].includes(load_type))
+    return res.status(400).json({ error: 'load_type must be always_on / cyclic / intermittent' });
+
+  const slug = slugify(name);
+  if (!slug) return res.status(400).json({ error: 'name produced empty slug' });
+  const deviceId = `manual_${slug}`;
+  const mean_w = timeAvgW(load_type, peak_w, duty_cycle_pct, nominal_w);
+
+  const dpsConfig = { phase, load_type };
+  if (load_type === 'always_on')  dpsConfig.nominal_w     = Number(nominal_w) || 0;
+  if (load_type === 'cyclic')   { dpsConfig.peak_w        = Number(peak_w) || 0;
+                                  dpsConfig.duty_cycle_pct = Number(duty_cycle_pct) || 0; }
+  if (notes) dpsConfig.notes = String(notes);
+
+  const dpsLabels = (() => {
+    if (load_type === 'always_on') return { nominal_w: 'Nominal W' };
+    if (load_type === 'cyclic')    return { peak_w: 'Peak W', duty_cycle_pct: 'Duty Cycle %', time_avg_w: 'Time-avg W' };
+    return {};
+  })();
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      INSERT INTO devices (id, name, vendor, device_type, protocol, room,
+        enabled, show_dashboard, poll_enabled, poll_interval_sec,
+        dps_labels, dps_config, channel_config)
+      VALUES ($1, $2, 'Manual', 'unmanaged_load', 'virtual', $3,
+        TRUE, FALSE, FALSE, 0, $4::jsonb, $5::jsonb, '{}'::jsonb)
+    `, [deviceId, String(name).trim(), room || null, JSON.stringify(dpsLabels), JSON.stringify(dpsConfig)]);
+
+    await client.query(`
+      INSERT INTO power_devices (device_id, phase, mean_w, source, confidence,
+        is_cyclic, notes, updated_at)
+      VALUES ($1, $2, $3, 'manual_unmanaged', 'high', $4, $5, NOW())
+    `, [deviceId, phase, mean_w, load_type === 'cyclic', notes || null]);
+
+    await client.query('COMMIT');
+    res.json({ ok: true, device_id: deviceId, mean_w });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (String(e.message).includes('duplicate key'))
+      return res.status(409).json({ error: `device "${deviceId}" already exists` });
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.patch('/api/power/devices/:id', async (req, res) => {
+  const id = req.params.id;
+  if (!id.startsWith('manual_')) return res.status(400).json({ error: 'only manual_* devices editable here' });
+
+  const { name, phase, load_type, peak_w, duty_cycle_pct, nominal_w, room, notes } = req.body || {};
+  if (phase && !['R','S','T'].includes(phase)) return res.status(400).json({ error: 'phase must be R / S / T' });
+  if (load_type && !['always_on','cyclic','intermittent'].includes(load_type))
+    return res.status(400).json({ error: 'load_type must be always_on / cyclic / intermittent' });
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query('SELECT dps_config FROM devices WHERE id = $1', [id]);
+    if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'not found' }); }
+    const dpsConfig = { ...(cur.rows[0].dps_config || {}) };
+    if (phase) dpsConfig.phase = phase;
+    if (load_type) dpsConfig.load_type = load_type;
+    if (nominal_w !== undefined) dpsConfig.nominal_w = Number(nominal_w) || 0;
+    if (peak_w !== undefined) dpsConfig.peak_w = Number(peak_w) || 0;
+    if (duty_cycle_pct !== undefined) dpsConfig.duty_cycle_pct = Number(duty_cycle_pct) || 0;
+    if (notes !== undefined) dpsConfig.notes = notes ? String(notes) : null;
+
+    const finalLoadType = dpsConfig.load_type;
+    const mean_w = timeAvgW(finalLoadType, dpsConfig.peak_w, dpsConfig.duty_cycle_pct, dpsConfig.nominal_w);
+
+    if (name) {
+      await client.query('UPDATE devices SET name = $2, updated_at = NOW() WHERE id = $1', [id, String(name).trim()]);
+    }
+    if (room !== undefined) {
+      await client.query('UPDATE devices SET room = $2, updated_at = NOW() WHERE id = $1', [id, room || null]);
+    }
+    await client.query('UPDATE devices SET dps_config = $2::jsonb, updated_at = NOW() WHERE id = $1', [id, JSON.stringify(dpsConfig)]);
+
+    await client.query(`
+      UPDATE power_devices
+      SET phase = COALESCE($2, phase),
+          mean_w = $3,
+          is_cyclic = $4,
+          notes = COALESCE($5, notes),
+          updated_at = NOW()
+      WHERE device_id = $1
+    `, [id, phase || null, mean_w, finalLoadType === 'cyclic', notes || null]);
+
+    await client.query('COMMIT');
+    res.json({ ok: true, mean_w });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/power/devices/:id', async (req, res) => {
+  const id = req.params.id;
+  if (!id.startsWith('manual_')) return res.status(400).json({ error: 'only manual_* devices removable here' });
+  try {
+    // ON DELETE CASCADE on power_devices.device_id handles the FK; deleting
+    // the devices row cleans up both rows in one statement.
+    const r = await db.query('DELETE FROM devices WHERE id = $1', [id]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1083,7 +1253,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'manual_people_log', 'ups_status',
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
       'esp_boards',
-      'power_consumption',
+      'power_consumption', 'power_devices',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -1107,6 +1277,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
       power_consumption: 'ts',
+      power_devices: 'updated_at',
     };
 
     const sizes = await db.query(`

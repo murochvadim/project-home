@@ -124,6 +124,10 @@ function renderTotalCol(d) {
           <div>
             <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">TOTAL POWER</div>
             ${lcdValueHTML(fmt(d.total_w, 0), 'W', '2.4rem', lcdPowerColor)}
+            <!-- Always-on baseline (sum of all power_devices.mean_w) — same hero
+                 size as TOTAL POWER so the two readouts stack visually equal. -->
+            <div style="margin-top:30px; font-size:0.7rem; color:#8a7a3a; letter-spacing:1.5px; margin-bottom:4px;">ALWAYS-ON</div>
+            ${lcdValueHTML(fmt(d.always_on_w, 0), 'W', '2.4rem', '#ffd560')}
           </div>
           <div>
             <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">TOTAL CURRENT</div>
@@ -228,3 +232,233 @@ async function loadPower() {
 
 loadPower();
 pollTimer = setInterval(loadPower, POLL_INTERVAL_MS);
+
+// ─── Manual Device Registry (P2) ────────────────────────────────
+// State: open form is either "create" or "edit:<device_id>". Empty = closed.
+let mdFormMode = '';
+let mdRoomsCache = null;
+let mdRowsCache = [];   // last loaded /api/power/devices result; Edit/Delete look up by id here
+                         // (avoids quoting names through onclick attributes — that was breaking
+                         //  the Delete button when the JSON-stringified name contained "")
+function mdEscHtml(s) {
+  // Mirrors the dashboard's existing escHtml convention (devices.js / health.js / esp-boards.js).
+  // Applied to free-form TEXT fields (row.name, row.room) before template-inserting into HTML.
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function mdLoadRooms() {
+  if (mdRoomsCache) return mdRoomsCache;
+  try {
+    const r = await fetch('/api/rooms');
+    if (!r.ok) return [];
+    mdRoomsCache = await r.json();
+    return mdRoomsCache;
+  } catch { return []; }
+}
+
+async function mdPopulateRoomsDropdown(selected = '') {
+  const sel = document.getElementById('md-room');
+  if (!sel) return;
+  const rooms = await mdLoadRooms();
+  // /api/rooms returns rows shaped {room, device_count}, not {name}.
+  // Required field — no "none" option.
+  sel.innerHTML = '<option value="">— pick a room —</option>' +
+    rooms.map(r => `<option value="${r.room}"${r.room === selected ? ' selected' : ''}>${r.room}</option>`).join('');
+}
+
+function mdShowFields() {
+  const lt = document.querySelector('input[name="md-load-type"]:checked')?.value;
+  document.getElementById('md-fields-always').style.display = (lt === 'always_on') ? '' : 'none';
+  document.getElementById('md-fields-cyclic').style.display = (lt === 'cyclic') ? '' : 'none';
+  mdUpdateCyclicPreview();
+}
+
+function mdUpdateCyclicPreview() {
+  const peak = parseFloat(document.getElementById('md-peak-w').value) || 0;
+  const duty = parseFloat(document.getElementById('md-duty-pct').value) || 0;
+  document.getElementById('md-cyclic-preview').textContent = `${Math.round(peak * duty / 100)} W`;
+}
+
+function mdToggleForm() {
+  if (mdFormMode) { mdCancel(); return; }
+  mdOpenCreate();
+}
+
+function mdOpenCreate() {
+  mdFormMode = 'create';
+  document.getElementById('md-form').style.display = '';
+  document.getElementById('md-form-mode-tag').textContent = '(creating new)';
+  document.getElementById('md-add-btn').textContent = '× Close form';
+  mdResetFormFields();
+  mdPopulateRoomsDropdown();
+  document.getElementById('md-name').focus();
+}
+
+function mdOpenEdit(deviceId) {
+  const row = mdRowsCache.find(r => r.device_id === deviceId);
+  if (!row) return;
+  mdFormMode = `edit:${row.device_id}`;
+  document.getElementById('md-form').style.display = '';
+  document.getElementById('md-form-mode-tag').textContent = `(editing ${row.name})`;
+  document.getElementById('md-add-btn').textContent = '× Close form';
+  mdResetFormFields();
+  document.getElementById('md-name').value = row.name;
+  document.getElementById('md-phase').value = row.phase || '';
+  const dcfg = row.dps_config || {};
+  const lt = dcfg.load_type || 'always_on';
+  const lr = document.querySelector(`input[name="md-load-type"][value="${lt}"]`);
+  if (lr) lr.checked = true;
+  if (dcfg.nominal_w != null) document.getElementById('md-nominal-w').value = dcfg.nominal_w;
+  if (dcfg.peak_w != null)    document.getElementById('md-peak-w').value = dcfg.peak_w;
+  if (dcfg.duty_cycle_pct != null) document.getElementById('md-duty-pct').value = dcfg.duty_cycle_pct;
+  mdShowFields();
+  mdPopulateRoomsDropdown(row.room || '');
+}
+
+function mdCancel() {
+  mdFormMode = '';
+  document.getElementById('md-form').style.display = 'none';
+  document.getElementById('md-form-mode-tag').textContent = '';
+  document.getElementById('md-add-btn').textContent = '+ Add Unmanaged Device';
+  document.getElementById('md-form-msg').textContent = '';
+}
+
+function mdResetFormFields() {
+  document.getElementById('md-name').value = '';
+  document.getElementById('md-phase').value = '';
+  document.getElementById('md-nominal-w').value = '';
+  document.getElementById('md-peak-w').value = '';
+  document.getElementById('md-duty-pct').value = '';
+  document.querySelectorAll('input[name="md-load-type"]').forEach(r => r.checked = false);
+  document.getElementById('md-fields-always').style.display = 'none';
+  document.getElementById('md-fields-cyclic').style.display = 'none';
+  document.getElementById('md-cyclic-preview').textContent = '— W';
+  document.getElementById('md-form-msg').textContent = '';
+}
+
+async function mdSave() {
+  const msg = document.getElementById('md-form-msg');
+  msg.textContent = '';
+  const name = document.getElementById('md-name').value.trim();
+  const phase = document.getElementById('md-phase').value;
+  const room  = document.getElementById('md-room').value;
+  const load_type = document.querySelector('input[name="md-load-type"]:checked')?.value || '';
+
+  if (!name)  { msg.textContent = 'Name is required'; return; }
+  if (!phase) { msg.textContent = 'Phase is required'; return; }
+  if (!room)  { msg.textContent = 'Room is required'; return; }
+  if (!load_type) { msg.textContent = 'Load type is required'; return; }
+
+  const body = { name, phase, load_type, room };
+  if (load_type === 'always_on') {
+    body.nominal_w = parseFloat(document.getElementById('md-nominal-w').value) || 0;
+    if (body.nominal_w <= 0) { msg.textContent = 'Always-on wattage must be > 0'; return; }
+  }
+  if (load_type === 'cyclic') {
+    body.peak_w        = parseFloat(document.getElementById('md-peak-w').value) || 0;
+    body.duty_cycle_pct = parseFloat(document.getElementById('md-duty-pct').value) || 0;
+    if (body.peak_w <= 0)        { msg.textContent = 'Peak wattage must be > 0'; return; }
+    if (body.duty_cycle_pct <= 0 || body.duty_cycle_pct > 100)
+      { msg.textContent = 'Duty cycle must be 1-100 %'; return; }
+  }
+
+  const url = mdFormMode === 'create'
+    ? '/api/power/devices'
+    : `/api/power/devices/${mdFormMode.slice(5)}`;
+  const method = mdFormMode === 'create' ? 'POST' : 'PATCH';
+
+  const btn = document.getElementById('md-save-btn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) { msg.textContent = `Error: ${data.error || r.statusText}`; return; }
+    mdCancel();
+    mdLoadDevices();
+  } catch (e) {
+    msg.textContent = `Error: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function mdDelete(deviceId) {
+  const row = mdRowsCache.find(r => r.device_id === deviceId);
+  const name = row?.name || deviceId;
+  if (!confirm(`Delete "${name}" from the manual registry?`)) return;
+  try {
+    const r = await fetch(`/api/power/devices/${deviceId}`, { method: 'DELETE' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert(`Delete failed: ${d.error || r.statusText}`);
+      return;
+    }
+    mdLoadDevices();
+  } catch (e) {
+    alert(`Delete failed: ${e.message}`);
+  }
+}
+
+function mdLoadTypeLabel(lt, dcfg) {
+  if (lt === 'always_on')    return `always-on (${dcfg?.nominal_w ?? '?'} W)`;
+  if (lt === 'cyclic')       return `cyclic (peak ${dcfg?.peak_w ?? '?'} W × ${dcfg?.duty_cycle_pct ?? '?'} %)`;
+  if (lt === 'intermittent') return 'intermittent (not auto-subtracted)';
+  return '—';
+}
+
+function mdSourceTag(source) {
+  if (source === 'manual_unmanaged') return '<span style="background:#fff3e0; color:#8b5a2a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">manual</span>';
+  if (source === 'manual_seed')      return '<span style="background:#e8f0d8; color:#4a6a2a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">seed</span>';
+  if (source === 'auto_discovered')  return '<span style="background:#d8e8f0; color:#2a4a6a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto</span>';
+  return source || '—';
+}
+
+async function mdLoadDevices() {
+  try {
+    const r = await fetch('/api/power/devices');
+    const rows = await r.json();
+    mdRowsCache = Array.isArray(rows) ? rows : [];
+    const tbody = document.getElementById('md-tbody');
+    if (mdRowsCache.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; color:#aaa; text-align:center;">No devices registered yet. Click <b>+ Add Unmanaged Device</b> to start.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = mdRowsCache.map(row => {
+      const dcfg = row.dps_config || {};
+      const isManual = row.source === 'manual_unmanaged';
+      const ltLabel = mdLoadTypeLabel(dcfg.load_type, dcfg);
+      const meanW = row.mean_w != null ? `${Math.round(Number(row.mean_w))} W` : '—';
+      // Pass only the device_id to Edit/Delete handlers; they look up the row
+      // from mdRowsCache so quotes in names can't break the onclick attribute.
+      const actions = isManual
+        ? `<button class="btn btn-secondary btn-sm" onclick="mdOpenEdit('${row.device_id}')">Edit</button>
+           <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete('${row.device_id}')">Delete</button>`
+        : '<span style="color:#aaa; font-size:0.78rem;">(managed by engine)</span>';
+      return `
+        <tr style="border-bottom:1px solid #e6e1da;">
+          <td style="padding:8px 14px; font-weight:600;">${mdEscHtml(row.name)}</td>
+          <td style="padding:8px 14px; text-align:center;">${row.phase || '—'}</td>
+          <td style="padding:8px 14px; color:#666;">${ltLabel}</td>
+          <td style="padding:8px 22px 8px 14px; text-align:right; font-weight:600;">${meanW}</td>
+          <td style="padding:8px 14px; color:#666;">${mdEscHtml(row.room) || '—'}</td>
+          <td style="padding:8px 14px;">${mdSourceTag(row.source)}</td>
+          <td style="padding:8px 14px; text-align:center; white-space:nowrap;">${actions}</td>
+        </tr>
+      `;
+    }).join('');
+  } catch (e) {
+    document.getElementById('md-tbody').innerHTML =
+      `<tr><td colspan="7" style="padding:14px; color:#c0392b; text-align:center;">Fetch error: ${e.message}</td></tr>`;
+  }
+}
+
+// Wire up the cyclic-preview listeners + initial load
+['md-peak-w', 'md-duty-pct'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', mdUpdateCyclicPreview);
+});
+mdLoadDevices();
