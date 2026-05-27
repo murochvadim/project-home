@@ -355,16 +355,34 @@ class TuyaAdapter(DeviceAdapter):
         return new_ip
 
     def _persist_local_ip(self, dev_id, new_ip):
-        """Write the rediscovered IP back to `devices.local_ip`. Idempotent
-        (UPDATE matches one row by primary key). Opens a short-lived
-        connection so we don't share state with the agent's main pool —
-        rediscovery is rare, the connection cost is negligible."""
+        """Write the rediscovered IP back to BOTH `devices.local_ip` AND
+        `net_devices.ip` (looked up via the device's MAC). The double-
+        write is load-bearing: device_agent's startup query reads
+        `COALESCE(net_devices.ip, devices.local_ip)`, so if only
+        devices.local_ip was updated, the next process restart would
+        still pick the stale net_devices.ip and rediscovery would have
+        to refire. The net_devices write also pre-empts device-agent's
+        own 5-min keepalive writeback, which historically pushed the
+        OLD startup-cached IP back into net_devices and undid this
+        update — that hole was closed at the same time by switching
+        device_agent._db_write to read mac+local_ip via RETURNING
+        instead of trusting the startup-populated cache. Idempotent;
+        opens a short-lived connection so we don't share state with
+        the agent's main pool (rediscovery is rare, cost negligible)."""
         try:
             conn = psycopg2.connect(**_DB_CONFIG)
             try:
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE devices SET local_ip = %s WHERE id = %s",
+                        (new_ip, dev_id),
+                    )
+                    cur.execute(
+                        """UPDATE net_devices
+                           SET ip = %s, last_seen = NOW(), last_online = NOW()
+                           WHERE lower(mac::text) = (
+                             SELECT lower(mac::text) FROM devices WHERE id = %s
+                           )""",
                         (new_ip, dev_id),
                     )
                 conn.commit()

@@ -179,10 +179,22 @@ class DeviceAgent:
         """Execute the DB writes for a state change event. Must be called under _db_lock."""
         with self.conn.cursor() as cur:
             if source == 'keepalive':
-                cur.execute("UPDATE devices SET last_seen = NOW() WHERE id = %s", (device_id,))
-                net = self._device_net_info.get(device_id)
-                if net:
-                    self._update_net_device(net[0], net[1])
+                # RETURNING mac+local_ip: read fresh values directly from the
+                # row we just touched, so the net_devices writeback uses the
+                # CURRENT IP — not the stale startup-cached value from
+                # _device_net_info. Closes the loop with tuya.py's
+                # _persist_local_ip which writes the rediscovered IP back to
+                # devices.local_ip; without RETURNING here, the next
+                # keepalive would clobber net_devices.ip with the cached
+                # stale value and rediscovery would have to refire on the
+                # next restart. See 2026-05-27 audit.
+                cur.execute(
+                    "UPDATE devices SET last_seen = NOW() WHERE id = %s RETURNING mac, local_ip",
+                    (device_id,),
+                )
+                row = cur.fetchone()
+                if row and row[0] and row[1]:
+                    self._update_net_device(str(row[0]), str(row[1]))
                 return
 
             for k, v in list(dps.items()):
@@ -245,19 +257,23 @@ class DeviceAgent:
             last_any = self._device_last_event.get(device_id)
             is_dup = (not filtered_json) or (last_same_src == filtered_json) or (last_any and (now - last_any[0]) < 2 and last_any[1] == filtered_json)
 
-            # DB last_state gets ALL DPS (for Settings view)
+            # DB last_state gets ALL DPS (for Settings view).
+            # RETURNING mac+local_ip: same rationale as the keepalive
+            # path above — use the freshly-persisted IP, not the stale
+            # _device_net_info cache, so a rediscovery-triggered IP
+            # change is preserved across the 5-min throttle cycle.
             cur.execute("""
                 UPDATE devices
                 SET last_state = COALESCE(last_state, '{}'::jsonb) || %s::jsonb,
                     last_seen = NOW(), updated_at = NOW(), last_source = %s
                 WHERE id = %s
+                RETURNING mac, local_ip
             """, (dps_json, best, device_id))
+            row = cur.fetchone()
 
             # Update net_devices IP/online for locally-connected Tuya devices
-            if source in ('initial', 'local_poll', 'tcp_push'):
-                net = self._device_net_info.get(device_id)
-                if net:
-                    self._update_net_device(net[0], net[1])
+            if source in ('initial', 'local_poll', 'tcp_push') and row and row[0] and row[1]:
+                self._update_net_device(str(row[0]), str(row[1]))
 
             # Events + MQTT get only filtered (allowed) DPS
             if not is_dup and filtered_json:
