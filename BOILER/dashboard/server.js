@@ -1687,6 +1687,73 @@ app.post('/api/corridor-sim/clear', (_req, res) => {
   res.json({ ok: true });
 });
 
+// ─── FR Diagnostics — door-unlock chip toggle ───────────────────────────────
+// Toggles the `@RemoteXY Gate` chip's action in s_frl1_unlock between
+// "on" and "off". When "off", the rule engine's _resolve_esp_action
+// silently drops the unlock command because RemoteXY Gate's `door`
+// channel has no `action_off` mapping — door stays closed even on a
+// successful face_identified. Lets the user walk past the camera with
+// debug enabled WITHOUT physically opening the door.
+//
+// The rule's sentence cache TTL is 30 s — changes take effect within
+// that window (or click Reload to force-refresh).
+//
+// GET returns the current chip state (extracted from the sentence's
+// device segment): { enabled: true|false } based on whether the chip
+// trailing word is "on" or "off".
+// POST body { enabled: bool } sets it.
+app.get('/api/fr-diagnostics/unlock-chip', async (_req, res) => {
+  try {
+    const r = await db.query("SELECT value FROM dashboard_settings WHERE key = 'apartment.rule_sentences'");
+    if (!r.rows[0]) return res.status(404).json({ error: 'no rule_sentences row' });
+    const arr = r.rows[0].value;
+    const container = arr.find(c => c.id === 'r_face_recognition_loop_init');
+    if (!container) return res.status(404).json({ error: 'no Face Recognition Loop container' });
+    const sentence = container.sentences.find(s => s.id === 's_frl1_unlock');
+    if (!sentence) return res.status(404).json({ error: 'no s_frl1_unlock sentence' });
+    let action = null;
+    for (const seg of (sentence.segments || [])) {
+      if (seg.t === 'dev' && seg.v && seg.v.toLowerCase().includes('@remotexy gate')) {
+        const m = seg.v.match(/\s+(on|off)\s*$/i);
+        if (m) action = m[1].toLowerCase();
+      }
+    }
+    return res.json({ enabled: action === 'on', action_token: action });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/fr-diagnostics/unlock-chip', async (req, res) => {
+  try {
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled (bool) required' });
+    const newAction = enabled ? 'on' : 'off';
+    const r = await db.query("SELECT value FROM dashboard_settings WHERE key = 'apartment.rule_sentences'");
+    if (!r.rows[0]) return res.status(404).json({ error: 'no rule_sentences row' });
+    const arr = r.rows[0].value;
+    const container = arr.find(c => c.id === 'r_face_recognition_loop_init');
+    if (!container) return res.status(404).json({ error: 'no Face Recognition Loop container' });
+    const sentence = container.sentences.find(s => s.id === 's_frl1_unlock');
+    if (!sentence) return res.status(404).json({ error: 'no s_frl1_unlock sentence' });
+    let changed = false;
+    for (const seg of (sentence.segments || [])) {
+      if (seg.t === 'dev' && seg.v && seg.v.toLowerCase().includes('@remotexy gate')) {
+        seg.v = seg.v.replace(/\s+(on|off)\s*$/i, ` ${newAction}`);
+        changed = true;
+      }
+    }
+    if (!changed) return res.status(404).json({ error: 'no @RemoteXY Gate chip found in s_frl1_unlock' });
+    sentence.text = (sentence.segments || []).map(s => s.v).join('');
+    const nowIso = new Date().toISOString();
+    sentence.updated_at = nowIso;
+    container.updated_at = nowIso;
+    await db.query(
+      "UPDATE dashboard_settings SET value = $1::jsonb, updated_at = NOW() WHERE key = 'apartment.rule_sentences'",
+      [JSON.stringify(arr)]
+    );
+    res.json({ ok: true, enabled, new_action: newAction });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/corridor-sim/state', async (_req, res) => {
   try {
     const ids = Object.values(CORRIDOR_SIM_IDS);

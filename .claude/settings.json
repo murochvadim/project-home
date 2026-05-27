@@ -8,7 +8,12 @@
       "Bash(chmod +x /c/Users/muroc/project_home/.claude/hooks/pre-lxc-check.sh)",
       "Bash(ssh -o ConnectTimeout=3 root@192.168.1.219 \"hostname\")",
       "Bash(ssh -o ConnectTimeout=3 root@192.168.1.188 \"hostname\")",
-      "Bash(ssh root@192.168.1.227 *)"
+      "Bash(ssh root@192.168.1.227 *)",
+      "Bash(grep -n \"reset_wifi\\\\|publishEspAck\" c:/Users/muroc/Arduino_Projects/Face_Recognition_Claude/Esp_Base.ino | head -15)",
+      "Read(//c/Users/muroc/Arduino_Projects/Face_Recognition_Claude/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\muroc\\Arduino_Projects\\Face_Recognition_Claude"
     ]
   },
   "hooks": {

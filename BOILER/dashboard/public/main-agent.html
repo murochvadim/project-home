@@ -114,6 +114,8 @@
     <div class="time-mode-bar" id="time-mode-bar">
       <span class="tmb-item"><span class="tmb-label">home mode:</span> <span class="tmb-value" id="tmb-home-mode">—</span></span>
       <span class="tmb-sep">·</span>
+      <span class="tmb-item"><span class="tmb-label">transit:</span> <span class="tmb-value" id="tmb-corridor-transit">—</span></span>
+      <span class="tmb-sep">·</span>
       <span class="tmb-item"><span class="tmb-label">time mode:</span> <span class="tmb-value" id="tmb-time-mode">—</span></span>
       <span class="tmb-sep">·</span>
       <span class="tmb-item"><span class="tmb-label">next sunrise:</span> <span class="tmb-value" id="tmb-next-sunrise">—</span></span>
@@ -342,28 +344,75 @@
       </div>
     </div>
 
-    <!-- Home State Simulator — synthetic event publish to the 8 Gang Switch
-         channels (HOME=4 / AWAY=8 / ABROAD=3) so the Mode Buttons rule sees
-         them as real button presses and flips state.shared['home_mode'].
-         Reverts to HOME after 30 s (default_home_cooldown_sec) unless the
-         physical button stays ON. -->
-    <div class="card">
-      <h2>Home State Simulator <span style="font-size:0.78rem;color:#666;font-weight:normal;">(simulate Home / Away / Abroad button presses)</span></h2>
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;font-size:0.85rem;">
-        <span>Current home mode: <strong id="hsm-current" style="color:#3a7d44;">—</strong></span>
-      </div>
-      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
-        <div class="cs-sim-row" style="width:300px;">
-          <button class="cs-sim-btn cs-sim-btn-green" onclick="setHomeMode('home')">▶ Home</button>
-          <button class="cs-sim-btn cs-sim-btn-grey"  onclick="setHomeMode('away')" style="background:#e67e22;">▶ Away</button>
-          <button class="cs-sim-btn cs-sim-btn-grey"  onclick="setHomeMode('abroad')" style="background:#c0392b;">▶ Abroad</button>
+    <!-- Row of two side-by-side cards: Home State Simulator + Diagnostics -->
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:stretch;">
+
+      <!-- Home State Simulator — synthetic event publish to the 8 Gang Switch
+           channels (HOME=4 / AWAY=8 / ABROAD=3) so the Mode Buttons rule sees
+           them as real button presses and flips state.shared['home_mode'].
+           Reverts to HOME after 30 s (default_home_cooldown_sec) unless the
+           physical button stays ON. -->
+      <div class="card" style="flex:1 1 360px;">
+        <h2>Home State Simulator <span style="font-size:0.78rem;color:#666;font-weight:normal;">(simulate Home / Away / Abroad button presses)</span></h2>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;font-size:0.85rem;">
+          <span>Current home mode: <strong id="hsm-current" style="color:#3a7d44;">—</strong></span>
         </div>
-        <span id="hsm-result" style="font-size:0.78rem;color:#888;"></span>
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+          <div class="cs-sim-row" style="width:300px;">
+            <button class="cs-sim-btn cs-sim-btn-green" onclick="setHomeMode('home')">▶ Home</button>
+            <button class="cs-sim-btn cs-sim-btn-grey"  onclick="setHomeMode('away')" style="background:#e67e22;">▶ Away</button>
+            <button class="cs-sim-btn cs-sim-btn-grey"  onclick="setHomeMode('abroad')" style="background:#c0392b;">▶ Abroad</button>
+          </div>
+          <span id="hsm-result" style="font-size:0.78rem;color:#888;"></span>
+        </div>
+        <div style="font-size:0.72rem;color:#888;margin-top:8px;font-style:italic;">
+          Synthetic event publish — Mode Buttons rule sees it like a real press.
+          Reverts to HOME after 30 s unless a real button stays ON.
+        </div>
       </div>
-      <div style="font-size:0.72rem;color:#888;margin-top:8px;font-style:italic;">
-        Synthetic event publish — Mode Buttons rule sees it like a real press.
-        Reverts to HOME after 30 s unless a real button stays ON.
+
+      <!-- FR Diagnostics — two toggles for safer debugging:
+           1. Debug Mode (v16) — when ON, FR board publishes diagnostic MQTT
+              events (displ_skipped, multi_frame, frame_implausible) so we can
+              see WHY the TX-510 is silent. When OFF, event stream stays clean.
+           2. Door Unlock on Match — when OFF, FR Loop's @RemoteXY Gate chip
+              is set to `off` action. RemoteXY Gate channel has no action_off,
+              so the rule engine silently drops the command — door stays closed
+              even on successful face_identified. Lets you walk through and test
+              without actually opening the door. -->
+      <div class="card" style="flex:1 1 360px;">
+        <h2>FR Diagnostics <span style="font-size:0.78rem;color:#666;font-weight:normal;">(safer debugging on real walk-throughs)</span></h2>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+
+          <!-- Row 1: Debug Mode -->
+          <div style="display:flex;align-items:center;gap:14px;font-size:0.85rem;flex-wrap:wrap;">
+            <span style="min-width:130px;">FR Debug Mode:</span>
+            <strong id="fr-debug-current" style="min-width:60px;color:#888;">—</strong>
+            <div class="cs-sim-row" style="width:200px;">
+              <button class="cs-sim-btn cs-sim-btn-green" onclick="setFrDebug(true)">▶ Enable</button>
+              <button class="cs-sim-btn cs-sim-btn-grey"  onclick="setFrDebug(false)">▶ Disable</button>
+            </div>
+            <span id="fr-debug-result" style="font-size:0.78rem;color:#888;flex-basis:100%;"></span>
+          </div>
+
+          <!-- Row 2: Door Unlock Chip -->
+          <div style="display:flex;align-items:center;gap:14px;font-size:0.85rem;flex-wrap:wrap;">
+            <span style="min-width:130px;">Door on FR Match:</span>
+            <strong id="fr-unlock-current" style="min-width:60px;color:#888;">—</strong>
+            <div class="cs-sim-row" style="width:200px;">
+              <button class="cs-sim-btn cs-sim-btn-green" onclick="setUnlockChip(true)">▶ Enable</button>
+              <button class="cs-sim-btn cs-sim-btn-grey"  onclick="setUnlockChip(false)">▶ Disable</button>
+            </div>
+            <span id="fr-unlock-result" style="font-size:0.78rem;color:#888;flex-basis:100%;"></span>
+          </div>
+
+          <div style="font-size:0.72rem;color:#888;font-style:italic;">
+            Debug Mode requires v16 on the FR board. Door toggle edits the
+            <code>s_frl1_unlock</code> chip action (rule reload within ~30 s).
+          </div>
+        </div>
       </div>
+
     </div>
 
     <div class="card">
@@ -397,6 +446,6 @@
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/device-picker.js?v=11"></script>
-<script src="js/main-agent.js?v=67"></script>
+<script src="js/main-agent.js?v=72"></script>
 </body>
 </html>

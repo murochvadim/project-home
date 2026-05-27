@@ -441,6 +441,133 @@
     }
   };
 
+  // ── FR Diagnostics ───────────────────────────────────────────────────────
+  // Two toggles in a dedicated card on the Corridor Simulator tab:
+  //   • FR Debug Mode — publishes action debug_enable / debug_disable to
+  //     /api/esp/boards/face_01/command. Only works when face_01 is on
+  //     sketch v16+ (older sketches reject the unknown action).
+  //   • Door Unlock on FR Match — flips the s_frl1_unlock chip's action
+  //     between "on" and "off". When "off", the rule engine drops the
+  //     unlock command silently because RemoteXY Gate has no action_off.
+  //   Both states polled every 5 s by loadFrDiagnostics().
+
+  window.setFrDebug = async function (enabled) {
+    const resultEl = document.getElementById('fr-debug-result');
+    try {
+      if (resultEl) { resultEl.textContent = '...'; resultEl.style.color = '#888'; }
+      const action = enabled ? 'debug_enable' : 'debug_disable';
+      const r = await fetch('/api/esp/boards/face_01/command', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ action }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        if (resultEl) {
+          resultEl.textContent = '✗ ' + (data.error || 'failed') +
+            (data.error && data.error.includes('unknown') ? ' (flash v16 first)' : '');
+          resultEl.style.color = '#c0392b';
+        }
+        return;
+      }
+      if (resultEl) {
+        resultEl.textContent = `✓ ${action} sent`;
+        resultEl.style.color = '#27ae60';
+        setTimeout(() => { if (resultEl.textContent.startsWith('✓')) resultEl.textContent = ''; }, 3000);
+      }
+      setTimeout(loadFrDiagnostics, 1000);
+    } catch (e) {
+      console.error('setFrDebug failed:', e);
+      if (resultEl) { resultEl.textContent = '✗ connection error'; resultEl.style.color = '#c0392b'; }
+    }
+  };
+
+  window.setUnlockChip = async function (enabled) {
+    const resultEl = document.getElementById('fr-unlock-result');
+    try {
+      if (resultEl) { resultEl.textContent = '...'; resultEl.style.color = '#888'; }
+      const r = await fetch('/api/fr-diagnostics/unlock-chip', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ enabled }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        if (resultEl) { resultEl.textContent = '✗ ' + (data.error || 'failed'); resultEl.style.color = '#c0392b'; }
+        return;
+      }
+      if (resultEl) {
+        resultEl.textContent = `✓ chip set to "${data.new_action}" (rule cache 30 s)`;
+        resultEl.style.color = '#27ae60';
+        setTimeout(() => { if (resultEl.textContent.startsWith('✓')) resultEl.textContent = ''; }, 5000);
+      }
+      setTimeout(loadFrDiagnostics, 300);
+    } catch (e) {
+      console.error('setUnlockChip failed:', e);
+      if (resultEl) { resultEl.textContent = '✗ connection error'; resultEl.style.color = '#c0392b'; }
+    }
+  };
+
+  async function loadFrDiagnostics() {
+    // FR Debug Mode — read from /api/esp/boards (last_status.debug_enabled)
+    try {
+      const r = await fetch('/api/esp/boards');
+      const d = await r.json();
+      const boards = d.boards || d || [];
+      const face = boards.find(b => b && b.id === 'face_01');
+      const debugOn = face && face.last_status && face.last_status.debug_enabled === true;
+      const dbgEl = document.getElementById('fr-debug-current');
+      if (dbgEl) {
+        if (face && face.last_status && 'debug_enabled' in face.last_status) {
+          dbgEl.textContent = debugOn ? 'ON' : 'OFF';
+          dbgEl.style.color = debugOn ? '#27ae60' : '#888';
+        } else {
+          dbgEl.textContent = 'N/A';
+          dbgEl.style.color = '#c0392b';
+          dbgEl.title = 'Flash v16 to enable this feature';
+        }
+      }
+    } catch (_) {}
+    // Unlock chip — read from /api/fr-diagnostics/unlock-chip
+    try {
+      const r = await fetch('/api/fr-diagnostics/unlock-chip');
+      const d = await r.json();
+      const ulEl = document.getElementById('fr-unlock-current');
+      if (ulEl) {
+        if (r.ok && typeof d.enabled === 'boolean') {
+          ulEl.textContent = d.enabled ? 'ON' : 'OFF';
+          ulEl.style.color = d.enabled ? '#27ae60' : '#888';
+        } else {
+          ulEl.textContent = '?';
+          ulEl.style.color = '#c0392b';
+          ulEl.title = d.error || 'failed';
+        }
+      }
+    } catch (_) {}
+  }
+  // Poll every 5 s while the Corridor Simulator tab is visible.
+  // Lazy-init on first tab activation (we don't poll the FR diagnostics
+  // endpoints on every page load — only when the user opens the tab).
+  let _frDiagPollTimer = null;
+  function startFrDiagnosticsPoll() {
+    if (_frDiagPollTimer) return;
+    loadFrDiagnostics();
+    _frDiagPollTimer = setInterval(loadFrDiagnostics, 5000);
+  }
+  // Hook: when the user clicks the Corridor Simulator tab, start polling.
+  document.addEventListener('DOMContentLoaded', () => {
+    // If page loads with corridor-sim already active, start immediately.
+    if (document.getElementById('tab-corridor-sim')?.classList.contains('active')) {
+      startFrDiagnosticsPoll();
+    }
+    // Wrap showTab so we start polling when the user opens the tab.
+    const _prevShowTab = window.showTab;
+    window.showTab = function (name, btn) {
+      if (typeof _prevShowTab === 'function') _prevShowTab(name, btn);
+      if (name === 'corridor-sim') startFrDiagnosticsPoll();
+    };
+  });
+
   window.saveManualPeople = async function () {
     const inp = document.getElementById('manual-people-input');
     const btn = document.getElementById('manual-people-save');
@@ -584,6 +711,7 @@
         } catch (e) { return '—'; }
       };
       const hmEl = document.getElementById('tmb-home-mode');
+      const ctEl = document.getElementById('tmb-corridor-transit');
       const tmEl = document.getElementById('tmb-time-mode');
       const srEl = document.getElementById('tmb-next-sunrise');
       const ssEl = document.getElementById('tmb-next-sunset');
@@ -594,10 +722,28 @@
                               : m === 'away'   ? '#e67e22'
                               : m === 'abroad' ? '#c0392b'
                               : '#888');
+      // Corridor transit colour palette:
+      //   clear     = green  (idle / safe — default state)
+      //   visit     = amber  (someone in corridor, unknown intent)
+      //   to_home   = green  (coming in)
+      //   from_home = blue   (leaving)
+      const transitColor = (m) => (m === 'Corridor_To_Home'    ? '#27ae60'
+                                 : m === 'Corridor_From_Home'  ? '#2e74b5'
+                                 : m === 'Corridor_Visit_Home' ? '#e67e22'
+                                 : '#27ae60');
+      // Strip the "Corridor_" prefix for a tighter tab-bar chip.
+      const transitShort = (m) => (m || '').replace(/^Corridor_/, '').replace(/_/g, ' ').toLowerCase() || '—';
       if (hmEl) {
         hmEl.textContent = s.home_mode || '—';
         hmEl.style.color = modeColor(s.home_mode);
         hmEl.style.fontWeight = '600';
+      }
+      if (ctEl) {
+        const ctMode = s['corridor_transit.mode'] || 'Corridor_Clear_Home';
+        ctEl.textContent = transitShort(ctMode);
+        ctEl.style.color = transitColor(ctMode);
+        ctEl.style.fontWeight = '600';
+        ctEl.title = ctMode;
       }
       if (tmEl) tmEl.textContent = s.time_mode || '—';
       if (srEl) srEl.textContent = fmtSunHM(s.next_sunrise);
@@ -1212,6 +1358,7 @@
     const s = (rule.sentences || []).find(x => x.id === sentId);
     if (!s || !s.segments || !s.segments[segIdx]) return;
     s.segments[segIdx].v = el.value;
+    s.text = s.segments.map(seg => seg.v || '').join('');
     s.updated_at = new Date().toISOString();
     rule.updated_at = s.updated_at;
     brsMarkDirty();
@@ -1229,6 +1376,7 @@
       s.segments.push({t:'dev', v: token});
       s.segments.push({t:'text', v: ' '});
       s.segments = _brsNormalize(s.segments);
+      s.text = s.segments.map(seg => seg.v || '').join('');
       s.updated_at = new Date().toISOString();
       rule.updated_at = s.updated_at;
       brsMarkDirty();
@@ -1243,6 +1391,7 @@
     if (!s || !s.segments || !s.segments[segIdx] || s.segments[segIdx].t !== 'dev') return;
     s.segments.splice(segIdx, 1);
     s.segments = _brsNormalize(s.segments);
+    s.text = s.segments.map(seg => seg.v || '').join('');
     s.updated_at = new Date().toISOString();
     rule.updated_at = s.updated_at;
     brsMarkDirty();
@@ -1257,6 +1406,7 @@
     if (!s || !s.segments || !s.segments[segIdx] || s.segments[segIdx].t !== 'dev') return;
     window.openDevicePicker((newToken) => {
       s.segments[segIdx].v = newToken;
+      s.text = s.segments.map(seg => seg.v || '').join('');
       s.updated_at = new Date().toISOString();
       rule.updated_at = s.updated_at;
       brsMarkDirty();
@@ -1369,11 +1519,13 @@
     for (const rule of brsRules) {
       for (const s of (rule.sentences || [])) {
         _brsEnsureSegments(s);
+        let sentenceChanged = false;
         for (const seg of (s.segments || [])) {
           if (seg.t !== 'dev') continue;
           const nv = window._dpMigrateToken(seg.v, devMap);
-          if (nv !== seg.v) { seg.v = nv; changed = true; }
+          if (nv !== seg.v) { seg.v = nv; changed = true; sentenceChanged = true; }
         }
+        if (sentenceChanged) s.text = s.segments.map(seg => seg.v || '').join('');
       }
     }
     return changed;
