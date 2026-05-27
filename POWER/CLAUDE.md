@@ -408,7 +408,7 @@ New rules in the `power` group, triggered by Shelly events:
 
 All five alerts auto-resolve when the underlying condition clears (no manual ack needed).
 
-## Dashboard — Project Consumption page
+## Dashboard — Project Power page
 
 New sidebar entry under "General". Six cards:
 
@@ -593,14 +593,14 @@ Computed in software (no HA entity):
 | 10 | Write Power Ingest rule (LXC 105) | RULES/rules/ | ⏳ |
 | 11 | Write Power Phase Discovery rule | RULES/rules/ | ⏳ |
 | 12 | Write remaining 8 power rules (incl. Power Billing Period Roll for P6 + Power Unaccounted Background for P5) | RULES/rules/ | ⏳ |
-| 13 | Build Project Consumption page on dashboard | BOILER/dashboard/public/ | ⏳ |
+| 13 | Build Project Power page on dashboard | BOILER/dashboard/public/ | ⏳ |
 | 14 | Add sidebar link + status badge wiring | BOILER/dashboard/public/sidebar | ⏳ |
 
 ## Phase rollout
 
 | Phase | Effort | What ships |
 |---|---|---|
-| **P1 — Ingest + Live Status** | ~1 day | Steps 5-9 + Card 1 on dashboard. End state: live 3-phase numbers visible on Project Consumption page; raw `power_consumption` time-series populating. No attribution yet. |
+| **P1 — Ingest + Live Status** | ~1 day | Steps 5-9 + Card 1 on dashboard. End state: live 3-phase numbers visible on Project Power page; raw `power_consumption` time-series populating. No attribution yet. |
 | **P2 — Manual Device Registry** | ~1 day | Card 4's "+ Add Unmanaged Device" form (always-on / cyclic / intermittent categories) + the `devices` row + `power_devices` row creation flow. User registers every known unmanaged device they're aware of (fridge, wine fridge, routers, modems, aquarium pump, etc.). End state: the always-on + cyclic baseline of the home is captured in `power_devices` BEFORE any auto-discovery starts. Iterative — user keeps registering devices as they realize they exist. |
 | **P3 — Auto-Discovery Rule** | ~2 days | Power Phase Discovery rule on LXC 105 + the discovery-status portion of Card 4 (auto-discovered rows). Now starts with the manual baseline in place, so per-device delta measurements are clean (fridge cycles already subtracted via time-averaged contribution). End state: `power_devices` self-populating over the next week as smart devices toggle. |
 | **P4 — Attribution** | ~1 day | Power Attribution rule + Card 2 (stacked bar) + Card 3 (daily kWh). Combines manual + auto-discovered entries. End state: per-device live + historical consumption visible. |

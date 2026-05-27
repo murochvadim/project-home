@@ -538,6 +538,62 @@ app.get('/api/weather/daily', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── POWER (P1 — Ingest + Live Status) ────────────────────────
+// Card 1 status read: devices.last_state for shelly_3em_main has the
+// 15 latest DPS values (R/S/T × V/A/W/PF/kWh). Total_w + imbalance %
+// computed in software since HA exposes per-phase only. See POWER/CLAUDE.md.
+app.get('/api/power/status', async (req, res) => {
+  try {
+    const r = await db.query(
+      "SELECT last_seen, last_state, NOW() - last_seen AS age FROM devices WHERE id = 'shelly_3em_main'"
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'shelly_3em_main not found' });
+    const row = r.rows[0];
+    const s = row.last_state || {};
+    const phase = (p) => ({
+      v:   typeof s[`${p}_v`]   === 'number' ? s[`${p}_v`]   : null,
+      a:   typeof s[`${p}_a`]   === 'number' ? s[`${p}_a`]   : null,
+      w:   typeof s[`${p}_w`]   === 'number' ? s[`${p}_w`]   : null,
+      pf:  typeof s[`${p}_pf`]  === 'number' ? s[`${p}_pf`]  : null,
+      kwh: typeof s[`${p}_kwh`] === 'number' ? s[`${p}_kwh`] : null,
+    });
+    const R = phase('r'), S = phase('s'), T = phase('t');
+
+    const ws = [R.w, S.w, T.w].filter(x => typeof x === 'number');
+    const total_w = ws.length ? ws.reduce((a, b) => a + b, 0) : null;
+    const max_w = ws.length ? Math.max(...ws) : 0;
+    const min_w = ws.length ? Math.min(...ws) : 0;
+    const imbalance_pct = max_w > 0 ? Math.round(((max_w - min_w) / max_w) * 1000) / 10 : null;
+
+    const kwhs = [R.kwh, S.kwh, T.kwh].filter(x => typeof x === 'number');
+    const total_kwh = kwhs.length === 3
+      ? Math.round((kwhs[0] + kwhs[1] + kwhs[2]) * 100) / 100
+      : null;
+
+    // Apparent VA per phase (V × A); system PF = total_w / sum(va)
+    const va = (p) => (typeof p.v === 'number' && typeof p.a === 'number')
+      ? Math.round(p.v * p.a) : null;
+    const vas = [va(R), va(S), va(T)].filter(x => typeof x === 'number');
+    const total_va = vas.length === 3 ? vas[0] + vas[1] + vas[2] : null;
+    const system_pf = (total_w != null && total_va && total_va > 0)
+      ? Math.round((total_w / total_va) * 100) / 100 : null;
+
+    res.json({
+      device_id: 'shelly_3em_main',
+      last_seen: row.last_seen,
+      age_sec: row.age ? (row.age.seconds || 0) + (row.age.minutes || 0) * 60 + (row.age.milliseconds || 0) / 1000 : null,
+      r: R, s: S, t: T,
+      r_va: va(R), s_va: va(S), t_va: va(T),
+      total_w,
+      total_va,
+      total_kwh,
+      system_pf,
+      imbalance_pct,
+      frequency_hz: 50,  // Israel grid standard — Shelly Gen 1 doesn't expose frequency via HA
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Services status ──────────────────────────────────────────
 app.get('/api/status', async (req, res) => {
   const result = { db: false, ha: false };
@@ -1027,6 +1083,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'manual_people_log', 'ups_status',
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
       'esp_boards',
+      'power_consumption',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -1049,6 +1106,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       manual_people_log: 'ts', ups_status: 'ts',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
+      power_consumption: 'ts',
     };
 
     const sizes = await db.query(`

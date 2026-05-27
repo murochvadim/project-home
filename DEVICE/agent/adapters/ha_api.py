@@ -81,6 +81,29 @@ class HAApiAdapter(DeviceAdapter):
             ('binary_sensor.presence_sensor_kitchen_walkway',            'z_kitchen_walkway'),
             ('binary_sensor.presence_sensor_sofa_entertaiment',          'z_sofa_entertaiment'),
         ],
+        # Shelly 3EM Gen 1 — 3-phase apartment energy meter. 15 sensors
+        # (R/S/T × {voltage, current, active power, power factor,
+        # cumulative energy}). Naming matches HA's electrician convention
+        # (R/S/T = L1/L2/L3) and is preserved end-to-end through DPS keys,
+        # power_consumption columns, virtual:phase_<r|s|t>_background ids,
+        # and dashboard labels. See POWER/CLAUDE.md.
+        'shelly_3em_main': [
+            ('sensor.r_voltage',      'r_v'),
+            ('sensor.r_current',      'r_a'),
+            ('sensor.r_power',        'r_w'),
+            ('sensor.r_power_factor', 'r_pf'),
+            ('sensor.r_energy',       'r_kwh'),
+            ('sensor.s_voltage',      's_v'),
+            ('sensor.s_current',      's_a'),
+            ('sensor.s_power',        's_w'),
+            ('sensor.s_power_factor', 's_pf'),
+            ('sensor.s_energy',       's_kwh'),
+            ('sensor.t_voltage',      't_v'),
+            ('sensor.t_current',      't_a'),
+            ('sensor.t_power',        't_w'),
+            ('sensor.t_power_factor', 't_pf'),
+            ('sensor.t_energy',       't_kwh'),
+        ],
     }
 
     def __init__(self, devices, on_state_change):
