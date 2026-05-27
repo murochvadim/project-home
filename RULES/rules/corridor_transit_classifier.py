@@ -91,7 +91,7 @@ RULE = {
     ],
     "controls": [],
     "category": "info",
-    "group": "info",
+    "group": "corridor",
     "priority": 10,
     "depends_on": [],
 }

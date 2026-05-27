@@ -83,13 +83,16 @@ _CONFIG_TTL_SEC = 30.0
 
 RULE = {
     "name": "Move in Corridor",
-    "description": "Corridor presence chain — chips in r_move_in_corridor drive all output devices; delayed bucket uses engine deferred dispatch",
+    "description": "Corridor presence chain — chips in r_move_in_corridor drive all output devices; delayed bucket uses engine deferred dispatch. Monitor/awtrix/FR/pixoo chain suppressed when Corridor Transit Classifier reports Corridor_From_Home (user leaving the apartment — no welcome / no recognition needed).",
     "triggers": [CORRIDOR_PRESENCE_ID],
     "controls": [],
     "category": "control",
     "group": "corridor",
     "priority": 10,
-    "depends_on": ["Mode Buttons"],
+    # depends_on Corridor Transit Classifier so it runs FIRST on every corridor
+    # presence event and `state.shared['corridor_transit.mode']` is up-to-date
+    # when this rule reads it below.
+    "depends_on": ["Mode Buttons", "Corridor Transit Classifier"],
     "test_event": {
         "device_id": CORRIDOR_PRESENCE_ID,
         "source": "event",
@@ -278,26 +281,41 @@ def evaluate(event, state):
         return commands
     state.set_timer('move_in_corridor_cooldown')
 
-    log.info("Move in Corridor: rising edge — firing chain "
-             "(always=%d, when_home=%d, delayed=%d, cooldown=%ds, after_delay=%ds)",
-             len(cfg['always_cmds']), len(cfg['when_home_cmds']),
-             len(cfg['delayed_cmds']), cfg['cooldown_sec'], cfg['after_delay_sec'])
+    # Read the transit mode set by Corridor Transit Classifier on the SAME
+    # event (depends_on guarantees the classifier ran first). When mode is
+    # Corridor_From_Home the user is leaving the apartment — no welcome,
+    # no recognition, no monitoring needed. Suppress the whole monitor /
+    # awtrix / FR / pixoo chain; only the ALWAYS bucket (corridor light)
+    # fires so the user has light to walk out by.
+    transit_mode = state.shared.get('corridor_transit.mode', 'Corridor_Clear_Home')
+    suppress_monitoring = (transit_mode == 'Corridor_From_Home')
 
-    # 1. ALWAYS bucket
+    log.info("Move in Corridor: rising edge — firing chain "
+             "(transit=%s, always=%d, when_home=%d, delayed=%d, cooldown=%ds, after_delay=%ds, suppress_monitoring=%s)",
+             transit_mode, len(cfg['always_cmds']), len(cfg['when_home_cmds']),
+             len(cfg['delayed_cmds']), cfg['cooldown_sec'], cfg['after_delay_sec'],
+             suppress_monitoring)
+
+    # 1. ALWAYS bucket — fires regardless of transit mode (corridor light)
     commands.extend(cfg['always_cmds'])
 
-    # 2. WHEN home_mode == 'home' bucket
+    # 2. WHEN home_mode == 'home' bucket — gated by BOTH home_mode AND transit mode
     home_mode = state.shared.get('home_mode', 'away')
-    if home_mode == 'home':
-        commands.extend(cfg['when_home_cmds'])
-    else:
+    if home_mode != 'home':
         log.info("Move in Corridor: home_mode='%s' (not home) — skipping when-home bucket", home_mode)
+    elif suppress_monitoring:
+        log.info("Move in Corridor: transit_mode='%s' — skipping when-home bucket (monitor/awtrix/FR)", transit_mode)
+    else:
+        commands.extend(cfg['when_home_cmds'])
 
     # 3. Delayed bucket — emit each command with `_delay_sec` so the
     #    engine's deferred-dispatch Timer fires the MQTT publish at
     #    exact wall-clock time. No pending_ts, no heartbeat polling,
     #    not sensitive to mmWave silence after the rising edge.
-    if cfg['delayed_cmds'] and cfg['after_delay_sec'] > 0:
+    #    Gated by transit mode: From_Home suppresses Pixoo welcome + FR.
+    if suppress_monitoring:
+        log.info("Move in Corridor: transit_mode='%s' — skipping delayed bucket (pixoo/FR start_recognition)", transit_mode)
+    elif cfg['delayed_cmds'] and cfg['after_delay_sec'] > 0:
         for cmd in cfg['delayed_cmds']:
             deferred = dict(cmd)
             deferred['_delay_sec'] = cfg['after_delay_sec']
@@ -312,7 +330,11 @@ def evaluate(event, state):
     #    operating window (its `conditions.time.after..before`). Without
     #    this substitution, the LED matrix would hold a stale Daily_Welcome
     #    preset overnight after the last corridor walk-in before bedtime.
-    if cfg['cleanup_cmds'] and cfg['cooldown_sec'] > 0:
+    #    Also gated by transit mode: if we suppressed the welcome chain,
+    #    no cleanup needed.
+    if suppress_monitoring:
+        log.info("Move in Corridor: transit_mode='%s' — skipping cleanup bucket (nothing to clean up)", transit_mode)
+    elif cfg['cleanup_cmds'] and cfg['cooldown_sec'] > 0:
         fire_at = datetime.now(LOCAL_TZ) + timedelta(seconds=cfg['cooldown_sec'])
         in_window = _in_daily_welcome_window(fire_at)
         n_pushed_subst = 0
