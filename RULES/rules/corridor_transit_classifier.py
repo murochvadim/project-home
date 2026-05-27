@@ -17,10 +17,21 @@ State machine — 4 modes, default Corridor_Clear_Home:
        └─ Inside-trigger (door open / Entrance pres) THEN
           Corridor presence within window           ────────────▶ Corridor_From_Home
 
-Corridor_To_Home and Corridor_From_Home automatically revert to
-Corridor_Clear_Home after `cooldown_sec` has elapsed since the mode was
-entered. Corridor_Visit_Home reverts after `window_sec` if no follow-up
-inside-trigger arrives.
+Mode lock + cooldown semantics (revised 2026-05-27):
+  • Corridor_Visit_Home — auto-reverts to Corridor_Clear_Home after
+    `window_sec` if no follow-up inside-trigger arrives. CAN still be
+    upgraded to Corridor_To_Home if a door-open / Entrance-presence
+    inside-trigger arrives within window_sec.
+  • Corridor_To_Home and Corridor_From_Home — LOCKED once entered.
+    No further mode changes from any event until the Main Door has a
+    falling edge (open → closed). When the door closes, the cooldown
+    timer starts; mode reverts to Corridor_Clear_Home after
+    `cooldown_sec` of continuously-closed door time. If the door
+    re-opens during cooldown, the cooldown is paused (and the next
+    door close restarts it from that new close timestamp).
+  • Rationale: avoids mode flip-flopping during a transit moment.
+    Once we decide "user is coming home" or "user is leaving", commit
+    to that decision until the physical transit is complete (door shut).
 
 Outputs (info-only — no device commands):
   • state.shared['corridor_transit.mode']  — current mode string, polled
@@ -40,13 +51,19 @@ Sentence-driven knobs (container `r_corridor_transit_init`):
                       (after From_Home / To_Home before returning to Clear_Home)
 
 state.shared keys owned by this rule:
-  • corridor_transit.mode                    — current mode string
-  • corridor_transit.mode_set_ts             — epoch float when mode was entered
-  • corridor_transit.last_inside_trigger_ts  — last door-open / Entrance-pres rising edge
-  • corridor_transit.last_corridor_rising_ts — last Corridor rising edge
-  • corridor_transit._prev_corridor          — internal: previous Corridor pres value
-  • corridor_transit._prev_door              — internal: previous Main Door open value
-  • corridor_transit._prev_entrance          — internal: previous Entrance pres value
+  • corridor_transit.mode                          — current mode string
+  • corridor_transit.mode_set_ts                   — epoch float when mode was entered
+  • corridor_transit.last_inside_trigger_ts        — last door-open / Entrance-pres rising edge
+  • corridor_transit.last_corridor_rising_ts       — last Corridor rising edge
+  • corridor_transit.door_closed_after_mode_set_ts — epoch float of the most recent Main Door
+                                                     falling edge (open → closed) while in
+                                                     TO_HOME or FROM_HOME mode. Reset to 0
+                                                     on every mode change. Used by
+                                                     _check_timeouts as the cooldown anchor
+                                                     for TO_HOME/FROM_HOME revert.
+  • corridor_transit._prev_corridor                — internal: previous Corridor pres value
+  • corridor_transit._prev_door                    — internal: previous Main Door open value
+  • corridor_transit._prev_entrance                — internal: previous Entrance pres value
 """
 
 import json
@@ -151,6 +168,9 @@ def _set_mode(state, new_mode, now):
         return
     state.shared['corridor_transit.mode']        = new_mode
     state.shared['corridor_transit.mode_set_ts'] = now
+    # Reset the door-closed-anchor on every mode change. The new mode owns
+    # its own cooldown window starting from the NEXT door close (if any).
+    state.shared['corridor_transit.door_closed_after_mode_set_ts'] = 0
     log.info("Corridor Transit: mode %s → %s", prior, new_mode)
     state.emit_virtual_event(
         virtual_id=VIRTUAL_ID,
@@ -170,15 +190,35 @@ def _set_mode(state, new_mode, now):
 
 
 def _check_timeouts(state, cfg, now):
-    """Auto-revert From_Home / To_Home / Visit_Home back to Clear_Home once
-    their respective windows elapse. Called on every event entry."""
+    """Auto-revert non-CLEAR modes back to Clear_Home when their timeout
+    condition is satisfied. Called on every event entry (including heartbeat).
+
+    Revised 2026-05-27:
+      • VISIT — unchanged: reverts after `window_sec` from mode_set_ts.
+      • TO_HOME / FROM_HOME — LOCKED until Main Door closes. Cooldown
+        timer (`cooldown_sec`) starts from the most recent door
+        falling edge (open → closed) that happened AFTER mode entry.
+        Cooldown only counts while the door is currently closed —
+        if it re-opens, cooldown pauses (the next close timestamp
+        replaces the anchor when this function is called again).
+    """
     mode = state.shared.get('corridor_transit.mode', MODE_CLEAR)
     if mode == MODE_CLEAR:
         return
-    mode_age = now - float(state.shared.get('corridor_transit.mode_set_ts', 0) or 0)
-    if mode == MODE_VISIT and mode_age >= cfg['window_sec']:
-        _set_mode(state, MODE_CLEAR, now)
-    elif mode in (MODE_TO_HOME, MODE_FROM_HOME) and mode_age >= cfg['cooldown_sec']:
+    if mode == MODE_VISIT:
+        mode_age = now - float(state.shared.get('corridor_transit.mode_set_ts', 0) or 0)
+        if mode_age >= cfg['window_sec']:
+            _set_mode(state, MODE_CLEAR, now)
+        return
+    # TO_HOME / FROM_HOME — cooldown only counts when door has closed
+    # since mode entered AND is currently closed.
+    door_closed_ts = float(state.shared.get('corridor_transit.door_closed_after_mode_set_ts', 0) or 0)
+    door_is_open   = bool(state.shared.get('corridor_transit._prev_door', False))
+    if door_closed_ts <= 0:
+        return                                  # door hasn't closed yet → locked
+    if door_is_open:
+        return                                  # door re-opened during cooldown → paused
+    if (now - door_closed_ts) >= cfg['cooldown_sec']:
         _set_mode(state, MODE_CLEAR, now)
 
 
@@ -205,10 +245,18 @@ def evaluate(event, state):
         state.shared['corridor_transit._prev_corridor'] = 'presence' if is_presence else 'none'
 
         if is_presence and prev != 'presence':
-            # Rising edge: classify based on whether an inside-trigger
-            # arrived within window_sec.
-            last_inside = float(state.shared.get('corridor_transit.last_inside_trigger_ts', 0) or 0)
+            # Rising edge — record the timestamp regardless of lock state
+            # (useful for diagnostics) before deciding whether to update mode.
             state.shared['corridor_transit.last_corridor_rising_ts'] = now
+            current_mode = state.shared.get('corridor_transit.mode', MODE_CLEAR)
+            # Lock: TO_HOME / FROM_HOME stay until door close + cooldown.
+            # New corridor rising edges during the lock are ignored.
+            if current_mode in (MODE_TO_HOME, MODE_FROM_HOME):
+                log.debug("Corridor Transit: locked in %s — Corridor rising edge ignored",
+                          current_mode)
+                return commands
+            # Classify based on whether an inside-trigger arrived within window_sec.
+            last_inside = float(state.shared.get('corridor_transit.last_inside_trigger_ts', 0) or 0)
             if last_inside > 0 and (now - last_inside) <= cfg['window_sec']:
                 _set_mode(state, MODE_FROM_HOME, now)
             else:
@@ -224,6 +272,17 @@ def evaluate(event, state):
         if is_open and not prev:
             # Door rising edge (closed → open) counts as an inside trigger.
             _handle_inside_trigger(state, cfg, now)
+        elif not is_open and prev:
+            # Door falling edge (open → closed). If we're currently locked
+            # in TO_HOME or FROM_HOME, this is the cooldown anchor —
+            # _check_timeouts will revert to CLEAR cooldown_sec after this
+            # timestamp (as long as the door stays closed).
+            mode = state.shared.get('corridor_transit.mode', MODE_CLEAR)
+            if mode in (MODE_TO_HOME, MODE_FROM_HOME):
+                state.shared['corridor_transit.door_closed_after_mode_set_ts'] = now
+                log.info("Corridor Transit: Main Door closed in %s — cooldown anchor set, "
+                         "%ds until revert to Clear_Home",
+                         mode, cfg['cooldown_sec'])
         return commands
 
     # ── Entrance Presence ─────────────────────────────────────────────────
@@ -244,9 +303,15 @@ def _handle_inside_trigger(state, cfg, now):
     1. Records the timestamp (so subsequent Corridor rise can classify as From_Home).
     2. If currently in Visit_Home AND the visit started within window_sec,
        upgrades the mode to To_Home (the "visitor" was actually us coming home).
+    3. Lock: if currently in TO_HOME or FROM_HOME, the mode is locked until
+       the door closes (handled in _check_timeouts via cooldown). The
+       timestamp is still recorded for diagnostics, but no mode change.
     """
     state.shared['corridor_transit.last_inside_trigger_ts'] = now
     mode = state.shared.get('corridor_transit.mode', MODE_CLEAR)
+    if mode in (MODE_TO_HOME, MODE_FROM_HOME):
+        log.debug("Corridor Transit: locked in %s — inside trigger logged but no mode change", mode)
+        return
     if mode == MODE_VISIT:
         mode_age = now - float(state.shared.get('corridor_transit.mode_set_ts', 0) or 0)
         if mode_age <= cfg['window_sec']:
