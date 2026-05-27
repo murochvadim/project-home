@@ -20,6 +20,7 @@ import time
 import logging
 
 import tinytuya
+import psycopg2
 
 from .base import DeviceAdapter
 
@@ -30,6 +31,20 @@ RECONNECT_DELAY    = 5     # seconds — initial reconnect wait
 RECONNECT_MAX      = 60    # seconds — maximum reconnect wait
 SOCKET_TIMEOUT     = 15    # seconds — receive timeout (> heartbeat interval)
 KEEPALIVE_INTERVAL = 3600  # seconds — update last_seen for devices with no DPS (IR remotes etc.)
+# tinytuya.find_device(dev_id) — signature is (dev_id=None, address=None);
+# no timeout kwarg. The function blocks until ANY broadcast arrives or its
+# internal scan window expires (~10–15 s in practice on this LAN).
+
+# DB connection params — mirror device_agent.DB_CONFIG (LAN trust auth per
+# pg_hba.conf, no password needed). Used by _persist_local_ip to write back
+# the rediscovered IP so the next service restart skips straight to the
+# fresh address. Kept tiny — opens a short-lived connection per write.
+_DB_CONFIG = {
+    'host':     '192.168.1.219',
+    'port':     5432,
+    'database': 'home_data',
+    'user':     'postgres',
+}
 
 # ─── Per-device silent-freeze watchdog ──────────────────────────────────────
 # A per-device TCP thread can sit silently for days if it's in a reconnect
@@ -305,6 +320,59 @@ class TuyaAdapter(DeviceAdapter):
     def stop(self):
         self._stop_event.set()
 
+    # ─── Tuya UDP-broadcast IP rediscovery (since 2026-05-27) ──────────────
+    # Tuya devices announce themselves over UDP (encrypted, ports 6666/6667)
+    # every ~30 sec — that broadcast carries the device's CURRENT LAN IP.
+    # When a per-device TCP thread fails to connect on the cached IP (DHCP
+    # rotated the address out from under us, common case), we listen for
+    # the next broadcast and reconnect with the fresh IP. `tinytuya` ships
+    # `find_device(devid)` which does exactly this. Side effect: the new IP
+    # gets persisted to `devices.local_ip` so a future service restart
+    # boots straight to the right address, no rediscovery wait.
+    #
+    # We deliberately DON'T run find_device on the first connect of a
+    # device-thread (the cached IP is right ~99% of the time at process
+    # start). Only when a connection attempt fails does the next iteration
+    # rediscover, so healthy devices never pay the UDP-listen cost.
+
+    def _rediscover_ip(self, dev_id, current_ip, name):
+        """Listen for the device's UDP broadcast; return the discovered IP
+        (str) or None on timeout. Logs a transition when the IP differs
+        from the cached one."""
+        try:
+            r = tinytuya.find_device(dev_id)
+        except Exception as e:
+            log.warning(f'{name}: find_device exception ({type(e).__name__}): {e}')
+            return None
+        if not r or not r.get('ip'):
+            log.info(f'{name}: rediscovery timed out (no broadcast seen) — keeping cached IP {current_ip}')
+            return None
+        new_ip = r['ip']
+        if new_ip == current_ip:
+            log.debug(f'{name}: rediscovery confirms cached IP {current_ip}')
+        else:
+            log.info(f'{name}: IP changed {current_ip} → {new_ip} (DHCP rotation), reconnecting + persisting')
+        return new_ip
+
+    def _persist_local_ip(self, dev_id, new_ip):
+        """Write the rediscovered IP back to `devices.local_ip`. Idempotent
+        (UPDATE matches one row by primary key). Opens a short-lived
+        connection so we don't share state with the agent's main pool —
+        rediscovery is rare, the connection cost is negligible."""
+        try:
+            conn = psycopg2.connect(**_DB_CONFIG)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE devices SET local_ip = %s WHERE id = %s",
+                        (new_ip, dev_id),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            log.warning(f'persist local_ip failed for {dev_id}: {type(e).__name__}: {e}')
+
     # ─── Local device persistent connection ────────────────────────────────
 
     def _device_thread(self, dev):
@@ -334,10 +402,26 @@ class TuyaAdapter(DeviceAdapter):
         self._per_dev_last_active[dev_id] = time.monotonic()
         log.info(f'{name} ({ip}): per-device thread started')
 
+        # IP-rediscovery iteration counter — first iteration uses cached IP
+        # (fast path on process start; right ~99% of the time). Every
+        # subsequent iteration (i.e. after ANY failure — exception, Err
+        # 904, watchdog force-reconnect) starts by listening for the
+        # device's Tuya UDP broadcast and updating the IP if it changed.
+        # Self-heals from DHCP rotation within one reconnect cycle, no
+        # manual SQL needed.
+        attempt = 0
+
         while not self._stop_event.is_set():
             if force_event.is_set():
                 force_event.clear()
                 log.info(f'{name}: watchdog requested reconnect — opening fresh TCP')
+
+            if attempt > 0:
+                new_ip = self._rediscover_ip(dev_id, ip, name)
+                if new_ip and new_ip != ip:
+                    ip = new_ip
+                    self._persist_local_ip(dev_id, new_ip)
+            attempt += 1
 
             d = None
             try:
@@ -418,8 +502,10 @@ class TuyaAdapter(DeviceAdapter):
                             break
 
             except Exception as e:
-                # Was already logged here, but include the exception type
-                # so 904/timeout/network-down are easy to grep apart.
+                # Include the exception type so 904/timeout/network-down
+                # are easy to grep apart. (Rediscovery triggers
+                # automatically on the next outer-loop iteration via the
+                # `attempt > 0` check at the top.)
                 log.warning(f'{name} ({ip}): {type(e).__name__}: {e} — reconnecting in {delay}s')
             finally:
                 try:
