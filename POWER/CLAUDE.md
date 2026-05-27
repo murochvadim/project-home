@@ -48,8 +48,10 @@ device-agent on LXC 103 (HA WebSocket adapter)
        ▼
 LXC 102 devices table:
    id = 'shelly_3em_main', protocol = 'ha_api', device_type = 'power_meter'
-   last_state = {p1_w: 1240, p1_v: 230.4, p1_a: 5.38, p1_pf: 0.96, p1_kwh: 12345.6,
-                 p2_w: 380, p2_v: 229.8, ..., total_w: 1710, total_kwh: 19259}
+   last_state = {r_w: 1240, r_v: 230.4, r_a: 5.38, r_pf: 0.96, r_kwh: 12345.6,
+                 s_w: 380, s_v: 229.8, ..., t_w: 90, t_v: 231.1, ..., total_w: 1710, total_kwh: 19259}
+   (R / S / T = European 3-phase convention = HA sensor naming = electrician convention.
+    Kept consistent through HA → DPS keys → DB columns → virtual devices → dashboard.)
        │
        ├──► Dashboard reads last_state directly for the "3-phase live status" card
        │
@@ -79,31 +81,41 @@ These are wired across all 3 phases (balanced load by design). Auto-discovery sk
 
 All other devices are single-phase (one phase only), with phase assignment unknown until auto-discovery learns it.
 
+### Devices that already have their own per-phase meter (better than Shelly-delta attribution)
+
+Discovered during the 2026-05-28 HA audit: a SEPARATE 3-phase smart-breaker exposes its own per-phase consumption for the bedroom AC. When a device has its own meter, we attribute it **directly from that meter** instead of computing deltas off the apartment-wide Shelly. Cleaner signal, no contamination from other devices toggling during the measurement window.
+
+- **Bedroom AC** — `sensor.bedroom_ac_breaker_phase_{a,b,c}_{voltage,current,power}` + `sensor.bedroom_ac_breaker_total_energy`. Breaker-side phase letters A/B/C don't have a guaranteed mapping to Shelly's R/S/T at the panel — verify by correlating live readings when the AC is running (the phase the AC actually loads on the breaker will match exactly one of Shelly's R/S/T deltas; the other two should be near-zero). During the 2026-05-28 audit only `phase_a_voltage` was non-zero (238.5 V — closest to Shelly's T at 238.4 V) but with the AC OFF that's circumstantial; pin the mapping at first observed AC startup.
+
+Pattern for future per-device meters: add to a small `power_devices` flag like `has_own_meter=TRUE` + store the entity IDs in `dps_config.own_meter`. The Attribution rule reads that meter directly and DOES NOT touch the residual bucket for this device.
+
 ## DB schema additions (LXC 102)
 
 ### `power_consumption` — time-series of Shelly readings
 ```sql
 CREATE TABLE power_consumption (
   ts        TIMESTAMPTZ PRIMARY KEY,
-  p1_w      INT,           -- active power, watts
-  p2_w      INT,
-  p3_w      INT,
-  total_w   INT,
-  p1_a      NUMERIC(7,3),  -- current, amps
-  p2_a      NUMERIC(7,3),
-  p3_a      NUMERIC(7,3),
-  p1_v      NUMERIC(5,1),  -- voltage, V
-  p2_v      NUMERIC(5,1),
-  p3_v      NUMERIC(5,1),
-  p1_pf     NUMERIC(4,3),  -- power factor, 0..1
-  p2_pf     NUMERIC(4,3),
-  p3_pf     NUMERIC(4,3),
-  p1_kwh    NUMERIC(10,2), -- cumulative energy, kWh
-  p2_kwh    NUMERIC(10,2),
-  p3_kwh    NUMERIC(10,2)
+  r_w       INT,           -- active power, watts  (Phase R / L1)
+  s_w       INT,           --                       (Phase S / L2)
+  t_w       INT,           --                       (Phase T / L3)
+  total_w   INT,           -- computed: r_w + s_w + t_w  (no native HA entity for total)
+  r_a       NUMERIC(7,3),  -- current, amps
+  s_a       NUMERIC(7,3),
+  t_a       NUMERIC(7,3),
+  r_v       NUMERIC(5,1),  -- voltage, V
+  s_v       NUMERIC(5,1),
+  t_v       NUMERIC(5,1),
+  r_pf      NUMERIC(4,3),  -- power factor, 0..1
+  s_pf      NUMERIC(4,3),
+  t_pf      NUMERIC(4,3),
+  r_kwh     NUMERIC(10,2), -- cumulative energy, kWh
+  s_kwh     NUMERIC(10,2),
+  t_kwh     NUMERIC(10,2)
 );
 CREATE INDEX power_consumption_ts ON power_consumption (ts DESC);
 ```
+
+R/S/T match the HA sensor names (`sensor.r_voltage`, `sensor.s_power`, …) so the `HA_DIRECT_DEVICES` entries map straight across with no rename. Same letters used everywhere downstream — column names, DPS keys, virtual device ids, dashboard labels.
 
 Written by the rule engine on every Shelly state change event (or downsampled to once per N seconds if events are noisy). Retention: **30 days, auto_clean**.
 
@@ -111,7 +123,7 @@ Written by the rule engine on every Shelly state change event (or downsampled to
 ```sql
 CREATE TABLE power_devices (
   device_id          TEXT PRIMARY KEY REFERENCES devices(id),
-  phase              SMALLINT,        -- 1, 2, 3, OR NULL for unknown / 3-phase
+  phase              CHAR(1),         -- 'R', 'S', 'T', OR NULL for unknown / 3-phase
   is_three_phase     BOOLEAN DEFAULT FALSE,    -- TRUE for hob, AC1, AC2
   is_cyclic          BOOLEAN DEFAULT FALSE,    -- TRUE for washing machine, dishwasher, etc.
   samples_count      INT DEFAULT 0,
@@ -137,7 +149,7 @@ Retention: **forever** (config-like data, low volume).
 CREATE TABLE power_attribution (
   ts            TIMESTAMPTZ,
   device_id     TEXT,
-  phase         SMALLINT,
+  phase         CHAR(1),         -- 'R' / 'S' / 'T' OR NULL for 3-phase devices
   attributed_w  INT,
   PRIMARY KEY (ts, device_id)
 );
@@ -152,12 +164,12 @@ CREATE TABLE power_billing_periods (
   id                BIGSERIAL PRIMARY KEY,
   start_ts          TIMESTAMPTZ NOT NULL,
   end_ts            TIMESTAMPTZ,                -- NULL while current period is open
-  start_kwh_p1      NUMERIC,                    -- meter snapshot at period start
-  start_kwh_p2      NUMERIC,
-  start_kwh_p3      NUMERIC,
-  end_kwh_p1        NUMERIC,                    -- meter snapshot at period end
-  end_kwh_p2        NUMERIC,
-  end_kwh_p3        NUMERIC,
+  start_kwh_r       NUMERIC,                    -- meter snapshot at period start
+  start_kwh_s       NUMERIC,
+  start_kwh_t       NUMERIC,
+  end_kwh_r         NUMERIC,                    -- meter snapshot at period end
+  end_kwh_s         NUMERIC,
+  end_kwh_t         NUMERIC,
   period_kwh        NUMERIC,                    -- (end - start) summed across phases (computed at close)
   est_cost_ils      NUMERIC,                    -- our dashboard estimate using configured tariff
   bill_received_ils NUMERIC,                    -- actual IEC bill amount (user enters when bill arrives)
@@ -174,7 +186,7 @@ Written by the Power Billing Period Roll rule on heartbeat (60s). Captures the S
 
 Registered in the existing `devices` table (`device_type='virtual'`, `protocol='virtual'`) so they appear like any other device + rules can subscribe to them:
 
-- `virtual:phase_1_background`, `virtual:phase_2_background`, `virtual:phase_3_background` — residual / unknown load per phase (sum of all small + unmodeled draws). `last_state.w` updated by the Attribution rule.
+- `virtual:phase_r_background`, `virtual:phase_s_background`, `virtual:phase_t_background` — residual / unknown load per phase (sum of all small + unmodeled draws). `last_state.w` updated by the Attribution rule.
 - `virtual:power_picture` — single aggregated state with `total_w`, `attributed_w`, `unknown_w`, `top_device_now`, etc. Dashboard convenience.
 
 ## Auto-discovery rule — "Power Phase Discovery"
@@ -192,10 +204,10 @@ On device state change (any device):
      - any OTHER device transitioned within ±5 s of this event? → skip, contaminated
   5. Find the Shelly reading just BEFORE this transition (max ts < event_ts in power_consumption)
   6. Wait for the next Shelly reading AFTER this transition (rule re-fires on next Shelly event)
-  7. Compute Δp1, Δp2, Δp3 = (after - before)
+  7. Compute Δr, Δs, Δt = (after - before)
   8. Threshold guard: if max|Δ| < 10 W → skip (below noise floor, untrackable)
-  9. For ON events: phase = argmax(Δp1, Δp2, Δp3); measured_w = +largest_delta
-     For OFF events: phase = argmin(Δp1, Δp2, Δp3); measured_w = -largest_delta
+  9. For ON events: phase = argmax(Δr, Δs, Δt); measured_w = +largest_delta
+     For OFF events: phase = argmin(Δr, Δs, Δt); measured_w = -largest_delta
   10. Upsert power_devices(device_id, phase, samples_count++, running mean_w, running stddev_w, last_observed_at)
   11. After samples_count > N: auto-classify is_cyclic if stddev_w / mean_w > 0.4
   12. After samples_count > M (e.g. 5) with low variance: bump confidence 'low' → 'medium' → 'high'
@@ -261,7 +273,7 @@ VALUES (
   'virtual',                                            -- new virtual peer
   'unmanaged_load',                                     -- NEW device_type value (alongside light, switch, presence, etc.)
   '{"nominal_w":"Nominal W","duty_cycle":"Duty Cycle %","time_avg_w":"Time-avg W"}'::jsonb,
-  '{"phase":1,"load_type":"cyclic","peak_w":120,"duty_cycle_pct":25,"notes":"kitchen, single-door"}'::jsonb
+  '{"phase":"R","load_type":"cyclic","peak_w":120,"duty_cycle_pct":25,"notes":"kitchen, single-door"}'::jsonb
 );
 ```
 
@@ -270,11 +282,11 @@ And a matching `power_devices` row:
 INSERT INTO power_devices (device_id, phase, source, confidence, mean_w, notes)
 VALUES (
   'manual_fridge',
-  1,
+  'R',
   'manual_unmanaged',                                   -- NEW source value
   'high',                                                -- manual entries treated as high-confidence by definition
   30,                                                    -- time-averaged contribution (peak_w * duty_cycle / 100)
-  'Phase 1, cycle ~25% — avg 30W, peak 120W'
+  'Phase R, cycle ~25% — avg 30W, peak 120W'
 );
 ```
 
@@ -294,7 +306,7 @@ Card 4 (Discovery Status Table) gets a new "+ Add Unmanaged Device" button next 
 
 Form fields:
 - **Name** (required, free text — becomes both display name + the auto-generated slug for `devices.id`)
-- **Phase** (1 / 2 / 3 — required)
+- **Phase** (R / S / T — required; matches HA + electrician convention)
 - **Load type** (always-on / cyclic / intermittent — required)
 - **Always-on wattage** (W) — shown if load type is always-on
 - **Peak wattage** (W) + **Duty cycle** (%) — shown if load type is cyclic
@@ -307,23 +319,23 @@ Edit existing manual devices inline (click row → edit panel).
 ### Phase residual after manual + auto entries
 
 ```
-phase_observed_w   = e.g. 145 W (right now, while home_mode='abroad')
+phase_R_observed_w = e.g. 145 W (right now, while home_mode='abroad')
 
-minus all known managed devices on this phase that are ON   (e.g. nothing, since user is away)
-minus all manual always-on devices on this phase            (e.g. router 25 W + modem 15 W = 40 W)
-minus all manual cyclic devices' time_avg_w on this phase   (e.g. fridge 30 W)
+minus all known managed devices on R that are ON           (e.g. nothing, since user is away)
+minus all manual always-on devices on R                    (e.g. router 25 W + modem 15 W = 40 W)
+minus all manual cyclic devices' time_avg_w on R           (e.g. fridge 30 W)
                                                               ─────
                                                               70 W subtracted
 
-phase_background_w = 145 − 70 = 75 W       ← still unattributed
+phase_R_background_w = 145 − 70 = 75 W     ← still unattributed
 ```
 
-If `phase_background_w` is still high (e.g. 75 W on phase 1 while everything known is OFF), the user has more unmanaged devices to register. Iterative process.
+If `phase_<x>_background_w` is still high (e.g. 75 W on phase R while everything known is OFF), the user has more unmanaged devices to register. Iterative process.
 
 ### Sanity check + alert: "still too much background"
 
 New alert (variant of `power:phantom_load_spike`):
-- **`power:unaccounted_background`** — when `virtual:phase_<n>_background > N W` sustained > 30 min AND `home_mode IN ('away','abroad')`
+- **`power:unaccounted_background`** — when `virtual:phase_<r|s|t>_background > N W` sustained > 30 min AND `home_mode IN ('away','abroad')`
 - Severity: `info` (it's a forensic prompt, not an emergency)
 - Message: *"Phase N has X W of unaccounted load while you're away. Likely an unmanaged device that hasn't been registered yet."*
 - Threshold N is tunable per phase via sentence (default 50 W per phase)
@@ -350,7 +362,7 @@ Three layered strategies:
 - Prevents noise-driven false phase assignments
 
 ### B. Per-phase "background load" virtual device
-- After subtracting all known tracked devices from each phase's observed wattage, the residual = `virtual:phase_<n>_background`
+- After subtracting all known tracked devices from each phase's observed wattage, the residual = `virtual:phase_<r|s|t>_background`
 - Updated by the Attribution rule on every cycle
 - Visible on the dashboard as a forensic clue ("phase 1 has 80 W of always-on background load — what is it?")
 - Captures all the small + always-on + unmodeled loads in aggregate
@@ -406,21 +418,23 @@ Three columns, one per phase, plus a "Total" column:
 
 ```
 ┌──────────────┬──────────────┬──────────────┬───────────────┐
-│  Phase 1     │  Phase 2     │  Phase 3     │  Total        │
+│  Phase R     │  Phase S     │  Phase T     │  Total        │
 ├──────────────┼──────────────┼──────────────┼───────────────┤
 │  Voltage     │  Voltage     │  Voltage     │  Total Power  │
-│  230.4 V     │  229.8 V     │  231.1 V     │  1,710 W      │
+│  231.8 V     │  237.1 V     │  238.4 V     │  2,617 W      │
 │  Current     │  Current     │  Current     │  Apparent     │
-│  5.38 A      │  1.65 A      │  0.39 A      │  1,842 VA     │
+│  10.79 A     │  0.66 A      │  1.24 A      │  ~2,820 VA    │
 │  Power       │  Power       │  Power       │  Power factor │
-│  1,240 W     │  380 W       │  90 W        │  0.93         │
+│  2,459 W     │   30 W       │  128 W       │  0.93 (calc)  │
 │  Power factor│  Power factor│  Power factor│  Frequency    │
-│  0.96        │  0.93        │  0.88        │  50.0 Hz      │
-└──────────────┴──────────────┴──────────────┴───────────────┘
+│  0.98        │  0.19        │  0.43        │  50 Hz (Israel│
+└──────────────┴──────────────┴──────────────┴───── grid std)┘
 
-Phase imbalance: 72% (high) ⚠
-Voltage quality: all phases in nominal 220-240V band ✓
+Phase imbalance: 95 % (high) ⚠     ← Phase R doing nearly all the work
+Voltage quality: all 3 phases in nominal 220-240V band ✓
 ```
+
+Note: HA exposes per-phase only — no `total_w` / apparent-power / system PF / frequency entities. Compute in software (`total_w = r_w + s_w + t_w`; weighted PF = `total_w / total_va`; frequency hardcoded 50 Hz for Israel residential grid).
 
 Color coding:
 - Voltage cells: green 220-240 V; amber 215-220 OR 240-245; red outside
@@ -490,9 +504,9 @@ Stored as `dashboard_settings.power.tariff` + `dashboard_settings.power.billing`
 │  Projected period cost:    ₪382 (linear extrapolation)     │
 │                                                             │
 │  Per-phase split:                                           │
-│    Phase 1: 187 kWh  (60%)                                  │
-│    Phase 2:  98 kWh  (31%)                                  │
-│    Phase 3:  27 kWh   (9%)                                  │
+│    Phase R: 187 kWh  (60%)                                  │
+│    Phase S:  98 kWh  (31%)                                  │
+│    Phase T:  27 kWh   (9%)                                  │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -534,12 +548,41 @@ If/when PV panels are added, Shelly 3EM already reports `kwh_returned` (negative
 
 All rules sentence-tunable via Main Agent → Base Rule Settings — thresholds (`min_delta_w`, `voltage_low_v`, `voltage_high_v`, `imbalance_pct`, `phantom_load_w`, `mismatch_pct`, etc.) lifted out of Python and into authorable sentences.
 
+## HA entity inventory (verified 2026-05-28)
+
+Pre-build audit on `/api/states` enumerated the 15 sensors the Shelly integration exposes (the integration also surfaces `binary_sensor.shellyem3_e8db84d6909b_overpowering`, `button.shellyem3_e8db84d6909b_reboot`, and `switch.shellyem3_e8db84d6909b` — none consumed by this project). DPS keys for `HA_DIRECT_DEVICES` mapping:
+
+| HA entity | DPS key | Unit | Live value (audit) |
+|---|---|---|---|
+| `sensor.r_voltage` | `r_v` | V | 231.84 |
+| `sensor.r_current` | `r_a` | A | 10.79 |
+| `sensor.r_power` | `r_w` | W | 2458.79 |
+| `sensor.r_power_factor` | `r_pf` | — | 0.98 |
+| `sensor.r_energy` | `r_kwh` | kWh | 18299.67 |
+| `sensor.s_voltage` | `s_v` | V | 237.09 |
+| `sensor.s_current` | `s_a` | A | 0.66 |
+| `sensor.s_power` | `s_w` | W | 30.19 |
+| `sensor.s_power_factor` | `s_pf` | — | 0.19 |
+| `sensor.s_energy` | `s_kwh` | kWh | 8658.12 |
+| `sensor.t_voltage` | `t_v` | V | 238.36 |
+| `sensor.t_current` | `t_a` | A | 1.24 |
+| `sensor.t_power` | `t_w` | W | 128.33 |
+| `sensor.t_power_factor` | `t_pf` | — | 0.43 |
+| `sensor.t_energy` | `t_kwh` | kWh | 6946.35 |
+
+Computed in software (no HA entity):
+- `total_w = r_w + s_w + t_w`
+- `total_kwh = r_kwh + s_kwh + t_kwh`
+- `apparent_va` per phase: `v * a` (rounded)
+- System-wide power factor: `total_w / total_apparent_va`
+- Frequency: hardcoded 50 Hz (Israel grid standard, not exposed by integration)
+
 ## Setup steps (when user is ready to build)
 
 | # | What | Where | Status |
 |---|---|---|---|
 | 1 | Shelly 3EM physically installed in panel | Apartment | ✓ done |
-| 2 | Shelly 3EM integrated in HA | HA on LXC 101 | ✓ done (per user) |
+| 2 | Shelly 3EM integrated in HA — 15 sensors exposed (R/S/T × V/A/W/PF/kWh) | HA on LXC 101 | ✓ verified 2026-05-28 (see entity inventory above) |
 | 3 | Local-only mode (disable Shelly Cloud) | Shelly app | Optional — does not block project work |
 | 4 | DHCP reservation for Shelly's local IP | Router | Recommended |
 | 5 | INSERT `devices` row `shelly_3em_main` | LXC 102 | ⏳ |
