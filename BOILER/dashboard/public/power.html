@@ -111,6 +111,7 @@
             <option value="R">Phase R</option>
             <option value="S">Phase S</option>
             <option value="T">Phase T</option>
+            <option value="RST">R.S.T (3-phase)</option>
           </select>
         </div>
         <div>
@@ -160,21 +161,31 @@
 
     <!-- Registry table -->
     <div style="overflow-x:auto;">
+      <!-- Uniform column padding via CSS (was inline + 22px exception) so
+           gaps look consistent across columns. Last-child / first-child get
+           a smaller side padding to avoid wasted space at the table edges. -->
+      <style>
+        #md-table th, #md-table td { padding:10px 16px; }
+        #md-table th:first-child, #md-table td:first-child { padding-left:8px; }
+        #md-table th:last-child, #md-table td:last-child { padding-right:8px; }
+      </style>
       <table id="md-table" style="width:100%; border-collapse:collapse; font-size:0.9rem;">
         <thead>
           <tr style="background:#fafaf6; border-bottom:2px solid #d0cbc4;">
-            <th style="text-align:left; padding:10px 14px;">Name</th>
-            <th style="text-align:center; padding:10px 14px;">Phase</th>
-            <th style="text-align:left; padding:10px 14px;">Load type</th>
-            <th style="text-align:right; padding:10px 22px 10px 14px;">Time-avg W</th>
-            <th style="text-align:left; padding:10px 14px;">Room</th>
-            <th style="text-align:left; padding:10px 14px;">Source</th>
-            <th style="text-align:center; padding:10px 14px;">Actions</th>
+            <th style="text-align:left;">Name</th>
+            <th style="text-align:center;">Phase</th>
+            <th style="text-align:center;">Type</th>
+            <th style="text-align:center;">Power</th>
+            <th style="text-align:center;">Time-avg W</th>
+            <th style="text-align:center;">Room</th>
+            <th style="text-align:center;">Source</th>
+            <th style="text-align:center;">Actions</th>
           </tr>
         </thead>
         <tbody id="md-tbody">
-          <tr><td colspan="7" style="padding:14px; color:#aaa; text-align:center;">Loading…</td></tr>
+          <tr><td colspan="8" style="color:#aaa; text-align:center;">Loading…</td></tr>
         </tbody>
+        <tfoot id="md-tfoot"><!-- per-phase totals row, rendered by mdLoadDevices() --></tfoot>
       </table>
     </div>
   </div>
@@ -183,6 +194,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/power.js?v=18"></script>
+<script src="js/power.js?v=21"></script>
 </body>
 </html>

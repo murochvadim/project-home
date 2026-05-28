@@ -406,7 +406,16 @@ New rules in the `power` group, triggered by Shelly events:
 - Severity: `warn`
 - Catches: stuck switches, smart-plug failures, the user manually unplugging something, etc.
 
-All five alerts auto-resolve when the underlying condition clears (no manual ack needed).
+### `power:phase_lost:<R|S|T>`
+- A phase's `current_a` average < 0.05 A AND `power_w` average < 5 W sustained for > 60 s (= last 6 power_consumption rows at the default 10 s ingest cadence)
+- **Voltage is NOT a reliable signal** — the Shelly's voltage-sense leads are wired at the panel side of the breakers, so a phase whose downstream breaker is open / wire is cut still reads ~230 V on Shelly. The kit only knows the phase is gone via collapsed current + power + jittery PF. Verified empirically on 2026-05-28 by physically pulling Phase T: voltage stayed at 236.95 V while `t_a=0.01, t_w=0, t_pf=-0.02`.
+- One alert per affected phase (`power:phase_lost:R`, `power:phase_lost:S`, `power:phase_lost:T`)
+- Severity: `error` — losing a phase usually means a tripped main, broken neutral, or supply-side fault. Sidebar Status badge turns red.
+- Auto-resolves the moment current returns
+- **False-positive guard:** if no `power_devices` row has been registered on the affected phase AND no auto-discovered device has ever attributed load to it, the rule emits `severity: info` instead of `error` (the "phase has genuinely no load" case is indistinguishable from "phase is dead" until the user registers at least one device on each leg)
+- Rendered as a prominent `⚠ LOST PHASE T` banner above Card 1 on the Project Power page (red, full-width)
+
+All six alerts auto-resolve when the underlying condition clears (no manual ack needed).
 
 ## Dashboard — Project Power page
 
@@ -543,6 +552,7 @@ If/when PV panels are added, Shelly 3EM already reports `kwh_returned` (negative
 | **Power Imbalance** | `power` | heartbeat (60 s) | Emits `power:phase_imbalance` alert when sustained imbalance detected |
 | **Power Phantom Load** | `power` | heartbeat (60 s) | Emits `power:phantom_load_spike` when background bucket too high |
 | **Power Device Mismatch** | `power` | wildcard (device events) | Emits `power:device_state_mismatch` |
+| **Power Phase Loss** | `power` | heartbeat (60 s) | Reads last 60 s of `power_consumption`; emits `power:phase_lost:<R\|S\|T>` when avg current < 0.05 A AND avg power < 5 W for that phase. Demoted to severity=info when no devices are registered on the affected phase (can't distinguish "dead" from "no load"). |
 | **Power Billing Period Roll** | `power` | heartbeat (60 s) | When `now() > current_period.start_ts + period_months`: close current `power_billing_periods` row (snapshot end-kWh + compute period_kwh + compute est_cost_ils) and open the next one (snapshot start-kWh, NULL end_ts). Idempotent — only acts on the period boundary. |
 | **Power Unaccounted Background** | `power` | heartbeat (60 s) | When `virtual:phase_<n>_background > threshold_w` sustained > 30 min AND `home_mode IN ('away','abroad')`: emit `power:unaccounted_background` alert (severity info). Threshold per-phase, sentence-tunable. Prompts user to register more unmanaged devices. |
 
@@ -605,7 +615,7 @@ Computed in software (no HA entity):
 | **P3 — Auto-Discovery Rule** | ~2 days | Power Phase Discovery rule on LXC 105 + the discovery-status portion of Card 4 (auto-discovered rows). Now starts with the manual baseline in place, so per-device delta measurements are clean (fridge cycles already subtracted via time-averaged contribution). End state: `power_devices` self-populating over the next week as smart devices toggle. |
 | **P4 — Attribution** | ~1 day | Power Attribution rule + Card 2 (stacked bar) + Card 3 (daily kWh). Combines manual + auto-discovered entries. End state: per-device live + historical consumption visible. |
 | **P5 — 3-Phase + Cyclic refinement** | ~1 day | Special rules for hob/AC1/AC2 and cyclic devices. End state: 3-phase appliances correctly attributed; washing machine / dishwasher / oven contribution dynamically tracked across cycle. |
-| **P6 — Alerts** | ~1 day | 6 power-quality + anomaly rules (incl. unaccounted-background) + Card 5 (alerts on Power page). End state: voltage / imbalance / phantom-load / device-mismatch / unaccounted-background monitoring live. The unaccounted-background alert is what drives the iterative loop back to P2 ("still 200 W I can't see → register more"). |
+| **P6 — Alerts** | ~1 day | 7 power-quality + anomaly rules (voltage_low/high, phase_imbalance, phantom_load_spike, device_state_mismatch, unaccounted_background, **phase_lost:R/S/T**) + Card 5 (alerts on Power page). End state: voltage / imbalance / phantom-load / device-mismatch / unaccounted-background / phase-loss monitoring live. The unaccounted-background alert drives the iterative loop back to P2 ("still 200 W I can't see → register more"). The phase-loss rule renders as a prominent `⚠ LOST PHASE X` banner above Card 1 — added 2026-05-28 after physically pulling Phase T proved voltage is not a reliable signal (V stays alive even with the breaker open; only current + power + PF collapse). |
 | **P7 — Cost + Billing Cycle** | ~1-1.5 days | Tariff config + Israel 2-month billing cycle + `power_billing_periods` table + Power Billing Period Roll rule + Card 6 (settings + current period + top consumers + history with bill reconciliation). End state: live cost-so-far visible, projected period cost, ability to enter actual IEC bills for estimate-vs-reality feedback loop. |
 
 Total: ~7-8 days spread over a few weeks. Each phase is independently shippable + commits separately. P1 alone is a useful win (live 3-phase numbers on dashboard) even without the rest.

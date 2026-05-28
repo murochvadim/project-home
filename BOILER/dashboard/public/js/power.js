@@ -262,9 +262,13 @@ async function mdPopulateRoomsDropdown(selected = '') {
   if (!sel) return;
   const rooms = await mdLoadRooms();
   // /api/rooms returns rows shaped {room, device_count}, not {name}.
-  // Required field — no "none" option.
-  sel.innerHTML = '<option value="">— pick a room —</option>' +
-    rooms.map(r => `<option value="${r.room}"${r.room === selected ? ' selected' : ''}>${r.room}</option>`).join('');
+  // Two special options: empty (forces a choice) + "(no room)" for
+  // devices that don't belong to any specific room (routers, modems,
+  // closet-mounted gear). "(no room)" stores as NULL via the special
+  // sentinel value "__none__" → translated on the way to the backend.
+  sel.innerHTML = '<option value="">— pick a room —</option>'
+    + `<option value="__none__"${selected === '__none__' ? ' selected' : ''}>(no room)</option>`
+    + rooms.map(r => `<option value="${r.room}"${r.room === selected ? ' selected' : ''}>${r.room}</option>`).join('');
 }
 
 function mdShowFields() {
@@ -304,7 +308,9 @@ function mdOpenEdit(deviceId) {
   document.getElementById('md-add-btn').textContent = '× Close form';
   mdResetFormFields();
   document.getElementById('md-name').value = row.name;
-  document.getElementById('md-phase').value = row.phase || '';
+  // 3-phase devices have phase=NULL + is_three_phase=true → "RST" sentinel
+  // in the dropdown so the "(3-phase)" option highlights on edit.
+  document.getElementById('md-phase').value = row.is_three_phase ? 'RST' : (row.phase || '');
   const dcfg = row.dps_config || {};
   const lt = dcfg.load_type || 'always_on';
   const lr = document.querySelector(`input[name="md-load-type"][value="${lt}"]`);
@@ -313,7 +319,8 @@ function mdOpenEdit(deviceId) {
   if (dcfg.peak_w != null)    document.getElementById('md-peak-w').value = dcfg.peak_w;
   if (dcfg.duty_cycle_pct != null) document.getElementById('md-duty-pct').value = dcfg.duty_cycle_pct;
   mdShowFields();
-  mdPopulateRoomsDropdown(row.room || '');
+  // null/empty room → '__none__' selector so the "(no room)" option highlights.
+  mdPopulateRoomsDropdown(row.room || '__none__');
 }
 
 function mdCancel() {
@@ -350,7 +357,13 @@ async function mdSave() {
   if (!room)  { msg.textContent = 'Room is required'; return; }
   if (!load_type) { msg.textContent = 'Load type is required'; return; }
 
-  const body = { name, phase, load_type, room };
+  // Translate "(no room)" sentinel into NULL on the wire so the DB
+  // stores the row with room=NULL rather than the literal "__none__".
+  const roomValue = room === '__none__' ? null : room;
+  // "RST" sentinel → 3-phase device (phase=NULL + is_three_phase=true)
+  const isThreePhase = (phase === 'RST');
+  const phaseValue = isThreePhase ? null : phase;
+  const body = { name, phase: phaseValue, is_three_phase: isThreePhase, load_type, room: roomValue };
   if (load_type === 'always_on') {
     body.nominal_w = parseFloat(document.getElementById('md-nominal-w').value) || 0;
     if (body.nominal_w <= 0) { msg.textContent = 'Always-on wattage must be > 0'; return; }
@@ -404,10 +417,31 @@ async function mdDelete(deviceId) {
   }
 }
 
-function mdLoadTypeLabel(lt, dcfg) {
-  if (lt === 'always_on')    return `always-on (${dcfg?.nominal_w ?? '?'} W)`;
-  if (lt === 'cyclic')       return `cyclic (peak ${dcfg?.peak_w ?? '?'} W × ${dcfg?.duty_cycle_pct ?? '?'} %)`;
-  if (lt === 'intermittent') return 'intermittent (not auto-subtracted)';
+function mdTypeLabel(lt) {
+  if (lt === 'always_on')    return 'always-on';
+  if (lt === 'cyclic')       return 'cyclic';
+  if (lt === 'intermittent') return 'intermittent';
+  return '—';
+}
+// Color cues for the Power + Time-avg cells, based on how the device actually
+// consumes: always-on devices burn power 24/7 (red, attention-grabbing),
+// cyclic devices consume on a duty cycle (amber/yellow), intermittent
+// devices consume only briefly when triggered (grey — no continuous load).
+function mdConsumptionColor(lt) {
+  if (lt === 'always_on')    return '#c0392b';   // red — continuous draw, attention-grabbing
+  if (lt === 'cyclic')       return '#daa520';   // goldenrod — true yellow, readable on light bg
+  if (lt === 'intermittent') return '#888';      // grey — no continuous draw
+  return '#888';
+}
+function mdPowerSpec(lt, dcfg) {
+  if (lt === 'always_on')    return `${dcfg?.nominal_w ?? '?'} W`;
+  if (lt === 'cyclic') {
+    const peak = dcfg?.peak_w ?? '?';
+    const duty = dcfg?.duty_cycle_pct ?? '?';
+    const avg  = (typeof peak === 'number' && typeof duty === 'number') ? Math.round(peak * duty / 100) : '?';
+    return `${peak} W × ${duty}% → ${avg} W`;
+  }
+  if (lt === 'intermittent') return '(varies)';
   return '—';
 }
 
@@ -424,30 +458,46 @@ async function mdLoadDevices() {
     const rows = await r.json();
     mdRowsCache = Array.isArray(rows) ? rows : [];
     const tbody = document.getElementById('md-tbody');
+    const tfoot = document.getElementById('md-tfoot');
+    tfoot.innerHTML = '';  // no footer row (user removed per-phase totals here — same info now lives in the LCD)
     if (mdRowsCache.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; color:#aaa; text-align:center;">No devices registered yet. Click <b>+ Add Unmanaged Device</b> to start.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="color:#aaa; text-align:center;">No devices registered yet. Click <b>+ Add Unmanaged Device</b> to start.</td></tr>';
       return;
     }
     tbody.innerHTML = mdRowsCache.map(row => {
       const dcfg = row.dps_config || {};
       const isManual = row.source === 'manual_unmanaged';
-      const ltLabel = mdLoadTypeLabel(dcfg.load_type, dcfg);
+      const typeLabel = mdTypeLabel(dcfg.load_type);
+      const powerSpec = mdPowerSpec(dcfg.load_type, dcfg);
       const meanW = row.mean_w != null ? `${Math.round(Number(row.mean_w))} W` : '—';
+      const roomCell = row.room ? mdEscHtml(row.room) : '<span style="color:#aaa; font-style:italic;">(no room)</span>';
+      // 3-phase devices store phase=NULL + is_three_phase=true → render as "R.S.T"
+      const phaseDisplay = row.is_three_phase ? 'R.S.T' : (row.phase || '—');
+      // Color the Power + Time-avg cells per consumption pattern:
+      //   always-on → red (continuous load, always drawing)
+      //   cyclic    → amber/yellow (cycles on/off)
+      //   intermittent → grey (no continuous load, user-triggered only)
+      const cColor = mdConsumptionColor(dcfg.load_type);
       // Pass only the device_id to Edit/Delete handlers; they look up the row
       // from mdRowsCache so quotes in names can't break the onclick attribute.
       const actions = isManual
         ? `<button class="btn btn-secondary btn-sm" onclick="mdOpenEdit('${row.device_id}')">Edit</button>
            <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete('${row.device_id}')">Delete</button>`
         : '<span style="color:#aaa; font-size:0.78rem;">(managed by engine)</span>';
+      // All inner cells (Phase / Type / Power / Time-avg / Room / Source)
+      // center-aligned so the visual gap between cell contents is symmetric
+      // across the row. Name stays left (it's the row's identity) and
+      // Actions center (buttons cluster). The cell padding stays uniform.
       return `
         <tr style="border-bottom:1px solid #e6e1da;">
-          <td style="padding:8px 14px; font-weight:600;">${mdEscHtml(row.name)}</td>
-          <td style="padding:8px 14px; text-align:center;">${row.phase || '—'}</td>
-          <td style="padding:8px 14px; color:#666;">${ltLabel}</td>
-          <td style="padding:8px 22px 8px 14px; text-align:right; font-weight:600;">${meanW}</td>
-          <td style="padding:8px 14px; color:#666;">${mdEscHtml(row.room) || '—'}</td>
-          <td style="padding:8px 14px;">${mdSourceTag(row.source)}</td>
-          <td style="padding:8px 14px; text-align:center; white-space:nowrap;">${actions}</td>
+          <td style="font-weight:600;">${mdEscHtml(row.name)}</td>
+          <td style="text-align:center;">${phaseDisplay}</td>
+          <td style="text-align:center; color:#666;">${typeLabel}</td>
+          <td style="text-align:center; color:${cColor}; font-weight:600;">${powerSpec}</td>
+          <td style="text-align:center; color:${cColor}; font-weight:700;">${meanW}</td>
+          <td style="text-align:center; color:#666;">${roomCell}</td>
+          <td style="text-align:center;">${mdSourceTag(row.source)}</td>
+          <td style="text-align:center; white-space:nowrap;">${actions}</td>
         </tr>
       `;
     }).join('');

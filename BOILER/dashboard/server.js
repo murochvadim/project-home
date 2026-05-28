@@ -647,9 +647,15 @@ app.get('/api/power/devices', async (req, res) => {
 
 app.post('/api/power/devices', async (req, res) => {
   const { name, phase, load_type, peak_w, duty_cycle_pct, nominal_w, room, notes } = req.body || {};
+  // 3-phase devices send phase=null + is_three_phase=true (hob, AC1, AC2 etc.,
+  // wired across all 3 phases). The check constraint allows phase=NULL so the
+  // power_devices row stores phase=NULL alongside is_three_phase=true; the
+  // dashboard renders "R.S.T" for these on the way out.
+  const isThreePhase = !!req.body.is_three_phase;
 
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
-  if (!['R','S','T'].includes(phase)) return res.status(400).json({ error: 'phase must be R / S / T' });
+  if (!isThreePhase && !['R','S','T'].includes(phase))
+    return res.status(400).json({ error: 'phase must be R / S / T (or pick R.S.T for 3-phase)' });
   if (!['always_on','cyclic','intermittent'].includes(load_type))
     return res.status(400).json({ error: 'load_type must be always_on / cyclic / intermittent' });
 
@@ -657,8 +663,9 @@ app.post('/api/power/devices', async (req, res) => {
   if (!slug) return res.status(400).json({ error: 'name produced empty slug' });
   const deviceId = `manual_${slug}`;
   const mean_w = timeAvgW(load_type, peak_w, duty_cycle_pct, nominal_w);
+  const phaseToStore = isThreePhase ? null : phase;
 
-  const dpsConfig = { phase, load_type };
+  const dpsConfig = { phase: isThreePhase ? 'RST' : phase, load_type, is_three_phase: isThreePhase };
   if (load_type === 'always_on')  dpsConfig.nominal_w     = Number(nominal_w) || 0;
   if (load_type === 'cyclic')   { dpsConfig.peak_w        = Number(peak_w) || 0;
                                   dpsConfig.duty_cycle_pct = Number(duty_cycle_pct) || 0; }
@@ -683,12 +690,12 @@ app.post('/api/power/devices', async (req, res) => {
 
     await client.query(`
       INSERT INTO power_devices (device_id, phase, mean_w, source, confidence,
-        is_cyclic, notes, updated_at)
-      VALUES ($1, $2, $3, 'manual_unmanaged', 'high', $4, $5, NOW())
-    `, [deviceId, phase, mean_w, load_type === 'cyclic', notes || null]);
+        is_cyclic, is_three_phase, notes, updated_at)
+      VALUES ($1, $2, $3, 'manual_unmanaged', 'high', $4, $5, $6, NOW())
+    `, [deviceId, phaseToStore, mean_w, load_type === 'cyclic', isThreePhase, notes || null]);
 
     await client.query('COMMIT');
-    res.json({ ok: true, device_id: deviceId, mean_w });
+    res.json({ ok: true, device_id: deviceId, mean_w, is_three_phase: isThreePhase });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     if (String(e.message).includes('duplicate key'))
@@ -704,7 +711,11 @@ app.patch('/api/power/devices/:id', async (req, res) => {
   if (!id.startsWith('manual_')) return res.status(400).json({ error: 'only manual_* devices editable here' });
 
   const { name, phase, load_type, peak_w, duty_cycle_pct, nominal_w, room, notes } = req.body || {};
-  if (phase && !['R','S','T'].includes(phase)) return res.status(400).json({ error: 'phase must be R / S / T' });
+  // is_three_phase is treated as a sentinel that pairs with phase=null;
+  // PATCH always overwrites both fields together when either is in the request.
+  const isThreePhase = !!req.body.is_three_phase;
+  if (!isThreePhase && phase !== undefined && phase !== null && !['R','S','T'].includes(phase))
+    return res.status(400).json({ error: 'phase must be R / S / T (or set is_three_phase=true)' });
   if (load_type && !['always_on','cyclic','intermittent'].includes(load_type))
     return res.status(400).json({ error: 'load_type must be always_on / cyclic / intermittent' });
 
@@ -714,7 +725,13 @@ app.patch('/api/power/devices/:id', async (req, res) => {
     const cur = await client.query('SELECT dps_config FROM devices WHERE id = $1', [id]);
     if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'not found' }); }
     const dpsConfig = { ...(cur.rows[0].dps_config || {}) };
-    if (phase) dpsConfig.phase = phase;
+    // phase + is_three_phase travel as a pair — overwrite both on every PATCH
+    // so a switch from R → R.S.T (or vice versa) works correctly. If the
+    // caller didn't send `phase` at all, leave both alone.
+    if (phase !== undefined || req.body.is_three_phase !== undefined) {
+      dpsConfig.phase = isThreePhase ? 'RST' : phase;
+      dpsConfig.is_three_phase = isThreePhase;
+    }
     if (load_type) dpsConfig.load_type = load_type;
     if (nominal_w !== undefined) dpsConfig.nominal_w = Number(nominal_w) || 0;
     if (peak_w !== undefined) dpsConfig.peak_w = Number(peak_w) || 0;
@@ -732,18 +749,22 @@ app.patch('/api/power/devices/:id', async (req, res) => {
     }
     await client.query('UPDATE devices SET dps_config = $2::jsonb, updated_at = NOW() WHERE id = $1', [id, JSON.stringify(dpsConfig)]);
 
+    // power_devices: overwrite phase + is_three_phase from the new dpsConfig
+    // so the row always reflects the latest authored intent.
+    const newPhaseSql = dpsConfig.is_three_phase ? null : (dpsConfig.phase || null);
     await client.query(`
       UPDATE power_devices
-      SET phase = COALESCE($2, phase),
-          mean_w = $3,
-          is_cyclic = $4,
-          notes = COALESCE($5, notes),
+      SET phase = $2,
+          is_three_phase = $3,
+          mean_w = $4,
+          is_cyclic = $5,
+          notes = COALESCE($6, notes),
           updated_at = NOW()
       WHERE device_id = $1
-    `, [id, phase || null, mean_w, finalLoadType === 'cyclic', notes || null]);
+    `, [id, newPhaseSql, !!dpsConfig.is_three_phase, mean_w, finalLoadType === 'cyclic', notes || null]);
 
     await client.query('COMMIT');
-    res.json({ ok: true, mean_w });
+    res.json({ ok: true, mean_w, is_three_phase: !!dpsConfig.is_three_phase });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
