@@ -636,9 +636,12 @@ async function mdOpenEdit(rowId) {
   document.getElementById('md-phase').value = row.is_three_phase ? 'RST' : (row.phase || '');
 
   // Behavior radio prefill — derive from source:
-  //   manual_unmanaged → always_on
+  //   manual_unmanaged / manual_linked → always_on
   //   auto_pending / auto_custom / auto_discovered → auto
-  const behavior = (row.source === 'manual_unmanaged') ? 'always_on' : 'auto';
+  //   state_known → state_known
+  let behavior = 'auto';
+  if (row.source === 'manual_unmanaged' || row.source === 'manual_linked') behavior = 'always_on';
+  else if (row.source === 'state_known') behavior = 'state_known';
   const br = document.querySelector(`input[name="md-behavior"][value="${behavior}"]`);
   if (br) br.checked = true;
 
@@ -823,24 +826,32 @@ async function mdDelete(rowId) {
   }
 }
 
-// Behavior derived from power_devices.source. Cyclic is no longer a
-// separate behavior — all rows are either always_on or auto.
+// Behavior derived from power_devices.source.
 //   manual_unmanaged → always_on, custom virtual device
 //   manual_linked    → always_on, real linked device (e.g. fridge)
 //   auto_pending     → auto, real linked device
 //   auto_custom      → auto, custom virtual device
 //   auto_discovered  → auto, P3 rule discovered
+//   state_known      → state, TV/Alexa — Power Known State rule reads device.dps.state
 function mdBehavior(source) {
   if (source === 'manual_unmanaged' || source === 'manual_linked') return 'always_on';
+  if (source === 'state_known') return 'state';
   return 'auto';
 }
 function mdTypeLabel(source) {
-  return mdBehavior(source) === 'always_on' ? 'always-on' : 'auto';
+  const b = mdBehavior(source);
+  if (b === 'always_on') return 'always-on';
+  if (b === 'state')     return 'known state';
+  return 'auto';
 }
 // Always-on devices burn power 24/7 (red, attention-grabbing).
-// Auto devices contribute only when the rule detects them ON (blue).
+// State-known devices show their wattage when HA says ON (purple).
+// Auto devices contribute only when the discovery rule detects them ON (blue).
 function mdConsumptionColor(source) {
-  return mdBehavior(source) === 'always_on' ? '#c0392b' : '#2980b9';
+  const b = mdBehavior(source);
+  if (b === 'always_on') return '#c0392b';
+  if (b === 'state')     return '#7d3c98';
+  return '#2980b9';
 }
 // Live wattage cell — what the rule currently sees:
 //   * always_on rows always render as ON in red with their expected
@@ -971,6 +982,7 @@ function mdSourceTag(source) {
   if (source === 'auto_pending')     return '<span style="background:#e3f2fd; color:#1565c0; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto (linked)</span>';
   if (source === 'auto_custom')      return '<span style="background:#f3e5f5; color:#6a1b9a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto (custom)</span>';
   if (source === 'auto_discovered')  return '<span style="background:#d8e8f0; color:#2a4a6a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto</span>';
+  if (source === 'state_known')      return '<span style="background:#ede7f6; color:#5e35b1; padding:2px 8px; border-radius:10px; font-size:0.72rem;">known state</span>';
   return source || '—';
 }
 

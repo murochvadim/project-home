@@ -761,12 +761,14 @@ app.get('/api/power/status', async (req, res) => {
     const always_on_w = aoR.rows[0]?.w ?? 0;
 
     // ON/OFF device counts surfaced on the LCD Total card.
-    // ON  = always_on rows (always treated as ON) + auto rows whose live.on is true
-    // OFF = auto rows whose live.on is false
+    // ON  = always_on rows + any row whose live.on is true
+    //       (covers auto rows the discovery rule has flipped on AND
+    //        state_known rows the Power Known State rule has flipped on)
+    // OFF = auto + state_known rows whose live.on is FALSE/NULL
     const countsR = await db.query(`
       SELECT
         COUNT(*) FILTER (WHERE source IN ('manual_unmanaged','manual_linked') OR (live->>'on')::bool = TRUE) AS on_count,
-        COUNT(*) FILTER (WHERE source IN ('auto_pending','auto_custom','auto_discovered') AND COALESCE((live->>'on')::bool, FALSE) = FALSE) AS off_count
+        COUNT(*) FILTER (WHERE source IN ('auto_pending','auto_custom','auto_discovered','state_known') AND COALESCE((live->>'on')::bool, FALSE) = FALSE) AS off_count
       FROM power_devices
     `);
     const devices_on  = Number(countsR.rows[0]?.on_count)  || 0;
@@ -1052,8 +1054,8 @@ app.get('/api/power/devices/available', async (req, res) => {
 // Returns either {ok:true, ...} or {error:string, status:int}.
 function _powerParseBody(body) {
   const behavior = body.behavior;
-  if (!['always_on','auto'].includes(behavior))
-    return { error: 'behavior must be always_on or auto', status: 400 };
+  if (!['always_on','auto','state_known'].includes(behavior))
+    return { error: 'behavior must be always_on, auto, or state_known', status: 400 };
   const phase = body.phase || null;
   const isThreePhase = !!body.is_three_phase;
   if (!isThreePhase && !['R','S','T'].includes(phase))
@@ -1090,10 +1092,11 @@ function _powerParseBody(body) {
   }
 
   // mean_w semantics:
-  //   always_on → continuous baseline = sum of expected powers
-  //   auto      → contributes only when the discovery rule detects ON,
-  //               so the baseline column stays NULL (skipped by the
-  //               always_on_w SUM in /api/power/status).
+  //   always_on   → continuous baseline = sum of expected powers
+  //   auto        → contributes only when the discovery rule detects ON.
+  //   state_known → contributes only when device.state says ON; baseline NULL.
+  // Only always_on adds to the always_on_w SUM in /api/power/status; the
+  // other two are counted via live.on at runtime.
   const mean_w = behavior === 'always_on' ? sumW : null;
   const phaseToStore = isThreePhase ? null : phase;
 
@@ -1115,13 +1118,19 @@ app.post('/api/power/devices', async (req, res) => {
     return res.status(400).json({ error: 'linked_device_id and custom_device_name are mutually exclusive' });
 
   // source values:
-  //   linked   + always_on → 'manual_linked'   (real device, baseline)
-  //   linked   + auto      → 'auto_pending'
-  //   custom   + always_on → 'manual_unmanaged' (virtual manual_<slug>)
-  //   custom   + auto      → 'auto_custom'      (virtual auto_<slug>)
+  //   linked   + always_on   → 'manual_linked'    (real device, baseline)
+  //   linked   + auto        → 'auto_pending'
+  //   linked   + state_known → 'state_known'      (HA-reported on/off)
+  //   custom   + always_on   → 'manual_unmanaged' (virtual manual_<slug>)
+  //   custom   + auto        → 'auto_custom'      (virtual auto_<slug>)
+  //   state_known requires linked path (needs a real device's state.dps.state).
   const isLinked = !!linked_device_id;
+  if (!isLinked && behavior === 'state_known')
+    return res.status(400).json({ error: 'state_known requires a linked device — pick one, not custom' });
   const source = isLinked
-    ? (behavior === 'always_on' ? 'manual_linked' : 'auto_pending')
+    ? (behavior === 'always_on' ? 'manual_linked'
+       : behavior === 'state_known' ? 'state_known'
+       : 'auto_pending')
     : (behavior === 'always_on' ? 'manual_unmanaged' : 'auto_custom');
 
   const client = await db.connect();
@@ -1130,7 +1139,7 @@ app.post('/api/power/devices', async (req, res) => {
     // device row created. Multiple rows can share device_id when channel
     // differs (e.g. Kitchen Switch ch1 + ch2 each registered separately).
     if (isLinked) {
-      const dev = await client.query('SELECT id, channel_config FROM devices WHERE id = $1', [linked_device_id]);
+      const dev = await client.query('SELECT id, channel_config, last_state FROM devices WHERE id = $1', [linked_device_id]);
       if (!dev.rows.length) return res.status(404).json({ error: `device "${linked_device_id}" not found` });
       // Validate channel exists in device's channel_config when supplied.
       if (channel) {
@@ -1144,12 +1153,30 @@ app.post('/api/power/devices', async (req, res) => {
       );
       if (existing.rows.length) return res.status(409).json({ error: `this device/channel is already in the registry` });
 
+      // For state_known rows, seed `live` from the device's current
+      // last_state.state so the LCD counter is accurate immediately (the
+      // rule only writes live on a state change → without seeding, a TV
+      // that's been off for hours would show OFF/'live' = default).
+      let initialLive = { on: false };
+      if (behavior === 'state_known') {
+        const ls = dev.rows[0].last_state || {};
+        const stateVal = channel && ls[channel] !== undefined ? ls[channel] : ls.state;
+        const offSet = new Set(['off','unavailable','unknown','standby','none','']);
+        const isOn = stateVal != null
+          && !(typeof stateVal === 'string' && offSet.has(String(stateVal).toLowerCase()))
+          && stateVal !== false;
+        initialLive = isOn
+          ? { on: true, w: Number(cfg.expected_w) || 0, ts: new Date().toISOString() }
+          : { on: false, ts: new Date().toISOString() };
+      }
+
       const r = await client.query(`
         INSERT INTO power_devices (device_id, channel, phase, is_three_phase, mean_w, source, confidence,
-          is_cyclic, samples_count, display_name, config, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, 'high', FALSE, 0, $7, $8::jsonb, NOW())
+          is_cyclic, samples_count, display_name, config, live, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 'high', FALSE, 0, $7, $8::jsonb, $9::jsonb, NOW())
         RETURNING row_id
-      `, [linked_device_id, channel, phaseToStore, isThreePhase, mean_w, source, displayName || null, JSON.stringify(cfg)]);
+      `, [linked_device_id, channel, phaseToStore, isThreePhase, mean_w, source, displayName || null,
+          JSON.stringify(cfg), JSON.stringify(initialLive)]);
       return res.json({ ok: true, row_id: r.rows[0].row_id, device_id: linked_device_id, channel, source,
                         behavior, is_three_phase: isThreePhase, mean_w });
     }
@@ -1213,10 +1240,17 @@ app.patch('/api/power/devices/:row_id', async (req, res) => {
 
     // source flips with behavior — pick the right value based on whether the
     // row is virtual (manual_/auto_ prefix) or linked (real device id).
+    // Virtual rows can't switch to state_known (no real device.state to read).
     const isVirtual = deviceId.startsWith('manual_') || deviceId.startsWith('auto_');
+    if (isVirtual && behavior === 'state_known') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'state_known not valid for virtual rows' });
+    }
     const source = isVirtual
       ? (behavior === 'always_on' ? 'manual_unmanaged' : 'auto_custom')
-      : (behavior === 'always_on' ? 'manual_linked'    : 'auto_pending');
+      : (behavior === 'always_on' ? 'manual_linked'
+         : behavior === 'state_known' ? 'state_known'
+         : 'auto_pending');
 
     // For virtual rows, also update the linked devices row's room so the
     // join still picks it up. Linked rows leave the real device untouched

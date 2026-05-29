@@ -104,6 +104,22 @@ class HAApiAdapter(DeviceAdapter):
             ('sensor.t_power_factor', 't_pf'),
             ('sensor.t_energy',       't_kwh'),
         ],
+        # Samsung TVs (state only — POWER subsystem reads dps['state'] to
+        # decide ON/OFF for state_known power_devices rows). Unmatched
+        # domain in _ha_state_to_dps_value → state passes through as raw
+        # string ('on' / 'off' / 'playing' / 'idle' / 'standby').
+        'media_player.samsung_85_qled':       [('media_player.samsung_85_qled',       'state')],
+        'media_player.samsung_q60ba_50_tv_2': [('media_player.samsung_q60ba_50_tv_2', 'state')],
+        'media_player.samsung_q49_ba_tv':     [('media_player.samsung_q49_ba_tv',     'state')],
+        # Alexa Echo devices + Samsung soundbar (built-in Alexa). devices
+        # rows already exist (protocol='alexa', identity-only); adding here
+        # so their HA media_player state flows into last_state for power
+        # attribution.
+        'media_player.10inch_echo_show':   [('media_player.10inch_echo_show',   'state')],
+        'media_player.alexa_guy_room':     [('media_player.alexa_guy_room',     'state')],
+        'media_player.samsung_soundbar_2': [('media_player.samsung_soundbar_2', 'state')],
+        'media_player.alexa_maya_bedroom': [('media_player.alexa_maya_bedroom', 'state')],
+        'media_player.alexa_my_bathroom':  [('media_player.alexa_my_bathroom',  'state')],
     }
 
     def __init__(self, devices, on_state_change):

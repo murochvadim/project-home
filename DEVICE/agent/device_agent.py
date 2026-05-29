@@ -136,8 +136,13 @@ class DeviceAgent:
                 labels = row.get('dps_labels') or {}
                 # dps_labels = source of truth. Has labels → only labeled. No labels → DPS "1" default
                 allowed = set(labels.keys()) if labels else {'1'}
-                # dps_config: enabled=false is a kill switch, overrides everything
+                # dps_config: enabled=false is a kill switch, overrides everything.
+                # Skip non-dict values (legacy POWER virtual-device rows store
+                # flat keys like {"phase":"R","nominal_w":200} here, not per-
+                # channel dicts).
                 for k, cfg in (row.get('dps_config') or {}).items():
+                    if not isinstance(cfg, dict):
+                        continue
                     if cfg.get('enabled') is False:
                         allowed.discard(k)
                 self._allowed_dps[row['id']] = allowed
