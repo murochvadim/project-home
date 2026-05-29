@@ -826,9 +826,16 @@
         };
         const SECTION_ORDER = [
           'Apartment (Layer 0)', 'Activity', 'Lighting', 'Mode transitions',
-          'Corridor', 'Living Room', 'Balcony', 'My BathRoom', 'Boiler', 'Pixoo', 'Other',
+          'Corridor', 'Living Room', 'Balcony', 'My BathRoom', 'Boiler', 'Pixoo', 'Power', 'Other',
         ];
-        const cap = s => s ? (s.charAt(0).toUpperCase() + s.slice(1).replace('-', ' ')) : 'Other';
+        // Capitalize each dash-separated word. Special-case my-bathroom so
+        // the rendered label matches the project's canonical "My BathRoom"
+        // camelCase used in SECTION_ORDER + everywhere in CLAUDE.md.
+        const cap = s => {
+          if (!s) return 'Other';
+          if (s === 'my-bathroom') return 'My BathRoom';
+          return s.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+        };
         const sectionOf = r => RULE_NAME_TO_SECTION[r.name] || cap(r.group);
 
         // Bucket rules by section
