@@ -46,33 +46,52 @@
     </div>
   </div>
 
+  <!-- Tab bar -->
+  <div style="display:flex; gap:8px; margin-bottom:16px;">
+    <button class="tab-btn active" data-tab="status" onclick="powerSwitchTab('status')">Status</button>
+    <button class="tab-btn" data-tab="settings" onclick="powerSwitchTab('settings')">Settings</button>
+  </div>
+
+  <!-- ── Status tab — current LCD + registry cards ── -->
+  <div id="tab-status" class="tab-panel active">
+
   <!-- Card 1 — Shelly 3EM Live Status -->
   <div class="card">
-    <h2>Shelly 3EM — Live Status
-      <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
-        — polled every 5 s
+    <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:20px;">
+      <span>Shelly 3EM — Live Status
+        <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
+          — polled every 5 s
+        </span>
+      </span>
+      <!-- Imbalance / voltage-quality / freshness line lives on the right of the
+           header so it doesn't take a whole row below the phase cards. -->
+      <span style="font-size:0.82rem; font-weight:400; text-transform:none; letter-spacing:0; display:inline-flex; gap:6px; flex-wrap:wrap; color:#666; align-items:baseline;">
+        <span>
+          <span style="color:#888;">Phase imbalance:</span>
+          <span id="imbalance-val" style="font-weight:600;">—</span>
+          <span id="imbalance-tag" style="margin-left:4px;"></span>
+        </span>
+        <span style="color:#ccc;">|</span>
+        <span>
+          <span style="color:#888;">Voltage:</span>
+          <span id="voltage-quality" style="font-weight:600;">—</span>
+        </span>
+        <span style="color:#ccc;">|</span>
+        <span>
+          <span style="color:#888;">Freq:</span>
+          <span id="freq-val" style="font-weight:600;">—</span>
+        </span>
+        <span style="color:#ccc;">|</span>
+        <span>
+          <span style="color:#888;">Last update:</span>
+          <span id="last-update-age" style="font-weight:600;">—</span>
+        </span>
       </span>
     </h2>
 
     <div id="power-phases" style="display:grid; grid-template-columns:1fr 1fr 1fr 1.55fr; gap:16px;">
       <!-- Phase R / S / T / Total columns rendered by JS;
            Total is wider so the row-1 hero numbers fit comfortably side-by-side. -->
-    </div>
-
-    <div style="margin-top:16px; display:flex; gap:24px; flex-wrap:wrap; font-size:0.86rem;">
-      <div>
-        <span style="color:#888;">Phase imbalance:</span>
-        <span id="imbalance-val" style="font-weight:600;">—</span>
-        <span id="imbalance-tag" style="margin-left:4px;"></span>
-      </div>
-      <div>
-        <span style="color:#888;">Voltage quality:</span>
-        <span id="voltage-quality" style="font-weight:600;">—</span>
-      </div>
-      <div>
-        <span style="color:#888;">Last update:</span>
-        <span id="last-update-age" style="font-weight:600;">—</span>
-      </div>
     </div>
   </div>
 
@@ -219,6 +238,7 @@
       <table id="md-table" style="width:100%; border-collapse:collapse; font-size:0.9rem;">
         <thead>
           <tr style="background:#fafaf6; border-bottom:2px solid #d0cbc4;">
+            <th style="width:24px;" title="Drag to reorder"></th>
             <th style="text-align:left;">Name</th>
             <th style="text-align:center;">Phase</th>
             <th style="text-align:center;">Type</th>
@@ -231,17 +251,209 @@
           </tr>
         </thead>
         <tbody id="md-tbody">
-          <tr><td colspan="9" style="color:#aaa; text-align:center;">Loading…</td></tr>
+          <tr><td colspan="10" style="color:#aaa; text-align:center;">Loading…</td></tr>
         </tbody>
         <tfoot id="md-tfoot"><!-- per-phase totals row, rendered by mdLoadDevices() --></tfoot>
       </table>
     </div>
   </div>
 
+  </div><!-- /tab-status -->
+
+  <!-- ── Settings tab — discovery + billing + tariff ── -->
+  <div id="tab-settings" class="tab-panel">
+
+    <!-- Billing cycle -->
+    <div class="card">
+      <h2>Billing Cycle
+        <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
+          — when each billing period starts + how long it lasts
+        </span>
+      </h2>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:20px 26px; max-width:900px; margin-top:14px;">
+        <div>
+          <label class="md-form-label">Start day (1-28)</label>
+          <input id="ps-billing-start-day" type="number" min="1" max="28" step="1" class="md-form-input" style="max-width:120px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">Day-of-month each cycle starts.</div>
+        </div>
+        <div>
+          <label class="md-form-label">Length (months)</label>
+          <input id="ps-billing-length" type="number" min="1" max="12" step="1" class="md-form-input" style="max-width:120px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">Israel residential default: 2.</div>
+        </div>
+        <div>
+          <label class="md-form-label">Current period start date</label>
+          <input id="ps-billing-current-start" type="date" class="md-form-input" style="max-width:200px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">Auto-rolls forward. Override once to match your first IEC bill.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tariff -->
+    <div class="card">
+      <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:14px;">
+        <span>Tariff
+          <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
+            — IEC rates used to compute the current period's cost. Take values from your last bill.
+          </span>
+        </span>
+        <a href="https://www.iec.co.il/home" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="font-size:0.78rem; font-weight:500; text-transform:none; letter-spacing:0; padding:6px 14px;">
+          ↗ IEC website — current tariffs
+        </a>
+      </h2>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:20px 26px; max-width:900px; margin-top:14px;">
+        <div>
+          <label class="md-form-label">Tariff type</label>
+          <select id="ps-tariff-type" class="md-form-input" style="max-width:160px;" onchange="psShowTaoz()">
+            <option value="flat">Flat</option>
+            <option value="taoz">TAOZ (time-of-use)</option>
+          </select>
+        </div>
+        <div>
+          <label class="md-form-label">Flat rate (₪ / kWh)</label>
+          <input id="ps-tariff-flat" type="number" min="0" step="0.001" class="md-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="md-form-label">Fixed monthly fee (₪)</label>
+          <input id="ps-tariff-fixed-fee" type="number" min="0" step="0.01" class="md-form-input" style="max-width:160px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">Distribution + supply, e.g. 11.45 + 14.80 = 26.25.</div>
+        </div>
+        <div>
+          <label class="md-form-label">KVA rate (₪/year per KVA)</label>
+          <input id="ps-tariff-kva-rate" type="number" min="0" step="0.001" class="md-form-input" style="max-width:160px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">Capacity charge per KVA per year (IEC published).</div>
+        </div>
+        <div>
+          <label class="md-form-label">Connection size (KVA)</label>
+          <input id="ps-tariff-connection-kva" type="number" min="0" step="0.01" class="md-form-input" style="max-width:160px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">From your bill (e.g. 3×25A ≈ 17.32 KVA).</div>
+        </div>
+        <div>
+          <label class="md-form-label">Direct-debit credit (₪/bill)</label>
+          <input id="ps-tariff-direct-debit" type="number" step="0.01" class="md-form-input" style="max-width:160px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">Negative if it's a credit. 0 if you don't pay by bank standing order.</div>
+        </div>
+        <div>
+          <label class="md-form-label">VAT (%)</label>
+          <input id="ps-tariff-vat" type="number" min="0" max="100" step="0.1" class="md-form-input" style="max-width:120px;">
+        </div>
+        <div>
+          <label class="md-form-label">Currency symbol</label>
+          <input id="ps-tariff-currency" type="text" maxlength="4" class="md-form-input" style="max-width:80px;">
+        </div>
+      </div>
+
+      <!-- TAOZ block — shown when type=taoz. Cost calc currently uses
+           a crude (peak + shoulder + off-peak) / 3 average until proper
+           hourly integration lands in a follow-up iteration. -->
+      <div id="ps-taoz-block" style="display:none; margin-top:18px; padding-top:14px; border-top:1px dashed #d0cbc4;">
+        <div style="font-size:0.86rem; color:#666; margin-bottom:10px;">TAOZ rates + hourly windows (cost calc uses the average rate for now)</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:20px 26px; max-width:900px;">
+          <div>
+            <label class="md-form-label">Peak rate (₪/kWh)</label>
+            <input id="ps-tariff-peak-rate" type="number" min="0" step="0.001" class="md-form-input" style="max-width:160px;">
+          </div>
+          <div>
+            <label class="md-form-label">Peak hours</label>
+            <input id="ps-tariff-peak-hours" type="text" maxlength="64" class="md-form-input" style="max-width:200px;" placeholder="17:00-22:00">
+          </div>
+          <div>
+            <label class="md-form-label">Shoulder rate (₪/kWh)</label>
+            <input id="ps-tariff-shoulder-rate" type="number" min="0" step="0.001" class="md-form-input" style="max-width:160px;">
+          </div>
+          <div>
+            <label class="md-form-label">Shoulder hours</label>
+            <input id="ps-tariff-shoulder-hours" type="text" maxlength="64" class="md-form-input" style="max-width:200px;">
+          </div>
+          <div>
+            <label class="md-form-label">Off-peak rate (₪/kWh)</label>
+            <input id="ps-tariff-offpeak-rate" type="number" min="0" step="0.001" class="md-form-input" style="max-width:160px;">
+          </div>
+          <div>
+            <label class="md-form-label">Off-peak hours</label>
+            <input id="ps-tariff-offpeak-hours" type="text" maxlength="64" class="md-form-input" style="max-width:200px;">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Discovery rule knobs -->
+    <div class="card">
+      <h2>Discovery Rule
+        <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
+          — knobs the (future) P3 Power Phase Discovery rule reads
+        </span>
+      </h2>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:20px 26px; max-width:900px; margin-top:14px;">
+        <div>
+          <label class="md-form-label">Match offset (± W)</label>
+          <input id="ps-match-offset-w" type="number" min="0" step="1" class="md-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="md-form-label">Candidate window (seconds)</label>
+          <input id="ps-candidate-window-sec" type="number" min="1" step="1" class="md-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="md-form-label">Noise floor (W)</label>
+          <input id="ps-noise-floor-w" type="number" min="0" step="1" class="md-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="md-form-label">Settling delay (seconds)</label>
+          <input id="ps-settling-sec" type="number" min="0" step="1" class="md-form-input" style="max-width:160px;">
+        </div>
+      </div>
+    </div>
+
+    <!-- Shared Save button -->
+    <div class="card" style="background:transparent; box-shadow:none; padding:8px 0;">
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button id="ps-save-btn" class="btn btn-primary btn-sm" onclick="psSave()" style="padding:9px 22px; font-size:0.95rem;">Save all settings</button>
+        <span id="ps-save-msg" style="font-size:0.88rem; font-weight:600;"></span>
+      </div>
+    </div>
+
+    <!-- Past Bills — history + manual paste + AI extract -->
+    <div class="card">
+      <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:14px;">
+        <span>Past Bills
+          <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
+            — auto-inserts on cycle rollover. Paste an IEC bill to reconcile estimate vs actual.
+          </span>
+        </span>
+        <span style="display:inline-flex; gap:8px; align-items:center;">
+          <input id="pb-file-input" type="file" accept="application/pdf,.pdf" style="display:none;" onchange="pbUpload(event)">
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('pb-file-input').click()" style="padding:6px 14px; font-size:0.85rem;">+ Paste bill (PDF)</button>
+          <span id="pb-upload-msg" style="font-size:0.82rem;"></span>
+        </span>
+      </h2>
+      <div style="overflow-x:auto; margin-top:10px;">
+        <table id="pb-table" style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+          <thead>
+            <tr style="background:#fafaf6; border-bottom:2px solid #d0cbc4;">
+              <th style="text-align:left; padding:10px 14px;">Period</th>
+              <th style="text-align:right; padding:10px 14px;">kWh</th>
+              <th style="text-align:right; padding:10px 14px;">Estimate ₪</th>
+              <th style="text-align:right; padding:10px 14px;">Actual ₪</th>
+              <th style="text-align:right; padding:10px 14px;">Diff</th>
+              <th style="text-align:left; padding:10px 14px;">Source</th>
+              <th style="text-align:left; padding:10px 14px;">Uploaded</th>
+              <th style="text-align:center; padding:10px 14px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="pb-tbody">
+            <tr><td colspan="8" style="padding:14px; color:#aaa; text-align:center;">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-settings -->
+
+
 </main>
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/power.js?v=27"></script>
+<script src="js/power.js?v=41"></script>
 </body>
 </html>

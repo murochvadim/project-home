@@ -193,29 +193,32 @@ CREATE INDEX power_attribution_ts ON power_attribution (ts DESC);
 
 Written by the Attribution rule on each Shelly reading (or downsampled). For the dashboard's "stacked bar by device" + "per-device daily kWh." Retention: **30 days, auto_clean** — derived from raw data + power_devices, can be rebuilt.
 
-### `power_billing_periods` — billing cycle history + bill reconciliation
+### `power_bills` — billing-period history + IEC bill reconciliation (since 2026-05-29)
 ```sql
-CREATE TABLE power_billing_periods (
-  id                BIGSERIAL PRIMARY KEY,
-  start_ts          TIMESTAMPTZ NOT NULL,
-  end_ts            TIMESTAMPTZ,                -- NULL while current period is open
-  start_kwh_r       NUMERIC,                    -- meter snapshot at period start
-  start_kwh_s       NUMERIC,
-  start_kwh_t       NUMERIC,
-  end_kwh_r         NUMERIC,                    -- meter snapshot at period end
-  end_kwh_s         NUMERIC,
-  end_kwh_t         NUMERIC,
-  period_kwh        NUMERIC,                    -- (end - start) summed across phases (computed at close)
-  est_cost_ils      NUMERIC,                    -- our dashboard estimate using configured tariff
-  bill_received_ils NUMERIC,                    -- actual IEC bill amount (user enters when bill arrives)
-  bill_period_kwh   NUMERIC,                    -- kWh reported on actual IEC bill (sanity check)
-  source            TEXT,                       -- 'auto_rolled' | 'manual_synced_with_bill'
-  notes             TEXT
+CREATE TABLE power_bills (
+  id              BIGSERIAL PRIMARY KEY,
+  uploaded_at     TIMESTAMPTZ DEFAULT NOW(),
+  period_start    DATE,           -- billing-cycle start
+  period_end      DATE,           -- billing-cycle end
+  total_kwh       NUMERIC,        -- kWh in the period
+  total_cost_ils  NUMERIC,        -- actual ₪ from the IEC bill
+  est_cost_ils    NUMERIC,        -- our dashboard estimate at rollover (auto-snap kWh × tariff)
+  raw_text        TEXT,           -- first 6 KB of pdf-parse output (debugging)
+  parsed          JSONB,          -- regex-extracted fields + baseline snapshots for auto_rollover rows
+  source          TEXT,           -- 'pdf_parsed' | 'auto_rollover'
+  notes           TEXT
 );
-CREATE INDEX power_billing_periods_start ON power_billing_periods (start_ts DESC);
+CREATE INDEX power_bills_period_start ON power_bills (period_start DESC NULLS LAST);
+CREATE INDEX power_bills_uploaded_at  ON power_bills (uploaded_at  DESC);
 ```
 
-Written by the Power Billing Period Roll rule on heartbeat (60s). Captures the Shelly's cumulative kWh meter reading at each billing-cycle boundary. When the user receives their actual IEC bill, they enter `bill_received_ils` + `bill_period_kwh` via the dashboard — gives a feedback loop on whether our tariff config is accurate (estimate vs reality). Retention: **forever, low volume** (6 rows/year for a 2-month cycle).
+Two write paths:
+1. **`auto_rollover`** — `_powerResolveBillingPeriod` (in `server.js`) auto-INSERTs a row on each cycle-close it detects. `parsed` JSONB carries `{baseline_start, baseline_end}` Shelly snapshots so the period's actual kWh consumption is reproducible.
+2. **`pdf_parsed`** — `POST /api/power/bills/upload` (multer + pdf-parse) extracts the IEC PDF's period dates, total kWh, total cost, per-kWh rate, fixed monthly fee, KVA rate + connection size, direct-debit credit, and VAT via regex. No LLM call. If the uploaded bill is the most recent in the table and any extracted rate differs > 1% from current Settings, the response includes a `diff` array — frontend pops a "Tariff change detected" modal to one-click sync the user's Settings.
+
+Retention: **forever, low volume** (6 rows/year for a 2-month cycle).
+
+> Note: the originally-scoped `power_billing_periods` table was replaced with `power_bills` during P7 implementation — same purpose, simpler shape, single row per period regardless of source (auto-snap or PDF upload).
 
 ### Virtual devices
 
@@ -523,6 +526,8 @@ Standard pattern (matches Project Health page): list of unresolved alerts where 
 
 ### Card 6 — Cost + Billing Cycle
 
+> **Implemented 2026-05-29 as a separate Settings tab** rather than the 4-sub-card Card-6 originally specced. The Settings tab carries: Billing Cycle / Tariff (with IEC website link) / Discovery Rule / Past Bills cards. The current period readout (kWh + cost + days elapsed) lives on the Status tab's LCD Total card so it's always visible. Top-consumers + history-reconciliation are P4+ work — see Phase rollout for the full P7 description. Detail below is the original design for reference.
+
 #### Settings sub-card (collapsed by default, editable)
 - **Tariff type** — `flat` (single rate) or `taoz` (time-of-use peak/shoulder/off-peak)
 - **Flat rate** — `₪ per kWh` (Israel residential standard ≈ 0.66 ₪/kWh as of 2026; updates yearly via IEC publication)
@@ -651,7 +656,7 @@ Computed in software (no HA entity):
 | **P4 — Attribution** | ~1 day | Power Attribution rule + Card 2 (stacked bar) + Card 3 (daily kWh). Combines manual + auto-discovered entries. End state: per-device live + historical consumption visible. |
 | **P5 — 3-Phase + Cyclic refinement** | ~1 day | Special rules for hob/AC1/AC2 and cyclic devices. End state: 3-phase appliances correctly attributed; washing machine / dishwasher / oven contribution dynamically tracked across cycle. |
 | **P6 — Alerts** | ~1 day | 7 power-quality + anomaly rules (voltage_low/high, phase_imbalance, phantom_load_spike, device_state_mismatch, unaccounted_background, **phase_lost:R/S/T**) + Card 5 (alerts on Power page). End state: voltage / imbalance / phantom-load / device-mismatch / unaccounted-background / phase-loss monitoring live. The unaccounted-background alert drives the iterative loop back to P2 ("still 200 W I can't see → register more"). The phase-loss rule renders as a prominent `⚠ LOST PHASE X` banner above Card 1 — added 2026-05-28 after physically pulling Phase T proved voltage is not a reliable signal (V stays alive even with the breaker open; only current + power + PF collapse). |
-| **P7 — Cost + Billing Cycle** | ~1-1.5 days | Tariff config + Israel 2-month billing cycle + `power_billing_periods` table + Power Billing Period Roll rule + Card 6 (settings + current period + top consumers + history with bill reconciliation). End state: live cost-so-far visible, projected period cost, ability to enter actual IEC bills for estimate-vs-reality feedback loop. |
+| **P7 — Cost + Billing Cycle** (✓ done 2026-05-29) | Settings tab with 4 cards: **Billing Cycle** (start day, length months, current period start date — auto-rolls forward, persists in `dashboard_settings.power.billing`), **Tariff** (Flat/TAOZ + flat rate + TAOZ rates/hours + fixed monthly fee + KVA rate + connection KVA + direct-debit credit + VAT + currency, with IEC website link), **Discovery Rule** knobs (match_offset_w / candidate_window_sec / noise_floor_w / settling_sec — read later by the P3 rule), **Past Bills** (history table + + Paste bill PDF button → pdf-parse extracts period/kWh/cost/rates server-side, no AI). LCD Total card displays PERIOD ENERGY (since current period start) + PERIOD COST (using `_powerComputeCost` mirroring IEC bill: energy + KVA × days/365 + monthly fee × days/30.42 + direct-debit credit, then × (1+VAT/100)). Per-phase LCD cards show period kWh. Baseline policy: auto-snap Shelly cumulative kWh at every cycle rollover; for cycles already in progress at first deploy, em_data.csv backfill from Shelly's 60-day local history; lazy_init fallback when Shelly is unreachable. **Tariff drift detection**: when uploaded bill is the latest in DB and its parsed rates differ > 1% from current Settings (flat rate / monthly fee / KVA rate / connection KVA / direct-debit credit / VAT), the upload response returns a `diff` array and the frontend pops a modal letting the user one-click sync. **Auto-insert on cycle rollover**: each closed period is INSERTed into `power_bills` with `source='auto_rollover'` + an est_cost_ils. End state: live cost-so-far visible, projected period cost, automatic bill history. |
 
 Total: ~7-8 days spread over a few weeks. Each phase is independently shippable + commits separately. P1 alone is a useful win (live 3-phase numbers on dashboard) even without the rest.
 

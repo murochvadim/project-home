@@ -35,7 +35,7 @@ function fmt(v, digits = 0) {
   return Number(v).toFixed(digits);
 }
 
-function renderPhaseCol(label, p, va) {
+function renderPhaseCol(label, p, va, periodKwh) {
   const v_color = colorForVoltage(p.v);
   const w_color = colorForPower(p.w);
   const pf_color = colorForPF(p.pf);
@@ -50,8 +50,8 @@ function renderPhaseCol(label, p, va) {
       <div style="font-size:1.3rem; font-weight:600; color:${w_color};">${fmt(p.w, 0)} <span style="font-size:0.78rem; color:#888;">W</span></div>
       <div style="font-size:0.72rem; color:#888; margin-top:8px;">Power factor</div>
       <div style="font-size:1.3rem; font-weight:600; color:${pf_color};">${fmt(p.pf, 2)}</div>
-      <div style="font-size:0.72rem; color:#888; margin-top:8px;">Energy (cumulative)</div>
-      <div style="font-size:0.96rem; font-weight:600;">${fmt(p.kwh, 2)} <span style="font-size:0.72rem; color:#888;">kWh</span></div>
+      <div style="font-size:0.72rem; color:#888; margin-top:8px;">Period</div>
+      <div style="font-size:0.96rem; font-weight:600;">${fmt(periodKwh, 2)} <span style="font-size:0.72rem; color:#888;">kWh</span></div>
     </div>
   `;
 }
@@ -135,21 +135,31 @@ function renderTotalCol(d) {
           </div>
         </div>
 
-        <!-- Row 2 — Frequency (alone, centered across full card width) -->
-        <div style="margin-bottom:28px;">
-          <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">FREQ</div>
-          ${lcdValueHTML(d.frequency_hz, 'Hz', '1.5rem', '')}
-        </div>
-
-        <!-- Row 3 — System PF + Total Energy -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:28px;">
+        <!-- Devices ON / OFF counters — same hero font as ALWAYS-ON,
+             positioned right below it. ON = always_on rows + auto rows
+             currently detected ON (red); OFF = auto rows currently OFF (grey). -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:30px;">
           <div>
-            <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">SYS PF</div>
-            ${lcdValueHTML(fmt(d.system_pf, 2), '', '1.5rem', lcdPfColor)}
+            <div style="font-size:0.7rem; color:#8a3a3a; letter-spacing:1.5px; margin-bottom:4px;">DEVICES ON</div>
+            ${lcdValueHTML(d.devices_on ?? 0, '', '2.4rem', '#ff6e6e')}
           </div>
           <div>
-            <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">TOTAL ENERGY</div>
-            ${lcdValueHTML(fmt(d.total_kwh, 2), 'kWh', '1.5rem', '')}
+            <div style="font-size:0.7rem; color:#3a3a3a; letter-spacing:1.5px; margin-bottom:4px;">DEVICES OFF</div>
+            ${lcdValueHTML(d.devices_off ?? 0, '', '2.4rem', '#888')}
+          </div>
+        </div>
+
+        <!-- Row 3 — Billing-period total kWh + cost (since current period start) -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:28px;">
+          <div>
+            <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">PERIOD ENERGY</div>
+            ${lcdValueHTML(fmt(d.period?.total_kwh, 2), 'kWh', '1.5rem', '')}
+            <div style="font-size:0.66rem; color:#3a8a52; margin-top:4px;">since ${d.period?.start || '—'}</div>
+          </div>
+          <div>
+            <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">PERIOD COST</div>
+            ${lcdValueHTML(fmt(d.period?.cost, 2), d.period?.currency || '₪', '1.5rem', '')}
+            <div style="font-size:0.66rem; color:#3a8a52; margin-top:4px;">day ${d.period?.days_elapsed || 0} of ${d.period?.days_total || 0} (${d.period?.elapsed_pct || 0}%)</div>
           </div>
         </div>
 
@@ -182,10 +192,11 @@ async function loadPower() {
     }
     const d = await r.json();
 
+    const period = d.period || {};
     document.getElementById('power-phases').innerHTML =
-      renderPhaseCol('Phase R', d.r, d.r_va) +
-      renderPhaseCol('Phase S', d.s, d.s_va) +
-      renderPhaseCol('Phase T', d.t, d.t_va) +
+      renderPhaseCol('Phase R', d.r, d.r_va, period.r_kwh) +
+      renderPhaseCol('Phase S', d.s, d.s_va, period.s_kwh) +
+      renderPhaseCol('Phase T', d.t, d.t_va, period.t_kwh) +
       renderTotalCol(d);
 
     const imb = document.getElementById('imbalance-val');
@@ -212,10 +223,10 @@ async function loadPower() {
         vq.textContent = 'OUT OF RANGE ⚠';
         vq.style.color = '#c0392b';
       } else if (worst > 10) {
-        vq.textContent = 'fringe (within 215-245V)';
+        vq.textContent = '215-245V ⚠';
         vq.style.color = '#e67e22';
       } else {
-        vq.textContent = 'all phases in nominal 220-240V band ✓';
+        vq.textContent = '220-240V band ✓';
         vq.style.color = '#27ae60';
       }
     } else {
@@ -223,6 +234,11 @@ async function loadPower() {
     }
 
     document.getElementById('last-update-age').textContent = ageString(d.age_sec);
+    // Israel grid nominal 50 Hz. Within ±0.5 Hz = green; otherwise amber.
+    const freqEl = document.getElementById('freq-val');
+    freqEl.textContent = `${d.frequency_hz} Hz`;
+    freqEl.style.color = (typeof d.frequency_hz === 'number' && Math.abs(d.frequency_hz - 50) <= 0.5)
+      ? '#27ae60' : '#e67e22';
     document.getElementById('last-refresh').textContent = `Refreshed at ${new Date().toLocaleTimeString()}`;
   } catch (e) {
     document.getElementById('power-phases').innerHTML =
@@ -232,6 +248,276 @@ async function loadPower() {
 
 loadPower();
 pollTimer = setInterval(loadPower, POLL_INTERVAL_MS);
+
+// ─── Tab switcher (Status / Settings) ─────────────────────────
+function powerSwitchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
+  if (tab === 'settings') { psLoad(); pbLoad(); }
+}
+
+// ─── Past Bills card — list + paste modal + AI extract ────────
+async function pbLoad() {
+  try {
+    const r = await fetch('/api/power/bills');
+    const rows = await r.json();
+    const tbody = document.getElementById('pb-tbody');
+    if (!Array.isArray(rows) || rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:14px; color:#aaa; text-align:center;">No bills yet. The first row will auto-insert at the next cycle rollover; you can also paste one with the button above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(b => {
+      const est = b.est_cost_ils != null ? Number(b.est_cost_ils).toFixed(2) : '—';
+      const act = b.total_cost_ils != null ? Number(b.total_cost_ils).toFixed(2) : '<span style="color:#aaa;">—</span>';
+      let diffCell = '—';
+      if (b.total_cost_ils != null && b.est_cost_ils != null) {
+        const diff = Number(b.total_cost_ils) - Number(b.est_cost_ils);
+        const pct  = (Math.abs(diff) / Number(b.est_cost_ils)) * 100;
+        const col  = Math.abs(pct) <= 5 ? '#27ae60' : Math.abs(pct) <= 15 ? '#e67e22' : '#c0392b';
+        diffCell = `<span style="color:${col}; font-weight:600;">${diff >= 0 ? '+' : ''}${diff.toFixed(2)} (${pct.toFixed(1)}%)</span>`;
+      }
+      // Postgres serializes DATE as full ISO timestamp with TZ offset; trim
+      // to YYYY-MM-DD for display so the date doesn't shift across timezones.
+      const fmtDate = (s) => (s ? String(s).slice(0, 10) : '?');
+      const period = (b.period_start || b.period_end)
+        ? `${fmtDate(b.period_start)} → ${fmtDate(b.period_end)}`
+        : '<span style="color:#aaa;">—</span>';
+      const upISO = b.uploaded_at ? new Date(b.uploaded_at).toLocaleDateString() : '—';
+      return `
+        <tr style="border-bottom:1px solid #e6e1da;">
+          <td style="padding:10px 14px;">${period}</td>
+          <td style="padding:10px 14px; text-align:right;">${b.total_kwh != null ? Number(b.total_kwh).toFixed(1) : '—'}</td>
+          <td style="padding:10px 14px; text-align:right;">${est}</td>
+          <td style="padding:10px 14px; text-align:right;">${act}</td>
+          <td style="padding:10px 14px; text-align:right;">${diffCell}</td>
+          <td style="padding:10px 14px; color:#666; font-size:0.78rem;">${mdEscHtml(b.source || '')}</td>
+          <td style="padding:10px 14px; color:#888;">${upISO}</td>
+          <td style="padding:10px 14px; text-align:center;">
+            <button class="btn btn-secondary btn-sm" style="color:#c0392b; padding:4px 10px;" onclick="pbDelete(${b.id})">×</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  } catch (e) {
+    document.getElementById('pb-tbody').innerHTML =
+      `<tr><td colspan="8" style="padding:14px; color:#c0392b; text-align:center;">Load failed: ${mdEscHtml(e.message)}</td></tr>`;
+  }
+}
+
+// PDF upload — single click → file picker → POST to /api/power/bills/upload
+// which extracts fields server-side (pdf-parse + regex, no LLM), inserts
+// the row, and returns a `diff` array if any tariff field on the bill
+// drifted > 1 % from current Settings (IEC rate update). The drift modal
+// lets the user sync Settings with one click.
+async function pbUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const msg = document.getElementById('pb-upload-msg');
+  msg.textContent = `Reading "${file.name}"…`;
+  msg.style.color = '#666';
+  const fd = new FormData();
+  fd.append('pdf', file);
+  try {
+    const r = await fetch('/api/power/bills/upload', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (!r.ok) {
+      msg.textContent = `Failed: ${d.error || r.statusText}`;
+      msg.style.color = '#c0392b';
+      return;
+    }
+    const row = d.row || {};
+    msg.textContent = `✓ Saved — ${row.period_start || '?'} → ${row.period_end || '?'}, ${row.total_kwh || '?'} kWh, ₪${row.total_cost_ils || '?'}`;
+    msg.style.color = '#27ae60';
+    setTimeout(() => { msg.textContent = ''; }, 6000);
+    pbLoad();
+
+    // Tariff-drift detection: if the server flagged any fields that have
+    // changed since the previous bill / current Settings, prompt the user
+    // to sync. Modal is shown only when at least one diff entry exists.
+    if (Array.isArray(d.diff) && d.diff.length > 0) {
+      pbShowDriftModal(d.diff, d.parsed || {});
+    }
+  } catch (e) {
+    msg.textContent = `Upload error: ${e.message}`;
+    msg.style.color = '#c0392b';
+  } finally {
+    event.target.value = '';
+  }
+}
+
+// Drift modal — shown when uploaded bill's rates differ > 1 % from
+// current Settings. User picks "Update Settings" to apply the new
+// values, or "Keep current" to dismiss.
+function pbShowDriftModal(diff, parsed) {
+  const rows = diff.map(d => `
+    <tr style="border-bottom:1px solid #e6e1da;">
+      <td style="padding:8px 14px;">${mdEscHtml(d.label)}</td>
+      <td style="padding:8px 14px; text-align:right; color:#888;">${d.current}</td>
+      <td style="padding:8px 14px; text-align:right; color:#c0392b; font-weight:600;">→ ${d.new}</td>
+    </tr>
+  `).join('');
+  const html = `
+    <div id="pb-drift-modal" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1010; display:flex; align-items:center; justify-content:center;">
+      <div style="background:#fff; max-width:600px; width:90%; max-height:90vh; overflow-y:auto; border-radius:8px; padding:24px;">
+        <h2 style="margin-top:0; color:#c0392b;">⚠ Tariff change detected</h2>
+        <p style="font-size:0.95rem; color:#444;">
+          The bill you just uploaded has rates that don't match your current Settings.
+          IEC likely published an update.
+        </p>
+        <table style="width:100%; border-collapse:collapse; font-size:0.9rem; margin-top:14px;">
+          <thead>
+            <tr style="background:#fafaf6;">
+              <th style="text-align:left;  padding:8px 14px;">Field</th>
+              <th style="text-align:right; padding:8px 14px;">Current</th>
+              <th style="text-align:right; padding:8px 14px;">From bill</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div style="margin-top:22px; display:flex; gap:10px;">
+          <button class="btn btn-primary btn-sm"   onclick="pbApplyDrift()"  style="padding:9px 22px; font-size:0.95rem;">Update Settings</button>
+          <button class="btn btn-secondary btn-sm" onclick="pbCloseDrift()" style="padding:9px 18px; font-size:0.95rem;">Keep current</button>
+        </div>
+      </div>
+    </div>
+  `;
+  // Stash the diff payload so pbApplyDrift can read it without a closure.
+  window._pbDriftDiff = diff;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function pbCloseDrift() {
+  const el = document.getElementById('pb-drift-modal');
+  if (el) el.remove();
+  window._pbDriftDiff = null;
+}
+
+async function pbApplyDrift() {
+  const diff = window._pbDriftDiff || [];
+  if (diff.length === 0) { pbCloseDrift(); return; }
+  // Load current settings first so we can do a merge-PUT (the PUT handler
+  // expects the full tariff block; we only override the drifted fields).
+  try {
+    const cur = await (await fetch('/api/power/settings')).json();
+    const tariff = { ...(cur.tariff || {}) };
+    for (const d of diff) tariff[d.field] = d.new;
+    const r = await fetch('/api/power/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tariff, billing: cur.billing, discovery: cur.discovery }),
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(`Update failed: ${data.error || r.statusText}`); return; }
+    pbCloseDrift();
+    psLoad();    // refresh Settings form so the user sees the new values
+  } catch (e) {
+    alert(`Update error: ${e.message}`);
+  }
+}
+
+async function pbDelete(id) {
+  if (!confirm('Delete this bill record?')) return;
+  try {
+    const r = await fetch(`/api/power/bills/${id}`, { method: 'DELETE' });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || r.statusText); return; }
+    pbLoad();
+  } catch (e) { alert(e.message); }
+}
+
+// ─── Settings tab — load + save (discovery + billing + tariff) ─────
+function psShowTaoz() {
+  const t = document.getElementById('ps-tariff-type').value;
+  document.getElementById('ps-taoz-block').style.display = (t === 'taoz') ? '' : 'none';
+}
+
+async function psLoad() {
+  try {
+    const r = await fetch('/api/power/settings');
+    const d = await r.json();
+    // Discovery
+    const dsc = d.discovery || {};
+    document.getElementById('ps-match-offset-w').value       = dsc.match_offset_w ?? '';
+    document.getElementById('ps-candidate-window-sec').value = dsc.candidate_window_sec ?? '';
+    document.getElementById('ps-noise-floor-w').value        = dsc.noise_floor_w ?? '';
+    document.getElementById('ps-settling-sec').value         = dsc.settling_sec ?? '';
+    // Billing
+    const bl = d.billing || {};
+    document.getElementById('ps-billing-start-day').value     = bl.start_day ?? '';
+    document.getElementById('ps-billing-length').value        = bl.length_months ?? '';
+    document.getElementById('ps-billing-current-start').value = bl.current_period_start_date ?? '';
+    // Tariff
+    const t = d.tariff || {};
+    document.getElementById('ps-tariff-type').value           = t.type ?? 'flat';
+    document.getElementById('ps-tariff-flat').value           = t.flat_rate_ils_per_kwh ?? '';
+    document.getElementById('ps-tariff-fixed-fee').value      = t.fixed_monthly_fee_ils ?? '';
+    document.getElementById('ps-tariff-kva-rate').value       = t.kva_rate_ils_per_year ?? '';
+    document.getElementById('ps-tariff-connection-kva').value = t.connection_kva ?? '';
+    document.getElementById('ps-tariff-direct-debit').value   = t.direct_debit_credit_ils ?? '';
+    document.getElementById('ps-tariff-vat').value            = t.vat_pct ?? '';
+    document.getElementById('ps-tariff-currency').value       = t.currency_symbol ?? '₪';
+    document.getElementById('ps-tariff-peak-rate').value     = t.taoz_peak_rate ?? '';
+    document.getElementById('ps-tariff-peak-hours').value    = t.taoz_peak_hours ?? '';
+    document.getElementById('ps-tariff-shoulder-rate').value = t.taoz_shoulder_rate ?? '';
+    document.getElementById('ps-tariff-shoulder-hours').value= t.taoz_shoulder_hours ?? '';
+    document.getElementById('ps-tariff-offpeak-rate').value  = t.taoz_off_peak_rate ?? '';
+    document.getElementById('ps-tariff-offpeak-hours').value = t.taoz_off_peak_hours ?? '';
+    psShowTaoz();
+  } catch (e) {
+    const msg = document.getElementById('ps-save-msg');
+    msg.textContent = `Load error: ${e.message}`; msg.style.color = '#c0392b';
+  }
+}
+
+async function psSave() {
+  const msg = document.getElementById('ps-save-msg');
+  msg.textContent = '';
+  const body = {
+    discovery: {
+      match_offset_w:       parseFloat(document.getElementById('ps-match-offset-w').value),
+      candidate_window_sec: parseFloat(document.getElementById('ps-candidate-window-sec').value),
+      noise_floor_w:        parseFloat(document.getElementById('ps-noise-floor-w').value),
+      settling_sec:         parseFloat(document.getElementById('ps-settling-sec').value),
+    },
+    billing: {
+      start_day:                 parseInt(document.getElementById('ps-billing-start-day').value, 10),
+      length_months:             parseInt(document.getElementById('ps-billing-length').value, 10),
+      current_period_start_date: document.getElementById('ps-billing-current-start').value || null,
+    },
+    tariff: {
+      type:                    document.getElementById('ps-tariff-type').value,
+      flat_rate_ils_per_kwh:   parseFloat(document.getElementById('ps-tariff-flat').value),
+      taoz_peak_rate:          parseFloat(document.getElementById('ps-tariff-peak-rate').value),
+      taoz_shoulder_rate:      parseFloat(document.getElementById('ps-tariff-shoulder-rate').value),
+      taoz_off_peak_rate:      parseFloat(document.getElementById('ps-tariff-offpeak-rate').value),
+      taoz_peak_hours:         document.getElementById('ps-tariff-peak-hours').value,
+      taoz_shoulder_hours:     document.getElementById('ps-tariff-shoulder-hours').value,
+      taoz_off_peak_hours:     document.getElementById('ps-tariff-offpeak-hours').value,
+      fixed_monthly_fee_ils:   parseFloat(document.getElementById('ps-tariff-fixed-fee').value),
+      kva_rate_ils_per_year:   parseFloat(document.getElementById('ps-tariff-kva-rate').value),
+      connection_kva:          parseFloat(document.getElementById('ps-tariff-connection-kva').value),
+      direct_debit_credit_ils: parseFloat(document.getElementById('ps-tariff-direct-debit').value),
+      vat_pct:                 parseFloat(document.getElementById('ps-tariff-vat').value),
+      currency_symbol:         document.getElementById('ps-tariff-currency').value,
+    },
+  };
+  const btn = document.getElementById('ps-save-btn');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/power/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = `Save failed: ${d.error || r.statusText}`; msg.style.color = '#c0392b'; return; }
+    msg.textContent = '✓ Saved'; msg.style.color = '#27ae60';
+    setTimeout(() => { msg.textContent = ''; }, 2500);
+  } catch (e) {
+    msg.textContent = `Save error: ${e.message}`; msg.style.color = '#c0392b';
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 // ─── Manual Device Registry (P2) ────────────────────────────────
 // State: open form is either "create" or "edit:<device_id>". Empty = closed.
@@ -407,7 +693,7 @@ function mdCancel() {
   mdFormMode = '';
   document.getElementById('md-form').style.display = 'none';
   document.getElementById('md-form-mode-tag').textContent = '';
-  document.getElementById('md-add-btn').textContent = '+ Add Unmanaged Device';
+  document.getElementById('md-add-btn').textContent = '+ Add Device';
   document.getElementById('md-form-msg').textContent = '';
 }
 
@@ -530,8 +816,13 @@ async function mdDelete(deviceId) {
 
 // Behavior derived from power_devices.source. Cyclic is no longer a
 // separate behavior — all rows are either always_on or auto.
+//   manual_unmanaged → always_on, custom virtual device
+//   manual_linked    → always_on, real linked device (e.g. fridge)
+//   auto_pending     → auto, real linked device
+//   auto_custom      → auto, custom virtual device
+//   auto_discovered  → auto, P3 rule discovered
 function mdBehavior(source) {
-  if (source === 'manual_unmanaged' || source === 'manual_seed') return 'always_on';
+  if (source === 'manual_unmanaged' || source === 'manual_linked') return 'always_on';
   return 'auto';
 }
 function mdTypeLabel(source) {
@@ -607,9 +898,67 @@ function mdPowerSpec(row) {
   return `${_rangeStr(exp, mx)} W`;
 }
 
+// Drag-to-reorder for registry rows. Mirrors wirePlaylistDragReorder
+// in media.js: handle = the ⋮⋮ cell, drop target = the whole row.
+// On drop, POST the new order to /api/power/devices/reorder which
+// writes sort_order back to power_devices.
+let _mdDragId = null;
+function mdWireDragReorder(tbody) {
+  const rows = Array.from(tbody.querySelectorAll('tr[data-device-id]'));
+  for (const row of rows) {
+    const handle = row.querySelector('[data-md-drag-handle]');
+    if (handle) {
+      handle.addEventListener('dragstart', (e) => {
+        _mdDragId = row.dataset.deviceId;
+        row.style.opacity = '0.4';
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', _mdDragId); } catch (_) {}
+      });
+      handle.addEventListener('dragend', () => {
+        row.style.opacity = '';
+        _mdDragId = null;
+      });
+    }
+    row.addEventListener('dragover', (e) => {
+      if (!_mdDragId) return;
+      e.preventDefault();
+      if (row.dataset.deviceId === _mdDragId) return;
+      row.style.background = '#f0f6ff';
+    });
+    row.addEventListener('dragleave', () => { row.style.background = ''; });
+    row.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      row.style.background = '';
+      if (!_mdDragId || row.dataset.deviceId === _mdDragId) return;
+      const targetId = row.dataset.deviceId;
+      // Compute the new order — pull the moved id out, insert before target.
+      const current = Array.from(tbody.querySelectorAll('tr[data-device-id]'))
+                           .map(r => r.dataset.deviceId);
+      const fromIdx = current.indexOf(_mdDragId);
+      if (fromIdx >= 0) current.splice(fromIdx, 1);
+      const toIdx = current.indexOf(targetId);
+      current.splice(toIdx, 0, _mdDragId);
+      try {
+        const r = await fetch('/api/power/devices/reorder', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ order: current }),
+        });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          alert(`Reorder failed: ${d.error || r.statusText}`);
+        }
+        mdLoadDevices();   // re-render in the server-confirmed order
+      } catch (err) {
+        alert(`Reorder failed: ${err.message || err}`);
+      }
+    });
+  }
+}
+
 function mdSourceTag(source) {
   if (source === 'manual_unmanaged') return '<span style="background:#fff3e0; color:#8b5a2a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">manual</span>';
-  if (source === 'manual_seed')      return '<span style="background:#e8f0d8; color:#4a6a2a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">seed</span>';
+  if (source === 'manual_linked')    return '<span style="background:#fff3e0; color:#8b5a2a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">manual (linked)</span>';
   if (source === 'auto_pending')     return '<span style="background:#e3f2fd; color:#1565c0; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto (linked)</span>';
   if (source === 'auto_custom')      return '<span style="background:#f3e5f5; color:#6a1b9a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto (custom)</span>';
   if (source === 'auto_discovered')  return '<span style="background:#d8e8f0; color:#2a4a6a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto</span>';
@@ -625,7 +974,7 @@ async function mdLoadDevices() {
     const tfoot = document.getElementById('md-tfoot');
     tfoot.innerHTML = '';  // no footer row (user removed per-phase totals here — same info now lives in the LCD)
     if (mdRowsCache.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" style="color:#aaa; text-align:center;">No devices registered yet. Click <b>+ Add Unmanaged Device</b> to start.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" style="color:#aaa; text-align:center;">No devices registered yet. Click <b>+ Add Device</b> to start.</td></tr>';
       return;
     }
     tbody.innerHTML = mdRowsCache.map(row => {
@@ -642,7 +991,8 @@ async function mdLoadDevices() {
         <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete('${row.device_id}')">Delete</button>
       `;
       return `
-        <tr style="border-bottom:1px solid #e6e1da;">
+        <tr data-device-id="${row.device_id}" style="border-bottom:1px solid #e6e1da;">
+          <td style="cursor:grab; color:#bbb; user-select:none; text-align:center;" title="Drag to reorder" data-md-drag-handle="1" draggable="true">⋮⋮</td>
           <td style="font-weight:600;">${mdEscHtml(rowName)}</td>
           <td style="text-align:center;">${phaseDisplay}</td>
           <td style="text-align:center; color:#666;">${typeLabel}</td>
@@ -655,9 +1005,11 @@ async function mdLoadDevices() {
         </tr>
       `;
     }).join('');
+
+    mdWireDragReorder(tbody);
   } catch (e) {
     document.getElementById('md-tbody').innerHTML =
-      `<tr><td colspan="7" style="padding:14px; color:#c0392b; text-align:center;">Fetch error: ${e.message}</td></tr>`;
+      `<tr><td colspan="10" style="padding:14px; color:#c0392b; text-align:center;">Fetch error: ${e.message}</td></tr>`;
   }
 }
 

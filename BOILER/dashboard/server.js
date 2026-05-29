@@ -18,6 +18,12 @@ const voiceUploadDir = path.join(os.tmpdir(), 'voice-uploads');
 if (!fs.existsSync(voiceUploadDir)) fs.mkdirSync(voiceUploadDir, { recursive: true });
 const upload = multer({ dest: voiceUploadDir });
 
+// Power bill PDF upload — hoisted here so the /api/power/bills/upload
+// route (defined ~line 1336, well before the ESP OTA's multer at line 3800)
+// can resolve the const at module-load time. 8 MB cap is plenty for an
+// IEC bill PDF (typically 100-200 KB).
+const billPdfUpload = multer({ dest: path.join(os.tmpdir(), 'power-bills'), limits: { fileSize: 8 * 1024 * 1024 } });
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app = express();
@@ -542,6 +548,201 @@ app.get('/api/weather/daily', async (req, res) => {
 // Card 1 status read: devices.last_state for shelly_3em_main has the
 // 15 latest DPS values (R/S/T × V/A/W/PF/kWh). Total_w + imbalance %
 // computed in software since HA exposes per-phase only. See POWER/CLAUDE.md.
+// Resolve the Shelly's LAN IP (from net_devices via MAC join). Returns
+// null if we can't find it — caller falls back gracefully.
+async function _shellyResolveIp() {
+  try {
+    const r = await db.query(`
+      SELECT split_part(n.ip::text, '/', 1) AS ip
+      FROM devices d
+      LEFT JOIN net_devices n ON lower(n.mac::text) = lower(d.mac::text)
+      WHERE d.id = 'shelly_3em_main'
+    `);
+    return r.rows[0]?.ip || null;
+  } catch (e) { return null; }
+}
+
+// Fetch Shelly Gen 1 EM3's local minute-by-minute energy log for one channel
+// since the given unix timestamp. Returns kWh consumed in that window, or
+// null if the device is unreachable / no buffered data covers the window.
+// Shelly retains ~60 days of em_data locally — enough for current-period
+// backfill in nearly every scenario.
+async function _fetchShellyKwhSince(shellyIp, channelIdx, sinceUnix) {
+  if (!shellyIp) return null;
+  try {
+    const r = await fetch(
+      `http://${shellyIp}/emeter/${channelIdx}/em_data.csv?ts=${sinceUnix}`,
+      { signal: AbortSignal.timeout(15000) },
+    );
+    if (!r.ok) return null;
+    const text = await r.text();
+    let sumWh = 0;
+    let hadAnyRow = false;
+    for (const line of text.trim().split('\n')) {
+      const cols = line.split(',');
+      const ts = parseInt(cols[0], 10);
+      const energyWh = parseFloat(cols[1]);
+      if (Number.isFinite(ts) && Number.isFinite(energyWh) && ts >= sinceUnix) {
+        sumWh += energyWh;
+        hadAnyRow = true;
+      }
+    }
+    return hadAnyRow ? sumWh / 1000 : null;  // Wh → kWh
+  } catch (e) { return null; }
+}
+
+// Resolve the current billing period from the user's billing settings.
+// Auto-rolls the stored current_period_start_date forward when today is
+// past the end of the period; persists the new start back to
+// dashboard_settings.power.billing so future requests see the rolled value.
+async function _powerResolveBillingPeriod(billing) {
+  // Helper — add N months to a YYYY-MM-DD date, capping the day at the
+  // target month's last day (so "Mar 31 + 1 month" lands on Apr 30, not
+  // an invalid May 1).
+  function _addMonths(iso, n) {
+    const d = new Date(iso + 'T00:00:00Z');
+    const yy = d.getUTCFullYear();
+    const mm = d.getUTCMonth() + n;
+    const dd = d.getUTCDate();
+    const t = new Date(Date.UTC(yy, mm, 1));
+    const lastDay = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+    return new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), Math.min(dd, lastDay)))
+      .toISOString().slice(0, 10);
+  }
+  const todayISO = new Date().toISOString().slice(0, 10);
+
+  // Derive a first period_start if the user hasn't set one. Pick the most
+  // recent `start_day` that's ≤ today. (User can override in Settings to
+  // align with their first IEC bill date.)
+  let start = billing.current_period_start_date;
+  if (!start) {
+    const now = new Date();
+    let y = now.getUTCFullYear();
+    let m = now.getUTCMonth();
+    if (now.getUTCDate() < billing.start_day) {
+      m -= 1;
+      if (m < 0) { m = 11; y -= 1; }
+    }
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    start = new Date(Date.UTC(y, m, Math.min(billing.start_day, lastDay))).toISOString().slice(0, 10);
+  }
+  // Roll forward while today is past the period end. Cap at 100 hops as
+  // a safety guard against pathological input. Each hop = one cycle close
+  // → record the closed cycle as a `power_bills` row + reset the baseline.
+  let rolled = 0;
+  let priorBaseline = billing.baseline_kwh;
+  let closedPeriods = [];          // [{start, end, baseline}] — used to insert bill rows after the loop
+  for (let i = 0; i < 100; i++) {
+    const end = _addMonths(start, billing.length_months);
+    if (todayISO < end) break;
+    closedPeriods.push({ start, end, baseline: priorBaseline });
+    start = end;
+    rolled++;
+    priorBaseline = null;          // each subsequent cycle re-baselined later
+  }
+  const end = _addMonths(start, billing.length_months);
+
+  const changed = (start !== billing.current_period_start_date) || rolled > 0;
+  // Baseline policy:
+  //   * rolled > 0  → snap current Shelly cumulative kWh (perfect accuracy
+  //                   going forward — we're AT the period start).
+  //   * !baseline   → leave null; the status endpoint's em_data backfill
+  //                   will try to recover the actual period-start values
+  //                   from Shelly's 60-day local history. If that fails,
+  //                   the endpoint sets a "lazy_init" baseline as a last
+  //                   resort (period_kwh will count from now onwards).
+  let baseline = billing.baseline_kwh;
+  if (rolled > 0) {
+    try {
+      const r = await db.query(
+        "SELECT last_state FROM devices WHERE id = 'shelly_3em_main' LIMIT 1"
+      );
+      const ls = r.rows[0]?.last_state || {};
+      if (typeof ls.r_kwh === 'number' && typeof ls.s_kwh === 'number' && typeof ls.t_kwh === 'number') {
+        baseline = {
+          r: ls.r_kwh, s: ls.s_kwh, t: ls.t_kwh,
+          captured_at: new Date().toISOString(),
+          source:      'auto_snap',
+        };
+      }
+    } catch (_) { /* leave baseline as-is */ }
+  }
+
+  // Persist updated billing back to settings (start + baseline).
+  if (changed || baseline !== billing.baseline_kwh) {
+    await db.query(`
+      INSERT INTO dashboard_settings (key, value, updated_at)
+      VALUES ('power.billing', $1::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value, updated_at = NOW()
+    `, [JSON.stringify({ ...billing, current_period_start_date: start, baseline_kwh: baseline })]);
+  }
+
+  // For each cycle that just closed, snapshot it as a power_bills row so
+  // the AI / history can read it later. Computed at rollover time, never
+  // mutated again unless the user manually edits the row.
+  for (const cp of closedPeriods) {
+    if (!cp.baseline || !baseline) continue;  // can't compute without both endpoints
+    const period_kwh = (Number(baseline.r) - Number(cp.baseline.r))
+                     + (Number(baseline.s) - Number(cp.baseline.s))
+                     + (Number(baseline.t) - Number(cp.baseline.t));
+    // Cycle is fully closed → days = length_months × 30.42, the
+    // approximation IEC themselves use on the bill.
+    const days = Math.max(1, billing.length_months * 30.42);
+    let est_cost = null;
+    try {
+      const t = (await _powerLoadSettings()).tariff;
+      est_cost = _powerComputeCost(t, period_kwh, days);
+    } catch (_) { /* fine, leave null */ }
+    try {
+      await db.query(`
+        INSERT INTO power_bills (period_start, period_end, total_kwh, est_cost_ils, source, parsed)
+        VALUES ($1::date, $2::date, $3, $4, 'auto_rollover', $5::jsonb)
+      `, [cp.start, cp.end, Math.round(period_kwh * 100) / 100, est_cost,
+          JSON.stringify({ baseline_start: cp.baseline, baseline_end: baseline })]);
+    } catch (_) { /* duplicate or transient — fine */ }
+  }
+
+  return { start, end, baseline, rolled };
+}
+
+// Look up the kWh-baseline at the start of the period — i.e. the
+// power_consumption row taken at-or-just-after period start.
+async function _powerPeriodBaseline(periodStart) {
+  const r = await db.query(`
+    SELECT r_kwh, s_kwh, t_kwh, ts
+    FROM power_consumption
+    WHERE ts >= $1::timestamptz
+    ORDER BY ts ASC LIMIT 1
+  `, [periodStart]);
+  return r.rows[0] || { r_kwh: null, s_kwh: null, t_kwh: null, ts: null };
+}
+
+// Period cost — mirrors the IEC bill's line items:
+//   1. Energy:        period_kwh × rate          (₪/kWh × kWh)
+//   2. KVA capacity:  kva × kva_rate × days/365  (yearly capacity charge prorated by elapsed days)
+//   3. Fixed fee:     monthly_fee × days/30.42   (avg-month daily rate, matches IEC math)
+//   4. Direct debit:  direct_debit_credit_ils    (per-bill credit, usually negative)
+//   5. VAT:           (1 + 2 + 3 + 4) × VAT%     (applied to the post-credit subtotal)
+// TAOZ uses a crude (peak + shoulder + off-peak) / 3 average until hourly
+// integration lands in a follow-up iteration.
+function _powerComputeCost(tariff, periodKwh, daysElapsed) {
+  if (periodKwh == null) return null;
+  const rate = (tariff.type === 'taoz')
+    ? ((tariff.taoz_peak_rate + tariff.taoz_shoulder_rate + tariff.taoz_off_peak_rate) / 3)
+    : tariff.flat_rate_ils_per_kwh;
+  const days = Math.max(0, daysElapsed);
+
+  const energyCost = periodKwh * rate;
+  const kvaCost    = (Number(tariff.kva_rate_ils_per_year) || 0) *
+                     (Number(tariff.connection_kva) || 0) * days / 365;
+  const feeCost    = (Number(tariff.fixed_monthly_fee_ils) || 0) * days / 30.42;   // 365 / 12 ≈ avg-month
+  const credit     = Number(tariff.direct_debit_credit_ils) || 0;                   // per-bill, applied in full
+
+  const pretax     = energyCost + kvaCost + feeCost + credit;
+  return Math.round((pretax * (1 + (tariff.vat_pct || 0) / 100)) * 100) / 100;
+}
+
 app.get('/api/power/status', async (req, res) => {
   try {
     const r = await db.query(
@@ -558,6 +759,18 @@ app.get('/api/power/status', async (req, res) => {
       "SELECT COALESCE(SUM(mean_w), 0)::int AS w FROM power_devices WHERE mean_w IS NOT NULL"
     );
     const always_on_w = aoR.rows[0]?.w ?? 0;
+
+    // ON/OFF device counts surfaced on the LCD Total card.
+    // ON  = always_on rows (always treated as ON) + auto rows whose live.on is true
+    // OFF = auto rows whose live.on is false
+    const countsR = await db.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE source IN ('manual_unmanaged','manual_linked') OR (live->>'on')::bool = TRUE) AS on_count,
+        COUNT(*) FILTER (WHERE source IN ('auto_pending','auto_custom','auto_discovered') AND COALESCE((live->>'on')::bool, FALSE) = FALSE) AS off_count
+      FROM power_devices
+    `);
+    const devices_on  = Number(countsR.rows[0]?.on_count)  || 0;
+    const devices_off = Number(countsR.rows[0]?.off_count) || 0;
     const row = r.rows[0];
     const s = row.last_state || {};
     const phase = (p) => ({
@@ -600,7 +813,93 @@ app.get('/api/power/status', async (req, res) => {
       system_pf,
       imbalance_pct,
       always_on_w,
+      devices_on,
+      devices_off,
       frequency_hz: 50,  // Israel grid standard — Shelly Gen 1 doesn't expose frequency via HA
+      ...(await (async () => {
+        // Billing-period kWh + cost.
+        const { billing, tariff } = await _powerLoadSettings();
+        const { start, end, baseline, rolled } = await _powerResolveBillingPeriod(billing);
+
+        // If we still don't have a baseline for this cycle (only happens
+        // when the system was first deployed mid-cycle, before the rollover
+        // logic ever fired), try to backfill from Shelly's local 60-day
+        // em_data.csv buffer. This is the "fully automatic current-period
+        // recovery" path.
+        let effectiveBaseline = baseline;
+        if (!effectiveBaseline) {
+          const shellyIp = await _shellyResolveIp();
+          const startUnix = Math.floor(new Date(start + 'T00:00:00Z').getTime() / 1000);
+          const [rConsumed, sConsumed, tConsumed] = await Promise.all([
+            _fetchShellyKwhSince(shellyIp, 0, startUnix),
+            _fetchShellyKwhSince(shellyIp, 1, startUnix),
+            _fetchShellyKwhSince(shellyIp, 2, startUnix),
+          ]);
+          // baseline = current_cumulative − sum_consumed_since_start
+          if (typeof R.kwh === 'number' && typeof rConsumed === 'number'
+           && typeof S.kwh === 'number' && typeof sConsumed === 'number'
+           && typeof T.kwh === 'number' && typeof tConsumed === 'number') {
+            effectiveBaseline = {
+              r: Math.round((R.kwh - rConsumed) * 100) / 100,
+              s: Math.round((S.kwh - sConsumed) * 100) / 100,
+              t: Math.round((T.kwh - tConsumed) * 100) / 100,
+              captured_at: new Date().toISOString(),
+              source:      'em_data_backfill',
+            };
+          } else if (typeof R.kwh === 'number' && typeof S.kwh === 'number' && typeof T.kwh === 'number') {
+            // Last-resort fallback when Shelly is unreachable / has no
+            // buffered data covering the period start. Snap current
+            // cumulative — period_kwh will count from now onwards, which
+            // is wrong-but-not-broken. User can manually correct via
+            // Settings if they ever look up the May-15 readings.
+            effectiveBaseline = {
+              r: R.kwh, s: S.kwh, t: T.kwh,
+              captured_at: new Date().toISOString(),
+              source:      'lazy_init',
+            };
+          }
+          if (effectiveBaseline) {
+            await db.query(`
+              INSERT INTO dashboard_settings (key, value, updated_at)
+              VALUES ('power.billing', $1::jsonb, NOW())
+              ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = NOW()
+            `, [JSON.stringify({ ...billing, current_period_start_date: start, baseline_kwh: effectiveBaseline })]);
+          }
+        }
+
+        const periodKwh = (phaseChar) => {
+          const cur = phaseChar === 'r' ? R : phaseChar === 's' ? S : T;
+          const baseKwh = effectiveBaseline?.[phaseChar];
+          if (cur.kwh == null || baseKwh == null) return null;
+          return Math.round((Number(cur.kwh) - Number(baseKwh)) * 100) / 100;
+        };
+        const r_period = periodKwh('r'), s_period = periodKwh('s'), t_period = periodKwh('t');
+        const total_period_kwh = [r_period, s_period, t_period]
+          .filter(x => typeof x === 'number')
+          .reduce((a, b) => a + b, 0);
+
+        // Days elapsed / total in current period.
+        const now = Date.now();
+        const startTs = new Date(start + 'T00:00:00Z').getTime();
+        const endTs   = new Date(end   + 'T00:00:00Z').getTime();
+        const days_total    = Math.max(1, Math.round((endTs - startTs) / 86400000));
+        const days_elapsed  = Math.max(0, Math.round((now - startTs) / 86400000));
+        const elapsed_pct   = Math.min(100, Math.round((days_elapsed / days_total) * 100));
+
+        return {
+          period: {
+            start, end,
+            days_total, days_elapsed, elapsed_pct,
+            r_kwh:     r_period,
+            s_kwh:     s_period,
+            t_kwh:     t_period,
+            total_kwh: Math.round(total_period_kwh * 100) / 100,
+            cost:      _powerComputeCost(tariff, total_period_kwh, days_elapsed),
+            currency:  tariff.currency_symbol,
+          },
+        };
+      })()),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -639,12 +938,14 @@ app.get('/api/power/devices', async (req, res) => {
              pd.samples_count, pd.mean_w, pd.stddev_w, pd.cycle_max_w,
              pd.cycle_typical_kwh, pd.confidence, pd.last_observed_at,
              pd.source, pd.notes, pd.updated_at,
-             pd.display_name, pd.config, pd.live,
+             pd.display_name, pd.config, pd.live, pd.sort_order,
              d.name, d.device_type, d.protocol, d.dps_config,
              COALESCE(pd.config->>'room', d.room) AS room
       FROM power_devices pd
       JOIN devices d ON d.id = pd.device_id
-      ORDER BY pd.phase ASC NULLS LAST, COALESCE(pd.display_name, d.name) ASC
+      ORDER BY pd.sort_order ASC NULLS LAST,
+               pd.phase      ASC NULLS LAST,
+               COALESCE(pd.display_name, d.name) ASC
     `);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -695,10 +996,14 @@ function _powerParseBody(body) {
   const isThreePhase = !!body.is_three_phase;
   if (!isThreePhase && !['R','S','T'].includes(phase))
     return { error: 'phase must be R / S / T (or set is_three_phase=true)', status: 400 };
-  const room = (body.room || '').trim();
-  if (!room) return { error: 'room is required', status: 400 };
+  // Room is optional — picks "(no room)" for routers / modems / closet
+  // gear that don't belong to a specific room. Stored as NULL in
+  // config.room + devices.room (linked rows leave the device's existing
+  // room alone).
+  const room = (body.room == null) ? null : String(body.room).trim() || null;
 
-  const cfg = { behavior, room };
+  const cfg = { behavior };
+  if (room) cfg.room = room;
   let sumW = 0;
   if (isThreePhase) {
     const r_w = Number(body.r_expected_w) || 0;
@@ -848,6 +1153,331 @@ app.patch('/api/power/devices/:id', async (req, res) => {
 
     await client.query('COMMIT');
     res.json({ ok: true, device_id: id, source, behavior, is_three_phase: isThreePhase, mean_w });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── Power Phase Discovery rule settings ───────────────────────
+// User-editable knobs for the (future) P3 rule. Stored as a single
+// JSONB blob under dashboard_settings.key='power.discovery'. Defaults
+// returned to the form when the row doesn't exist yet.
+const _POWER_DISCOVERY_DEFAULTS = {
+  match_offset_w:        50,   // ± tolerance around device's expected/max wattage
+  candidate_window_sec:  10,   // look-back window for delta computation
+  noise_floor_w:         10,   // ignore deltas smaller than this (sensor noise)
+  settling_sec:           2,   // delta must persist this long before confirming
+};
+
+// Billing-cycle defaults — IEC residential is a 2-month cycle. Start day +
+// length determine when each cycle begins; current_period_start_date is
+// auto-rolled forward on each /api/power/status read once a cycle ends.
+// baseline_kwh holds the Shelly cumulative readings at the moment the
+// current period started — used to compute period_kwh = current − baseline.
+// Auto-snapped on rollover (perfect accuracy going forward); for cycles
+// already in progress when the system first deployed, em_data.csv backfill
+// from Shelly's 60-day local history fills it in retroactively.
+const _POWER_BILLING_DEFAULTS = {
+  start_day:                 15,
+  length_months:              2,
+  current_period_start_date: null,
+  baseline_kwh:              null,  // { r, s, t, captured_at, source: 'auto_snap'|'em_data_backfill'|'manual' }
+};
+
+// Tariff defaults — calibrated against the user's actual IEC bill
+// (mid-2026, see commit log + POWER spec). User overrides via the
+// Settings tab when their actual rate or connection size differs.
+const _POWER_TARIFF_DEFAULTS = {
+  type:                       'flat',        // 'flat' | 'taoz'
+  flat_rate_ils_per_kwh:      0.5451,        // IEC residential — 54.51 אגורות/kWh
+  taoz_peak_rate:             0.85,          // placeholder until user enters real TAOZ rates
+  taoz_shoulder_rate:         0.55,
+  taoz_off_peak_rate:         0.30,
+  taoz_peak_hours:            '17:00-22:00', // free-text label; hourly integration deferred
+  taoz_shoulder_hours:        '22:00-06:00',
+  taoz_off_peak_hours:        '06:00-17:00',
+  fixed_monthly_fee_ils:      26.25,         // distribution 11.45 + supply 14.80 (IEC residential)
+  kva_rate_ils_per_year:      5.19,          // capacity charge per KVA per year (IEC published)
+  connection_kva:             17.32,         // user's connection size — 3×25A = 17.32 KVA
+  direct_debit_credit_ils:   -3.84,          // per-bill discount when paying by bank standing order (set 0 if not on direct debit)
+  vat_pct:                    18,            // Israel VAT raised from 17% → 18% in 2025
+  currency_symbol:            '₪',
+};
+
+// Load all three settings blocks (discovery + billing + tariff) into one
+// merged-with-defaults response. Frontend deals with three sections in the
+// Settings tab using this payload.
+async function _powerLoadSettings() {
+  const r = await db.query("SELECT key, value FROM dashboard_settings WHERE key IN ('power.discovery','power.billing','power.tariff')");
+  const map = {};
+  for (const row of r.rows) map[row.key] = row.value || {};
+  return {
+    discovery: { ..._POWER_DISCOVERY_DEFAULTS, ...(map['power.discovery'] || {}) },
+    billing:   { ..._POWER_BILLING_DEFAULTS,   ...(map['power.billing']   || {}) },
+    tariff:    { ..._POWER_TARIFF_DEFAULTS,    ...(map['power.tariff']    || {}) },
+  };
+}
+
+app.get('/api/power/settings', async (req, res) => {
+  try { res.json(await _powerLoadSettings()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/power/settings', async (req, res) => {
+  const body = req.body || {};
+
+  // Validate + clamp each known field. Unknown keys are dropped.
+  const cleanedDiscovery = {};
+  for (const k of Object.keys(_POWER_DISCOVERY_DEFAULTS)) {
+    const v = Number(body?.discovery?.[k]);
+    cleanedDiscovery[k] = (Number.isFinite(v) && v >= 0) ? Math.round(v) : _POWER_DISCOVERY_DEFAULTS[k];
+  }
+  // Read existing billing to preserve system-managed fields (baseline_kwh)
+  // that the frontend doesn't surface in the Settings form.
+  const existingBillingRow = await db.query("SELECT value FROM dashboard_settings WHERE key = 'power.billing' LIMIT 1");
+  const existingBilling = existingBillingRow.rows[0]?.value || {};
+  const cleanedBilling = {
+    start_day:     Math.min(28, Math.max(1, parseInt(body?.billing?.start_day, 10) || _POWER_BILLING_DEFAULTS.start_day)),
+    length_months: Math.min(12, Math.max(1, parseInt(body?.billing?.length_months, 10) || _POWER_BILLING_DEFAULTS.length_months)),
+    current_period_start_date: body?.billing?.current_period_start_date || existingBilling.current_period_start_date || _POWER_BILLING_DEFAULTS.current_period_start_date,
+    baseline_kwh:  (body?.billing?.baseline_kwh !== undefined) ? body.billing.baseline_kwh : (existingBilling.baseline_kwh || null),
+  };
+  const tt = body?.tariff || {};
+  // Helper — clamp to >=0 unless explicitly allowed negative (direct_debit_credit_ils).
+  const _num = (v, dflt, { allowNeg = false, min = 0 } = {}) => {
+    const x = Number(v);
+    if (!Number.isFinite(x)) return dflt;
+    return allowNeg ? x : Math.max(min, x);
+  };
+  const cleanedTariff = {
+    type:                    ['flat','taoz'].includes(tt.type) ? tt.type : _POWER_TARIFF_DEFAULTS.type,
+    flat_rate_ils_per_kwh:   _num(tt.flat_rate_ils_per_kwh,   _POWER_TARIFF_DEFAULTS.flat_rate_ils_per_kwh),
+    taoz_peak_rate:          _num(tt.taoz_peak_rate,          _POWER_TARIFF_DEFAULTS.taoz_peak_rate),
+    taoz_shoulder_rate:      _num(tt.taoz_shoulder_rate,      _POWER_TARIFF_DEFAULTS.taoz_shoulder_rate),
+    taoz_off_peak_rate:      _num(tt.taoz_off_peak_rate,      _POWER_TARIFF_DEFAULTS.taoz_off_peak_rate),
+    taoz_peak_hours:         String(tt.taoz_peak_hours     || _POWER_TARIFF_DEFAULTS.taoz_peak_hours).slice(0, 64),
+    taoz_shoulder_hours:     String(tt.taoz_shoulder_hours || _POWER_TARIFF_DEFAULTS.taoz_shoulder_hours).slice(0, 64),
+    taoz_off_peak_hours:     String(tt.taoz_off_peak_hours || _POWER_TARIFF_DEFAULTS.taoz_off_peak_hours).slice(0, 64),
+    fixed_monthly_fee_ils:   _num(tt.fixed_monthly_fee_ils,   _POWER_TARIFF_DEFAULTS.fixed_monthly_fee_ils),
+    kva_rate_ils_per_year:   _num(tt.kva_rate_ils_per_year,   _POWER_TARIFF_DEFAULTS.kva_rate_ils_per_year),
+    connection_kva:          _num(tt.connection_kva,          _POWER_TARIFF_DEFAULTS.connection_kva),
+    direct_debit_credit_ils: _num(tt.direct_debit_credit_ils, _POWER_TARIFF_DEFAULTS.direct_debit_credit_ils, { allowNeg: true }),
+    vat_pct:                 Math.max(0, Math.min(100, Number(tt.vat_pct) || _POWER_TARIFF_DEFAULTS.vat_pct)),
+    currency_symbol:         String(tt.currency_symbol || _POWER_TARIFF_DEFAULTS.currency_symbol).slice(0, 4),
+  };
+
+  try {
+    // Three idempotent UPSERTs — only blocks the user sent get written;
+    // unsent blocks fall back to defaults on next GET.
+    const writes = [
+      ['power.discovery', cleanedDiscovery],
+      ['power.billing',   cleanedBilling],
+      ['power.tariff',    cleanedTariff],
+    ];
+    for (const [key, value] of writes) {
+      await db.query(`
+        INSERT INTO dashboard_settings (key, value, updated_at)
+        VALUES ($1, $2::jsonb, NOW())
+        ON CONFLICT (key) DO UPDATE
+          SET value = EXCLUDED.value, updated_at = NOW()
+      `, [key, JSON.stringify(value)]);
+    }
+    res.json({ ok: true, discovery: cleanedDiscovery, billing: cleanedBilling, tariff: cleanedTariff });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Power Bills — history + manual paste + AI extract ───────
+app.get('/api/power/bills', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT id, uploaded_at,
+             to_char(period_start, 'YYYY-MM-DD') AS period_start,
+             to_char(period_end,   'YYYY-MM-DD') AS period_end,
+             total_kwh, total_cost_ils, est_cost_ils, raw_text, parsed, source, notes
+      FROM power_bills
+      ORDER BY COALESCE(period_start, uploaded_at::date) DESC, uploaded_at DESC
+      LIMIT 200
+    `);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/power/bills/:id', async (req, res) => {
+  try {
+    const r = await db.query('DELETE FROM power_bills WHERE id = $1', [parseInt(req.params.id, 10)]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// IEC bill PDF parser — pure server-side, no LLM. Uses pdf-parse to extract
+// text from the uploaded PDF, then regex-matches the IEC residential
+// template's known anchor strings to pull the four key fields:
+//   - period_start / period_end (DD/MM/YYYY pattern, RTL-flipped by pdf-parse)
+//   - total_kwh   (from "סה\"כ N קוט\"ש")
+//   - total_cost_ils (from "N סה\"כ לתשלום )ש\"ח(")
+// Inserts directly into power_bills. If regex misses any field, the row
+// still saves with NULL — user can delete + retry, or fix in DB.
+function _parseIecBill(text) {
+  const out = {};
+
+  // Period dates — pdf-parse reverses RTL text, so the visual layout in
+  // the PDF "מ-15/01/2026 עד 19/03/2026" extracts as
+  // "19/03/2026 15/01/2026 עד-מ" — END_DATE comes first.
+  const m = text.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+עד/);
+  if (m) {
+    const _iso = (ddmmyyyy) => ddmmyyyy.split('/').reverse().join('-');
+    const a = _iso(m[1]);
+    const b = _iso(m[2]);
+    // Sort to be safe — earlier date is start, later is end.
+    if (a < b) { out.period_start = a; out.period_end = b; }
+    else       { out.period_start = b; out.period_end = a; }
+  }
+
+  // Total kWh consumed — "חיוב בגין צריכה - סה\"כ 1273 קוט\"ש"
+  const k = text.match(/סה"כ\s+(\d+)\s+קוט"ש/);
+  if (k) out.total_kwh = parseInt(k[1], 10);
+
+  // Grand total ₪ — pdf-parse extracts as "898.05 \tסה\"כ לתשלום )ש\"ח(",
+  // i.e. the number is BEFORE the label.
+  const c = text.match(/([\d,]+\.\d+)\s+סה"כ\s+לתשלום/);
+  if (c) out.total_cost_ils = parseFloat(c[1].replace(/,/g, ''));
+
+  // Per-kWh rate in agorot — "54.51 \tאגורות" or in the consumption table.
+  // Stored as ₪/kWh (agorot ÷ 100).
+  const a = text.match(/(\d+\.\d{2})\s+(?:אגורות|לקוט"ש)/);
+  if (a) out.rate_ils_per_kwh = parseFloat(a[1]) / 100;
+
+  // VAT %
+  const v = text.match(/(\d+\.\d+)\s*%\s*מע"מ/);
+  if (v) out.vat_pct = parseFloat(v[1]);
+
+  // Fixed monthly fee — IEC splits into distribution + supply rows in the
+  // bill body. Each shows "תשלום קבוע <חלוקה|אספקה> ... ימים לפי <X.XX>".
+  // Anchoring to "תשלום קבוע" is important — without it the generic
+  // "ימים לפי" pattern also hits the KVA-rate row ("ימים לפי 5.19 ש\"ח
+  // לשנה לכל 1 KVA") and contaminates the sum.
+  const feeRates = [...text.matchAll(/תשלום\s+קבוע\s+(?:חלוקה|אספקה)[\s\S]{0,200}?ימים\s+לפי\s+(\d+\.\d+)/g)]
+                    .map(m => parseFloat(m[1]));
+  if (feeRates.length >= 2) {
+    out.fixed_monthly_fee_ils = Math.round((feeRates[0] + feeRates[1]) * 100) / 100;
+  }
+
+  // KVA capacity rate (₪/year per KVA): "לפי 5.19 ש\"ח לשנה לכל 1 KVA"
+  const kvaRate = text.match(/לפי\s+(\d+\.\d+)\s+ש"ח\s+לשנה/);
+  if (kvaRate) out.kva_rate_ils_per_year = parseFloat(kvaRate[1]);
+
+  // Connection size in KVA: "הספק 17.32 KVA"
+  const connKva = text.match(/הספק\s+(\d+\.\d+)\s+KVA/);
+  if (connKva) out.connection_kva = parseFloat(connKva[1]);
+
+  // Direct-debit credit: "הוראת קבע בבנק -3.84" (typically negative).
+  const ddCredit = text.match(/הוראת\s+קבע\s+בבנק\s+(-?\d+\.\d+)/);
+  if (ddCredit) out.direct_debit_credit_ils = parseFloat(ddCredit[1]);
+
+  return out;
+}
+
+// One-click PDF flow: pick a bill PDF in the dashboard → multer receives
+// it → pdf-parse extracts text → regex pulls the IEC-template fields →
+// INSERT into power_bills + return the new row. No LLM call, no external
+// API dependency. If regex misses a field the row still saves (NULL).
+app.post('/api/power/bills/upload', billPdfUpload.single('pdf'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'pdf file required' });
+  try {
+    const pdfBytes = fs.readFileSync(req.file.path);
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+
+    const { PDFParse } = require('pdf-parse');
+    const result = await (new PDFParse({ data: pdfBytes })).getText();
+    const text = result.text || '';
+    const parsed = _parseIecBill(text);
+
+    if (!parsed.period_start && !parsed.total_kwh && !parsed.total_cost_ils) {
+      return res.status(422).json({ error: 'could not extract any fields from PDF — unrecognised IEC template?' });
+    }
+
+    const r = await db.query(`
+      INSERT INTO power_bills (period_start, period_end, total_kwh, total_cost_ils,
+        raw_text, parsed, source)
+      VALUES ($1::date, $2::date, $3, $4, $5, $6::jsonb, 'pdf_parsed')
+      RETURNING id,
+                to_char(period_start, 'YYYY-MM-DD') AS period_start,
+                to_char(period_end,   'YYYY-MM-DD') AS period_end,
+                total_kwh, total_cost_ils
+    `, [
+      parsed.period_start || null,
+      parsed.period_end   || null,
+      parsed.total_kwh    != null ? Number(parsed.total_kwh)      : null,
+      parsed.total_cost_ils != null ? Number(parsed.total_cost_ils) : null,
+      text.slice(0, 6000),
+      JSON.stringify(parsed),
+    ]);
+
+    // Tariff-drift detection: if this bill is the most recent the user
+    // has uploaded, compare the parsed rate fields against the current
+    // Settings values. Any field that differs by > 1% gets returned in
+    // a `diff` array. The frontend offers an "Update Settings" button so
+    // the user can sync the new IEC rates with a single click.
+    let diff = [];
+    if (parsed.period_end) {
+      const latestQ = await db.query(
+        "SELECT MAX(period_end) AS latest FROM power_bills WHERE id <> $1 AND period_end IS NOT NULL",
+        [r.rows[0].id],
+      );
+      const latestExisting = latestQ.rows[0]?.latest;
+      const isLatest = !latestExisting
+        || new Date(parsed.period_end) >= new Date(latestExisting);
+      if (isLatest) {
+        const { tariff } = await _powerLoadSettings();
+        const _drift = (cur, neu) => {
+          if (cur == null || neu == null) return false;
+          const ref = Math.abs(cur) > 0.001 ? Math.abs(cur) : 1;
+          return Math.abs(cur - neu) / ref > 0.01;     // > 1% off
+        };
+        const _check = (field, parsedVal, label) => {
+          if (parsedVal != null && _drift(tariff[field], parsedVal)) {
+            diff.push({ field, label, current: tariff[field], new: parsedVal });
+          }
+        };
+        _check('flat_rate_ils_per_kwh',   parsed.rate_ils_per_kwh,        'Rate per kWh (₪)');
+        _check('fixed_monthly_fee_ils',   parsed.fixed_monthly_fee_ils,   'Fixed monthly fee (₪)');
+        _check('kva_rate_ils_per_year',   parsed.kva_rate_ils_per_year,   'KVA rate (₪/year)');
+        _check('connection_kva',          parsed.connection_kva,          'Connection size (KVA)');
+        _check('direct_debit_credit_ils', parsed.direct_debit_credit_ils, 'Direct-debit credit (₪)');
+        _check('vat_pct',                 parsed.vat_pct,                 'VAT (%)');
+      }
+    }
+
+    res.json({ ok: true, parsed, row: r.rows[0], diff });
+  } catch (e) {
+    try { if (req.file) fs.unlinkSync(req.file.path); } catch (_) {}
+    res.status(500).json({ error: `Bill upload failed: ${e.message}` });
+  }
+});
+
+// Drag-to-reorder: receives the full ordered list of device ids, writes
+// the index back to power_devices.sort_order. Mirrors the same pattern
+// the media playlists use (POST /api/playlists/reorder).
+app.post('/api/power/devices/reorder', async (req, res) => {
+  const order = Array.isArray(req.body?.order) ? req.body.order : null;
+  if (!order || !order.length) return res.status(400).json({ error: 'order array required' });
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    // Wipe all sort_order values first so removed ids don't keep stale positions.
+    await client.query('UPDATE power_devices SET sort_order = NULL');
+    for (let i = 0; i < order.length; i++) {
+      await client.query(
+        'UPDATE power_devices SET sort_order = $2, updated_at = NOW() WHERE device_id = $1',
+        [String(order[i]), i],
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, count: order.length });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
@@ -1364,7 +1994,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'manual_people_log', 'ups_status',
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
       'esp_boards',
-      'power_consumption', 'power_devices',
+      'power_consumption', 'power_devices', 'power_bills',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -1389,6 +2019,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       esp_boards: 'created_at',
       power_consumption: 'ts',
       power_devices: 'updated_at',
+      power_bills: 'uploaded_at',
     };
 
     const sizes = await db.query(`
