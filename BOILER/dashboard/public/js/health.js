@@ -277,6 +277,19 @@ async function loadStatus() {
      'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs','svc-ups'
     ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });
   }
+
+  // Dashboard self-stats strip in the System Status h2 — independent of the
+  // main status payload, cached 60 s server-side anyway.
+  try {
+    const ds = await fetch('/api/health/dashboard-stats').then(r => r.json());
+    const fmtInt = (n) => Number(n || 0).toLocaleString();
+    const locEl  = document.getElementById('ds-loc');
+    const diskEl = document.getElementById('ds-disk');
+    const ramEl  = document.getElementById('ds-ram');
+    if (locEl)  locEl.textContent  = fmtInt(ds.loc);
+    if (diskEl) diskEl.textContent = ds.disk_human || '—';
+    if (ramEl)  ramEl.textContent  = `${ds.ram_process_human} / ${ds.ram_total_human} (${ds.ram_pct}%)`;
+  } catch (_) { /* keep "—" placeholders */ }
 }
 
 // ── DB Volumes ───────────────────────────────────────────────

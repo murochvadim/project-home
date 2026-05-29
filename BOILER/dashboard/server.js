@@ -2078,6 +2078,78 @@ app.get('/api/health/status', (req, res) => {
   runHealthChecks().then(() => res.json(statusCache)).catch(e => res.status(500).json({ error: e.message }));
 });
 
+// ─── Project Health — Dashboard self-stats ───────────────────
+// LOC + on-disk footprint + RAM-of-this-process / total system RAM. Rendered
+// next to System Status on the Health page header. Cached 60 s — none of
+// these change fast and walking the dashboard tree on every poll is wasteful.
+let _dashStatsCache = null;
+let _dashStatsTs = 0;
+const _DASH_STATS_TTL_MS = 60_000;
+function _humanBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+function _walkDashboard(root) {
+  // Walk the dashboard subtree returning {loc, bytes}. Skips node_modules
+  // (huge + not part of "the dashboard's code" by any meaningful measure)
+  // and tmp/cache dirs.
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'tmp']);
+  const COUNT_EXT = new Set(['.js', '.html', '.css', '.json']);
+  let loc = 0, bytes = 0;
+  const stack = [root];
+  while (stack.length) {
+    const p = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(p, { withFileTypes: true }); }
+    catch (_) { continue; }
+    for (const e of entries) {
+      if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+      const full = path.join(p, e.name);
+      if (e.isDirectory()) { stack.push(full); continue; }
+      if (!e.isFile()) continue;
+      try {
+        const st = fs.statSync(full);
+        bytes += st.size;
+        const ext = path.extname(e.name).toLowerCase();
+        if (COUNT_EXT.has(ext)) {
+          // Count newlines — cheap + good enough for LOC.
+          const buf = fs.readFileSync(full);
+          let n = 0;
+          for (let i = 0; i < buf.length; i++) if (buf[i] === 0x0a) n++;
+          // +1 if file doesn't end with newline (still has content on last line)
+          if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) n++;
+          loc += n;
+        }
+      } catch (_) { /* skip unreadable */ }
+    }
+  }
+  return { loc, bytes };
+}
+app.get('/api/health/dashboard-stats', (req, res) => {
+  if (_dashStatsCache && (Date.now() - _dashStatsTs) < _DASH_STATS_TTL_MS) {
+    return res.json(_dashStatsCache);
+  }
+  try {
+    const dashRoot = path.resolve(__dirname);
+    const { loc, bytes } = _walkDashboard(dashRoot);
+    const mem = process.memoryUsage();
+    _dashStatsCache = {
+      loc,
+      disk_bytes:        bytes,
+      disk_human:        _humanBytes(bytes),
+      ram_process_bytes: mem.rss,
+      ram_process_human: _humanBytes(mem.rss),
+      ram_total_bytes:   os.totalmem(),
+      ram_total_human:   _humanBytes(os.totalmem()),
+      ram_pct:           Math.round((mem.rss / os.totalmem()) * 1000) / 10,  // 1 decimal
+    };
+    _dashStatsTs = Date.now();
+    res.json(_dashStatsCache);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Project Health — DB Volumes ─────────────────────────────
 app.get('/api/health/db-volumes', async (req, res) => {
   try {

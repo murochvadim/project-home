@@ -96,7 +96,23 @@
 
     <!-- System Status -->
     <div class="card">
-      <h2>System Status</h2>
+      <h2 style="display:flex; align-items:baseline; flex-wrap:wrap; gap:28px;">
+        <span>System Status</span>
+        <!-- Dashboard self-stats: LOC + disk footprint + RAM/total. Populated
+             by /api/health/dashboard-stats on the same 60 s poll. Left-
+             aligned next to the title (28 px gap) and blue-tinted to
+             distinguish from the live-status grids below. -->
+        <span style="font-size:0.78rem; font-weight:400; text-transform:none; letter-spacing:0; display:inline-flex; gap:6px; align-items:baseline; color:#2980b9;">
+          <span><span style="color:#5a8db5;">LOC:</span>
+                <span id="ds-loc" style="font-weight:600; color:#2980b9;">—</span></span>
+          <span style="color:#a8c4d8;">|</span>
+          <span><span style="color:#5a8db5;">Disk:</span>
+                <span id="ds-disk" style="font-weight:600; color:#2980b9;">—</span></span>
+          <span style="color:#a8c4d8;">|</span>
+          <span><span style="color:#5a8db5;">RAM:</span>
+                <span id="ds-ram" style="font-weight:600; color:#2980b9;">—</span></span>
+        </span>
+      </h2>
 
       <!-- Infrastructure -->
       <div style="font-size:0.7rem; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; margin-top:2px; padding-bottom:5px; border-bottom:1px solid #e0dbd4;">Infrastructure</div>
@@ -829,6 +845,6 @@ async function deploy() {
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=36"></script>
+<script src="js/health.js?v=38"></script>
 </body>
 </html>
