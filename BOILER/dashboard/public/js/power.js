@@ -271,18 +271,57 @@ async function mdPopulateRoomsDropdown(selected = '') {
     + rooms.map(r => `<option value="${r.room}"${r.room === selected ? ' selected' : ''}>${r.room}</option>`).join('');
 }
 
+// Unified form — same fields for both behaviors. Only the Power section
+// toggles based on Phase: 1 input for single phase, 3 for R.S.T.
 function mdShowFields() {
-  const lt = document.querySelector('input[name="md-load-type"]:checked')?.value;
-  document.getElementById('md-fields-always').style.display = (lt === 'always_on') ? '' : 'none';
-  document.getElementById('md-fields-cyclic').style.display = (lt === 'cyclic') ? '' : 'none';
-  mdUpdateCyclicPreview();
+  const phase = document.getElementById('md-phase').value;
+  document.getElementById('md-fields-auto-single').style.display = (phase === 'R' || phase === 'S' || phase === 'T') ? '' : 'none';
+  document.getElementById('md-fields-auto-rst').style.display    = (phase === 'RST') ? '' : 'none';
 }
 
-function mdUpdateCyclicPreview() {
-  const peak = parseFloat(document.getElementById('md-peak-w').value) || 0;
-  const duty = parseFloat(document.getElementById('md-duty-pct').value) || 0;
-  document.getElementById('md-cyclic-preview').textContent = `${Math.round(peak * duty / 100)} W`;
+// Linked-device dropdown's onchange — reveal either the custom-name input
+// (when "Other (custom)" picked) or the display-name override (when a real
+// device is picked).
+function mdHandleLinkedChange() {
+  const v = document.getElementById('md-linked-device').value;
+  const isCustom = (v === '__custom__');
+  document.getElementById('md-custom-device-name-wrap').style.display = isCustom ? '' : 'none';
+  document.getElementById('md-display-name-wrap').style.display       = (v && !isCustom) ? '' : 'none';
 }
+
+// Populated lazily the first time the user picks "auto"; refreshed each
+// time the form opens so it reflects fresh adds/removes elsewhere.
+// The "__custom__" option at the END lets the user register a device
+// that isn't in the system (no smart control). Backend creates a
+// virtual auto_<slug> device for that case.
+async function mdLoadAvailableDevices(selected = '') {
+  const sel = document.getElementById('md-linked-device');
+  try {
+    const r = await fetch('/api/power/devices/available');
+    const rows = await r.json();
+    if (!Array.isArray(rows)) throw new Error('bad response');
+    const byRoom = {};
+    for (const row of rows) {
+      const key = row.room || '(no room)';
+      (byRoom[key] = byRoom[key] || []).push(row);
+    }
+    const opts = ['<option value="">— pick a device —</option>'];
+    for (const room of Object.keys(byRoom).sort()) {
+      opts.push(`<optgroup label="${mdEscHtml(room)}">`);
+      for (const d of byRoom[room]) {
+        const sel2 = d.id === selected ? ' selected' : '';
+        opts.push(`<option value="${mdEscHtml(d.id)}"${sel2}>${mdEscHtml(d.name)}  (${mdEscHtml(d.device_type)})</option>`);
+      }
+      opts.push('</optgroup>');
+    }
+    opts.push(`<option value="__custom__"${selected === '__custom__' ? ' selected' : ''}>— Other (custom — not in system) —</option>`);
+    sel.innerHTML = opts.join('');
+    mdHandleLinkedChange();
+  } catch (e) {
+    sel.innerHTML = `<option value="">— error loading: ${mdEscHtml(e.message)} —</option>`;
+  }
+}
+
 
 function mdToggleForm() {
   if (mdFormMode) { mdCancel(); return; }
@@ -296,30 +335,71 @@ function mdOpenCreate() {
   document.getElementById('md-add-btn').textContent = '× Close form';
   mdResetFormFields();
   mdPopulateRoomsDropdown();
-  document.getElementById('md-name').focus();
+  mdLoadAvailableDevices();
 }
 
-function mdOpenEdit(deviceId) {
+async function mdOpenEdit(deviceId) {
   const row = mdRowsCache.find(r => r.device_id === deviceId);
   if (!row) return;
   mdFormMode = `edit:${row.device_id}`;
   document.getElementById('md-form').style.display = '';
-  document.getElementById('md-form-mode-tag').textContent = `(editing ${row.name})`;
+  document.getElementById('md-form-mode-tag').textContent = `(editing ${row.display_name || row.name})`;
   document.getElementById('md-add-btn').textContent = '× Close form';
   mdResetFormFields();
-  document.getElementById('md-name').value = row.name;
-  // 3-phase devices have phase=NULL + is_three_phase=true → "RST" sentinel
-  // in the dropdown so the "(3-phase)" option highlights on edit.
+
+  // Phase prefill
   document.getElementById('md-phase').value = row.is_three_phase ? 'RST' : (row.phase || '');
+
+  // Behavior radio prefill — derive from source:
+  //   manual_unmanaged → always_on
+  //   auto_pending / auto_custom / auto_discovered → auto
+  const behavior = (row.source === 'manual_unmanaged') ? 'always_on' : 'auto';
+  const br = document.querySelector(`input[name="md-behavior"][value="${behavior}"]`);
+  if (br) br.checked = true;
+
+  // Power values come from power_devices.config (new path) OR from the
+  // virtual device's dps_config.nominal_w (old manual_unmanaged path).
+  const cfg = row.config || {};
   const dcfg = row.dps_config || {};
-  const lt = dcfg.load_type || 'always_on';
-  const lr = document.querySelector(`input[name="md-load-type"][value="${lt}"]`);
-  if (lr) lr.checked = true;
-  if (dcfg.nominal_w != null) document.getElementById('md-nominal-w').value = dcfg.nominal_w;
-  if (dcfg.peak_w != null)    document.getElementById('md-peak-w').value = dcfg.peak_w;
-  if (dcfg.duty_cycle_pct != null) document.getElementById('md-duty-pct').value = dcfg.duty_cycle_pct;
+  if (row.is_three_phase) {
+    document.getElementById('md-r-expected-w').value = cfg.r_expected_w ?? 0;
+    document.getElementById('md-s-expected-w').value = cfg.s_expected_w ?? 0;
+    document.getElementById('md-t-expected-w').value = cfg.t_expected_w ?? 0;
+    // Max defaults: show the stored value if it's > expected, else leave
+    // blank (the user explicitly didn't set a range).
+    if (cfg.r_max_w != null && cfg.r_max_w > (cfg.r_expected_w ?? 0)) document.getElementById('md-r-max-w').value = cfg.r_max_w;
+    if (cfg.s_max_w != null && cfg.s_max_w > (cfg.s_expected_w ?? 0)) document.getElementById('md-s-max-w').value = cfg.s_max_w;
+    if (cfg.t_max_w != null && cfg.t_max_w > (cfg.t_expected_w ?? 0)) document.getElementById('md-t-max-w').value = cfg.t_max_w;
+  } else {
+    const exp = cfg.expected_w ?? dcfg.nominal_w ?? 0;
+    document.getElementById('md-expected-w').value = exp;
+    if (cfg.max_w != null && cfg.max_w > exp) document.getElementById('md-max-w').value = cfg.max_w;
+  }
+
+  // Device dropdown — needs to be populated first, then preselected.
+  // For manual_<slug> / auto_<slug> virtual devices, pick "Other (custom)"
+  // and prefill the custom name. For linked-auto rows, pick the real id.
+  await mdLoadAvailableDevices();
+  const sel = document.getElementById('md-linked-device');
+  const isVirtual = row.device_id.startsWith('manual_') || row.device_id.startsWith('auto_');
+  if (isVirtual) {
+    // Virtual rows aren't in the available list (already-registered).
+    // Use the __custom__ option and prefill the typed name.
+    sel.value = '__custom__';
+    document.getElementById('md-custom-device-name').value = row.display_name || row.name;
+  } else {
+    // Linked-auto: the real device is already in the registry so it's
+    // NOT in the available list. Inject it as a transient option so the
+    // dropdown can show + preselect it during edit.
+    const opt = document.createElement('option');
+    opt.value = row.device_id;
+    opt.textContent = `${row.name} (currently registered)`;
+    opt.selected = true;
+    sel.appendChild(opt);
+    if (row.display_name) document.getElementById('md-display-name').value = row.display_name;
+  }
+  mdHandleLinkedChange();
   mdShowFields();
-  // null/empty room → '__none__' selector so the "(no room)" option highlights.
   mdPopulateRoomsDropdown(row.room || '__none__');
 }
 
@@ -332,48 +412,79 @@ function mdCancel() {
 }
 
 function mdResetFormFields() {
-  document.getElementById('md-name').value = '';
-  document.getElementById('md-phase').value = '';
-  document.getElementById('md-nominal-w').value = '';
-  document.getElementById('md-peak-w').value = '';
-  document.getElementById('md-duty-pct').value = '';
-  document.querySelectorAll('input[name="md-load-type"]').forEach(r => r.checked = false);
-  document.getElementById('md-fields-always').style.display = 'none';
-  document.getElementById('md-fields-cyclic').style.display = 'none';
-  document.getElementById('md-cyclic-preview').textContent = '— W';
+  for (const id of ['md-phase','md-custom-device-name','md-display-name',
+                    'md-expected-w','md-max-w',
+                    'md-r-expected-w','md-s-expected-w','md-t-expected-w',
+                    'md-r-max-w','md-s-max-w','md-t-max-w']) {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  }
+  document.querySelectorAll('input[name="md-behavior"]').forEach(r => r.checked = false);
+  for (const id of ['md-fields-auto-single','md-fields-auto-rst',
+                    'md-custom-device-name-wrap','md-display-name-wrap']) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
   document.getElementById('md-form-msg').textContent = '';
+  const ld = document.getElementById('md-linked-device');
+  if (ld) ld.innerHTML = '<option value="">— loading… —</option>';
 }
 
 async function mdSave() {
   const msg = document.getElementById('md-form-msg');
   msg.textContent = '';
-  const name = document.getElementById('md-name').value.trim();
   const phase = document.getElementById('md-phase').value;
   const room  = document.getElementById('md-room').value;
-  const load_type = document.querySelector('input[name="md-load-type"]:checked')?.value || '';
+  const behavior = document.querySelector('input[name="md-behavior"]:checked')?.value || '';
 
-  if (!name)  { msg.textContent = 'Name is required'; return; }
+  if (!behavior) { msg.textContent = 'Behavior is required'; return; }
   if (!phase) { msg.textContent = 'Phase is required'; return; }
   if (!room)  { msg.textContent = 'Room is required'; return; }
-  if (!load_type) { msg.textContent = 'Load type is required'; return; }
-
-  // Translate "(no room)" sentinel into NULL on the wire so the DB
-  // stores the row with room=NULL rather than the literal "__none__".
   const roomValue = room === '__none__' ? null : room;
-  // "RST" sentinel → 3-phase device (phase=NULL + is_three_phase=true)
   const isThreePhase = (phase === 'RST');
   const phaseValue = isThreePhase ? null : phase;
-  const body = { name, phase: phaseValue, is_three_phase: isThreePhase, load_type, room: roomValue };
-  if (load_type === 'always_on') {
-    body.nominal_w = parseFloat(document.getElementById('md-nominal-w').value) || 0;
-    if (body.nominal_w <= 0) { msg.textContent = 'Always-on wattage must be > 0'; return; }
+
+  // Unified shape — every row registers a device (linked OR custom) on
+  // a phase with expected power(s). Behavior decides the LCD's baseline
+  // treatment: always_on subtracts continuously; auto contributes only
+  // when the discovery rule detects ON.
+  const linkedSel = document.getElementById('md-linked-device').value;
+  const isCustom = (linkedSel === '__custom__');
+  if (!linkedSel) { msg.textContent = 'Pick a device (or "Other custom")'; return; }
+  let linked_device_id = null;
+  let custom_device_name = null;
+  if (isCustom) {
+    custom_device_name = document.getElementById('md-custom-device-name').value.trim();
+    if (!custom_device_name) { msg.textContent = 'Custom device name is required'; return; }
+  } else {
+    linked_device_id = linkedSel;
   }
-  if (load_type === 'cyclic') {
-    body.peak_w        = parseFloat(document.getElementById('md-peak-w').value) || 0;
-    body.duty_cycle_pct = parseFloat(document.getElementById('md-duty-pct').value) || 0;
-    if (body.peak_w <= 0)        { msg.textContent = 'Peak wattage must be > 0'; return; }
-    if (body.duty_cycle_pct <= 0 || body.duty_cycle_pct > 100)
-      { msg.textContent = 'Duty cycle must be 1-100 %'; return; }
+  const display_name = (document.getElementById('md-display-name').value || '').trim() || null;
+
+  const body = {
+    behavior,
+    linked_device_id, custom_device_name, display_name,
+    phase: phaseValue, is_three_phase: isThreePhase, room: roomValue,
+  };
+  if (isThreePhase) {
+    body.r_expected_w = parseFloat(document.getElementById('md-r-expected-w').value) || 0;
+    body.s_expected_w = parseFloat(document.getElementById('md-s-expected-w').value) || 0;
+    body.t_expected_w = parseFloat(document.getElementById('md-t-expected-w').value) || 0;
+    if (body.r_expected_w + body.s_expected_w + body.t_expected_w <= 0) {
+      msg.textContent = 'At least one of R/S/T power must be > 0'; return;
+    }
+    // Max defaults to Expected if blank, per phase.
+    body.r_max_w = parseFloat(document.getElementById('md-r-max-w').value) || body.r_expected_w;
+    body.s_max_w = parseFloat(document.getElementById('md-s-max-w').value) || body.s_expected_w;
+    body.t_max_w = parseFloat(document.getElementById('md-t-max-w').value) || body.t_expected_w;
+    for (const [exp, mx, ph] of [[body.r_expected_w, body.r_max_w, 'R'], [body.s_expected_w, body.s_max_w, 'S'], [body.t_expected_w, body.t_max_w, 'T']]) {
+      if (mx < exp) { msg.textContent = `${ph}-max must be ≥ ${ph}-expected`; return; }
+    }
+  } else {
+    body.expected_w = parseFloat(document.getElementById('md-expected-w').value) || 0;
+    if (body.expected_w <= 0) { msg.textContent = 'Expected power must be > 0'; return; }
+    body.max_w = parseFloat(document.getElementById('md-max-w').value) || body.expected_w;
+    if (body.max_w < body.expected_w) { msg.textContent = 'Max power must be ≥ Expected'; return; }
   }
 
   const url = mdFormMode === 'create'
@@ -417,37 +528,90 @@ async function mdDelete(deviceId) {
   }
 }
 
-function mdTypeLabel(lt) {
-  if (lt === 'always_on')    return 'always-on';
-  if (lt === 'cyclic')       return 'cyclic';
-  if (lt === 'intermittent') return 'intermittent';
-  return '—';
+// Behavior derived from power_devices.source. Cyclic is no longer a
+// separate behavior — all rows are either always_on or auto.
+function mdBehavior(source) {
+  if (source === 'manual_unmanaged' || source === 'manual_seed') return 'always_on';
+  return 'auto';
 }
-// Color cues for the Power + Time-avg cells, based on how the device actually
-// consumes: always-on devices burn power 24/7 (red, attention-grabbing),
-// cyclic devices consume on a duty cycle (amber/yellow), intermittent
-// devices consume only briefly when triggered (grey — no continuous load).
-function mdConsumptionColor(lt) {
-  if (lt === 'always_on')    return '#c0392b';   // red — continuous draw, attention-grabbing
-  if (lt === 'cyclic')       return '#daa520';   // goldenrod — true yellow, readable on light bg
-  if (lt === 'intermittent') return '#888';      // grey — no continuous draw
-  return '#888';
+function mdTypeLabel(source) {
+  return mdBehavior(source) === 'always_on' ? 'always-on' : 'auto';
 }
-function mdPowerSpec(lt, dcfg) {
-  if (lt === 'always_on')    return `${dcfg?.nominal_w ?? '?'} W`;
-  if (lt === 'cyclic') {
-    const peak = dcfg?.peak_w ?? '?';
-    const duty = dcfg?.duty_cycle_pct ?? '?';
-    const avg  = (typeof peak === 'number' && typeof duty === 'number') ? Math.round(peak * duty / 100) : '?';
-    return `${peak} W × ${duty}% → ${avg} W`;
+// Always-on devices burn power 24/7 (red, attention-grabbing).
+// Auto devices contribute only when the rule detects them ON (blue).
+function mdConsumptionColor(source) {
+  return mdBehavior(source) === 'always_on' ? '#c0392b' : '#2980b9';
+}
+// Live wattage cell — what the rule currently sees:
+//   * always_on rows always render as ON in red with their expected
+//     wattage (they're on by definition; no rule detection needed).
+//   * auto rows default to "Off" in grey; flip to red live wattage when
+//     the future P3 rule sets power_devices.live = {on:true, w, r/s/t_w}.
+// 3-phase rows show per-phase live values when ON.
+const _OFF_COLOR  = '#888';
+const _ON_COLOR   = '#c0392b';
+function mdLiveCell(row) {
+  const beh  = mdBehavior(row.source);
+  const live = row.live || { on: false };
+  const cfg  = row.config || {};
+  const dcfg = row.dps_config || {};
+  // always_on devices are continuously on by definition
+  const isOn = (beh === 'always_on') || !!live.on;
+  if (!isOn) return `<span style="color:${_OFF_COLOR};">OFF</span>`;
+  // Build the wattage string. Prefer live measurements when present;
+  // otherwise fall back to the expected signature.
+  if (row.is_three_phase) {
+    const r = (live.r_w ?? cfg.r_expected_w) ?? 0;
+    const s = (live.s_w ?? cfg.s_expected_w) ?? 0;
+    const t = (live.t_w ?? cfg.t_expected_w) ?? 0;
+    return `<span style="color:${_ON_COLOR}; font-weight:700;">R:${Math.round(r)} &nbsp; S:${Math.round(s)} &nbsp; T:${Math.round(t)} <span style="opacity:0.7; font-weight:400;">W</span></span>`;
   }
-  if (lt === 'intermittent') return '(varies)';
-  return '—';
+  const w = (live.w ?? cfg.expected_w ?? dcfg.nominal_w) ?? 0;
+  return `<span style="color:${_ON_COLOR}; font-weight:700;">${Math.round(w)} W</span>`;
+}
+
+// Last-seen cell — relative timestamp of the last on/off transition the
+// rule logged. always_on rows have no transitions so render "—". The P3
+// rule will set power_devices.live.ts (or update last_observed_at) when
+// it detects a state change.
+function mdLastSeenCell(row) {
+  if (mdBehavior(row.source) === 'always_on') return '—';
+  const ts = row.live?.ts || row.last_observed_at;
+  if (!ts) return '<span style="color:#bbb;">never</span>';
+  const ageSec = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (ageSec < 60)    return `${Math.round(ageSec)} s ago`;
+  if (ageSec < 3600)  return `${Math.round(ageSec / 60)} m ago`;
+  if (ageSec < 86400) return `${Math.round(ageSec / 3600)} h ago`;
+  return `${Math.round(ageSec / 86400)} d ago`;
+}
+
+// Unified power display. Shows expected-max range when they differ
+// (variable-power device like a dishwasher), single value otherwise.
+function _rangeStr(exp, mx) {
+  if (typeof exp !== 'number') return '—';
+  if (typeof mx === 'number' && mx > exp) return `${exp}-${mx}`;
+  return `${exp}`;
+}
+function mdPowerSpec(row) {
+  const cfg = row?.config || {};
+  const dcfg = row?.dps_config || {};
+  if (row?.is_three_phase) {
+    const r = _rangeStr(cfg.r_expected_w, cfg.r_max_w);
+    const s = _rangeStr(cfg.s_expected_w, cfg.s_max_w);
+    const t = _rangeStr(cfg.t_expected_w, cfg.t_max_w);
+    return `R:${r} &nbsp; S:${s} &nbsp; T:${t} <span style="opacity:0.7; font-weight:400;">W</span>`;
+  }
+  const exp = (typeof cfg.expected_w === 'number') ? cfg.expected_w : dcfg.nominal_w;
+  const mx  = (typeof cfg.max_w === 'number') ? cfg.max_w : exp;
+  if (typeof exp !== 'number') return '—';
+  return `${_rangeStr(exp, mx)} W`;
 }
 
 function mdSourceTag(source) {
   if (source === 'manual_unmanaged') return '<span style="background:#fff3e0; color:#8b5a2a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">manual</span>';
   if (source === 'manual_seed')      return '<span style="background:#e8f0d8; color:#4a6a2a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">seed</span>';
+  if (source === 'auto_pending')     return '<span style="background:#e3f2fd; color:#1565c0; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto (linked)</span>';
+  if (source === 'auto_custom')      return '<span style="background:#f3e5f5; color:#6a1b9a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto (custom)</span>';
   if (source === 'auto_discovered')  return '<span style="background:#d8e8f0; color:#2a4a6a; padding:2px 8px; border-radius:10px; font-size:0.72rem;">auto</span>';
   return source || '—';
 }
@@ -465,36 +629,26 @@ async function mdLoadDevices() {
       return;
     }
     tbody.innerHTML = mdRowsCache.map(row => {
-      const dcfg = row.dps_config || {};
-      const isManual = row.source === 'manual_unmanaged';
-      const typeLabel = mdTypeLabel(dcfg.load_type);
-      const powerSpec = mdPowerSpec(dcfg.load_type, dcfg);
-      const meanW = row.mean_w != null ? `${Math.round(Number(row.mean_w))} W` : '—';
+      const rowName  = row.display_name || row.name;
+      const typeLabel = mdTypeLabel(row.source);
+      const powerSpec = mdPowerSpec(row);
       const roomCell = row.room ? mdEscHtml(row.room) : '<span style="color:#aaa; font-style:italic;">(no room)</span>';
-      // 3-phase devices store phase=NULL + is_three_phase=true → render as "R.S.T"
       const phaseDisplay = row.is_three_phase ? 'R.S.T' : (row.phase || '—');
-      // Color the Power + Time-avg cells per consumption pattern:
-      //   always-on → red (continuous load, always drawing)
-      //   cyclic    → amber/yellow (cycles on/off)
-      //   intermittent → grey (no continuous load, user-triggered only)
-      const cColor = mdConsumptionColor(dcfg.load_type);
-      // Pass only the device_id to Edit/Delete handlers; they look up the row
-      // from mdRowsCache so quotes in names can't break the onclick attribute.
-      const actions = isManual
-        ? `<button class="btn btn-secondary btn-sm" onclick="mdOpenEdit('${row.device_id}')">Edit</button>
-           <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete('${row.device_id}')">Delete</button>`
-        : '<span style="color:#aaa; font-size:0.78rem;">(managed by engine)</span>';
-      // All inner cells (Phase / Type / Power / Time-avg / Room / Source)
-      // center-aligned so the visual gap between cell contents is symmetric
-      // across the row. Name stays left (it's the row's identity) and
-      // Actions center (buttons cluster). The cell padding stays uniform.
+      const cColor = mdConsumptionColor(row.source);
+      const liveCell = mdLiveCell(row);
+      const lastSeenCell = mdLastSeenCell(row);
+      const actions = `
+        <button class="btn btn-secondary btn-sm" onclick="mdOpenEdit('${row.device_id}')">Edit</button>
+        <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete('${row.device_id}')">Delete</button>
+      `;
       return `
         <tr style="border-bottom:1px solid #e6e1da;">
-          <td style="font-weight:600;">${mdEscHtml(row.name)}</td>
+          <td style="font-weight:600;">${mdEscHtml(rowName)}</td>
           <td style="text-align:center;">${phaseDisplay}</td>
           <td style="text-align:center; color:#666;">${typeLabel}</td>
           <td style="text-align:center; color:${cColor}; font-weight:600;">${powerSpec}</td>
-          <td style="text-align:center; color:${cColor}; font-weight:700;">${meanW}</td>
+          <td style="text-align:center;">${liveCell}</td>
+          <td style="text-align:center; color:#888; font-size:0.82rem;">${lastSeenCell}</td>
           <td style="text-align:center; color:#666;">${roomCell}</td>
           <td style="text-align:center;">${mdSourceTag(row.source)}</td>
           <td style="text-align:center; white-space:nowrap;">${actions}</td>
@@ -507,8 +661,4 @@ async function mdLoadDevices() {
   }
 }
 
-// Wire up the cyclic-preview listeners + initial load
-['md-peak-w', 'md-duty-pct'].forEach(id => {
-  document.getElementById(id)?.addEventListener('input', mdUpdateCyclicPreview);
-});
 mdLoadDevices();

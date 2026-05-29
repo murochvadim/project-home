@@ -119,28 +119,63 @@ R/S/T match the HA sensor names (`sensor.r_voltage`, `sensor.s_power`, …) so t
 
 Written by the rule engine on every Shelly state change event (or downsampled to once per N seconds if events are noisy). Retention: **30 days, auto_clean**.
 
-### `power_devices` — discovered or seeded device-to-phase map
+### `power_devices` — registered devices + power signatures + live state
 ```sql
 CREATE TABLE power_devices (
-  device_id          TEXT PRIMARY KEY REFERENCES devices(id),
-  phase              CHAR(1),         -- 'R', 'S', 'T', OR NULL for unknown / 3-phase
-  is_three_phase     BOOLEAN DEFAULT FALSE,    -- TRUE for hob, AC1, AC2
-  is_cyclic          BOOLEAN DEFAULT FALSE,    -- TRUE for washing machine, dishwasher, etc.
+  device_id          TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+  phase              CHAR(1),         -- 'R', 'S', 'T', OR NULL for 3-phase
+  is_three_phase     BOOLEAN DEFAULT FALSE,
+  is_cyclic          BOOLEAN DEFAULT FALSE,    -- legacy column, kept for forward-compat (always FALSE since 2026-05-29 cyclic drop)
   samples_count      INT DEFAULT 0,
-  mean_w             NUMERIC,         -- running mean from observed transitions
-  stddev_w           NUMERIC,         -- running stddev (used to auto-classify cyclic)
-  cycle_max_w        INT,             -- highest observed wattage during a cycle (cyclic only)
-  cycle_typical_kwh  NUMERIC,         -- avg kWh per complete ON→OFF cycle (cyclic only)
+  mean_w             NUMERIC,         -- always_on: sum of expected powers (contributes to LCD baseline). auto: NULL.
+  stddev_w           NUMERIC,         -- reserved for P3 — running stddev of observed live wattage
+  cycle_max_w        INT,             -- reserved for P3 (legacy from cyclic spec)
+  cycle_typical_kwh  NUMERIC,         -- reserved for P3 (legacy from cyclic spec)
   confidence         TEXT,            -- 'none' | 'low' | 'medium' | 'high'
-  last_observed_at   TIMESTAMPTZ,
-  source             TEXT,            -- 'auto_discovered' | 'manual_seed' | 'baseline_calibration'
-  notes              TEXT
+  last_observed_at   TIMESTAMPTZ,     -- written by future P3 on each detected state change
+  source             TEXT,            -- 'manual_unmanaged' | 'manual_linked' | 'auto_pending' | 'auto_custom' | 'auto_discovered'
+  notes              TEXT,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW(),
+  display_name       TEXT,            -- (since 2026-05-28) optional override for the device's display name in the registry
+  config             JSONB DEFAULT '{}'::jsonb,  -- (since 2026-05-28) user-supplied power signature + behavior + room
+  live               JSONB DEFAULT '{"on":false}'::jsonb  -- (since 2026-05-29) what the rule currently sees (P3 writes here)
 );
 ```
 
-Static devices: phase + mean_w + stddev_w form the signature.
-Cyclic devices: phase only (stable); mean_w and stddev_w are diagnostic; actual contribution attributed dynamically while ON.
-3-phase devices: is_three_phase = TRUE, phase = NULL, mean_w = nominal total across all 3 phases.
+**Behavior** (a value of `config.behavior`):
+- **`always_on`** — constant load, always subtracted from the apartment-wide total. `mean_w` is set to the sum of expected powers.
+- **`auto`** — rule detects ON/OFF from Shelly per-phase deltas; contributes ONLY while detected ON. `mean_w` stays `NULL` so the always-on baseline calc excludes them.
+
+**Identity** (encoded in `source` + the `device_id` shape):
+- **Linked** (`source='manual_linked'` for always_on, `'auto_pending'` for auto) — `power_devices.device_id` = an existing real device's id. The real `devices` row is left untouched.
+- **Custom** (`source='manual_unmanaged'` for always_on, `'auto_custom'` for auto) — a virtual `devices` row is created with `id = manual_<slug>` or `auto_<slug>` so unmanaged loads (router, dishwasher) get a home.
+
+**`config` JSONB shape** (single-phase):
+```json
+{ "behavior": "auto", "room": "Kitchen", "expected_w": 150, "max_w": 2000 }
+```
+
+**`config` JSONB shape** (3-phase):
+```json
+{ "behavior": "auto", "room": "Living Room",
+  "r_expected_w": 1000, "s_expected_w": 1000, "t_expected_w": 2000,
+  "r_max_w": 1500, "s_max_w": 1800, "t_max_w": 2500 }
+```
+
+**`max_w` semantics** — variable-power devices (dishwasher = 150 W pump + 1950 W during heating) put their peak in `max_w`. The P3 discovery rule matches a Shelly delta to a device when the delta falls inside `[expected_w × 0.5, max_w × 1.2]`. Simple devices (microwave) leave `max_w` = `expected_w` and behave as point-match.
+
+**`live` JSONB shape** — written by the future P3 rule on every detected state change. Single-phase:
+```json
+{ "on": true, "w": 187, "ts": "2026-05-29T08:30:00Z" }
+```
+
+3-phase:
+```json
+{ "on": true, "r_w": 1100, "s_w": 950, "t_w": 1850, "ts": "..." }
+```
+
+Default `{"on": false}` for newly-registered rows. P2 dashboard reads it for the Live W + Last seen columns.
 
 Retention: **forever** (config-like data, low volume).
 
@@ -611,8 +646,8 @@ Computed in software (no HA entity):
 | Phase | Effort | What ships |
 |---|---|---|
 | **P1 — Ingest + Live Status** | ~1 day | Steps 5-9 + Card 1 on dashboard. End state: live 3-phase numbers visible on Project Power page; raw `power_consumption` time-series populating. No attribution yet. |
-| **P2 — Manual Device Registry** | ~1 day | Card 4's "+ Add Unmanaged Device" form (always-on / cyclic / intermittent categories) + the `devices` row + `power_devices` row creation flow. User registers every known unmanaged device they're aware of (fridge, wine fridge, routers, modems, aquarium pump, etc.). End state: the always-on + cyclic baseline of the home is captured in `power_devices` BEFORE any auto-discovery starts. Iterative — user keeps registering devices as they realize they exist. |
-| **P3 — Auto-Discovery Rule** | ~2 days | Power Phase Discovery rule on LXC 105 + the discovery-status portion of Card 4 (auto-discovered rows). Now starts with the manual baseline in place, so per-device delta measurements are clean (fridge cycles already subtracted via time-averaged contribution). End state: `power_devices` self-populating over the next week as smart devices toggle. |
+| **P2 — Device Registry** (✓ done 2026-05-29) | unified `+ Add Device` form on the Project Power page → device picker (existing devices OR "Other custom" for unmanaged loads) + optional display-name override + Phase (R / S / T / R.S.T) + Room + Power. Behavior radio at the end: **always_on** (constant baseline) or **auto** (rule detects on/off from Shelly deltas). Single-phase rows take Expected + optional Max; R.S.T rows take per-phase Expected + Max so variable-power devices (dishwasher's heating peak) are recognized across their full range. Two new columns: **Live W** (red wattage when rule says ON, grey OFF default, always_on rows always render as ON) + **Last seen** (relative timestamp of the last state change). All rows editable; cyclic dropped as a behavior — devices that cycle just register as auto and the rule handles the cycling. |
+| **P3 — Discovery Rule** | ~2 days | Power Phase Discovery rule on LXC 105. **Scope flipped 2026-05-29** — no longer learns unknown phase/power from scratch. Now the user registers each auto device up-front with phase + expected power + max power (via P2's unified form). The rule's job is purely **state recognition**: on every Shelly event, computes Δr/s/t since the previous `power_consumption` row; for each auto-registered device, checks if Δ on its registered phase falls inside `[expected_w × tol_low, max_w × tol_high]` (defaults 0.5 / 1.2, sentence-tunable). On match it flips `power_devices.live = {on:true, w:Δ (or per-phase), ts:NOW}`; on the reverse delta, flips to `{on:false, ts:NOW}`. 3-phase devices match when all three per-phase deltas hit. End state: Live W + Last seen columns light up in the registry on every detection; the LCD's ALWAYS-ON readout grows to include currently-detected auto contributions. |
 | **P4 — Attribution** | ~1 day | Power Attribution rule + Card 2 (stacked bar) + Card 3 (daily kWh). Combines manual + auto-discovered entries. End state: per-device live + historical consumption visible. |
 | **P5 — 3-Phase + Cyclic refinement** | ~1 day | Special rules for hob/AC1/AC2 and cyclic devices. End state: 3-phase appliances correctly attributed; washing machine / dishwasher / oven contribution dynamically tracked across cycle. |
 | **P6 — Alerts** | ~1 day | 7 power-quality + anomaly rules (voltage_low/high, phase_imbalance, phantom_load_spike, device_state_mismatch, unaccounted_background, **phase_lost:R/S/T**) + Card 5 (alerts on Power page). End state: voltage / imbalance / phantom-load / device-mismatch / unaccounted-background / phase-loss monitoring live. The unaccounted-background alert drives the iterative loop back to P2 ("still 200 W I can't see → register more"). The phase-loss rule renders as a prominent `⚠ LOST PHASE X` banner above Card 1 — added 2026-05-28 after physically pulling Phase T proved voltage is not a reliable signal (V stays alive even with the breaker open; only current + power + PF collapse). |

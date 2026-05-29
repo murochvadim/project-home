@@ -76,17 +76,13 @@
     </div>
   </div>
 
-  <!-- Card 2 — Manual Device Registry (P2) -->
+  <!-- Card 2 — Device Registry (P2 + P3) -->
   <div class="card">
-    <h2>Manual Device Registry
-      <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
-        — register unmanaged loads BEFORE P3 auto-discovery so deltas are clean
-      </span>
-    </h2>
+    <h2>Device Registry</h2>
 
-    <!-- Inline form (toggled by + Add Unmanaged Device button) -->
+    <!-- Inline form (toggled by + Add Device button) -->
     <div style="margin-bottom:14px;">
-      <button id="md-add-btn" class="btn btn-secondary btn-sm" onclick="mdToggleForm()">+ Add Unmanaged Device</button>
+      <button id="md-add-btn" class="btn btn-secondary btn-sm" onclick="mdToggleForm()">+ Add Device</button>
       <span id="md-form-mode-tag" style="margin-left:10px; font-size:0.82rem; color:#888;"></span>
     </div>
 
@@ -99,56 +95,107 @@
       .md-form-radio input { margin-right:8px; }
     </style>
     <div id="md-form" style="display:none; border:1px solid #d0cbc4; border-radius:8px; padding:22px; background:#fafaf6; margin-bottom:16px;">
-      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:20px 22px;">
-        <div>
-          <label class="md-form-label">Name *</label>
-          <input id="md-name" type="text" class="md-form-input" placeholder="e.g. Fridge">
-        </div>
-        <div>
-          <label class="md-form-label">Phase *</label>
-          <select id="md-phase" class="md-form-input">
-            <option value="">— pick —</option>
-            <option value="R">Phase R</option>
-            <option value="S">Phase S</option>
-            <option value="T">Phase T</option>
-            <option value="RST">R.S.T (3-phase)</option>
-          </select>
-        </div>
-        <div>
-          <label class="md-form-label">Room *</label>
-          <select id="md-room" class="md-form-input">
-            <option value="">— pick a room —</option>
-          </select>
-        </div>
+      <!-- Unified form: same fields for every device. The only difference
+           is the Behavior radio at the bottom (always_on vs auto). -->
 
-        <div style="grid-column:1 / -1;">
-          <label class="md-form-label">Load type *</label>
-          <div style="display:flex; gap:12px; flex-wrap:wrap;">
-            <label class="md-form-radio"><input type="radio" name="md-load-type" value="always_on" onchange="mdShowFields()">Always-on</label>
-            <label class="md-form-radio"><input type="radio" name="md-load-type" value="cyclic" onchange="mdShowFields()">Cyclic</label>
-            <label class="md-form-radio"><input type="radio" name="md-load-type" value="intermittent" onchange="mdShowFields()">Intermittent</label>
+      <!-- Device picker — always shown. Dropdown of eligible devices +
+           "Other (custom)" for devices not in the system. -->
+      <div style="margin-bottom:18px;">
+        <label class="md-form-label">Device *</label>
+        <select id="md-linked-device" class="md-form-input" onchange="mdHandleLinkedChange()" style="max-width:520px;">
+          <option value="">— loading… —</option>
+        </select>
+        <div id="md-custom-device-name-wrap" style="display:none; margin-top:14px;">
+          <label class="md-form-label">Custom device name *</label>
+          <input id="md-custom-device-name" type="text" class="md-form-input" placeholder="e.g. Microwave (no smart control)" style="max-width:420px;">
+          <div style="margin-top:4px; font-size:0.78rem; color:#888;">
+            Creates a virtual device — the discovery rule recognizes its on/off purely by matching Shelly deltas to its expected power.
           </div>
         </div>
-
-        <div id="md-fields-always" style="display:none; grid-column:1 / -1;">
-          <label class="md-form-label">Always-on wattage (W) *</label>
-          <input id="md-nominal-w" type="number" min="0" step="1" placeholder="e.g. 25 (router)" class="md-form-input" style="max-width:260px;">
+        <div id="md-display-name-wrap" style="display:none; margin-top:14px;">
+          <label class="md-form-label">Display name (optional)</label>
+          <input id="md-display-name" type="text" class="md-form-input" placeholder="leave blank to use the device's existing name" style="max-width:420px;">
         </div>
-        <div id="md-fields-cyclic" style="display:none; grid-column:1 / -1;">
-          <div style="display:flex; gap:22px; flex-wrap:wrap; align-items:flex-end;">
-            <div style="flex:0 0 200px;">
-              <label class="md-form-label">Peak wattage (W) *</label>
-              <input id="md-peak-w" type="number" min="0" step="1" placeholder="e.g. 120 (fridge)" class="md-form-input">
-            </div>
-            <div style="flex:0 0 180px;">
-              <label class="md-form-label">Duty cycle (%) *</label>
-              <input id="md-duty-pct" type="number" min="0" max="100" step="1" placeholder="e.g. 25" class="md-form-input">
-            </div>
-            <div style="padding-bottom:11px;">
-              <span style="font-size:0.86rem; color:#666;">Time-avg: </span>
-              <span id="md-cyclic-preview" style="font-size:1.1rem; font-weight:700; color:#1a1a1a; margin-left:6px;">— W</span>
+      </div>
+
+      <!-- Phase + Room — always visible. -->
+      <div style="margin-bottom:18px;">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px 22px; max-width:560px;">
+          <div>
+            <label class="md-form-label">Phase *</label>
+            <select id="md-phase" class="md-form-input" onchange="mdShowFields()">
+              <option value="">— pick —</option>
+              <option value="R">Phase R</option>
+              <option value="S">Phase S</option>
+              <option value="T">Phase T</option>
+              <option value="RST">R.S.T (3-phase)</option>
+            </select>
+          </div>
+          <div>
+            <label class="md-form-label">Room *</label>
+            <select id="md-room" class="md-form-input">
+              <option value="">— pick a room —</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Power section — 1 input pair for single phase, 3 input pairs for R.S.T.
+           Each pair: Expected (typical draw) + Max (peak during heating/burst).
+           Variable-power devices (dishwasher, washing machine, oven) put their
+           heating peak in Max; simple devices (microwave) leave Max blank — it
+           defaults to Expected. The discovery rule treats the device as ON
+           when Shelly's delta lands inside [Expected × 0.5, Max × 1.2]. -->
+      <div id="md-fields-auto-single" style="display:none; margin-bottom:18px;">
+        <div style="display:flex; gap:18px; align-items:flex-end; flex-wrap:wrap;">
+          <div style="flex:0 0 200px;">
+            <label class="md-form-label">Expected power (W) *</label>
+            <input id="md-expected-w" type="number" min="0" step="1" placeholder="e.g. 150 (dishwasher)" class="md-form-input">
+          </div>
+          <div style="flex:0 0 200px;">
+            <label class="md-form-label">Max power (W)</label>
+            <input id="md-max-w" type="number" min="0" step="1" placeholder="e.g. 2000 (heating phase)" class="md-form-input">
+          </div>
+        </div>
+        <div style="margin-top:6px; font-size:0.78rem; color:#888;">
+          Leave Max blank for single-state devices (microwave, kettle) — defaults to Expected.
+        </div>
+      </div>
+      <div id="md-fields-auto-rst" style="display:none; margin-bottom:18px;">
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:18px;">
+          <div>
+            <label class="md-form-label">R-power (W) *</label>
+            <div style="display:flex; gap:8px;">
+              <input id="md-r-expected-w" type="number" min="0" step="1" placeholder="expected" class="md-form-input">
+              <input id="md-r-max-w" type="number" min="0" step="1" placeholder="max" class="md-form-input">
             </div>
           </div>
+          <div>
+            <label class="md-form-label">S-power (W) *</label>
+            <div style="display:flex; gap:8px;">
+              <input id="md-s-expected-w" type="number" min="0" step="1" placeholder="expected" class="md-form-input">
+              <input id="md-s-max-w" type="number" min="0" step="1" placeholder="max" class="md-form-input">
+            </div>
+          </div>
+          <div>
+            <label class="md-form-label">T-power (W) *</label>
+            <div style="display:flex; gap:8px;">
+              <input id="md-t-expected-w" type="number" min="0" step="1" placeholder="expected" class="md-form-input">
+              <input id="md-t-max-w" type="number" min="0" step="1" placeholder="max" class="md-form-input">
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:6px; font-size:0.78rem; color:#888;">
+          One pair per phase. Enter 0 for any phase the device doesn't draw on. Max defaults to Expected if blank.
+        </div>
+      </div>
+
+      <!-- Behavior — the ONE thing that differs across rows. -->
+      <div style="margin-bottom:18px;">
+        <label class="md-form-label">Behavior *</label>
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <label class="md-form-radio"><input type="radio" name="md-behavior" value="always_on">Always-on (constant load, no discovery)</label>
+          <label class="md-form-radio"><input type="radio" name="md-behavior" value="auto">Auto (rule detects ON/OFF from Shelly deltas)</label>
         </div>
       </div>
 
@@ -176,14 +223,15 @@
             <th style="text-align:center;">Phase</th>
             <th style="text-align:center;">Type</th>
             <th style="text-align:center;">Power</th>
-            <th style="text-align:center;">Time-avg W</th>
+            <th style="text-align:center;">Live W</th>
+            <th style="text-align:center;">Last seen</th>
             <th style="text-align:center;">Room</th>
             <th style="text-align:center;">Source</th>
             <th style="text-align:center;">Actions</th>
           </tr>
         </thead>
         <tbody id="md-tbody">
-          <tr><td colspan="8" style="color:#aaa; text-align:center;">Loading…</td></tr>
+          <tr><td colspan="9" style="color:#aaa; text-align:center;">Loading…</td></tr>
         </tbody>
         <tfoot id="md-tfoot"><!-- per-phase totals row, rendered by mdLoadDevices() --></tfoot>
       </table>
@@ -194,6 +242,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/power.js?v=21"></script>
+<script src="js/power.js?v=27"></script>
 </body>
 </html>

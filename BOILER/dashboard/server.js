@@ -605,166 +605,249 @@ app.get('/api/power/status', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── POWER P2 — Manual Device Registry ────────────────────────
-// Pattern: register unmanaged loads (fridge, routers, modems, etc.) so
-// their time-averaged contribution is subtracted from each phase BEFORE
-// P3 auto-discovery starts measuring deltas on real device transitions.
-// Without this baseline, fridge compressor cycles randomly during a
-// smart device's ON/OFF transition window contaminate the measurement.
-//
-// Two-row pattern per entry — see POWER/CLAUDE.md "Manual / unmanaged
-// devices" section:
-//   * devices row: id=manual_<slug>, protocol='virtual',
-//     device_type='unmanaged_load', dps_config holds the form fields.
-//   * power_devices row: phase + mean_w (= nominal for always-on, or
-//     peak*duty/100 for cyclic, or 0 for intermittent),
-//     source='manual_unmanaged', confidence='high'.
+// ─── POWER P2 — Device Registry ───────────────────────────────
+// Every row is one device on one (or three) phase(s) with an expected
+// power signature. The Behavior field decides what the future P3
+// discovery rule does with the row:
+//   * always_on — constant baseline subtracted from total continuously
+//   * auto      — rule detects ON/OFF from Shelly per-phase deltas;
+//                 contributes only while detected ON
+// Each row carries an identity in one of two flavours:
+//   * Linked  — power_devices.device_id = an existing real device's id;
+//               the real devices row is left alone
+//   * Custom  — a virtual devices row is created with id manual_<slug>
+//               (always_on) or auto_<slug> (auto)
+// Single-phase rows store {expected_w, max_w} in power_devices.config;
+// 3-phase rows store {r/s/t_expected_w, r/s/t_max_w}. Max defaults to
+// Expected if blank (single-state device — microwave / kettle).
+// Variable-power devices (dishwasher with heating phase) get a Max
+// value > Expected so the rule can recognize the device across its
+// whole consumption range.
 function slugify(name) {
   return String(name).toLowerCase()
     .replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
 }
-function timeAvgW(loadType, peakW, dutyPct, nominalW) {
-  if (loadType === 'always_on') return Number(nominalW) || 0;
-  if (loadType === 'cyclic')    return Math.round((Number(peakW) || 0) * (Number(dutyPct) || 0) / 100);
-  return 0;  // intermittent — not auto-subtracted
-}
 
 app.get('/api/power/devices', async (req, res) => {
   try {
+    // room comes from config.room first (the user's pick on the registry
+    // form) and falls back to devices.room for legacy rows. Linked-real
+    // rows specifically keep the user's pick in config since we don't
+    // mutate the real device's room column.
     const r = await db.query(`
       SELECT pd.device_id, pd.phase, pd.is_three_phase, pd.is_cyclic,
              pd.samples_count, pd.mean_w, pd.stddev_w, pd.cycle_max_w,
              pd.cycle_typical_kwh, pd.confidence, pd.last_observed_at,
              pd.source, pd.notes, pd.updated_at,
-             d.name, d.device_type, d.protocol, d.room, d.dps_config
+             pd.display_name, pd.config, pd.live,
+             d.name, d.device_type, d.protocol, d.dps_config,
+             COALESCE(pd.config->>'room', d.room) AS room
       FROM power_devices pd
       JOIN devices d ON d.id = pd.device_id
-      ORDER BY pd.phase ASC NULLS LAST, d.name ASC
+      ORDER BY pd.phase ASC NULLS LAST, COALESCE(pd.display_name, d.name) ASC
     `);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/power/devices', async (req, res) => {
-  const { name, phase, load_type, peak_w, duty_cycle_pct, nominal_w, room, notes } = req.body || {};
-  // 3-phase devices send phase=null + is_three_phase=true (hob, AC1, AC2 etc.,
-  // wired across all 3 phases). The check constraint allows phase=NULL so the
-  // power_devices row stores phase=NULL alongside is_three_phase=true; the
-  // dashboard renders "R.S.T" for these on the way out.
-  const isThreePhase = !!req.body.is_three_phase;
+// Devices eligible to register with behavior='auto' — discovery rule will
+// watch their ON/OFF transitions and match Shelly deltas to the user-
+// supplied expected power signature.
+// Excludes:
+//   * already-registered devices (NOT IN power_devices)
+//   * the Shelly meter itself
+//   * virtual + sensor types that can't actually draw measurable load (no
+//     ON/OFF transitions to learn from)
+//   * disabled devices
+app.get('/api/power/devices/available', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT d.id, d.name, d.room, d.device_type, d.protocol, d.last_source
+      FROM devices d
+      LEFT JOIN power_devices pd ON pd.device_id = d.id
+      WHERE pd.device_id IS NULL
+        AND d.enabled = TRUE
+        AND d.id <> 'shelly_3em_main'
+        AND d.protocol NOT IN ('virtual')
+        AND d.device_type NOT IN ('power_meter','presence','motion','door_sensor','remote','temp_controller','co_alarm','gas_detector','display','panel','unmanaged_load')
+      ORDER BY d.room ASC NULLS LAST, d.name ASC
+    `);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
-  if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
+// Unified parser: every registry write goes through the same body shape.
+//   {
+//     behavior: 'always_on' | 'auto',
+//     linked_device_id | custom_device_name,
+//     display_name?,
+//     phase: 'R'|'S'|'T'|null, is_three_phase: bool,
+//     room: <text>,
+//     expected_w?      // single phase
+//     r_expected_w?, s_expected_w?, t_expected_w?   // 3-phase
+//   }
+// Returns either {ok:true, ...} or {error:string, status:int}.
+function _powerParseBody(body) {
+  const behavior = body.behavior;
+  if (!['always_on','auto'].includes(behavior))
+    return { error: 'behavior must be always_on or auto', status: 400 };
+  const phase = body.phase || null;
+  const isThreePhase = !!body.is_three_phase;
   if (!isThreePhase && !['R','S','T'].includes(phase))
-    return res.status(400).json({ error: 'phase must be R / S / T (or pick R.S.T for 3-phase)' });
-  if (!['always_on','cyclic','intermittent'].includes(load_type))
-    return res.status(400).json({ error: 'load_type must be always_on / cyclic / intermittent' });
+    return { error: 'phase must be R / S / T (or set is_three_phase=true)', status: 400 };
+  const room = (body.room || '').trim();
+  if (!room) return { error: 'room is required', status: 400 };
 
-  const slug = slugify(name);
-  if (!slug) return res.status(400).json({ error: 'name produced empty slug' });
-  const deviceId = `manual_${slug}`;
-  const mean_w = timeAvgW(load_type, peak_w, duty_cycle_pct, nominal_w);
+  const cfg = { behavior, room };
+  let sumW = 0;
+  if (isThreePhase) {
+    const r_w = Number(body.r_expected_w) || 0;
+    const s_w = Number(body.s_expected_w) || 0;
+    const t_w = Number(body.t_expected_w) || 0;
+    if (r_w + s_w + t_w <= 0)
+      return { error: 'at least one of R/S/T expected power must be > 0', status: 400 };
+    // Max defaults to Expected per phase if blank/missing. Validate max >= expected.
+    const r_mx = Math.max(Number(body.r_max_w) || 0, r_w);
+    const s_mx = Math.max(Number(body.s_max_w) || 0, s_w);
+    const t_mx = Math.max(Number(body.t_max_w) || 0, t_w);
+    cfg.r_expected_w = r_w; cfg.s_expected_w = s_w; cfg.t_expected_w = t_w;
+    cfg.r_max_w = r_mx;     cfg.s_max_w = s_mx;     cfg.t_max_w = t_mx;
+    sumW = r_w + s_w + t_w;
+  } else {
+    const w = Number(body.expected_w) || 0;
+    if (w <= 0) return { error: 'expected_w must be > 0', status: 400 };
+    const mx = Math.max(Number(body.max_w) || 0, w);
+    cfg.expected_w = w;
+    cfg.max_w = mx;
+    sumW = w;
+  }
+
+  // mean_w semantics:
+  //   always_on → continuous baseline = sum of expected powers
+  //   auto      → contributes only when the discovery rule detects ON,
+  //               so the baseline column stays NULL (skipped by the
+  //               always_on_w SUM in /api/power/status).
+  const mean_w = behavior === 'always_on' ? sumW : null;
   const phaseToStore = isThreePhase ? null : phase;
 
-  const dpsConfig = { phase: isThreePhase ? 'RST' : phase, load_type, is_three_phase: isThreePhase };
-  if (load_type === 'always_on')  dpsConfig.nominal_w     = Number(nominal_w) || 0;
-  if (load_type === 'cyclic')   { dpsConfig.peak_w        = Number(peak_w) || 0;
-                                  dpsConfig.duty_cycle_pct = Number(duty_cycle_pct) || 0; }
-  if (notes) dpsConfig.notes = String(notes);
+  return { cfg, mean_w, phaseToStore, isThreePhase, behavior, room };
+}
 
-  const dpsLabels = (() => {
-    if (load_type === 'always_on') return { nominal_w: 'Nominal W' };
-    if (load_type === 'cyclic')    return { peak_w: 'Peak W', duty_cycle_pct: 'Duty Cycle %', time_avg_w: 'Time-avg W' };
-    return {};
-  })();
+app.post('/api/power/devices', async (req, res) => {
+  const parsed = _powerParseBody(req.body || {});
+  if (parsed.error) return res.status(parsed.status).json({ error: parsed.error });
+  const { cfg, mean_w, phaseToStore, isThreePhase, behavior, room } = parsed;
+
+  const linked_device_id = req.body.linked_device_id || null;
+  const customName       = (req.body.custom_device_name || '').trim();
+  const displayName      = (req.body.display_name || '').trim();
+  if (!linked_device_id && !customName)
+    return res.status(400).json({ error: 'pick a device or supply a custom name' });
+  if (linked_device_id && customName)
+    return res.status(400).json({ error: 'linked_device_id and custom_device_name are mutually exclusive' });
+
+  // source values:
+  //   linked   + always_on → 'manual_linked'   (NEW — real device, baseline)
+  //   linked   + auto      → 'auto_pending'    (existing)
+  //   custom   + always_on → 'manual_unmanaged' (existing — virtual manual_<slug>)
+  //   custom   + auto      → 'auto_custom'      (existing — virtual auto_<slug>)
+  const isLinked = !!linked_device_id;
+  const source = isLinked
+    ? (behavior === 'always_on' ? 'manual_linked' : 'auto_pending')
+    : (behavior === 'always_on' ? 'manual_unmanaged' : 'auto_custom');
 
   const client = await db.connect();
   try {
+    // Linked path — power_devices row references the real device; no
+    // virtual device row created.
+    if (isLinked) {
+      const dev = await client.query('SELECT id FROM devices WHERE id = $1', [linked_device_id]);
+      if (!dev.rows.length) return res.status(404).json({ error: `device "${linked_device_id}" not found` });
+      const existing = await client.query('SELECT device_id FROM power_devices WHERE device_id = $1', [linked_device_id]);
+      if (existing.rows.length) return res.status(409).json({ error: `device "${linked_device_id}" is already in the registry` });
+
+      await client.query(`
+        INSERT INTO power_devices (device_id, phase, is_three_phase, mean_w, source, confidence,
+          is_cyclic, samples_count, display_name, config, updated_at)
+        VALUES ($1, $2, $3, $4, $5, 'high', FALSE, 0, $6, $7::jsonb, NOW())
+      `, [linked_device_id, phaseToStore, isThreePhase, mean_w, source, displayName || null, JSON.stringify(cfg)]);
+      return res.json({ ok: true, device_id: linked_device_id, source, behavior, is_three_phase: isThreePhase, mean_w });
+    }
+
+    // Custom path — create a virtual device + power_devices row.
+    const slug = slugify(customName);
+    if (!slug) return res.status(400).json({ error: 'custom name produced empty slug' });
+    const prefix = behavior === 'always_on' ? 'manual' : 'auto';
+    const newId = `${prefix}_${slug}`;
+
     await client.query('BEGIN');
+    const existsDev = await client.query('SELECT id FROM devices WHERE id = $1', [newId]);
+    if (existsDev.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `device "${newId}" already exists` });
+    }
     await client.query(`
       INSERT INTO devices (id, name, vendor, device_type, protocol, room,
         enabled, show_dashboard, poll_enabled, poll_interval_sec,
         dps_labels, dps_config, channel_config)
-      VALUES ($1, $2, 'Manual', 'unmanaged_load', 'virtual', $3,
-        TRUE, FALSE, FALSE, 0, $4::jsonb, $5::jsonb, '{}'::jsonb)
-    `, [deviceId, String(name).trim(), room || null, JSON.stringify(dpsLabels), JSON.stringify(dpsConfig)]);
-
+      VALUES ($1, $2, $3, 'unmanaged_load', 'virtual', $4,
+        TRUE, FALSE, FALSE, 0, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)
+    `, [newId, customName, behavior === 'always_on' ? 'Manual' : 'Auto-tracked', room]);
     await client.query(`
-      INSERT INTO power_devices (device_id, phase, mean_w, source, confidence,
-        is_cyclic, is_three_phase, notes, updated_at)
-      VALUES ($1, $2, $3, 'manual_unmanaged', 'high', $4, $5, $6, NOW())
-    `, [deviceId, phaseToStore, mean_w, load_type === 'cyclic', isThreePhase, notes || null]);
-
+      INSERT INTO power_devices (device_id, phase, is_three_phase, mean_w, source, confidence,
+        is_cyclic, samples_count, display_name, config, updated_at)
+      VALUES ($1, $2, $3, $4, $5, 'high', FALSE, 0, $6, $7::jsonb, NOW())
+    `, [newId, phaseToStore, isThreePhase, mean_w, source, customName, JSON.stringify(cfg)]);
     await client.query('COMMIT');
-    res.json({ ok: true, device_id: deviceId, mean_w, is_three_phase: isThreePhase });
+    return res.json({ ok: true, device_id: newId, source, behavior, is_three_phase: isThreePhase, mean_w });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
-    if (String(e.message).includes('duplicate key'))
-      return res.status(409).json({ error: `device "${deviceId}" already exists` });
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
   }
 });
 
+// PATCH — every row type editable (manual_*, auto_*, real linked device id).
+// Same body shape as POST minus the identity fields (device id is fixed in
+// the URL; can't change it on edit — delete + re-add to switch device).
 app.patch('/api/power/devices/:id', async (req, res) => {
   const id = req.params.id;
-  if (!id.startsWith('manual_')) return res.status(400).json({ error: 'only manual_* devices editable here' });
+  const parsed = _powerParseBody(req.body || {});
+  if (parsed.error) return res.status(parsed.status).json({ error: parsed.error });
+  const { cfg, mean_w, phaseToStore, isThreePhase, behavior, room } = parsed;
+  const displayName = (req.body.display_name || '').trim();
 
-  const { name, phase, load_type, peak_w, duty_cycle_pct, nominal_w, room, notes } = req.body || {};
-  // is_three_phase is treated as a sentinel that pairs with phase=null;
-  // PATCH always overwrites both fields together when either is in the request.
-  const isThreePhase = !!req.body.is_three_phase;
-  if (!isThreePhase && phase !== undefined && phase !== null && !['R','S','T'].includes(phase))
-    return res.status(400).json({ error: 'phase must be R / S / T (or set is_three_phase=true)' });
-  if (load_type && !['always_on','cyclic','intermittent'].includes(load_type))
-    return res.status(400).json({ error: 'load_type must be always_on / cyclic / intermittent' });
+  // source flips with behavior — pick the right value based on whether the
+  // row is virtual (manual_/auto_ prefix) or linked (real device id).
+  const isVirtual = id.startsWith('manual_') || id.startsWith('auto_');
+  const source = isVirtual
+    ? (behavior === 'always_on' ? 'manual_unmanaged' : 'auto_custom')
+    : (behavior === 'always_on' ? 'manual_linked'    : 'auto_pending');
 
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const cur = await client.query('SELECT dps_config FROM devices WHERE id = $1', [id]);
+    const cur = await client.query('SELECT device_id FROM power_devices WHERE device_id = $1', [id]);
     if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'not found' }); }
-    const dpsConfig = { ...(cur.rows[0].dps_config || {}) };
-    // phase + is_three_phase travel as a pair — overwrite both on every PATCH
-    // so a switch from R → R.S.T (or vice versa) works correctly. If the
-    // caller didn't send `phase` at all, leave both alone.
-    if (phase !== undefined || req.body.is_three_phase !== undefined) {
-      dpsConfig.phase = isThreePhase ? 'RST' : phase;
-      dpsConfig.is_three_phase = isThreePhase;
-    }
-    if (load_type) dpsConfig.load_type = load_type;
-    if (nominal_w !== undefined) dpsConfig.nominal_w = Number(nominal_w) || 0;
-    if (peak_w !== undefined) dpsConfig.peak_w = Number(peak_w) || 0;
-    if (duty_cycle_pct !== undefined) dpsConfig.duty_cycle_pct = Number(duty_cycle_pct) || 0;
-    if (notes !== undefined) dpsConfig.notes = notes ? String(notes) : null;
 
-    const finalLoadType = dpsConfig.load_type;
-    const mean_w = timeAvgW(finalLoadType, dpsConfig.peak_w, dpsConfig.duty_cycle_pct, dpsConfig.nominal_w);
-
-    if (name) {
-      await client.query('UPDATE devices SET name = $2, updated_at = NOW() WHERE id = $1', [id, String(name).trim()]);
+    // For virtual rows, also update the linked devices row's room so the
+    // join still picks it up. Linked rows leave the real device untouched
+    // (room lives in config.room for them).
+    if (isVirtual) {
+      await client.query('UPDATE devices SET room = $2, updated_at = NOW() WHERE id = $1', [id, room]);
     }
-    if (room !== undefined) {
-      await client.query('UPDATE devices SET room = $2, updated_at = NOW() WHERE id = $1', [id, room || null]);
-    }
-    await client.query('UPDATE devices SET dps_config = $2::jsonb, updated_at = NOW() WHERE id = $1', [id, JSON.stringify(dpsConfig)]);
-
-    // power_devices: overwrite phase + is_three_phase from the new dpsConfig
-    // so the row always reflects the latest authored intent.
-    const newPhaseSql = dpsConfig.is_three_phase ? null : (dpsConfig.phase || null);
     await client.query(`
       UPDATE power_devices
-      SET phase = $2,
-          is_three_phase = $3,
-          mean_w = $4,
-          is_cyclic = $5,
-          notes = COALESCE($6, notes),
+      SET phase = $2, is_three_phase = $3, mean_w = $4,
+          source = $5, display_name = $6, config = $7::jsonb,
+          is_cyclic = FALSE,
           updated_at = NOW()
       WHERE device_id = $1
-    `, [id, newPhaseSql, !!dpsConfig.is_three_phase, mean_w, finalLoadType === 'cyclic', notes || null]);
+    `, [id, phaseToStore, isThreePhase, mean_w, source, displayName || null, JSON.stringify(cfg)]);
 
     await client.query('COMMIT');
-    res.json({ ok: true, mean_w, is_three_phase: !!dpsConfig.is_three_phase });
+    res.json({ ok: true, device_id: id, source, behavior, is_three_phase: isThreePhase, mean_w });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
@@ -775,12 +858,19 @@ app.patch('/api/power/devices/:id', async (req, res) => {
 
 app.delete('/api/power/devices/:id', async (req, res) => {
   const id = req.params.id;
-  if (!id.startsWith('manual_')) return res.status(400).json({ error: 'only manual_* devices removable here' });
   try {
-    // ON DELETE CASCADE on power_devices.device_id handles the FK; deleting
-    // the devices row cleans up both rows in one statement.
-    const r = await db.query('DELETE FROM devices WHERE id = $1', [id]);
-    if (r.rowCount === 0) return res.status(404).json({ error: 'not found' });
+    // manual_<slug> and auto_<slug> are virtual devices created BY this
+    // registry — deleting them removes both the devices row and the
+    // power_devices row (CASCADE). Linked-auto rows reference a REAL
+    // existing device that lives in `devices` for its own reasons — we
+    // only remove it from power_devices, leaving the real device intact.
+    if (id.startsWith('manual_') || id.startsWith('auto_')) {
+      const r = await db.query('DELETE FROM devices WHERE id = $1', [id]);
+      if (r.rowCount === 0) return res.status(404).json({ error: 'not found' });
+    } else {
+      const r = await db.query('DELETE FROM power_devices WHERE device_id = $1', [id]);
+      if (r.rowCount === 0) return res.status(404).json({ error: 'not found in registry' });
+    }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
