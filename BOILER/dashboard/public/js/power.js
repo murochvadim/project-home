@@ -50,8 +50,8 @@ function renderPhaseCol(label, p, va, periodKwh) {
       <div style="font-size:1.3rem; font-weight:600; color:${w_color};">${fmt(p.w, 0)} <span style="font-size:0.78rem; color:#888;">W</span></div>
       <div style="font-size:0.72rem; color:#888; margin-top:8px;">Power factor</div>
       <div style="font-size:1.3rem; font-weight:600; color:${pf_color};">${fmt(p.pf, 2)}</div>
-      <div style="font-size:0.72rem; color:#888; margin-top:8px;">Period</div>
-      <div style="font-size:0.96rem; font-weight:600;">${fmt(periodKwh, 2)} <span style="font-size:0.72rem; color:#888;">kWh</span></div>
+      <div style="font-size:0.72rem; color:#2980b9; margin-top:8px;">Period</div>
+      <div style="font-size:0.96rem; font-weight:600; color:#2980b9;">${fmt(periodKwh, 2)} <span style="font-size:0.72rem; color:#2980b9;">kWh</span></div>
     </div>
   `;
 }
@@ -61,10 +61,21 @@ function renderPhaseCol(label, p, va, periodKwh) {
 // Without this, "830 W" centers as a whole — the W shifts the visual
 // center of the digits LEFT, and the label above appears offset to the
 // right of the number. Hanging the unit absolute fixes that.
+// Unit-label dim color: derive from the number color so blue numbers get
+// blue units, etc. Default = dim green (matches the original LCD scheme).
+function _lcdUnitColor(numColor) {
+  if (!numColor)                  return '#3a8a52';      // default green
+  if (numColor === '#ff6e6e')     return '#8a3a3a';      // red → dim red
+  if (numColor === '#ffd560')     return '#8a7a3a';      // yellow → dim yellow
+  if (numColor === '#7eb8ff')     return '#3a6a8a';      // blue → dim blue
+  return '#3a8a52';                                       // fallback dim green
+}
+
 function lcdValueHTML(numStr, unit, fontSize, color) {
   const colorCss  = color ? `color:${color};text-shadow:0 0 10px currentColor;` : '';
+  const unitColor = _lcdUnitColor(color);
   const unitHTML  = unit
-    ? `<span style="position:absolute; left:100%; bottom:0.45rem; padding-left:6px; font-size:0.85rem; color:#3a8a52; font-weight:500; white-space:nowrap; text-shadow:none;">${unit}</span>`
+    ? `<span style="position:absolute; left:100%; bottom:0.45rem; padding-left:6px; font-size:0.85rem; color:${unitColor}; font-weight:500; white-space:nowrap; text-shadow:none;">${unit}</span>`
     : '';
   return `
     <div style="position:relative; display:inline-block; line-height:1.05;">
@@ -119,36 +130,39 @@ function renderTotalCol(d) {
           text-shadow:0 0 10px rgba(126,255,158,0.6);
         ">TOTAL</div>
 
-        <!-- Row 1 — Total Power + Total Current (hero) -->
+        <!-- Row 1 — Total Power + Total Current (hero). Font reduced two
+             steps from the original 2.4rem so the LCD sits more compact. -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:30px;">
           <div>
             <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">TOTAL POWER</div>
-            ${lcdValueHTML(fmt(d.total_w, 0), 'W', '2.4rem', lcdPowerColor)}
+            ${lcdValueHTML(fmt(d.total_w, 0), 'W', '1.8rem', lcdPowerColor)}
             <!-- Always-on baseline (sum of all power_devices.mean_w) — same hero
                  size as TOTAL POWER so the two readouts stack visually equal. -->
             <div style="margin-top:30px; font-size:0.7rem; color:#8a7a3a; letter-spacing:1.5px; margin-bottom:4px;">ALWAYS-ON</div>
-            ${lcdValueHTML(fmt(d.always_on_w, 0), 'W', '2.4rem', '#ffd560')}
+            ${lcdValueHTML(fmt(d.always_on_w, 0), 'W', '1.8rem', '#ffd560')}
           </div>
           <div>
             <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">TOTAL CURRENT</div>
-            ${lcdValueHTML(fmt(total_a, 2), 'A', '2.4rem', '')}
+            ${lcdValueHTML(fmt(total_a, 2), 'A', '1.8rem', '')}
           </div>
         </div>
 
         <!-- DEVICES ON / DEVICES OFF moved to the Device Registry card
              header (sits next to the rows it describes). -->
 
-        <!-- Row 3 — Billing-period total kWh + cost (since current period start) -->
+        <!-- Row 3 — Billing-period total kWh + cost (since current period
+             start). Blue tint distinguishes the "money" readouts from the
+             green "live power" readouts above. -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:28px;">
           <div>
-            <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">PERIOD ENERGY</div>
-            ${lcdValueHTML(fmt(d.period?.total_kwh, 2), 'kWh', '1.5rem', '')}
-            <div style="font-size:0.66rem; color:#3a8a52; margin-top:4px;">since ${d.period?.start || '—'}</div>
+            <div style="font-size:0.7rem; color:#3a6a8a; letter-spacing:1.5px; margin-bottom:4px;">PERIOD ENERGY</div>
+            ${lcdValueHTML(fmt(d.period?.total_kwh, 2), 'kWh', '1.8rem', '#7eb8ff')}
+            <div style="font-size:0.66rem; color:#3a6a8a; margin-top:4px;">since ${d.period?.start || '—'}</div>
           </div>
           <div>
-            <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">PERIOD COST</div>
-            ${lcdValueHTML(fmt(d.period?.cost, 2), d.period?.currency || '₪', '1.5rem', '')}
-            <div style="font-size:0.66rem; color:#3a8a52; margin-top:4px;">day ${d.period?.days_elapsed || 0} of ${d.period?.days_total || 0} (${d.period?.elapsed_pct || 0}%)</div>
+            <div style="font-size:0.7rem; color:#3a6a8a; letter-spacing:1.5px; margin-bottom:4px;">PERIOD COST</div>
+            ${lcdValueHTML(fmt(d.period?.cost, 2), d.period?.currency || '₪', '1.8rem', '#7eb8ff')}
+            <div style="font-size:0.66rem; color:#3a6a8a; margin-top:4px;">day ${d.period?.days_elapsed || 0} of ${d.period?.days_total || 0} (${d.period?.elapsed_pct || 0}%)</div>
           </div>
         </div>
 
