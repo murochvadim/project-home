@@ -404,7 +404,7 @@ async function pbApplyDrift() {
     const r = await fetch('/api/power/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tariff, billing: cur.billing, discovery: cur.discovery }),
+      body: JSON.stringify({ tariff, billing: cur.billing }),
     });
     const data = await r.json();
     if (!r.ok) { alert(`Update failed: ${data.error || r.statusText}`); return; }
@@ -434,12 +434,8 @@ async function psLoad() {
   try {
     const r = await fetch('/api/power/settings');
     const d = await r.json();
-    // Discovery
-    const dsc = d.discovery || {};
-    document.getElementById('ps-match-offset-w').value       = dsc.match_offset_w ?? '';
-    document.getElementById('ps-candidate-window-sec').value = dsc.candidate_window_sec ?? '';
-    document.getElementById('ps-noise-floor-w').value        = dsc.noise_floor_w ?? '';
-    document.getElementById('ps-settling-sec').value         = dsc.settling_sec ?? '';
+    // Discovery knobs live in apartment.rule_sentences (sentence-driven);
+    // see the (future) P3 rule. No UI here.
     // Billing
     const bl = d.billing || {};
     document.getElementById('ps-billing-start-day').value     = bl.start_day ?? '';
@@ -472,12 +468,6 @@ async function psSave() {
   const msg = document.getElementById('ps-save-msg');
   msg.textContent = '';
   const body = {
-    discovery: {
-      match_offset_w:       parseFloat(document.getElementById('ps-match-offset-w').value),
-      candidate_window_sec: parseFloat(document.getElementById('ps-candidate-window-sec').value),
-      noise_floor_w:        parseFloat(document.getElementById('ps-noise-floor-w').value),
-      settling_sec:         parseFloat(document.getElementById('ps-settling-sec').value),
-    },
     billing: {
       start_day:                 parseInt(document.getElementById('ps-billing-start-day').value, 10),
       length_months:             parseInt(document.getElementById('ps-billing-length').value, 10),

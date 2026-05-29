@@ -377,32 +377,9 @@
       </div>
     </div>
 
-    <!-- Discovery rule knobs -->
-    <div class="card">
-      <h2>Discovery Rule
-        <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
-          — knobs the (future) P3 Power Phase Discovery rule reads
-        </span>
-      </h2>
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:20px 26px; max-width:900px; margin-top:14px;">
-        <div>
-          <label class="md-form-label">Match offset (± W)</label>
-          <input id="ps-match-offset-w" type="number" min="0" step="1" class="md-form-input" style="max-width:160px;">
-        </div>
-        <div>
-          <label class="md-form-label">Candidate window (seconds)</label>
-          <input id="ps-candidate-window-sec" type="number" min="1" step="1" class="md-form-input" style="max-width:160px;">
-        </div>
-        <div>
-          <label class="md-form-label">Noise floor (W)</label>
-          <input id="ps-noise-floor-w" type="number" min="0" step="1" class="md-form-input" style="max-width:160px;">
-        </div>
-        <div>
-          <label class="md-form-label">Settling delay (seconds)</label>
-          <input id="ps-settling-sec" type="number" min="0" step="1" class="md-form-input" style="max-width:160px;">
-        </div>
-      </div>
-    </div>
+    <!-- Discovery rule knobs are sentence-driven — authored in Main Agent →
+         Base Rule Settings under the `r_power_discovery_init` container
+         (created together with the P3 rule via /create-rule when it ships). -->
 
     <!-- Shared Save button -->
     <div class="card" style="background:transparent; box-shadow:none; padding:8px 0;">
@@ -454,6 +431,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/power.js?v=41"></script>
+<script src="js/power.js?v=42"></script>
 </body>
 </html>

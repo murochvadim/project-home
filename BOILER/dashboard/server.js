@@ -1161,16 +1161,10 @@ app.patch('/api/power/devices/:id', async (req, res) => {
   }
 });
 
-// ─── Power Phase Discovery rule settings ───────────────────────
-// User-editable knobs for the (future) P3 rule. Stored as a single
-// JSONB blob under dashboard_settings.key='power.discovery'. Defaults
-// returned to the form when the row doesn't exist yet.
-const _POWER_DISCOVERY_DEFAULTS = {
-  match_offset_w:        50,   // ± tolerance around device's expected/max wattage
-  candidate_window_sec:  10,   // look-back window for delta computation
-  noise_floor_w:         10,   // ignore deltas smaller than this (sensor noise)
-  settling_sec:           2,   // delta must persist this long before confirming
-};
+// Discovery rule knobs are sentence-driven (parsed by rule_engine on heartbeat
+// into state.shared['power_discovery.*']) — no dashboard_settings.power.discovery
+// row, no server-side defaults. The P3 rule reads its knobs straight from
+// state.shared via the standard KNOB_PATTERNS pipeline.
 
 // Billing-cycle defaults — IEC residential is a 2-month cycle. Start day +
 // length determine when each cycle begins; current_period_start_date is
@@ -1207,17 +1201,14 @@ const _POWER_TARIFF_DEFAULTS = {
   currency_symbol:            '₪',
 };
 
-// Load all three settings blocks (discovery + billing + tariff) into one
-// merged-with-defaults response. Frontend deals with three sections in the
-// Settings tab using this payload.
+// Load billing + tariff blocks merged with defaults for the Settings tab.
 async function _powerLoadSettings() {
-  const r = await db.query("SELECT key, value FROM dashboard_settings WHERE key IN ('power.discovery','power.billing','power.tariff')");
+  const r = await db.query("SELECT key, value FROM dashboard_settings WHERE key IN ('power.billing','power.tariff')");
   const map = {};
   for (const row of r.rows) map[row.key] = row.value || {};
   return {
-    discovery: { ..._POWER_DISCOVERY_DEFAULTS, ...(map['power.discovery'] || {}) },
-    billing:   { ..._POWER_BILLING_DEFAULTS,   ...(map['power.billing']   || {}) },
-    tariff:    { ..._POWER_TARIFF_DEFAULTS,    ...(map['power.tariff']    || {}) },
+    billing: { ..._POWER_BILLING_DEFAULTS, ...(map['power.billing'] || {}) },
+    tariff:  { ..._POWER_TARIFF_DEFAULTS,  ...(map['power.tariff']  || {}) },
   };
 }
 
@@ -1229,12 +1220,6 @@ app.get('/api/power/settings', async (req, res) => {
 app.put('/api/power/settings', async (req, res) => {
   const body = req.body || {};
 
-  // Validate + clamp each known field. Unknown keys are dropped.
-  const cleanedDiscovery = {};
-  for (const k of Object.keys(_POWER_DISCOVERY_DEFAULTS)) {
-    const v = Number(body?.discovery?.[k]);
-    cleanedDiscovery[k] = (Number.isFinite(v) && v >= 0) ? Math.round(v) : _POWER_DISCOVERY_DEFAULTS[k];
-  }
   // Read existing billing to preserve system-managed fields (baseline_kwh)
   // that the frontend doesn't surface in the Settings form.
   const existingBillingRow = await db.query("SELECT value FROM dashboard_settings WHERE key = 'power.billing' LIMIT 1");
@@ -1270,12 +1255,11 @@ app.put('/api/power/settings', async (req, res) => {
   };
 
   try {
-    // Three idempotent UPSERTs — only blocks the user sent get written;
+    // Two idempotent UPSERTs — only blocks the user sent get written;
     // unsent blocks fall back to defaults on next GET.
     const writes = [
-      ['power.discovery', cleanedDiscovery],
-      ['power.billing',   cleanedBilling],
-      ['power.tariff',    cleanedTariff],
+      ['power.billing', cleanedBilling],
+      ['power.tariff',  cleanedTariff],
     ];
     for (const [key, value] of writes) {
       await db.query(`
@@ -1285,11 +1269,11 @@ app.put('/api/power/settings', async (req, res) => {
           SET value = EXCLUDED.value, updated_at = NOW()
       `, [key, JSON.stringify(value)]);
     }
-    res.json({ ok: true, discovery: cleanedDiscovery, billing: cleanedBilling, tariff: cleanedTariff });
+    res.json({ ok: true, billing: cleanedBilling, tariff: cleanedTariff });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── Power Bills — history + manual paste + AI extract ───────
+// ─── Power Bills — history + PDF upload ─────────────────────
 app.get('/api/power/bills', async (req, res) => {
   try {
     const r = await db.query(`
