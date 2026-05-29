@@ -570,6 +570,12 @@ function mdHandleLinkedChange() {
 // The "__custom__" option at the END lets the user register a device
 // that isn't in the system (no smart control). Backend creates a
 // virtual auto_<slug> device for that case.
+// Channel-aware composite picker: each multi-channel switch (Kitchen Switch,
+// Bedroom Main Switch, etc.) expands to one option PER enabled channel — so
+// the user registers the load (e.g. "Kitchen Switch – High Light", channel
+// key "1") not the parent switch. Single-channel devices stay as one option.
+// The option value encodes `<device_id>::<channel>` (channel = '' for single-
+// channel); mdSave splits this back into linked_device_id + channel.
 async function mdLoadAvailableDevices(selected = '') {
   const sel = document.getElementById('md-linked-device');
   try {
@@ -585,8 +591,9 @@ async function mdLoadAvailableDevices(selected = '') {
     for (const room of Object.keys(byRoom).sort()) {
       opts.push(`<optgroup label="${mdEscHtml(room)}">`);
       for (const d of byRoom[room]) {
-        const sel2 = d.id === selected ? ' selected' : '';
-        opts.push(`<option value="${mdEscHtml(d.id)}"${sel2}>${mdEscHtml(d.name)}  (${mdEscHtml(d.device_type)})</option>`);
+        const compositeId = `${d.id}::${d.channel || ''}`;
+        const sel2 = compositeId === selected ? ' selected' : '';
+        opts.push(`<option value="${mdEscHtml(compositeId)}"${sel2}>${mdEscHtml(d.name)}  (${mdEscHtml(d.device_type)})</option>`);
       }
       opts.push('</optgroup>');
     }
@@ -614,12 +621,14 @@ function mdOpenCreate() {
   mdLoadAvailableDevices();
 }
 
-async function mdOpenEdit(deviceId) {
-  const row = mdRowsCache.find(r => r.device_id === deviceId);
+async function mdOpenEdit(rowId) {
+  rowId = Number(rowId);
+  const row = mdRowsCache.find(r => Number(r.row_id) === rowId);
   if (!row) return;
-  mdFormMode = `edit:${row.device_id}`;
+  mdFormMode = `edit:${row.row_id}`;
   document.getElementById('md-form').style.display = '';
-  document.getElementById('md-form-mode-tag').textContent = `(editing ${row.display_name || row.name})`;
+  const displayName = row.display_name || (row.channel_name ? `${row.name} – ${row.channel_name}` : row.name);
+  document.getElementById('md-form-mode-tag').textContent = `(editing ${displayName})`;
   document.getElementById('md-add-btn').textContent = '× Close form';
   mdResetFormFields();
 
@@ -654,22 +663,20 @@ async function mdOpenEdit(deviceId) {
 
   // Device dropdown — needs to be populated first, then preselected.
   // For manual_<slug> / auto_<slug> virtual devices, pick "Other (custom)"
-  // and prefill the custom name. For linked-auto rows, pick the real id.
+  // and prefill the custom name. For linked rows, inject a transient option
+  // (the row is registered → filtered from the available list).
   await mdLoadAvailableDevices();
   const sel = document.getElementById('md-linked-device');
   const isVirtual = row.device_id.startsWith('manual_') || row.device_id.startsWith('auto_');
   if (isVirtual) {
-    // Virtual rows aren't in the available list (already-registered).
-    // Use the __custom__ option and prefill the typed name.
     sel.value = '__custom__';
     document.getElementById('md-custom-device-name').value = row.display_name || row.name;
   } else {
-    // Linked-auto: the real device is already in the registry so it's
-    // NOT in the available list. Inject it as a transient option so the
-    // dropdown can show + preselect it during edit.
+    const compositeId = `${row.device_id}::${row.channel || ''}`;
     const opt = document.createElement('option');
-    opt.value = row.device_id;
-    opt.textContent = `${row.name} (currently registered)`;
+    opt.value = compositeId;
+    const labelSuffix = row.channel_name ? ` – ${row.channel_name}` : (row.channel ? ` – Ch ${row.channel}` : '');
+    opt.textContent = `${row.name}${labelSuffix} (currently registered)`;
     opt.selected = true;
     sel.appendChild(opt);
     if (row.display_name) document.getElementById('md-display-name').value = row.display_name;
@@ -721,25 +728,35 @@ async function mdSave() {
   const phaseValue = isThreePhase ? null : phase;
 
   // Unified shape — every row registers a device (linked OR custom) on
-  // a phase with expected power(s). Behavior decides the LCD's baseline
-  // treatment: always_on subtracts continuously; auto contributes only
-  // when the discovery rule detects ON.
+  // a phase with expected power(s). The dropdown stores composite id
+  // `<device_id>::<channel>` (channel = '' for single-channel devices) so
+  // multiple channels of the same parent switch are individually pickable.
   const linkedSel = document.getElementById('md-linked-device').value;
   const isCustom = (linkedSel === '__custom__');
   if (!linkedSel) { msg.textContent = 'Pick a device (or "Other custom")'; return; }
   let linked_device_id = null;
+  let channel = null;
   let custom_device_name = null;
   if (isCustom) {
     custom_device_name = document.getElementById('md-custom-device-name').value.trim();
     if (!custom_device_name) { msg.textContent = 'Custom device name is required'; return; }
   } else {
-    linked_device_id = linkedSel;
+    // Split "<device_id>::<channel>" back into its parts. Empty channel
+    // segment means single-channel device.
+    const sep = linkedSel.lastIndexOf('::');
+    if (sep >= 0) {
+      linked_device_id = linkedSel.slice(0, sep);
+      const chanPart = linkedSel.slice(sep + 2);
+      channel = chanPart || null;
+    } else {
+      linked_device_id = linkedSel;
+    }
   }
   const display_name = (document.getElementById('md-display-name').value || '').trim() || null;
 
   const body = {
     behavior,
-    linked_device_id, custom_device_name, display_name,
+    linked_device_id, channel, custom_device_name, display_name,
     phase: phaseValue, is_three_phase: isThreePhase, room: roomValue,
   };
   if (isThreePhase) {
@@ -763,9 +780,10 @@ async function mdSave() {
     if (body.max_w < body.expected_w) { msg.textContent = 'Max power must be ≥ Expected'; return; }
   }
 
+  // Edit uses row_id (synthetic PK); create POSTs to the list endpoint.
   const url = mdFormMode === 'create'
     ? '/api/power/devices'
-    : `/api/power/devices/${mdFormMode.slice(5)}`;
+    : `/api/power/devices/${mdFormMode.slice(5)}`;   // 'edit:<row_id>' → row_id
   const method = mdFormMode === 'create' ? 'POST' : 'PATCH';
 
   const btn = document.getElementById('md-save-btn');
@@ -787,12 +805,13 @@ async function mdSave() {
   }
 }
 
-async function mdDelete(deviceId) {
-  const row = mdRowsCache.find(r => r.device_id === deviceId);
-  const name = row?.name || deviceId;
-  if (!confirm(`Delete "${name}" from the manual registry?`)) return;
+async function mdDelete(rowId) {
+  rowId = Number(rowId);
+  const row = mdRowsCache.find(r => Number(r.row_id) === rowId);
+  const name = row ? (row.display_name || (row.channel_name ? `${row.name} – ${row.channel_name}` : row.name)) : `row ${rowId}`;
+  if (!confirm(`Delete "${name}" from the registry?`)) return;
   try {
-    const r = await fetch(`/api/power/devices/${deviceId}`, { method: 'DELETE' });
+    const r = await fetch(`/api/power/devices/${rowId}`, { method: 'DELETE' });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
       alert(`Delete failed: ${d.error || r.statusText}`);
@@ -894,12 +913,12 @@ function mdPowerSpec(row) {
 // writes sort_order back to power_devices.
 let _mdDragId = null;
 function mdWireDragReorder(tbody) {
-  const rows = Array.from(tbody.querySelectorAll('tr[data-device-id]'));
+  const rows = Array.from(tbody.querySelectorAll('tr[data-row-id]'));
   for (const row of rows) {
     const handle = row.querySelector('[data-md-drag-handle]');
     if (handle) {
       handle.addEventListener('dragstart', (e) => {
-        _mdDragId = row.dataset.deviceId;
+        _mdDragId = row.dataset.rowId;
         row.style.opacity = '0.4';
         e.dataTransfer.effectAllowed = 'move';
         try { e.dataTransfer.setData('text/plain', _mdDragId); } catch (_) {}
@@ -912,18 +931,18 @@ function mdWireDragReorder(tbody) {
     row.addEventListener('dragover', (e) => {
       if (!_mdDragId) return;
       e.preventDefault();
-      if (row.dataset.deviceId === _mdDragId) return;
+      if (row.dataset.rowId === _mdDragId) return;
       row.style.background = '#f0f6ff';
     });
     row.addEventListener('dragleave', () => { row.style.background = ''; });
     row.addEventListener('drop', async (e) => {
       e.preventDefault();
       row.style.background = '';
-      if (!_mdDragId || row.dataset.deviceId === _mdDragId) return;
-      const targetId = row.dataset.deviceId;
-      // Compute the new order — pull the moved id out, insert before target.
-      const current = Array.from(tbody.querySelectorAll('tr[data-device-id]'))
-                           .map(r => r.dataset.deviceId);
+      if (!_mdDragId || row.dataset.rowId === _mdDragId) return;
+      const targetId = row.dataset.rowId;
+      // Compute the new order — pull the moved row_id out, insert before target.
+      const current = Array.from(tbody.querySelectorAll('tr[data-row-id]'))
+                           .map(r => r.dataset.rowId);
       const fromIdx = current.indexOf(_mdDragId);
       if (fromIdx >= 0) current.splice(fromIdx, 1);
       const toIdx = current.indexOf(targetId);
@@ -968,7 +987,12 @@ async function mdLoadDevices() {
       return;
     }
     tbody.innerHTML = mdRowsCache.map(row => {
-      const rowName  = row.display_name || row.name;
+      // Row name = display_name override, else parent device name + channel
+      // suffix when this is a channel-scoped row.
+      const channelSuffix = row.channel_name
+        ? ` – ${row.channel_name}`
+        : (row.channel ? ` – Ch ${row.channel}` : '');
+      const rowName  = row.display_name || `${row.name}${channelSuffix}`;
       const typeLabel = mdTypeLabel(row.source);
       const powerSpec = mdPowerSpec(row);
       const roomCell = row.room ? mdEscHtml(row.room) : '<span style="color:#aaa; font-style:italic;">(no room)</span>';
@@ -977,11 +1001,11 @@ async function mdLoadDevices() {
       const liveCell = mdLiveCell(row);
       const lastSeenCell = mdLastSeenCell(row);
       const actions = `
-        <button class="btn btn-secondary btn-sm" onclick="mdOpenEdit('${row.device_id}')">Edit</button>
-        <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete('${row.device_id}')">Delete</button>
+        <button class="btn btn-secondary btn-sm" onclick="mdOpenEdit(${row.row_id})">Edit</button>
+        <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete(${row.row_id})">Delete</button>
       `;
       return `
-        <tr data-device-id="${row.device_id}" style="border-bottom:1px solid #e6e1da;">
+        <tr data-row-id="${row.row_id}" style="border-bottom:1px solid #e6e1da;">
           <td style="cursor:grab; color:#bbb; user-select:none; text-align:center;" title="Drag to reorder" data-md-drag-handle="1" draggable="true">⋮⋮</td>
           <td style="font-weight:600;">${mdEscHtml(rowName)}</td>
           <td style="text-align:center;">${phaseDisplay}</td>

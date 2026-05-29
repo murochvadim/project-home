@@ -933,20 +933,33 @@ app.get('/api/power/devices', async (req, res) => {
     // form) and falls back to devices.room for legacy rows. Linked-real
     // rows specifically keep the user's pick in config since we don't
     // mutate the real device's room column.
+    // pd.channel: NULL = whole device (single-channel devices, virtual rows,
+    // legacy pre-channel rows); set = a specific channel of a multi-gang
+    // switch. Display name appends " – <channel name>" when channel is set
+    // and the parent device's channel_config has a name for that key.
     const r = await db.query(`
-      SELECT pd.device_id, pd.phase, pd.is_three_phase, pd.is_cyclic,
+      SELECT pd.row_id, pd.device_id, pd.channel,
+             pd.phase, pd.is_three_phase, pd.is_cyclic,
              pd.samples_count, pd.mean_w, pd.stddev_w, pd.cycle_max_w,
              pd.cycle_typical_kwh, pd.confidence, pd.last_observed_at,
              pd.source, pd.notes, pd.updated_at,
              pd.display_name, pd.config, pd.live, pd.sort_order,
-             d.name, d.device_type, d.protocol, d.dps_config,
+             d.name, d.device_type, d.protocol, d.dps_config, d.channel_config,
              COALESCE(pd.config->>'room', d.room) AS room
       FROM power_devices pd
       JOIN devices d ON d.id = pd.device_id
       ORDER BY pd.sort_order ASC NULLS LAST,
                pd.phase      ASC NULLS LAST,
-               COALESCE(pd.display_name, d.name) ASC
+               COALESCE(pd.display_name, d.name) ASC,
+               pd.channel    ASC NULLS LAST
     `);
+    // Append channel name to row name for multi-channel rows.
+    for (const row of r.rows) {
+      if (row.channel && row.channel_config && row.channel_config[row.channel]) {
+        const cn = row.channel_config[row.channel].name;
+        if (cn) row.channel_name = cn;
+      }
+    }
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -962,18 +975,67 @@ app.get('/api/power/devices', async (req, res) => {
 //   * disabled devices
 app.get('/api/power/devices/available', async (req, res) => {
   try {
+    // Multi-channel switches (e.g. "Kitchen Switch" with channel_config keys
+    // 1/2/3) are the actual loads, not the parent. Expand each enabled
+    // channel into its own dropdown row so the user registers the lamp on
+    // channel 1, the spots on channel 2 separately — each with its own
+    // expected power signature. Single-channel devices (microwaves, AC
+    // units, etc.) get one row as before.
+    //
+    // A row is "channel-already-registered" if power_devices has a row
+    // matching BOTH device_id AND channel. The whole-device exclusion
+    // (channel IS NULL) only applies when no channel is specified.
     const r = await db.query(`
-      SELECT d.id, d.name, d.room, d.device_type, d.protocol, d.last_source
+      SELECT d.id, d.name, d.room, d.device_type, d.protocol, d.last_source,
+             d.channel_config
       FROM devices d
-      LEFT JOIN power_devices pd ON pd.device_id = d.id
-      WHERE pd.device_id IS NULL
-        AND d.enabled = TRUE
+      WHERE d.enabled = TRUE
         AND d.id <> 'shelly_3em_main'
         AND d.protocol NOT IN ('virtual')
         AND d.device_type NOT IN ('power_meter','presence','motion','door_sensor','remote','temp_controller','co_alarm','gas_detector','display','panel','unmanaged_load')
       ORDER BY d.room ASC NULLS LAST, d.name ASC
     `);
-    res.json(r.rows);
+    // Which (device_id, channel) pairs are already taken? Used to filter
+    // the dropdown so the user can't double-register.
+    const takenR = await db.query(
+      "SELECT device_id, COALESCE(channel, '') AS channel FROM power_devices"
+    );
+    const taken = new Set(takenR.rows.map(t => `${t.device_id}::${t.channel}`));
+
+    const out = [];
+    for (const d of r.rows) {
+      const cfg = (d.channel_config && typeof d.channel_config === 'object') ? d.channel_config : {};
+      // Pick the keys that look like genuine load channels — i.e. they have
+      // a `name`. Channels with only {room, enabled:false} are skipped
+      // (those are dead / unused gangs). Channels with only {room} also pass
+      // (some are nameless but real, e.g. Bathroom Switch).
+      const channelEntries = Object.entries(cfg).filter(([_k, c]) => {
+        if (c && typeof c === 'object' && c.enabled === false) return false;
+        return true;
+      });
+      if (channelEntries.length === 0) {
+        // Single-channel device — emit as one row (channel=null).
+        if (!taken.has(`${d.id}::`)) {
+          out.push({ id: d.id, name: d.name, room: d.room, device_type: d.device_type,
+                     protocol: d.protocol, channel: null });
+        }
+        continue;
+      }
+      // Multi-channel — one row per enabled channel.
+      for (const [key, cdesc] of channelEntries) {
+        if (taken.has(`${d.id}::${key}`)) continue;
+        const chanName = (cdesc && cdesc.name) ? cdesc.name : `Ch ${key}`;
+        out.push({
+          id:          d.id,
+          name:        `${d.name} – ${chanName}`,
+          room:        (cdesc && cdesc.room) || d.room,
+          device_type: d.device_type,
+          protocol:    d.protocol,
+          channel:     key,
+        });
+      }
+    }
+    res.json(out);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1044,6 +1106,7 @@ app.post('/api/power/devices', async (req, res) => {
   const { cfg, mean_w, phaseToStore, isThreePhase, behavior, room } = parsed;
 
   const linked_device_id = req.body.linked_device_id || null;
+  const channel          = req.body.channel ? String(req.body.channel) : null;  // multi-channel devices: which key (e.g. "1")
   const customName       = (req.body.custom_device_name || '').trim();
   const displayName      = (req.body.display_name || '').trim();
   if (!linked_device_id && !customName)
@@ -1052,10 +1115,10 @@ app.post('/api/power/devices', async (req, res) => {
     return res.status(400).json({ error: 'linked_device_id and custom_device_name are mutually exclusive' });
 
   // source values:
-  //   linked   + always_on → 'manual_linked'   (NEW — real device, baseline)
-  //   linked   + auto      → 'auto_pending'    (existing)
-  //   custom   + always_on → 'manual_unmanaged' (existing — virtual manual_<slug>)
-  //   custom   + auto      → 'auto_custom'      (existing — virtual auto_<slug>)
+  //   linked   + always_on → 'manual_linked'   (real device, baseline)
+  //   linked   + auto      → 'auto_pending'
+  //   custom   + always_on → 'manual_unmanaged' (virtual manual_<slug>)
+  //   custom   + auto      → 'auto_custom'      (virtual auto_<slug>)
   const isLinked = !!linked_device_id;
   const source = isLinked
     ? (behavior === 'always_on' ? 'manual_linked' : 'auto_pending')
@@ -1063,23 +1126,36 @@ app.post('/api/power/devices', async (req, res) => {
 
   const client = await db.connect();
   try {
-    // Linked path — power_devices row references the real device; no
-    // virtual device row created.
+    // Linked path — power_devices row references the real device; no virtual
+    // device row created. Multiple rows can share device_id when channel
+    // differs (e.g. Kitchen Switch ch1 + ch2 each registered separately).
     if (isLinked) {
-      const dev = await client.query('SELECT id FROM devices WHERE id = $1', [linked_device_id]);
+      const dev = await client.query('SELECT id, channel_config FROM devices WHERE id = $1', [linked_device_id]);
       if (!dev.rows.length) return res.status(404).json({ error: `device "${linked_device_id}" not found` });
-      const existing = await client.query('SELECT device_id FROM power_devices WHERE device_id = $1', [linked_device_id]);
-      if (existing.rows.length) return res.status(409).json({ error: `device "${linked_device_id}" is already in the registry` });
+      // Validate channel exists in device's channel_config when supplied.
+      if (channel) {
+        const cc = dev.rows[0].channel_config || {};
+        if (!cc[channel]) return res.status(400).json({ error: `channel "${channel}" not found on device` });
+      }
+      // Duplicate check: same (device_id, channel) already registered?
+      const existing = await client.query(
+        "SELECT row_id FROM power_devices WHERE device_id = $1 AND COALESCE(channel, '') = COALESCE($2, '')",
+        [linked_device_id, channel],
+      );
+      if (existing.rows.length) return res.status(409).json({ error: `this device/channel is already in the registry` });
 
-      await client.query(`
-        INSERT INTO power_devices (device_id, phase, is_three_phase, mean_w, source, confidence,
+      const r = await client.query(`
+        INSERT INTO power_devices (device_id, channel, phase, is_three_phase, mean_w, source, confidence,
           is_cyclic, samples_count, display_name, config, updated_at)
-        VALUES ($1, $2, $3, $4, $5, 'high', FALSE, 0, $6, $7::jsonb, NOW())
-      `, [linked_device_id, phaseToStore, isThreePhase, mean_w, source, displayName || null, JSON.stringify(cfg)]);
-      return res.json({ ok: true, device_id: linked_device_id, source, behavior, is_three_phase: isThreePhase, mean_w });
+        VALUES ($1, $2, $3, $4, $5, $6, 'high', FALSE, 0, $7, $8::jsonb, NOW())
+        RETURNING row_id
+      `, [linked_device_id, channel, phaseToStore, isThreePhase, mean_w, source, displayName || null, JSON.stringify(cfg)]);
+      return res.json({ ok: true, row_id: r.rows[0].row_id, device_id: linked_device_id, channel, source,
+                        behavior, is_three_phase: isThreePhase, mean_w });
     }
 
-    // Custom path — create a virtual device + power_devices row.
+    // Custom path — create a virtual device + power_devices row. Custom rows
+    // are never channel-scoped (they're standalone unmanaged loads).
     const slug = slugify(customName);
     if (!slug) return res.status(400).json({ error: 'custom name produced empty slug' });
     const prefix = behavior === 'always_on' ? 'manual' : 'auto';
@@ -1098,13 +1174,15 @@ app.post('/api/power/devices', async (req, res) => {
       VALUES ($1, $2, $3, 'unmanaged_load', 'virtual', $4,
         TRUE, FALSE, FALSE, 0, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)
     `, [newId, customName, behavior === 'always_on' ? 'Manual' : 'Auto-tracked', room]);
-    await client.query(`
-      INSERT INTO power_devices (device_id, phase, is_three_phase, mean_w, source, confidence,
+    const r = await client.query(`
+      INSERT INTO power_devices (device_id, channel, phase, is_three_phase, mean_w, source, confidence,
         is_cyclic, samples_count, display_name, config, updated_at)
-      VALUES ($1, $2, $3, $4, $5, 'high', FALSE, 0, $6, $7::jsonb, NOW())
+      VALUES ($1, NULL, $2, $3, $4, $5, 'high', FALSE, 0, $6, $7::jsonb, NOW())
+      RETURNING row_id
     `, [newId, phaseToStore, isThreePhase, mean_w, source, customName, JSON.stringify(cfg)]);
     await client.query('COMMIT');
-    return res.json({ ok: true, device_id: newId, source, behavior, is_three_phase: isThreePhase, mean_w });
+    return res.json({ ok: true, row_id: r.rows[0].row_id, device_id: newId, channel: null, source,
+                      behavior, is_three_phase: isThreePhase, mean_w });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
@@ -1116,31 +1194,35 @@ app.post('/api/power/devices', async (req, res) => {
 // PATCH — every row type editable (manual_*, auto_*, real linked device id).
 // Same body shape as POST minus the identity fields (device id is fixed in
 // the URL; can't change it on edit — delete + re-add to switch device).
-app.patch('/api/power/devices/:id', async (req, res) => {
-  const id = req.params.id;
+// PATCH keyed on power_devices.row_id (synthetic PK, since multiple rows can
+// share device_id once channel-scoped registration is in play).
+app.patch('/api/power/devices/:row_id', async (req, res) => {
+  const rowId = parseInt(req.params.row_id, 10);
+  if (!Number.isFinite(rowId)) return res.status(400).json({ error: 'row_id required' });
   const parsed = _powerParseBody(req.body || {});
   if (parsed.error) return res.status(parsed.status).json({ error: parsed.error });
   const { cfg, mean_w, phaseToStore, isThreePhase, behavior, room } = parsed;
   const displayName = (req.body.display_name || '').trim();
 
-  // source flips with behavior — pick the right value based on whether the
-  // row is virtual (manual_/auto_ prefix) or linked (real device id).
-  const isVirtual = id.startsWith('manual_') || id.startsWith('auto_');
-  const source = isVirtual
-    ? (behavior === 'always_on' ? 'manual_unmanaged' : 'auto_custom')
-    : (behavior === 'always_on' ? 'manual_linked'    : 'auto_pending');
-
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const cur = await client.query('SELECT device_id FROM power_devices WHERE device_id = $1', [id]);
+    const cur = await client.query('SELECT row_id, device_id, channel FROM power_devices WHERE row_id = $1', [rowId]);
     if (!cur.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'not found' }); }
+    const deviceId = cur.rows[0].device_id;
+
+    // source flips with behavior — pick the right value based on whether the
+    // row is virtual (manual_/auto_ prefix) or linked (real device id).
+    const isVirtual = deviceId.startsWith('manual_') || deviceId.startsWith('auto_');
+    const source = isVirtual
+      ? (behavior === 'always_on' ? 'manual_unmanaged' : 'auto_custom')
+      : (behavior === 'always_on' ? 'manual_linked'    : 'auto_pending');
 
     // For virtual rows, also update the linked devices row's room so the
     // join still picks it up. Linked rows leave the real device untouched
     // (room lives in config.room for them).
     if (isVirtual) {
-      await client.query('UPDATE devices SET room = $2, updated_at = NOW() WHERE id = $1', [id, room]);
+      await client.query('UPDATE devices SET room = $2, updated_at = NOW() WHERE id = $1', [deviceId, room]);
     }
     await client.query(`
       UPDATE power_devices
@@ -1148,11 +1230,11 @@ app.patch('/api/power/devices/:id', async (req, res) => {
           source = $5, display_name = $6, config = $7::jsonb,
           is_cyclic = FALSE,
           updated_at = NOW()
-      WHERE device_id = $1
-    `, [id, phaseToStore, isThreePhase, mean_w, source, displayName || null, JSON.stringify(cfg)]);
+      WHERE row_id = $1
+    `, [rowId, phaseToStore, isThreePhase, mean_w, source, displayName || null, JSON.stringify(cfg)]);
 
     await client.query('COMMIT');
-    res.json({ ok: true, device_id: id, source, behavior, is_three_phase: isThreePhase, mean_w });
+    res.json({ ok: true, row_id: rowId, device_id: deviceId, source, behavior, is_three_phase: isThreePhase, mean_w });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
@@ -1446,18 +1528,21 @@ app.post('/api/power/bills/upload', billPdfUpload.single('pdf'), async (req, res
 // Drag-to-reorder: receives the full ordered list of device ids, writes
 // the index back to power_devices.sort_order. Mirrors the same pattern
 // the media playlists use (POST /api/playlists/reorder).
+// Reorder takes a list of row_ids — since multiple rows can share device_id
+// (when channel-scoped), the synthetic row_id is the only unambiguous handle.
 app.post('/api/power/devices/reorder', async (req, res) => {
   const order = Array.isArray(req.body?.order) ? req.body.order : null;
   if (!order || !order.length) return res.status(400).json({ error: 'order array required' });
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    // Wipe all sort_order values first so removed ids don't keep stale positions.
     await client.query('UPDATE power_devices SET sort_order = NULL');
     for (let i = 0; i < order.length; i++) {
+      const rid = parseInt(order[i], 10);
+      if (!Number.isFinite(rid)) continue;
       await client.query(
-        'UPDATE power_devices SET sort_order = $2, updated_at = NOW() WHERE device_id = $1',
-        [String(order[i]), i],
+        'UPDATE power_devices SET sort_order = $2, updated_at = NOW() WHERE row_id = $1',
+        [rid, i],
       );
     }
     await client.query('COMMIT');
@@ -1470,20 +1555,30 @@ app.post('/api/power/devices/reorder', async (req, res) => {
   }
 });
 
-app.delete('/api/power/devices/:id', async (req, res) => {
-  const id = req.params.id;
+// DELETE keyed on row_id. For virtual-device rows (manual_*/auto_* device_id),
+// also remove the devices row IF this is the last power_devices row pointing
+// at it — otherwise just remove the power_devices entry.
+app.delete('/api/power/devices/:row_id', async (req, res) => {
+  const rowId = parseInt(req.params.row_id, 10);
+  if (!Number.isFinite(rowId)) return res.status(400).json({ error: 'row_id required' });
   try {
-    // manual_<slug> and auto_<slug> are virtual devices created BY this
-    // registry — deleting them removes both the devices row and the
-    // power_devices row (CASCADE). Linked-auto rows reference a REAL
-    // existing device that lives in `devices` for its own reasons — we
-    // only remove it from power_devices, leaving the real device intact.
-    if (id.startsWith('manual_') || id.startsWith('auto_')) {
-      const r = await db.query('DELETE FROM devices WHERE id = $1', [id]);
-      if (r.rowCount === 0) return res.status(404).json({ error: 'not found' });
-    } else {
-      const r = await db.query('DELETE FROM power_devices WHERE device_id = $1', [id]);
-      if (r.rowCount === 0) return res.status(404).json({ error: 'not found in registry' });
+    const cur = await db.query('SELECT device_id FROM power_devices WHERE row_id = $1', [rowId]);
+    if (!cur.rows.length) return res.status(404).json({ error: 'not found' });
+    const deviceId = cur.rows[0].device_id;
+    const isVirtual = deviceId.startsWith('manual_') || deviceId.startsWith('auto_');
+
+    await db.query('DELETE FROM power_devices WHERE row_id = $1', [rowId]);
+
+    if (isVirtual) {
+      // Drop the virtual `devices` row IF no other power_devices row points
+      // at it (virtual devices are uniquely created BY the registry).
+      const remaining = await db.query(
+        'SELECT 1 FROM power_devices WHERE device_id = $1 LIMIT 1',
+        [deviceId],
+      );
+      if (remaining.rows.length === 0) {
+        await db.query('DELETE FROM devices WHERE id = $1', [deviceId]);
+      }
     }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

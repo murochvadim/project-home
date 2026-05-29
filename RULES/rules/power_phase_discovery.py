@@ -73,23 +73,26 @@ def _load_auto_registry(state):
         return cache
     rows = state.db_query(
         """
-        SELECT device_id, phase, is_three_phase, config
+        SELECT row_id, device_id, channel, phase, is_three_phase, config
         FROM power_devices
         WHERE source IN ('auto_pending', 'auto_custom', 'auto_discovered')
         """
     )
     # state.db_query returns positional tuples (psycopg default cursor),
-    # matching the SELECT order: 0=device_id, 1=phase, 2=is_three_phase, 3=config.
+    # matching the SELECT order:
+    #   0=row_id, 1=device_id, 2=channel, 3=phase, 4=is_three_phase, 5=config
     out = []
     for r in (rows or []):
-        cfg = r[3] or {}
+        cfg = r[5] or {}
         if isinstance(cfg, str):
             try: cfg = json.loads(cfg)
             except Exception: cfg = {}
         out.append({
-            'device_id':      r[0],
-            'phase':          r[1],
-            'is_three_phase': bool(r[2]),
+            'row_id':         int(r[0]),
+            'device_id':      r[1],
+            'channel':        r[2],         # None for whole-device rows
+            'phase':          r[3],
+            'is_three_phase': bool(r[4]),
             'config':         cfg,
         })
     state.shared['_power_discovery.registry_cache']    = out
@@ -177,14 +180,15 @@ def _confirm_flip(state, reg_row, delta_total, want_on, now):
         live = {'on': False, 'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}
 
     state.db_execute(
-        "UPDATE power_devices SET live = %s::jsonb, last_observed_at = NOW(), updated_at = NOW() WHERE device_id = %s",
-        (json.dumps(live), reg_row['device_id']),
+        "UPDATE power_devices SET live = %s::jsonb, last_observed_at = NOW(), updated_at = NOW() WHERE row_id = %s",
+        (json.dumps(live), reg_row['row_id']),
     )
 
     state.emit_virtual_event(
         virtual_id='virtual:power_state',
         dps={
             'device_id': reg_row['device_id'],
+            'channel':   reg_row['channel'] or '',
             'phase':     reg_row['phase'] or 'RST',
             'on':        bool(want_on),
             'w':         int(round(delta_total)) if want_on else 0,
@@ -193,6 +197,7 @@ def _confirm_flip(state, reg_row, delta_total, want_on, now):
         name='Power State',
         dps_labels={
             'device_id': 'Device',
+            'channel':   'Channel',
             'phase':     'Phase',
             'on':        'On',
             'w':         'Watts',
@@ -235,64 +240,59 @@ def evaluate(event, state):
         return []
 
     now    = time.time()
+    # All per-device state is keyed by row_id (synthetic PK on power_devices),
+    # since one device_id can now have multiple registered rows (one per
+    # channel of a multi-gang switch).
     locks  = state.shared.get('_power_discovery.lock_until') or {}
     cands  = state.shared.get('_power_discovery.candidates')  or {}
     flips  = []
 
-    # For each device currently OFF look for a positive-Δ match; for each
-    # device currently ON look for a negative-Δ match. live.on lives in the
-    # registry cache's row (synced from DB).
     live_state = state.shared.get('_power_discovery.live_state') or {}
     for reg in registry:
-        did = reg['device_id']
-        if locks.get(did, 0) > now:
+        rid = str(reg['row_id'])   # state.shared serializes JSON; keys become strings
+        if locks.get(rid, 0) > now:
             continue
-        want_on = not bool(live_state.get(did, False))
+        want_on = not bool(live_state.get(rid, False))
         total, score = _phase_match(reg, delta_r, delta_s, delta_t, tol_low, tol_high, want_on)
         if total is None:
             continue
-        # Candidate found — start settling timer if not already counting.
-        prior = cands.get(did)
+        prior = cands.get(rid)
         if not prior or prior.get('want_on') != want_on:
-            cands[did] = {'want_on': want_on, 'start_ts': now, 'total': total, 'score': score}
+            cands[rid] = {'want_on': want_on, 'start_ts': now, 'total': total, 'score': score}
         else:
-            # Update most-recent reading; settling timer continues
             prior['total'] = total
             prior['score'] = score
 
     # Promote candidates that have settled.
     to_clear = []
-    for did, c in cands.items():
+    for rid, c in cands.items():
         if (now - c['start_ts']) >= settling:
-            # Multi-candidate: only one winner per Δ event. If multiple
-            # candidates fire on the same tick, pick the lowest score (closest
-            # to expected_w) and skip the rest until next event.
-            flips.append((did, c['want_on'], c['total'], c['score']))
-            to_clear.append(did)
+            flips.append((rid, c['want_on'], c['total'], c['score']))
+            to_clear.append(rid)
 
-    # Sort by score asc → take winner, clear others (they'll re-enter cands
-    # on the next event if their Δ is still observable).
+    # Multi-candidate tiebreaker: lowest score (closest to expected) wins.
     flips.sort(key=lambda x: x[3])
     fired_this_tick = set()
-    for did, want_on, total, _score in flips:
-        if did in fired_this_tick:
+    for rid, want_on, total, _score in flips:
+        if rid in fired_this_tick:
             continue
-        reg = next((r for r in registry if r['device_id'] == did), None)
+        reg = next((r for r in registry if str(r['row_id']) == rid), None)
         if not reg:
-            to_clear.append(did)
+            to_clear.append(rid)
             continue
         try:
             _confirm_flip(state, reg, total, want_on, now)
-            live_state[did] = bool(want_on)
-            locks[did] = now + post_lock
+            live_state[rid] = bool(want_on)
+            locks[rid] = now + post_lock
+            label = reg['device_id'] + (f":{reg['channel']}" if reg['channel'] else '')
             log.info("power_phase_discovery: %s -> %s (Δ=%s W)",
-                     did, 'ON' if want_on else 'OFF', int(round(total)))
+                     label, 'ON' if want_on else 'OFF', int(round(total)))
         except Exception as e:
-            log.warning("power_phase_discovery: confirm failed for %s: %s", did, e)
-        fired_this_tick.add(did)
+            log.warning("power_phase_discovery: confirm failed for row %s: %s", rid, e)
+        fired_this_tick.add(rid)
 
-    for did in to_clear:
-        cands.pop(did, None)
+    for rid in to_clear:
+        cands.pop(rid, None)
 
     state.shared['_power_discovery.candidates'] = cands
     state.shared['_power_discovery.lock_until'] = locks
