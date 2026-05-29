@@ -979,6 +979,9 @@
     'r_start_away_init':            'Mode transitions',
     'r_move_in_corridor':           'Corridor',
     'r_face_recognition_loop_init': 'Corridor',
+    'r_corridor_transit_init':      'Corridor',
+    'r_power_discovery_init':       'Power',
+    'r_power_known_state_init':     'Power',
   };
   const BRS_SECTION_ORDER = [
     'Apartment (Layer 0)',
@@ -989,6 +992,7 @@
     'Balcony',
     'My BathRoom',
     'Living Room',
+    'Power',
     'Other',
   ];
   function brsSectionFor(ruleId) { return BRS_RULE_GROUPS[ruleId] || 'Other'; }
