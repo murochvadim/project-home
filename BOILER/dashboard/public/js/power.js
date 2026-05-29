@@ -135,19 +135,8 @@ function renderTotalCol(d) {
           </div>
         </div>
 
-        <!-- Devices ON / OFF counters — same hero font as ALWAYS-ON,
-             positioned right below it. ON = always_on rows + auto rows
-             currently detected ON (red); OFF = auto rows currently OFF (grey). -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:30px;">
-          <div>
-            <div style="font-size:0.7rem; color:#8a3a3a; letter-spacing:1.5px; margin-bottom:4px;">DEVICES ON</div>
-            ${lcdValueHTML(d.devices_on ?? 0, '', '2.4rem', '#ff6e6e')}
-          </div>
-          <div>
-            <div style="font-size:0.7rem; color:#3a3a3a; letter-spacing:1.5px; margin-bottom:4px;">DEVICES OFF</div>
-            ${lcdValueHTML(d.devices_off ?? 0, '', '2.4rem', '#888')}
-          </div>
-        </div>
+        <!-- DEVICES ON / DEVICES OFF moved to the Device Registry card
+             header (sits next to the rows it describes). -->
 
         <!-- Row 3 — Billing-period total kWh + cost (since current period start) -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:28px;">
@@ -986,6 +975,22 @@ function mdSourceTag(source) {
   return source || '—';
 }
 
+// ON/OFF semantics matching the LCD's /api/power/status SQL counter:
+//   ON  = manual_unmanaged / manual_linked rows + any row with live.on=true
+//   OFF = auto_pending / auto_custom / auto_discovered / state_known rows
+//         whose live.on is FALSE or NULL
+function mdComputeOnOffCounts(rows) {
+  let on = 0, off = 0;
+  for (const r of rows) {
+    const isAlwaysOn = (r.source === 'manual_unmanaged' || r.source === 'manual_linked');
+    const isOn      = isAlwaysOn || !!(r.live && r.live.on === true);
+    const isAutoLike = ['auto_pending','auto_custom','auto_discovered','state_known'].includes(r.source);
+    if (isOn) on++;
+    else if (isAutoLike) off++;
+  }
+  return { on, off };
+}
+
 async function mdLoadDevices() {
   try {
     const r = await fetch('/api/power/devices');
@@ -994,6 +999,12 @@ async function mdLoadDevices() {
     const tbody = document.getElementById('md-tbody');
     const tfoot = document.getElementById('md-tfoot');
     tfoot.innerHTML = '';  // no footer row (user removed per-phase totals here — same info now lives in the LCD)
+    // Header counters (sit in the Device Registry h2 — moved out of LCD).
+    const counts = mdComputeOnOffCounts(mdRowsCache);
+    const onEl = document.getElementById('md-devices-on');
+    const offEl = document.getElementById('md-devices-off');
+    if (onEl)  onEl.textContent  = counts.on;
+    if (offEl) offEl.textContent = counts.off;
     if (mdRowsCache.length === 0) {
       tbody.innerHTML = '<tr><td colspan="10" style="color:#aaa; text-align:center;">No devices registered yet. Click <b>+ Add Device</b> to start.</td></tr>';
       return;

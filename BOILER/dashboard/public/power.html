@@ -97,7 +97,18 @@
 
   <!-- Card 2 — Device Registry (P2 + P3) -->
   <div class="card">
-    <h2>Device Registry</h2>
+    <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:14px;">
+      <span>Device Registry</span>
+      <!-- ON/OFF counters live here (moved from LCD Total card so they
+           sit next to the rows they describe). -->
+      <span style="font-size:0.82rem; font-weight:400; text-transform:none; letter-spacing:0; display:inline-flex; gap:6px; align-items:baseline; color:#666;">
+        <span><span style="color:#888;">DEVICES ON:</span>
+              <span id="md-devices-on" style="font-weight:700; color:#c0392b;">—</span></span>
+        <span style="color:#ccc;">|</span>
+        <span><span style="color:#888;">DEVICES OFF:</span>
+              <span id="md-devices-off" style="font-weight:700; color:#888;">—</span></span>
+      </span>
+    </h2>
 
     <!-- Inline form (toggled by + Add Device button) -->
     <div style="margin-bottom:14px;">
@@ -432,6 +443,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/power.js?v=44"></script>
+<script src="js/power.js?v=45"></script>
 </body>
 </html>

@@ -760,19 +760,9 @@ app.get('/api/power/status', async (req, res) => {
     );
     const always_on_w = aoR.rows[0]?.w ?? 0;
 
-    // ON/OFF device counts surfaced on the LCD Total card.
-    // ON  = always_on rows + any row whose live.on is true
-    //       (covers auto rows the discovery rule has flipped on AND
-    //        state_known rows the Power Known State rule has flipped on)
-    // OFF = auto + state_known rows whose live.on is FALSE/NULL
-    const countsR = await db.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE source IN ('manual_unmanaged','manual_linked') OR (live->>'on')::bool = TRUE) AS on_count,
-        COUNT(*) FILTER (WHERE source IN ('auto_pending','auto_custom','auto_discovered','state_known') AND COALESCE((live->>'on')::bool, FALSE) = FALSE) AS off_count
-      FROM power_devices
-    `);
-    const devices_on  = Number(countsR.rows[0]?.on_count)  || 0;
-    const devices_off = Number(countsR.rows[0]?.off_count) || 0;
+    // ON/OFF device counters are now computed client-side from
+    // /api/power/devices in mdComputeOnOffCounts (rendered in the
+    // Device Registry h2 — moved out of LCD card per user request).
     const row = r.rows[0];
     const s = row.last_state || {};
     const phase = (p) => ({
@@ -815,8 +805,6 @@ app.get('/api/power/status', async (req, res) => {
       system_pf,
       imbalance_pct,
       always_on_w,
-      devices_on,
-      devices_off,
       frequency_hz: 50,  // Israel grid standard — Shelly Gen 1 doesn't expose frequency via HA
       ...(await (async () => {
         // Billing-period kWh + cost.
