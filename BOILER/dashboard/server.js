@@ -16,7 +16,9 @@ const os = require('os');
 const mqtt = require('mqtt');
 const voiceUploadDir = path.join(os.tmpdir(), 'voice-uploads');
 if (!fs.existsSync(voiceUploadDir)) fs.mkdirSync(voiceUploadDir, { recursive: true });
-const upload = multer({ dest: voiceUploadDir });
+// 25 MB cap — typical Whisper audio clip is ≤ 1-2 MB; cap prevents any LAN
+// device from filling C:\ tmpdir with an unbounded blob (DoS).
+const upload = multer({ dest: voiceUploadDir, limits: { fileSize: 25 * 1024 * 1024 } });
 
 // Power bill PDF upload — hoisted here so the /api/power/bills/upload
 // route (defined ~line 1336, well before the ESP OTA's multer at line 3800)
@@ -5758,8 +5760,25 @@ app.get('/api/backup/storages/:id/folders', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Containment for the Windows directory browser used by the Health page's
+// backup-job source picker. Only paths under the user profile are allowed
+// — without this, any LAN device could enumerate the full filesystem
+// (returns dir NAMES, not file contents — but still maps the host's disk
+// layout, which is unnecessary info leak).
+const _WIN_BROWSE_ROOT = 'c:/users/muroc';
+function _isAllowedWinBrowsePath(p) {
+  if (!p || typeof p !== 'string') return false;
+  if (p.includes('..')) return false;
+  // Normalize separators + case for the prefix compare; the OS handles the
+  // real path resolution case-insensitively anyway.
+  const norm = p.replace(/\\/g, '/').toLowerCase();
+  return norm === _WIN_BROWSE_ROOT || norm.startsWith(_WIN_BROWSE_ROOT + '/');
+}
 app.get('/api/backup/windows/browse', (req, res) => {
-  const reqPath = req.query.path || 'C:/';
+  const reqPath = req.query.path || 'C:/Users/muroc';
+  if (!_isAllowedWinBrowsePath(reqPath)) {
+    return res.status(400).json({ error: 'path outside allowed root (C:/Users/muroc)' });
+  }
   try {
     const entries = fs.readdirSync(reqPath, { withFileTypes: true });
     const dirs = entries
