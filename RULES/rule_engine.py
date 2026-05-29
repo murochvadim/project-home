@@ -96,6 +96,18 @@ KNOB_PATTERNS = [
     # Mode Buttons knob
     (re.compile(r'mode buttons:.*default.*?cooldown.*?' + _NUM_UNIT, re.I),
      'mode_buttons.default_home_cooldown_sec', 'sec'),
+    # Power Phase Discovery knobs (sentence-driven, parsed by heartbeat into
+    # state.shared['power_discovery.*'] which power_phase_discovery.py reads).
+    (re.compile(r'power discovery:.*noise floor.*?(\d+(?:\.\d+)?)\s*w', re.I),
+     'power_discovery.noise_floor_w', 'watt'),
+    (re.compile(r'power discovery:.*settling.*?' + _NUM_UNIT, re.I),
+     'power_discovery.settling_sec', 'sec'),
+    (re.compile(r'power discovery:.*tolerance low.*?(\d+(?:\.\d+)?)', re.I),
+     'power_discovery.tol_low', 'ratio'),
+    (re.compile(r'power discovery:.*tolerance high.*?(\d+(?:\.\d+)?)', re.I),
+     'power_discovery.tol_high', 'ratio'),
+    (re.compile(r'power discovery:.*post-?flip lock.*?' + _NUM_UNIT, re.I),
+     'power_discovery.post_flip_lock_sec', 'sec'),
 ]
 
 _UNIT_TO_SEC = {
@@ -135,6 +147,10 @@ def _parse_knob_sentences(containers):
                     break
                 if target_unit == 'count':
                     knobs[key] = int(n)
+                elif target_unit == 'watt':
+                    knobs[key] = int(round(n))
+                elif target_unit == 'ratio':
+                    knobs[key] = round(n, 3)   # float, dimensionless
                 else:
                     unit_word = ''
                     try:
