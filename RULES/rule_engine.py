@@ -823,7 +823,7 @@ class RuleEngine:
         # smell board
         'pump_state', 'auto_enabled', 'auto_phase', 'manual_active',
         # remoteXY gate
-        'door_relay', 'charge_relay',
+        'door_relay', 'charge_relay', 'door_open_enabled',
         # jura coffee bridge
         'power_state', 'current_drink',
         'water_low', 'beans_low', 'grounds_full',

@@ -259,7 +259,12 @@
             const meta = (cc.type ? { type: cc.type, min: cc.min, max: cc.max } : null);
             _controllable.push({ device_id: d.id, channel: ch, name: d.name, label: cc.name || ch,
                                  room: cc.room || d.room || '', protocol: d.protocol,
-                                 chan_meta: meta });
+                                 chan_meta: meta,
+                                 // Pulse-only channels (action_on without action_off,
+                                 // e.g. RemoteXY door_open) get a filtered action
+                                 // dropdown so the user can't pick Turn Off / Toggle.
+                                 has_on:  !!cc.action_on,
+                                 has_off: !!cc.action_off });
           }
         } else {
           _controllable.push({ device_id: d.id, channel: null, name: d.name, label: '',
@@ -421,8 +426,18 @@
           <optgroup label="Stop"><option value="stop" ${'stop' === curVal ? 'selected' : ''}>stop</option></optgroup>
         </select>`;
       } else {
+        // ESP channels with has_on / has_off flags get filtered to the
+        // directions the channel actually supports. Other rows (Tuya gangs,
+        // Zigbee) keep the full ACTIONS list.
+        const allowedActions = (d.has_on !== undefined || d.has_off !== undefined)
+          ? ACTIONS.filter(a =>
+              (a.v === 'turn_on'  && d.has_on) ||
+              (a.v === 'turn_off' && d.has_off) ||
+              (a.v === 'toggle'   && d.has_on && d.has_off)
+            )
+          : ACTIONS;
         dropdownHtml = `<select class="picker-action-select">
-          ${ACTIONS.map(a => `<option value="${a.v}" ${a.v === act ? 'selected' : ''}>${a.label}</option>`).join('')}
+          ${allowedActions.map(a => `<option value="${a.v}" ${a.v === act ? 'selected' : ''}>${a.label}</option>`).join('')}
         </select>`;
       }
 
@@ -1074,8 +1089,15 @@
           <optgroup label="Stop"><option value="stop" ${'stop' === curVal ? 'selected' : ''}>stop</option></optgroup>
         </select>`;
       } else {
+        const allowedActions = (d.has_on !== undefined || d.has_off !== undefined)
+          ? ACTIONS.filter(a =>
+              (a.v === 'turn_on'  && d.has_on) ||
+              (a.v === 'turn_off' && d.has_off) ||
+              (a.v === 'toggle'   && d.has_on && d.has_off)
+            )
+          : ACTIONS;
         actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
-          ${ACTIONS.map(a => `<option value="${a.v}" ${(sel?.action || defAct) === a.v ? 'selected' : ''}>${a.label}</option>`).join('')}
+          ${allowedActions.map(a => `<option value="${a.v}" ${(sel?.action || defAct) === a.v ? 'selected' : ''}>${a.label}</option>`).join('')}
         </select>`;
       }
       const item = document.createElement('div');

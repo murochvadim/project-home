@@ -161,6 +161,11 @@
               name: d.name, label: cc.name || ch,
               room: cc.room || d.room || '', protocol: d.protocol,
               chan_meta: meta,
+              // has_on / has_off drive the action-dropdown filter so channels
+              // that lack one direction (e.g. RemoteXY door_open — pulse-only,
+              // no hardware "close") render only the directions they support.
+              has_on:  !!cc.action_on,
+              has_off: !!cc.action_off,
             });
           }
         } else {
@@ -319,8 +324,19 @@
           <optgroup label="Stop"><option value="stop" ${'stop' === curVal ? 'selected' : ''}>stop</option></optgroup>
         </select>`;
       } else {
+        // ESP/HASP/Awtrix channels carry has_on/has_off flags from
+        // dps_config; filter the action list to what the channel actually
+        // supports. Devices without flags (Tuya / Zigbee gangs) keep the
+        // full ACTIONS list — they always support both directions.
+        const allowedActions = (d.has_on !== undefined || d.has_off !== undefined)
+          ? ACTIONS.filter(a =>
+              (a.v === 'turn_on'  && d.has_on) ||
+              (a.v === 'turn_off' && d.has_off) ||
+              (a.v === 'toggle'   && d.has_on && d.has_off)
+            )
+          : ACTIONS;
         dropdownHtml = `<select class="picker-action-select">
-          ${ACTIONS.map(a => `<option value="${a.v}" ${a.v === act ? 'selected' : ''}>${a.label}</option>`).join('')}
+          ${allowedActions.map(a => `<option value="${a.v}" ${a.v === act ? 'selected' : ''}>${a.label}</option>`).join('')}
         </select>`;
       }
 

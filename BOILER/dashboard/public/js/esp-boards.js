@@ -63,7 +63,7 @@ const DESTRUCTIVE_ACTIONS = new Set(['reset_wifi', 'clear_eeprom', 'restart', 'f
 // new sketches stay visible without dashboard edits.
 const ACTION_GROUPS = [
   { id: 'system',   label: 'System',        tab: 'status',     keys: ['restart', 'clear_eeprom', 'reset_wifi', 'factory_reset'] },
-  { id: 'doorlock', label: 'Doorlock',      tab: 'simulation', keys: ['open_doorlock'],                           statusFlag: 'door_relay',   statusLabel: 'Door Relay' },
+  { id: 'doorlock', label: 'Doorlock',      tab: 'simulation', keys: ['open_doorlock', 'enable_doorlock_open', 'disable_doorlock_open'], statusFlag: 'door_relay',   statusLabel: 'Door Relay' },
   { id: 'robot',    label: 'Robot',         tab: 'simulation', keys: ['robot_alive', 'robot_lost_power'],         statusFlag: 'charge_relay', statusLabel: 'Charge Relay' },
   { id: 'hivemq',   label: 'HiveMQ Bridge', tab: 'simulation', keys: ['reconnect_hivemq', 'sim_came_parking', 'sim_in_parking', 'sim_no_data'] },
   { id: 'pump',     label: 'Pump',          tab: 'simulation', keys: ['smell_start', 'smell_stop', 'smell_auto_start', 'smell_auto_stop'], statusFlag: 'pump_state',   statusLabel: 'Pump' },

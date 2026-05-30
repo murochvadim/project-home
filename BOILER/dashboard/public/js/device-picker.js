@@ -230,11 +230,15 @@
           }
           const suffix = single ? '' : ` ${key}`;
           const lblPrefix = `${label || key}: `;
+          // Render [on] only when action_on is declared, [off] only when
+          // action_off is declared. Channels that lack one direction (e.g.
+          // RemoteXY door_open — open is a real pulse, "close" has no
+          // hardware counterpart) get a single button instead of both.
           return [
-            `<button data-dp-action="esp-on"  data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
-                     style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}on</button>`,
-            `<button data-dp-action="esp-off" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
-                     style="padding:2px 8px;margin:2px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}off</button>`,
+            ch.action_on ? `<button data-dp-action="esp-on"  data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
+                     style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}on</button>` : '',
+            ch.action_off ? `<button data-dp-action="esp-off" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
+                     style="padding:2px 8px;margin:2px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}off</button>` : '',
           ];
         }).join('');
         extrasHtml = `<div style="padding:2px 8px 6px 24px;">${buttons}</div>`;
