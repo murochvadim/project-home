@@ -260,6 +260,17 @@ async function loadPower() {
 loadPower();
 pollTimer = setInterval(loadPower, POLL_INTERVAL_MS);
 
+// Device Registry auto-refresh — paired with the LCD's 5 s tick so the
+// table's Live W + Last-seen cells + DEVICES ON/OFF header strip stay
+// current without the user needing to manually reload. Skipped while a
+// drag-to-reorder is in flight (_mdDragId truthy) to preserve the
+// dragged-element reference. Add/Edit form is in a separate <div>, so
+// re-rendering <tbody> doesn't disturb form inputs.
+setInterval(() => {
+  if (_mdDragId) return;
+  mdLoadDevices();
+}, POLL_INTERVAL_MS);
+
 // ─── Tab switcher (Status / Settings) ─────────────────────────
 function powerSwitchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
