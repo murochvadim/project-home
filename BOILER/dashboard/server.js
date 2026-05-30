@@ -2461,20 +2461,37 @@ app.get('/api/network/timers', async (req, res) => {
   } catch (e) { try { ssh.dispose(); } catch {} res.status(500).json({ error: e.message }); }
 });
 
-// Manual ARP scan trigger — fires the systemd one-shot on LXC 104 immediately
-// instead of waiting up to 5 min for the next timer-driven invocation. Used by
-// the "↻ Scan now" button in the Project Network overview card. systemd
-// one-shot units are inherently single-instance (the second invocation queues
-// behind the first), so overlapping clicks don't fork concurrent scans.
+// Manual scan trigger — fires the systemd one-shot ARP scan AND then runs
+// the group-health watchdog so any IP-collision / device-cloud-only /
+// stale-local alerts get recomputed immediately based on the fresh ARP
+// state. Without the chained watchdog the alerts would still take up to
+// 5 min to update even after the user fixes the underlying problem.
+//
+// One SSH connection covers both commands. systemd one-shot for the ARP
+// scan blocks `systemctl start` until ExecStart completes, so the
+// watchdog only runs once the ARP table has been updated. Used by the
+// "↻ Scan now" button in the Project Network overview card.
 app.post('/api/network/scan', async (req, res) => {
   const { NodeSSH } = require('node-ssh');
   const ssh = new NodeSSH();
   try {
     await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
-    const r = await ssh.execCommand('systemctl start net-arp-scan.service');
+    const arpR = await ssh.execCommand('systemctl start net-arp-scan.service');
+    if (arpR.code !== 0) {
+      ssh.dispose();
+      return res.status(500).json({ error: `arp scan failed (exit ${arpR.code}): ${arpR.stderr || arpR.stdout}` });
+    }
+    // group_health_watchdog.py is the cron-driven script that evaluates
+    // freshness/collision/cloud-only conditions and writes to
+    // system_alerts. Running it right after ARP scan means the user sees
+    // alerts clear (or fire) within the same click — no 5-min wait.
+    const whR = await ssh.execCommand('/usr/bin/python3 /opt/group_health_watchdog.py');
     ssh.dispose();
-    if (r.code !== 0) {
-      return res.status(500).json({ error: `systemctl exit ${r.code}: ${r.stderr || r.stdout}` });
+    if (whR.code !== 0) {
+      // Surface the failure but don't 500 — the ARP scan already succeeded.
+      // User gets fresh devices table; alerts will still update on the next
+      // cron tick (≤ 5 min).
+      return res.json({ ok: true, watchdog_error: `exit ${whR.code}: ${whR.stderr || whR.stdout}` });
     }
     res.json({ ok: true });
   } catch (e) { try { ssh.dispose(); } catch {} res.status(500).json({ error: e.message }); }

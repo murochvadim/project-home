@@ -93,9 +93,9 @@ async function triggerManualScan() {
   btn.textContent = 'Scanning…';
   wrap.style.visibility = 'visible';
   bar.style.width = '0%';
-  // Animate the bar over 6 s (target scan duration with a small buffer).
-  // Real scan completion triggers the reload regardless of where the bar
-  // is, but the visual feedback keeps the UI honest about latency.
+  // Animate the bar over 6 s (typical ARP scan ~5 s + watchdog ~40 ms,
+  // measured). Real completion triggers the reload regardless of where
+  // the bar is.
   const startTs = Date.now();
   const ESTIMATED_MS = 6000;
   const tick = setInterval(() => {
@@ -112,9 +112,12 @@ async function triggerManualScan() {
   } finally {
     clearInterval(tick);
     bar.style.width = '100%';
-    // Reload the devices table so the user sees fresh data.
-    try { await loadSummary(); } catch (_) {}
-    try { await loadDevices(); } catch (_) {}
+    // Reload summary + devices + ALERTS — the watchdog just ran, so any
+    // resolved/new IP-collision / cloud-only / stale-local alerts should
+    // appear immediately.
+    try { await loadSummary(); }   catch (_) {}
+    try { await loadDevices(); }   catch (_) {}
+    try { await loadNetAlerts(); } catch (_) {}
     // Reset UI after a brief moment so the user sees the bar fill.
     setTimeout(() => {
       btn.disabled = false;
