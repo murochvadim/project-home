@@ -202,6 +202,11 @@
       <h2>All Devices</h2>
       <div class="filter-bar">
         <input type="text" id="search-input" placeholder="Search name…" oninput="applyFilters()">
+        <!-- Type dropdown: must include every device_type actually in
+             the devices table. Missing entries silently hide filter
+             options from the user. Added 2026-05-30: face_recognition,
+             media_player, motion, power_meter, tv, unmanaged_load,
+             vacuum, virtual — all present in DB but were not surfaced. -->
         <select id="filter-type" onchange="applyFilters()">
           <option value="">All types</option>
           <option value="circuit_breaker">Circuit Breaker</option>
@@ -211,20 +216,28 @@
           <option value="display">Display</option>
           <option value="door_sensor">Door Sensor</option>
           <option value="esp_board">ESP Board</option>
+          <option value="face_recognition">Face Recognition</option>
           <option value="gas_detector">Gas Detector</option>
           <option value="gateway">Gateway</option>
           <option value="hob">Hob</option>
           <option value="hood">Hood</option>
           <option value="light">Light</option>
+          <option value="media_player">Media Player</option>
+          <option value="motion">Motion</option>
           <option value="oven">Oven</option>
           <option value="panel">Panel</option>
+          <option value="power_meter">Power Meter</option>
           <option value="presence">Presence</option>
           <option value="remote">Remote</option>
           <option value="scene">Scene</option>
           <option value="siren">Siren</option>
           <option value="switch">Switch</option>
           <option value="temp_controller">Temp Controller</option>
+          <option value="tv">TV</option>
+          <option value="unmanaged_load">Unmanaged Load</option>
+          <option value="vacuum">Vacuum</option>
           <option value="valve">Valve</option>
+          <option value="virtual">Virtual</option>
           <option value="washer">Washer</option>
           <option value="water_heater">Water Heater</option>
           <option value="water_sensor">Water Sensor</option>
@@ -295,6 +308,8 @@
       <h2>Device Settings</h2>
       <div class="filter-bar">
         <input type="text" id="settings-search" placeholder="Search name…" oninput="applySettingsFilters()">
+        <!-- Settings tab type dropdown — mirrors filter-type above so
+             both surfaces show every device_type present in the DB. -->
         <select id="settings-type" onchange="applySettingsFilters()">
           <option value="">All types</option>
           <option value="circuit_breaker">Circuit Breaker</option>
@@ -304,20 +319,28 @@
           <option value="display">Display</option>
           <option value="door_sensor">Door Sensor</option>
           <option value="esp_board">ESP Board</option>
+          <option value="face_recognition">Face Recognition</option>
           <option value="gas_detector">Gas Detector</option>
           <option value="gateway">Gateway</option>
           <option value="hob">Hob</option>
           <option value="hood">Hood</option>
           <option value="light">Light</option>
+          <option value="media_player">Media Player</option>
+          <option value="motion">Motion</option>
           <option value="oven">Oven</option>
           <option value="panel">Panel</option>
+          <option value="power_meter">Power Meter</option>
           <option value="presence">Presence</option>
           <option value="remote">Remote</option>
           <option value="scene">Scene</option>
           <option value="siren">Siren</option>
           <option value="switch">Switch</option>
           <option value="temp_controller">Temp Controller</option>
+          <option value="tv">TV</option>
+          <option value="unmanaged_load">Unmanaged Load</option>
+          <option value="vacuum">Vacuum</option>
           <option value="valve">Valve</option>
+          <option value="virtual">Virtual</option>
           <option value="washer">Washer</option>
           <option value="water_heater">Water Heater</option>
           <option value="water_sensor">Water Sensor</option>
