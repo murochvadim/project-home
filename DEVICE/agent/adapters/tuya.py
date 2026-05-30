@@ -78,6 +78,19 @@ SILENT_FREEZE_SEC     = 3600       # 1 h with zero data = thread considered stuc
 KEY_REFETCH_904_THRESHOLD    = 5     # consecutive Err 904 responses before refetch fires
 KEY_REFETCH_THROTTLE_SEC     = 1800  # 30 min between refetches per device
 
+# ─── Mode C: device-side TCP listener stuck (since 2026-05-30) ─────────────
+# Distinct from Mode B (key rotation) — same Err code class but different
+# cause. If a device's local TCP listener (port 6668) hangs while its UDP
+# discovery broadcaster (port 6667) keeps working AND the cloud says the
+# device is online, no amount of code can fix it — the device's firmware
+# needs a power-cycle. The watchdog detects this combination and raises a
+# `network:device_tcp_stuck:<id>` row in system_alerts so the user knows
+# which physical device to power-cycle (which would otherwise sit silently
+# on ha_api/cloud for days). On recovery (next successful local read), the
+# alert is auto-resolved.
+TCP_STUCK_901_THRESHOLD      = 120   # ~30 min at 15 s poll interval
+TCP_STUCK_ALERT_THROTTLE_SEC = 3600  # don't re-raise more than once per hour per device
+
 from .tuya_config import API_REGION, API_KEY, API_SECRET
 
 
@@ -103,6 +116,11 @@ class TuyaAdapter(DeviceAdapter):
         # fresh key.
         self._per_dev_904_count:        dict[str, int]              = {}
         self._per_dev_last_key_refetch: dict[str, float]            = {}
+        # Mode C tracking — sustained Err 901 (TCP unreachable). Used by
+        # the watchdog to detect device-side listener hangs (vs key
+        # rotation Mode B vs DHCP-rotation already auto-fixed).
+        self._per_dev_901_count:        dict[str, int]              = {}
+        self._per_dev_last_stuck_alert: dict[str, float]            = {}
         # Live reference each per-device thread reads at reconnect time
         # so the watchdog can hand it a fresh local_key without restart.
         # Initialised from each device's row.
@@ -335,6 +353,44 @@ class TuyaAdapter(DeviceAdapter):
                         # counter intact so we retry on the next tick after
                         # the throttle window closes.
 
+                # ─── Mode C: device-side TCP listener stuck ───────────
+                # Sustained Err 901 — verify the device is on the LAN
+                # (UDP broadcast) AND the cloud says online. If both,
+                # the TCP listener is hung; raise an alert so the user
+                # power-cycles the device. Throttled per-device.
+                count_901 = self._per_dev_901_count.get(dev_id, 0)
+                if count_901 >= TCP_STUCK_901_THRESHOLD:
+                    last_alert = self._per_dev_last_stuck_alert.get(dev_id, 0)
+                    wall_now = time.time()
+                    if wall_now - last_alert >= TCP_STUCK_ALERT_THROTTLE_SEC:
+                        # UDP probe — device must be broadcasting AT ALL
+                        udp_hit = self._rediscover_ip(dev_id, dev.get('local_ip', '?'), name)
+                        # Cloud probe — Tuya says it's online
+                        cloud_online = False
+                        current_ip = udp_hit or dev.get('local_ip', '?')
+                        try:
+                            cloud = tinytuya.Cloud(apiRegion=API_REGION, apiKey=API_KEY, apiSecret=API_SECRET)
+                            r = cloud.cloudrequest(f'/v1.0/devices/{dev_id}')
+                            if r and r.get('success'):
+                                cloud_online = bool((r.get('result') or {}).get('online'))
+                        except Exception as e:
+                            log.warning(f'Tuya watchdog: {name} cloud online check failed: {e}')
+                        if udp_hit and cloud_online:
+                            log.warning(
+                                f'Tuya watchdog: {name} TCP listener stuck — UDP+cloud confirm '
+                                f'device is alive but local TCP fails — raising alert'
+                            )
+                            self._raise_tcp_stuck_alert(dev_id, name, current_ip)
+                            self._per_dev_last_stuck_alert[dev_id] = wall_now
+                        else:
+                            log.info(
+                                f'Tuya watchdog: {name} sustained 901 but UDP={bool(udp_hit)} '
+                                f'cloud_online={cloud_online} — device genuinely offline, no alert'
+                            )
+                            # Bump throttle anyway so we don't burn cloud
+                            # API on a permanently-offline device.
+                            self._per_dev_last_stuck_alert[dev_id] = wall_now
+
                 # ─── Mode A: silent-freeze watchdog (existing) ─────────
                 last = self._per_dev_last_active.get(dev_id)
                 if last is None:
@@ -480,6 +536,65 @@ class TuyaAdapter(DeviceAdapter):
             log.warning(f'{name}: cloud key fetch exception ({type(e).__name__}): {e}')
             return None
 
+    def _raise_tcp_stuck_alert(self, dev_id, name, current_ip):
+        """Raise (or refresh) a `network:device_tcp_stuck:<id>` system_alerts
+        entry — used when sustained Err 901 + UDP find succeeds + cloud says
+        online confirms the device's TCP listener has hung (firmware bug,
+        not fixable in code). Idempotent: if an unresolved row for the same
+        device exists, the message is refreshed via UPDATE instead of
+        inserting a duplicate."""
+        alert_type = f'network:device_tcp_stuck:{dev_id}'
+        message = (
+            f'{name} ({current_ip}): TCP listener stuck — UDP broadcast + Tuya cloud '
+            f'both confirm the device is alive, but local TCP poll fails with Err 901. '
+            f'Power-cycle the physical device to restore the local channel. '
+            f'(Adapter falls back to cloud channel meanwhile; control still works.)'
+        )
+        try:
+            conn = psycopg2.connect(**_DB_CONFIG)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE system_alerts
+                           SET message = %s, ts = NOW()
+                           WHERE alert_type = %s AND resolved_at IS NULL""",
+                        (message, alert_type),
+                    )
+                    if cur.rowcount == 0:
+                        cur.execute(
+                            """INSERT INTO system_alerts
+                                 (source, severity, affected_agent, alert_type, message)
+                               VALUES ('device_agent', 'warn', NULL, %s, %s)""",
+                            (alert_type, message),
+                        )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            log.warning(f'raise tcp_stuck_alert failed for {dev_id}: {type(e).__name__}: {e}')
+
+    def _resolve_tcp_stuck_alert(self, dev_id):
+        """Mark any active `network:device_tcp_stuck:<id>` row as resolved.
+        Called from the per-device thread on the FIRST successful local read
+        after a TCP-stuck period, so the alert clears automatically when the
+        user power-cycles the device."""
+        alert_type = f'network:device_tcp_stuck:{dev_id}'
+        try:
+            conn = psycopg2.connect(**_DB_CONFIG)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE system_alerts
+                           SET resolved_at = NOW()
+                           WHERE alert_type = %s AND resolved_at IS NULL""",
+                        (alert_type,),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            log.warning(f'resolve tcp_stuck_alert failed for {dev_id}: {type(e).__name__}: {e}')
+
     def _persist_local_key(self, dev_id, new_key):
         """UPDATE devices.local_key. Parameterised via psycopg2 so keys
         containing '$' / single-quotes / etc. round-trip cleanly. Sets
@@ -571,15 +686,25 @@ class TuyaAdapter(DeviceAdapter):
                 if status and 'dps' in status:
                     self.on_state_change(dev_id, status['dps'], 'initial')
                     self._per_dev_last_active[dev_id] = time.monotonic()
-                    self._per_dev_904_count[dev_id] = 0   # success — reset 904 counter
+                    # Success — reset error counters + auto-resolve any
+                    # active TCP-stuck alert (Mode C recovery path: user
+                    # power-cycled the device).
+                    was_stuck = self._per_dev_901_count.get(dev_id, 0) >= TCP_STUCK_901_THRESHOLD
+                    self._per_dev_904_count[dev_id] = 0
+                    self._per_dev_901_count[dev_id] = 0
+                    if was_stuck:
+                        self._resolve_tcp_stuck_alert(dev_id)
                     delay = RECONNECT_DELAY
                 elif status and status.get('Error'):
                     # Loud: spell out the error so a recurring failure
                     # (e.g. Err 904 = stale local_key after re-pair) is
                     # immediately diagnosable in the journal.
                     log.warning(f'{name}: initial status error: {status}')
-                    if str(status.get('Err')) == '904':
+                    err = str(status.get('Err'))
+                    if err == '904':
                         self._per_dev_904_count[dev_id] = self._per_dev_904_count.get(dev_id, 0) + 1
+                    elif err == '901':
+                        self._per_dev_901_count[dev_id] = self._per_dev_901_count.get(dev_id, 0) + 1
 
                 last_heartbeat  = time.time()
                 last_poll       = time.time()
@@ -608,7 +733,12 @@ class TuyaAdapter(DeviceAdapter):
                             if ps and 'dps' in ps:
                                 self.on_state_change(dev_id, ps['dps'], 'local_poll')
                                 self._per_dev_last_active[dev_id] = time.monotonic()
-                                self._per_dev_904_count[dev_id] = 0   # success
+                                # Reset both error counters + auto-resolve stuck-alert
+                                was_stuck = self._per_dev_901_count.get(dev_id, 0) >= TCP_STUCK_901_THRESHOLD
+                                self._per_dev_904_count[dev_id] = 0
+                                self._per_dev_901_count[dev_id] = 0
+                                if was_stuck:
+                                    self._resolve_tcp_stuck_alert(dev_id)
                                 has_dps = True
                             elif ps and ps.get('Error'):
                                 # Loud — this was silently swallowed before
@@ -616,8 +746,11 @@ class TuyaAdapter(DeviceAdapter):
                                 # Frozen-thread observability lives or dies
                                 # here.
                                 log.warning(f'{name}: poll returned error: {ps}')
-                                if str(ps.get('Err')) == '904':
+                                perr = str(ps.get('Err'))
+                                if perr == '904':
                                     self._per_dev_904_count[dev_id] = self._per_dev_904_count.get(dev_id, 0) + 1
+                                elif perr == '901':
+                                    self._per_dev_901_count[dev_id] = self._per_dev_901_count.get(dev_id, 0) + 1
                                 break  # reopen socket
                         except Exception as poll_err:
                             log.warning(f'{name}: poll exception ({type(poll_err).__name__}): {poll_err}')
@@ -639,12 +772,19 @@ class TuyaAdapter(DeviceAdapter):
                         if 'dps' in data and data['dps']:
                             self.on_state_change(dev_id, data['dps'], 'tcp_push')
                             self._per_dev_last_active[dev_id] = time.monotonic()
-                            self._per_dev_904_count[dev_id] = 0   # success
+                            was_stuck = self._per_dev_901_count.get(dev_id, 0) >= TCP_STUCK_901_THRESHOLD
+                            self._per_dev_904_count[dev_id] = 0
+                            self._per_dev_901_count[dev_id] = 0
+                            if was_stuck:
+                                self._resolve_tcp_stuck_alert(dev_id)
                             last_push = time.time()
                         elif data.get('Error'):
                             log.warning(f'{name}: device error: {data}')
-                            if str(data.get('Err')) == '904':
+                            derr = str(data.get('Err'))
+                            if derr == '904':
                                 self._per_dev_904_count[dev_id] = self._per_dev_904_count.get(dev_id, 0) + 1
+                            elif derr == '901':
+                                self._per_dev_901_count[dev_id] = self._per_dev_901_count.get(dev_id, 0) + 1
                             break
 
             except Exception as e:
