@@ -175,12 +175,31 @@ async function editDeviceName(mac, el) {
 }
 
 // ── Ports ─────────────────────────────────────────────────────
+// localStorage key for the "Show UP only" checkbox state.
+// Default is ON (true) — most users only care about live ports. The setting
+// persists across page navigations so the user doesn't have to re-check it
+// every time they come back to Project Network.
+const PORTS_SHOW_UP_KEY = 'network.showUpOnly';
+function _restoreShowUpOnly() {
+  const cb = document.getElementById('show-up-only');
+  if (!cb) return true;
+  const raw = localStorage.getItem(PORTS_SHOW_UP_KEY);
+  // First-ever load: keep the HTML default (`checked`) → true.
+  // Otherwise honor the stored choice.
+  const checked = raw === null ? true : raw === '1';
+  cb.checked = checked;
+  return checked;
+}
+
 async function loadPorts() {
   try {
     const rawPorts = await fetch('/api/network/ports').then(r => r.json());
     // Keep only physical ports 1/1 – 1/28
     allPorts = rawPorts.filter(p => /^1\/([1-9]|1\d|2[0-8])$/.test(p.if_name));
-    renderPorts(allPorts);
+    // Apply the persisted "Show UP only" checkbox state on initial render so
+    // the table never flashes the full list before the filter kicks in.
+    const upOnly = _restoreShowUpOnly();
+    renderPorts(upOnly ? allPorts.filter(p => p.status === 'up') : allPorts);
   } catch (e) { console.error('loadPorts error:', e); }
 }
 
@@ -205,6 +224,8 @@ function renderPorts(list) {
 
 function filterPorts() {
   const upOnly = document.getElementById('show-up-only').checked;
+  // Persist for next page load / cross-tab consistency.
+  try { localStorage.setItem(PORTS_SHOW_UP_KEY, upOnly ? '1' : '0'); } catch (_) {}
   renderPorts(upOnly ? allPorts.filter(p => p.status === 'up') : allPorts);
 }
 
