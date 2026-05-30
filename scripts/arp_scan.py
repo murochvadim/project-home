@@ -27,8 +27,15 @@ def get_local_iface_info():
 
 
 def run_arp():
+    # --retry=4 (was 2): doubles the per-target retry count to catch
+    # devices that drop the first 1-2 probe replies. Adds ~3-5 s to scan
+    # duration per /24 sweep but materially improves hit rate on noisy
+    # WiFi (sparse-push devices like Ring Doorbell, Aqara FP2, ESP boards
+    # were frequently slipping past the 10-min frontend threshold because
+    # a single missed scan = 5+ min red.) Time budget at 5-min cadence
+    # is generous (scan takes ~2 s currently → ~5-7 s after).
     result = subprocess.run(
-        ['arp-scan', f'--interface={IFACE}', '--localnet', '--retry=2'],
+        ['arp-scan', f'--interface={IFACE}', '--localnet', '--retry=4'],
         capture_output=True, text=True
     )
     devices = []
