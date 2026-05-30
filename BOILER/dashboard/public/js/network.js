@@ -129,13 +129,68 @@ async function triggerManualScan() {
   }
 }
 
+// Classify why a device is red. Based on the verified probe results of
+// 2026-05-30 — most "offline" devices fall into 5 categories and a LAN
+// scan can't fix any of them. The tooltip explains the most likely
+// cause so the user stops re-clicking Scan trying to revive a device
+// that's powered off / cloud-only / sleeping.
+//
+// Inputs:
+//   d.last_online          — string ISO timestamp
+//   d.d_protocol           — null for transient MACs, else: local/cloud/esp/zigbee/zwave/ring/ha_api/awtrix/pixoo/hasp/alexa/vacuum/virtual/mqtt
+//   d.d_device_type        — e.g. 'remote' (IR hub), 'tv', 'media_player'
+//   d.d_last_source        — what channel the device-agent is using now
+//   d.vendor               — OUI vendor string from arp-scan
+function _classifyOfflineReason(d) {
+  const ageMs = Date.now() - new Date(d.last_online || 0).getTime();
+  const ageMin = Math.round(ageMs / 60000);
+  const ageDays = ageMs / 86400000;
+  // Category 5 — dead net_devices row (very old)
+  if (ageDays > 30) {
+    return `Dead row — last responded ${Math.round(ageDays)} days ago. IP likely reassigned, MAC may be randomized (phone/guest), or device gone. Safe to ignore.`;
+  }
+  if (ageDays > 7) {
+    return `Not seen in ${Math.round(ageDays)} days — device is genuinely offline (powered off, moved, or unplugged).`;
+  }
+  // Category 2 — Tuya IR remote: cloud-only by design
+  if (d.d_protocol === 'cloud' && d.d_device_type === 'remote') {
+    return `Tuya IR hub (cloud-only by design) — never responds to LAN probes. Liveness comes from cloud heartbeat; check Devices page for last_seen.`;
+  }
+  // Category 4 — Tuya local on ha_api fallback for a long time = Mode B/C alert territory
+  if (d.d_protocol === 'local' && d.d_last_source === 'ha_api' && ageMin > 60) {
+    return `Local TCP channel broken — device-agent fell back to cloud (ha_api). Check Project Health → System Alerts for Mode B/C details. May need device power-cycle.`;
+  }
+  // Category 3 — known sparse-responders (WiFi power-save / Ring / Aqara FP2 etc.)
+  const vendor = (d.vendor || '').toLowerCase();
+  if (vendor.startsWith('ring')) {
+    return `Ring devices use WiFi power-saving — they ignore broadcast ARP/ICMP between cloud events. LAN scan can't reliably detect them; check Ring app for true status.`;
+  }
+  if (vendor.includes('lumi united')) {
+    return `Aqara devices often suppress broadcast LAN traffic to save power. Liveness comes via HA WebSocket; check Devices page.`;
+  }
+  if (vendor.includes('samsung electronics') && (d.name || '').match(/tv/i)) {
+    return `Samsung TV — when powered off the WiFi sleeps. Will respond again once the TV is turned on.`;
+  }
+  if (vendor.includes('locally administered') || vendor === '') {
+    return `Randomized / locally-administered MAC — usually a phone or guest device. Disappears when the device leaves the LAN or rotates its privacy MAC.`;
+  }
+  // Category 1 — recent flake
+  if (ageMin <= 15) {
+    return `Just missed the last scan (${ageMin} min ago) — usually recovers on the next sweep. Click Scan now to retry.`;
+  }
+  // Generic fallback
+  return `Not seen in ${ageMin} min — likely powered off, in WiFi power-save, or has moved IP. LAN scanning cannot wake a sleeping device.`;
+}
+
 function renderDevices(list) {
   const tbody = document.getElementById('devices-body');
   document.getElementById('device-count').textContent = `${list.length} devices`;
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="7" style="color:#aaa; text-align:center;">No devices found</td></tr>'; return; }
   tbody.innerHTML = list.map(d => {
-    const online   = isOnline(d);
-    const dot      = online ? '<span style="color:#2ecc71;">⬤</span>' : '<span style="color:#e74c3c;">⬤</span>';
+    const online      = isOnline(d);
+    const dotTip      = online ? 'Responded to ARP within the last 10 min' : _classifyOfflineReason(d);
+    const dotTipAttr  = dotTip.replace(/"/g, '&quot;');
+    const dot         = `<span style="color:${online ? '#2ecc71' : '#e74c3c'}; cursor:help;" title="${dotTipAttr}">⬤</span>`;
     const nameCell = `<span style="font-size:0.78rem; color:#aaa; cursor:pointer;" onclick="editDeviceName('${d.mac}', this)" title="Click to edit">${d.name || '— add name —'}</span>`;
     return `<tr>
       <td style="text-align:center;">${dot}</td>

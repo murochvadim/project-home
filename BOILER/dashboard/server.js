@@ -2383,7 +2383,21 @@ app.get('/api/network/summary', async (req, res) => {
 // ─── Network: device list ─────────────────────────────────────
 app.get('/api/network/devices', async (req, res) => {
   try {
-    const r = await db.query('SELECT * FROM net_devices ORDER BY last_online DESC NULLS LAST, mac ASC');
+    // LEFT JOIN devices via MAC so the frontend can classify red dots
+    // (`d_protocol`, `d_device_type`, `d_last_source`). The columns are
+    // NULL for net_devices rows that aren't registered as project devices
+    // (transient guests, randomized MACs); the frontend tooltip falls
+    // back to "unknown device, likely powered off or sleeping".
+    const r = await db.query(`
+      SELECT n.*,
+             d.id           AS d_id,
+             d.protocol     AS d_protocol,
+             d.device_type  AS d_device_type,
+             d.last_source  AS d_last_source
+      FROM net_devices n
+      LEFT JOIN devices d ON lower(d.mac::text) = lower(n.mac::text)
+      ORDER BY n.last_online DESC NULLS LAST, n.mac ASC
+    `);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
