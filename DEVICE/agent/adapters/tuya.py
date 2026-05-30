@@ -56,6 +56,28 @@ _DB_CONFIG = {
 WATCHDOG_INTERVAL_SEC = 300        # check every 5 min
 SILENT_FREEZE_SEC     = 3600       # 1 h with zero data = thread considered stuck
 
+# ─── Local-key rotation auto-recovery (since 2026-05-30) ────────────────────
+# When a Tuya device is re-paired in the user's Tuya app, the cloud generates
+# a NEW `local_key` and ships it to the device. The DB still has the OLD key,
+# so every local TCP poll fails with Err 904 "Unexpected Payload". The
+# silent-freeze watchdog only force-reconnects (no fix); the IP rediscovery
+# watchdog only touches IP. Neither resolves a rotated key — so the device
+# silently fell back to the cloud channel (ha_api) and stayed there until
+# someone manually re-fetched the key. Guy Room window Light sat in this
+# state for 14+ days before being caught on 2026-05-30.
+#
+# Auto-fix: each per-device thread increments _per_dev_904_count on every
+# Err 904 response; resets to 0 on any successful read. The watchdog checks
+# this counter every WATCHDOG_INTERVAL_SEC tick — if it exceeds the
+# threshold AND the per-device key-refetch throttle has elapsed, the
+# watchdog queries the Tuya cloud for the device's current local_key, and
+# if it differs from the DB, UPDATEs the row + signals the per-device
+# thread to reconnect using the fresh key (via the existing force_event
+# mechanism). Throttle prevents bursting cloud API calls if the cloud's
+# key also happens to be wrong (extremely unlikely but possible).
+KEY_REFETCH_904_THRESHOLD    = 5     # consecutive Err 904 responses before refetch fires
+KEY_REFETCH_THROTTLE_SEC     = 1800  # 30 min between refetches per device
+
 from .tuya_config import API_REGION, API_KEY, API_SECRET
 
 
@@ -74,6 +96,17 @@ class TuyaAdapter(DeviceAdapter):
         # thread without having to kill+respawn it.
         self._per_dev_last_active:      dict[str, float]            = {}
         self._per_dev_force_reconnect:  dict[str, threading.Event]  = {}
+        # Err 904 (local_key rotation) tracking — see KEY_REFETCH_*
+        # constants above. Counter increments on every 904, resets to 0
+        # on any successful read. Watchdog reads the counter + last-
+        # refetch ts to decide whether to query the Tuya cloud for a
+        # fresh key.
+        self._per_dev_904_count:        dict[str, int]              = {}
+        self._per_dev_last_key_refetch: dict[str, float]            = {}
+        # Live reference each per-device thread reads at reconnect time
+        # so the watchdog can hand it a fresh local_key without restart.
+        # Initialised from each device's row.
+        self._per_dev_key: dict[str, str] = {d['id']: d.get('local_key', '') for d in devices}
         self._watchdog_thread = None
 
         # Find gateway hub device (device_type='gateway', has local_ip) FIRST
@@ -263,6 +296,46 @@ class TuyaAdapter(DeviceAdapter):
                 watched.append(self._gateway_dev)
             for dev in watched:
                 dev_id = dev['id']
+                name = dev.get('name', dev_id)[:30]
+
+                # ─── Mode B: local_key rotation auto-recovery ─────────
+                # Sustained Err 904 = stale local_key. Refetch from cloud,
+                # update DB if different, signal reconnect. Throttled per
+                # device so a permanently-broken device can't burst the
+                # Tuya cloud API.
+                count_904 = self._per_dev_904_count.get(dev_id, 0)
+                if count_904 >= KEY_REFETCH_904_THRESHOLD:
+                    last_refetch = self._per_dev_last_key_refetch.get(dev_id, 0)
+                    wall_now = time.time()
+                    if wall_now - last_refetch >= KEY_REFETCH_THROTTLE_SEC:
+                        self._per_dev_last_key_refetch[dev_id] = wall_now
+                        log.warning(
+                            f'Tuya watchdog: {name} sustained Err 904 ({count_904} consecutive) '
+                            f'— querying cloud for fresh local_key'
+                        )
+                        cloud_key = self._refresh_local_key_from_cloud(dev_id, name)
+                        stored_key = self._per_dev_key.get(dev_id) or dev.get('local_key', '')
+                        if cloud_key and cloud_key != stored_key:
+                            log.warning(
+                                f'Tuya watchdog: {name} local_key rotated — updating DB + reconnecting'
+                            )
+                            self._persist_local_key(dev_id, cloud_key)
+                            self._per_dev_key[dev_id] = cloud_key   # next reconnect reads this
+                            self._per_dev_904_count[dev_id] = 0      # reset counter
+                            ev = self._per_dev_force_reconnect.get(dev_id)
+                            if ev and not ev.is_set():
+                                ev.set()
+                        elif cloud_key:
+                            log.info(
+                                f'Tuya watchdog: {name} cloud key matches DB — Err 904 cause is something '
+                                f'else (firmware bug, peer mismatch). Resetting counter.'
+                            )
+                            self._per_dev_904_count[dev_id] = 0
+                        # If cloud_key is None (cloud unreachable) leave the
+                        # counter intact so we retry on the next tick after
+                        # the throttle window closes.
+
+                # ─── Mode A: silent-freeze watchdog (existing) ─────────
                 last = self._per_dev_last_active.get(dev_id)
                 if last is None:
                     # Thread hasn't registered itself yet — skip
@@ -276,7 +349,6 @@ class TuyaAdapter(DeviceAdapter):
                 if event.is_set():
                     # Previous force-reconnect not consumed yet — don't pile up
                     continue
-                name = dev.get('name', dev_id)[:30]
                 log.warning(
                     f'Tuya watchdog: {name} silent for {silent_for/3600:.1f}h '
                     f'(> {SILENT_FREEZE_SEC/3600:.0f}h threshold) — forcing reconnect'
@@ -391,6 +463,46 @@ class TuyaAdapter(DeviceAdapter):
         except Exception as e:
             log.warning(f'persist local_ip failed for {dev_id}: {type(e).__name__}: {e}')
 
+    def _refresh_local_key_from_cloud(self, dev_id, name):
+        """Query the Tuya cloud for this device's current local_key. Returns
+        the cloud-side key (str) or None on any error. Used by the 904
+        watchdog when sustained 'Unexpected Payload' errors suggest the key
+        was rotated by a re-pair. See KEY_REFETCH_* constants for the
+        trigger threshold and throttle."""
+        try:
+            cloud = tinytuya.Cloud(apiRegion=API_REGION, apiKey=API_KEY, apiSecret=API_SECRET)
+            r = cloud.cloudrequest(f'/v1.0/devices/{dev_id}')
+            if not r or not r.get('success'):
+                log.warning(f'{name}: cloud key fetch failed: {r}')
+                return None
+            return (r.get('result') or {}).get('local_key')
+        except Exception as e:
+            log.warning(f'{name}: cloud key fetch exception ({type(e).__name__}): {e}')
+            return None
+
+    def _persist_local_key(self, dev_id, new_key):
+        """UPDATE devices.local_key. Parameterised via psycopg2 so keys
+        containing '$' / single-quotes / etc. round-trip cleanly. Sets
+        last_source='cloud_key_refresh' so the journal trail of the
+        recovery is visible on the Devices page + System Alerts."""
+        try:
+            conn = psycopg2.connect(**_DB_CONFIG)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE devices
+                           SET local_key = %s,
+                               last_source = 'cloud_key_refresh',
+                               updated_at = NOW()
+                           WHERE id = %s""",
+                        (new_key, dev_id),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            log.warning(f'persist local_key failed for {dev_id}: {type(e).__name__}: {e}')
+
     # ─── Local device persistent connection ────────────────────────────────
 
     def _device_thread(self, dev):
@@ -407,7 +519,10 @@ class TuyaAdapter(DeviceAdapter):
         """
         dev_id = dev['id']
         ip     = dev['local_ip']
-        key    = dev['local_key']
+        # Live key reference — watchdog can rotate this in-place via
+        # self._per_dev_key[dev_id] when it auto-refetches from the cloud
+        # after sustained Err 904. Each outer loop iteration re-reads, so
+        # the next reconnect uses whatever key the watchdog wrote.
         ver    = float(dev.get('version') or 3.3)
         name   = dev.get('name', dev_id)[:30]
         delay  = RECONNECT_DELAY
@@ -443,6 +558,10 @@ class TuyaAdapter(DeviceAdapter):
 
             d = None
             try:
+                # Read the latest key from the per-device key map so a
+                # watchdog auto-refetch (after sustained Err 904) takes
+                # effect on the very next reconnect, no service restart.
+                key = self._per_dev_key.get(dev_id) or dev['local_key']
                 d = tinytuya.Device(dev_id, ip, key, version=ver)
                 d.set_socketPersistent(True)
                 d.set_socketTimeout(SOCKET_TIMEOUT)
@@ -452,12 +571,15 @@ class TuyaAdapter(DeviceAdapter):
                 if status and 'dps' in status:
                     self.on_state_change(dev_id, status['dps'], 'initial')
                     self._per_dev_last_active[dev_id] = time.monotonic()
+                    self._per_dev_904_count[dev_id] = 0   # success — reset 904 counter
                     delay = RECONNECT_DELAY
                 elif status and status.get('Error'):
                     # Loud: spell out the error so a recurring failure
                     # (e.g. Err 904 = stale local_key after re-pair) is
                     # immediately diagnosable in the journal.
                     log.warning(f'{name}: initial status error: {status}')
+                    if str(status.get('Err')) == '904':
+                        self._per_dev_904_count[dev_id] = self._per_dev_904_count.get(dev_id, 0) + 1
 
                 last_heartbeat  = time.time()
                 last_poll       = time.time()
@@ -486,6 +608,7 @@ class TuyaAdapter(DeviceAdapter):
                             if ps and 'dps' in ps:
                                 self.on_state_change(dev_id, ps['dps'], 'local_poll')
                                 self._per_dev_last_active[dev_id] = time.monotonic()
+                                self._per_dev_904_count[dev_id] = 0   # success
                                 has_dps = True
                             elif ps and ps.get('Error'):
                                 # Loud — this was silently swallowed before
@@ -493,6 +616,8 @@ class TuyaAdapter(DeviceAdapter):
                                 # Frozen-thread observability lives or dies
                                 # here.
                                 log.warning(f'{name}: poll returned error: {ps}')
+                                if str(ps.get('Err')) == '904':
+                                    self._per_dev_904_count[dev_id] = self._per_dev_904_count.get(dev_id, 0) + 1
                                 break  # reopen socket
                         except Exception as poll_err:
                             log.warning(f'{name}: poll exception ({type(poll_err).__name__}): {poll_err}')
@@ -514,9 +639,12 @@ class TuyaAdapter(DeviceAdapter):
                         if 'dps' in data and data['dps']:
                             self.on_state_change(dev_id, data['dps'], 'tcp_push')
                             self._per_dev_last_active[dev_id] = time.monotonic()
+                            self._per_dev_904_count[dev_id] = 0   # success
                             last_push = time.time()
                         elif data.get('Error'):
                             log.warning(f'{name}: device error: {data}')
+                            if str(data.get('Err')) == '904':
+                                self._per_dev_904_count[dev_id] = self._per_dev_904_count.get(dev_id, 0) + 1
                             break
 
             except Exception as e:
