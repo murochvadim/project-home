@@ -762,6 +762,27 @@ app.get('/api/power/status', async (req, res) => {
     );
     const always_on_w = aoR.rows[0]?.w ?? 0;
 
+    // Companion to always_on_w: sum of live wattage for auto + state_known
+    // devices the rules currently detect as ON. Surfaced next to ALWAYS-ON
+    // on the LCD so the user can see the *detected* dynamic load (TV on,
+    // dishwasher heating, etc.) separately from the constant baseline.
+    // For single-phase rows live carries `w`; for 3-phase rows it carries
+    // `r_w` / `s_w` / `t_w`. COALESCE handles both cases — irrelevant keys
+    // resolve to NULL → 0 in the sum.
+    const aoKnownR = await db.query(
+      `SELECT COALESCE(SUM(
+         CASE WHEN (live->>'on')::bool = TRUE
+              AND source IN ('auto_pending','auto_custom','auto_discovered','state_known') THEN
+           COALESCE((live->>'w')::int,   0)
+         + COALESCE((live->>'r_w')::int, 0)
+         + COALESCE((live->>'s_w')::int, 0)
+         + COALESCE((live->>'t_w')::int, 0)
+         ELSE 0 END
+       ), 0)::int AS w
+       FROM power_devices`
+    );
+    const auto_known_on_w = aoKnownR.rows[0]?.w ?? 0;
+
     // ON/OFF device counters are now computed client-side from
     // /api/power/devices in mdComputeOnOffCounts (rendered in the
     // Device Registry h2 — moved out of LCD card per user request).
@@ -807,6 +828,7 @@ app.get('/api/power/status', async (req, res) => {
       system_pf,
       imbalance_pct,
       always_on_w,
+      auto_known_on_w,
       frequency_hz: 50,  // Israel grid standard — Shelly Gen 1 doesn't expose frequency via HA
       ...(await (async () => {
         // Billing-period kWh + cost.

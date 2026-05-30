@@ -133,17 +133,25 @@ function renderTotalCol(d) {
         <!-- Row 1 — Total Power + Total Current (hero). Font reduced two
              steps from the original 2.4rem so the LCD sits more compact. -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:30px;">
+          <!-- 2×2 hero grid. Top row = green meter readouts (TOTAL POWER /
+               TOTAL CURRENT). Bottom row = yellow "known-load" readouts
+               (ALWAYS-ON / AUTO+KNOWN). Symmetric: 4 cells, identical
+               structure each. -->
           <div>
             <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">TOTAL POWER</div>
             ${lcdValueHTML(fmt(d.total_w, 0), 'W', '1.8rem', lcdPowerColor)}
-            <!-- Always-on baseline (sum of all power_devices.mean_w) — same hero
-                 size as TOTAL POWER so the two readouts stack visually equal. -->
+            <!-- Bottom-left: ALWAYS-ON (sum of mean_w for always_on rows
+                 — constant baseline) -->
             <div style="margin-top:30px; font-size:0.7rem; color:#8a7a3a; letter-spacing:1.5px; margin-bottom:4px;">ALWAYS-ON</div>
             ${lcdValueHTML(fmt(d.always_on_w, 0), 'W', '1.8rem', '#ffd560')}
           </div>
           <div>
             <div style="font-size:0.7rem; color:#3a8a52; letter-spacing:1.5px; margin-bottom:4px;">TOTAL CURRENT</div>
             ${lcdValueHTML(fmt(total_a, 2), 'A', '1.8rem', '')}
+            <!-- Bottom-right: AUTO+KNOWN (sum of live.w for auto + state_known
+                 rows currently detected ON by rules — variable load). -->
+            <div style="margin-top:30px; font-size:0.7rem; color:#8a7a3a; letter-spacing:1.5px; margin-bottom:4px;">AUTO+KNOWN</div>
+            ${lcdValueHTML(fmt(d.auto_known_on_w, 0), 'W', '1.8rem', '#ffd560')}
           </div>
         </div>
 
