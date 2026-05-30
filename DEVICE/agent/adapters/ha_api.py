@@ -108,7 +108,21 @@ class HAApiAdapter(DeviceAdapter):
         # decide ON/OFF for state_known power_devices rows). Unmatched
         # domain in _ha_state_to_dps_value → state passes through as raw
         # string ('on' / 'off' / 'playing' / 'idle' / 'standby').
-        'media_player.samsung_85_qled':       [('media_player.samsung_85_qled',       'state')],
+        #
+        # TV 85 QLED has TWO sources both projecting to the same `state`
+        # dps key. Reason: the Samsung TV HA integration goes 'unavailable'
+        # for days at a time (broke 2026-05-26 for >4 days continuously),
+        # but the smart-plug `switch.samsung_85_qled` reliably tracks
+        # power. The adapter's _on_ws_message filters out 'unavailable'/
+        # 'unknown', so the broken media_player can't overwrite the
+        # switch's 'on'/'off' — whichever has a usable value wins. Media
+        # Agents already trusts the switch entity (tv_control.py
+        # TV_SWITCH). Q60BA 50 / Q49 BA have no smart plug, so they keep
+        # the media_player-only entry below.
+        'media_player.samsung_85_qled':       [
+            ('media_player.samsung_85_qled',  'state'),
+            ('switch.samsung_85_qled',        'state'),
+        ],
         'media_player.samsung_q60ba_50_tv_2': [('media_player.samsung_q60ba_50_tv_2', 'state')],
         'media_player.samsung_q49_ba_tv':     [('media_player.samsung_q49_ba_tv',     'state')],
         # Alexa Echo devices + Samsung soundbar (built-in Alexa). devices
