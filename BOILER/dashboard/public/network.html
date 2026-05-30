@@ -150,7 +150,7 @@
           <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
             <button id="manual-scan-btn" class="btn btn-secondary btn-sm"
                     onclick="triggerManualScan()"
-                    title="Runs an ARP scan on LXC 104 (refreshes the devices table with live LAN state) followed by group_health_watchdog.py (re-evaluates IP-collision / device-cloud-only / stale-local alerts against the fresh data). Use after powering up a device, after a router DHCP change, or after fixing a flagged alert to clear it without waiting for the next 5-min cron tick. Total ~5-6 seconds."
+                    title="Runs a 2-pass network scan on LXC 104: broadcast ARP sweep (~5 s) for fast detection + unicast-ping pass (~17 s) for WiFi-power-save devices that ignore broadcast ARP (Star Projector, Ring, Aqara FP2, etc.). Then group_health_watchdog.py re-evaluates IP-collision / cloud-only / stale-local alerts. Use after powering up a device, after a router DHCP change, or after fixing a flagged alert. Total ~22 seconds."
                     style="font-size:0.85rem; padding:6px 14px;">↻ Scan now</button>
           </div>
           <div id="manual-scan-progress" style="width:100%; height:6px; background:#e6e1da; border-radius:3px; margin-top:6px; overflow:hidden; visibility:hidden;">
@@ -238,6 +238,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/network.js?v=8"></script>
+<script src="js/network.js?v=10"></script>
 </body>
 </html>

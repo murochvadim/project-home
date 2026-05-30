@@ -93,11 +93,14 @@ async function triggerManualScan() {
   btn.textContent = 'Scanning…';
   wrap.style.visibility = 'visible';
   bar.style.width = '0%';
-  // Animate the bar over 6 s (typical ARP scan ~5 s + watchdog ~40 ms,
-  // measured). Real completion triggers the reload regardless of where
-  // the bar is.
+  // Animate the bar over 22 s — measured 2026-05-30 scan duration:
+  //   ~5 s broadcast arp-scan (Pass-1, --retry=4)
+  //   ~17 s sequential unicast pings to ~23 missed-but-recently-seen
+  //         MACs (Pass-2 sparse-broadcast catcher, 1 s timeout each)
+  //   ~40 ms group_health_watchdog
+  // Real completion triggers reload regardless of where the bar is.
   const startTs = Date.now();
-  const ESTIMATED_MS = 6000;
+  const ESTIMATED_MS = 22000;
   const tick = setInterval(() => {
     const pct = Math.min(98, ((Date.now() - startTs) / ESTIMATED_MS) * 100);
     bar.style.width = pct.toFixed(1) + '%';
@@ -152,22 +155,15 @@ function _classifyOfflineReason(d) {
   if (ageDays > 7) {
     return `Not seen in ${Math.round(ageDays)} days — device is genuinely offline (powered off, moved, or unplugged).`;
   }
-  // Category 2 — Tuya IR remote: cloud-only by design
-  if (d.d_protocol === 'cloud' && d.d_device_type === 'remote') {
-    return `Tuya IR hub (cloud-only by design) — never responds to LAN probes. Liveness comes from cloud heartbeat; check Devices page for last_seen.`;
-  }
-  // Category 4 — Tuya local on ha_api fallback for a long time = Mode B/C alert territory
+  // Tuya local on ha_api fallback for a long time = Mode B/C alert territory.
+  // 2026-05-30: clarified wording — the device IS on the LAN (Pass-2 unicast
+  // ping catches it), what's broken is the Tuya local TCP control channel
+  // (Err 901/904). LAN reachability and Tuya control are separate concerns.
   if (d.d_protocol === 'local' && d.d_last_source === 'ha_api' && ageMin > 60) {
-    return `Local TCP channel broken — device-agent fell back to cloud (ha_api). Check Project Health → System Alerts for Mode B/C details. May need device power-cycle.`;
+    return `Tuya local TCP control is broken (Err 901/904) — device-agent fell back to cloud (ha_api). The device may actually be on the LAN; check Project Health → System Alerts for the auto-recovery status (Mode B = key rotation, Mode C = TCP listener stuck → power-cycle).`;
   }
-  // Category 3 — known sparse-responders (WiFi power-save / Ring / Aqara FP2 etc.)
+  // Samsung TV vendor — TVs that are off don't respond to anything.
   const vendor = (d.vendor || '').toLowerCase();
-  if (vendor.startsWith('ring')) {
-    return `Ring devices use WiFi power-saving — they ignore broadcast ARP/ICMP between cloud events. LAN scan can't reliably detect them; check Ring app for true status.`;
-  }
-  if (vendor.includes('lumi united')) {
-    return `Aqara devices often suppress broadcast LAN traffic to save power. Liveness comes via HA WebSocket; check Devices page.`;
-  }
   if (vendor.includes('samsung electronics') && (d.name || '').match(/tv/i)) {
     return `Samsung TV — when powered off the WiFi sleeps. Will respond again once the TV is turned on.`;
   }

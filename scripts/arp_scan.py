@@ -138,6 +138,68 @@ def merge_replaced_macs(cur, now):
     return merged
 
 
+def unicast_probe_missed(cur, online_macs, now):
+    """Pass 2 — catch sparse-broadcast responders that ignore arp-scan's
+    broadcast ARP requests but DO answer unicast IP traffic once the
+    sender knows their MAC.
+
+    Verified affected devices on 2026-05-30 (8 of 14 currently-red
+    devices answered unicast ping after MAC pre-seed): Star Projector,
+    Aura Air, Ring Doorbell, Aqara FP2, Tuya IR remotes, ESP boards,
+    plus various Tuya local devices. Many WiFi-power-saving devices
+    only wake on unicast IP traffic addressed directly to them — the
+    broadcast ARP packet that arp-scan sends is filtered before they
+    notice it.
+
+    The Pass-2 technique:
+      1. Look up every MAC seen in net_devices in the last 7 days
+         that WASN'T caught by the just-finished broadcast pass.
+      2. Pre-seed the kernel's ARP cache with the known MAC so the
+         next outbound packet to that IP goes out as unicast.
+      3. Send one unicast ping (1 s timeout). If the device replies
+         the ping returns 0 → mark online.
+      4. Otherwise leave it alone (device genuinely offline; the
+         broadcast pass already missed it).
+
+    Returns set of MACs recovered."""
+    cutoff_recent = now - timedelta(days=7)
+    if online_macs:
+        cur.execute(
+            "SELECT mac, ip FROM net_devices "
+            "WHERE last_online >= %s AND mac != ALL(%s)",
+            (cutoff_recent, list(online_macs)),
+        )
+    else:
+        cur.execute(
+            "SELECT mac, ip FROM net_devices WHERE last_online >= %s",
+            (cutoff_recent,),
+        )
+    candidates = cur.fetchall()
+    recovered = set()
+    for mac, ip in candidates:
+        # Pre-seed the kernel ARP cache so the next packet to `ip`
+        # goes out as unicast to `mac` (skipping the broadcast ARP
+        # request that the device would ignore). `ip neigh replace`
+        # is local to LXC 104; no traffic on the wire yet.
+        subprocess.run(
+            ['ip', 'neigh', 'replace', ip, 'lladdr', mac,
+             'dev', IFACE, 'nud', 'reachable'],
+            capture_output=True,
+        )
+        r = subprocess.run(
+            ['ping', '-c', '1', '-W', '1', ip],
+            capture_output=True,
+        )
+        if r.returncode == 0:
+            cur.execute(
+                "UPDATE net_devices SET last_seen = %s, last_online = %s "
+                "WHERE mac = %s",
+                (now, now, mac),
+            )
+            recovered.add(mac)
+    return recovered
+
+
 def main():
     devices = run_arp()
     now = datetime.now(timezone.utc)
@@ -156,6 +218,11 @@ def main():
                         last_seen   = EXCLUDED.last_seen,
                         last_online = EXCLUDED.last_online
                 """, (mac, ip, vendor, name, now, now, now))
+
+            # Pass-2 unicast pinger — catches devices in WiFi power-save
+            # that ignored the broadcast ARP probes above.
+            recovered = unicast_probe_missed(cur, online_macs, now)
+            online_macs |= recovered
 
             # Dedup pass — collapse replaced MACs of existing physical devices
             merged = merge_replaced_macs(cur, now)
@@ -176,7 +243,7 @@ def main():
                 (now, total_online, total_offline, total_ever)
             )
         conn.commit()
-    print(f"[arp_scan] {now.isoformat()} — online:{total_online} offline:{total_offline} ever:{total_ever} merged:{merged} (grace:{ONLINE_GRACE_MIN}m)")
+    print(f"[arp_scan] {now.isoformat()} — online:{total_online} offline:{total_offline} ever:{total_ever} merged:{merged} pass2_recovered:{len(recovered)} (grace:{ONLINE_GRACE_MIN}m)")
 
 if __name__ == '__main__':
     main()
