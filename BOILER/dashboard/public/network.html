@@ -140,6 +140,22 @@
           </div>
           <div style="font-size:0.72rem; color:#888; margin-top:4px;">next run</div>
         </div>
+        <div style="width:1px; height:80px; background:#d0cbc4; margin-top:2rem;"></div>
+        <!-- Manual ARP scan trigger — fires net-arp-scan.service on LXC 104,
+             shows a progress bar while the scan runs, then refreshes the
+             devices table. Button disables itself during the run so spam
+             clicks can't overlap. -->
+        <div style="text-align:center;">
+          <div style="font-size:0.75rem; color:#888; height:2rem; display:flex; align-items:center; justify-content:center;">Manual Scan</div>
+          <div style="height:3rem; display:flex; align-items:center; justify-content:center;">
+            <button id="manual-scan-btn" class="btn btn-secondary btn-sm"
+                    onclick="triggerManualScan()"
+                    style="font-size:0.85rem; padding:6px 14px;">↻ Scan now</button>
+          </div>
+          <div id="manual-scan-progress" style="width:100%; height:6px; background:#e6e1da; border-radius:3px; margin-top:6px; overflow:hidden; visibility:hidden;">
+            <div id="manual-scan-bar" style="height:100%; width:0%; background:#7a9ab8; transition:width 0.2s linear;"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -221,6 +237,6 @@
 
 <script src="js/alerts-monitor.js?v=9"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/network.js?v=3"></script>
+<script src="js/network.js?v=5"></script>
 </body>
 </html>

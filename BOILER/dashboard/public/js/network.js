@@ -78,6 +78,54 @@ function isOnline(d) {
   return (Date.now() - new Date(d.last_online)) < 10 * 60 * 1000; // seen in last 10 min
 }
 
+// Manual ARP-scan trigger — fires the systemd one-shot on LXC 104, animates
+// a progress bar for ~6 s (typical scan completes in ~5 s with --retry=4),
+// then reloads the devices table. Button is disabled during the run to
+// prevent overlapping invocations (systemd queues them but the UX is
+// confusing if the bar resets mid-animation).
+async function triggerManualScan() {
+  const btn  = document.getElementById('manual-scan-btn');
+  const wrap = document.getElementById('manual-scan-progress');
+  const bar  = document.getElementById('manual-scan-bar');
+  if (!btn || !wrap || !bar) return;
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+  wrap.style.visibility = 'visible';
+  bar.style.width = '0%';
+  // Animate the bar over 6 s (target scan duration with a small buffer).
+  // Real scan completion triggers the reload regardless of where the bar
+  // is, but the visual feedback keeps the UI honest about latency.
+  const startTs = Date.now();
+  const ESTIMATED_MS = 6000;
+  const tick = setInterval(() => {
+    const pct = Math.min(98, ((Date.now() - startTs) / ESTIMATED_MS) * 100);
+    bar.style.width = pct.toFixed(1) + '%';
+  }, 100);
+  try {
+    const r = await fetch('/api/network/scan', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.statusText);
+  } catch (e) {
+    bar.style.background = '#c0392b';
+    btn.textContent = `Failed: ${e.message}`.slice(0, 32);
+  } finally {
+    clearInterval(tick);
+    bar.style.width = '100%';
+    // Reload the devices table so the user sees fresh data.
+    try { await loadSummary(); } catch (_) {}
+    try { await loadDevices(); } catch (_) {}
+    // Reset UI after a brief moment so the user sees the bar fill.
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = '↻ Scan now';
+      wrap.style.visibility = 'hidden';
+      bar.style.background = '#7a9ab8';
+      bar.style.width = '0%';
+    }, 600);
+  }
+}
+
 function renderDevices(list) {
   const tbody = document.getElementById('devices-body');
   document.getElementById('device-count').textContent = `${list.length} devices`;

@@ -2461,6 +2461,25 @@ app.get('/api/network/timers', async (req, res) => {
   } catch (e) { try { ssh.dispose(); } catch {} res.status(500).json({ error: e.message }); }
 });
 
+// Manual ARP scan trigger — fires the systemd one-shot on LXC 104 immediately
+// instead of waiting up to 5 min for the next timer-driven invocation. Used by
+// the "↻ Scan now" button in the Project Network overview card. systemd
+// one-shot units are inherently single-instance (the second invocation queues
+// behind the first), so overlapping clicks don't fork concurrent scans.
+app.post('/api/network/scan', async (req, res) => {
+  const { NodeSSH } = require('node-ssh');
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    const r = await ssh.execCommand('systemctl start net-arp-scan.service');
+    ssh.dispose();
+    if (r.code !== 0) {
+      return res.status(500).json({ error: `systemctl exit ${r.code}: ${r.stderr || r.stdout}` });
+    }
+    res.json({ ok: true });
+  } catch (e) { try { ssh.dispose(); } catch {} res.status(500).json({ error: e.message }); }
+});
+
 // ─── System Alerts ───────────────────────────────────────────
 app.get('/api/health/alerts', async (req, res) => {
   const includeResolved = req.query.include_resolved === 'true';
