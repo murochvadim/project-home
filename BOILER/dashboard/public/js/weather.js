@@ -1,9 +1,23 @@
 const HOURLY_CACHE = '_general_hourly_tbody';
 const DAILY_CACHE  = '_general_daily_tbody';
 
-// Restore cached tbodys instantly — prevents height jump on page load
-try { const c = localStorage.getItem(HOURLY_CACHE); if (c) document.getElementById('hourly-body').innerHTML = c; } catch(e) {}
-try { const c = localStorage.getItem(DAILY_CACHE);  if (c) document.getElementById('daily-body').innerHTML  = c; } catch(e) {}
+// Lazy init: this script now loads on project-general.html where the
+// Weather DOM doesn't exist until the user clicks the Weather tab.
+// Calling getElementById('hourly-body') at script-load time would
+// silently fail (return null) and a later innerHTML assignment would
+// throw. Instead, every entry point starts via `weatherOnTabShow()`,
+// which restores the tbody cache only after confirming the tab DOM
+// is mounted.
+let _weatherInited = false;
+function weatherRestoreCache() {
+  if (_weatherInited) return;
+  const hb = document.getElementById('hourly-body');
+  const db = document.getElementById('daily-body');
+  if (!hb || !db) return;   // tab not rendered yet — try again next show
+  try { const c = localStorage.getItem(HOURLY_CACHE); if (c) hb.innerHTML = c; } catch (e) {}
+  try { const c = localStorage.getItem(DAILY_CACHE);  if (c) db.innerHTML = c; } catch (e) {}
+  _weatherInited = true;
+}
 
 function setHTML(el, html) {
   el.innerHTML = html;
@@ -195,8 +209,15 @@ async function loadDaily() {
 async function refreshAll() {
   renderSeason('season-badge-w', 'season-label-w');
   await Promise.all([loadScores(), loadCurrent(), loadHourly(), loadDaily()]);
-  document.getElementById('last-refresh').textContent =
+  const stamp = document.getElementById('weather-last-refresh');
+  if (stamp) stamp.textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
 }
 
-refreshAll();
+// Called by project-general.html when the Weather tab is opened. First
+// call restores cached tbodys + fires a fetch; subsequent calls just
+// refetch (cache restoration is idempotent + guarded by _weatherInited).
+function weatherOnTabShow() {
+  weatherRestoreCache();
+  refreshAll();
+}
