@@ -116,13 +116,19 @@ def evaluate(event, state):
     registry = _load_registry(state)
     if not registry:
         return []
-    matching = [r for r in registry if r['device_id'] == dev_id]
-    if not matching:
-        return []
 
-    dev = state.devices.get(dev_id)
-    if not dev:
-        return []
+    # Heartbeat tick: sweep EVERY state_known row regardless of which device
+    # the event names. Catches devices that were already in their current
+    # state when added to the registry (no source-event fires for stable
+    # devices, so without this sweep they stay frozen at the row's default
+    # live={on:false}). Also self-heals after engine restart or any drift.
+    # Real device events keep the fast per-device path below.
+    if dev_id == 'heartbeat':
+        matching = registry
+    else:
+        matching = [r for r in registry if r['device_id'] == dev_id]
+        if not matching:
+            return []
 
     last_on_map = state.shared.get(SHARED_LAST_ON_KEY) or {}
     now_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
@@ -130,6 +136,9 @@ def evaluate(event, state):
     changed = False
     for reg in matching:
         rid = str(reg['row_id'])
+        dev = state.devices.get(reg['device_id'])
+        if not dev:
+            continue
         is_on = _read_device_on(dev, reg['channel'])
         prior = last_on_map.get(rid)
         if prior == is_on:
@@ -147,7 +156,7 @@ def evaluate(event, state):
             state.emit_virtual_event(
                 virtual_id='virtual:power_state',
                 dps={
-                    'device_id': dev_id,
+                    'device_id': reg['device_id'],
                     'channel':   reg['channel'] or '',
                     'phase':     reg['phase'] or '',
                     'on':        bool(is_on),
@@ -163,11 +172,11 @@ def evaluate(event, state):
                     'w':         'Watts',
                 },
             )
-            label = dev_id + (f":{reg['channel']}" if reg['channel'] else '')
+            label = reg['device_id'] + (f":{reg['channel']}" if reg['channel'] else '')
             log.info("power_known_state: %s -> %s (w=%s)",
                      label, 'ON' if is_on else 'OFF', w)
         except Exception as e:
-            log.warning("power_known_state: confirm failed for %s: %s", dev_id, e)
+            log.warning("power_known_state: confirm failed for %s: %s", reg['device_id'], e)
         last_on_map[rid] = is_on
         changed = True
 
