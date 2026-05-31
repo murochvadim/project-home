@@ -59,7 +59,7 @@ body {
 
 /* ── Sidebar ── */
 #sidebar {
-  width: 220px;
+  width: 250px;
   background: #1e2a3a;
   color: #cdd8e3;
   display: flex;
@@ -70,6 +70,8 @@ body {
   left: 0;
   bottom: 0;
   z-index: 100;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #sidebar .logo {
@@ -125,7 +127,8 @@ body {
 }
 
 #integrations-indicator,
-#network-indicator {
+#network-indicator,
+#netbird-indicator {
   font-size: 0.65rem;
   background: #3a7d44;
   color: #fff;
@@ -180,7 +183,7 @@ body {
 
 /* ── Main content ── */
 #content {
-  margin-left: 220px;
+  margin-left: 250px;
   flex: 1;
   padding: 28px 32px;
 }

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Gateway</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a><a href="network.html" id="network-indicator"></a><a href="gateway.html" id="netbird-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="gateway.html">Project Gateway</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html">Project Boards</a>
+  <a href="power.html">Project Power</a>
+  <a href="general.html">Weather</a>
+  <a href="project-general.html">Project General</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+  <a href="my-bathroom.html">My BathRoom Agent</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Project Gateway</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Top status header — fills via /api/gateway/status -->
+  <div class="card" id="gw-status-card" style="margin-bottom:16px;">
+    <div id="gw-status-line" style="font-size:1rem; color:#666;">Loading NetBird tenant status…</div>
+  </div>
+
+  <!-- Peer identity card -->
+  <div class="card">
+    <h2>Peers</h2>
+    <p style="color:#666; font-size:0.9rem; margin-top:0;">
+      Each peer in your NetBird tenant + your project-level identity overlay.
+      Edit User / Role / Device label inline. Per-peer offline alert threshold
+      configurable via the Settings button on each row.
+    </p>
+    <div style="overflow-x:auto;">
+      <table id="gw-peers-table" style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead>
+          <tr style="background:#fafaf6;">
+            <th style="text-align:left; padding:6px 12px;">NetBird Name</th>
+            <th style="text-align:left; padding:6px 12px;">FQDN</th>
+            <th style="text-align:center; padding:6px 12px;">NetBird IP</th>
+            <th style="text-align:center; padding:6px 12px;">Status</th>
+            <th style="text-align:center; padding:6px 12px;">Last seen</th>
+            <th style="text-align:left; padding:6px 12px;">User</th>
+            <th style="text-align:left; padding:6px 12px;">Role</th>
+            <th style="text-align:left; padding:6px 12px;">Device label</th>
+            <th style="text-align:center; padding:6px 12px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="gw-peers-tbody">
+          <tr><td colspan="9" style="padding:14px; text-align:center; color:#aaa;">Waiting for token…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Active routes card -->
+  <div class="card" style="margin-top:16px;">
+    <h2>Active Network Routes</h2>
+    <p style="color:#666; font-size:0.9rem; margin-top:0;">
+      Read-only view of NetBird routes (managed in NetBird Cloud admin).
+    </p>
+    <div style="overflow-x:auto;">
+      <table id="gw-routes-table" style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead>
+          <tr style="background:#fafaf6;">
+            <th style="text-align:left;   padding:6px 12px;">Network name</th>
+            <th style="text-align:center; padding:6px 12px;">CIDR</th>
+            <th style="text-align:left;   padding:6px 12px;">Routing peer(s)</th>
+            <th style="text-align:center; padding:6px 12px;">Status</th>
+          </tr>
+        </thead>
+        <tbody id="gw-routes-tbody">
+          <tr><td colspan="4" style="padding:14px; text-align:center; color:#aaa;">Waiting for token…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Tenant alert settings card -->
+  <div class="card" style="margin-top:16px;">
+    <h2>Tenant Alert Settings</h2>
+    <p style="color:#666; font-size:0.9rem; margin-top:0;">
+      Rules for when the NetBird watchdog (LXC 104) writes to
+      <code>system_alerts</code>. These appear in the sidebar Status badge +
+      Project Health like every other alert.
+    </p>
+    <div id="gw-settings-form" style="display:grid; grid-template-columns:max-content 1fr; gap:10px 18px; align-items:center; max-width:640px;">
+      <label for="gw-alert-new-peer">Alert on new peer joining tenant:</label>
+      <input type="checkbox" id="gw-alert-new-peer" />
+
+      <label for="gw-alert-route-drop">Alert when a route stops announcing:</label>
+      <input type="checkbox" id="gw-alert-route-drop" />
+
+      <label for="gw-poll-interval">Watchdog poll interval (sec):</label>
+      <input type="number" id="gw-poll-interval" min="30" max="600" step="10" style="width:100px;" />
+
+      <label style="align-self:start;">Trusted peers:</label>
+      <div id="gw-trusted-peers" style="font-size:0.88rem; color:#888;">
+        Will populate once peers load.
+      </div>
+    </div>
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <button class="btn btn-primary btn-sm" onclick="gwSaveSettings()" style="padding:6px 18px;">💾 Save settings</button>
+      <button class="btn btn-secondary btn-sm" onclick="gwTrustAll()" style="padding:6px 18px;">✓ Trust all current peers</button>
+      <button class="btn btn-secondary btn-sm" onclick="gwRunWatchdog()" style="padding:6px 18px;">▶ Run watchdog now</button>
+      <span id="gw-settings-msg" style="margin-left:8px; font-size:0.9rem;"></span>
+    </div>
+  </div>
+
+  <!-- Recent events card -->
+  <div class="card" style="margin-top:16px;">
+    <h2>Recent NetBird Events</h2>
+    <p style="color:#666; font-size:0.9rem; margin-top:0;">
+      Last 20 entries from <code>system_alerts</code> where alert_type starts with <code>netbird:</code> — active and recently-resolved.
+    </p>
+    <div style="overflow-x:auto;">
+      <table id="gw-events-table" style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead>
+          <tr style="background:#fafaf6;">
+            <th style="text-align:left;   padding:6px 12px;">Time</th>
+            <th style="text-align:left;   padding:6px 12px;">Type</th>
+            <th style="text-align:center; padding:6px 12px;">Severity</th>
+            <th style="text-align:left;   padding:6px 12px;">Message</th>
+            <th style="text-align:center; padding:6px 12px;">Resolved</th>
+          </tr>
+        </thead>
+        <tbody id="gw-events-tbody">
+          <tr><td colspan="5" style="padding:14px; text-align:center; color:#aaa;">No NetBird events yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Edit-peer modal placeholder — rendered dynamically -->
+
+</main>
+
+<script src="js/alerts-monitor.js?v=11"></script>
+<script src="js/scroll-stabilizer.js"></script>
+<script src="js/gateway.js?v=6"></script>
+</body>
+</html>

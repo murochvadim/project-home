@@ -266,13 +266,71 @@
     } catch (e) {}
   }
 
+  // ── NetBird badge (peers online + active netbird:* alerts) ──────────
+  // Goes alongside the other infra badges. Click → Project Gateway.
+  // 503 from the endpoint = token missing → render the badge in amber
+  // so the dashboard surfaces that NetBird isn't fully wired yet.
+  const NETBIRD_STORE = '_netbird_status';
+
+  function applyNetbirdState(state) {
+    const el = document.getElementById('netbird-indicator');
+    if (!el) return;
+    const { peersOnline = 0, peersTotal = 0, alerts = 0, tokenMissing = false } = state || {};
+    if (tokenMissing) {
+      el.textContent = 'NetBird Integration ⚠ no token';
+      el.title = 'NETBIRD_API_TOKEN not configured. Add it to BOILER/dashboard/.env and restart.';
+      el.style.background = '#5c0e0e';
+      return;
+    }
+    if (alerts > 0) {
+      el.textContent = `NetBird Integration ✗ ${alerts} alert${alerts > 1 ? 's' : ''}`;
+      el.title = `${alerts} active NetBird tenant alert${alerts > 1 ? 's' : ''}. Click for Project Gateway.`;
+      el.style.background = '#5c0e0e';
+      return;
+    }
+    if (peersTotal > 0 && peersOnline < peersTotal) {
+      el.textContent = `NetBird Integration ✗ ${peersTotal - peersOnline} offline`;
+      el.title = `${peersOnline} of ${peersTotal} NetBird peers online. Click for Project Gateway.`;
+      el.style.background = '#5c0e0e';
+      return;
+    }
+    el.textContent = 'NetBird Integration ✓';
+    el.title = peersTotal > 0
+      ? `All ${peersTotal} NetBird peers online. Click for Project Gateway.`
+      : 'No peers in tenant yet.';
+    el.style.background = '#3a7d44';
+  }
+
+  try {
+    const saved = localStorage.getItem(NETBIRD_STORE);
+    if (saved) applyNetbirdState(JSON.parse(saved));
+  } catch (e) {}
+
+  async function checkNetbird() {
+    try {
+      const resp = await fetch('/api/gateway/status');
+      const d = await resp.json().catch(() => ({}));
+      const state = (resp.status === 503)
+        ? { tokenMissing: true }
+        : {
+            peersOnline: d.peers?.online || 0,
+            peersTotal:  d.peers?.total  || 0,
+            alerts:      d.alerts?.active || 0,
+          };
+      applyNetbirdState(state);
+      try { localStorage.setItem(NETBIRD_STORE, JSON.stringify(state)); } catch (e) {}
+    } catch (e) {}
+  }
+
   // First check after page settles, then every 60 s
   setTimeout(checkAlerts, 1500);
   setTimeout(checkBattery, 2000);
   setTimeout(checkIntegrations, 2500);
   setTimeout(checkNetwork, 3000);
+  setTimeout(checkNetbird, 3500);
   setInterval(checkAlerts, 60000);
   setInterval(checkBattery, 60000);
   setInterval(checkIntegrations, 60000);
   setInterval(checkNetwork, 60000);
+  setInterval(checkNetbird, 60000);
 })();

@@ -130,6 +130,7 @@ function renderStatus(r) {
   document.getElementById('svc-lxc105').innerHTML = dot(r.lxc105?.ok);
   document.getElementById('svc-lxc106').innerHTML = dot(r.lxc106?.ok);
   document.getElementById('svc-lxc107').innerHTML = dot(r.lxc107?.ok);
+  document.getElementById('svc-lxc108').innerHTML = dot(r.lxc108?.ok);
 
   const htp = r.ha_to_pg;
   if (htp) {
@@ -272,7 +273,7 @@ async function loadStatus() {
     renderStatus(r);
     try { localStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(r)); } catch (e) {}
   } catch (e) {
-    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-vm101',
+    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-vm101',
      'svc-agent','svc-media-agents','svc-voice-agent','svc-auto-scan','svc-ha-to-pg','svc-pm2',
      'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs','svc-ups'
     ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });

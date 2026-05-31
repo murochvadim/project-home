@@ -1,6 +1,98 @@
 # NetBird VPN (transport layer for off-network access)
 
-**Status:** PARTIAL — hosted-tier route taken first (2026-05-20). Self-host plan still valid as Phase 5+ if needed.
+**Status:** ACTIVE — hosted tier @ `app.netbird.io`, LXC 108 gateway peer routing whole home LAN (2026-05-31). Project Gateway dashboard page under construction.
+
+## Update 2026-05-31 — LXC 108 gateway + dashboard agent
+
+Two milestones today:
+
+### Milestone A — Gateway peer for whole-LAN access
+
+LXC 108 created on Proxmox host as the dedicated NetBird gateway. Replaces the earlier "only the Windows host is a peer" topology, so now ANY peer in the tenant can reach ANY home LAN IP regardless of whether the Windows laptop is on.
+
+| Spec | Value |
+|---|---|
+| Proxmox CT ID | 108 |
+| Hostname | `netbird-gw` |
+| LAN IP | `192.168.1.195/24` (gateway `192.168.1.1`) |
+| Template | `debian-12-standard_12.12-1_amd64` |
+| Resources | 1 vCPU, 512 MB RAM, 4 GB disk (`local-zfs`) |
+| Privileged | yes (matches the rest of the project's LXCs — kernel WireGuard works instead of userspace fallback) |
+| Features | `nesting=1` |
+| onboot | 1 |
+| SSH keys | inherited from Proxmox host's `/root/.ssh/authorized_keys` (claude-code + root@proxmox) |
+| NetBird version | 0.71.4 (Linux client) |
+| NetBird IP | `100.102.204.103/16` |
+| NetBird FQDN | `netbird-gw.netbird.cloud` |
+| Interface type | Kernel (not userspace) |
+| `ip_forward` | enabled + persisted in `/etc/sysctl.conf` |
+
+NetBird Cloud admin has `home-lan` network resource (CIDR `192.168.1.0/24`) with `netbird-gw` as the routing peer. Confirmed via `netbird status -d` on the Windows host (`newasus.netbird.cloud`, IP `100.102.207.1`) — it sees the peer announcing `192.168.1.0/24`.
+
+**What this unlocks:** any NetBird peer in the tenant (Windows laptop, smartphone when its Android VPN-permission issue is fixed, future devices) can reach every home LAN service directly:
+- `http://192.168.1.110:8123` — Home Assistant
+- `http://192.168.1.128:3000` — Dashboard (Windows host)
+- `192.168.1.219:5432` — Postgres
+- All LXCs at `192.168.1.{114,138,187,188,189,219,227,190}`
+- QNAP, router admin, etc.
+
+No port forwarding on the home router. No public exposure. NetBird Cloud handles tenant auth via Google SSO.
+
+### Milestone B — Project Gateway dashboard agent
+
+NetBird/CLAUDE.md becomes the index for a new dashboard agent: **Project Gateway** (`gateway.html` + `js/gateway.js`). The agent's purpose is the controls NetBird Cloud admin doesn't natively cover:
+
+1. **Peer identity overlay** — map NetBird peers (which only know FQDNs like `ahmed-iphone`) to project identities (User, Role, Device label). The mapping is consulted by other project features so "who is connecting via NetBird" propagates into rules, dashboards, and notifications.
+2. **Tenant-event alerts** — push NetBird state into the existing `system_alerts` pipeline so unknown peers joining the tenant, peers offline beyond a per-peer threshold, or routes silently dropping all surface in the same dashboard badge as every other alert.
+
+**File locations** (per project convention — files live in shared dirs, this CLAUDE.md is the index):
+
+| Artifact | Path |
+|---|---|
+| Dashboard page | `BOILER/dashboard/public/gateway.html` + `BOILER/dashboard/public/js/gateway.js` |
+| Server endpoints | `BOILER/dashboard/server.js` → `/api/gateway/*` cluster |
+| DB tables (LXC 102) | `netbird_peers_local` (peer identity overlay) + `netbird_tenant_settings` (tenant-wide alert prefs) |
+| Watchdog | `scripts/netbird_watchdog.py` → deployed to `/opt/netbird_watchdog.py` on LXC 104, cron every 5 min |
+| Token storage | `BOILER/dashboard/.env` → `NETBIRD_API_TOKEN` (server.js consumer) + `/etc/netbird-watchdog.env` on LXC 104 (watchdog consumer); both must hold the same NetBird Personal Access Token generated in `app.netbird.io` → Profile → Personal Access Tokens |
+| Sidebar slot | between Project Network and Project Boards |
+| Sidebar status sub-badge | `NetBird ✓ N/M online` / `NetBird ⚠ alert` — added to `alerts-monitor.js`, polls `/api/gateway/status` |
+| Alert namespace | `netbird:new_peer:<peer_id>` / `netbird:peer_offline:<peer_id>` / `netbird:route_dropped:<route_id>` — consistent with existing `group_stale:*` and `network:*` patterns; auto-resolve when condition clears |
+| Watchdog `source` in `system_alerts` | `netbird_watchdog` |
+
+**DB schemas** (LXC 102, both retention=forever via `retention_policies`):
+
+```sql
+CREATE TABLE netbird_peers_local (
+  peer_id           text PRIMARY KEY,
+  netbird_name      text,
+  netbird_fqdn      text,
+  user_name         text,
+  role              text,
+  device_label      text,
+  alert_offline_min int,
+  alert_on_join     boolean DEFAULT false,
+  notes             text,
+  bookmarks         jsonb DEFAULT '[]'::jsonb,
+  created_at        timestamptz DEFAULT NOW(),
+  updated_at        timestamptz DEFAULT NOW()
+);
+
+CREATE TABLE netbird_tenant_settings (
+  id                int PRIMARY KEY DEFAULT 1,
+  alert_new_peer    boolean DEFAULT true,
+  alert_route_drop  boolean DEFAULT true,
+  trusted_peers     jsonb DEFAULT '[]'::jsonb,
+  poll_interval_sec int DEFAULT 60,
+  updated_at        timestamptz DEFAULT NOW(),
+  CHECK (id = 1)
+);
+```
+
+**API auth pattern:** Bearer token in `Authorization` header against `https://api.netbird.io/api/peers` (and `/api/networks`, `/api/groups`, etc.). Token revocable from NetBird Cloud admin at any time — both consumers (server.js + watchdog) will fail the same way when that happens, which is intentional and surface-able as an alert.
+
+**Mobile Cockpit (PWA) lives separately** at `NETBIRD/MOBILE/CLAUDE.md` — different scope (end-user touch surface), runs on LXC 105 as the `mobile-api` service. Not affected by today's work; both efforts share the NetBird transport layer.
+
+---
 
 ## Update 2026-05-20 — hosted-tier setup completed
 

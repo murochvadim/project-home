@@ -14,11 +14,12 @@
 <body>
 
 <nav id="sidebar">
-  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a><a href="network.html" id="network-indicator"></a></div></div>
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a><a href="network.html" id="network-indicator"></a><a href="gateway.html" id="netbird-indicator"></a></div></div>
 
   <div class="section-label">General</div>
   <a href="health.html" class="active">Project Health</a>
   <a href="network.html">Project Network</a>
+  <a href="gateway.html">Project Gateway</a>
   <a href="rooms.html">Project Rooms</a>
   <a href="esp-boards.html">Project Boards</a>
   <a href="power.html">Project Power</a>
@@ -224,6 +225,10 @@
         <div class="status-item">
           <label>LXC 107 — MQTT</label>
           <div class="value small" id="svc-lxc107">—</div>
+        </div>
+        <div class="status-item">
+          <label>LXC 108 — NetBird</label>
+          <div class="value small" id="svc-lxc108">—</div>
         </div>
       </div>
 
@@ -842,7 +847,7 @@ async function deploy() {
   }
 }
 </script>
-<script src="js/alerts-monitor.js?v=9"></script>
+<script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="js/health.js?v=38"></script>

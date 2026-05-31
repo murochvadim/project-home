@@ -1950,7 +1950,7 @@ async function runHealthChecks() {
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
-    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result,
+    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
@@ -2006,6 +2006,7 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.187', 22),    // LXC 105 — MainAgent
     tcpCheck('192.168.1.188', 22),    // LXC 106 — Voice
     tcpCheck('192.168.1.189', 22),    // LXC 107 — MQTT
+    tcpCheck('192.168.1.195', 22),    // LXC 108 — NetBird gateway
   ]);
 
   const r = {};
@@ -2021,6 +2022,7 @@ async function runHealthChecks() {
   r.lxc105 = { ok: lxc105Result.ok };
   r.lxc106 = { ok: lxc106Result.ok };
   r.lxc107 = { ok: lxc107Result.ok };
+  r.lxc108 = { ok: lxc108Result.ok };
   // Server
   r.pm2 = pm2Result;
   // Services — boiler_agent status from orchestrator's system_alerts
@@ -2192,6 +2194,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
       'esp_boards',
       'power_consumption', 'power_devices', 'power_bills',
+      'netbird_peers_local', 'netbird_tenant_settings',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2217,6 +2220,8 @@ app.get('/api/health/db-volumes', async (req, res) => {
       power_consumption: 'ts',
       power_devices: 'updated_at',
       power_bills: 'uploaded_at',
+      netbird_peers_local: 'updated_at',
+      netbird_tenant_settings: 'updated_at',
     };
 
     const sizes = await db.query(`
@@ -2531,6 +2536,253 @@ app.post('/api/network/scan', async (req, res) => {
     }
     res.json({ ok: true });
   } catch (e) { try { ssh.dispose(); } catch {} res.status(500).json({ error: e.message }); }
+});
+
+// ───────────────────────────────────────────────────────────────────
+// Project Gateway — NetBird peer identity overlay + tenant alert
+// settings. Index: NETBIRD/CLAUDE.md. Tables: netbird_peers_local +
+// netbird_tenant_settings on LXC 102. Token: NETBIRD_API_TOKEN in
+// BOILER/dashboard/.env (consumed here) AND /etc/netbird-watchdog.env
+// on LXC 104 (consumed by scripts/netbird_watchdog.py). When the env
+// var is empty, every read endpoint returns 503 with a friendly error
+// so the dashboard shell can render a "token missing" hint instead
+// of an opaque failure.
+// ───────────────────────────────────────────────────────────────────
+
+const NETBIRD_API_BASE = 'https://api.netbird.io/api';
+const _NB_CACHE = { peers: null, peersTs: 0, routes: null, routesTs: 0 };
+const _NB_CACHE_TTL_MS = 30_000;
+
+function _nbToken() {
+  return (process.env.NETBIRD_API_TOKEN || '').trim();
+}
+
+async function _nbFetch(path) {
+  const token = _nbToken();
+  if (!token) {
+    const err = new Error('NETBIRD_API_TOKEN not configured');
+    err.status = 503;
+    throw err;
+  }
+  const url = `${NETBIRD_API_BASE}${path}`;
+  const r = await fetch(url, {
+    headers: { 'Authorization': `Token ${token}`, 'Accept': 'application/json' },
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    const err = new Error(`NetBird API ${r.status}: ${body.slice(0, 200) || r.statusText}`);
+    err.status = r.status === 401 ? 401 : 502;
+    throw err;
+  }
+  return r.json();
+}
+
+// GET /api/gateway/peers — live peer list from NetBird API joined with
+// netbird_peers_local overlay. 30 s cache on the NetBird API hit so 5 s
+// dashboard polling doesn't hammer the upstream.
+app.get('/api/gateway/peers', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
+      _NB_CACHE.peers   = await _nbFetch('/peers');
+      _NB_CACHE.peersTs = now;
+    }
+    const overlay = await db.query('SELECT * FROM netbird_peers_local');
+    const overlayMap = new Map(overlay.rows.map(r => [r.peer_id, r]));
+    const peers = (_NB_CACHE.peers || []).map(p => {
+      const ov = overlayMap.get(p.id) || {};
+      return {
+        peer_id:      p.id,
+        name:         p.name,
+        fqdn:         p.dns_label || p.hostname,
+        ip:           p.ip,
+        connected:    !!p.connected,
+        last_seen:    p.last_seen,
+        os:           p.os,
+        version:      p.version,
+        user_name:    ov.user_name || null,
+        role:         ov.role || null,
+        device_label: ov.device_label || null,
+        notes:        ov.notes || null,
+        alert_offline_min: ov.alert_offline_min,
+        alert_on_join:     ov.alert_on_join,
+      };
+    });
+    res.json({ peers });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/gateway/peer/:peer_id — upserts identity-overlay fields
+app.patch('/api/gateway/peer/:peer_id', async (req, res) => {
+  const allowed = ['user_name', 'role', 'device_label', 'notes', 'alert_offline_min', 'alert_on_join'];
+  const fields = {};
+  for (const k of allowed) if (k in (req.body || {})) fields[k] = req.body[k];
+  if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'no allowed fields in body' });
+  try {
+    const cols = Object.keys(fields);
+    const vals = cols.map(k => fields[k]);
+    const setStr = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
+    const insertCols = ['peer_id', ...cols].join(', ');
+    const insertPlaceholders = ['$1', ...cols.map((_, i) => `$${i + 2}`)].join(', ');
+    await db.query(
+      `INSERT INTO netbird_peers_local (${insertCols})
+       VALUES (${insertPlaceholders})
+       ON CONFLICT (peer_id) DO UPDATE SET ${setStr}, updated_at = NOW()`,
+      [req.params.peer_id, ...vals],
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/gateway/routes — NetBird's REST API splits route info across
+// 3 endpoints: /networks (containers), /networks/{id}/resources (CIDR),
+// /networks/{id}/routers (peer IDs). We join them here and resolve peer
+// IDs against the cached peer list to surface friendly names.
+app.get('/api/gateway/routes', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (!_NB_CACHE.routes || (now - _NB_CACHE.routesTs) > _NB_CACHE_TTL_MS) {
+      const nets = await _nbFetch('/networks');
+      // Refresh peer cache too so we can resolve router.peer → peer.name.
+      if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
+        _NB_CACHE.peers   = await _nbFetch('/peers');
+        _NB_CACHE.peersTs = now;
+      }
+      const peerById = new Map((_NB_CACHE.peers || []).map(p => [p.id, p.name]));
+      const expanded = await Promise.all((nets || []).map(async n => {
+        // Each net has 0..N resources (each = a CIDR address) and 0..N routers
+        // (each = a peer that announces the route). Parallel-fetch both.
+        let resources = []; let routers = [];
+        try { resources = await _nbFetch(`/networks/${n.id}/resources`); } catch (_) {}
+        try { routers   = await _nbFetch(`/networks/${n.id}/routers`);   } catch (_) {}
+        const cidrs = (resources || []).map(r => r.address).filter(Boolean);
+        const peerNames = (routers || []).map(r => peerById.get(r.peer) || r.peer).filter(Boolean);
+        const anyEnabled = (resources || []).some(r => r.enabled !== false)
+                       && (routers   || []).some(r => r.enabled !== false);
+        return {
+          id:            n.id,
+          network_name:  n.name,
+          cidr:          cidrs.join(', ') || '—',
+          routing_peers: peerNames,
+          enabled:       anyEnabled,
+        };
+      }));
+      _NB_CACHE.routes   = expanded;
+      _NB_CACHE.routesTs = now;
+    }
+    res.json({ routes: _NB_CACHE.routes });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// GET /api/gateway/settings — singleton row in netbird_tenant_settings
+app.get('/api/gateway/settings', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM netbird_tenant_settings WHERE id = 1');
+    res.json(r.rows[0] || {});
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/gateway/settings — update tenant-wide alert prefs
+app.post('/api/gateway/settings', async (req, res) => {
+  const b = req.body || {};
+  try {
+    await db.query(
+      `UPDATE netbird_tenant_settings
+       SET alert_new_peer    = COALESCE($1, alert_new_peer),
+           alert_route_drop  = COALESCE($2, alert_route_drop),
+           poll_interval_sec = COALESCE($3, poll_interval_sec),
+           trusted_peers     = COALESCE($4::jsonb, trusted_peers),
+           updated_at = NOW()
+       WHERE id = 1`,
+      [
+        typeof b.alert_new_peer   === 'boolean' ? b.alert_new_peer   : null,
+        typeof b.alert_route_drop === 'boolean' ? b.alert_route_drop : null,
+        Number.isFinite(b.poll_interval_sec) ? b.poll_interval_sec : null,
+        Array.isArray(b.trusted_peers) ? JSON.stringify(b.trusted_peers) : null,
+      ],
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/gateway/status — lightweight summary for sidebar badge
+app.get('/api/gateway/status', async (req, res) => {
+  if (!_nbToken()) {
+    return res.status(503).json({ error: 'NETBIRD_API_TOKEN not configured', peers: { total: 0, online: 0 }, routes: { total: 0, healthy: 0 }, alerts: { active: 0 } });
+  }
+  try {
+    const now = Date.now();
+    if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
+      _NB_CACHE.peers   = await _nbFetch('/peers');
+      _NB_CACHE.peersTs = now;
+    }
+    if (!_NB_CACHE.routes || (now - _NB_CACHE.routesTs) > _NB_CACHE_TTL_MS) {
+      _NB_CACHE.routes   = await _nbFetch('/networks');
+      _NB_CACHE.routesTs = now;
+    }
+    const peers   = _NB_CACHE.peers || [];
+    const routes  = _NB_CACHE.routes || [];
+    const alertR  = await db.query(`SELECT COUNT(*)::int AS n FROM system_alerts WHERE alert_type LIKE 'netbird:%' AND resolved_at IS NULL`);
+    res.json({
+      peers:  { total: peers.length,  online:  peers.filter(p => p.connected).length },
+      routes: { total: routes.length, healthy: routes.filter(r => r.enabled !== false).length },
+      alerts: { active: alertR.rows[0]?.n || 0 },
+    });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// POST /api/gateway/watchdog/run — manual trigger of the LXC 104 watchdog.
+// Same script the cron runs every 5 min; this just runs it on demand so
+// the user doesn't have to wait when they've just changed settings.
+app.post('/api/gateway/watchdog/run', async (req, res) => {
+  const { NodeSSH } = require('node-ssh');
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    const r = await ssh.execCommand(
+      'set -a; . /etc/netbird-watchdog.env; set +a; /usr/bin/python3 /opt/netbird_watchdog.py 2>&1'
+    );
+    ssh.dispose();
+    if (r.code !== 0) {
+      return res.status(500).json({ error: `watchdog exited ${r.code}`, output: r.stdout || r.stderr });
+    }
+    // The watchdog logs "Pass complete: N peers, N networks; offline_alerts=N"
+    const m = (r.stdout || '').match(/Pass complete:.*/);
+    res.json({ ok: true, summary: m ? m[0].trim() : 'OK', output: r.stdout });
+  } catch (e) {
+    try { ssh.dispose(); } catch (_) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/gateway/events?limit=20 — recent system_alerts of type netbird:*
+app.get('/api/gateway/events', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  try {
+    const r = await db.query(
+      `SELECT id, ts, alert_type, severity, message, resolved_at, affected_agent, source
+       FROM system_alerts
+       WHERE alert_type LIKE 'netbird:%'
+       ORDER BY ts DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({ events: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── System Alerts ───────────────────────────────────────────
@@ -7587,7 +7839,12 @@ app.delete('/api/rooms/:name', async (req, res) => {
 
 const PORT = 3000;
 ensureSchema().then(() => {
-  app.listen(PORT, '127.0.0.1', () => {
+  // Bind to all interfaces so NetBird peers can reach the dashboard via the
+  // wt0 (WireGuard Tunnel) interface at 100.102.207.1:3000. A Windows
+  // Firewall rule restricts inbound TCP/3000 to the wt0 interface only —
+  // home LAN (eth/wifi) inbound is blocked. Loopback (127.0.0.1) still
+  // works for pm2 health checks + local browser access.
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`Boiler Dashboard running at http://localhost:${PORT}`);
   });
 }).catch(e => {
