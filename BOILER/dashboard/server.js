@@ -2195,6 +2195,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'esp_boards',
       'power_consumption', 'power_devices', 'power_bills',
       'netbird_peers_local', 'netbird_tenant_settings',
+      'device_locations',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2222,6 +2223,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       power_bills: 'uploaded_at',
       netbird_peers_local: 'updated_at',
       netbird_tenant_settings: 'updated_at',
+      device_locations: 'ts',
     };
 
     const sizes = await db.query(`
@@ -2777,6 +2779,181 @@ app.get('/api/gateway/events', async (req, res) => {
        WHERE alert_type LIKE 'netbird:%'
        ORDER BY ts DESC
        LIMIT $1`,
+      [limit],
+    );
+    res.json({ events: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────
+// Project Geolocation — phone movement tracking. Index:
+// GEOLOCATION/CLAUDE.md. Tables: device_locations on LXC 102 (time
+// series of GPS pings) + device_events rows for geofence:home /
+// geofence:away crossings. Settings live in
+// dashboard_settings.geolocation (singleton JSONB). Ingest runs on
+// LXC 104 via systemd timer (geolocation-ingest.timer, 30 s cadence).
+// ───────────────────────────────────────────────────────────────────
+
+// GET /api/geolocation/settings — read singleton config
+app.get('/api/geolocation/settings', async (req, res) => {
+  try {
+    const r = await db.query("SELECT value FROM dashboard_settings WHERE key = 'geolocation'");
+    const defaults = {
+      center:                { lat: 32.1593, lon: 34.8932 },
+      home_radius_m:         80,
+      tracked_devices:       [],
+      retention_days:        30,
+      geofence_events:       true,
+      trail_window_default:  '24h',
+      low_accuracy_filter_m: 100,
+      stale_alert_hours:     6,
+      dedup_radius_m:        25,
+      dedup_window_sec:      60,
+    };
+    const val = r.rows[0]?.value || defaults;
+    // Merge defaults for missing keys so frontend never breaks
+    res.json({ ...defaults, ...val });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/geolocation/settings — replace config
+app.post('/api/geolocation/settings', async (req, res) => {
+  const cfg = req.body || {};
+  // Allow-listed fields only; reject anything else to keep DB clean
+  const allowed = ['center', 'home_radius_m', 'tracked_devices', 'retention_days',
+                   'geofence_events', 'trail_window_default', 'low_accuracy_filter_m',
+                   'stale_alert_hours', 'dedup_radius_m', 'dedup_window_sec'];
+  const clean = {};
+  for (const k of allowed) if (k in cfg) clean[k] = cfg[k];
+  try {
+    await db.query(
+      `INSERT INTO dashboard_settings (key, value, updated_at)
+       VALUES ('geolocation', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()`,
+      [JSON.stringify(clean)],
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/geolocation/locations?device_id=X&since=ISO&limit=N
+// Returns trail points for a device, newest first. Default window 24h.
+app.get('/api/geolocation/locations', async (req, res) => {
+  const deviceId = String(req.query.device_id || '').trim();
+  if (!deviceId) return res.status(400).json({ error: 'device_id required' });
+  const limit = Math.min(parseInt(req.query.limit, 10) || 5000, 10000);
+  const sinceStr = req.query.since;
+  try {
+    const params = [deviceId];
+    let where = 'device_id = $1';
+    if (sinceStr) {
+      params.push(sinceStr);
+      where += ` AND ts >= $${params.length}`;
+    }
+    params.push(limit);
+    const r = await db.query(
+      `SELECT id, ts, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source
+       FROM device_locations
+       WHERE ${where}
+       ORDER BY ts ASC
+       LIMIT $${params.length}`,
+      params,
+    );
+    res.json({ device_id: deviceId, locations: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/geolocation/status — latest position per tracked device +
+// home/away/offline classification.
+app.get('/api/geolocation/status', async (req, res) => {
+  try {
+    const s = await db.query("SELECT value FROM dashboard_settings WHERE key = 'geolocation'");
+    const cfg = s.rows[0]?.value || {};
+    const devices = Array.isArray(cfg.tracked_devices) ? cfg.tracked_devices : [];
+    const center = cfg.center || {};
+    const radius = Number(cfg.home_radius_m) || 80;
+    const staleHours = Number(cfg.stale_alert_hours) || 6;
+    // Pull latest ping per device
+    const rows = await Promise.all(devices.map(async d => {
+      const r = await db.query(
+        `SELECT ts, lat, lon, accuracy_m, battery_pct FROM device_locations
+         WHERE device_id = $1 ORDER BY ts DESC LIMIT 1`,
+        [d.device_id],
+      );
+      const last = r.rows[0];
+      if (!last) {
+        return { device_id: d.device_id, name: d.name, status: 'no_data' };
+      }
+      const ageMs = Date.now() - new Date(last.ts).getTime();
+      const stale = ageMs > staleHours * 3600_000;
+      let distance = null, isHome = null;
+      if (center.lat != null && center.lon != null) {
+        // Haversine in JS (same formula as the Python ingest)
+        const R = 6_371_000;
+        const p1 = center.lat * Math.PI / 180;
+        const p2 = Number(last.lat) * Math.PI / 180;
+        const dp = (Number(last.lat) - center.lat) * Math.PI / 180;
+        const dl = (Number(last.lon) - center.lon) * Math.PI / 180;
+        const a  = Math.sin(dp/2)**2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2)**2;
+        distance = 2 * R * Math.asin(Math.sqrt(a));
+        isHome   = distance <= radius;
+      }
+      return {
+        device_id:    d.device_id,
+        name:         d.name,
+        status:       stale ? 'stale' : (isHome === true ? 'home' : (isHome === false ? 'away' : 'unknown')),
+        ts:           last.ts,
+        age_sec:      Math.round(ageMs / 1000),
+        lat:          Number(last.lat),
+        lon:          Number(last.lon),
+        accuracy_m:   last.accuracy_m,
+        battery_pct:  last.battery_pct,
+        distance_m:   distance != null ? Math.round(distance) : null,
+      };
+    }));
+    res.json({ devices: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/geolocation/run-ingest — manual trigger of the LXC 104
+// systemd unit. Same as `systemctl start geolocation-ingest.service`;
+// the user clicks this after editing settings or charging the phone
+// and doesn't want to wait for the next 30 s tick.
+app.post('/api/geolocation/run-ingest', async (req, res) => {
+  const { NodeSSH } = require('node-ssh');
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    await ssh.execCommand('systemctl start geolocation-ingest.service');
+    // The unit runs oneshot, so by the time the start returns it's complete.
+    const r = await ssh.execCommand('tail -1 /var/log/geolocation-ingest.log');
+    ssh.dispose();
+    res.json({ ok: true, summary: r.stdout.trim() || 'started' });
+  } catch (e) {
+    try { ssh.dispose(); } catch (_) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/geolocation/events?limit=20 — recent geofence crossings
+app.get('/api/geolocation/events', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
+  try {
+    const r = await db.query(
+      `SELECT id, ts, device_id, source, dps
+       FROM device_events
+       WHERE source = 'geolocation_ingest'
+       ORDER BY ts DESC LIMIT $1`,
       [limit],
     );
     res.json({ events: r.rows });

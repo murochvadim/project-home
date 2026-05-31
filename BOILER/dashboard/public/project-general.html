@@ -5,6 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Project General</title>
   <link rel="stylesheet" href="css/style.css">
+  <!-- Leaflet for the Geolocation tab's map widget — free OSM tiles, no API key -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <style>
+    .geo-chip { display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:14px; font-size:0.86rem; font-weight:600; margin-right:8px; }
+    .geo-chip.home    { background:rgba(39,174,96,0.15); color:#1a7a3a; }
+    .geo-chip.away    { background:rgba(230,126,34,0.18); color:#9c4f00; }
+    .geo-chip.stale   { background:rgba(149,165,166,0.20); color:#555; }
+    .geo-chip.no_data { background:rgba(149,165,166,0.20); color:#555; }
+    .geo-chip.unknown { background:rgba(149,165,166,0.20); color:#555; }
+    #geo-map { height:480px; border-radius:6px; border:1px solid #d0cbc4; }
+    .geo-settings-grid { display:grid; grid-template-columns:max-content 1fr; gap:10px 18px; align-items:center; max-width:760px; }
+    .geo-settings-grid input[type="number"], .geo-settings-grid input[type="text"] { padding:5px 8px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.9rem; }
+    .geo-dev-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+    .geo-dev-table th { text-align:left; padding:5px 8px; background:#fafaf6; }
+    .geo-dev-table td { padding:5px 8px; border-top:1px solid #f0eee8; }
+    .geo-dev-table input { width:100%; padding:4px 6px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.85rem; box-sizing:border-box; }
+  </style>
   <style>
     /* Mini window-with-curtains visual — drives state from data-state="open|close|stop|unknown" */
     .curtain-vis {
@@ -118,6 +136,7 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('curtain', this)">Curtain</button>
+    <button class="tab-btn" onclick="showTab('geolocation', this); geoOnTabShow();">Geolocation</button>
   </div>
 
   <div class="tab-panel active" id="tab-curtain">
@@ -133,6 +152,98 @@
         <div style="font-size:0.82rem; color:#aaa; padding:6px 0;">Loading…</div>
       </div>
     </div>
+  </div>
+
+  <!-- ─── Geolocation tab ─── -->
+  <div class="tab-panel" id="tab-geolocation">
+
+    <div class="card">
+      <h2>Status</h2>
+      <div id="geo-status-chips" style="margin-top:6px;">
+        <span style="color:#aaa; font-size:0.86rem;">Loading…</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary style="cursor:pointer; font-weight:600; font-size:1rem; padding:4px 0;">⚙ Settings</summary>
+        <div style="margin-top:14px;" class="geo-settings-grid">
+          <label>Apartment center (lat / lon):</label>
+          <div>
+            <input type="number" step="0.0001" id="geo-center-lat" style="width:140px;" />
+            <input type="number" step="0.0001" id="geo-center-lon" style="width:140px;" />
+            <button onclick="geoUseFirstPing()" style="padding:4px 10px; font-size:0.78rem; margin-left:8px; border:1px solid #6c4f9f; color:#6c4f9f; background:#fff; border-radius:3px; cursor:pointer;">Use first available ping</button>
+          </div>
+
+          <label>Home radius (m):</label>
+          <input type="number" id="geo-radius" min="10" max="5000" style="width:120px;" />
+
+          <label>Retention (days):</label>
+          <input type="number" id="geo-retention" min="1" max="3650" style="width:120px;" />
+
+          <label>Low-accuracy filter (m):</label>
+          <input type="number" id="geo-lo-acc" min="0" max="5000" style="width:120px;" />
+
+          <label>Stale-data alert (h):</label>
+          <input type="number" id="geo-stale" min="1" max="168" style="width:120px;" />
+
+          <label>Dedup radius (m):</label>
+          <input type="number" id="geo-dedup-r" min="0" max="500" style="width:120px;" />
+
+          <label>Dedup window (sec):</label>
+          <input type="number" id="geo-dedup-s" min="0" max="3600" style="width:120px;" />
+
+          <label>Emit geofence events:</label>
+          <input type="checkbox" id="geo-geofence-on" style="justify-self:start; transform:scale(1.2);" />
+
+          <label style="align-self:start;">Tracked devices:</label>
+          <div>
+            <table class="geo-dev-table" id="geo-dev-table">
+              <thead><tr><th>device_id</th><th>name</th><th>ha_entity</th><th>battery_entity</th><th></th></tr></thead>
+              <tbody id="geo-dev-tbody"></tbody>
+            </table>
+            <button onclick="geoAddDeviceRow()" style="margin-top:6px; padding:4px 10px; font-size:0.78rem; border:1px solid #888; background:#fff; color:#444; border-radius:3px; cursor:pointer;">+ Add device</button>
+          </div>
+        </div>
+        <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
+          <button onclick="geoSaveSettings()" style="padding:6px 18px; background:#3a7d44; color:#fff; border:none; border-radius:3px; cursor:pointer; font-weight:600;">💾 Save settings</button>
+          <button onclick="geoRunIngestNow()" style="padding:6px 18px; border:1px solid #888; background:#fff; color:#444; border-radius:3px; cursor:pointer;">▶ Run ingest now</button>
+          <span id="geo-settings-msg" style="font-size:0.9rem;"></span>
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h2 style="margin:0;">Map · trail</h2>
+        <div>
+          Window:
+          <select id="geo-window" onchange="geoReloadTrail()">
+            <option value="1h">1 h</option>
+            <option value="24h" selected>24 h</option>
+            <option value="7d">7 d</option>
+            <option value="30d">30 d</option>
+          </select>
+        </div>
+      </div>
+      <div id="geo-map">Loading map…</div>
+    </div>
+
+    <div class="card">
+      <h2>Recent geofence events</h2>
+      <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+        <thead><tr style="background:#fafaf6;">
+          <th style="text-align:left; padding:6px 12px;">Time</th>
+          <th style="text-align:left; padding:6px 12px;">Device</th>
+          <th style="text-align:left; padding:6px 12px;">Event</th>
+          <th style="text-align:left; padding:6px 12px;">Where</th>
+        </tr></thead>
+        <tbody id="geo-events-tbody">
+          <tr><td colspan="4" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
   </div>
 
 </main>
@@ -336,6 +447,265 @@ async function curtainCmd(id, action) {
 
 loadCurtains();
 setInterval(loadCurtains, 5000);
+
+// ──────────────────────────────────────────────────────────────────
+// Geolocation tab
+// ──────────────────────────────────────────────────────────────────
+let _geoMap = null, _geoCenter = null, _geoRadiusCircle = null;
+let _geoTrailLayer = null, _geoMarkers = [];
+let _geoSettings = null;
+let _geoLastBoundsFit = false;
+let _geoPollTimer = null;
+
+function geoOnTabShow() {
+  if (!_geoMap) geoInitMap();
+  geoLoadSettings();
+  geoReloadStatus();
+  geoReloadTrail();
+  geoReloadEvents();
+  if (!_geoPollTimer) {
+    _geoPollTimer = setInterval(() => {
+      geoReloadStatus();
+      geoReloadTrail();
+      geoReloadEvents();
+    }, 10_000);
+  }
+}
+
+function geoInitMap() {
+  if (!window.L) {
+    setTimeout(geoInitMap, 200);
+    return;
+  }
+  const el = document.getElementById('geo-map');
+  if (!el) return;
+  _geoMap = L.map('geo-map').setView([32.1593, 34.8932], 13);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors', maxZoom: 19,
+  }).addTo(_geoMap);
+}
+
+async function geoLoadSettings() {
+  try {
+    const r = await fetch('/api/geolocation/settings');
+    const d = await r.json();
+    _geoSettings = d;
+    document.getElementById('geo-center-lat').value  = d.center?.lat ?? 32.1593;
+    document.getElementById('geo-center-lon').value  = d.center?.lon ?? 34.8932;
+    document.getElementById('geo-radius').value      = d.home_radius_m ?? 80;
+    document.getElementById('geo-retention').value   = d.retention_days ?? 30;
+    document.getElementById('geo-lo-acc').value      = d.low_accuracy_filter_m ?? 100;
+    document.getElementById('geo-stale').value       = d.stale_alert_hours ?? 6;
+    document.getElementById('geo-dedup-r').value     = d.dedup_radius_m ?? 25;
+    document.getElementById('geo-dedup-s').value     = d.dedup_window_sec ?? 60;
+    document.getElementById('geo-geofence-on').checked = d.geofence_events !== false;
+    geoRenderDeviceRows(d.tracked_devices || []);
+    geoUpdateCenterMarker();
+  } catch (e) { console.warn('geoLoadSettings:', e); }
+}
+
+function geoRenderDeviceRows(devs) {
+  const tbody = document.getElementById('geo-dev-tbody');
+  tbody.innerHTML = devs.map((d, i) => `
+    <tr>
+      <td><input value="${pgEsc(d.device_id || '')}" data-geo-dev-i="${i}" data-geo-dev-k="device_id" /></td>
+      <td><input value="${pgEsc(d.name || '')}" data-geo-dev-i="${i}" data-geo-dev-k="name" /></td>
+      <td><input value="${pgEsc(d.ha_entity || '')}" data-geo-dev-i="${i}" data-geo-dev-k="ha_entity" placeholder="device_tracker.…" /></td>
+      <td><input value="${pgEsc(d.battery_entity || '')}" data-geo-dev-i="${i}" data-geo-dev-k="battery_entity" placeholder="sensor.…_battery_level" /></td>
+      <td><button onclick="geoRemoveDeviceRow(${i})" style="padding:3px 8px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;">✕</button></td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center; color:#aaa; padding:8px;">No tracked devices — click "+ Add device".</td></tr>`;
+}
+
+function geoCollectDeviceRows() {
+  const cur = _geoSettings?.tracked_devices || [];
+  const updated = cur.map(x => ({...x}));
+  document.querySelectorAll('[data-geo-dev-i]').forEach(inp => {
+    const i = parseInt(inp.dataset.geoDevI, 10);
+    const k = inp.dataset.geoDevK;
+    while (updated.length <= i) updated.push({});
+    updated[i][k] = inp.value.trim();
+  });
+  return updated.filter(d => d.device_id && d.ha_entity);
+}
+
+function geoAddDeviceRow() {
+  const cur = geoCollectDeviceRows();
+  cur.push({ device_id: '', name: '', ha_entity: '', battery_entity: '', source: 'ha_companion' });
+  _geoSettings.tracked_devices = cur;
+  geoRenderDeviceRows(cur);
+}
+
+function geoRemoveDeviceRow(i) {
+  const cur = geoCollectDeviceRows();
+  cur.splice(i, 1);
+  _geoSettings.tracked_devices = cur;
+  geoRenderDeviceRows(cur);
+}
+
+async function geoSaveSettings() {
+  const msg = document.getElementById('geo-settings-msg');
+  msg.style.color = '#888';
+  msg.textContent = 'Saving…';
+  const body = {
+    center: {
+      lat: parseFloat(document.getElementById('geo-center-lat').value) || 0,
+      lon: parseFloat(document.getElementById('geo-center-lon').value) || 0,
+    },
+    home_radius_m:         parseInt(document.getElementById('geo-radius').value, 10) || 80,
+    retention_days:        parseInt(document.getElementById('geo-retention').value, 10) || 30,
+    low_accuracy_filter_m: parseInt(document.getElementById('geo-lo-acc').value, 10) || 100,
+    stale_alert_hours:     parseInt(document.getElementById('geo-stale').value, 10) || 6,
+    dedup_radius_m:        parseInt(document.getElementById('geo-dedup-r').value, 10) || 25,
+    dedup_window_sec:      parseInt(document.getElementById('geo-dedup-s').value, 10) || 60,
+    geofence_events:       document.getElementById('geo-geofence-on').checked,
+    tracked_devices:       geoCollectDeviceRows().map(d => ({
+      device_id:      d.device_id,
+      name:           d.name || d.device_id,
+      source:         d.source || 'ha_companion',
+      ha_entity:      d.ha_entity,
+      battery_entity: d.battery_entity || null,
+    })),
+  };
+  try {
+    const r = await fetch('/api/geolocation/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      msg.style.color = '#c0392b'; msg.textContent = `Error: ${d.error || r.statusText}`;
+      return;
+    }
+    msg.style.color = '#27ae60'; msg.textContent = '✓ Saved — reloading…';
+    geoLoadSettings();
+    setTimeout(() => { msg.textContent = ''; }, 2500);
+  } catch (e) {
+    msg.style.color = '#c0392b'; msg.textContent = `Error: ${e.message}`;
+  }
+}
+
+async function geoRunIngestNow() {
+  const msg = document.getElementById('geo-settings-msg');
+  msg.style.color = '#888';
+  msg.textContent = 'Triggering ingest on LXC 104…';
+  try {
+    const r = await fetch('/api/geolocation/run-ingest', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      msg.style.color = '#c0392b'; msg.textContent = `Error: ${d.error || r.statusText}`;
+      return;
+    }
+    msg.style.color = '#27ae60'; msg.textContent = `✓ ${d.summary || 'Done'}`;
+    setTimeout(() => { msg.textContent = ''; geoReloadStatus(); geoReloadTrail(); geoReloadEvents(); }, 500);
+  } catch (e) {
+    msg.style.color = '#c0392b'; msg.textContent = `Error: ${e.message}`;
+  }
+}
+
+function geoUseFirstPing() {
+  // Convenience: pick the most recent ping's coordinates as apartment center.
+  fetch('/api/geolocation/status').then(r => r.json()).then(d => {
+    const dev = (d.devices || []).find(x => x.lat != null);
+    if (!dev) { alert('No pings recorded yet.'); return; }
+    document.getElementById('geo-center-lat').value = dev.lat.toFixed(6);
+    document.getElementById('geo-center-lon').value = dev.lon.toFixed(6);
+  });
+}
+
+function geoUpdateCenterMarker() {
+  if (!_geoMap || !_geoSettings) return;
+  const lat = parseFloat(_geoSettings.center?.lat);
+  const lon = parseFloat(_geoSettings.center?.lon);
+  const radius = parseFloat(_geoSettings.home_radius_m) || 80;
+  if (isNaN(lat) || isNaN(lon)) return;
+  if (_geoCenter) _geoCenter.remove();
+  if (_geoRadiusCircle) _geoRadiusCircle.remove();
+  _geoCenter = L.marker([lat, lon], { title: 'Apartment center' }).addTo(_geoMap);
+  _geoRadiusCircle = L.circle([lat, lon], {
+    radius, color: '#c0392b', fillColor: '#c0392b', fillOpacity: 0.10, weight: 2,
+  }).addTo(_geoMap);
+  if (!_geoLastBoundsFit) {
+    _geoMap.setView([lat, lon], 14);
+    _geoLastBoundsFit = true;
+  }
+}
+
+async function geoReloadStatus() {
+  try {
+    const r = await fetch('/api/geolocation/status');
+    const d = await r.json();
+    const chips = (d.devices || []).map(x => {
+      const battery = (x.battery_pct != null) ? ` · 🔋 ${x.battery_pct}%` : '';
+      const dist = (x.distance_m != null) ? ` · ${x.distance_m >= 1000 ? (x.distance_m/1000).toFixed(2) + ' km' : x.distance_m + ' m'}` : '';
+      const age = (x.age_sec != null) ? ` · ${x.age_sec < 60 ? x.age_sec + ' s' : (x.age_sec < 3600 ? Math.round(x.age_sec/60) + ' min' : Math.round(x.age_sec/3600) + ' h')} ago` : '';
+      const label = `${pgEsc(x.name || x.device_id)}: ${x.status}${dist}${age}${battery}`;
+      return `<span class="geo-chip ${x.status}">${label}</span>`;
+    }).join('');
+    const el = document.getElementById('geo-status-chips');
+    el.innerHTML = chips || '<span style="color:#aaa; font-size:0.86rem;">No tracked devices.</span>';
+  } catch (e) { console.warn('geoReloadStatus:', e); }
+}
+
+async function geoReloadTrail() {
+  if (!_geoMap) return;
+  // Remove old trail + markers
+  if (_geoTrailLayer) { _geoTrailLayer.remove(); _geoTrailLayer = null; }
+  _geoMarkers.forEach(m => m.remove());
+  _geoMarkers = [];
+  geoUpdateCenterMarker();
+
+  const window = document.getElementById('geo-window')?.value || '24h';
+  const hours = window === '1h' ? 1 : window === '7d' ? 24*7 : window === '30d' ? 24*30 : 24;
+  const since = new Date(Date.now() - hours*3600_000).toISOString();
+  if (!_geoSettings) return;
+  const devs = _geoSettings.tracked_devices || [];
+
+  for (const dev of devs) {
+    try {
+      const r = await fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(dev.device_id)}&since=${encodeURIComponent(since)}`);
+      const d = await r.json();
+      const pts = (d.locations || []).map(p => [Number(p.lat), Number(p.lon)]);
+      if (pts.length < 1) continue;
+      const trail = L.polyline(pts, { color: '#1565c0', weight: 3, opacity: 0.7 }).addTo(_geoMap);
+      _geoTrailLayer = trail;
+      const last = pts[pts.length - 1];
+      const lastMarker = L.marker(last, { title: dev.name }).addTo(_geoMap);
+      _geoMarkers.push(lastMarker);
+      // Sparse dots for older points (every 5th)
+      d.locations.forEach((p, i) => {
+        if (i % 5 !== 0 || i === d.locations.length - 1) return;
+        const dot = L.circleMarker([Number(p.lat), Number(p.lon)], { radius: 3, color: '#888', fillOpacity: 0.6 });
+        dot.bindTooltip(`${p.ts} · accuracy ${p.accuracy_m || '?'} m`);
+        dot.addTo(_geoMap);
+        _geoMarkers.push(dot);
+      });
+    } catch (e) { console.warn('geoReloadTrail:', e); }
+  }
+}
+
+async function geoReloadEvents() {
+  try {
+    const r = await fetch('/api/geolocation/events?limit=20');
+    const d = await r.json();
+    const tbody = document.getElementById('geo-events-tbody');
+    if (!d.events || !d.events.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:14px; text-align:center; color:#aaa;">No geofence events yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.events.map(e => {
+      const dps = typeof e.dps === 'string' ? JSON.parse(e.dps) : e.dps;
+      const event = dps?.event || '?';
+      const color = event === 'home' ? '#1a7a3a' : '#9c4f00';
+      return `<tr style="border-top:1px solid #f0eee8;">
+        <td style="padding:5px 12px; color:#666;">${pgEsc(new Date(e.ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
+        <td style="padding:5px 12px;">${pgEsc(e.device_id)}</td>
+        <td style="padding:5px 12px; font-weight:600; color:${color};">${event}</td>
+        <td style="padding:5px 12px; color:#888;">${dps?.lat ? dps.lat.toFixed(4) + ', ' + dps.lon.toFixed(4) : ''}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) { console.warn('geoReloadEvents:', e); }
+}
 </script>
 </body>
 </html>
