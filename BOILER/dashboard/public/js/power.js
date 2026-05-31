@@ -1056,9 +1056,20 @@ async function mdLoadDevices() {
       const cColor = mdConsumptionColor(row.source);
       const liveCell = mdLiveCell(row);
       const lastSeenCell = mdLastSeenCell(row);
+      // Action buttons — uniform compact size + style, only color differs.
+      // Cal shows only for auto/known rows; an invisible placeholder
+      // takes the same width on rows without Cal so every row's action
+      // cell stays vertically symmetric.
+      const calibrateable = ['auto_pending', 'auto_custom', 'auto_discovered', 'state_known']
+        .includes(row.source) && (row.is_three_phase || row.phase);
+      const btnStyle = 'padding:2px 7px; font-size:0.7rem; background:#fff; border-radius:3px; cursor:pointer;';
+      const calibBtn = calibrateable
+        ? `<button onclick="mdCalibrateOpen(${row.row_id})" style="${btnStyle} border:1px solid #6c4f9f; color:#6c4f9f;">Cal</button>`
+        : `<button disabled style="${btnStyle} border:1px solid transparent; color:transparent; cursor:default; pointer-events:none;">Cal</button>`;
       const actions = `
-        <button class="btn btn-secondary btn-sm" onclick="mdOpenEdit(${row.row_id})">Edit</button>
-        <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="mdDelete(${row.row_id})">Delete</button>
+        ${calibBtn}
+        <button onclick="mdOpenEdit(${row.row_id})" style="${btnStyle} border:1px solid #888; color:#444;">Edit</button>
+        <button onclick="mdDelete(${row.row_id})" style="${btnStyle} border:1px solid #c0392b; color:#c0392b;">Delete</button>
       `;
       return `
         <tr data-row-id="${row.row_id}" style="border-bottom:1px solid #e6e1da;">
@@ -1081,6 +1092,398 @@ async function mdLoadDevices() {
     document.getElementById('md-tbody').innerHTML =
       `<tr><td colspan="10" style="padding:14px; color:#c0392b; text-align:center;">Fetch error: ${e.message}</td></tr>`;
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Calibration modal — per-device Δ capture for tuning expected_w / max_w
+// from real meter data. Frontend-only: polls /api/power/status every 1 s,
+// computes Δ on the device's phase, accumulates samples, suggests values.
+// No backend / no rule changes; suggestions write via existing PATCH
+// /api/power/devices/:rowId endpoint that mdOpenEdit already uses.
+// ──────────────────────────────────────────────────────────────────────
+
+let _mdCalibState = null;
+// Shape: {
+//   rowId, row, is3p, phaseKeys: ['r'|'s'|'t', ...],
+//   prevW: {r,s,t}, peaks: {r,s,t}, sustainedW: {r,s,t}, baselines: {r,s,t},
+//   samples: [{t, phase, delta, total}],
+//   t0, timer, stopped, suggested
+// }
+
+function mdCalibrateOpen(rowId) {
+  const row = mdRowsCache.find(r => Number(r.row_id) === Number(rowId));
+  if (!row) return;
+  const is3p = !!row.is_three_phase;
+  const phaseKeys = is3p ? ['r','s','t'] : [(row.phase || '').toLowerCase()];
+  if (!is3p && !['r','s','t'].includes(phaseKeys[0])) { alert('Cal needs a phase set on this row'); return; }
+
+  if (_mdCalibState && _mdCalibState.timer) clearInterval(_mdCalibState.timer);
+  _mdCalibState = {
+    rowId: Number(rowId),
+    row,
+    is3p,
+    phaseKeys,
+    prevW:      { r: null, s: null, t: null },
+    peaks:      { r: 0, s: 0, t: 0 },
+    sustainedW: { r: 0, s: 0, t: 0 },
+    baselines:  { r: null, s: null, t: null },
+    samples:    [],
+    t0:         Date.now(),
+    timer:      null,
+    stopped:    false,
+  };
+
+  const rowName = row.display_name || `${row.name}${row.channel_name ? ' – ' + row.channel_name : (row.channel ? ' – Ch ' + row.channel : '')}`;
+  const phaseLabel = is3p ? 'R · S · T (3-phase)' : (row.phase || '').toUpperCase();
+  const currentRow = phaseKeys.map(ph =>
+    `<span style="margin-right:14px;">${ph.toUpperCase()}: <b id="md-calib-current-${ph}">— W</b></span>`
+  ).join('');
+  const statBoxes = is3p
+    ? ['r','s','t'].map(ph => `
+        <div style="border:1px solid #e6e1da; border-radius:6px; padding:10px; text-align:center;">
+          <div style="font-size:0.72rem; color:#888;">Peak ${ph.toUpperCase()} / Sustained ${ph.toUpperCase()}</div>
+          <div style="font-size:1.05rem; font-weight:700;">
+            <span id="md-calib-peak-${ph}">— W</span> /
+            <span id="md-calib-sust-${ph}" style="color:#444;">— W</span>
+          </div>
+        </div>
+      `).join('') + `
+        <div style="border:1px solid #e6e1da; border-radius:6px; padding:10px; text-align:center; grid-column:1 / -1;">
+          <div style="font-size:0.72rem; color:#888;">Duration</div>
+          <div id="md-calib-duration" style="font-size:1.25rem; font-weight:700;">0:00</div>
+        </div>`
+    : `
+        <div style="border:1px solid #e6e1da; border-radius:6px; padding:10px; text-align:center;">
+          <div style="font-size:0.72rem; color:#888;">Peak Δ</div>
+          <div id="md-calib-peak-${phaseKeys[0]}" style="font-size:1.25rem; font-weight:700;">— W</div>
+        </div>
+        <div style="border:1px solid #e6e1da; border-radius:6px; padding:10px; text-align:center;">
+          <div style="font-size:0.72rem; color:#888;">Sustained</div>
+          <div id="md-calib-sust-${phaseKeys[0]}" style="font-size:1.25rem; font-weight:700;">— W</div>
+        </div>
+        <div style="border:1px solid #e6e1da; border-radius:6px; padding:10px; text-align:center;">
+          <div style="font-size:0.72rem; color:#888;">Duration</div>
+          <div id="md-calib-duration" style="font-size:1.25rem; font-weight:700;">0:00</div>
+        </div>`;
+
+  const tableHeader = is3p
+    ? `<th style="text-align:left; padding:6px 12px;">Time</th>
+       <th style="text-align:center; padding:6px 12px;">Phase</th>
+       <th style="text-align:right; padding:6px 12px;">Δ</th>
+       <th style="text-align:right; padding:6px 12px;">Phase total</th>`
+    : `<th style="text-align:left; padding:6px 12px;">Time</th>
+       <th style="text-align:right; padding:6px 12px;">Δ on phase ${(row.phase || '').toUpperCase()}</th>
+       <th style="text-align:right; padding:6px 12px;">Phase total</th>`;
+
+  // Suggested-values section becomes a comparison table at Stop time.
+  // We give it a placeholder + container — mdCalibrateStop fills it in.
+  const suggestSection = `<div id="md-calib-suggest-panel" style="color:#888; font-size:0.88rem;">
+      Suggested values populate here when you click Stop…
+    </div>`;
+
+  const html = `
+    <div id="md-calib-modal" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1010; display:flex; align-items:center; justify-content:center;">
+      <div style="background:#fff; max-width:720px; width:92%; max-height:92vh; overflow-y:auto; border-radius:8px; padding:22px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+          <h2 style="margin:0;">Cal — ${mdEscHtml(rowName)}</h2>
+          <button onclick="mdCalibrateClose()" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:#888;">✕</button>
+        </div>
+        <div style="color:#666; font-size:0.92rem; margin-bottom:14px;">
+          Phase <b>${phaseLabel}</b> · Current: ${currentRow}
+          · <span id="md-calib-status" style="color:#6c4f9f;">● Recording</span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:14px;">
+          ${statBoxes}
+        </div>
+        <div style="max-height:260px; overflow-y:auto; border:1px solid #e6e1da; border-radius:6px;">
+          <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+            <thead><tr style="background:#fafaf6; position:sticky; top:0;">${tableHeader}</tr></thead>
+            <tbody id="md-calib-tbody">
+              <tr><td colspan="${is3p ? 4 : 3}" style="padding:14px; text-align:center; color:#aaa;">Waiting for first sample…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:14px; padding:12px; background:#fafaf6; border-radius:6px; font-size:0.92rem;">
+          <div style="margin-bottom:4px;">Suggested values once you stop:</div>
+          ${suggestSection}
+        </div>
+        <div id="md-calib-msg" style="margin-top:10px; color:#c0392b; font-size:0.92rem;"></div>
+        <div style="margin-top:18px; display:flex; gap:10px;">
+          <button id="md-calib-stop-btn"  class="btn btn-secondary btn-sm" onclick="mdCalibrateStop()"  style="padding:9px 18px;">⏹ Stop</button>
+          <button id="md-calib-apply-btn" class="btn btn-primary btn-sm"   onclick="mdCalibrateApply()" style="padding:9px 18px;" disabled>💾 Apply suggested</button>
+          <button class="btn btn-secondary btn-sm" onclick="mdCalibrateClose()" style="padding:9px 18px; margin-left:auto;">✕ Close</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', html);
+  _mdCalibState.timer = setInterval(mdCalibrateTick, 1000);
+  mdCalibrateTick();
+}
+
+async function mdCalibrateTick() {
+  if (!_mdCalibState || _mdCalibState.stopped) return;
+  try {
+    const r = await fetch('/api/power/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    const NOISE_FLOOR_W = 20;
+    const tSec = Math.round((Date.now() - _mdCalibState.t0) / 1000);
+
+    for (const ph of _mdCalibState.phaseKeys) {
+      const phaseObj = d[ph];
+      if (!phaseObj || typeof phaseObj.w !== 'number') continue;
+      const w = phaseObj.w;
+
+      const curEl = document.getElementById(`md-calib-current-${ph}`);
+      if (curEl) curEl.textContent = `${Math.round(w)} W`;
+
+      // First sample on this phase: seed prevW + baseline.
+      if (_mdCalibState.prevW[ph] === null) {
+        _mdCalibState.prevW[ph] = w;
+        _mdCalibState.baselines[ph] = w;
+        _mdCalibState.sustainedW[ph] = w;
+        continue;
+      }
+
+      const delta = w - _mdCalibState.prevW[ph];
+      _mdCalibState.prevW[ph] = w;
+      _mdCalibState.sustainedW[ph] = w;
+
+      if (Math.abs(delta) >= NOISE_FLOOR_W) {
+        _mdCalibState.samples.push({ t: tSec, phase: ph, delta, total: w });
+        if (Math.abs(delta) > _mdCalibState.peaks[ph]) _mdCalibState.peaks[ph] = Math.abs(delta);
+        mdCalibrateRenderTable();
+      }
+
+      const peakEl = document.getElementById(`md-calib-peak-${ph}`);
+      if (peakEl) peakEl.textContent = `${Math.round(_mdCalibState.peaks[ph])} W`;
+      const sustEl = document.getElementById(`md-calib-sust-${ph}`);
+      if (sustEl) sustEl.textContent = `${Math.round(_mdCalibState.sustainedW[ph] || 0)} W`;
+    }
+
+    const durEl = document.getElementById('md-calib-duration');
+    if (durEl) {
+      const mm = Math.floor(tSec / 60);
+      const ss = String(tSec % 60).padStart(2, '0');
+      durEl.textContent = `${mm}:${ss}`;
+    }
+  } catch (_) { /* swallow — next tick retries */ }
+}
+
+function mdCalibrateRenderTable() {
+  const tbody = document.getElementById('md-calib-tbody');
+  if (!tbody || !_mdCalibState) return;
+  const is3p = _mdCalibState.is3p;
+  const cols = is3p ? 4 : 3;
+  if (_mdCalibState.samples.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="${cols}" style="padding:14px; text-align:center; color:#aaa;">No Δ events yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = _mdCalibState.samples.slice(-100).reverse().map(s => {
+    const sign = s.delta > 0 ? '▲' : '▼';
+    const color = s.delta > 0 ? '#27ae60' : '#c0392b';
+    const mm = Math.floor(s.t / 60);
+    const ss = String(s.t % 60).padStart(2, '0');
+    const phaseCell = is3p
+      ? `<td style="padding:5px 12px; text-align:center; color:#6c4f9f; font-weight:700;">${s.phase.toUpperCase()}</td>`
+      : '';
+    return `
+      <tr style="border-top:1px solid #f0eee8;">
+        <td style="padding:5px 12px; color:#888;">+${mm}:${ss}</td>
+        ${phaseCell}
+        <td style="padding:5px 12px; text-align:right; color:${color}; font-weight:600;">${s.delta > 0 ? '+' : ''}${Math.round(s.delta)} W ${sign}</td>
+        <td style="padding:5px 12px; text-align:right;">${Math.round(s.total)} W</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// Classify suggested vs current. Returns 'green' | 'amber' | 'red' | 'unknown'.
+function _mdCalibClassify(suggested, current) {
+  if (!current || current <= 0) return 'unknown';
+  const ratio = suggested / current;
+  if (ratio >= 0.7 && ratio <= 1.5) return 'green';
+  if ((ratio >= 0.3 && ratio < 0.7) || (ratio > 1.5 && ratio <= 3)) return 'amber';
+  return 'red';
+}
+
+function _mdCalibColor(cat) {
+  return cat === 'green' ? '#27ae60'
+       : cat === 'amber' ? '#e67e22'
+       : cat === 'red'   ? '#c0392b'
+       : '#888';
+}
+
+function _mdCalibDeltaPct(suggested, current) {
+  if (!current || current <= 0) return '—';
+  const pct = Math.round(((suggested - current) / current) * 100);
+  return (pct > 0 ? '+' : '') + pct + '%';
+}
+
+function mdCalibrateStop() {
+  if (!_mdCalibState) return;
+  _mdCalibState.stopped = true;
+  if (_mdCalibState.timer) { clearInterval(_mdCalibState.timer); _mdCalibState.timer = null; }
+  const statusEl = document.getElementById('md-calib-status');
+  if (statusEl) { statusEl.textContent = '■ Stopped'; statusEl.style.color = '#888'; }
+  const stopBtn = document.getElementById('md-calib-stop-btn');
+  if (stopBtn) stopBtn.disabled = true;
+
+  // Suggested values per phase: expected_w = sustained draw above baseline;
+  // max_w = peak Δ × 1.05. baseline = first sample on that phase.
+  const suggestion = {};
+  let totalExpected = 0;
+  let worstCategory = 'green';   // escalates if any field falls in amber/red
+  const categoryRank = { green: 0, amber: 1, red: 2, unknown: 0 };
+
+  for (const ph of _mdCalibState.phaseKeys) {
+    const baseline = _mdCalibState.baselines[ph] || 0;
+    const peakW = _mdCalibState.peaks[ph];
+    const sustainedAboveBase = Math.max(0, (_mdCalibState.sustainedW[ph] || 0) - baseline);
+    const expW = Math.round(sustainedAboveBase > 0 ? sustainedAboveBase : peakW);
+    const maxW = Math.max(Math.round(peakW * 1.05), expW);
+    suggestion[ph] = { expected_w: expW, max_w: maxW };
+    totalExpected += expW;
+  }
+  _mdCalibState.suggested = suggestion;
+
+  // Build the comparison table. Pull "current" from the row's config —
+  // single-phase devices have expected_w/max_w; 3-phase have r_/s_/t_*.
+  const cfg = _mdCalibState.row.config || {};
+  const is3p = _mdCalibState.is3p;
+  const behavior = cfg.behavior || '—';
+
+  let rowsHtml = '';
+  const renderRow = (label, current, suggested) => {
+    const cat = _mdCalibClassify(suggested, current);
+    if (categoryRank[cat] > categoryRank[worstCategory]) worstCategory = cat;
+    const color = _mdCalibColor(cat);
+    const delta = _mdCalibDeltaPct(suggested, current);
+    const curStr = (current && current > 0) ? `${Math.round(current)} W` : '—';
+    return `
+      <tr>
+        <td style="padding:5px 10px; color:#444;">${label}</td>
+        <td style="padding:5px 10px; text-align:right; color:#888;">${curStr}</td>
+        <td style="padding:5px 10px; text-align:center; color:#aaa;">→</td>
+        <td style="padding:5px 10px; text-align:right; font-weight:700; color:${color};">${Math.round(suggested)} W</td>
+        <td style="padding:5px 10px; text-align:right; font-weight:600; color:${color};">${delta}</td>
+      </tr>`;
+  };
+
+  if (is3p) {
+    for (const ph of ['r','s','t']) {
+      const sug = suggestion[ph] || { expected_w: 0, max_w: 0 };
+      rowsHtml += renderRow(`${ph.toUpperCase()}: expected_w`, cfg[`${ph}_expected_w`], sug.expected_w);
+      rowsHtml += renderRow(`${ph.toUpperCase()}: max_w`,      cfg[`${ph}_max_w`],      sug.max_w);
+    }
+  } else {
+    const ph = _mdCalibState.phaseKeys[0];
+    const sug = suggestion[ph];
+    rowsHtml += renderRow('expected_w', cfg.expected_w, sug.expected_w);
+    rowsHtml += renderRow('max_w',      cfg.max_w,      sug.max_w);
+  }
+
+  // Color legend + behavior tag for context.
+  const legend = `
+    <div style="display:flex; gap:14px; margin-top:6px; font-size:0.78rem; color:#666;">
+      <span><span style="color:#27ae60;">●</span> within 0.7–1.5×</span>
+      <span><span style="color:#e67e22;">●</span> 0.3–0.7× or 1.5–3×</span>
+      <span><span style="color:#c0392b;">●</span> outside — confirm before applying</span>
+    </div>`;
+  const panel = document.getElementById('md-calib-suggest-panel');
+  if (panel) {
+    panel.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <div style="font-weight:600;">Suggested vs current</div>
+        <div style="font-size:0.78rem; color:#666;">behavior: <b>${mdEscHtml(behavior)}</b></div>
+      </div>
+      <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead><tr style="background:#fafaf6; color:#666; font-size:0.78rem;">
+          <th style="padding:5px 10px; text-align:left;">Field</th>
+          <th style="padding:5px 10px; text-align:right;">Current</th>
+          <th></th>
+          <th style="padding:5px 10px; text-align:right;">Suggested</th>
+          <th style="padding:5px 10px; text-align:right;">Δ</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      ${legend}`;
+  }
+
+  _mdCalibState.worstCategory = worstCategory;
+  const applyBtn = document.getElementById('md-calib-apply-btn');
+  if (applyBtn) applyBtn.disabled = (totalExpected <= 0);
+}
+
+async function mdCalibrateApply() {
+  if (!_mdCalibState || !_mdCalibState.suggested) return;
+  const msgEl = document.getElementById('md-calib-msg');
+  // Warn if any field's suggested value is wildly different from current.
+  // Red = outside 0.3-3× — capture may have included cross-talk from
+  // another device on the same phase, or the existing values are way off.
+  if (_mdCalibState.worstCategory === 'red') {
+    if (!confirm('Suggested values are very different from current (outside 0.3-3×). The capture may have included another device. Apply anyway?')) {
+      return;
+    }
+  }
+  msgEl.style.color = '#888';
+  msgEl.textContent = 'Saving…';
+
+  // Server's PATCH validates the full edit body (behavior + phase + room
+  // + linked/custom identity fields). Reuse everything from the row's
+  // current state, override only the calibrated expected_w / max_w.
+  const row = _mdCalibState.row;
+  const cfg = row.config || {};
+  const isManual  = String(row.device_id || '').startsWith('manual_');
+  const body = {
+    behavior:          cfg.behavior,
+    linked_device_id:  isManual ? null : row.device_id,
+    channel:           row.channel,
+    custom_device_name: isManual ? row.name : null,
+    display_name:      row.display_name || null,
+    phase:             row.phase,
+    is_three_phase:    !!row.is_three_phase,
+    room:              cfg.room || row.room || null,
+  };
+  if (_mdCalibState.is3p) {
+    for (const ph of ['r','s','t']) {
+      const sug = _mdCalibState.suggested[ph] || { expected_w: 0, max_w: 0 };
+      body[`${ph}_expected_w`] = sug.expected_w;
+      body[`${ph}_max_w`]      = sug.max_w;
+    }
+  } else {
+    const ph = _mdCalibState.phaseKeys[0];
+    const sug = _mdCalibState.suggested[ph];
+    body.expected_w = sug.expected_w;
+    body.max_w      = sug.max_w;
+  }
+  try {
+    const r = await fetch(`/api/power/devices/${_mdCalibState.rowId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      msgEl.style.color = '#c0392b';
+      msgEl.textContent = `Error: ${data.error || r.statusText}`;
+      return;
+    }
+    msgEl.style.color = '#27ae60';
+    msgEl.textContent = '✓ Applied. Reloading registry…';
+    setTimeout(() => { mdCalibrateClose(); mdLoadDevices(); }, 800);
+  } catch (e) {
+    msgEl.style.color = '#c0392b';
+    msgEl.textContent = `Error: ${e.message}`;
+  }
+}
+
+function mdCalibrateClose() {
+  if (_mdCalibState && _mdCalibState.timer) clearInterval(_mdCalibState.timer);
+  _mdCalibState = null;
+  const el = document.getElementById('md-calib-modal');
+  if (el) el.remove();
 }
 
 mdLoadDevices();
