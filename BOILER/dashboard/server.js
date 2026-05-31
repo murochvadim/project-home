@@ -2644,37 +2644,79 @@ app.patch('/api/gateway/peer/:peer_id', async (req, res) => {
 // 3 endpoints: /networks (containers), /networks/{id}/resources (CIDR),
 // /networks/{id}/routers (peer IDs). We join them here and resolve peer
 // IDs against the cached peer list to surface friendly names.
+//
+// Failure handling: if a sub-fetch (/resources or /routers) throws, we
+// FALL BACK to the raw /networks fields (routing_peers_count) for the
+// enabled flag instead of pretending the route is offline. We also
+// REFUSE to overwrite the cache when partial failures degraded the
+// data — previous good data keeps serving until a clean refresh
+// succeeds. Without this, a single transient NetBird API hiccup
+// poisoned the cache for 30 s and the dashboard flipped to "Offline".
 app.get('/api/gateway/routes', async (req, res) => {
   try {
     const now = Date.now();
     if (!_NB_CACHE.routes || (now - _NB_CACHE.routesTs) > _NB_CACHE_TTL_MS) {
       const nets = await _nbFetch('/networks');
-      // Refresh peer cache too so we can resolve router.peer → peer.name.
       if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
         _NB_CACHE.peers   = await _nbFetch('/peers');
         _NB_CACHE.peersTs = now;
       }
       const peerById = new Map((_NB_CACHE.peers || []).map(p => [p.id, p.name]));
+      let allCleanFetches = true;
       const expanded = await Promise.all((nets || []).map(async n => {
-        // Each net has 0..N resources (each = a CIDR address) and 0..N routers
-        // (each = a peer that announces the route). Parallel-fetch both.
-        let resources = []; let routers = [];
-        try { resources = await _nbFetch(`/networks/${n.id}/resources`); } catch (_) {}
-        try { routers   = await _nbFetch(`/networks/${n.id}/routers`);   } catch (_) {}
-        const cidrs = (resources || []).map(r => r.address).filter(Boolean);
-        const peerNames = (routers || []).map(r => peerById.get(r.peer) || r.peer).filter(Boolean);
-        const anyEnabled = (resources || []).some(r => r.enabled !== false)
-                       && (routers   || []).some(r => r.enabled !== false);
+        let resources = null; let routers = null;   // null = sub-fetch failed
+        try { resources = await _nbFetch(`/networks/${n.id}/resources`); }
+        catch (_) { allCleanFetches = false; }
+        try { routers   = await _nbFetch(`/networks/${n.id}/routers`); }
+        catch (_) { allCleanFetches = false; }
+
+        const rawRouterCount = Array.isArray(n.routers) ? n.routers.length
+                              : (typeof n.routing_peers_count === 'number' ? n.routing_peers_count : 0);
+
+        // CIDR — if /resources succeeded, use real addresses; else fall back
+        // to a placeholder string that doesn't claim "no CIDR" definitively.
+        const cidrs = resources !== null
+          ? resources.map(r => r.address).filter(Boolean)
+          : [];
+        const cidrStr = cidrs.length ? cidrs.join(', ')
+                                     : (resources === null ? '(loading…)' : '—');
+
+        // Peer names — same logic. If /routers succeeded, resolve through
+        // the peer cache; else fall back to "<N peers>" from raw count.
+        const peerNames = routers !== null
+          ? routers.map(r => peerById.get(r.peer) || r.peer).filter(Boolean)
+          : (rawRouterCount > 0 ? [`<${rawRouterCount} peer${rawRouterCount > 1 ? 's' : ''}>`] : []);
+
+        // Enabled — only "offline" when we have GOOD data from BOTH
+        // sub-endpoints AND they confirm 0 active routers. If either
+        // sub-fetch failed but raw /networks says routing_peers_count > 0,
+        // we trust the raw count (route IS announcing).
+        let enabled;
+        if (resources !== null && routers !== null) {
+          enabled = resources.some(r => r.enabled !== false)
+                 && routers.some(r => r.enabled !== false);
+        } else {
+          enabled = rawRouterCount > 0;
+        }
+
         return {
           id:            n.id,
           network_name:  n.name,
-          cidr:          cidrs.join(', ') || '—',
+          cidr:          cidrStr,
           routing_peers: peerNames,
-          enabled:       anyEnabled,
+          enabled:       enabled,
         };
       }));
-      _NB_CACHE.routes   = expanded;
-      _NB_CACHE.routesTs = now;
+
+      // Only commit to cache if every sub-fetch succeeded. On partial failure
+      // we still SERVE the expanded data (best effort), but the cache stays
+      // empty / stale so the next request gets a fresh attempt instead of
+      // serving 30 s of degraded data.
+      if (allCleanFetches) {
+        _NB_CACHE.routes   = expanded;
+        _NB_CACHE.routesTs = now;
+      }
+      return res.json({ routes: expanded });
     }
     res.json({ routes: _NB_CACHE.routes });
   } catch (e) {
