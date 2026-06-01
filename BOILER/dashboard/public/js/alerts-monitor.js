@@ -289,8 +289,8 @@
       return;
     }
     if (peersTotal > 0 && peersOnline < peersTotal) {
-      el.textContent = `NetBird Integration ✗ ${peersTotal - peersOnline} offline`;
-      el.title = `${peersOnline} of ${peersTotal} NetBird peers online. Click for Project Gateway.`;
+      el.textContent = `NetBird Integration ${peersTotal - peersOnline}`;
+      el.title = `${peersOnline} of ${peersTotal} NetBird peers online (${peersTotal - peersOnline} offline). Click for Project Gateway.`;
       el.style.background = '#5c0e0e';
       return;
     }
