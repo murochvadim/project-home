@@ -581,8 +581,19 @@ class RuleEngine:
                 rule_shared_before = self.state.shared.copy()
 
                 commands = self._evaluate_rule(rule, event)
+                # Per-command try/except so ONE failing device doesn't cascade
+                # and abort the whole fan-out. Real-world trigger: a wallmote
+                # "Good Night" binding fanning out 40+ devices where 1-2 are
+                # orphan IDs (deleted device row but stale binding) or offline.
+                # Exception in any single _dispatch_command call previously
+                # bubbled up and stopped every later command in the list.
                 for cmd in commands:
-                    self._dispatch_command(cmd, rule_name)
+                    try:
+                        self._dispatch_command(cmd, rule_name)
+                    except Exception as e:
+                        log.warning("Rule '%s' dispatch failed for %s/%s: %s",
+                                    rule_name, cmd.get('device_id', '?'),
+                                    cmd.get('action', '?'), e)
 
                 # Detect what changed
                 elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0)
@@ -1825,9 +1836,16 @@ class RuleEngine:
                 k: self.state.shared.get(k) for k in changed_keys
             } if changed_keys else {}
 
-            # Dispatch for real
+            # Dispatch for real — same per-command try/except as the
+            # main dispatch loop above: one failure must not abort the
+            # remaining commands in the fan-out.
             for cmd in commands:
-                self._dispatch_command(cmd, rule_name)
+                try:
+                    self._dispatch_command(cmd, rule_name)
+                except Exception as e:
+                    log.warning("Rule '%s' dispatch failed for %s/%s: %s",
+                                rule_name, cmd.get('device_id', '?'),
+                                cmd.get('action', '?'), e)
 
             # Restore state + timers (hold the lock across both assignments so
             # the heartbeat thread can't snapshot a half-restored state).
