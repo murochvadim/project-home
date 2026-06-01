@@ -1,0 +1,17 @@
+[Unit]
+Description=OwnTracks MQTT ingest — subscribes to LXC 107 broker, writes pings to device_locations on LXC 102
+Documentation=https://github.com/owntracks/booklet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/owntracks-ingest.env
+ExecStart=/usr/bin/python3 /opt/owntracks_ingest.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/owntracks-ingest.log
+StandardError=append:/var/log/owntracks-ingest.log
+
+[Install]
+WantedBy=multi-user.target

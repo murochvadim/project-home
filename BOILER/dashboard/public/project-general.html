@@ -16,12 +16,14 @@
     .geo-chip.no_data { background:rgba(149,165,166,0.20); color:#555; }
     .geo-chip.unknown { background:rgba(149,165,166,0.20); color:#555; }
     #geo-map { height:480px; border-radius:6px; border:1px solid #d0cbc4; }
-    .geo-settings-grid { display:grid; grid-template-columns:max-content 1fr; gap:10px 18px; align-items:center; max-width:760px; }
+    .geo-settings-grid { display:grid; grid-template-columns:max-content 1fr; gap:10px 18px; align-items:center; }
     .geo-settings-grid input[type="number"], .geo-settings-grid input[type="text"] { padding:5px 8px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.9rem; }
-    .geo-dev-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+    .geo-dev-table { width:100%; border-collapse:collapse; font-size:0.85rem; table-layout:fixed; }
     .geo-dev-table th { text-align:left; padding:5px 8px; background:#fafaf6; }
-    .geo-dev-table td { padding:5px 8px; border-top:1px solid #f0eee8; }
-    .geo-dev-table input { width:100%; padding:4px 6px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.85rem; box-sizing:border-box; }
+    .geo-dev-table td { padding:5px 8px 5px 0; border-top:1px solid #f0eee8; }
+    .geo-dev-table input { width:100%; padding:4px 7px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.85rem; box-sizing:border-box; }
+    .geo-dev-table th:nth-child(-n+4), .geo-dev-table td:nth-child(-n+4) { width:24%; }
+    .geo-dev-table th:nth-child(5), .geo-dev-table td:nth-child(5) { width:4%; text-align:center; }
   </style>
   <style>
     /* Mini window-with-curtains visual — drives state from data-state="open|close|stop|unknown" */
@@ -134,12 +136,12 @@
   </div>
 
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="showTab('curtain', this)">Curtain</button>
-    <button class="tab-btn" onclick="showTab('geolocation', this); geoOnTabShow();">Geolocation</button>
+    <button class="tab-btn" onclick="showTab('curtain', this)">Curtain</button>
+    <button class="tab-btn active" onclick="showTab('geolocation', this); geoOnTabShow();">Geolocation</button>
     <button class="tab-btn" onclick="showTab('weather', this); weatherOnTabShow();">Weather</button>
   </div>
 
-  <div class="tab-panel active" id="tab-curtain">
+  <div class="tab-panel" id="tab-curtain">
     <div class="card">
       <h2>Curtains <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">— state polled every 5 s</span></h2>
       <div id="curtain-list-curtains" style="display:flex; flex-direction:column; gap:12px;">
@@ -155,17 +157,17 @@
   </div>
 
   <!-- ─── Geolocation tab ─── -->
-  <div class="tab-panel" id="tab-geolocation">
+  <div class="tab-panel active" id="tab-geolocation">
 
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:stretch; margin-bottom:16px;">
-    <div class="card" style="flex:1 1 0; min-width:380px; margin-bottom:0;">
+    <div class="card" style="flex:1 1 0; min-width:240px; margin-bottom:0;">
       <h2>Status</h2>
       <div id="geo-status-chips" style="margin-top:6px;">
         <span style="color:#aaa; font-size:0.86rem;">Loading…</span>
       </div>
     </div>
 
-    <div class="card" style="flex:1 1 0; min-width:380px; margin-bottom:0;">
+    <div class="card" style="flex:3 1 0; min-width:520px; margin-bottom:0;">
       <details>
         <summary style="cursor:pointer; font-weight:600; font-size:1rem; padding:4px 0;">⚙ Settings</summary>
         <div style="margin-top:14px;" class="geo-settings-grid">
@@ -177,25 +179,52 @@
           </div>
 
           <label>Home radius (m):</label>
-          <input type="number" id="geo-radius" min="10" max="5000" style="width:120px;" />
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-radius" min="10" max="5000" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">distance from center counted as "home"; outside this fires an <code>away</code> event</span>
+          </div>
 
           <label>Retention (days):</label>
-          <input type="number" id="geo-retention" min="1" max="3650" style="width:120px;" />
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-retention" min="1" max="3650" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">location rows older than this are auto-deleted</span>
+          </div>
 
           <label>Low-accuracy filter (m):</label>
-          <input type="number" id="geo-lo-acc" min="0" max="5000" style="width:120px;" />
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-lo-acc" min="0" max="5000" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">pings with reported GPS accuracy worse than this are dropped</span>
+          </div>
 
           <label>Stale-data alert (h):</label>
-          <input type="number" id="geo-stale" min="1" max="168" style="width:120px;" />
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-stale" min="1" max="168" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">raise an alert if no ping arrives within this many hours</span>
+          </div>
 
           <label>Dedup radius (m):</label>
-          <input type="number" id="geo-dedup-r" min="0" max="500" style="width:120px;" />
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-dedup-r" min="0" max="500" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">skip insert when new ping is within this distance of the last row…</span>
+          </div>
 
           <label>Dedup window (sec):</label>
-          <input type="number" id="geo-dedup-s" min="0" max="3600" style="width:120px;" />
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-dedup-s" min="0" max="3600" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">…AND within this many seconds of the last row</span>
+          </div>
 
           <label>Emit geofence events:</label>
-          <input type="checkbox" id="geo-geofence-on" style="justify-self:start; transform:scale(1.2);" />
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="checkbox" id="geo-geofence-on" style="transform:scale(1.2);" />
+            <span style="font-size:0.82rem; color:#888;">write <code>home</code>/<code>away</code> rows into <code>device_events</code> on radius crossings</span>
+          </div>
+
+          <label>Heartbeat event (sec, 0=off):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-geofence-hb" min="0" max="86400" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">re-emit the current home/away state every N sec even without a crossing; 0 = transitions only (capped at ingest's 30 s cycle)</span>
+          </div>
 
           <label style="align-self:start;">Tracked devices:</label>
           <div>
@@ -214,30 +243,15 @@
       </details>
     </div>
 
-    <div class="card" style="flex:1 1 0; min-width:380px; margin-bottom:0;">
-      <h2>Recent geofence events</h2>
-      <div style="overflow-y:auto; max-height:280px;">
-        <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
-          <thead><tr style="background:#fafaf6;">
-            <th style="text-align:left; padding:6px 12px;">Time</th>
-            <th style="text-align:left; padding:6px 12px;">Device</th>
-            <th style="text-align:left; padding:6px 12px;">Event</th>
-            <th style="text-align:left; padding:6px 12px;">Where</th>
-          </tr></thead>
-          <tbody id="geo-events-tbody">
-            <tr><td colspan="4" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-    </div><!-- /flex row: Status + Settings + Events -->
+    </div><!-- /flex row: Status + Settings -->
 
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <h2 style="margin:0;">Map · trail</h2>
-        <div>
-          Window:
-          <select id="geo-window" onchange="geoReloadTrail()">
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button onclick="geoFitToTrack()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #1565c0; color:#1565c0; background:#fff; border-radius:3px; cursor:pointer;" title="Zoom + pan the map so the entire trail is visible">🔍 Fit to track</button>
+          <span>Window:</span>
+          <select id="geo-window" onchange="try{localStorage.setItem('geo.trailWindow', this.value)}catch(e){}; geoReloadTrail()">
             <option value="1h">1 h</option>
             <option value="24h" selected>24 h</option>
             <option value="7d">7 d</option>
@@ -246,6 +260,28 @@
         </div>
       </div>
       <div id="geo-map">Loading map…</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h2 style="margin:0;">Recent geofence events</h2>
+        <button onclick="geoClearEvents()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;" title="Wipe every geofence event AND every GPS ping from the DB. Empties both the table below and all dots on the map.">🗑 Clear all geolocation data</button>
+      </div>
+      <div style="overflow-y:auto; max-height:280px;">
+        <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+          <thead><tr style="background:#fafaf6;">
+            <th style="text-align:right;  padding:6px 12px; width:48px;">#</th>
+            <th style="text-align:left;   padding:6px 12px;">Time</th>
+            <th style="text-align:left;   padding:6px 12px;">Device</th>
+            <th style="text-align:left;   padding:6px 12px;">Event</th>
+            <th style="text-align:right;  padding:6px 12px;">Distance from home</th>
+            <th style="text-align:left;   padding:6px 12px;">Where</th>
+          </tr></thead>
+          <tbody id="geo-events-tbody">
+            <tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
   </div>
@@ -382,13 +418,18 @@ function showTab(name, btn) {
 // matching tab's onTabShow hook so its data fetch fires.
 document.addEventListener('DOMContentLoaded', () => {
   const hash = (window.location.hash || '').replace(/^#/, '');
-  if (!hash) return;
-  const panel = document.getElementById('tab-' + hash);
-  const btn   = document.querySelector(`.tab-btn[onclick*="showTab('${hash}'"]`);
-  if (!panel || !btn) return;
-  showTab(hash, btn);
-  if (hash === 'geolocation' && typeof geoOnTabShow === 'function') geoOnTabShow();
-  if (hash === 'weather'     && typeof weatherOnTabShow === 'function') weatherOnTabShow();
+  if (hash) {
+    const panel = document.getElementById('tab-' + hash);
+    const btn   = document.querySelector(`.tab-btn[onclick*="showTab('${hash}'"]`);
+    if (panel && btn) {
+      showTab(hash, btn);
+      if (hash === 'geolocation' && typeof geoOnTabShow === 'function') geoOnTabShow();
+      if (hash === 'weather'     && typeof weatherOnTabShow === 'function') weatherOnTabShow();
+      return;
+    }
+  }
+  // No (or unknown) hash → fire the default tab's onTabShow so its data loads.
+  if (typeof geoOnTabShow === 'function') geoOnTabShow();
 });
 
 function _isCurtainKind(d) {
@@ -590,6 +631,15 @@ let _geoPollTimer = null;
 
 function geoOnTabShow() {
   if (!_geoMap) geoInitMap();
+  // Restore last-chosen trail window from localStorage so it persists across
+  // page navigation. Falls back to the default option in the markup.
+  try {
+    const savedWin = localStorage.getItem('geo.trailWindow');
+    if (savedWin) {
+      const sel = document.getElementById('geo-window');
+      if (sel && [...sel.options].some(o => o.value === savedWin)) sel.value = savedWin;
+    }
+  } catch (e) {}
   geoLoadSettings();
   geoReloadStatus();
   geoReloadTrail();
@@ -610,10 +660,31 @@ function geoInitMap() {
   }
   const el = document.getElementById('geo-map');
   if (!el) return;
-  _geoMap = L.map('geo-map').setView([32.1593, 34.8932], 13);
+  // Restore last saved view (zoom + center) from localStorage so the user's
+  // zoom/pan persists across page navigation. Falls back to apartment default.
+  let initLat = 32.1593, initLon = 34.8932, initZoom = 13;
+  try {
+    const saved = JSON.parse(localStorage.getItem('geo.mapView') || 'null');
+    if (saved && typeof saved.lat === 'number' && typeof saved.lon === 'number' && typeof saved.zoom === 'number') {
+      initLat = saved.lat; initLon = saved.lon; initZoom = saved.zoom;
+      _geoLastBoundsFit = true;  // suppress the auto-recenter in geoUpdateCenterMarker
+    }
+  } catch (e) {}
+  _geoMap = L.map('geo-map').setView([initLat, initLon], initZoom);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors', maxZoom: 19,
   }).addTo(_geoMap);
+  // Persist the view on every pan or zoom interaction.
+  const saveView = () => {
+    try {
+      const c = _geoMap.getCenter();
+      localStorage.setItem('geo.mapView', JSON.stringify({
+        lat: c.lat, lon: c.lng, zoom: _geoMap.getZoom(),
+      }));
+    } catch (e) {}
+  };
+  _geoMap.on('moveend', saveView);
+  _geoMap.on('zoomend', saveView);
 }
 
 async function geoLoadSettings() {
@@ -630,6 +701,7 @@ async function geoLoadSettings() {
     document.getElementById('geo-dedup-r').value     = d.dedup_radius_m ?? 25;
     document.getElementById('geo-dedup-s').value     = d.dedup_window_sec ?? 60;
     document.getElementById('geo-geofence-on').checked = d.geofence_events !== false;
+    document.getElementById('geo-geofence-hb').value = d.geofence_heartbeat_sec ?? 0;
     geoRenderDeviceRows(d.tracked_devices || []);
     geoUpdateCenterMarker();
   } catch (e) { console.warn('geoLoadSettings:', e); }
@@ -656,7 +728,10 @@ function geoCollectDeviceRows() {
     while (updated.length <= i) updated.push({});
     updated[i][k] = inp.value.trim();
   });
-  return updated.filter(d => d.device_id && d.ha_entity);
+  // Keep any entry with a device_id. ha_entity is only required for the
+  // HA-Companion source; MQTT-based sources (e.g. OwnTracks) carry mqtt_topic
+  // instead, so filtering on ha_entity used to silently drop them on save.
+  return updated.filter(d => d.device_id);
 }
 
 function geoAddDeviceRow() {
@@ -688,7 +763,8 @@ async function geoSaveSettings() {
     stale_alert_hours:     parseInt(document.getElementById('geo-stale').value, 10) || 6,
     dedup_radius_m:        parseInt(document.getElementById('geo-dedup-r').value, 10) || 25,
     dedup_window_sec:      parseInt(document.getElementById('geo-dedup-s').value, 10) || 60,
-    geofence_events:       document.getElementById('geo-geofence-on').checked,
+    geofence_events:        document.getElementById('geo-geofence-on').checked,
+    geofence_heartbeat_sec: parseInt(document.getElementById('geo-geofence-hb').value, 10) || 0,
     tracked_devices:       geoCollectDeviceRows().map(d => ({
       device_id:      d.device_id,
       name:           d.name || d.device_id,
@@ -752,7 +828,12 @@ function geoUpdateCenterMarker() {
   if (isNaN(lat) || isNaN(lon)) return;
   if (_geoCenter) _geoCenter.remove();
   if (_geoRadiusCircle) _geoRadiusCircle.remove();
-  _geoCenter = L.marker([lat, lon], { title: 'Apartment center' }).addTo(_geoMap);
+  // Apartment center: small red dot so it can't be confused with the phone's
+  // blue teardrop pin when the phone's reported coord drifts a few meters
+  // away from the configured center.
+  _geoCenter = L.circleMarker([lat, lon], {
+    radius: 6, color: '#c0392b', fillColor: '#c0392b', fillOpacity: 0.9, weight: 2,
+  }).bindTooltip('Apartment center').addTo(_geoMap);
   _geoRadiusCircle = L.circle([lat, lon], {
     radius, color: '#c0392b', fillColor: '#c0392b', fillOpacity: 0.10, weight: 2,
   }).addTo(_geoMap);
@@ -778,10 +859,20 @@ async function geoReloadStatus() {
   } catch (e) { console.warn('geoReloadStatus:', e); }
 }
 
+function _geoHaversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 async function geoReloadTrail() {
   if (!_geoMap) return;
-  // Remove old trail + markers
-  if (_geoTrailLayer) { _geoTrailLayer.remove(); _geoTrailLayer = null; }
+  // Remove old trail + markers (trail is an array of polyline segments)
+  if (_geoTrailLayer) {
+    (Array.isArray(_geoTrailLayer) ? _geoTrailLayer : [_geoTrailLayer]).forEach(l => l.remove());
+    _geoTrailLayer = null;
+  }
   _geoMarkers.forEach(m => m.remove());
   _geoMarkers = [];
   geoUpdateCenterMarker();
@@ -792,26 +883,100 @@ async function geoReloadTrail() {
   if (!_geoSettings) return;
   const devs = _geoSettings.tracked_devices || [];
 
+  // Group tracked_devices by group_id (entries without group_id stay
+  // standalone, falling back to the device_id as the group key). Inside a
+  // group: fetch every member's locations in parallel, merge into one
+  // chronologically-sorted list, render as ONE set of grey dots. So HA
+  // Companion + OwnTracks of the same phone produce a single trail, not
+  // two overlapping trails.
+  const groups = new Map();
   for (const dev of devs) {
+    const gid = dev.group_id || dev.device_id;
+    if (!groups.has(gid)) groups.set(gid, []);
+    groups.get(gid).push(dev);
+  }
+
+  for (const [gid, members] of groups) {
     try {
-      const r = await fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(dev.device_id)}&since=${encodeURIComponent(since)}`);
-      const d = await r.json();
-      const pts = (d.locations || []).map(p => [Number(p.lat), Number(p.lon)]);
-      if (pts.length < 1) continue;
-      const trail = L.polyline(pts, { color: '#1565c0', weight: 3, opacity: 0.7 }).addTo(_geoMap);
-      _geoTrailLayer = trail;
-      const last = pts[pts.length - 1];
-      const lastMarker = L.marker(last, { title: dev.name }).addTo(_geoMap);
-      _geoMarkers.push(lastMarker);
-      // Sparse dots for older points (every 5th)
-      d.locations.forEach((p, i) => {
-        if (i % 5 !== 0 || i === d.locations.length - 1) return;
-        const dot = L.circleMarker([Number(p.lat), Number(p.lon)], { radius: 3, color: '#888', fillOpacity: 0.6 });
+      const responses = await Promise.all(members.map(d =>
+        fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(d.device_id)}&since=${encodeURIComponent(since)}`)
+          .then(r => r.json())
+          .then(d => d.locations || [])
+          .catch(() => [])
+      ));
+      const merged = responses.flat()
+        .map(p => ({ ts: p.ts, lat: Number(p.lat), lon: Number(p.lon), accuracy_m: p.accuracy_m }))
+        .filter(p => !isNaN(p.lat) && !isNaN(p.lon))
+        .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      if (merged.length < 1) continue;
+
+      // Grey dot for every ping except the freshest. The freshest ping
+      // (last item in the chronological merge) gets a blue last-position
+      // pin instead — one per group, regardless of which source supplied
+      // the latest reading.
+      merged.slice(0, -1).forEach(p => {
+        const dot = L.circleMarker([p.lat, p.lon], {
+          radius: 3, color: '#888', fillColor: '#888', fillOpacity: 0.6, weight: 1,
+        });
         dot.bindTooltip(`${p.ts} · accuracy ${p.accuracy_m || '?'} m`);
         dot.addTo(_geoMap);
         _geoMarkers.push(dot);
       });
+      const newest = merged[merged.length - 1];
+      const lastMarker = L.marker([newest.lat, newest.lon], { title: members[0].name || gid }).addTo(_geoMap);
+      lastMarker.bindTooltip(`${newest.ts} · accuracy ${newest.accuracy_m || '?'} m`);
+      _geoMarkers.push(lastMarker);
     } catch (e) { console.warn('geoReloadTrail:', e); }
+  }
+
+  // Event-marker overlay on the map was removed by user request — they
+  // want the map to show only the merged trail (grey dots + one blue
+  // last-position pin per group). Geofence event detail still lives in
+  // the Recent geofence events card below the map. To re-enable per-event
+  // markers, add a Leaflet marker block here driven by
+  // /api/geolocation/events. See git log for the original implementation.
+}
+
+// Zoom + pan the map to encompass every ping in the current trail window
+// across all tracked devices. Saves the resulting view so it persists like
+// any manual pan/zoom.
+async function geoFitToTrack() {
+  if (!_geoMap || !_geoSettings) return;
+  const window = document.getElementById('geo-window')?.value || '24h';
+  const hours = window === '1h' ? 1 : window === '7d' ? 24*7 : window === '30d' ? 24*30 : 24;
+  const since = new Date(Date.now() - hours*3600_000).toISOString();
+  const devs = _geoSettings.tracked_devices || [];
+  const bounds = L.latLngBounds([]);
+  let count = 0;
+  for (const dev of devs) {
+    try {
+      const r = await fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(dev.device_id)}&since=${encodeURIComponent(since)}`);
+      const d = await r.json();
+      (d.locations || []).forEach(p => {
+        bounds.extend([Number(p.lat), Number(p.lon)]);
+        count++;
+      });
+    } catch (e) {}
+  }
+  if (count === 0) { alert('No locations in the current window to fit to.'); return; }
+  _geoMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
+}
+
+async function geoClearEvents() {
+  if (!confirm('Delete ALL geolocation data (every GPS ping + every geofence event)? This cannot be undone.')) return;
+  try {
+    const r = await fetch('/api/geolocation/events', { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) {
+      // Redraw both the table and the map. After this both should be empty;
+      // they'll start repopulating from the next ingest pass.
+      await geoReloadEvents();
+      await geoReloadTrail();
+    } else {
+      alert('Clear failed: ' + (d.error || 'unknown error'));
+    }
+  } catch (e) {
+    alert('Clear failed: ' + e.message);
   }
 }
 
@@ -821,17 +986,31 @@ async function geoReloadEvents() {
     const d = await r.json();
     const tbody = document.getElementById('geo-events-tbody');
     if (!d.events || !d.events.length) {
-      tbody.innerHTML = '<tr><td colspan="4" style="padding:14px; text-align:center; color:#aaa;">No geofence events yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">No geofence events yet.</td></tr>';
       return;
     }
-    tbody.innerHTML = d.events.map(e => {
+    const cLat = parseFloat(_geoSettings?.center?.lat);
+    const cLon = parseFloat(_geoSettings?.center?.lon);
+    const haveCenter = !isNaN(cLat) && !isNaN(cLon);
+    // Number from 1 = oldest, ascending toward newest, so the # matches the
+    // sequence numbers on the map (lower # = earlier in time).
+    const total = d.events.length;
+    tbody.innerHTML = d.events.map((e, i) => {
+      const seq = total - i;
       const dps = typeof e.dps === 'string' ? JSON.parse(e.dps) : e.dps;
       const event = dps?.event || '?';
       const color = event === 'home' ? '#1a7a3a' : '#9c4f00';
+      let distCell = '<span style="color:#bbb;">—</span>';
+      if (haveCenter && typeof dps?.lat === 'number' && typeof dps?.lon === 'number') {
+        const m = _geoHaversineM(cLat, cLon, dps.lat, dps.lon);
+        distCell = m >= 1000 ? (m/1000).toFixed(2) + ' km' : Math.round(m) + ' m';
+      }
       return `<tr style="border-top:1px solid #f0eee8;">
+        <td style="padding:5px 12px; text-align:right; color:#1565c0; font-weight:600; font-family:monospace;">${seq}</td>
         <td style="padding:5px 12px; color:#666;">${pgEsc(new Date(e.ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
         <td style="padding:5px 12px;">${pgEsc(e.device_id)}</td>
         <td style="padding:5px 12px; font-weight:600; color:${color};">${event}</td>
+        <td style="padding:5px 12px; text-align:right; color:#444;">${distCell}</td>
         <td style="padding:5px 12px; color:#888;">${dps?.lat ? dps.lat.toFixed(4) + ', ' + dps.lon.toFixed(4) : ''}</td>
       </tr>`;
     }).join('');

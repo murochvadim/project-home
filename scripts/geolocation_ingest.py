@@ -45,6 +45,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -101,6 +102,7 @@ def read_settings(conn):
         'tracked_devices':        [],
         'retention_days':         30,
         'geofence_events':        True,
+        'geofence_heartbeat_sec':  0,
         'trail_window_default':   '24h',
         'low_accuracy_filter_m':  100,
         'stale_alert_hours':      6,
@@ -205,6 +207,7 @@ def run():
     dedup_s  = float(cfg.get('dedup_window_sec') or 60)
     lo_acc   = float(cfg.get('low_accuracy_filter_m') or 100)
     do_geo   = bool(cfg.get('geofence_events', True))
+    hb_sec   = int(cfg.get('geofence_heartbeat_sec') or 0)
 
     if not devices:
         log.info('no tracked_devices configured — exit')
@@ -249,41 +252,83 @@ def run():
             log.debug('skip %s low-accuracy ping (%s m > %s m)', device_id, acc, lo_acc)
             continue
 
-        # Dedup against last row
+        # Fetch the last DB row up-front — needed for dedup, teleport filter,
+        # AND geofence transition compare. Pulling it here means the geofence
+        # block below runs even when the new ping gets deduped (heartbeat
+        # fires regardless of new location data).
         last = get_last_location(conn, device_id)
+        deduped = False
         if last:
             try:
                 last_lat = float(last['lat']); last_lon = float(last['lon'])
                 dist     = haversine_m(last_lat, last_lon, lat, lon)
                 age_sec  = (time.time() - last['ts'].timestamp())
+                # Teleport filter — Android's WiFi-based location occasionally
+                # returns coords from a poisoned access-point DB entry, with
+                # fake-tight accuracy. If the implied speed since the last
+                # known ping is greater than max_speed_ms (default 100 m/s =
+                # 360 km/h), the ping is physically impossible and dropped.
+                # Skipped if age_sec <= 0 (clock anomaly) or no prior row.
+                if age_sec > 0:
+                    speed = dist / age_sec
+                    max_speed = float(cfg.get('max_speed_ms') or 100)
+                    if max_speed > 0 and speed > max_speed:
+                        log.info('drop teleport ping from %s: %.0fm in %.0fs '
+                                 '= %.0fm/s (filter %sm/s)',
+                                 device_id, dist, age_sec, speed, max_speed)
+                        continue
                 if dist < dedup_r and age_sec < dedup_s:
                     log.debug('dedup %s: %sm < %sm AND %ss < %ss', device_id, dist, dedup_r, age_sec, dedup_s)
-                    continue
+                    deduped = True
             except Exception as e:
                 log.debug('dedup compare error: %s', e)
 
-        battery = get_battery(batt_ent)
-        insert_location(conn, device_id, lat, lon, acc, alt, speed, battery)
-        inserts += 1
+        if not deduped:
+            battery = get_battery(batt_ent)
+            insert_location(conn, device_id, lat, lon, acc, alt, speed, battery)
+            inserts += 1
 
-        # Geofence transition check
+        # Geofence transition check + optional heartbeat re-emit. Runs every
+        # pass — heartbeat must fire even when the new ping was deduped, since
+        # a stationary phone will be deduped for hours at a time.
         if can_geofence:
             dist_home = haversine_m(center_lat, center_lon, lat, lon)
             is_home   = dist_home <= radius_m
-            # Compare to the PREVIOUS state (row before the one we just inserted).
-            if last:
+            event     = 'home' if is_home else 'away'
+            emit_reason = None
+            # Compare to the PREVIOUS state (the last DB row).
+            if last and not deduped:
                 try:
                     prev_dist = haversine_m(center_lat, center_lon,
                                             float(last['lat']), float(last['lon']))
                     was_home  = prev_dist <= radius_m
                     if is_home != was_home:
-                        event = 'home' if is_home else 'away'
-                        emit_geofence_event(conn, device_id, event, lat, lon)
-                        geofence_crossings += 1
-                        log.info('%s crossed geofence -> %s (dist %.0f m)',
-                                 device_id, event, dist_home)
+                        emit_reason = 'crossing'
                 except Exception as e:
                     log.debug('geofence compare error: %s', e)
+            # Heartbeat: re-emit current state every hb_sec seconds even when
+            # no boundary crossing happened — useful for periodic confirmation
+            # the pipeline is alive. Disabled when hb_sec == 0.
+            if emit_reason is None and hb_sec > 0:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT MAX(ts) FROM device_events "
+                            "WHERE device_id = %s AND source = 'geolocation_ingest'",
+                            (device_id,))
+                        row = cur.fetchone()
+                        last_evt_ts = row[0] if row else None
+                    if (last_evt_ts is None
+                            or (datetime.now(timezone.utc) - last_evt_ts).total_seconds()
+                                >= hb_sec):
+                        emit_reason = 'heartbeat'
+                except Exception as e:
+                    log.warning('geofence heartbeat check error: %s', e)
+            if emit_reason is not None:
+                emit_geofence_event(conn, device_id, event, lat, lon)
+                geofence_crossings += 1
+                log.info('%s geofence %s -> %s (dist %.0f m)',
+                         device_id, emit_reason, event, dist_home)
 
     conn.commit()
     conn.close()

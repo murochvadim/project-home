@@ -142,7 +142,10 @@
 
   <!-- Recent events card -->
   <div class="card" style="margin-top:16px;">
-    <h2>Recent NetBird Events</h2>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <h2 style="margin:0;">Recent NetBird Events</h2>
+      <button onclick="gwClearResolvedEvents()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;" title="Delete every resolved netbird:* alert. Active alerts are kept.">🗑 Clear resolved</button>
+    </div>
     <p style="color:#666; font-size:0.9rem; margin-top:0;">
       Last 20 entries from <code>system_alerts</code> where alert_type starts with <code>netbird:</code> — active and recently-resolved.
     </p>
@@ -164,12 +167,36 @@
     </div>
   </div>
 
+  <!-- Recent peer transitions card -->
+  <div class="card" style="margin-top:16px;">
+    <h2>Recent peer transitions</h2>
+    <p style="color:#666; font-size:0.9rem; margin-top:0;">
+      Every time a peer's <code>connected</code> field flips (caught at the dashboard's 30 s cache refresh).
+      Empty = no flap since the dashboard started. If the page feels "flappy" but this stays empty for hours, the issue isn't real connectivity — it's UI rendering or browser cache.
+    </p>
+    <div style="overflow-x:auto;">
+      <table id="gw-transitions-table" style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead>
+          <tr style="background:#fafaf6;">
+            <th style="text-align:left;   padding:6px 12px;">Time</th>
+            <th style="text-align:left;   padding:6px 12px;">Peer</th>
+            <th style="text-align:center; padding:6px 12px;">Transition</th>
+            <th style="text-align:left;   padding:6px 12px;">Source</th>
+          </tr>
+        </thead>
+        <tbody id="gw-transitions-tbody">
+          <tr><td colspan="4" style="padding:14px; text-align:center; color:#aaa;">No transitions logged yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Edit-peer modal placeholder — rendered dynamically -->
 
 </main>
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/gateway.js?v=6"></script>
+<script src="js/gateway.js?v=8"></script>
 </body>
 </html>

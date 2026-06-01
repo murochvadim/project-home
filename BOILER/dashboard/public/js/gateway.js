@@ -275,6 +275,47 @@
     } catch (_) { /* transient — leave prior render */ }
   }
 
+  // ─── Clear resolved NetBird events ───────────────────────────────
+  window.gwClearResolvedEvents = async function () {
+    if (!confirm('Delete ALL resolved netbird:* alerts? Active alerts will be kept.')) return;
+    try {
+      const r = await fetch('/api/gateway/events/clear-resolved', { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { await loadEvents(); }
+      else alert('Clear failed: ' + (d.error || r.statusText));
+    } catch (e) { alert('Clear failed: ' + e.message); }
+  };
+
+  // ─── Transitions card ────────────────────────────────────────────
+  async function loadTransitions() {
+    const tbody = document.getElementById('gw-transitions-tbody');
+    if (!tbody) return;
+    try {
+      const r = await fetch('/api/gateway/transitions?limit=20');
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !Array.isArray(d.transitions)) return;
+      if (!d.transitions.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="padding:14px; text-align:center; color:#aaa;">No transitions logged yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = d.transitions.map(t => {
+        const went_offline = t.to_state === 'disconnected';
+        const arrow = went_offline ? '↓' : '↑';
+        const color = went_offline ? '#c0392b' : '#27ae60';
+        return `
+          <tr style="border-top:1px solid #f0eee8;">
+            <td style="padding:6px 12px; color:#666;">${esc(ageString(t.ts))}</td>
+            <td style="padding:6px 12px; font-weight:600;">${esc(t.peer_name || t.peer_id)}</td>
+            <td style="padding:6px 12px; text-align:center; color:${color}; font-family:monospace;">
+              ${esc(t.from_state)} ${arrow} ${esc(t.to_state)}
+            </td>
+            <td style="padding:6px 12px; color:#888; font-size:0.85rem;">${esc(t.source || 'dashboard_cache')}</td>
+          </tr>
+        `;
+      }).join('');
+    } catch (_) { /* transient — leave prior render */ }
+  }
+
   // ─── Inline peer edit (modal opens via gwEditPeer; PATCH on save) ─
   let _editingPeer = null;
 
@@ -380,6 +421,7 @@
     loadRoutes();
     loadSettings();
     loadEvents();
+    loadTransitions();
     const el = document.getElementById('last-refresh');
     if (el) {
       el.textContent = new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', second: '2-digit' });

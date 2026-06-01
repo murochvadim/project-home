@@ -30,7 +30,19 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false, lastModified: false,
+  setHeaders: (res, filePath) => {
+    // HTML files carry inline <script> blocks that change with every code
+    // edit. `no-cache` (alone) lets the browser serve from disk on
+    // back/forward nav or restored tabs without revalidating, so users
+    // sometimes run stale inline JS for hours. `no-store` forces a fresh
+    // fetch every time. Static assets (js/css/images) still get the
+    // weaker `no-cache` so they're fast but never poisonously stale.
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+    else res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
 
 // PostgreSQL connection to LXC 102
 const db = new Pool({
@@ -2554,9 +2566,63 @@ app.post('/api/network/scan', async (req, res) => {
 const NETBIRD_API_BASE = 'https://api.netbird.io/api';
 const _NB_CACHE = { peers: null, peersTs: 0, routes: null, routesTs: 0 };
 const _NB_CACHE_TTL_MS = 30_000;
+// Flap detection: tracks each peer's last COMMITTED `connected` state. A
+// flip is only logged into gateway_peer_transitions after it persists for
+// _NB_DEBOUNCE_MS — single-poll API blips from NetBird's control plane
+// (occasionally reports all peers as offline for ~30 s while WireGuard is
+// actually fine — verified 2026-06-01) are filtered out.
+const _NB_PEER_STATE   = new Map();   // peer_id → committed boolean state
+const _NB_PEER_PENDING = new Map();   // peer_id → { state: bool, ts: ms } when a flip is in-flight
+const _NB_DEBOUNCE_MS  = 30_000;
 
 function _nbToken() {
   return (process.env.NETBIRD_API_TOKEN || '').trim();
+}
+
+async function _refreshPeersCache() {
+  const fresh = await _nbFetch('/peers');
+  const now = Date.now();
+  for (const p of fresh) {
+    const newState  = !!p.connected;
+    const committed = _NB_PEER_STATE.get(p.id);
+    const pending   = _NB_PEER_PENDING.get(p.id);
+
+    if (committed === undefined) {
+      // First time we see this peer — set committed state directly, no
+      // transition logged (we have no prior baseline to flip from).
+      _NB_PEER_STATE.set(p.id, newState);
+      continue;
+    }
+
+    if (newState === committed) {
+      // State matches the committed baseline. If a flip was pending, the
+      // API reverted within the debounce window → discard it as noise.
+      if (pending) _NB_PEER_PENDING.delete(p.id);
+      continue;
+    }
+
+    // newState differs from committed → real flip candidate.
+    if (!pending || pending.state !== newState) {
+      // Start a fresh debounce timer for this flip direction.
+      _NB_PEER_PENDING.set(p.id, { state: newState, ts: now });
+      continue;
+    }
+
+    // Pending matches newState and has been in this state for a while.
+    if (now - pending.ts >= _NB_DEBOUNCE_MS) {
+      db.query(
+        `INSERT INTO gateway_peer_transitions (peer_id, peer_name, from_state, to_state)
+         VALUES ($1, $2, $3, $4)`,
+        [p.id, p.name, committed ? 'connected' : 'disconnected', newState ? 'connected' : 'disconnected'],
+      ).catch(e => console.error('[gateway] transition log failed:', e.message));
+      _NB_PEER_STATE.set(p.id, newState);
+      _NB_PEER_PENDING.delete(p.id);
+    }
+    // else: still inside the debounce window — wait for the next refresh.
+  }
+  _NB_CACHE.peers   = fresh;
+  _NB_CACHE.peersTs = now;
+  return fresh;
 }
 
 async function _nbFetch(path) {
@@ -2586,8 +2652,7 @@ app.get('/api/gateway/peers', async (req, res) => {
   try {
     const now = Date.now();
     if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
-      _NB_CACHE.peers   = await _nbFetch('/peers');
-      _NB_CACHE.peersTs = now;
+      await _refreshPeersCache();
     }
     const overlay = await db.query('SELECT * FROM netbird_peers_local');
     const overlayMap = new Map(overlay.rows.map(r => [r.peer_id, r]));
@@ -2658,8 +2723,7 @@ app.get('/api/gateway/routes', async (req, res) => {
     if (!_NB_CACHE.routes || (now - _NB_CACHE.routesTs) > _NB_CACHE_TTL_MS) {
       const nets = await _nbFetch('/networks');
       if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
-        _NB_CACHE.peers   = await _nbFetch('/peers');
-        _NB_CACHE.peersTs = now;
+        await _refreshPeersCache();
       }
       const peerById = new Map((_NB_CACHE.peers || []).map(p => [p.id, p.name]));
       let allCleanFetches = true;
@@ -2673,26 +2737,36 @@ app.get('/api/gateway/routes', async (req, res) => {
         const rawRouterCount = Array.isArray(n.routers) ? n.routers.length
                               : (typeof n.routing_peers_count === 'number' ? n.routing_peers_count : 0);
 
-        // CIDR — if /resources succeeded, use real addresses; else fall back
-        // to a placeholder string that doesn't claim "no CIDR" definitively.
-        const cidrs = resources !== null
+        // "Clean" = sub-fetch came back AND had actual data. An empty
+        // array is a transient NetBird state during route reconfiguration
+        // (HTTP 200 with `[]` body) — render it the same way as a failed
+        // sub-fetch, otherwise the dashboard flips to "Offline" for ~30 s
+        // every time a route is briefly recomputed upstream.
+        const resourcesClean = resources !== null && resources.length > 0;
+        const routersClean   = routers   !== null && routers.length   > 0;
+        if (!resourcesClean || !routersClean) allCleanFetches = false;
+
+        // CIDR — only trust /resources when it actually has entries. Empty
+        // array → show raw fallback marker instead of '—'.
+        const cidrs = resourcesClean
           ? resources.map(r => r.address).filter(Boolean)
           : [];
-        const cidrStr = cidrs.length ? cidrs.join(', ')
-                                     : (resources === null ? '(loading…)' : '—');
+        const cidrStr = cidrs.length
+          ? cidrs.join(', ')
+          : (rawRouterCount > 0 ? '(reconfiguring…)' : '—');
 
-        // Peer names — same logic. If /routers succeeded, resolve through
-        // the peer cache; else fall back to "<N peers>" from raw count.
-        const peerNames = routers !== null
+        // Peer names — same logic. Fall back to "<N peers>" from raw count
+        // when /routers is empty or failed.
+        const peerNames = routersClean
           ? routers.map(r => peerById.get(r.peer) || r.peer).filter(Boolean)
           : (rawRouterCount > 0 ? [`<${rawRouterCount} peer${rawRouterCount > 1 ? 's' : ''}>`] : []);
 
-        // Enabled — only "offline" when we have GOOD data from BOTH
-        // sub-endpoints AND they confirm 0 active routers. If either
-        // sub-fetch failed but raw /networks says routing_peers_count > 0,
-        // we trust the raw count (route IS announcing).
+        // Enabled — require GOOD data from BOTH sub-endpoints with non-empty
+        // arrays AND both confirming the route is active. Otherwise trust
+        // /networks's rawRouterCount (route IS announcing if NetBird's
+        // canonical network view says so).
         let enabled;
-        if (resources !== null && routers !== null) {
+        if (resourcesClean && routersClean) {
           enabled = resources.some(r => r.enabled !== false)
                  && routers.some(r => r.enabled !== false);
         } else {
@@ -2721,6 +2795,24 @@ app.get('/api/gateway/routes', async (req, res) => {
     res.json({ routes: _NB_CACHE.routes });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// GET /api/gateway/transitions?limit=20 — Recent peer connected/disconnected
+// flips written by _refreshPeersCache. Hand-evidence for "is the gateway
+// actually flapping or is it just a UI artifact" debugging.
+app.get('/api/gateway/transitions', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  try {
+    const r = await db.query(
+      `SELECT id, ts, peer_id, peer_name, from_state, to_state, source
+       FROM gateway_peer_transitions
+       ORDER BY ts DESC LIMIT $1`,
+      [limit],
+    );
+    res.json({ transitions: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -2767,8 +2859,7 @@ app.get('/api/gateway/status', async (req, res) => {
   try {
     const now = Date.now();
     if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
-      _NB_CACHE.peers   = await _nbFetch('/peers');
-      _NB_CACHE.peersTs = now;
+      await _refreshPeersCache();
     }
     if (!_NB_CACHE.routes || (now - _NB_CACHE.routesTs) > _NB_CACHE_TTL_MS) {
       _NB_CACHE.routes   = await _nbFetch('/networks');
@@ -2829,6 +2920,21 @@ app.get('/api/gateway/events', async (req, res) => {
   }
 });
 
+// DELETE /api/gateway/events/clear-resolved — wipe every resolved netbird:*
+// alert. Active alerts (resolved_at IS NULL) are kept so the system_alerts
+// card on Project Health still surfaces them.
+app.delete('/api/gateway/events/clear-resolved', async (req, res) => {
+  try {
+    const r = await db.query(
+      `DELETE FROM system_alerts
+       WHERE alert_type LIKE 'netbird:%' AND resolved_at IS NOT NULL`
+    );
+    res.json({ ok: true, deleted: r.rowCount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ───────────────────────────────────────────────────────────────────
 // Project Geolocation — phone movement tracking. Index:
 // GEOLOCATION/CLAUDE.md. Tables: device_locations on LXC 102 (time
@@ -2867,8 +2973,9 @@ app.post('/api/geolocation/settings', async (req, res) => {
   const cfg = req.body || {};
   // Allow-listed fields only; reject anything else to keep DB clean
   const allowed = ['center', 'home_radius_m', 'tracked_devices', 'retention_days',
-                   'geofence_events', 'trail_window_default', 'low_accuracy_filter_m',
-                   'stale_alert_hours', 'dedup_radius_m', 'dedup_window_sec'];
+                   'geofence_events', 'geofence_heartbeat_sec', 'trail_window_default',
+                   'low_accuracy_filter_m', 'stale_alert_hours', 'dedup_radius_m',
+                   'dedup_window_sec'];
   const clean = {};
   for (const k of allowed) if (k in cfg) clean[k] = cfg[k];
   try {
@@ -2913,8 +3020,12 @@ app.get('/api/geolocation/locations', async (req, res) => {
   }
 });
 
-// GET /api/geolocation/status — latest position per tracked device +
-// home/away/offline classification.
+// GET /api/geolocation/status — latest position per tracked-device GROUP
+// + home/away/offline classification. Multiple tracked_devices entries
+// can share a group_id (e.g. both HA Companion + OwnTracks of the same
+// phone). Each group collapses to a single returned row using the
+// freshest ping from any member. Entries without group_id stay
+// standalone (group_id defaults to the device_id itself).
 app.get('/api/geolocation/status', async (req, res) => {
   try {
     const s = await db.query("SELECT value FROM dashboard_settings WHERE key = 'geolocation'");
@@ -2923,22 +3034,35 @@ app.get('/api/geolocation/status', async (req, res) => {
     const center = cfg.center || {};
     const radius = Number(cfg.home_radius_m) || 80;
     const staleHours = Number(cfg.stale_alert_hours) || 6;
-    // Pull latest ping per device
-    const rows = await Promise.all(devices.map(async d => {
+    // 1) Per-device latest ping (unchanged from before).
+    const perDevice = await Promise.all(devices.map(async d => {
       const r = await db.query(
         `SELECT ts, lat, lon, accuracy_m, battery_pct FROM device_locations
          WHERE device_id = $1 ORDER BY ts DESC LIMIT 1`,
         [d.device_id],
       );
-      const last = r.rows[0];
+      return { dev: d, last: r.rows[0] || null };
+    }));
+    // 2) Collapse by group_id — pick member with the newest `last.ts`.
+    const groups = new Map();
+    for (const item of perDevice) {
+      const gid = item.dev.group_id || item.dev.device_id;
+      const prev = groups.get(gid);
+      if (!prev) { groups.set(gid, item); continue; }
+      if (item.last && (!prev.last || new Date(item.last.ts) > new Date(prev.last.ts))) {
+        groups.set(gid, item);
+      }
+    }
+    // 3) Format each group as one status row.
+    const rows = [...groups.values()].map(({ dev, last }) => {
+      const groupId = dev.group_id || dev.device_id;
       if (!last) {
-        return { device_id: d.device_id, name: d.name, status: 'no_data' };
+        return { device_id: groupId, name: dev.name, status: 'no_data' };
       }
       const ageMs = Date.now() - new Date(last.ts).getTime();
       const stale = ageMs > staleHours * 3600_000;
       let distance = null, isHome = null;
       if (center.lat != null && center.lon != null) {
-        // Haversine in JS (same formula as the Python ingest)
         const R = 6_371_000;
         const p1 = center.lat * Math.PI / 180;
         const p2 = Number(last.lat) * Math.PI / 180;
@@ -2949,8 +3073,8 @@ app.get('/api/geolocation/status', async (req, res) => {
         isHome   = distance <= radius;
       }
       return {
-        device_id:    d.device_id,
-        name:         d.name,
+        device_id:    groupId,
+        name:         dev.name,
         status:       stale ? 'stale' : (isHome === true ? 'home' : (isHome === false ? 'away' : 'unknown')),
         ts:           last.ts,
         age_sec:      Math.round(ageMs / 1000),
@@ -2959,8 +3083,9 @@ app.get('/api/geolocation/status', async (req, res) => {
         accuracy_m:   last.accuracy_m,
         battery_pct:  last.battery_pct,
         distance_m:   distance != null ? Math.round(distance) : null,
+        freshest_source: dev.source,
       };
-    }));
+    });
     res.json({ devices: rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2987,18 +3112,35 @@ app.post('/api/geolocation/run-ingest', async (req, res) => {
   }
 });
 
-// GET /api/geolocation/events?limit=20 — recent geofence crossings
+// GET /api/geolocation/events?limit=20 — recent geofence crossings from
+// either ingest path (HA Companion → geolocation_ingest, MQTT → owntracks_ingest).
 app.get('/api/geolocation/events', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
   try {
     const r = await db.query(
       `SELECT id, ts, device_id, source, dps
        FROM device_events
-       WHERE source = 'geolocation_ingest'
+       WHERE source IN ('geolocation_ingest', 'owntracks_ingest')
        ORDER BY ts DESC LIMIT $1`,
       [limit],
     );
     res.json({ events: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/geolocation/events — wipe BOTH the geofence events AND every
+// device_locations row, so the "Clear all geolocation data" button on the
+// dashboard fully empties the map + the events table in one click. Both
+// ingest paths (HA Companion + OwnTracks) are covered.
+app.delete('/api/geolocation/events', async (req, res) => {
+  try {
+    const evt = await db.query(
+      "DELETE FROM device_events WHERE source IN ('geolocation_ingest', 'owntracks_ingest')"
+    );
+    const loc = await db.query("DELETE FROM device_locations");
+    res.json({ ok: true, events_deleted: evt.rowCount, locations_deleted: loc.rowCount });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
