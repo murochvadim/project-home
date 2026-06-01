@@ -15,6 +15,15 @@
     .geo-chip.stale   { background:rgba(149,165,166,0.20); color:#555; }
     .geo-chip.no_data { background:rgba(149,165,166,0.20); color:#555; }
     .geo-chip.unknown { background:rgba(149,165,166,0.20); color:#555; }
+    /* Connection chips — same shape as the status chip on the row above so
+       the two rows align visually. Three semantic states:
+       - good: phone on home WiFi (LAN routes everything) — green
+       - mid:  phone on foreign WiFi / cellular but NetBird tunnel is up
+               (away-pings can still flow through the tunnel) — amber
+       - bad:  off-WiFi AND NetBird off (away-pings WILL queue) — red */
+    .geo-chip.conn-good { background:rgba(39,174,96,0.15);  color:#1a7a3a; }
+    .geo-chip.conn-mid  { background:rgba(230,126,34,0.18); color:#9c4f00; }
+    .geo-chip.conn-bad  { background:rgba(192,57,43,0.18);  color:#962917; }
     #geo-map { height:480px; border-radius:6px; border:1px solid #d0cbc4; }
     .geo-settings-grid { display:grid; grid-template-columns:max-content 1fr; gap:10px 18px; align-items:center; }
     .geo-settings-grid input[type="number"], .geo-settings-grid input[type="text"] { padding:5px 8px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.9rem; }
@@ -1033,7 +1042,29 @@ async function geoReloadStatus() {
       const dist = (x.distance_m != null) ? ` · ${x.distance_m >= 1000 ? (x.distance_m/1000).toFixed(2) + ' km' : x.distance_m + ' m'}` : '';
       const age = (x.age_sec != null) ? ` · ${x.age_sec < 60 ? x.age_sec + ' s' : (x.age_sec < 3600 ? Math.round(x.age_sec/60) + ' min' : Math.round(x.age_sec/3600) + ' h')} ago` : '';
       const label = `${pgEsc(x.name || x.device_id)}: ${x.status}${dist}${age}${battery}`;
-      return `<span class="geo-chip ${x.status}">${label}</span>`;
+      // Connection chip — same pill shape as the row above. WiFi SSID + NetBird
+      // tunnel state. Semantic colors:
+      //   good = on home WiFi (LAN direct, all ingest paths happy)
+      //   mid  = off-WiFi or foreign WiFi, but NetBird tunnel is up
+      //   bad  = off-WiFi AND NetBird down → away-pings will queue
+      const c = x.connection || {};
+      const ssid = c.ssid;
+      const homeSsid = c.home_ssid;
+      const offWifi = !ssid || ssid === 'unavailable' || ssid === 'unknown' || ssid === '<not connected>';
+      const isHomeSsid = ssid && homeSsid && ssid.toLowerCase() === String(homeSsid).toLowerCase();
+      let wifiPart;
+      if (offWifi)         wifiPart = '📱 Off-WiFi';
+      else if (isHomeSsid) wifiPart = `📶 Home WiFi (${pgEsc(ssid)})`;
+      else                 wifiPart = `📶 ${pgEsc(ssid)}`;
+      let nbPart = '';
+      if (c.netbird_connected === true)  nbPart = ' · NetBird ✓';
+      else if (c.netbird_connected === false) nbPart = (offWifi || !isHomeSsid) ? ' · ⚠ NetBird off' : ' · NetBird off';
+      let connClass;
+      if (isHomeSsid)                                         connClass = 'conn-good';
+      else if (offWifi && c.netbird_connected !== true)       connClass = 'conn-bad';
+      else                                                    connClass = 'conn-mid';
+      const connChip = `<span class="geo-chip ${connClass}">${wifiPart}${nbPart}</span>`;
+      return `<div class="geo-status-block" style="display:inline-block; vertical-align:top; margin:0 8px 6px 0;"><div><span class="geo-chip ${x.status}">${label}</span></div><div style="margin-top:4px;">${connChip}</div></div>`;
     }).join('');
     const el = document.getElementById('geo-status-chips');
     el.innerHTML = chips || '<span style="color:#aaa; font-size:0.86rem;">No tracked devices.</span>';

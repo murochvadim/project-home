@@ -3212,6 +3212,51 @@ app.get('/api/geolocation/status', async (req, res) => {
       );
       return { dev: d, last: r.rows[0] || null };
     }));
+    // 1b) Connection signals — current WiFi SSID per device + NetBird tunnel
+    // state per group. Both feed the second row of the Status chip ("📶 Home"
+    // / "📱 Off-WiFi · ⚠ NetBird off"). Failures degrade silently so a HA or
+    // NetBird outage doesn't blank the rest of the status card.
+    const haUrl = 'http://192.168.1.110:8123';
+    const haToken = (process.env.HA_TOKEN || '').trim();
+    const wifiEntities = new Set(devices.map(d => d.wifi_entity).filter(Boolean));
+    const wifiStates = {};
+    await Promise.all([...wifiEntities].map(async eid => {
+      try {
+        const r = await fetch(`${haUrl}/api/states/${encodeURIComponent(eid)}`, {
+          headers: { 'Authorization': `Bearer ${haToken}` },
+          signal: AbortSignal.timeout(2500),
+        });
+        if (r.ok) wifiStates[eid] = await r.json();
+      } catch (_) {}
+    }));
+    // NetBird peer lookup — match by tracked_devices[].name against either
+    // peer.name or netbird_peers_local.device_label (overlay). Reuse the
+    // existing 30 s peer cache so we don't hammer the upstream.
+    let nbPeers = [];
+    try {
+      const now = Date.now();
+      if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
+        await _refreshPeersCache();
+      }
+      const overlay = await db.query('SELECT peer_id, device_label FROM netbird_peers_local');
+      const labelByPeer = new Map(overlay.rows.map(r => [r.peer_id, r.device_label]));
+      nbPeers = (_NB_CACHE.peers || []).map(p => ({
+        name: p.name,
+        label: labelByPeer.get(p.id) || null,
+        connected: !!p.connected,
+        last_seen: p.last_seen,
+      }));
+    } catch (_) { /* NetBird unreachable → leave nbPeers empty */ }
+    function _findPeer(deviceName) {
+      if (!deviceName) return null;
+      const lc = deviceName.toLowerCase();
+      return nbPeers.find(p =>
+        (p.label && p.label.toLowerCase() === lc) ||
+        (p.name && p.name.toLowerCase() === lc) ||
+        (p.label && lc.includes(p.label.toLowerCase())) ||
+        (p.name && lc.includes(p.name.toLowerCase()))
+      ) || null;
+    }
     // 2) Collapse by group_id — pick member with the newest `last.ts`.
     const groups = new Map();
     for (const item of perDevice) {
@@ -3222,11 +3267,44 @@ app.get('/api/geolocation/status', async (req, res) => {
         groups.set(gid, item);
       }
     }
+    // Helper — assemble the `connection` sub-object for one group. Walks
+    // every member device, picks the WiFi state from whichever has a
+    // configured wifi_entity, and looks up the matching NetBird peer once
+    // per group.
+    function _connectionFor(group) {
+      const members = group.members || [group.dev];
+      let ssid = null, home_ssid = null;
+      for (const m of members) {
+        const eid = m && m.wifi_entity;
+        if (eid && wifiStates[eid]) {
+          ssid = wifiStates[eid].state || null;
+          home_ssid = m.wifi_home_ssid || home_ssid;
+          break;
+        }
+      }
+      const peer = _findPeer((group.dev && group.dev.name) || null);
+      return {
+        ssid,
+        home_ssid,
+        netbird_connected: peer ? peer.connected : null,
+        netbird_last_seen: peer ? peer.last_seen : null,
+      };
+    }
     // 3) Format each group as one status row.
+    // Rebuild groups to track ALL member devices (not just the freshest)
+    // so _connectionFor can scan every member's wifi_entity.
+    const groupMembers = new Map();
+    for (const item of perDevice) {
+      const gid = item.dev.group_id || item.dev.device_id;
+      if (!groupMembers.has(gid)) groupMembers.set(gid, []);
+      groupMembers.get(gid).push(item.dev);
+    }
     const rows = [...groups.values()].map(({ dev, last }) => {
       const groupId = dev.group_id || dev.device_id;
+      const members = groupMembers.get(groupId) || [dev];
       if (!last) {
-        return { device_id: groupId, name: dev.name, status: 'no_data' };
+        return { device_id: groupId, name: dev.name, status: 'no_data',
+                 connection: _connectionFor({ dev, members }) };
       }
       const ageMs = Date.now() - new Date(last.ts).getTime();
       const stale = ageMs > staleHours * 3600_000;
@@ -3253,6 +3331,7 @@ app.get('/api/geolocation/status', async (req, res) => {
         battery_pct:  last.battery_pct,
         distance_m:   distance != null ? Math.round(distance) : null,
         freshest_source: dev.source,
+        connection:   _connectionFor({ dev, members }),
       };
     });
     res.json({ devices: rows });
