@@ -2574,6 +2574,13 @@ const _NB_CACHE_TTL_MS = 30_000;
 const _NB_PEER_STATE   = new Map();   // peer_id → committed boolean state
 const _NB_PEER_PENDING = new Map();   // peer_id → { state: bool, ts: ms } when a flip is in-flight
 const _NB_DEBOUNCE_MS  = 30_000;
+// Same debounce pattern for the route's `enabled` flag. When /networks
+// briefly reports routing_peers_count=0 (NetBird's control plane recomputing
+// a network), we'd otherwise flash "— — Offline" on the dashboard for ~30 s.
+// Now we serve the last known good route until offline persists for the
+// debounce window. Keyed by network id.
+const _NB_ROUTE_LAST_GOOD       = new Map();   // network_id → last route object that had enabled=true
+const _NB_ROUTE_PENDING_OFFLINE = new Map();   // network_id → ts_ms when offline first seen
 
 function _nbToken() {
   return (process.env.NETBIRD_API_TOKEN || '').trim();
@@ -2773,13 +2780,44 @@ app.get('/api/gateway/routes', async (req, res) => {
           enabled = rawRouterCount > 0;
         }
 
-        return {
+        const newRoute = {
           id:            n.id,
           network_name:  n.name,
           cidr:          cidrStr,
           routing_peers: peerNames,
           enabled:       enabled,
         };
+
+        // Debounce offline transitions — if a previously-good route now
+        // reports offline, serve the last known good version until the
+        // offline state persists for _NB_DEBOUNCE_MS. Mirrors the peer
+        // flap debouncer. Catches NetBird's "routing_peers_count briefly 0"
+        // hiccup that otherwise paints "— — Offline" on the dashboard.
+        const lastGood = _NB_ROUTE_LAST_GOOD.get(n.id);
+        const pendingOffline = _NB_ROUTE_PENDING_OFFLINE.get(n.id);
+        if (newRoute.enabled) {
+          _NB_ROUTE_LAST_GOOD.set(n.id, newRoute);
+          _NB_ROUTE_PENDING_OFFLINE.delete(n.id);
+          return newRoute;
+        }
+        // newRoute.enabled === false at this point.
+        if (!lastGood) {
+          // No prior good state — first time we've seen this route, accept as-is.
+          return newRoute;
+        }
+        if (!pendingOffline) {
+          // First offline report after a known-good period → start debounce.
+          _NB_ROUTE_PENDING_OFFLINE.set(n.id, now);
+          return lastGood;
+        }
+        if (now - pendingOffline < _NB_DEBOUNCE_MS) {
+          // Still within debounce window → keep serving last good.
+          return lastGood;
+        }
+        // Offline state has persisted past the debounce → commit.
+        _NB_ROUTE_LAST_GOOD.delete(n.id);
+        _NB_ROUTE_PENDING_OFFLINE.delete(n.id);
+        return newRoute;
       }));
 
       // Only commit to cache if every sub-fetch succeeded. On partial failure
@@ -2944,6 +2982,95 @@ app.delete('/api/gateway/events/clear-resolved', async (req, res) => {
 // LXC 104 via systemd timer (geolocation-ingest.timer, 30 s cadence).
 // ───────────────────────────────────────────────────────────────────
 
+// 5-point median outlier filter for the trail. For each ping in a
+// chronological list, take 2 neighbors on each side (5-ping window),
+// compute the median lat/lon, and flag the center ping as outlier when
+// its distance from that median exceeds 3× the neighbors' spread (and
+// at least MIN_OUTLIER_DIST_M as an absolute floor so stationary
+// jitter isn't flagged). Robust against single isolated bad pings
+// (e.g. HA Companion publishing a stale home-area position while the
+// phone is actually walking outdoors — verified 2026-06-01).
+//
+// First 2 and last 2 pings of the window keep is_outlier=false
+// because they don't have enough context. Rare misses there are
+// acceptable; bigger picture is to suppress mid-window glitches.
+function _haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6_371_000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function _median(arr) {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const n = sorted.length;
+  return n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n/2 - 1] + sorted[n/2]) / 2;
+}
+function _flagOutliers(locs, opts) {
+  const out = locs.map(p => ({ ...p, is_outlier: false }));
+  if (locs.length === 0) return out;
+
+  // Step 1 — stuck-source detector. Real GPS chips ALWAYS jitter between
+  // consecutive fixes (sub-meter noise minimum). If two consecutive pings
+  // from the same device report bit-identical lat/lon, the second is a
+  // cached replay of the first — typically HA Companion in Samsung
+  // battery-saver mode where the location service stops refreshing but
+  // the app keeps publishing the last-known coord every minute.
+  // Verified 2026-06-01: HA published the same (32.16750, 34.89958)
+  // 18 times while the user was actually walking 100-400m away.
+  for (let i = 1; i < locs.length; i++) {
+    const prev = locs[i - 1];
+    const p = locs[i];
+    if (Math.abs(Number(p.lat) - Number(prev.lat)) < 0.00001 &&
+        Math.abs(Number(p.lon) - Number(prev.lon)) < 0.00001) {
+      out[i].is_outlier = true;
+    }
+  }
+
+  // Step 2 — 5-point median outlier filter for isolated bad pings
+  // (e.g. WiFi-DB poisoning sending a single ping to Dead Sea coords).
+  // Skips already-flagged stuck pings so they don't poison the window.
+  const HALF = 2;
+  const OUTLIER_RATIO = 3;
+  const MIN_OUTLIER_DIST_M = 30;
+  const usable = locs.map((p, i) => out[i].is_outlier ? null : p);
+  for (let i = HALF; i < locs.length - HALF; i++) {
+    if (out[i].is_outlier) continue;
+    const window = usable.slice(i - HALF, i + HALF + 1).filter(Boolean);
+    if (window.length < 3) continue;
+    const medianLat = _median(window.map(w => Number(w.lat)));
+    const medianLon = _median(window.map(w => Number(w.lon)));
+    const neighbors = window.filter(w => w !== locs[i]);
+    if (neighbors.length === 0) continue;
+    const neighborGaps = neighbors.map(n => _haversineM(Number(n.lat), Number(n.lon), medianLat, medianLon));
+    const spread = Math.max(...neighborGaps);
+    const myGap = _haversineM(Number(locs[i].lat), Number(locs[i].lon), medianLat, medianLon);
+    const threshold = Math.max(OUTLIER_RATIO * spread, MIN_OUTLIER_DIST_M);
+    if (myGap > threshold) out[i].is_outlier = true;
+  }
+
+  // Step 3 — Outdoor low-accuracy filter. The chip's reported accuracy_m
+  // is the best signal for "GPS lost a clean satellite lock" — when it
+  // climbs above 40m, the reported position drifts laterally by 50-150m
+  // (verified 2026-06-01 against ground-truth user feedback). For pings
+  // INSIDE the home radius this drift is irrelevant (they all cluster
+  // at home anyway). For pings OUTSIDE the radius the drift moves them
+  // off the real walking path. Flag those.
+  if (opts && opts.centerLat != null && opts.centerLon != null && opts.radiusM > 0) {
+    const accThreshold = opts.outsideAccThresholdM || 40;
+    for (let i = 0; i < locs.length; i++) {
+      if (out[i].is_outlier) continue;
+      const acc = Number(locs[i].accuracy_m);
+      if (!(acc > accThreshold)) continue;
+      const dist = _haversineM(opts.centerLat, opts.centerLon,
+                               Number(locs[i].lat), Number(locs[i].lon));
+      if (dist > opts.radiusM) out[i].is_outlier = true;
+    }
+  }
+  return out;
+}
+
 // GET /api/geolocation/settings — read singleton config
 app.get('/api/geolocation/settings', async (req, res) => {
   try {
@@ -2956,6 +3083,7 @@ app.get('/api/geolocation/settings', async (req, res) => {
       geofence_events:       true,
       trail_window_default:  '24h',
       low_accuracy_filter_m: 100,
+      outside_accuracy_threshold_m: 40,
       stale_alert_hours:     6,
       dedup_radius_m:        25,
       dedup_window_sec:      60,
@@ -2974,8 +3102,8 @@ app.post('/api/geolocation/settings', async (req, res) => {
   // Allow-listed fields only; reject anything else to keep DB clean
   const allowed = ['center', 'home_radius_m', 'tracked_devices', 'retention_days',
                    'geofence_events', 'geofence_heartbeat_sec', 'trail_window_default',
-                   'low_accuracy_filter_m', 'stale_alert_hours', 'dedup_radius_m',
-                   'dedup_window_sec'];
+                   'low_accuracy_filter_m', 'outside_accuracy_threshold_m',
+                   'stale_alert_hours', 'dedup_radius_m', 'dedup_window_sec'];
   const clean = {};
   for (const k of allowed) if (k in cfg) clean[k] = cfg[k];
   try {
@@ -3014,7 +3142,18 @@ app.get('/api/geolocation/locations', async (req, res) => {
        LIMIT $${params.length}`,
       params,
     );
-    res.json({ device_id: deviceId, locations: r.rows });
+    // Pull center+radius once so the outdoor low-accuracy filter knows
+    // which pings are outside the home circle (those need the strict
+    // accuracy threshold; indoor pings are exempt).
+    const s = await db.query("SELECT value FROM dashboard_settings WHERE key = 'geolocation'");
+    const cfg = s.rows[0]?.value || {};
+    const opts = {
+      centerLat: cfg.center?.lat,
+      centerLon: cfg.center?.lon,
+      radiusM:   Number(cfg.home_radius_m) || 80,
+      outsideAccThresholdM: Number(cfg.outside_accuracy_threshold_m) || 40,
+    };
+    res.json({ device_id: deviceId, locations: _flagOutliers(r.rows, opts) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

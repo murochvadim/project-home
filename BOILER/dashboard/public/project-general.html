@@ -193,7 +193,13 @@
           <label>Low-accuracy filter (m):</label>
           <div style="display:flex; align-items:center; gap:12px;">
             <input type="number" id="geo-lo-acc" min="0" max="5000" style="width:120px;" />
-            <span style="font-size:0.82rem; color:#888;">pings with reported GPS accuracy worse than this are dropped</span>
+            <span style="font-size:0.82rem; color:#888;">pings with reported GPS accuracy worse than this are dropped at ingest</span>
+          </div>
+
+          <label>Outside-radius accuracy cap (m):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-outside-acc" min="0" max="500" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">outdoor pings with accuracy worse than this hide from the trail</span>
           </div>
 
           <label>Stale-data alert (h):</label>
@@ -697,6 +703,7 @@ async function geoLoadSettings() {
     document.getElementById('geo-radius').value      = d.home_radius_m ?? 80;
     document.getElementById('geo-retention').value   = d.retention_days ?? 30;
     document.getElementById('geo-lo-acc').value      = d.low_accuracy_filter_m ?? 100;
+    document.getElementById('geo-outside-acc').value = d.outside_accuracy_threshold_m ?? 40;
     document.getElementById('geo-stale').value       = d.stale_alert_hours ?? 6;
     document.getElementById('geo-dedup-r').value     = d.dedup_radius_m ?? 25;
     document.getElementById('geo-dedup-s').value     = d.dedup_window_sec ?? 60;
@@ -760,6 +767,7 @@ async function geoSaveSettings() {
     home_radius_m:         parseInt(document.getElementById('geo-radius').value, 10) || 80,
     retention_days:        parseInt(document.getElementById('geo-retention').value, 10) || 30,
     low_accuracy_filter_m: parseInt(document.getElementById('geo-lo-acc').value, 10) || 100,
+    outside_accuracy_threshold_m: parseInt(document.getElementById('geo-outside-acc').value, 10) || 40,
     stale_alert_hours:     parseInt(document.getElementById('geo-stale').value, 10) || 6,
     dedup_radius_m:        parseInt(document.getElementById('geo-dedup-r').value, 10) || 25,
     dedup_window_sec:      parseInt(document.getElementById('geo-dedup-s').value, 10) || 60,
@@ -896,6 +904,16 @@ async function geoReloadTrail() {
     groups.get(gid).push(dev);
   }
 
+  // Home center + radius for the inside/outside test used by the polyline.
+  const cLatTrail = parseFloat(_geoSettings?.center?.lat);
+  const cLonTrail = parseFloat(_geoSettings?.center?.lon);
+  const radiusTrail = parseFloat(_geoSettings?.home_radius_m) || 80;
+  const haveCenterTrail = !isNaN(cLatTrail) && !isNaN(cLonTrail);
+  const isOutside = (lat, lon) =>
+    haveCenterTrail && _geoHaversineM(cLatTrail, cLonTrail, lat, lon) > radiusTrail;
+
+  _geoTrailLayer = [];   // accumulate polylines across groups for clean removal next reload
+
   for (const [gid, members] of groups) {
     try {
       const responses = await Promise.all(members.map(d =>
@@ -905,22 +923,71 @@ async function geoReloadTrail() {
           .catch(() => [])
       ));
       const merged = responses.flat()
+        .filter(p => !p.is_outlier)   // server's 5-point median filter flags noisy pings
         .map(p => ({ ts: p.ts, lat: Number(p.lat), lon: Number(p.lon), accuracy_m: p.accuracy_m }))
         .filter(p => !isNaN(p.lat) && !isNaN(p.lon))
         .sort((a, b) => new Date(a.ts) - new Date(b.ts));
       if (merged.length < 1) continue;
 
-      // Grey dot for every ping except the freshest. The freshest ping
-      // (last item in the chronological merge) gets a blue last-position
-      // pin instead — one per group, regardless of which source supplied
-      // the latest reading.
+      // Polyline through outside-radius pings, INCLUDING the inside pings
+      // that bracket each outdoor run. So the line visibly "enters" and
+      // "exits" the home circle on both ends of every excursion, rather
+      // than ending abruptly at the last outside point.
+      const segments = [];
+      let cur = [];
+      let lastInside = null;
+      let inRun = false;
+      merged.forEach(p => {
+        const pt = [p.lat, p.lon];
+        if (isOutside(p.lat, p.lon)) {
+          if (!inRun) {
+            // Starting an outdoor run — prepend the last inside ping
+            // (if any) so the line draws from home outward
+            if (lastInside) cur.push([lastInside.lat, lastInside.lon]);
+            inRun = true;
+          }
+          cur.push(pt);
+        } else {
+          if (inRun) {
+            // Returning home — include this inside ping to close the line
+            cur.push(pt);
+            if (cur.length >= 2) segments.push(cur);
+            cur = [];
+            inRun = false;
+          }
+          lastInside = p;
+        }
+      });
+      if (cur.length >= 2) segments.push(cur);
+      segments.forEach(seg => {
+        _geoTrailLayer.push(
+          L.polyline(seg, { color: '#1565c0', weight: 3, opacity: 0.7 }).addTo(_geoMap)
+        );
+      });
+
+      // Inside-radius pings render as plain grey circleMarkers (no number,
+      // they're not useful to inspect). Outside-radius pings get a small
+      // numbered badge (sequence # across only the outside pings) so the
+      // user can tell us "ping #N looks wrong" for future filter tuning.
+      // The freshest ping is rendered separately below as the blue pin.
+      let outsideSeq = 0;
       merged.slice(0, -1).forEach(p => {
-        const dot = L.circleMarker([p.lat, p.lon], {
-          radius: 3, color: '#888', fillColor: '#888', fillOpacity: 0.6, weight: 1,
-        });
-        dot.bindTooltip(`${p.ts} · accuracy ${p.accuracy_m || '?'} m`);
-        dot.addTo(_geoMap);
-        _geoMarkers.push(dot);
+        if (isOutside(p.lat, p.lon)) {
+          outsideSeq += 1;
+          const html = `<div style="background:#fff; border:1px solid #555; color:#222; border-radius:8px; padding:0 4px; font-size:0.65rem; font-weight:600; line-height:1.1; white-space:nowrap;">${outsideSeq}</div>`;
+          const icon = L.divIcon({ html, className: 'geo-grey-num', iconSize: null, iconAnchor: [10, 7] });
+          const m = L.marker([p.lat, p.lon], { icon });
+          m.bindTooltip(`#${outsideSeq} · ${p.ts} · accuracy ${p.accuracy_m || '?'} m`);
+          m.addTo(_geoMap);
+          _geoMarkers.push(m);
+        } else {
+          const dot = L.circleMarker([p.lat, p.lon], {
+            radius: 3, color: '#888', fillColor: '#888', fillOpacity: 0.6, weight: 1,
+          });
+          dot.bindTooltip(`${p.ts} · accuracy ${p.accuracy_m || '?'} m`);
+          dot.addTo(_geoMap);
+          _geoMarkers.push(dot);
+        }
       });
       const newest = merged[merged.length - 1];
       const lastMarker = L.marker([newest.lat, newest.lon], { title: members[0].name || gid }).addTo(_geoMap);

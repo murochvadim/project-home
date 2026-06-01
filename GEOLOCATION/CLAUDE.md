@@ -36,7 +36,8 @@ so additional phones land without code changes.
   "retention_days":         30,
   "geofence_events":        true,                // emit geofence:home/away to device_events
   "trail_window_default":   "24h",
-  "low_accuracy_filter_m":  100,                 // drop pings with gps_accuracy > N m
+  "low_accuracy_filter_m":  100,                 // drop pings with gps_accuracy > N m at ingest
+  "outside_accuracy_threshold_m": 40,            // hide outdoor pings with gps_accuracy > N m from the trail (server-side filter)
   "stale_alert_hours":      6,                   // (reserved — future "no pings for N h" alert)
   "dedup_radius_m":         25,                  // skip insert if within N m AND M sec of last ping
   "dedup_window_sec":       60
@@ -77,6 +78,29 @@ Three cards on the **Geolocation** tab of `project-general.html`:
    - **💾 Save settings** + **▶ Run ingest now** (manual trigger via `/api/geolocation/run-ingest` → SSH to LXC 104 → `systemctl start geolocation-ingest.service`)
 3. **Map · trail** — Leaflet + OpenStreetMap tiles (no API key, free). Apartment marker + red radius circle + per-device trail polyline + latest position pin + sparse dots tooltipping ts + accuracy. Window selector: 1 h / 24 h / 7 d / 30 d.
 4. **Recent geofence events** — last 20 transitions from `device_events WHERE source='geolocation_ingest'`.
+
+## Trail outlier filter pipeline
+
+`GET /api/geolocation/locations` runs `_flagOutliers(rows, opts)` in `server.js` before returning, attaching an `is_outlier: true/false` per row. The dashboard renders only `!is_outlier` pings for the map. Three layers in order:
+
+1. **Stuck-source detector** — flags any ping whose lat/lon is bit-identical (to 5 decimal places) with the previous ping FROM THE SAME source. Real GPS chips ALWAYS jitter; identical fixes = cached replay. Catches HA Companion freeze mode where Samsung battery saver stops the location service but the app keeps republishing the last fix. Verified 2026-06-01: HA published the same coord 18 times while OwnTracks showed the phone walking 100–400 m away.
+
+2. **5-point median outlier** — for each ping, computes the median lat/lon of itself + 4 neighbors (2 each side). Flags the center ping when its distance from that median exceeds `max(3 × neighbor_spread, 30 m)`. Catches isolated single-ping outliers (e.g. WiFi-DB poisoning producing one Dead-Sea-style jump). Doesn't help against sustained drift across multiple consecutive pings.
+
+3. **Outdoor low-accuracy cap** — for pings outside the home radius, flags those whose reported `accuracy_m` exceeds `outside_accuracy_threshold_m` (default 40). Real walking GPS is 5–30 m accuracy; drift bursts are 40–100 m. Indoor (inside-radius) pings are exempt because their accuracy noise doesn't visibly clutter the map. Tunable via Settings card.
+
+Filter parameters are all in `dashboard_settings.geolocation`; threshold changes apply on the next 10 s dashboard poll cycle. No restart needed.
+
+Outliers stay in `device_locations` (raw data preserved for diagnostics). Only the API response marks them — the client hides them from render.
+
+## Trail rendering
+
+- ⚪ **Grey dots** — every accepted ping (one per ping). Outside-radius pings get a small numbered badge (`#1`, `#2`, …) for diagnostic feedback ("which ping is wrong?"); inside-radius pings are plain dots.
+- 🔵 **Blue polyline** — connects consecutive outside-radius pings AND the inside-bookend pings at each end of the outdoor run, so the line visually enters/exits the home circle on each excursion.
+- 🔵 **Blue last-position pin** — at the freshest accepted ping per `group_id`.
+- 🔴 **Red apartment center** + radius circle — drawn once.
+
+Both ingest sources contribute to the merged trail when grouped under one `group_id` (e.g. HA Companion + OwnTracks of the same phone collapse to one trail).
 
 ## v1 trade-offs
 
