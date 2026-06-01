@@ -2206,7 +2206,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
       'esp_boards',
       'power_consumption', 'power_devices', 'power_bills',
-      'netbird_peers_local', 'netbird_tenant_settings',
+      'netbird_peers_local', 'netbird_tenant_settings', 'gateway_peer_transitions',
       'device_locations', 'phone_trips',
     ];
     const tsCol = {
@@ -2235,6 +2235,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       power_bills: 'uploaded_at',
       netbird_peers_local: 'updated_at',
       netbird_tenant_settings: 'updated_at',
+      gateway_peer_transitions: 'ts',
       device_locations: 'ts',
       phone_trips: 'started_at',
     };
