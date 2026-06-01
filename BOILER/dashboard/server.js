@@ -2207,7 +2207,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'esp_boards',
       'power_consumption', 'power_devices', 'power_bills',
       'netbird_peers_local', 'netbird_tenant_settings',
-      'device_locations',
+      'device_locations', 'phone_trips',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2236,6 +2236,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       netbird_peers_local: 'updated_at',
       netbird_tenant_settings: 'updated_at',
       device_locations: 'ts',
+      phone_trips: 'started_at',
     };
 
     const sizes = await db.query(`
@@ -3113,6 +3114,8 @@ app.get('/api/geolocation/settings', async (req, res) => {
       stale_alert_hours:     6,
       dedup_radius_m:        25,
       dedup_window_sec:      60,
+      sensor_veto_enabled:           false,
+      sensor_veto_still_debounce_sec: 60,
     };
     const val = r.rows[0]?.value || defaults;
     // Merge defaults for missing keys so frontend never breaks
@@ -3129,7 +3132,8 @@ app.post('/api/geolocation/settings', async (req, res) => {
   const allowed = ['center', 'home_radius_m', 'tracked_devices', 'retention_days',
                    'geofence_events', 'geofence_heartbeat_sec', 'trail_window_default',
                    'low_accuracy_filter_m', 'outside_accuracy_threshold_m',
-                   'stale_alert_hours', 'dedup_radius_m', 'dedup_window_sec'];
+                   'stale_alert_hours', 'dedup_radius_m', 'dedup_window_sec',
+                   'sensor_veto_enabled', 'sensor_veto_still_debounce_sec'];
   const clean = {};
   for (const k of allowed) if (k in cfg) clean[k] = cfg[k];
   try {
@@ -3257,6 +3261,45 @@ app.get('/api/geolocation/status', async (req, res) => {
   }
 });
 
+// GET /api/geolocation/sensor-states — live values of the HA Companion
+// entities referenced by tracked_devices' veto config (activity, wifi,
+// android_auto). Used by the Settings card to display current sensor
+// state in the "Sensor entities HA" table cells.
+//
+// Narrow on purpose: only fetches entity IDs already in the tracked_devices
+// settings — no general HA-state proxy. Failed lookups become `null` per
+// entity; the dashboard renders these as a grey dash.
+app.get('/api/geolocation/sensor-states', async (req, res) => {
+  try {
+    const s = await db.query("SELECT value FROM dashboard_settings WHERE key = 'geolocation'");
+    const cfg  = s.rows[0]?.value || {};
+    const devs = Array.isArray(cfg.tracked_devices) ? cfg.tracked_devices : [];
+    const ids  = new Set();
+    for (const d of devs) {
+      for (const k of ['ha_entity', 'battery_entity', 'activity_entity', 'wifi_entity', 'android_auto_entity']) {
+        if (d[k]) ids.add(d[k]);
+      }
+    }
+    const token = (process.env.HA_TOKEN || '').trim();
+    const haUrl = 'http://192.168.1.110:8123';
+    const out = {};
+    await Promise.all([...ids].map(async eid => {
+      try {
+        const r = await fetch(`${haUrl}/api/states/${encodeURIComponent(eid)}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!r.ok) { out[eid] = null; return; }
+        const d = await r.json();
+        out[eid] = { state: d.state, last_changed: d.last_changed };
+      } catch (_) { out[eid] = null; }
+    }));
+    res.json({ states: out });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/geolocation/run-ingest — manual trigger of the LXC 104
 // systemd unit. Same as `systemctl start geolocation-ingest.service`;
 // the user clicks this after editing settings or charging the phone
@@ -3273,6 +3316,28 @@ app.post('/api/geolocation/run-ingest', async (req, res) => {
     res.json({ ok: true, summary: r.stdout.trim() || 'started' });
   } catch (e) {
     try { ssh.dispose(); } catch (_) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/geolocation/trips?limit=20 — closed trips with summary stats.
+// Open trips (returned_at IS NULL) are excluded by default; pass
+// ?include_open=1 to also return the in-progress trip with its current
+// duration so far.
+app.get('/api/geolocation/trips', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
+  const includeOpen = req.query.include_open === '1';
+  try {
+    const r = await db.query(
+      `SELECT id, group_id, device_label, started_at, returned_at,
+              duration_sec, max_dist_m, path_length_m, outside_pings
+       FROM phone_trips
+       ${includeOpen ? '' : 'WHERE returned_at IS NOT NULL'}
+       ORDER BY started_at DESC LIMIT $1`,
+      [limit],
+    );
+    res.json({ trips: r.rows });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });

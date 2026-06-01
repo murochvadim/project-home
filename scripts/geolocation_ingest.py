@@ -42,7 +42,6 @@ import logging
 import math
 import os
 import sys
-import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -65,6 +64,18 @@ DB = {
 }
 HA_URL   = (os.environ.get('HA_URL')   or 'http://192.168.1.110:8123').rstrip('/')
 HA_TOKEN = (os.environ.get('HA_TOKEN') or '').strip()
+
+# Flicker filter — GPS / WiFi state oscillates around the geofence boundary
+# for a few seconds on every real crossing (verified 2026-06-01: the return
+# crossing of a 22-min trip produced 4 spurious events within ~30 s). Without
+# a filter the trips table would accumulate 2-4 garbage rows per real trip.
+# At close time, if BOTH thresholds are unmet, the row is deleted instead of
+# updated. The AND gate keeps short-but-real trips (e.g. a 30-second jog to
+# the corner store, < 60s but > 100m) and long-but-stationary visits (> 60s
+# even if path is small). The device_events rows are kept either way for
+# diagnostic visibility.
+TRIP_MIN_DURATION_SEC = 60
+TRIP_MIN_PATH_LENGTH_M = 100
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -92,6 +103,66 @@ def ha_get_state(entity_id):
         return json.loads(resp.read().decode('utf-8'))
 
 
+def _safe_ha_state(entity_id, max_age_sec=600):
+    """Returns (state_value, age_sec) if entity is fresh, else (None, None).
+    Used by the sensor-veto cross-check — stale sensors aren't trusted to
+    veto geofence events."""
+    if not entity_id:
+        return None, None
+    try:
+        s = ha_get_state(entity_id)
+        last_changed = s.get('last_changed') or s.get('last_updated')
+        age = None
+        if last_changed:
+            ts = datetime.fromisoformat(last_changed.replace('Z', '+00:00'))
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            if age > max_age_sec:
+                return None, None
+        return s.get('state'), age
+    except Exception as e:
+        log.debug('safe_ha_state %s failed: %s', entity_id, e)
+        return None, None
+
+
+def phone_appears_at_home(dev, veto_enabled, still_debounce_sec):
+    """Returns True if the phone's HA Companion sensors say it's SETTLED at
+    home. The age check on BOTH wifi and activity is what distinguishes a
+    real "I've been at home for a while" state from a transient signal —
+    when returning home from a trip, WiFi reconnects to the home SSID a
+    few seconds before the user actually crosses the geofence inward, and
+    activity flips to 'still' as soon as they stop at the door. Without
+    age guards, the veto kills the real `away` event as the user walks
+    those last 50-60 m.
+
+    Signals (all gated by min age = still_debounce_sec):
+      1. Android Auto = 'on' → phone is in a car → DO NOT veto (override)
+      2. WiFi connection = home SSID AND settled ≥ debounce → veto
+      3. Activity = 'still' AND settled ≥ debounce → veto
+    """
+    if not veto_enabled:
+        return False
+    # 1. Android Auto override — only blocks veto if AA has actually been
+    # 'on' for at least debounce seconds. Transient AA state flips on
+    # phone unlock should not flip the override.
+    aa_state, aa_age = _safe_ha_state(dev.get('android_auto_entity'))
+    if aa_state == 'on' and aa_age is not None and aa_age >= still_debounce_sec:
+        return False
+    # 2. WiFi SSID check with age guard
+    wifi_ent  = dev.get('wifi_entity')
+    home_ssid = dev.get('wifi_home_ssid')
+    if wifi_ent and home_ssid:
+        wifi_state, wifi_age = _safe_ha_state(wifi_ent)
+        if wifi_state == home_ssid and wifi_age is not None and wifi_age >= still_debounce_sec:
+            return True
+    # 3. Debounced "still" activity check
+    act_ent = dev.get('activity_entity')
+    if act_ent:
+        act_state, act_age = _safe_ha_state(act_ent)
+        if act_state == 'still' and act_age is not None and act_age >= still_debounce_sec:
+            return True
+    return False
+
+
 def read_settings(conn):
     """Read the singleton dashboard_settings.geolocation row. Defaults
     embedded here mirror what the dashboard's POST endpoint will create
@@ -105,6 +176,8 @@ def read_settings(conn):
         'geofence_heartbeat_sec':  0,
         'trail_window_default':   '24h',
         'low_accuracy_filter_m':  100,
+        'sensor_veto_enabled':    False,
+        'sensor_veto_still_debounce_sec': 60,
         'stale_alert_hours':      6,
         'dedup_radius_m':         25,
         'dedup_window_sec':       60,
@@ -138,14 +211,19 @@ def get_last_location(conn, device_id):
         return cur.fetchone()
 
 
-def insert_location(conn, device_id, lat, lon, accuracy_m, altitude_m, speed,
+def insert_location(conn, device_id, ts, lat, lon, accuracy_m, altitude_m, speed,
                     battery_pct, source='ha_companion'):
+    """Insert one ping with explicit ts. Use the entity's last_changed
+    timestamp, not NOW() — burst-delivered or stale-but-just-published
+    pings get the correct chronological position, so the teleport check
+    in the next pass compares against real elapsed time, not against
+    when we happened to INSERT."""
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO device_locations
                (device_id, ts, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source)
-               VALUES (%s, NOW(), %s, %s, %s, %s, %s, %s, %s)""",
-            (device_id, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source),
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (device_id, ts, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source),
         )
 
 
@@ -174,6 +252,105 @@ def get_recent_home_state(conn, device_id, lookback_sec=600):
         )
         prev = cur.fetchone()
     return prev
+
+
+def _group_info(cfg, device_id):
+    """Look up the group_id, sibling device_ids, and display label for one
+    tracked device. group_id defaults to device_id when not configured
+    (a single phone with no sibling source still gets a group of size 1).
+    """
+    devs = cfg.get('tracked_devices') or []
+    dev = next((d for d in devs if d.get('device_id') == device_id), None)
+    if not dev:
+        return device_id, [device_id], device_id
+    gid = dev.get('group_id') or device_id
+    label = dev.get('name') or device_id
+    siblings = [d.get('device_id') for d in devs
+                if (d.get('group_id') or d.get('device_id')) == gid]
+    return gid, siblings, label
+
+
+def open_trip(conn, group_id, label, started_at):
+    """Open a new trip row. Unique partial index `uq_phone_trips_open_per_group`
+    guarantees at most one open trip per group, so concurrent ingest paths
+    racing on the same `away` event collapse to one row via ON CONFLICT."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO phone_trips (group_id, device_label, started_at)
+               VALUES (%s, %s, %s)
+               ON CONFLICT DO NOTHING""",
+            (group_id, label, started_at),
+        )
+
+
+def close_trip(conn, group_id, returned_at, center_lat, center_lon,
+               radius_m, sibling_device_ids):
+    """Close the currently-open trip (if any) for this group and compute
+    summary stats. Path length is summed from every ping by any sibling
+    device within the trip window — both HA Companion + OwnTracks
+    contribute. No-op if there is no open trip for this group (e.g.
+    `home` event fired without a prior `away`)."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT id, started_at FROM phone_trips "
+            "WHERE group_id = %s AND returned_at IS NULL "
+            "ORDER BY started_at DESC LIMIT 1",
+            (group_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return False
+    trip_id    = row['id']
+    started_at = row['started_at']
+    # Pull every ping by any sibling device within the trip window.
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT lat::float AS lat, lon::float AS lon, ts
+               FROM device_locations
+               WHERE device_id = ANY(%s) AND ts BETWEEN %s AND %s
+               ORDER BY ts ASC""",
+            (sibling_device_ids, started_at, returned_at),
+        )
+        pings = cur.fetchall()
+    duration_sec = max(0, int((returned_at - started_at).total_seconds()))
+    max_dist_m = 0
+    path_length_m = 0.0
+    outside_pings = 0
+    prev = None
+    for p in pings:
+        d = haversine_m(center_lat, center_lon, p['lat'], p['lon'])
+        if d > radius_m:
+            outside_pings += 1
+        if d > max_dist_m:
+            max_dist_m = int(d)
+        if prev is not None:
+            path_length_m += haversine_m(prev['lat'], prev['lon'], p['lat'], p['lon'])
+        prev = p
+    # Flicker filter — see comment on TRIP_MIN_* constants. AND gate so
+    # either threshold met = keep.
+    if (duration_sec < TRIP_MIN_DURATION_SEC
+            and int(path_length_m) < TRIP_MIN_PATH_LENGTH_M):
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM phone_trips WHERE id = %s", (trip_id,))
+        log.info('discarded flicker trip group=%s duration=%ds path=%dm (< %ds AND < %dm)',
+                 group_id, duration_sec, int(path_length_m),
+                 TRIP_MIN_DURATION_SEC, TRIP_MIN_PATH_LENGTH_M)
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE phone_trips
+               SET returned_at = %s,
+                   duration_sec = %s,
+                   max_dist_m = %s,
+                   path_length_m = %s,
+                   outside_pings = %s
+               WHERE id = %s""",
+            (returned_at, duration_sec, max_dist_m, int(path_length_m),
+             outside_pings, trip_id),
+        )
+    log.info('closed trip group=%s duration=%ds max=%dm path=%dm pings=%d',
+             group_id, duration_sec, max_dist_m, int(path_length_m), outside_pings)
+    return True
 
 
 def emit_geofence_event(conn, device_id, event, lat, lon):
@@ -208,6 +385,8 @@ def run():
     lo_acc   = float(cfg.get('low_accuracy_filter_m') or 100)
     do_geo   = bool(cfg.get('geofence_events', True))
     hb_sec   = int(cfg.get('geofence_heartbeat_sec') or 0)
+    veto_on  = bool(cfg.get('sensor_veto_enabled', False))
+    veto_db  = int(cfg.get('sensor_veto_still_debounce_sec') or 60)
 
     if not devices:
         log.info('no tracked_devices configured — exit')
@@ -252,6 +431,21 @@ def run():
             log.debug('skip %s low-accuracy ping (%s m > %s m)', device_id, acc, lo_acc)
             continue
 
+        # Use the entity's own last_changed as the ping ts (falls back to
+        # last_updated, then to now()). Burst-published pings or pings from
+        # a phone that just reconnected after being offline carry a real
+        # earlier timestamp — preserving it means the teleport check next
+        # pass measures real elapsed time, not "time since I happened to
+        # poll." Defensive: if HA's timestamp parses fail for any reason,
+        # fall back to now() so a malformed payload never blocks ingest.
+        ping_ts = datetime.now(timezone.utc)
+        try:
+            tsraw = state.get('last_changed') or state.get('last_updated')
+            if tsraw:
+                ping_ts = datetime.fromisoformat(tsraw.replace('Z', '+00:00'))
+        except Exception:
+            pass
+
         # Fetch the last DB row up-front — needed for dedup, teleport filter,
         # AND geofence transition compare. Pulling it here means the geofence
         # block below runs even when the new ping gets deduped (heartbeat
@@ -262,30 +456,37 @@ def run():
             try:
                 last_lat = float(last['lat']); last_lon = float(last['lon'])
                 dist     = haversine_m(last_lat, last_lon, lat, lon)
-                age_sec  = (time.time() - last['ts'].timestamp())
-                # Teleport filter — Android's WiFi-based location occasionally
-                # returns coords from a poisoned access-point DB entry, with
-                # fake-tight accuracy. If the implied speed since the last
-                # known ping is greater than max_speed_ms (default 100 m/s =
-                # 360 km/h), the ping is physically impossible and dropped.
-                # Skipped if age_sec <= 0 (clock anomaly) or no prior row.
-                if age_sec > 0:
-                    speed = dist / age_sec
+                # Real elapsed time = ping's own ts vs last DB row's ts.
+                age_sec = ping_ts.timestamp() - last['ts'].timestamp()
+                # Stale HA state: when phone stops publishing, HA caches
+                # the last fix and `last_changed` stays frozen. Successive
+                # polls produce age_sec = 0 with identical coords — must
+                # still dedup. age_sec < 0 = out-of-order ping (rare; HA
+                # rolled its state back somehow); treat as dedup too so we
+                # don't pollute DB or emit a backward geofence transition.
+                if age_sec <= 0:
+                    log.debug('dedup %s: stale/out-of-order ping (age_sec=%.1f)', device_id, age_sec)
+                    deduped = True
+                else:
+                    # Teleport filter — WiFi-DB poisoning produces impossibly-
+                    # fast jumps. Use a SEPARATE `implied_speed` var so we
+                    # don't clobber the GPS-reported `speed` we'll insert.
+                    implied_speed = dist / age_sec
                     max_speed = float(cfg.get('max_speed_ms') or 100)
-                    if max_speed > 0 and speed > max_speed:
+                    if max_speed > 0 and implied_speed > max_speed:
                         log.info('drop teleport ping from %s: %.0fm in %.0fs '
                                  '= %.0fm/s (filter %sm/s)',
-                                 device_id, dist, age_sec, speed, max_speed)
+                                 device_id, dist, age_sec, implied_speed, max_speed)
                         continue
-                if dist < dedup_r and age_sec < dedup_s:
-                    log.debug('dedup %s: %sm < %sm AND %ss < %ss', device_id, dist, dedup_r, age_sec, dedup_s)
-                    deduped = True
+                    if dist < dedup_r and age_sec < dedup_s:
+                        log.debug('dedup %s: %sm < %sm AND %ss < %ss', device_id, dist, dedup_r, age_sec, dedup_s)
+                        deduped = True
             except Exception as e:
                 log.debug('dedup compare error: %s', e)
 
         if not deduped:
             battery = get_battery(batt_ent)
-            insert_location(conn, device_id, lat, lon, acc, alt, speed, battery)
+            insert_location(conn, device_id, ping_ts, lat, lon, acc, alt, speed, battery)
             inserts += 1
 
         # Geofence transition check + optional heartbeat re-emit. Runs every
@@ -324,11 +525,31 @@ def run():
                         emit_reason = 'heartbeat'
                 except Exception as e:
                     log.warning('geofence heartbeat check error: %s', e)
+            # Sensor veto: if the phone's own HA Companion sensors say it's
+            # actually at home (activity=still, WiFi=home_ssid, not Android
+            # Auto), suppress AWAY events caused by WiFi-DB poisoning. Home
+            # events still fire — returning home with sensor agreement is
+            # always trustworthy.
+            if emit_reason is not None and event == 'away' and phone_appears_at_home(dev, veto_on, veto_db):
+                log.info('%s sensor veto: phone says at home; suppressing AWAY event (would have been %s, dist %.0f m)',
+                         device_id, emit_reason, dist_home)
+                emit_reason = None
             if emit_reason is not None:
                 emit_geofence_event(conn, device_id, event, lat, lon)
                 geofence_crossings += 1
                 log.info('%s geofence %s -> %s (dist %.0f m)',
                          device_id, emit_reason, event, dist_home)
+                # Trip tracking — open a row on the first `away` per group,
+                # close it on the next `home`. Per-group dedup is enforced
+                # by `uq_phone_trips_open_per_group` so heartbeats during a
+                # trip are no-ops. Wired inside the same `emit_reason` branch
+                # so vetoed/skipped events don't fabricate spurious trips.
+                gid, siblings, label = _group_info(cfg, device_id)
+                if event == 'away':
+                    open_trip(conn, gid, label, ping_ts)
+                else:
+                    close_trip(conn, gid, ping_ts, center_lat, center_lon,
+                               radius_m, siblings)
 
     conn.commit()
     conn.close()

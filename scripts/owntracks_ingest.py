@@ -25,6 +25,8 @@ import math
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
@@ -50,6 +52,17 @@ logging.basicConfig(
 )
 log = logging.getLogger('owntracks_ingest')
 
+# HA REST credentials for the sensor-veto cross-check. Loaded lazily from
+# /etc/owntracks-ingest.env (same env file as MQTT_PASS, supervised by
+# systemd). Optional — if absent, the sensor-veto step silently no-ops.
+HA_URL   = (os.environ.get('HA_URL')   or 'http://192.168.1.110:8123').rstrip('/')
+HA_TOKEN = os.environ.get('HA_TOKEN', '')
+
+# Flicker filter — keep in sync with geolocation_ingest. AND gate: trip is
+# discarded only if BOTH thresholds are unmet.
+TRIP_MIN_DURATION_SEC = 60
+TRIP_MIN_PATH_LENGTH_M = 100
+
 
 def haversine_m(lat1, lon1, lat2, lon2):
     R = 6_371_000
@@ -58,6 +71,64 @@ def haversine_m(lat1, lon1, lat2, lon2):
     dl = math.radians(lon2 - lon1)
     a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
+
+
+def _safe_ha_state(entity_id, max_age_sec=600):
+    """Returns (state_value, age_sec) if the HA entity is fresh, else
+    (None, None). Used by the sensor-veto cross-check. Silently no-ops if
+    HA_TOKEN is unset or the call fails (defense — never break ingest
+    just because HA is unreachable)."""
+    if not entity_id or not HA_TOKEN:
+        return None, None
+    try:
+        req = urllib.request.Request(
+            f'{HA_URL}/api/states/{entity_id}',
+            headers={
+                'Authorization': f'Bearer {HA_TOKEN}',
+                'Content-Type':  'application/json',
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            s = json.loads(resp.read().decode('utf-8'))
+        last_changed = s.get('last_changed') or s.get('last_updated')
+        age = None
+        if last_changed:
+            ts = datetime.fromisoformat(last_changed.replace('Z', '+00:00'))
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            if age > max_age_sec:
+                return None, None
+        return s.get('state'), age
+    except Exception as e:
+        log.debug('safe_ha_state %s failed: %s', entity_id, e)
+        return None, None
+
+
+def phone_appears_at_home(dev, veto_enabled, still_debounce_sec):
+    """Returns True if phone's HA Companion sensors say it's SETTLED at
+    home. Mirrors geolocation_ingest.phone_appears_at_home — keep in
+    sync. Age guards on BOTH wifi and activity prevent the veto from
+    killing real `away` events as the user walks the last 50-60 m back
+    toward home (WiFi reconnects to home SSID a few seconds before the
+    geofence crossing inward; activity flips 'still' the moment they
+    stop at the door).
+    """
+    if not veto_enabled:
+        return False
+    aa_state, aa_age = _safe_ha_state(dev.get('android_auto_entity'))
+    if aa_state == 'on' and aa_age is not None and aa_age >= still_debounce_sec:
+        return False
+    wifi_ent  = dev.get('wifi_entity')
+    home_ssid = dev.get('wifi_home_ssid')
+    if wifi_ent and home_ssid:
+        wifi_state, wifi_age = _safe_ha_state(wifi_ent)
+        if wifi_state == home_ssid and wifi_age is not None and wifi_age >= still_debounce_sec:
+            return True
+    act_ent = dev.get('activity_entity')
+    if act_ent:
+        act_state, act_age = _safe_ha_state(act_ent)
+        if act_state == 'still' and act_age is not None and act_age >= still_debounce_sec:
+            return True
+    return False
 
 
 _db_conn = None
@@ -113,14 +184,19 @@ def ensure_device_registered(device_id, name):
     _registered_devices.add(device_id)
 
 
-def insert_location(device_id, lat, lon, acc, alt, speed, battery):
+def insert_location(device_id, ts, lat, lon, acc, alt, speed, battery):
+    """Insert one ping with explicit ts (from OwnTracks `tst`). OwnTracks
+    queues pings while the phone is offline + flushes the batch on
+    reconnect — passing the ping's own ts keeps batch members in their
+    real chronological order so the next pass's teleport check sees real
+    elapsed time, not the millisecond gap between MQTT deliveries."""
     conn = get_conn()
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO device_locations
-               (device_id, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-            (device_id, lat, lon, acc, alt, speed, battery, 'owntracks_mqtt'),
+               (device_id, ts, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (device_id, ts, lat, lon, acc, alt, speed, battery, 'owntracks_mqtt'),
         )
 
 
@@ -145,6 +221,99 @@ def get_last_location(device_id):
             (device_id,),
         )
         return cur.fetchone()
+
+
+def _group_info(cfg, device_id):
+    """Mirror of geolocation_ingest._group_info — keep in sync."""
+    devs = cfg.get('tracked_devices') or []
+    dev = next((d for d in devs if d.get('device_id') == device_id), None)
+    if not dev:
+        return device_id, [device_id], device_id
+    gid = dev.get('group_id') or device_id
+    label = dev.get('name') or device_id
+    siblings = [d.get('device_id') for d in devs
+                if (d.get('group_id') or d.get('device_id')) == gid]
+    return gid, siblings, label
+
+
+def open_trip(group_id, label, started_at):
+    """Open a new trip row. Same shape as geolocation_ingest.open_trip —
+    `uq_phone_trips_open_per_group` partial unique index ensures only one
+    open trip per group across both ingest paths."""
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO phone_trips (group_id, device_label, started_at)
+               VALUES (%s, %s, %s)
+               ON CONFLICT DO NOTHING""",
+            (group_id, label, started_at),
+        )
+
+
+def close_trip(group_id, returned_at, center_lat, center_lon, radius_m, sibling_device_ids):
+    """Close the open trip for this group, computing path length from
+    every sibling ping in the trip window. Mirror of
+    geolocation_ingest.close_trip — keep in sync."""
+    conn = get_conn()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT id, started_at FROM phone_trips "
+            "WHERE group_id = %s AND returned_at IS NULL "
+            "ORDER BY started_at DESC LIMIT 1",
+            (group_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return False
+    trip_id    = row['id']
+    started_at = row['started_at']
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT lat::float AS lat, lon::float AS lon, ts
+               FROM device_locations
+               WHERE device_id = ANY(%s) AND ts BETWEEN %s AND %s
+               ORDER BY ts ASC""",
+            (sibling_device_ids, started_at, returned_at),
+        )
+        pings = cur.fetchall()
+    duration_sec = max(0, int((returned_at - started_at).total_seconds()))
+    max_dist_m = 0
+    path_length_m = 0.0
+    outside_pings = 0
+    prev = None
+    for p in pings:
+        d = haversine_m(center_lat, center_lon, p['lat'], p['lon'])
+        if d > radius_m:
+            outside_pings += 1
+        if d > max_dist_m:
+            max_dist_m = int(d)
+        if prev is not None:
+            path_length_m += haversine_m(prev['lat'], prev['lon'], p['lat'], p['lon'])
+        prev = p
+    # Flicker filter — see TRIP_MIN_* comment.
+    if (duration_sec < TRIP_MIN_DURATION_SEC
+            and int(path_length_m) < TRIP_MIN_PATH_LENGTH_M):
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM phone_trips WHERE id = %s", (trip_id,))
+        log.info('discarded flicker trip group=%s duration=%ds path=%dm (< %ds AND < %dm)',
+                 group_id, duration_sec, int(path_length_m),
+                 TRIP_MIN_DURATION_SEC, TRIP_MIN_PATH_LENGTH_M)
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE phone_trips
+               SET returned_at = %s,
+                   duration_sec = %s,
+                   max_dist_m = %s,
+                   path_length_m = %s,
+                   outside_pings = %s
+               WHERE id = %s""",
+            (returned_at, duration_sec, max_dist_m, int(path_length_m),
+             outside_pings, trip_id),
+        )
+    log.info('closed trip group=%s duration=%ds max=%dm path=%dm pings=%d',
+             group_id, duration_sec, max_dist_m, int(path_length_m), outside_pings)
+    return True
 
 
 def get_last_event_ts(device_id):
@@ -184,6 +353,16 @@ def on_message(client, userdata, msg):
         if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
             return
 
+        # OwnTracks `tst` is the unix timestamp of the GPS fix (seconds).
+        # When queued pings are batch-delivered after the phone reconnects,
+        # each carries the real ts — preserve it so DB chronology is
+        # correct and the teleport check measures real elapsed time.
+        tst = payload.get('tst')
+        if isinstance(tst, (int, float)) and tst > 0:
+            ping_ts = datetime.fromtimestamp(tst, tz=timezone.utc)
+        else:
+            ping_ts = datetime.now(timezone.utc)
+
         acc     = payload.get('acc')
         alt     = payload.get('alt')
         speed   = payload.get('vel')   # OwnTracks: velocity (km/h, optional)
@@ -207,33 +386,50 @@ def on_message(client, userdata, msg):
         center_lat = center.get('lat'); center_lon = center.get('lon')
         do_geo = bool(cfg.get('geofence_events', True))
         hb_sec = int(cfg.get('geofence_heartbeat_sec') or 0)
+        veto_on = bool(cfg.get('sensor_veto_enabled', False))
+        veto_db = int(cfg.get('sensor_veto_still_debounce_sec') or 60)
+        # Locate this device's tracked_devices entry so we can read its
+        # per-device sensor entity IDs for the veto check.
+        dev_entry = next((td for td in (cfg.get('tracked_devices') or [])
+                          if td.get('device_id') == device_id), None) or {}
 
         last = get_last_location(device_id)
         deduped = False
         if last:
             try:
                 dist    = haversine_m(float(last['lat']), float(last['lon']), lat, lon)
-                age_sec = (time.time() - last['ts'].timestamp())
-                # Teleport filter — Android WiFi-location DB poisoning produces
-                # impossibly-fast jumps. Drop if implied speed > max_speed_ms
-                # (default 100 m/s = 360 km/h, faster than typical highway driving).
-                if age_sec > 0:
-                    speed = dist / age_sec
+                # Real elapsed time between the two pings (NOT between MQTT
+                # delivery moments). Queue-flushes arrive ms apart but the
+                # `tst` deltas span real minutes — without this fix the
+                # teleport filter dropped all but the first of a batch.
+                age_sec = ping_ts.timestamp() - last['ts'].timestamp()
+                if age_sec <= 0:
+                    # Stale / out-of-order — most likely a retained-message
+                    # replay or an MQTT reorder. Skip everything (no insert,
+                    # no geofence emit) to avoid duplicate rows + backward
+                    # transitions.
+                    log.debug('dedup %s: stale/out-of-order ping (age_sec=%.1f)', device_id, age_sec)
+                    deduped = True
+                else:
+                    # Teleport filter — separate `implied_speed` var so the
+                    # device-reported `speed` (`vel` from OwnTracks) we'll
+                    # insert isn't overwritten.
+                    implied_speed = dist / age_sec
                     max_speed = float(cfg.get('max_speed_ms') or 100)
-                    if max_speed > 0 and speed > max_speed:
+                    if max_speed > 0 and implied_speed > max_speed:
                         log.info('drop teleport ping from %s: %.0fm in %.0fs '
                                  '= %.0fm/s (filter %sm/s)',
-                                 device_id, dist, age_sec, speed, max_speed)
+                                 device_id, dist, age_sec, implied_speed, max_speed)
                         return
-                if dist < dedup_r and age_sec < dedup_s:
-                    deduped = True
+                    if dist < dedup_r and age_sec < dedup_s:
+                        deduped = True
             except Exception:
                 pass
 
         if not deduped:
-            insert_location(device_id, lat, lon, acc, alt, speed, battery)
-            log.info('ingested ping from %s — lat=%.6f lon=%.6f acc=%s',
-                     device_id, lat, lon, acc)
+            insert_location(device_id, ping_ts, lat, lon, acc, alt, speed, battery)
+            log.info('ingested ping from %s — lat=%.6f lon=%.6f acc=%s ts=%s',
+                     device_id, lat, lon, acc, ping_ts.isoformat())
 
         # Geofence transition + heartbeat
         if do_geo and center_lat is not None and center_lon is not None and radius_m:
@@ -259,10 +455,28 @@ def on_message(client, userdata, msg):
                             >= hb_sec):
                     emit_reason = 'heartbeat'
 
+            # Sensor veto: if HA Companion sensors say the phone is at home
+            # (activity=still / WiFi=home_ssid / not Android Auto), suppress
+            # AWAY events that look like WiFi-DB poisoning. Mirrors
+            # geolocation_ingest. Home events always fire.
+            if emit_reason is not None and event == 'away' and phone_appears_at_home(dev_entry, veto_on, veto_db):
+                log.info('%s sensor veto: phone says at home; suppressing AWAY event (would have been %s, dist %.0f m)',
+                         device_id, emit_reason, dist_home)
+                emit_reason = None
             if emit_reason is not None:
                 emit_geofence_event(device_id, event, lat, lon)
                 log.info('%s geofence %s -> %s (dist %.0f m)',
                          device_id, emit_reason, event, dist_home)
+                # Trip tracking — open on first `away`, close on next `home`.
+                # Per-group dedup via the partial unique index so both
+                # ingests racing on the same physical crossing collapse to
+                # one row.
+                gid, siblings, label = _group_info(cfg, device_id)
+                if event == 'away':
+                    open_trip(gid, label, ping_ts)
+                else:
+                    close_trip(gid, ping_ts, center_lat, center_lon,
+                               radius_m, siblings)
 
     except Exception as e:
         log.exception('on_message error: %s', e)

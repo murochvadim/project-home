@@ -22,8 +22,31 @@
     .geo-dev-table th { text-align:left; padding:5px 8px; background:#fafaf6; }
     .geo-dev-table td { padding:5px 8px 5px 0; border-top:1px solid #f0eee8; }
     .geo-dev-table input { width:100%; padding:4px 7px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.85rem; box-sizing:border-box; }
-    .geo-dev-table th:nth-child(-n+4), .geo-dev-table td:nth-child(-n+4) { width:24%; }
-    .geo-dev-table th:nth-child(5), .geo-dev-table td:nth-child(5) { width:4%; text-align:center; }
+    /* Both tracked-devices and sensor-entities tables share the same column
+       layout — 5 equal columns at 20% each — so their column boundaries line
+       up vertically when stacked in the Settings card. The ✕ button in the
+       last column of Tracked devices is centered inside its 20% slot. */
+    .geo-dev-table th, .geo-dev-table td { width:20%; }
+    #geo-dev-table td:nth-child(5) { text-align:center; }
+    /* Read-only device_id cell in the veto table: style as a disabled-looking
+       input so it matches the input fields in the same column of the other table. */
+    .geo-dev-cell-readonly {
+      display:block; padding:4px 7px; border:1px solid #e8e3da; border-radius:3px;
+      background:#fafaf6; color:#666; font-size:0.85rem;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    /* Live-value spans (click-to-edit) in both Tracked Devices + Sensor entities
+       HA tables — center the value inside the cell and pad it like an input so
+       column widths stay symmetric with rows where the user hasn't yet
+       configured an entity (those still render an <input>). */
+    .geo-dev-table .geo-live-value {
+      display:block; text-align:center;
+      padding:4px 7px; border:1px solid transparent; border-radius:3px;
+      font-size:0.85rem; font-weight:600;
+    }
+    .geo-dev-table .geo-live-value:hover {
+      background:#f4f8ff; border-color:#cfdcf2;
+    }
   </style>
   <style>
     /* Mini window-with-curtains visual — drives state from data-state="open|close|stop|unknown" */
@@ -232,6 +255,18 @@
             <span style="font-size:0.82rem; color:#888;">re-emit the current home/away state every N sec even without a crossing; 0 = transitions only (capped at ingest's 30 s cycle)</span>
           </div>
 
+          <label>Sensor veto (suppress bogus away):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="checkbox" id="geo-veto-on" style="transform:scale(1.2);" />
+            <span style="font-size:0.82rem; color:#888;">use HA Companion sensors as ground truth — veto bogus away events when phone is actually at home</span>
+          </div>
+
+          <label>'Still' debounce (sec):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-veto-still-debounce" min="0" max="600" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">activity must report <code>still</code> for this long to veto (filters brief red-light stops in real trips)</span>
+          </div>
+
           <label style="align-self:start;">Tracked devices:</label>
           <div>
             <table class="geo-dev-table" id="geo-dev-table">
@@ -239,6 +274,14 @@
               <tbody id="geo-dev-tbody"></tbody>
             </table>
             <button onclick="geoAddDeviceRow()" style="margin-top:6px; padding:4px 10px; font-size:0.78rem; border:1px solid #888; background:#fff; color:#444; border-radius:3px; cursor:pointer;">+ Add device</button>
+          </div>
+
+          <label style="align-self:start;">Sensor entities HA:</label>
+          <div>
+            <table class="geo-dev-table" id="geo-veto-table">
+              <thead><tr><th>device_id</th><th>activity_entity</th><th>wifi_entity</th><th>home_ssid</th><th>android_auto_entity</th></tr></thead>
+              <tbody id="geo-veto-tbody"></tbody>
+            </table>
           </div>
         </div>
         <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
@@ -269,6 +312,25 @@
     </div>
 
     <div class="card">
+      <h2 style="margin:0 0 10px 0;">Recent trips</h2>
+      <div style="overflow-y:auto; max-height:280px;">
+        <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+          <thead><tr style="background:#fafaf6;">
+            <th style="text-align:center; padding:6px 12px; width:48px;">#</th>
+            <th style="text-align:center; padding:6px 12px;">Started</th>
+            <th style="text-align:center; padding:6px 12px;">Returned</th>
+            <th style="text-align:center; padding:6px 12px;">Duration</th>
+            <th style="text-align:center; padding:6px 12px;">Max distance</th>
+            <th style="text-align:center; padding:6px 12px;">Path length</th>
+          </tr></thead>
+          <tbody id="geo-trips-tbody">
+            <tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <h2 style="margin:0;">Recent geofence events</h2>
         <button onclick="geoClearEvents()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;" title="Wipe every geofence event AND every GPS ping from the DB. Empties both the table below and all dots on the map.">🗑 Clear all geolocation data</button>
@@ -276,12 +338,12 @@
       <div style="overflow-y:auto; max-height:280px;">
         <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
           <thead><tr style="background:#fafaf6;">
-            <th style="text-align:right;  padding:6px 12px; width:48px;">#</th>
-            <th style="text-align:left;   padding:6px 12px;">Time</th>
-            <th style="text-align:left;   padding:6px 12px;">Device</th>
-            <th style="text-align:left;   padding:6px 12px;">Event</th>
-            <th style="text-align:right;  padding:6px 12px;">Distance from home</th>
-            <th style="text-align:left;   padding:6px 12px;">Where</th>
+            <th style="text-align:center; padding:6px 12px; width:48px;">#</th>
+            <th style="text-align:center; padding:6px 12px;">Time</th>
+            <th style="text-align:center; padding:6px 12px;">Device</th>
+            <th style="text-align:center; padding:6px 12px;">Event</th>
+            <th style="text-align:center; padding:6px 12px;">Distance from home</th>
+            <th style="text-align:center; padding:6px 12px;">Where</th>
           </tr></thead>
           <tbody id="geo-events-tbody">
             <tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
@@ -632,6 +694,7 @@ setInterval(loadCurtains, 5000);
 let _geoMap = null, _geoCenter = null, _geoRadiusCircle = null;
 let _geoTrailLayer = null, _geoMarkers = [];
 let _geoSettings = null;
+let _geoSensorStates = {};  // entity_id → {state, last_changed} | null; populated by /api/geolocation/sensor-states, cached across re-renders so an HA blip doesn't blank the value cells.
 let _geoLastBoundsFit = false;
 let _geoPollTimer = null;
 
@@ -650,11 +713,13 @@ function geoOnTabShow() {
   geoReloadStatus();
   geoReloadTrail();
   geoReloadEvents();
+  geoReloadTrips();
   if (!_geoPollTimer) {
     _geoPollTimer = setInterval(() => {
       geoReloadStatus();
       geoReloadTrail();
       geoReloadEvents();
+      geoReloadTrips();
     }, 10_000);
   }
 }
@@ -709,19 +774,116 @@ async function geoLoadSettings() {
     document.getElementById('geo-dedup-s').value     = d.dedup_window_sec ?? 60;
     document.getElementById('geo-geofence-on').checked = d.geofence_events !== false;
     document.getElementById('geo-geofence-hb').value = d.geofence_heartbeat_sec ?? 0;
-    geoRenderDeviceRows(d.tracked_devices || []);
+    document.getElementById('geo-veto-on').checked = !!d.sensor_veto_enabled;
+    document.getElementById('geo-veto-still-debounce').value = d.sensor_veto_still_debounce_sec ?? 60;
+    geoRenderDeviceRows(d.tracked_devices || [], _geoSensorStates);
+    geoRenderVetoRows(d.tracked_devices || [], _geoSensorStates);
     geoUpdateCenterMarker();
+    // Fetch live sensor states and re-render both tables with values.
+    // Skipped if the user is mid-edit on a value cell — tearing down
+    // the DOM would wipe their typed input.
+    try {
+      const sr = await fetch('/api/geolocation/sensor-states');
+      const sd = await sr.json();
+      _geoSensorStates = sd.states || {};
+      if (!document.activeElement?.matches('[data-geo-veto-i],[data-geo-dev-i]')) {
+        geoRenderDeviceRows(d.tracked_devices || [], _geoSensorStates);
+        geoRenderVetoRows(d.tracked_devices || [], _geoSensorStates);
+      }
+    } catch (_) { /* keep cached states from previous open */ }
   } catch (e) { console.warn('geoLoadSettings:', e); }
 }
 
-function geoRenderDeviceRows(devs) {
+// Shared cell renderer for both tables. `prefix` selects which
+// data-attribute namespace to write (`geo-veto-` or `geo-dev-`), so
+// each table's row-collector picks up its own inputs without touching
+// the other's. `suffix` is appended to the displayed value when the
+// state is a real reading (skipped for `unavailable` / `unknown`).
+function geoValueCell(prefix, idx, key, entityId, placeholder, states, suffix) {
+  const eid = (entityId || '').trim();
+  const safeEid = pgEsc(eid);
+  const safePh  = pgEsc(placeholder);
+  if (!eid) {
+    return `<input value="" data-${prefix}-i="${idx}" data-${prefix}-k="${key}" placeholder="${safePh}" />`;
+  }
+  const stateObj = states[eid];
+  const stateVal = stateObj && stateObj.state != null ? String(stateObj.state) : null;
+  const isReal   = stateVal != null && stateVal !== 'unavailable' && stateVal !== 'unknown';
+  const display  = stateVal == null ? '—' : pgEsc(stateVal) + (suffix && isReal ? suffix : '');
+  const color    = stateVal == null ? '#bbb' : '#2563eb';
+  const title    = stateVal == null
+    ? `${safeEid} (no value — entity not found or HA unreachable)`
+    : `${safeEid} — click to edit`;
+  return `<span class="geo-live-value"
+            title="${title}"
+            style="color:${color}; cursor:pointer; user-select:none;"
+            onclick="geoCellEdit(this, '${prefix}')">${display}</span>
+          <input type="hidden" value="${safeEid}" data-${prefix}-i="${idx}" data-${prefix}-k="${key}" data-${prefix}-placeholder="${safePh}" />`;
+}
+
+// Click handler: swap a value span for an editable input pre-filled
+// with the underlying entity ID. `prefix` tells us which data-* keys
+// to read off the hidden input.
+function geoCellEdit(span, prefix) {
+  const hidden = span.nextElementSibling;
+  if (!hidden || hidden.tagName !== 'INPUT') return;
+  const camel = prefix.replace(/-([a-z])/g, (_, c) => c.toUpperCase()); // geo-veto → geoVeto
+  const ph = hidden.dataset[camel + 'Placeholder'] || '';
+  const newInp = document.createElement('input');
+  newInp.type = 'text';
+  newInp.value = hidden.value;
+  newInp.placeholder = ph;
+  newInp.setAttribute(`data-${prefix}-i`, hidden.dataset[camel + 'I']);
+  newInp.setAttribute(`data-${prefix}-k`, hidden.dataset[camel + 'K']);
+  span.parentNode.replaceChild(newInp, span);
+  hidden.remove();
+  newInp.focus();
+  newInp.select();
+}
+
+function geoRenderVetoRows(devs, states) {
+  // Per-device sensor-veto rows. Each cell shows the LIVE VALUE of the
+  // configured HA entity (e.g. `still`, `Home`, `off`); entity NAME on
+  // hover; click to edit. `wifi_home_ssid` is plain text config (not
+  // an entity), shown as a normal editable input.
+  const tbody = document.getElementById('geo-veto-tbody');
+  if (!tbody) return;
+  states = states || {};
+  const vc = (i, k, eid, ph) => geoValueCell('geo-veto', i, k, eid, ph, states, '');
+  tbody.innerHTML = devs.map((d, i) => `
+    <tr>
+      <td><span class="geo-dev-cell-readonly" title="${pgEsc(d.device_id || '')}">${pgEsc(d.device_id || '')}</span></td>
+      <td>${vc(i, 'activity_entity', d.activity_entity, 'sensor.…_detected_activity')}</td>
+      <td>${vc(i, 'wifi_entity', d.wifi_entity, 'sensor.…_wi_fi_connection')}</td>
+      <td><input value="${pgEsc(d.wifi_home_ssid || '')}" data-geo-veto-i="${i}" data-geo-veto-k="wifi_home_ssid" placeholder="Home" /></td>
+      <td>${vc(i, 'android_auto_entity', d.android_auto_entity, 'binary_sensor.…_android_auto')}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center; color:#aaa; padding:8px;">No tracked devices yet — add one above first.</td></tr>`;
+}
+
+function geoCollectVetoRows() {
+  // Merge the veto-table inputs back into the tracked_devices list. Run
+  // BEFORE geoCollectDeviceRows so the veto fields are preserved when the
+  // main collector spreads `{...x}` over its own row collection.
+  const cur = _geoSettings?.tracked_devices || [];
+  document.querySelectorAll('[data-geo-veto-i]').forEach(inp => {
+    const i = parseInt(inp.dataset.geoVetoI, 10);
+    const k = inp.dataset.geoVetoK;
+    while (cur.length <= i) cur.push({});
+    cur[i][k] = inp.value.trim();
+  });
+  _geoSettings.tracked_devices = cur;
+}
+
+function geoRenderDeviceRows(devs, states) {
   const tbody = document.getElementById('geo-dev-tbody');
+  states = states || {};
+  const vc = (i, k, eid, ph, suf) => geoValueCell('geo-dev', i, k, eid, ph, states, suf || '');
   tbody.innerHTML = devs.map((d, i) => `
     <tr>
       <td><input value="${pgEsc(d.device_id || '')}" data-geo-dev-i="${i}" data-geo-dev-k="device_id" /></td>
       <td><input value="${pgEsc(d.name || '')}" data-geo-dev-i="${i}" data-geo-dev-k="name" /></td>
-      <td><input value="${pgEsc(d.ha_entity || '')}" data-geo-dev-i="${i}" data-geo-dev-k="ha_entity" placeholder="device_tracker.…" /></td>
-      <td><input value="${pgEsc(d.battery_entity || '')}" data-geo-dev-i="${i}" data-geo-dev-k="battery_entity" placeholder="sensor.…_battery_level" /></td>
+      <td>${vc(i, 'ha_entity', d.ha_entity, 'device_tracker.…')}</td>
+      <td>${vc(i, 'battery_entity', d.battery_entity, 'sensor.…_battery_level', '%')}</td>
       <td><button onclick="geoRemoveDeviceRow(${i})" style="padding:3px 8px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;">✕</button></td>
     </tr>`).join('') || `<tr><td colspan="5" style="text-align:center; color:#aaa; padding:8px;">No tracked devices — click "+ Add device".</td></tr>`;
 }
@@ -759,7 +921,13 @@ async function geoSaveSettings() {
   const msg = document.getElementById('geo-settings-msg');
   msg.style.color = '#888';
   msg.textContent = 'Saving…';
+  // Pull veto-table inputs into _geoSettings.tracked_devices BEFORE
+  // geoCollectDeviceRows runs, so the spread in tracked_devices.map(d => ({...d}))
+  // picks up activity_entity / wifi_entity / wifi_home_ssid / android_auto_entity.
+  geoCollectVetoRows();
   const body = {
+    sensor_veto_enabled:           document.getElementById('geo-veto-on').checked,
+    sensor_veto_still_debounce_sec: parseInt(document.getElementById('geo-veto-still-debounce').value, 10) || 60,
     center: {
       lat: parseFloat(document.getElementById('geo-center-lat').value) || 0,
       lon: parseFloat(document.getElementById('geo-center-lon').value) || 0,
@@ -1078,15 +1246,44 @@ async function geoReloadEvents() {
         distCell = m >= 1000 ? (m/1000).toFixed(2) + ' km' : Math.round(m) + ' m';
       }
       return `<tr style="border-top:1px solid #f0eee8;">
-        <td style="padding:5px 12px; text-align:right; color:#1565c0; font-weight:600; font-family:monospace;">${seq}</td>
-        <td style="padding:5px 12px; color:#666;">${pgEsc(new Date(e.ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
-        <td style="padding:5px 12px;">${pgEsc(e.device_id)}</td>
-        <td style="padding:5px 12px; font-weight:600; color:${color};">${event}</td>
-        <td style="padding:5px 12px; text-align:right; color:#444;">${distCell}</td>
-        <td style="padding:5px 12px; color:#888;">${dps?.lat ? dps.lat.toFixed(4) + ', ' + dps.lon.toFixed(4) : ''}</td>
+        <td style="padding:5px 12px; text-align:center; color:#1565c0; font-weight:600; font-family:monospace;">${seq}</td>
+        <td style="padding:5px 12px; text-align:center; color:#666;">${pgEsc(new Date(e.ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
+        <td style="padding:5px 12px; text-align:center;">${pgEsc(e.device_id)}</td>
+        <td style="padding:5px 12px; text-align:center; font-weight:600; color:${color};">${event}</td>
+        <td style="padding:5px 12px; text-align:center; color:#444;">${distCell}</td>
+        <td style="padding:5px 12px; text-align:center; color:#888;">${dps?.lat ? dps.lat.toFixed(4) + ', ' + dps.lon.toFixed(4) : ''}</td>
       </tr>`;
     }).join('');
   } catch (e) { console.warn('geoReloadEvents:', e); }
+}
+
+async function geoReloadTrips() {
+  try {
+    const r = await fetch('/api/geolocation/trips?limit=20');
+    const d = await r.json();
+    const tbody = document.getElementById('geo-trips-tbody');
+    if (!tbody) return;
+    if (!d.trips || !d.trips.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">No trips yet.</td></tr>';
+      return;
+    }
+    const total = d.trips.length;
+    const fmtDur = s => {
+      if (s == null) return '—';
+      const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+      return h > 0 ? `${h}h ${m}m` : (m > 0 ? `${m}m ${sec}s` : `${sec}s`);
+    };
+    const fmtDist = m => m == null ? '—' : (m >= 1000 ? (m/1000).toFixed(2) + ' km' : m + ' m');
+    tbody.innerHTML = d.trips.map((t, i) => `
+      <tr style="border-top:1px solid #f0eee8;">
+        <td style="padding:5px 12px; text-align:center; color:#1565c0; font-weight:600; font-family:monospace;">${total - i}</td>
+        <td style="padding:5px 12px; text-align:center; color:#666;">${pgEsc(new Date(t.started_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
+        <td style="padding:5px 12px; text-align:center; color:#666;">${t.returned_at ? pgEsc(new Date(t.returned_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })) : '<span style="color:#e67e22; font-weight:600;">in progress</span>'}</td>
+        <td style="padding:5px 12px; text-align:center; font-weight:600;">${fmtDur(t.duration_sec)}</td>
+        <td style="padding:5px 12px; text-align:center; color:#c0392b; font-weight:600;">${fmtDist(t.max_dist_m)}</td>
+        <td style="padding:5px 12px; text-align:center; color:#1a7a3a; font-weight:600;">${fmtDist(t.path_length_m)}</td>
+      </tr>`).join('');
+  } catch (e) { console.warn('geoReloadTrips:', e); }
 }
 </script>
 </body>

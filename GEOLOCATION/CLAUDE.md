@@ -17,7 +17,7 @@ so additional phones land without code changes.
 | systemd unit + timer | `/etc/systemd/system/geolocation-ingest.{service,timer}` on LXC 104 — `OnUnitActiveSec=30s` |
 | Env file (HA token) | `/etc/geolocation-ingest.env` on LXC 104 (chmod 600) |
 | Log file | `/var/log/geolocation-ingest.log` on LXC 104 |
-| DB tables (LXC 102) | `device_locations` (time-series GPS pings, retention 30 d auto_clean=true) + geofence rows in `device_events` (source=`geolocation_ingest`, dps `{kind:geofence, event:home|away, lat, lon}`) |
+| DB tables (LXC 102) | `device_locations` (time-series GPS pings, retention 30 d auto_clean=true) + `phone_trips` (closed-trip summaries, retention forever) + geofence rows in `device_events` (source=`geolocation_ingest`, dps `{kind:geofence, event:home|away, lat, lon}`) |
 | Settings | `dashboard_settings.geolocation` (singleton JSONB row) |
 
 ## Settings schema (`dashboard_settings.geolocation`)
@@ -101,6 +101,30 @@ Outliers stay in `device_locations` (raw data preserved for diagnostics). Only t
 - 🔴 **Red apartment center** + radius circle — drawn once.
 
 Both ingest sources contribute to the merged trail when grouped under one `group_id` (e.g. HA Companion + OwnTracks of the same phone collapse to one trail).
+
+## Trip tracking (`phone_trips` table, added 2026-06-01)
+
+Closed-trip summaries computed at the `away → home` crossing. Both ingest paths share the table via a partial unique index `uq_phone_trips_open_per_group` (group_id) WHERE returned_at IS NULL — so whichever source detects the crossing first opens/closes the row, the other becomes a no-op via `ON CONFLICT DO NOTHING`.
+
+**Per-trip columns**: `group_id`, `device_label`, `started_at`, `returned_at`, `duration_sec`, `max_dist_m`, `path_length_m`, `outside_pings`. Path length is summed point-to-point from ALL sibling devices' device_locations rows within the trip window.
+
+**Flicker filter**: on close, if `duration_sec < TRIP_MIN_DURATION_SEC` (60s) AND `path_length_m < TRIP_MIN_PATH_LENGTH_M` (100m), the row is DELETED instead of UPDATED. Reason: GPS oscillates 2-4 events around the radius boundary on every real crossing (verified 2026-06-01: the return crossing produced `away→home` flickers at 1s, 10s, 1s, 10s within ~20s). Without the filter, every real trip would accumulate 2-4 garbage rows. Thresholds in AND so a deliberate short walk (>100m) or a long stationary visit (>60s) still gets recorded. Constants live in both ingest scripts — keep in sync.
+
+**Surface**: `GET /api/geolocation/trips?limit=N[&include_open=1]` returns closed trips by default; dashboard renders them in the "Recent trips" card on the Geolocation tab.
+
+**Retention forever** — trips are intended to outlive their source pings (`device_locations` is 30 d).
+
+## Algorithm corrections (2026-06-01 audit)
+
+Three fixes landed after a side-to-side audit caught real defects in the original ingest:
+
+1. **Ping timestamp now comes from the payload, not `NOW()`** — OwnTracks publishes `tst` (unix seconds), HA Companion exposes `state.last_changed`. Both ingests parse those and pass to `INSERT INTO device_locations (ts, …)`. Two problems this fixed:
+   - **Teleport filter false-positives on burst delivery**: OwnTracks queues pings while offline + dumps them in 100ms on reconnect. With `NOW()` as ts, `age_sec` between consecutive pings was ~0ms → implied speed ~340 m/s → ALL but first dropped as "teleport." Using payload ts makes consecutive pings span their real seconds apart → speeds pass the filter.
+   - **Chronology** in the trail render: burst-delivered pings now sort correctly by their actual fix time, not arrival time.
+
+2. **Sensor veto requires settled state** — Both ingests' `phone_appears_at_home()` originally accepted `wifi == home_ssid` (or `activity == 'still'`) at face value. Returning from a real trip, WiFi reconnects to the home SSID a few seconds BEFORE the user crosses the geofence inward, and activity flips to `'still'` as soon as they stop at the door. The veto was then suppressing the real `away → home` crossing. Fix: require `age >= sensor_veto_still_debounce_sec` on BOTH wifi and activity (and on the Android Auto override too). Veto still catches WiFi-DB poisoning while the phone has been settled at home for hours (`wifi_age` very large), but no longer kills real boundary crossings.
+
+3. **`device_locations.speed` no longer overwritten** — Both ingests' teleport block previously reassigned `speed` to the computed inter-ping speed before INSERT, clobbering the GPS-reported value. Now uses a separate `implied_speed` local var so the column stores the device's actual speed reading.
 
 ## v1 trade-offs
 
