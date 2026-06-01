@@ -2564,7 +2564,19 @@ app.post('/api/network/scan', async (req, res) => {
 // ───────────────────────────────────────────────────────────────────
 
 const NETBIRD_API_BASE = 'https://api.netbird.io/api';
-const _NB_CACHE = { peers: null, peersTs: 0, routes: null, routesTs: 0 };
+// Cache layout:
+//   peers / peersTs               — raw /peers response (used by both endpoints)
+//   routes / routesTs             — JOINED route objects {cidr, routing_peers, enabled,
+//                                   …} produced by /api/gateway/routes. Has debounce
+//                                   semantics applied. DO NOT write raw /networks here.
+//   networksRaw / networksRawTs   — raw /networks response. Used by /api/gateway/status
+//                                   for its lightweight healthy-count summary. Separate
+//                                   slot so the two shapes can't collide.
+const _NB_CACHE = {
+  peers: null, peersTs: 0,
+  routes: null, routesTs: 0,
+  networksRaw: null, networksRawTs: 0,
+};
 const _NB_CACHE_TTL_MS = 30_000;
 // Flap detection: tracks each peer's last COMMITTED `connected` state. A
 // flip is only logged into gateway_peer_transitions after it persists for
@@ -2899,16 +2911,30 @@ app.get('/api/gateway/status', async (req, res) => {
     if (!_NB_CACHE.peers || (now - _NB_CACHE.peersTs) > _NB_CACHE_TTL_MS) {
       await _refreshPeersCache();
     }
-    if (!_NB_CACHE.routes || (now - _NB_CACHE.routesTs) > _NB_CACHE_TTL_MS) {
-      _NB_CACHE.routes   = await _nbFetch('/networks');
-      _NB_CACHE.routesTs = now;
+    // Status uses raw /networks for the lightweight badge summary — kept in
+    // its OWN cache slot so it never collides with the joined-shape data
+    // /api/gateway/routes serves to the Routes table (collision used to
+    // paint "— — Offline" rows whenever status's poll hit first).
+    if (!_NB_CACHE.networksRaw || (now - _NB_CACHE.networksRawTs) > _NB_CACHE_TTL_MS) {
+      _NB_CACHE.networksRaw   = await _nbFetch('/networks');
+      _NB_CACHE.networksRawTs = now;
     }
     const peers   = _NB_CACHE.peers || [];
-    const routes  = _NB_CACHE.routes || [];
+    const networks = _NB_CACHE.networksRaw || [];
     const alertR  = await db.query(`SELECT COUNT(*)::int AS n FROM system_alerts WHERE alert_type LIKE 'netbird:%' AND resolved_at IS NULL`);
     res.json({
       peers:  { total: peers.length,  online:  peers.filter(p => p.connected).length },
-      routes: { total: routes.length, healthy: routes.filter(r => r.enabled !== false).length },
+      // Raw-shape networks have `routing_peers_count` (number) or `routers`
+      // (array) instead of an `enabled` boolean. A route is healthy when at
+      // least one routing peer is announcing it.
+      routes: {
+        total:   networks.length,
+        healthy: networks.filter(n => {
+          const rc = Array.isArray(n.routers) ? n.routers.length
+                                              : (typeof n.routing_peers_count === 'number' ? n.routing_peers_count : 0);
+          return rc > 0;
+        }).length,
+      },
       alerts: { active: alertR.rows[0]?.n || 0 },
     });
   } catch (e) {

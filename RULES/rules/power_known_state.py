@@ -187,9 +187,17 @@ def _refine_wattage_from_shelly(state, registry):
         expected_w = float(cfg.get('expected_w') or 0)
         max_w      = float(cfg.get('max_w') or 0)
         prev_w     = float(last_w_map.get(rid, expected_w))
-        # Add the signed Δ to the row's current wattage; clamp to [0, max_w*tol_high]
-        new_w_f = prev_w + delta
-        new_w_f = max(0.0, min(new_w_f, max_w * tol_high))
+        # Negative Δ matching the swing range = heating element STOPPED.
+        # The device is now back to standby — set w to expected_w directly
+        # instead of subtracting Δ. Subtraction leaves residual phantom
+        # wattage when the matching positive Δ was clamped upward earlier
+        # (e.g. Tami 4 sat at 843W after cycle complete because the +1441
+        # got clamped to 2300 but the -1456 only brought it back to 844).
+        if delta < 0:
+            new_w_f = expected_w
+        else:
+            new_w_f = prev_w + delta
+            new_w_f = max(0.0, min(new_w_f, max_w * tol_high))
         new_w = int(round(new_w_f))
         live = {'on': True, 'w': new_w, 'ts': now_iso}
         try:

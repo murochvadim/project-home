@@ -773,11 +773,16 @@ async function geoSaveSettings() {
     dedup_window_sec:      parseInt(document.getElementById('geo-dedup-s').value, 10) || 60,
     geofence_events:        document.getElementById('geo-geofence-on').checked,
     geofence_heartbeat_sec: parseInt(document.getElementById('geo-geofence-hb').value, 10) || 0,
+    // Spread `d` first so EVERY field on the existing entry is preserved
+    // (group_id, mqtt_topic, future additions). Then apply defaults/transforms
+    // only to the fields the UI form actually edits. Without the spread,
+    // saving settings was silently dropping any field not explicitly listed
+    // here — which collapsed the vadim_phone group and turned one phone into
+    // two blue pins on the map.
     tracked_devices:       geoCollectDeviceRows().map(d => ({
-      device_id:      d.device_id,
+      ...d,
       name:           d.name || d.device_id,
       source:         d.source || 'ha_companion',
-      ha_entity:      d.ha_entity,
       battery_entity: d.battery_entity || null,
     })),
   };
