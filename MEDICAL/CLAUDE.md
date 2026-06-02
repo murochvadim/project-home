@@ -28,12 +28,13 @@ sent, never the full medical history en bloc.
 
 | Artifact | Path |
 |---|---|
-| Sidebar entry | New top-level entry **MEDICAL** in [BOILER/dashboard/public/js/sidebar.js](../BOILER/dashboard/public/js/sidebar.js) (or equivalent — current sidebar pattern TBD) |
-| Dashboard page | New `BOILER/dashboard/public/medical.html` (preferred over Health-page tab — medical deserves its own page, multi-card layout) |
-| Dashboard JS | New `BOILER/dashboard/public/js/medical.js` |
+| Sidebar entry | **No new entry** — Medical lives as a tab inside the existing Project General page (decision changed 2026-06-02 from the originally-proposed top-level page) |
+| Dashboard page | New tab **Medical** inside [BOILER/dashboard/public/project-general.html](../BOILER/dashboard/public/project-general.html), alongside Curtain / Geolocation / Weather |
+| Sub-tab structure | Medical tab uses nested tabs inside itself (same `.tab-btn` / `.tab-panel` pattern, scoped) — 5 sub-tabs for Phase 1: Today / Visits / Medications / Documents / Providers. Phase 4 adds a 6th: AI Investigation. |
+| Dashboard JS | Inline in `project-general.html` (same pattern as the Geolocation tab — `medicalOnTabShow`, `medLoadVisits`, `medSaveSettings`, etc.) |
 | Server endpoints | New cluster `/api/medical/*` in [BOILER/dashboard/server.js](../BOILER/dashboard/server.js) |
-| Rule(s) | Pill-reminder rule in `RULES/rules/medical_pill_reminders.py` (rule group `medical`) |
-| File storage | QNAP NFS mount — `/mnt/qnap-laptop/Medical/` (private SMB share, restricted user) |
+| Rule(s) | Pill-reminder rule in `RULES/rules/medical_pill_reminders.py` (rule group `medical`) — Phase 2 |
+| File storage | QNAP NFS mount — `/mnt/qnap-laptop/Medical/` (existing mount, already in nightly backup) |
 | DB tables (LXC 102) | `medical_documents`, `medical_visits`, `medical_appointments`, `medications`, `medication_schedules`, `medication_log`, `medical_conclusions`, `medical_providers` |
 | Memory (Claude) | `project_agent_medical.md` once any non-obvious project context emerges |
 
@@ -43,12 +44,12 @@ The Project Health page has a `Documents` tab today
 ([health.html](../BOILER/dashboard/public/health.html#L335)) backed by a 6-column
 `documents` table (id, title, url, theme, sort_order, created_at). Currently
 holds 2 unrelated bookmarks (HOOK, Home Connect Re-auth). The user
-explicitly OK'd repurposing/removing it.
+explicitly OK'd removing it.
 
-Plan: **remove the Documents tab from Project Health**. Migrate the 2 existing
-rows to a simple URL-bookmark spot elsewhere if they're still useful, OR
-just leave them in the DB (harmless). The medical work gets its own
-top-level page, not a Health-page tab.
+Plan: **remove the Documents tab from Project Health** + DELETE the 2
+existing rows. Clean slate. The medical work lives in the new Medical
+tab on Project General (separate scope — that table never held medical
+content anyway).
 
 ## Data domains
 
@@ -143,8 +144,9 @@ Columns: `id`, `kind` ('clinic' | 'doctor' | 'hospital' | 'lab'),
 the FK is set; when they type freely (a new place), they can save to
 the directory inline or leave as free-text only.
 
-Surfaced on the Medical page as **Card 8: Medical providers** —
-searchable list, edit/add inline, mailto/tel links on the cards.
+Surfaced on the **Providers** sub-tab — searchable list, edit/add
+inline, mailto/tel/portal links on each card. Filterable by specialty
++ kind.
 
 ### 8. Medical conclusions
 
@@ -158,37 +160,37 @@ Columns: `id`, `ts` (when stated), `source` ('doctor' / 'ai' / 'self'),
 'definite' / 'probable' / 'speculative'), `linked_visit_id` (int, optional),
 `linked_document_ids` (int[], optional), `created_at`.
 
-### 9. AI investigation (future, not table — pattern only)
+### 9. AI investigation (Phase 4, not a table — pattern only)
 
 Mirror the Boiler Agent's `/api/ai-investigate` shape. User clicks "🧠
-Investigate" on the Medical page → server gathers a relevant slice of
-their data (recent visits + recent documents' OCR'd text + current
-medications) → sends to Claude API → response is displayed AND
-optionally saved as a `medical_conclusions` row with `source='ai'`.
+Investigate" in the **AI Investigation** sub-tab → server gathers a
+relevant slice of their data (recent visits + recent documents' OCR'd
+text + current medications) → sends to Claude API → response is
+displayed AND optionally saved as a `medical_conclusions` row with
+`source='ai'`. AI-source conclusions then surface in the Today and
+Visits sub-tabs alongside doctor and self conclusions.
 
-## Dashboard layout (Medical page)
+## Dashboard layout (Medical tab inside Project General)
 
-Single page (`medical.html`) with **cards** (not tabs — too much scrolling
-for tabs; cards laid out vertically work for medical's chronological
-nature):
+The Medical tab is one tab in the Project General page tab-bar (next to
+Curtain / Geolocation / Weather). Inside it, nested sub-tabs split the
+domain into 5 focused views (Phase 1) plus a 6th in Phase 4:
 
-1. **Status / Today** — "Next pill: 08:00 · Cholesterol", "Next visit:
-   Tue 09:30 Dr. Cohen, Cardiology, in 3 days". Headline-style chips.
-2. **Active medications** — table: pill name / dosage / schedule / last
-   taken / next due. Buttons: ✓ Taken / ⊘ Skipped.
-3. **Upcoming appointments** — chronological list. Edit / Cancel.
-4. **Recent visits** — last 5 visits with their conclusions. Click to
-   expand.
-5. **Medical conclusions timeline** — combined doctor + AI + self. Filter
-   by source / category.
-6. **Documents** — searchable list. Filter by doc_type / date / tags.
-   Upload button.
-7. **Medical providers / centers** — address book with mailto/tel links.
-   Add/edit clinics + doctors. Filter by specialty / kind.
-8. **AI Investigation** — same pattern as Boiler's. Question textbox +
-   Investigate button + results panel. (Phase 4)
+| Sub-tab | Phase | What it shows |
+|---|---|---|
+| **Today** | 1 | Overview cards: next pill, next visit, latest conclusion, recent activity. Global search bar (queries visits + conclusions + documents + meds + providers in one shot). Quick-add buttons. |
+| **Visits** | 1 | Chronological feed of past **visits** + future **appointments** in one list. Past show conclusion + linked documents inline (expand to detail). Future show reminder time, can be "marked completed" inline (converts the appointment row → a visit row). |
+| **Medications** | 1 | Active medications table (name / dosage / schedule / last taken / next due / ✓ Taken / ⊘ Skipped buttons). Manual taken-log (medication_log table — added in Phase 1 even though rule-engine alerts come in Phase 2). Discontinued history below. |
+| **Documents** | 1 | Drag-drop upload zone at the top. Below: searchable list with filter chips (doc_type / linked visit / tags). Each row: thumbnail, title, doc_type, issue date, size, view/download buttons, link-to-visit dropdown. |
+| **Providers** | 1 | Address-book grid of clinics + individual doctors. Each card: name, kind chip, specialty, mailto/tel/portal links. Add/edit inline form. Filter by specialty. |
+| **AI Investigation** | 4 | Same pattern as Boiler Agent's. Question textbox + Investigate button + results panel. Conclusions saved with source='ai' appear in Today and Visits. |
 
-Optional left-rail navigation if the page gets too long.
+Sub-tab switching uses the existing `.tab-btn` / `.tab-panel` pattern
+scoped to the Medical panel (`showMedicalSubTab()` helper). Only one
+sub-tab visible at a time → page stays focused.
+
+Mobile-first inside each sub-tab — single column, big tap targets,
+forms stack vertically.
 
 ## Pill reminder system
 
@@ -252,35 +254,50 @@ Same pattern as Boiler Agent's `/api/ai-investigate`:
 
 Building this is multi-session work. Honest staged plan:
 
-### Phase 1 — Foundation (next ~1-2 sessions)
-- Decide: replace Documents tab vs add new top-level page (recommended:
-  new top-level page)
-- Sidebar entry "Medical" added
-- DB schema: create 7 tables + retention policy rows
-- Server endpoints: CRUD for visits / appointments / documents / medications
-- Dashboard page skeleton with the 7 cards, hardcoded styling
-- File upload to QNAP working
-- NO rule engine yet, NO AI investigation yet
+### Phase 1 — Foundation (~3-4 hours, possibly split into DB+API and UI)
+- DB schema on LXC 102: create 8 tables + retention policies (all forever)
+- Server endpoints: full CRUD for visits / appointments / documents /
+  medications / medication_log / conclusions / providers + search + JSON
+  export. ~22 endpoints total under `/api/medical/*`.
+- New **Medical** tab in `project-general.html` (between Geolocation and
+  Weather)
+- 5 sub-tabs inside Medical (Today / Visits / Medications / Documents /
+  Providers), mobile-first responsive forms with smart defaults
+- File upload pipeline to QNAP `/mnt/qnap-laptop/Medical/<YYYY>/<uuid>.<ext>`
+  with EXIF rotate + compress + thumbnail
+- Manual pill log via `medication_log` table + ✓ Taken / ⊘ Skipped buttons
+  (pulled forward from Phase 2 so adherence tracking starts day 1)
+- Search across all domains via `/api/medical/search?q=X`
+- Kill Documents tab on Project Health + DELETE the 2 stale rows
+- Docs update: root `CLAUDE.md` (DB tables + agent index), memory note
+- NO rule-engine pill reminders (Phase 2), NO OCR/AI investigation (Phase 4)
 
-### Phase 2 — Pill reminders (next)
-- `medication_schedules` + `medication_log` populated
-- Rule engine rule fires alerts via Alexa + phone notification
-- Dashboard chip + sidebar badge for "pill due now"
+### Phase 2 — Auto pill reminders
+- Rule engine rule on LXC 105 (group=`medical`): triggers on heartbeat,
+  queries `medication_schedules`, fires alerts when due
+- Alert methods: Alexa TTS + HA Companion phone notification + dashboard
+  chip
+- 30-min follow-up notification for missed pills
+- Snooze action support
 
-### Phase 3 — Conclusions timeline + manual entry
-- Unified timeline view
-- Inline editor for adding self-conclusions
+### Phase 3 — Conclusions polish + appointment lifecycle
+- Inline self-conclusion editor on the Visits sub-tab
+- Auto-flip past appointments → "completed" with a prompt to fill in
+  the corresponding visit row
+- Doctor + clinic autocomplete from the Providers directory
+- Optional: appointment reminder notifications 24h / 1h before
 
 ### Phase 4 — OCR + AI investigation
-- On document upload: send PDF to a local OCR (tesseract via LXC 103?) or
-  cloud OCR; store extracted text in `medical_documents.ocr_text`
-- AI Investigation card on the Medical page, mirroring Boiler's pattern
+- On document upload: shell out to Tesseract on LXC 103, store
+  extracted text in `medical_documents.ocr_text`
+- AI Investigation sub-tab on the Medical tab (the 6th sub-tab),
+  mirroring Boiler Agent's pattern
 - AI conclusions saved with `source='ai'`
 
-### Phase 5 — Mobile-friendly + auto-prompt
-- Phone notification when an appointment is approaching (24h / 1h before)
-- "Did you take your morning pills?" follow-up
+### Phase 5 — Voice + opportunistic helpers
 - Voice control via Alexa ("Alexa, what pills do I have at 8 PM?")
+- "Did you take your morning pills?" proactive prompt if log shows skipped
+- Possible: Google Calendar import for appointments
 
 ## Decisions locked in 2026-06-02
 
@@ -294,18 +311,29 @@ Building this is multi-session work. Honest staged plan:
 | 6 | Alert escalation | **None for v1.** Missed pills produce a follow-up "did you take your morning pills?" notification 30 min after due_at, then go quiet. No third-party escalation. |
 | 7 | Existing Documents tab on Health | **Kill the tab + DELETE the 2 stale rows.** Clean slate. The 2 bookmark rows (HOOK, Home Connect Re-auth) are unrelated and stale. |
 
-## Why this is a separate top-level page, not a Health-page tab
+## Placement decision (revised 2026-06-02)
 
-The Project Health page is for system health (DB volumes, alerts,
-retention, services). Medical is human health — a different domain.
-Mixing the two on one page conflates "is the home-automation system OK"
-with "is the user OK". Separation is cleaner; sidebar entries make
-medical's prominence appropriate without burying it.
+Original plan was a new top-level **MEDICAL** sidebar entry + its own
+`medical.html` page. User revised to: Medical lives as a tab inside
+the existing **Project General** page (alongside Curtain / Geolocation
+/ Weather). With sub-tabs inside the Medical tab for the 5 phase-1
+domains.
 
-Bottom line: new top-level **MEDICAL** sidebar entry, new `medical.html`
-page, Project Health's Documents tab gets retired.
+Reasoning for the revision: Project General is already the home for
+non-system-health personal-context surfaces (curtain control, phone
+geolocation, weather). Medical fits the same theme. Avoids adding
+another top-level sidebar entry. The sub-tabs inside provide enough
+structure without making the medical tab itself feel cluttered.
+
+The original Project Health Documents tab still gets retired — that
+decision didn't change.
 
 ## Status
 
-**Scoped 2026-06-02. All 7 decisions locked in 2026-06-02.** Ready for
-Phase 1 implementation when the user signals to start.
+**Scoped 2026-06-02. 8 decisions locked in 2026-06-02** (7 original
+question-pack answers + the placement revision: Medical lives as a tab
+inside Project General with 5 nested sub-tabs, not as a separate
+top-level page).
+
+Phase 1 build is queued and ready to start on the user's signal. No
+code touched yet — only this doc.
