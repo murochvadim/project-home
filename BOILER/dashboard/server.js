@@ -45,11 +45,30 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 // PostgreSQL connection to LXC 102
+//
+// Wake-from-sleep recovery (added 2026-06-02): the dashboard runs under
+// pm2 on the Windows laptop. When the laptop sleeps, all TCP connections
+// to LXC 102 silently die at the OS level. Without explicit keepalive
+// and connect-timeout, pg.Pool keeps handing out dead connections after
+// wake — every API request then waits ~75 s for TCP retransmission to
+// give up, so the dashboard appears frozen for 60-90 s after opening
+// the laptop. The 4 knobs below cap that delay to ~10-20 s:
+//   - idleTimeoutMillis: aggressively recycle idle connections so most
+//     of the pool is empty before sleep
+//   - connectionTimeoutMillis: fail fast on slow new-connect attempts
+//   - keepAlive + keepAliveInitialDelayMillis: OS-level TCP keepalive
+//     probes start 10 s after a connection goes idle, so dead sockets
+//     get detected within seconds instead of minutes
 const db = new Pool({
   host: '192.168.1.219',
   database: 'home_data',
   user: 'postgres',
   port: 5432,
+  idleTimeoutMillis:           30000,
+  connectionTimeoutMillis:     5000,
+  keepAlive:                   true,
+  keepAliveInitialDelayMillis: 10000,
+  max:                         10,
 });
 
 // MQTT client for rule engine commands (test, reload).
@@ -81,6 +100,11 @@ const MQTT_OPTS = {
   password:        process.env.MQTT_RULE_PASS,
   clientId:        'dashboard-' + process.pid,
   reconnectPeriod: 5000,
+  // Wake-from-sleep recovery — shorter keepalive (default 60 s) so the
+  // broker detects a dead client within ~20 s instead of a minute, and
+  // the client's own internal keepalive-timeout fires sooner, kicking
+  // off the reconnect cycle faster on laptop wake.
+  keepalive:       20,
 };
 let mqttClient = null;
 let _mqttAuthFails  = 0;
