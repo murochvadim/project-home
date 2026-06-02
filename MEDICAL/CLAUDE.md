@@ -28,10 +28,10 @@ sent, never the full medical history en bloc.
 
 | Artifact | Path |
 |---|---|
-| Sidebar entry | **No new entry** — Medical lives as a tab inside the existing Project General page (decision changed 2026-06-02 from the originally-proposed top-level page) |
-| Dashboard page | New tab **Medical** inside [BOILER/dashboard/public/project-general.html](../BOILER/dashboard/public/project-general.html), alongside Curtain / Geolocation / Weather |
-| Sub-tab structure | Medical tab uses nested tabs inside itself (same `.tab-btn` / `.tab-panel` pattern, scoped) — 5 sub-tabs for Phase 1: Today / Visits / Medications / Documents / Providers. Phase 4 adds a 6th: AI Investigation. |
-| Dashboard JS | Inline in `project-general.html` (same pattern as the Geolocation tab — `medicalOnTabShow`, `medLoadVisits`, `medSaveSettings`, etc.) |
+| Sidebar entry | New top-level entry **MEDICAL** in the dashboard's sidebar navigation, under a new **Personal** section (the first section of that name). Personal will hold future personal-data trackers (fitness / journal / finances / etc.) alongside Medical. Pattern matches other dashboard-only agents (Living Room, Balcony, etc.) which each get a top-level sidebar entry. |
+| Dashboard page | New dedicated page `BOILER/dashboard/public/medical.html` |
+| Sub-tab structure | Inside `medical.html`, nested tabs split the domain into 5 focused sub-tabs for Phase 1: Today / Visits / Medications / Documents / Providers. Phase 4 adds a 6th: AI Investigation. Uses the same `.tab-btn` / `.tab-panel` pattern as the Project Health page and Project General page. |
+| Dashboard JS | New `BOILER/dashboard/public/js/medical.js` (separate file, lazy-loaded on first tab visit — same pattern as `js/weather.js`) |
 | Server endpoints | New cluster `/api/medical/*` in [BOILER/dashboard/server.js](../BOILER/dashboard/server.js) |
 | Rule(s) | Pill-reminder rule in `RULES/rules/medical_pill_reminders.py` (rule group `medical`) — Phase 2 |
 | File storage | QNAP NFS mount — `/mnt/qnap-laptop/Medical/` (existing mount, already in nightly backup) |
@@ -47,9 +47,9 @@ holds 2 unrelated bookmarks (HOOK, Home Connect Re-auth). The user
 explicitly OK'd removing it.
 
 Plan: **remove the Documents tab from Project Health** + DELETE the 2
-existing rows. Clean slate. The medical work lives in the new Medical
-tab on Project General (separate scope — that table never held medical
-content anyway).
+existing rows. Clean slate. The medical work lives in the new
+dedicated `medical.html` page (separate scope — that old `documents`
+table never held medical content anyway).
 
 ## Data domains
 
@@ -170,11 +170,11 @@ displayed AND optionally saved as a `medical_conclusions` row with
 `source='ai'`. AI-source conclusions then surface in the Today and
 Visits sub-tabs alongside doctor and self conclusions.
 
-## Dashboard layout (Medical tab inside Project General)
+## Dashboard layout (dedicated Medical page)
 
-The Medical tab is one tab in the Project General page tab-bar (next to
-Curtain / Geolocation / Weather). Inside it, nested sub-tabs split the
-domain into 5 focused views (Phase 1) plus a 6th in Phase 4:
+`medical.html` is a top-level page reached via a **MEDICAL** entry in
+the sidebar. Inside the page, nested sub-tabs split the domain into 5
+focused views (Phase 1) plus a 6th in Phase 4:
 
 | Sub-tab | Phase | What it shows |
 |---|---|---|
@@ -186,8 +186,8 @@ domain into 5 focused views (Phase 1) plus a 6th in Phase 4:
 | **AI Investigation** | 4 | Same pattern as Boiler Agent's. Question textbox + Investigate button + results panel. Conclusions saved with source='ai' appear in Today and Visits. |
 
 Sub-tab switching uses the existing `.tab-btn` / `.tab-panel` pattern
-scoped to the Medical panel (`showMedicalSubTab()` helper). Only one
-sub-tab visible at a time → page stays focused.
+already used by Project Health and Project General (`showTab()` helper).
+Only one sub-tab visible at a time → page stays focused.
 
 Mobile-first inside each sub-tab — single column, big tap targets,
 forms stack vertically.
@@ -259,17 +259,21 @@ Building this is multi-session work. Honest staged plan:
 - Server endpoints: full CRUD for visits / appointments / documents /
   medications / medication_log / conclusions / providers + search + JSON
   export. ~22 endpoints total under `/api/medical/*`.
-- New **Medical** tab in `project-general.html` (between Geolocation and
-  Weather)
-- 5 sub-tabs inside Medical (Today / Visits / Medications / Documents /
-  Providers), mobile-first responsive forms with smart defaults
+- New dedicated page `BOILER/dashboard/public/medical.html` with 5
+  sub-tabs (Today / Visits / Medications / Documents / Providers),
+  mobile-first responsive forms with smart defaults
+- New `BOILER/dashboard/public/js/medical.js` (separate file, lazy-init
+  on first sub-tab visit — same pattern as `js/weather.js`)
+- New **MEDICAL** entry in the sidebar navigation, with link to
+  `/medical.html`
 - File upload pipeline to QNAP `/mnt/qnap-laptop/Medical/<YYYY>/<uuid>.<ext>`
   with EXIF rotate + compress + thumbnail
 - Manual pill log via `medication_log` table + ✓ Taken / ⊘ Skipped buttons
   (pulled forward from Phase 2 so adherence tracking starts day 1)
 - Search across all domains via `/api/medical/search?q=X`
 - Kill Documents tab on Project Health + DELETE the 2 stale rows
-- Docs update: root `CLAUDE.md` (DB tables + agent index), memory note
+- Docs update: root `CLAUDE.md` (DB tables + agent index + Dashboard
+  Pages table entry for the new page), memory note
 - NO rule-engine pill reminders (Phase 2), NO OCR/AI investigation (Phase 4)
 
 ### Phase 2 — Auto pill reminders
@@ -311,29 +315,49 @@ Building this is multi-session work. Honest staged plan:
 | 6 | Alert escalation | **None for v1.** Missed pills produce a follow-up "did you take your morning pills?" notification 30 min after due_at, then go quiet. No third-party escalation. |
 | 7 | Existing Documents tab on Health | **Kill the tab + DELETE the 2 stale rows.** Clean slate. The 2 bookmark rows (HOOK, Home Connect Re-auth) are unrelated and stale. |
 
-## Placement decision (revised 2026-06-02)
+## Placement decision (final, 2026-06-02)
 
-Original plan was a new top-level **MEDICAL** sidebar entry + its own
-`medical.html` page. User revised to: Medical lives as a tab inside
-the existing **Project General** page (alongside Curtain / Geolocation
-/ Weather). With sub-tabs inside the Medical tab for the 5 phase-1
-domains.
+The placement was discussed three times during scoping:
 
-Reasoning for the revision: Project General is already the home for
-non-system-health personal-context surfaces (curtain control, phone
-geolocation, weather). Medical fits the same theme. Avoids adding
-another top-level sidebar entry. The sub-tabs inside provide enough
-structure without making the medical tab itself feel cluttered.
+1. **First proposal** — top-level MEDICAL page + sidebar entry.
+2. **Mid-discussion revision** — moved to a tab inside Project General
+   to avoid adding another sidebar entry.
+3. **Final decision** — reverted to the original top-level page + sidebar
+   entry, after a deeper assessment of scope. Sidebar entry placed in a
+   NEW **Personal** section (not General or Agents) — Personal will
+   host future personal-data trackers (fitness, journal, etc.).
+   Service layer: **none** (dashboard-only); rules live in group=`medical`
+   on the shared rule engine at LXC 105.
 
-The original Project Health Documents tab still gets retired — that
-decision didn't change.
+Reasoning for the final decision:
+- **Scale fit.** Medical has 5 sub-tabs in Phase 1 alone (Today / Visits /
+  Medications / Documents / Providers) and a 6th in Phase 4. That's
+  larger than Curtain + Geolocation + Weather combined. Project General
+  would feel cramped with Medical as a 4th peer.
+- **Pattern consistency.** Other substantial domains in this project
+  (Balcony, Living Room, My BathRoom, Corridor) each get their own
+  top-level page even though most are smaller in scope than Medical.
+- **Discoverability.** "Medical" in the sidebar → one click. As a
+  3-deep sub-tab inside Project General, it's buried.
+- **Domain isolation.** Medical is a different concern category from
+  the personal-utility surfaces in Project General. Mixing them
+  conflates "where's the weather forecast" with "when's my next blood
+  test."
+- **Privacy posture.** Distinct page makes future per-page restrictions
+  easier (different log-in, restricted Anthropic logging, etc.) if
+  the user ever wants stricter access control on medical data.
+- **Future-proofing.** Phase 4 + Phase 5 grow this further (AI
+  investigation, voice control, OCR). A dedicated page scales there.
+
+The Project Health Documents tab still gets retired — that decision
+didn't change across either revision.
 
 ## Status
 
 **Scoped 2026-06-02. 8 decisions locked in 2026-06-02** (7 original
-question-pack answers + the placement revision: Medical lives as a tab
-inside Project General with 5 nested sub-tabs, not as a separate
-top-level page).
+question-pack answers + placement = Medical is its own agent with a
+top-level page `medical.html` and a dedicated MEDICAL sidebar entry;
+5 nested sub-tabs inside for Phase 1).
 
 Phase 1 build is queued and ready to start on the user's signal. No
 code touched yet — only this doc.
