@@ -110,6 +110,69 @@ Closed-trip summaries computed at the `away → home` crossing. Both ingest path
 
 **Flicker filter**: on close, if `duration_sec < TRIP_MIN_DURATION_SEC` (60s) AND `path_length_m < TRIP_MIN_PATH_LENGTH_M` (100m), the row is DELETED instead of UPDATED. Reason: GPS oscillates 2-4 events around the radius boundary on every real crossing (verified 2026-06-01: the return crossing produced `away→home` flickers at 1s, 10s, 1s, 10s within ~20s). Without the filter, every real trip would accumulate 2-4 garbage rows. Thresholds in AND so a deliberate short walk (>100m) or a long stationary visit (>60s) still gets recorded. Constants live in both ingest scripts — keep in sync.
 
+## WiFi-confirmed state machine (since 2026-06-02)
+
+Goal: make `geofence:away` events accurate enough to drive rules. The close-time flicker filter cleans `phone_trips` but does NOT clean `device_events`, so rules consuming geofence events would still fire on every GPS jitter spike. Empirical evidence (2026-06-02 morning) showed 5 jitter "trips" where the phone never physically left home — each survived the flicker filter (durations 58-81 s) and would have fired bogus `geofence:away` events at rules.
+
+**Key insight**: the `wi_fi_connection` sensor is the discriminator. On a real exit it flips off-Home within seconds of physically leaving (verified during the user's first tracked trip — flipped at the door). During GPS jitter the phone never leaves home WiFi range, so the sensor stays `'Home'` the entire time. This gives both a fast-firing real-exit signal AND a deterministic jitter filter from the same data point.
+
+### State machine
+
+A `phone_trips` row is now opened on the FIRST outside ping in **provisional** state (`confirmed=false`), but **no `geofence:away` event fires yet**. The state machine commits to confirmed (and fires the event, backdated to the actual exit moment) only when one of three conditions is met:
+
+1. **`wifi_confirmed`** (fast path) — phone's `wi_fi_connection` sensor has been off-Home for at least `geofence_wifi_min_age_sec` (default 10 s). Typically fires within 10-30 s of physical exit.
+2. **`time_fallback`** — phone has been outside the radius continuously for at least `geofence_time_fallback_sec` (default 60 s). Catches broken/missing WiFi sensor.
+3. **`hard_cap`** — phone has been outside for `geofence_hard_cap_sec` (default 300 s). Defensive observability ceiling; should never trigger in normal operation.
+
+If the phone returns inside the radius before any of the three conditions fire, the provisional row is **silently DELETED** — no `device_events` row is ever written, no `phone_trips` row survives. Rules don't see jitter at all.
+
+Heartbeats (`geofence_heartbeat_sec`) are suppressed while a provisional trip is in flight so the pending state doesn't leak into events.
+
+`geofence:home` events still fire immediately on the first inside ping — symmetric delay isn't needed because spurious "I'm back" jitter is rare.
+
+### Event timestamp semantics
+
+| Event | `ts` column | Live MQTT delivery |
+|---|---|---|
+| `geofence:away` (committed) | `phone_trips.started_at` (the actual physical-exit moment) | At commit time (10-300 s after exit, typically wifi_confirmed → 10-30 s) |
+| `geofence:home` | `NOW()` | Immediate on first inside ping |
+
+Historical queries on `device_events` reflect actual exit moments. Live rule-engine subscribers receive events when they're inserted (commit moment).
+
+### Settings (in `dashboard_settings.geolocation`)
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `geofence_use_state_machine` | bool | true | Master switch. `false` → revert to legacy "emit on first outside ping" path (preserved byte-for-byte). No service restart needed; ingests re-read settings every pass. |
+| `geofence_wifi_min_age_sec` | int | 10 | Primary knob — WiFi must be off-Home this long before commit. |
+| `geofence_time_fallback_sec` | int | 60 | Fallback for missing/broken WiFi sensor. |
+| `geofence_hard_cap_sec` | int | 300 | Defensive ceiling. |
+
+All four exposed on the Settings card under the existing geofence section. Allow-listed at `BOILER/dashboard/server.js`'s POST handler.
+
+### Revert path
+
+Toggle `geofence_use_state_machine` to `false` and save — the next ingest pass (geolocation: 30 s, owntracks: next message) switches to the legacy `emit_geofence_event + open_trip/close_trip` path preserved byte-for-byte in both scripts. Any pending provisional row stays in DB; manually DELETE it via the Recent trips card's multi-select button.
+
+### Dashboard
+
+`GET /api/geolocation/trips` defaults to `WHERE confirmed = TRUE AND returned_at IS NOT NULL`. Query flags `?include_open=1` and `?include_provisional=1` expose the wider set for diagnostics.
+
+`DELETE /api/geolocation/trips` body `{ids: int[]}` powers the Recent trips card's multi-select delete: tick row checkboxes → "🗑 Delete selected (N)" button enables in red → confirm → rows DELETEd by id.
+
+### Verifying behavior
+
+```bash
+# Provisional/confirmed state on phone_trips
+ssh root@192.168.1.219 "psql -U postgres -d home_data -c \"
+  SELECT id, group_id, confirmed, returned_at IS NOT NULL AS closed,
+         to_char(started_at AT TIME ZONE 'Asia/Jerusalem','HH24:MI:SS') AS started
+  FROM phone_trips ORDER BY id DESC LIMIT 10\""
+
+# Recent ingest log lines — look for 'provisional opened', 'provisional deleted', 'commit:wifi_confirmed'
+ssh root@192.168.1.227 "tail -50 /var/log/geolocation-ingest.log /var/log/owntracks-ingest.log"
+```
+
 **Surface**: `GET /api/geolocation/trips?limit=N[&include_open=1]` returns closed trips by default; dashboard renders them in the "Recent trips" card on the Geolocation tab.
 
 **Retention forever** — trips are intended to outlive their source pings (`device_locations` is 30 d).

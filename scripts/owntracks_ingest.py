@@ -114,18 +114,22 @@ def phone_appears_at_home(dev, veto_enabled, still_debounce_sec):
     """
     if not veto_enabled:
         return False
-    aa_state, aa_age = _safe_ha_state(dev.get('android_auto_entity'))
+    # max_age_sec=86400 overrides _safe_ha_state's default 600s cap so
+    # settled-for-hours sensors aren't treated as stale (a phone on home
+    # WiFi for > 10 min would otherwise return None for wifi_state,
+    # silently disabling the veto). Same fix in geolocation_ingest.
+    aa_state, aa_age = _safe_ha_state(dev.get('android_auto_entity'), max_age_sec=86400)
     if aa_state == 'on' and aa_age is not None and aa_age >= still_debounce_sec:
         return False
     wifi_ent  = dev.get('wifi_entity')
     home_ssid = dev.get('wifi_home_ssid')
     if wifi_ent and home_ssid:
-        wifi_state, wifi_age = _safe_ha_state(wifi_ent)
+        wifi_state, wifi_age = _safe_ha_state(wifi_ent, max_age_sec=86400)
         if wifi_state == home_ssid and wifi_age is not None and wifi_age >= still_debounce_sec:
             return True
     act_ent = dev.get('activity_entity')
     if act_ent:
-        act_state, act_age = _safe_ha_state(act_ent)
+        act_state, act_age = _safe_ha_state(act_ent, max_age_sec=86400)
         if act_state == 'still' and act_age is not None and act_age >= still_debounce_sec:
             return True
     return False
@@ -151,6 +155,11 @@ def read_settings():
         'tracked_devices':        [],
         'geofence_events':        True,
         'geofence_heartbeat_sec': 0,
+        # State-machine defaults — see geolocation_ingest.py for full doc.
+        'geofence_use_state_machine':  True,
+        'geofence_wifi_min_age_sec':   10,
+        'geofence_time_fallback_sec':  60,
+        'geofence_hard_cap_sec':       300,
     }
     try:
         conn = get_conn()
@@ -200,16 +209,26 @@ def insert_location(device_id, ts, lat, lon, acc, alt, speed, battery):
         )
 
 
-def emit_geofence_event(device_id, event, lat, lon):
+def emit_geofence_event(device_id, event, lat, lon, ts=None):
+    """`ts=None` → NOW() (legacy + home events). `ts=<datetime>` → backdated,
+    used by the state machine for `away` events so historical queries see
+    the actual physical exit time, not the commit moment."""
     conn = get_conn()
     payload = json.dumps({'kind': 'geofence', 'event': event,
                           'lat': lat, 'lon': lon, 'source': 'owntracks'})
     with conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO device_events (ts, device_id, source, dps)
-               VALUES (NOW(), %s, 'owntracks_ingest', %s::jsonb)""",
-            (device_id, payload),
-        )
+        if ts is None:
+            cur.execute(
+                """INSERT INTO device_events (ts, device_id, source, dps)
+                   VALUES (NOW(), %s, 'owntracks_ingest', %s::jsonb)""",
+                (device_id, payload),
+            )
+        else:
+            cur.execute(
+                """INSERT INTO device_events (ts, device_id, source, dps)
+                   VALUES (%s, %s, 'owntracks_ingest', %s::jsonb)""",
+                (ts, device_id, payload),
+            )
 
 
 def get_last_location(device_id):
@@ -248,6 +267,108 @@ def open_trip(group_id, label, started_at):
                ON CONFLICT DO NOTHING""",
             (group_id, label, started_at),
         )
+
+
+# ─── WiFi-confirmed state machine (since 2026-06-02) ──────────────────
+# Mirror of geolocation_ingest helpers. Keep in sync. See that file for
+# the full state-machine doc.
+
+def _get_open_trip(group_id):
+    conn = get_conn()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT id, started_at, confirmed
+               FROM phone_trips
+               WHERE group_id = %s AND returned_at IS NULL
+               ORDER BY started_at DESC LIMIT 1""",
+            (group_id,),
+        )
+        return cur.fetchone()
+
+
+def _open_provisional(group_id, label, started_at):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO phone_trips (group_id, device_label, started_at, confirmed)
+               VALUES (%s, %s, %s, FALSE)
+               ON CONFLICT DO NOTHING""",
+            (group_id, label, started_at),
+        )
+
+
+def _delete_provisional(trip_id):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM phone_trips WHERE id = %s AND confirmed = FALSE", (trip_id,))
+
+
+def _confirm_trip(trip_id):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("UPDATE phone_trips SET confirmed = TRUE WHERE id = %s", (trip_id,))
+
+
+def _commit_away_atomic(trip_id, device_id, lat, lon, ts):
+    """Atomically: UPDATE trip to confirmed AND INSERT the geofence:away
+    event row. Both in the same transaction so a crash between them can't
+    leave a confirmed trip without its paired away event (which rules would
+    see as an unpaired home event next inside ping).
+
+    Necessary because `get_conn()` returns the daemon's connection with
+    `autocommit=True` — each cursor.execute commits independently. This
+    helper temporarily flips autocommit off, runs both writes, commits,
+    then restores autocommit so the rest of on_message keeps its
+    statement-at-a-time commit semantics.
+    """
+    conn = get_conn()
+    prev_ac = conn.autocommit
+    conn.autocommit = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE phone_trips SET confirmed = TRUE WHERE id = %s", (trip_id,))
+            payload = json.dumps({'kind': 'geofence', 'event': 'away',
+                                  'lat': lat, 'lon': lon, 'source': 'owntracks'})
+            cur.execute(
+                """INSERT INTO device_events (ts, device_id, source, dps)
+                   VALUES (%s, %s, 'owntracks_ingest', %s::jsonb)""",
+                (ts, device_id, payload),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.autocommit = prev_ac
+
+
+def should_commit(trip_row, ping_ts, cfg, dev):
+    """Mirror of geolocation_ingest.should_commit — see that file for doc.
+    Critical: time_fallback is SKIPPED when WiFi explicitly reports 'Home'
+    (prevents GPS drift from firing away events while phone is at home)."""
+    age_outside_sec = (ping_ts - trip_row['started_at']).total_seconds()
+    hard_cap = float(cfg.get('geofence_hard_cap_sec') or 300)
+    if age_outside_sec >= hard_cap:
+        return True, 'hard_cap'
+    wifi_min_age = float(cfg.get('geofence_wifi_min_age_sec') or 10)
+    wifi_entity  = dev.get('wifi_entity')
+    home_ssid    = dev.get('wifi_home_ssid')
+    wifi_verdict = 'unknown'
+    if wifi_entity and home_ssid:
+        # max_age_sec=86400 — see geolocation_ingest for rationale.
+        wifi_state, wifi_age = _safe_ha_state(wifi_entity, max_age_sec=86400)
+        # HA-reserved null states must NOT be treated as off-home SSID.
+        if wifi_state in (None, 'unavailable', 'unknown', ''):
+            wifi_verdict = 'unknown'
+        elif wifi_state == home_ssid:
+            wifi_verdict = 'home'
+        elif wifi_age is not None and wifi_age >= wifi_min_age:
+            return True, 'wifi_confirmed'
+    if wifi_verdict != 'home':
+        time_fallback = float(cfg.get('geofence_time_fallback_sec') or 60)
+        if age_outside_sec >= time_fallback:
+            return True, 'time_fallback'
+    return False, None
 
 
 def close_trip(group_id, returned_at, center_lat, center_lon, radius_m, sibling_device_ids):
@@ -387,6 +508,7 @@ def on_message(client, userdata, msg):
         do_geo = bool(cfg.get('geofence_events', True))
         hb_sec = int(cfg.get('geofence_heartbeat_sec') or 0)
         veto_on = bool(cfg.get('sensor_veto_enabled', False))
+        state_machine_on = bool(cfg.get('geofence_use_state_machine', True))
         veto_db = int(cfg.get('sensor_veto_still_debounce_sec') or 60)
         # Locate this device's tracked_devices entry so we can read its
         # per-device sensor entity IDs for the veto check.
@@ -435,48 +557,95 @@ def on_message(client, userdata, msg):
         if do_geo and center_lat is not None and center_lon is not None and radius_m:
             dist_home = haversine_m(center_lat, center_lon, lat, lon)
             is_home   = dist_home <= radius_m
-            event     = 'home' if is_home else 'away'
-            emit_reason = None
+            gid, siblings, label = _group_info(cfg, device_id)
 
-            if last and not deduped:
-                try:
-                    prev_dist = haversine_m(center_lat, center_lon,
-                                            float(last['lat']), float(last['lon']))
-                    was_home  = prev_dist <= radius_m
-                    if is_home != was_home:
-                        emit_reason = 'crossing'
-                except Exception:
-                    pass
-
-            if emit_reason is None and hb_sec > 0:
-                last_evt_ts = get_last_event_ts(device_id)
-                if (last_evt_ts is None
-                        or (datetime.now(timezone.utc) - last_evt_ts).total_seconds()
-                            >= hb_sec):
-                    emit_reason = 'heartbeat'
-
-            # Sensor veto: if HA Companion sensors say the phone is at home
-            # (activity=still / WiFi=home_ssid / not Android Auto), suppress
-            # AWAY events that look like WiFi-DB poisoning. Mirrors
-            # geolocation_ingest. Home events always fire.
-            if emit_reason is not None and event == 'away' and phone_appears_at_home(dev_entry, veto_on, veto_db):
-                log.info('%s sensor veto: phone says at home; suppressing AWAY event (would have been %s, dist %.0f m)',
-                         device_id, emit_reason, dist_home)
+            if state_machine_on:
+                # ─── NEW: WiFi-confirmed state machine ─────────────────
+                # See geolocation_ingest.py for full state-machine doc.
+                trip_row = _get_open_trip(gid)
+                # Track state evolution explicitly — heartbeat below MUST
+                # see post-state-machine status, not the stale pre-fetch.
+                # Without this, opening a provisional leaves trip_row=None
+                # locally → heartbeat fires the very event we deferred.
+                provisional_in_flight = bool(trip_row and not trip_row.get('confirmed'))
+                event_emitted_this_pass = False  # commit-away or crossing-home → suppress heartbeat
+                if is_home:
+                    if trip_row and not trip_row['confirmed']:
+                        _delete_provisional(trip_row['id'])
+                        log.info('%s provisional deleted (jitter, no event fired)', gid)
+                        provisional_in_flight = False
+                    elif trip_row and trip_row['confirmed']:
+                        emit_geofence_event(device_id, 'home', lat, lon)
+                        close_trip(gid, ping_ts, center_lat, center_lon,
+                                   radius_m, siblings)
+                        event_emitted_this_pass = True
+                        log.info('%s geofence crossing -> home (dist %.0f m)',
+                                 device_id, dist_home)
+                else:  # outside radius
+                    if not trip_row:
+                        _open_provisional(gid, label, ping_ts)
+                        log.info('%s provisional opened at %s (dist %.0f m, no event yet)',
+                                 gid, ping_ts.isoformat(), dist_home)
+                        provisional_in_flight = True
+                    elif not trip_row['confirmed']:
+                        if phone_appears_at_home(dev_entry, veto_on, veto_db):
+                            log.info('%s sensor veto blocking commit (provisional age %.0fs, dist %.0fm)',
+                                     gid, (ping_ts - trip_row['started_at']).total_seconds(), dist_home)
+                        else:
+                            commit, reason = should_commit(trip_row, ping_ts, cfg, dev_entry)
+                            if commit:
+                                _commit_away_atomic(trip_row['id'], device_id, lat, lon, trip_row['started_at'])
+                                event_emitted_this_pass = True
+                                log.info('%s geofence commit:%s -> away (started_at=%s, dist %.0f m)',
+                                         device_id, reason,
+                                         trip_row['started_at'].isoformat(),
+                                         dist_home)
+                                provisional_in_flight = False
+                # Heartbeat — suppressed when EITHER a provisional is in
+                # flight OR an event already fired this pass. The latter
+                # protects against backdated away-commit ts leaving
+                # MAX(ts) stale and the heartbeat firing a duplicate at NOW().
+                if hb_sec > 0 and not provisional_in_flight and not event_emitted_this_pass:
+                    last_evt_ts = get_last_event_ts(device_id)
+                    if (last_evt_ts is None
+                            or (datetime.now(timezone.utc) - last_evt_ts).total_seconds()
+                                >= hb_sec):
+                        event = 'home' if is_home else 'away'
+                        emit_geofence_event(device_id, event, lat, lon)
+                        log.info('%s geofence heartbeat -> %s (dist %.0f m)',
+                                 device_id, event, dist_home)
+            else:
+                # ─── LEGACY: emit-on-first-crossing (revert path) ─────
+                event     = 'home' if is_home else 'away'
                 emit_reason = None
-            if emit_reason is not None:
-                emit_geofence_event(device_id, event, lat, lon)
-                log.info('%s geofence %s -> %s (dist %.0f m)',
-                         device_id, emit_reason, event, dist_home)
-                # Trip tracking — open on first `away`, close on next `home`.
-                # Per-group dedup via the partial unique index so both
-                # ingests racing on the same physical crossing collapse to
-                # one row.
-                gid, siblings, label = _group_info(cfg, device_id)
-                if event == 'away':
-                    open_trip(gid, label, ping_ts)
-                else:
-                    close_trip(gid, ping_ts, center_lat, center_lon,
-                               radius_m, siblings)
+                if last and not deduped:
+                    try:
+                        prev_dist = haversine_m(center_lat, center_lon,
+                                                float(last['lat']), float(last['lon']))
+                        was_home  = prev_dist <= radius_m
+                        if is_home != was_home:
+                            emit_reason = 'crossing'
+                    except Exception:
+                        pass
+                if emit_reason is None and hb_sec > 0:
+                    last_evt_ts = get_last_event_ts(device_id)
+                    if (last_evt_ts is None
+                            or (datetime.now(timezone.utc) - last_evt_ts).total_seconds()
+                                >= hb_sec):
+                        emit_reason = 'heartbeat'
+                if emit_reason is not None and event == 'away' and phone_appears_at_home(dev_entry, veto_on, veto_db):
+                    log.info('%s sensor veto: phone says at home; suppressing AWAY event (would have been %s, dist %.0f m)',
+                             device_id, emit_reason, dist_home)
+                    emit_reason = None
+                if emit_reason is not None:
+                    emit_geofence_event(device_id, event, lat, lon)
+                    log.info('%s geofence %s -> %s (dist %.0f m)',
+                             device_id, emit_reason, event, dist_home)
+                    if event == 'away':
+                        open_trip(gid, label, ping_ts)
+                    else:
+                        close_trip(gid, ping_ts, center_lat, center_lon,
+                                   radius_m, siblings)
 
     except Exception as e:
         log.exception('on_message error: %s', e)

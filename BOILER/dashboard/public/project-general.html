@@ -276,6 +276,30 @@
             <span style="font-size:0.82rem; color:#888;">activity must report <code>still</code> for this long to veto (filters brief red-light stops in real trips)</span>
           </div>
 
+          <label>Use state machine:</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="checkbox" id="geo-sm-on" style="transform:scale(1.2);" />
+            <span style="font-size:0.82rem; color:#888;">defers <code>geofence:away</code> until WiFi confirms the exit — filters GPS jitter that creates fake "trips" while phone is actually at home. Uncheck to revert to legacy emit-on-first-crossing behavior.</span>
+          </div>
+
+          <label>WiFi min age (sec):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-sm-wifi-min-age" min="0" max="600" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">WiFi must have been off-Home for this many seconds before firing the away event (only used when state machine is on)</span>
+          </div>
+
+          <label>Time fallback (sec):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-sm-time-fallback" min="0" max="3600" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">commit away anyway after this many seconds outside if WiFi sensor never flips (broken-sensor safety net)</span>
+          </div>
+
+          <label>Hard cap (sec):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-sm-hard-cap" min="60" max="86400" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">defensive ceiling — fire after this many seconds outside regardless. Should never trigger in normal use; observability signal.</span>
+          </div>
+
           <label style="align-self:start;">Tracked devices:</label>
           <div>
             <table class="geo-dev-table" id="geo-dev-table">
@@ -321,10 +345,18 @@
     </div>
 
     <div class="card">
-      <h2 style="margin:0 0 10px 0;">Recent trips</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h2 style="margin:0;">Recent trips</h2>
+        <button id="geo-trips-delete-btn" onclick="geoDeleteSelectedTrips()" disabled
+                style="padding:4px 12px; font-size:0.82rem; border:1px solid #ccc; color:#888; background:#fafafa; border-radius:3px; cursor:not-allowed;"
+                title="Tick rows below to enable">
+          🗑 Delete selected (0)
+        </button>
+      </div>
       <div style="overflow-y:auto; max-height:280px;">
         <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
           <thead><tr style="background:#fafaf6;">
+            <th style="text-align:center; padding:6px 6px; width:32px;"><input type="checkbox" id="geo-trips-select-all" onchange="geoTripsToggleAll(this.checked)" /></th>
             <th style="text-align:center; padding:6px 12px; width:48px;">#</th>
             <th style="text-align:center; padding:6px 12px;">Started</th>
             <th style="text-align:center; padding:6px 12px;">Returned</th>
@@ -333,7 +365,7 @@
             <th style="text-align:center; padding:6px 12px;">Path length</th>
           </tr></thead>
           <tbody id="geo-trips-tbody">
-            <tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
+            <tr><td colspan="7" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -785,6 +817,10 @@ async function geoLoadSettings() {
     document.getElementById('geo-geofence-hb').value = d.geofence_heartbeat_sec ?? 0;
     document.getElementById('geo-veto-on').checked = !!d.sensor_veto_enabled;
     document.getElementById('geo-veto-still-debounce').value = d.sensor_veto_still_debounce_sec ?? 60;
+    document.getElementById('geo-sm-on').checked = d.geofence_use_state_machine !== false;
+    document.getElementById('geo-sm-wifi-min-age').value = d.geofence_wifi_min_age_sec ?? 10;
+    document.getElementById('geo-sm-time-fallback').value = d.geofence_time_fallback_sec ?? 60;
+    document.getElementById('geo-sm-hard-cap').value = d.geofence_hard_cap_sec ?? 300;
     geoRenderDeviceRows(d.tracked_devices || [], _geoSensorStates);
     geoRenderVetoRows(d.tracked_devices || [], _geoSensorStates);
     geoUpdateCenterMarker();
@@ -937,6 +973,10 @@ async function geoSaveSettings() {
   const body = {
     sensor_veto_enabled:           document.getElementById('geo-veto-on').checked,
     sensor_veto_still_debounce_sec: parseInt(document.getElementById('geo-veto-still-debounce').value, 10) || 60,
+    geofence_use_state_machine:    document.getElementById('geo-sm-on').checked,
+    geofence_wifi_min_age_sec:     parseInt(document.getElementById('geo-sm-wifi-min-age').value, 10) || 10,
+    geofence_time_fallback_sec:    parseInt(document.getElementById('geo-sm-time-fallback').value, 10) || 60,
+    geofence_hard_cap_sec:         parseInt(document.getElementById('geo-sm-hard-cap').value, 10) || 300,
     center: {
       lat: parseFloat(document.getElementById('geo-center-lat').value) || 0,
       lon: parseFloat(document.getElementById('geo-center-lon').value) || 0,
@@ -1295,7 +1335,8 @@ async function geoReloadTrips() {
     const tbody = document.getElementById('geo-trips-tbody');
     if (!tbody) return;
     if (!d.trips || !d.trips.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">No trips yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; text-align:center; color:#aaa;">No trips yet.</td></tr>';
+      geoTripsUpdateDeleteBtn();
       return;
     }
     const total = d.trips.length;
@@ -1307,6 +1348,7 @@ async function geoReloadTrips() {
     const fmtDist = m => m == null ? '—' : (m >= 1000 ? (m/1000).toFixed(2) + ' km' : m + ' m');
     tbody.innerHTML = d.trips.map((t, i) => `
       <tr style="border-top:1px solid #f0eee8;">
+        <td style="padding:5px 6px; text-align:center;"><input type="checkbox" class="geo-trip-cb" data-trip-id="${t.id}" onchange="geoTripsUpdateDeleteBtn()" /></td>
         <td style="padding:5px 12px; text-align:center; color:#1565c0; font-weight:600; font-family:monospace;">${total - i}</td>
         <td style="padding:5px 12px; text-align:center; color:#666;">${pgEsc(new Date(t.started_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
         <td style="padding:5px 12px; text-align:center; color:#666;">${t.returned_at ? pgEsc(new Date(t.returned_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })) : '<span style="color:#e67e22; font-weight:600;">in progress</span>'}</td>
@@ -1314,7 +1356,60 @@ async function geoReloadTrips() {
         <td style="padding:5px 12px; text-align:center; color:#c0392b; font-weight:600;">${fmtDist(t.max_dist_m)}</td>
         <td style="padding:5px 12px; text-align:center; color:#1a7a3a; font-weight:600;">${fmtDist(t.path_length_m)}</td>
       </tr>`).join('');
+    // Reset the select-all checkbox + button state on each re-render. Per-row
+    // selections don't persist across polls — user's expected to pick + delete
+    // in one quick action.
+    const sa = document.getElementById('geo-trips-select-all');
+    if (sa) sa.checked = false;
+    geoTripsUpdateDeleteBtn();
   } catch (e) { console.warn('geoReloadTrips:', e); }
+}
+
+function geoTripsToggleAll(checked) {
+  document.querySelectorAll('.geo-trip-cb').forEach(cb => { cb.checked = !!checked; });
+  geoTripsUpdateDeleteBtn();
+}
+
+function geoTripsUpdateDeleteBtn() {
+  const checked = document.querySelectorAll('.geo-trip-cb:checked');
+  const btn = document.getElementById('geo-trips-delete-btn');
+  if (!btn) return;
+  const n = checked.length;
+  btn.textContent = `🗑 Delete selected (${n})`;
+  if (n === 0) {
+    btn.disabled = true;
+    btn.style.cssText = 'padding:4px 12px; font-size:0.82rem; border:1px solid #ccc; color:#888; background:#fafafa; border-radius:3px; cursor:not-allowed;';
+    btn.title = 'Tick rows below to enable';
+  } else {
+    btn.disabled = false;
+    btn.style.cssText = 'padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#fff; background:#c0392b; border-radius:3px; cursor:pointer; font-weight:600;';
+    btn.title = `Delete ${n} trip${n>1?'s':''} from the database`;
+  }
+}
+
+async function geoDeleteSelectedTrips() {
+  const ids = [...document.querySelectorAll('.geo-trip-cb:checked')]
+    .map(cb => parseInt(cb.dataset.tripId, 10))
+    .filter(n => Number.isFinite(n));
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} trip${ids.length>1?'s':''} from the database? This cannot be undone.`)) return;
+  try {
+    const r = await fetch('/api/geolocation/trips', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({error: `HTTP ${r.status}`}));
+      alert('Delete failed: ' + (err.error || 'unknown error'));
+      return;
+    }
+    const j = await r.json();
+    // Refresh the table immediately — don't wait for the next 10 s poll.
+    await geoReloadTrips();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
 }
 </script>
 </body>

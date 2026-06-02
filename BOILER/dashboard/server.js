@@ -3117,6 +3117,11 @@ app.get('/api/geolocation/settings', async (req, res) => {
       dedup_window_sec:      60,
       sensor_veto_enabled:           false,
       sensor_veto_still_debounce_sec: 60,
+      // WiFi-confirmed state machine defaults — see GEOLOCATION/CLAUDE.md
+      geofence_use_state_machine:  true,
+      geofence_wifi_min_age_sec:   10,
+      geofence_time_fallback_sec:  60,
+      geofence_hard_cap_sec:       300,
     };
     const val = r.rows[0]?.value || defaults;
     // Merge defaults for missing keys so frontend never breaks
@@ -3134,7 +3139,13 @@ app.post('/api/geolocation/settings', async (req, res) => {
                    'geofence_events', 'geofence_heartbeat_sec', 'trail_window_default',
                    'low_accuracy_filter_m', 'outside_accuracy_threshold_m',
                    'stale_alert_hours', 'dedup_radius_m', 'dedup_window_sec',
-                   'sensor_veto_enabled', 'sensor_veto_still_debounce_sec'];
+                   'sensor_veto_enabled', 'sensor_veto_still_debounce_sec',
+                   // WiFi-confirmed state machine (since 2026-06-02). Master
+                   // switch + 3 commit-decision knobs. See GEOLOCATION/CLAUDE.md.
+                   'geofence_use_state_machine',
+                   'geofence_wifi_min_age_sec',
+                   'geofence_time_fallback_sec',
+                   'geofence_hard_cap_sec'];
   const clean = {};
   for (const k of allowed) if (k in cfg) clean[k] = cfg[k];
   try {
@@ -3401,22 +3412,52 @@ app.post('/api/geolocation/run-ingest', async (req, res) => {
 });
 
 // GET /api/geolocation/trips?limit=20 — closed trips with summary stats.
-// Open trips (returned_at IS NULL) are excluded by default; pass
-// ?include_open=1 to also return the in-progress trip with its current
-// duration so far.
+//
+// Default WHERE: `confirmed = TRUE AND returned_at IS NOT NULL` — hides
+// provisional (in-flight) AND open-confirmed trips, so the Recent trips
+// card shows real, completed trips only.
+// Query flags:
+//   ?include_open=1         → also return open trips (confirmed only)
+//   ?include_provisional=1  → also return in-flight provisional rows
+//                             (for diagnostic visibility of the state machine)
 app.get('/api/geolocation/trips', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
   const includeOpen = req.query.include_open === '1';
+  const includeProvisional = req.query.include_provisional === '1';
+  const clauses = [];
+  if (!includeProvisional) clauses.push('confirmed = TRUE');
+  if (!includeOpen)        clauses.push('returned_at IS NOT NULL');
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   try {
     const r = await db.query(
       `SELECT id, group_id, device_label, started_at, returned_at,
-              duration_sec, max_dist_m, path_length_m, outside_pings
+              duration_sec, max_dist_m, path_length_m, outside_pings,
+              confirmed
        FROM phone_trips
-       ${includeOpen ? '' : 'WHERE returned_at IS NOT NULL'}
+       ${where}
        ORDER BY started_at DESC LIMIT $1`,
       [limit],
     );
     res.json({ trips: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/geolocation/trips — bulk-delete trip rows by id. Body:
+// `{ ids: [int, int, ...] }`. Used by the Recent trips card's multi-select
+// delete button. Returns `{ deleted: <rowcount> }`.
+app.delete('/api/geolocation/trips', async (req, res) => {
+  const raw = (req.body && req.body.ids) || [];
+  if (!Array.isArray(raw)) return res.status(400).json({ error: 'ids must be an array' });
+  const ids = raw.map(x => parseInt(x, 10)).filter(n => Number.isFinite(n) && n > 0);
+  if (!ids.length) return res.status(400).json({ error: 'ids must contain at least one positive integer' });
+  try {
+    const r = await db.query(
+      'DELETE FROM phone_trips WHERE id = ANY($1::int[])',
+      [ids],
+    );
+    res.json({ deleted: r.rowCount });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
