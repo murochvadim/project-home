@@ -601,17 +601,23 @@ def run():
 
         # WiFi-DB-poisoning sanity check (added 2026-06-02 after trip 73
         # phantom incident — Android's Fused Location returned coords 115km
-        # away while phone was actually at home, both ingests got the same
-        # poisoned data, state machine fired hard_cap commit at 5min outside).
-        # If WiFi is settled at home_ssid AND the previous DB ping was inside
-        # the home radius AND this ping reports impossibly-far distance from
-        # home, drop it. Home WiFi has physical range ~200m — being on home
-        # WiFi at 2+ km is physically impossible, so the GPS is lying.
-        if (can_geofence and last is not None):
+        # away while phone was actually at home).
+        #
+        # Drop pings that claim impossibly-far distance from home while the
+        # WiFi sensor is settled at home_ssid. Home WiFi has physical range
+        # ~200 m — being on home WiFi while reporting 2+ km away is
+        # physically impossible.
+        #
+        # NOTE: the earlier version of this check also required the previous
+        # DB row to be inside the home radius. That created a failure mode:
+        # if last=None (no prior data, e.g. after manual cleanup) the check
+        # silently skipped. Once a single poisoned ping slipped through,
+        # `last` became outside-radius and every subsequent ping bypassed
+        # the filter. Removing both preconditions makes the check
+        # self-sufficient — wifi=home + impossible-distance is enough.
+        if can_geofence:
             try:
                 _dist_home = haversine_m(center_lat, center_lon, lat, lon)
-                _last_dist = haversine_m(center_lat, center_lon,
-                                         float(last['lat']), float(last['lon']))
                 _impossible_dist = max(2000.0, radius_m * 50)
                 _wifi_state, _wifi_age = _safe_ha_state(
                     dev.get('wifi_entity'), max_age_sec=86400)
@@ -620,13 +626,12 @@ def run():
                         and _wifi_state == _home_ssid
                         and _wifi_age is not None
                         and _wifi_age >= 60
-                        and _last_dist <= radius_m
                         and _dist_home > _impossible_dist):
                     log.warning(
                         'drop WiFi-DB-poisoned ping from %s: dist=%.0fm > %.0fm '
-                        'while wifi=%r (age=%.0fs) AND previous was inside (dist=%.0fm)',
+                        'while wifi=%r (age=%.0fs)',
                         device_id, _dist_home, _impossible_dist,
-                        _wifi_state, _wifi_age, _last_dist)
+                        _wifi_state, _wifi_age)
                     continue
             except Exception as e:
                 log.debug('wifi-anchored check error: %s', e)

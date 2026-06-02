@@ -518,16 +518,12 @@ def on_message(client, userdata, msg):
         last = get_last_location(device_id)
 
         # WiFi-DB-poisoning sanity check — mirror of geolocation_ingest.
-        # See that file's comment for full rationale (trip 73 incident).
+        # See that file's comment for the trip 73 / trip 75 history.
         # Drop pings claiming impossible distances while the phone is
-        # provably on home WiFi AND the previous DB ping was inside the
-        # home radius.
-        if (center_lat is not None and center_lon is not None and radius_m
-                and last is not None):
+        # provably on home WiFi. Self-sufficient — no last-row precondition.
+        if (center_lat is not None and center_lon is not None and radius_m):
             try:
                 _dist_home = haversine_m(center_lat, center_lon, lat, lon)
-                _last_dist = haversine_m(center_lat, center_lon,
-                                         float(last['lat']), float(last['lon']))
                 _impossible_dist = max(2000.0, radius_m * 50)
                 _wifi_state, _wifi_age = _safe_ha_state(
                     dev_entry.get('wifi_entity'), max_age_sec=86400)
@@ -536,13 +532,12 @@ def on_message(client, userdata, msg):
                         and _wifi_state == _home_ssid
                         and _wifi_age is not None
                         and _wifi_age >= 60
-                        and _last_dist <= radius_m
                         and _dist_home > _impossible_dist):
                     log.warning(
                         'drop WiFi-DB-poisoned ping from %s: dist=%.0fm > %.0fm '
-                        'while wifi=%r (age=%.0fs) AND previous was inside (dist=%.0fm)',
+                        'while wifi=%r (age=%.0fs)',
                         device_id, _dist_home, _impossible_dist,
-                        _wifi_state, _wifi_age, _last_dist)
+                        _wifi_state, _wifi_age)
                     return
             except Exception as e:
                 log.debug('wifi-anchored check error: %s', e)
