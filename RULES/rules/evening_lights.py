@@ -347,8 +347,8 @@ def evaluate(event, state):
     now = datetime.now(_TZ)
     now_min = now.hour * 60 + now.minute
 
-    # Daily latch reset — without this, a user who's continuously 'home'
-    # (vacation week, WFH) would never re-fire after the first night.
+    # Daily latch reset — without this, a user who's continuously in the
+    # gated mode (vacation week, WFH) would never re-fire after the first night.
     # Empty fired_date (legacy state from before this fix) is treated as
     # "not today" so the latch clears on the first run after upgrade.
     today_iso = now.date().isoformat()
