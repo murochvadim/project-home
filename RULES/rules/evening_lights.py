@@ -7,16 +7,21 @@ Two firing scenarios:
      Decoupled from time_mode — fires at the perceptual "low light"
      moment regardless of which time_mode window we're in.
 
-  B) Late arrival: home_mode just transitioned 'away'|'abroad' → 'home'
-     AND current time_mode is in the time_mode names declared in s_el2
-     (e.g. evening, twilight, late_night). Lights come on when you arrive
-     home during those windows.
+  B) Late arrival: home_mode just transitioned to the value declared by
+     the `s_el3` home_mode gate (e.g. `home_mode is home` → fires on
+     `<any_other_mode> → home`) AND current time_mode is in the names
+     declared in s_el2. Lights come on when you arrive home during
+     those windows.
 
 BOTH scenarios are gated by sentence-driven gate(s) — see s_el3 below.
+The home_mode gate ALSO drives Scenario B's transition target and the
+"home period" latch reset, so mode names are fully sentence-driven —
+no `'home'` / `'away'` / `'abroad'` literals in the code.
 
 Latched per "home period" — once fired, the rule won't refire until
-home_mode leaves 'home' (i.e. you press AWAY or ABROAD), then comes back.
-This prevents re-asserting on every heartbeat once the lights are on.
+home_mode leaves the gated value (i.e. you press AWAY / ABROAD / any
+non-gated mode) and comes back. Prevents re-asserting on every
+heartbeat once the lights are on.
 
 Sentences (authored in the dashboard "Evening Lights" container):
 
@@ -323,9 +328,18 @@ def evaluate(event, state):
     prev_home = state.shared.get('_evening_lights_prev_home_mode', '')
     fired     = bool(state.shared.get('_evening_lights_fired_this_period', False))
 
-    # Reset latch when leaving home (away/abroad). Next time we come back,
+    # Load gates once — used by gates_pass below AND to derive Scenario B's
+    # transition target. The gate `home_mode is <value>` makes <value> the
+    # "active mode" for this rule: arrival is `prev != active && now == active`,
+    # leaving is the inverse. No hardcoded mode literals.
+    gates = _load_gates(container)
+    home_gate_value = next((v for k, v in gates if k == 'home_mode'), None)
+
+    # Reset latch when leaving the active mode. Next time we come back,
     # the rule is free to fire again.
-    home_just_left = (prev_home == 'home' and home_mode != 'home')
+    home_just_left = (home_gate_value is not None
+                      and prev_home == home_gate_value
+                      and home_mode != home_gate_value)
     if home_just_left:
         fired = False
 
@@ -361,14 +375,17 @@ def evaluate(event, state):
                 sun_anchor_hit = True
                 break
 
-    # Scenario B — late arrival: home_mode just transitioned to 'home' AND
-    # current time_mode is one of the declared time_mode names.
-    home_just_arrived = (prev_home in ('away', 'abroad') and home_mode == 'home')
+    # Scenario B — late arrival: home_mode just transitioned to the gated
+    # value (the home_gate_value derived above) AND current time_mode is one
+    # of the declared time_mode names. If no home_mode gate is authored,
+    # Scenario B silently doesn't fire (no transition target known).
+    home_just_arrived = (home_gate_value is not None
+                         and prev_home != home_gate_value
+                         and home_mode == home_gate_value)
     late_arrival_hit  = home_just_arrived and time_mode in active_modes
 
     # Sentence-driven gates (s_el3). All gates AND-combined. If no gate
     # sentence is authored, gates_pass is True (no constraint).
-    gates = _load_gates(container)
     gates_pass = all(state.shared.get(k) == v for k, v in gates)
 
     fire = (not fired) and gates_pass and (sun_anchor_hit or late_arrival_hit)
