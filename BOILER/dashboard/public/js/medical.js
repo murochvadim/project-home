@@ -331,7 +331,9 @@ let _viewerWired = false;
 window.medViewImage = function (id, name) {
   const modal = document.getElementById('med-viewer-modal');
   const img   = document.getElementById('med-viewer-img');
-  document.getElementById('med-viewer-title').textContent = name || ('Document ' + id);
+  const ttl   = document.getElementById('med-viewer-title');
+  ttl.textContent  = name || ('Document ' + id);
+  ttl.dataset.docId = String(id);   // read by medViewerRecrop
   img.onload = () => medViewerFit();
   img.src = '/api/medical/documents/' + id + '/file';
   modal.style.display = 'block';
@@ -358,10 +360,111 @@ window.medViewerFit = function () {
 window.medViewerZoomIn  = function () { _zoomViewerAt(1.25); };
 window.medViewerZoomOut = function () { _zoomViewerAt(0.8);  };
 
-// Placeholder — wired up but disabled in HTML for now. Will reuse the
-// crop UI from camera capture in a follow-up commit.
+// ══════════════════════════════════════════════════════════════
+// Re-crop — opens a separate modal pre-loaded with the doc's image,
+// lets the user pick a new crop rectangle, PATCHes the cropped JPEG
+// back to /api/medical/documents/:id/file. Reuses the same crop
+// helpers (_renderCrop / _wireCropHandlers / _hitTest) by feeding
+// them through the recrop canvas + redirected globals.
+// ══════════════════════════════════════════════════════════════
+let _recropDocId   = null;
+let _recropDocName = '';
+
 window.medViewerRecrop = function () {
-  alert('Re-crop coming soon — for now, delete the doc and re-upload a cropped version, or use the live-camera workflow to capture + crop at the same time.');
+  const img = document.getElementById('med-viewer-img');
+  if (!img || !img.naturalWidth) { alert('Image not loaded yet'); return; }
+  // Stash full-res image into _origCanvas (the same global the camera-capture
+  // crop helpers read). Note: img.src is the /file endpoint — same-origin so
+  // canvas isn't tainted; we can extract bytes later via toBlob().
+  _origCanvas = document.createElement('canvas');
+  _origCanvas.width  = img.naturalWidth;
+  _origCanvas.height = img.naturalHeight;
+  _origCanvas.getContext('2d').drawImage(img, 0, 0);
+  _recropDocId   = parseInt(document.getElementById('med-viewer-title').dataset.docId || '0');
+  _recropDocName = document.getElementById('med-viewer-title').textContent;
+  document.getElementById('med-recrop-title').textContent = 'Re-crop — ' + _recropDocName;
+  // Hide viewer, show recrop modal.
+  document.getElementById('med-viewer-modal').style.display = 'none';
+  document.getElementById('med-recrop-modal').style.display = 'block';
+  _initRecropCanvas();
+};
+
+function _initRecropCanvas() {
+  const c = document.getElementById('med-recrop-canvas');
+  // Pick the largest crop-canvas size that fits in viewport, preserving image
+  // aspect ratio. Crop rect coordinates are in canvas-display space; the
+  // existing crop helpers handle the rest.
+  const wrap = c.parentElement;
+  const maxW = wrap.clientWidth  - 20;
+  const maxH = wrap.clientHeight - 20;
+  const ar  = _origCanvas.width / _origCanvas.height;
+  let w = maxW, h = maxW / ar;
+  if (h > maxH) { h = maxH; w = maxH * ar; }
+  c.width  = Math.round(w);
+  c.height = Math.round(h);
+  // Initialise crop to cover the whole image, then render + wire handlers.
+  _cropRect = { x: 0, y: 0, w: c.width, h: c.height };
+  // Temporarily point the rendering target at this canvas. The shared helper
+  // reads `document.getElementById('med-cam-canvas')` — we shim by giving the
+  // recrop canvas that id while it's in use.
+  const camCanvas = document.getElementById('med-cam-canvas');
+  c.dataset.prevId = c.id;
+  if (camCanvas) camCanvas.id = 'med-cam-canvas-PARKED';
+  c.id = 'med-cam-canvas';
+  _renderCrop();
+  _wireCropHandlers(c);
+}
+
+function _restoreCanvasIds() {
+  const cur = document.getElementById('med-cam-canvas');
+  if (cur && cur.id === 'med-cam-canvas' && cur.dataset.prevId) {
+    cur.id = cur.dataset.prevId;
+    delete cur.dataset.prevId;
+  }
+  const parked = document.getElementById('med-cam-canvas-PARKED');
+  if (parked) parked.id = 'med-cam-canvas';
+}
+
+window.medRecropCancel = function () {
+  document.getElementById('med-recrop-modal').style.display = 'none';
+  _restoreCanvasIds();
+  _origCanvas = null;
+  _cropRect = null;
+  _imgRect = null;
+};
+
+window.medRecropApply = async function () {
+  const btn = document.getElementById('med-recrop-apply-btn');
+  if (!_recropDocId || !_origCanvas || !_cropRect) return;
+  btn.disabled = true;
+  btn.textContent = 'Uploading…';
+  try {
+    const blob = await _getCroppedBlob();
+    if (!blob) throw new Error('failed to build cropped blob');
+    const fd = new FormData();
+    fd.append('file', new File([blob], _recropDocName + '.jpg', { type: 'image/jpeg' }));
+    const r = await fetch('/api/medical/documents/' + _recropDocId + '/file', {
+      method: 'PATCH', body: fd,
+    }).then(r => r.json());
+    if (r.error) throw new Error(r.error);
+    // Close recrop, refresh docs list, re-open viewer with new image.
+    document.getElementById('med-recrop-modal').style.display = 'none';
+    _restoreCanvasIds();
+    _origCanvas = null;
+    _cropRect = null;
+    _imgRect = null;
+    await medFetchDocuments();
+    // Re-open the viewer with cache-busting query so the new bytes load.
+    const img = document.getElementById('med-viewer-img');
+    img.src = '/api/medical/documents/' + _recropDocId + '/file?t=' + Date.now();
+    img.onload = () => medViewerFit();
+    document.getElementById('med-viewer-modal').style.display = 'block';
+  } catch (e) {
+    alert('Re-crop failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✓ Apply & replace';
+  }
 };
 
 function _zoomViewerAt(factor) {

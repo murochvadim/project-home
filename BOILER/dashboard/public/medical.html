@@ -218,6 +218,21 @@
 
 </main>
 
+<!-- Re-crop modal (image docs only — Apply replaces file on QNAP) -->
+<div id="med-recrop-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:10000;">
+  <div style="position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; align-items:center; z-index:2;">
+    <div id="med-recrop-title" style="color:#fff; font-size:0.95rem; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Re-crop —</div>
+    <button class="btn btn-success btn-sm" onclick="medRecropApply()" id="med-recrop-apply-btn">✓ Apply &amp; replace</button>
+    <button class="btn btn-secondary btn-sm" onclick="medRecropCancel()">Cancel</button>
+  </div>
+  <div style="position:absolute; top:60px; bottom:34px; left:0; right:0; display:flex; align-items:center; justify-content:center;">
+    <canvas id="med-recrop-canvas" style="background:#000; max-width:100%; max-height:100%; user-select:none; touch-action:none;"></canvas>
+  </div>
+  <div style="position:absolute; bottom:8px; left:0; right:0; text-align:center; color:#aaa; font-size:0.78rem; pointer-events:none;">
+    Drag yellow corners to size · drag inside to move · everything outside is discarded on Apply
+  </div>
+</div>
+
 <!-- Image viewer modal (image docs only — PDFs still open in a new tab) -->
 <div id="med-viewer-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:9999;">
   <div style="position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; align-items:center; z-index:2;">
@@ -225,7 +240,7 @@
     <button class="btn btn-secondary btn-sm" onclick="medViewerZoomOut()" title="Zoom out (or scroll down)">🔍−</button>
     <button class="btn btn-secondary btn-sm" onclick="medViewerZoomIn()" title="Zoom in (or scroll up)">🔍+</button>
     <button class="btn btn-secondary btn-sm" onclick="medViewerFit()" title="Fit to screen">↺ Fit</button>
-    <button class="btn btn-secondary btn-sm" onclick="medViewerRecrop()" title="Crop this image and replace it (coming soon)" disabled>✂ Crop</button>
+    <button class="btn btn-secondary btn-sm" onclick="medViewerRecrop()" title="Crop this image and replace the saved file">✂ Crop</button>
     <button class="btn btn-secondary btn-sm" onclick="medViewerClose()" title="Close (Esc)">✕</button>
   </div>
   <div id="med-viewer-canvas-wrap" style="position:absolute; inset:0; overflow:hidden; cursor:grab; user-select:none;">
@@ -248,6 +263,6 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=21"></script>
+<script src="js/medical.js?v=22"></script>
 </body>
 </html>

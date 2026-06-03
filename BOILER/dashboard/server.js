@@ -2637,6 +2637,57 @@ app.delete('/api/medical/documents/:id', async (req, res) => {
   } catch (e) { _medErr(res, e); }
 });
 
+// PATCH the file bytes (re-crop / re-upload-replace). Multipart `file`.
+// Overwrites the existing QNAP file (same filename if extension unchanged,
+// else writes new + asks LXC 104 to delete the old via SSH).
+app.patch('/api/medical/documents/:id/file', medicalDocUpload.single('file'), async (req, res) => {
+  let tmpPath = null;
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file required' });
+    tmpPath = req.file.path;
+    const id = parseInt(req.params.id);
+    const r = await db.query('SELECT file_path FROM medical_documents WHERE id = $1', [id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    const oldFilename = r.rows[0].file_path;
+    if (!oldFilename || /[\\/]/.test(oldFilename) || oldFilename.includes('..')) {
+      return res.status(400).json({ error: 'invalid existing file_path on row' });
+    }
+    // Pick the new extension from the uploaded file's MIME. JPEG / PNG /
+    // generic image — derive ext; fall back to the existing extension.
+    const oldExt = path.extname(oldFilename).toLowerCase();
+    const newMime = req.file.mimetype || 'application/octet-stream';
+    const newExt  = newMime === 'image/jpeg' ? '.jpg'
+                  : newMime === 'image/png'  ? '.png'
+                  : newMime === 'image/webp' ? '.webp'
+                  : oldExt;
+    const newFilename = newExt === oldExt
+      ? oldFilename
+      : oldFilename.slice(0, -oldExt.length) + newExt;
+    const newAbs = path.join(MEDICAL_DOCS_ROOT, newFilename);
+    fs.copyFileSync(tmpPath, newAbs);
+    // If we changed extension, the old file is still sitting there — clean
+    // it up via LXC 104 SSH (Windows-side claude can't delete on this share).
+    if (newFilename !== oldFilename) {
+      const linuxOldPath = MEDICAL_DOCS_LINUX + '/' + oldFilename;
+      const { NodeSSH } = require('node-ssh');
+      const ssh = new NodeSSH();
+      try {
+        await ssh.connect({ host: '192.168.1.227', username: SSH_USER, privateKeyPath: SSH_KEY });
+        await ssh.execCommand(`rm -f "${linuxOldPath.replace(/"/g, '\\"')}"`);
+      } finally { ssh.dispose(); }
+    }
+    await db.query(
+      'UPDATE medical_documents SET file_path = $1, file_size = $2, mime_type = $3 WHERE id = $4',
+      [newFilename, req.file.size, newMime, id]
+    );
+    res.json({ ok: true, id, file_path: newFilename, file_size: req.file.size });
+  } catch (e) {
+    _medErr(res, e);
+  } finally {
+    if (tmpPath) { try { fs.unlinkSync(tmpPath); } catch (_) {} }
+  }
+});
+
 // GET file — streams the document for inline view / download.
 app.get('/api/medical/documents/:id/file', async (req, res) => {
   try {
