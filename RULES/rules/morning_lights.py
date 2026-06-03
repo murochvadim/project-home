@@ -7,13 +7,11 @@ Two firing scenarios (both gated by s_ml3, both share the daily latch):
      Covers: home at sunrise+90 → fires at 07:08; home all morning →
      fires once when the anchor crosses.
 
-  B) Late arrival (NEW, sentence-driven via s_ml4): if home_mode
-     transitioned INTO the gated value AND now_min >= late-arrival
-     threshold → fire. Covers: away at 07:08, walked in at 07:30 —
-     fires immediately on the heartbeat after arrival. The threshold
-     can be "the anchor" (reuse earliest s_ml2 anchor) or any explicit
-     sun-event anchor like `sunrise+30`. If s_ml4 is absent, Scenario B
-     is disabled; only Scenario A fires.
+  B) Arrival (sentence-driven via s_ml4): if home_mode transitioned
+     INTO the gated value AND current time is past the sun-anchor
+     declared in s_ml4 → fire. Covers: away at 07:08, walked in at
+     07:30 — fires immediately on the heartbeat after arrival.
+     If s_ml4 is absent, Scenario B is disabled; only Scenario A fires.
 
 Daily latch ensures the rule fires at MOST once per calendar day, no
 matter which scenario triggers. No per-home-period latch reset (a brief
@@ -38,11 +36,12 @@ Sentences (authored in the dashboard "Morning Lights" container):
          (mode names are fully sentence-driven — no `'home'`/`'away'`/
          `'abroad'` literals in code).
 
-  s_ml4: Morning Lights: late arrival fires after the anchor
-         (optional) Enables Scenario B. Threshold can be:
-           - "the anchor" → reuse the earliest s_ml2 anchor
-           - "<event>[±N]" → explicit sun-event anchor (e.g. sunrise+30)
-         If absent, Scenario B is disabled.
+  s_ml4: Morning Lights: also fire on arrival after sunrise+90
+         (optional) Enables the arrival trigger. Threshold is an
+         explicit sun-event anchor: <event>[±N] where event is
+         dawn|sunrise|noon|sunset|dusk and ±N is minutes. Examples:
+         `... after sunrise`, `... after sunrise+90`, `... after dawn-15`.
+         If absent, the arrival trigger is disabled.
 
 If s_ml1 is empty (no chips) or s_ml2 yields no anchors, the rule is a
 safe no-op.
@@ -95,12 +94,12 @@ _GATE_RE = re.compile(
     r'morning\s+lights:\s*only\s+fires\s+when\s+(\w+)\s+is\s+([\w-]+)',
     re.IGNORECASE,
 )
-# Late-arrival sentence (s_ml4, optional) —
-#   "Morning Lights: late arrival fires after <threshold>"
-# <threshold> is either the literal phrase "the anchor" (reuse earliest s_ml2
-# anchor) or a sun-event anchor token (e.g. `sunrise+30`).
+# Arrival-trigger sentence (s_ml4, optional) —
+#   "Morning Lights: also fire on arrival after <event>[±N]"
+# Plain English: also fire when you arrive home after this sun-anchor time.
+# `<event>[±N]` is e.g. `sunrise`, `sunrise+90`, `dawn-15`.
 _LATE_ARRIVAL_RE = re.compile(
-    r'morning\s+lights:\s*late\s+arrival\s+fires\s+after\s+(.+)',
+    r'morning\s+lights:\s*also\s+fire\s+on\s+arrival\s+after\s+(.+)',
     re.IGNORECASE,
 )
 
@@ -312,13 +311,12 @@ def _anchor_minutes(sun_anchors, state):
     return out
 
 
-def _load_late_arrival_threshold(container, state, default_min):
+def _load_late_arrival_threshold(container, state):
     """Parse s_ml4. Returns the minute-of-day threshold for Scenario B,
     or None if no s_ml4 sentence is authored (Scenario B disabled).
 
-    Sentence: "Morning Lights: late arrival fires after <threshold>"
-      - "the anchor" → return default_min (earliest s_ml2 anchor)
-      - "<event>[±N]" → resolve via state.shared['<event>'] ISO string
+    Sentence: "Morning Lights: also fire on arrival after <event>[±N]"
+    e.g. `... after sunrise`, `... after sunrise+90`, `... after dawn-15`.
     """
     if not container:
         return None
@@ -330,9 +328,8 @@ def _load_late_arrival_threshold(container, state, default_min):
         if not m:
             continue
         spec = m.group(1).strip().lower().rstrip('.,;')
-        if spec.startswith('the anchor'):
-            return default_min
-        ma = _SUN_ANCHOR_RE.match(spec.split()[0] if spec else '')
+        token = spec.split()[0] if spec else ''
+        ma = _SUN_ANCHOR_RE.match(token)
         if ma:
             base = ma.group(1).lower()
             offset = int(ma.group(2)) if ma.group(2) else 0
@@ -344,7 +341,7 @@ def _load_late_arrival_threshold(container, state, default_min):
             except (ValueError, TypeError):
                 return None
             return (dt.hour * 60 + dt.minute + offset) % 1440
-        log.warning("morning_lights: s_ml4 threshold %r not recognized — Scenario B disabled", spec)
+        log.warning("morning_lights: s_ml4 threshold %r not a sun anchor — Scenario B disabled", spec)
         return None
     return None
 
@@ -403,7 +400,7 @@ def evaluate(event, state):
     # Scenario B — late arrival. Enabled by the optional s_ml4 sentence.
     # `prev_home` non-empty guard prevents a false-arrival at first heartbeat
     # post-restart, where the persisted state hasn't re-seeded yet.
-    late_arrival_threshold = _load_late_arrival_threshold(container, state, earliest_anchor)
+    late_arrival_threshold = _load_late_arrival_threshold(container, state)
     home_just_arrived = (home_gate_value is not None
                          and prev_home
                          and prev_home != home_gate_value
