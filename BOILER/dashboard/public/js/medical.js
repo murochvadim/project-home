@@ -275,7 +275,13 @@ window.medOpenDocForm = function (mode) {
     // _startCamera() may have replaced it with a failure message that
     // doesn't include the <video> / <canvas> / button row.
     stage.innerHTML = `
-      <video id="med-cam-video" autoplay muted playsinline></video>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <label style="color:#ddd; font-size:0.84rem;">Camera:</label>
+        <select id="med-cam-picker" onchange="medSwitchCamera(this.value)" style="flex:1; padding:4px 6px; background:#222; color:#fff; border:1px solid #444; border-radius:3px; font-size:0.84rem;">
+          <option value="">— scanning… —</option>
+        </select>
+      </div>
+      <video id="med-cam-video" autoplay muted playsinline style="display:block;"></video>
       <canvas id="med-cam-canvas"></canvas>
       <div class="cam-btns">
         <button class="btn btn-success btn-sm" onclick="medCameraSnap()">📸 Snap</button>
@@ -284,6 +290,12 @@ window.medOpenDocForm = function (mode) {
     stage.style.display = 'block';
     _startCamera();
   }
+};
+
+window.medSwitchCamera = async function (deviceId) {
+  if (!deviceId) return;
+  _stopCamera();
+  await _startCamera(deviceId);
 };
 
 window.medEditDoc = function (id) {
@@ -348,35 +360,94 @@ window.medFillNameFromFile = function () {
   }
 };
 
-async function _startCamera() {
+function _camDiag(msg, color) {
+  const el = document.getElementById('med-cam-diag');
+  if (!el) return;
+  el.innerHTML += `<div style="color:${color || '#ddd'}; font-size:0.78rem; font-family:monospace;">${msg}</div>`;
+  console.log('[medical camera]', msg);
+}
+
+async function _startCamera(forceDeviceId) {
   const stage = document.getElementById('med-camera-stage');
+  // Reset diag for each (re)start so the panel doesn't grow forever.
+  let diag = document.getElementById('med-cam-diag');
+  if (!diag) {
+    diag = document.createElement('div');
+    diag.id = 'med-cam-diag';
+    diag.style.cssText = 'margin-top:6px; padding:8px; background:#0a0a0a; border:1px solid #333; border-radius:4px; min-height:24px;';
+    stage.appendChild(diag);
+  } else {
+    diag.innerHTML = '';
+  }
+  _camDiag('1. opening location=' + location.protocol + '//' + location.hostname + ':' + location.port);
+  _camDiag('2. mediaDevices=' + !!navigator.mediaDevices + ', getUserMedia=' + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+
   const v = document.getElementById('med-cam-video');
-  // Reset preview state in case user toggled modes — make video visible
-  // again and canvas hidden (they get swapped on Snap).
-  v.style.display = '';
+  v.style.display = 'block';
   document.getElementById('med-cam-canvas').style.display = 'none';
   v.srcObject = null;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    stage.innerHTML = '<div style="color:#fff; padding:10px;">Camera API not available. The dashboard must be opened from <code>http://localhost:3000</code> (NOT the LAN IP) — getUserMedia requires a secure context, and localhost is the exempt origin.</div>';
+    _camDiag('FAIL: mediaDevices.getUserMedia not present in this context. Open dashboard at http://localhost:3000 (not LAN IP).', '#ff7f7f');
     return;
   }
+  // Enumerate available cameras so the user can switch from the (default)
+  // virtual-phone-camera to the laptop's real webcam. Labels are only
+  // populated AFTER a successful getUserMedia, so call it once for the
+  // permission-granting side effect even if we'll restart with a chosen id.
+  _camDiag('3. requesting camera' + (forceDeviceId ? ' (deviceId=' + forceDeviceId.slice(0,8) + '…)' : '') + '...');
   try {
-    // Plain `video: true` — let the browser pick whatever camera it has.
-    // (`facingMode: 'environment'` is a laptop killer when there's only a
-    // front-facing webcam, since some browsers don't fall back gracefully.)
-    _camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    const constraints = forceDeviceId
+      ? { video: { deviceId: { exact: forceDeviceId } }, audio: false }
+      : { video: true, audio: false };
+    _camStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const tracks = _camStream.getVideoTracks();
+    _camDiag('4. stream OK — ' + tracks.length + ' video track(s). Label="' + (tracks[0] && tracks[0].label) + '"');
+    // Populate the camera picker (labels available now that permission is granted).
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const cams = devs.filter(d => d.kind === 'videoinput');
+      const picker = document.getElementById('med-cam-picker');
+      if (picker && cams.length) {
+        const curLabel = tracks[0] && tracks[0].label;
+        picker.innerHTML = cams.map(c => {
+          const sel = c.label === curLabel ? ' selected' : '';
+          return `<option value="${c.deviceId}"${sel}>${esc(c.label || ('Camera ' + c.deviceId.slice(0,6)))}</option>`;
+        }).join('');
+      }
+      _camDiag('   ' + cams.length + ' camera(s) available — pick from the dropdown above to switch.', '#aaa');
+    } catch (_) { /* enumerateDevices not critical */ }
     v.srcObject = _camStream;
-    // Some browsers don't auto-play even with the autoplay attribute when
-    // the element became visible AFTER load. Kick it explicitly.
-    try { await v.play(); } catch (_) { /* play() rejects benignly on some setups */ }
+    _camDiag('5. srcObject set');
+    try {
+      await v.play();
+      _camDiag('6. video.play() resolved');
+    } catch (pe) {
+      _camDiag('6. video.play() rejected: ' + (pe.name || '') + ' ' + (pe.message || pe), '#ffa500');
+    }
+    // Poll for the first frame — videoWidth becomes non-zero when the
+    // browser actually starts decoding frames. If it stays 0 for >3s, the
+    // stream is connected but frames aren't flowing (driver issue / camera
+    // physically blocked / etc.).
+    let polls = 0;
+    const iv = setInterval(() => {
+      polls++;
+      if (v.videoWidth > 0) {
+        _camDiag('7. frames flowing — ' + v.videoWidth + 'x' + v.videoHeight, '#7fff7f');
+        clearInterval(iv);
+      } else if (polls > 15) {  // 3 s
+        _camDiag('FAIL: stream connected but videoWidth stayed 0 for 3s. Driver / camera-in-use elsewhere?', '#ff7f7f');
+        clearInterval(iv);
+      }
+    }, 200);
   } catch (e) {
     let hint = '';
-    if (e.name === 'NotAllowedError') hint = ' — you (or your browser) blocked camera access. Click the camera-permission icon in the address bar and re-allow.';
-    else if (e.name === 'NotFoundError') hint = ' — no camera device found.';
+    if (e.name === 'NotAllowedError') hint = ' — permission denied. Click the camera icon in the URL bar and re-allow.';
+    else if (e.name === 'NotFoundError') hint = ' — no camera device available.';
+    else if (e.name === 'NotReadableError') hint = ' — camera busy. Another app or tab is using it (Zoom, Teams, OBS, etc.). Close those and retry.';
     else if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-      hint = ` — opened from "${location.hostname}". Camera requires a secure context; open <code>http://localhost:3000/medical.html</code> instead.`;
+      hint = ' — opened from "' + location.hostname + '". Camera requires HTTPS or localhost. Open http://localhost:3000/medical.html instead.';
     }
-    stage.innerHTML = '<div style="color:#fff; padding:10px;">Camera failed: <b>' + esc(e.name || 'Error') + '</b> ' + esc(e.message) + hint + '</div>';
+    _camDiag('FAIL: ' + (e.name || 'Error') + ' — ' + (e.message || '') + hint, '#ff7f7f');
   }
 }
 function _stopCamera() {
