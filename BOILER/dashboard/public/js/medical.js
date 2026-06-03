@@ -265,12 +265,23 @@ function _fmtSize(n) {
 
 window.medOpenDocForm = function (mode) {
   // mode: 'pdf' | 'camera' | 'edit'
-  document.getElementById('med-camera-stage').style.display = 'none';
+  const stage = document.getElementById('med-camera-stage');
+  stage.style.display = 'none';
   const el = document.getElementById('med-doc-form');
   el.style.display = 'block';
   el.innerHTML = renderDocForm({ _mode: mode });
   if (mode === 'camera') {
-    document.getElementById('med-camera-stage').style.display = 'block';
+    // Rebuild the stage's innerHTML every time — a prior error inside
+    // _startCamera() may have replaced it with a failure message that
+    // doesn't include the <video> / <canvas> / button row.
+    stage.innerHTML = `
+      <video id="med-cam-video" autoplay muted playsinline></video>
+      <canvas id="med-cam-canvas"></canvas>
+      <div class="cam-btns">
+        <button class="btn btn-success btn-sm" onclick="medCameraSnap()">📸 Snap</button>
+        <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>
+      </div>`;
+    stage.style.display = 'block';
     _startCamera();
   }
 };
@@ -338,12 +349,34 @@ window.medFillNameFromFile = function () {
 };
 
 async function _startCamera() {
+  const stage = document.getElementById('med-camera-stage');
+  const v = document.getElementById('med-cam-video');
+  // Reset preview state in case user toggled modes — make video visible
+  // again and canvas hidden (they get swapped on Snap).
+  v.style.display = '';
+  document.getElementById('med-cam-canvas').style.display = 'none';
+  v.srcObject = null;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    stage.innerHTML = '<div style="color:#fff; padding:10px;">Camera API not available. The dashboard must be opened from <code>http://localhost:3000</code> (NOT the LAN IP) — getUserMedia requires a secure context, and localhost is the exempt origin.</div>';
+    return;
+  }
   try {
-    _camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-    document.getElementById('med-cam-video').srcObject = _camStream;
+    // Plain `video: true` — let the browser pick whatever camera it has.
+    // (`facingMode: 'environment'` is a laptop killer when there's only a
+    // front-facing webcam, since some browsers don't fall back gracefully.)
+    _camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    v.srcObject = _camStream;
+    // Some browsers don't auto-play even with the autoplay attribute when
+    // the element became visible AFTER load. Kick it explicitly.
+    try { await v.play(); } catch (_) { /* play() rejects benignly on some setups */ }
   } catch (e) {
-    document.getElementById('med-camera-stage').innerHTML =
-      '<div style="color:#fff; padding:10px;">Camera failed: ' + esc(e.message) + '</div>';
+    let hint = '';
+    if (e.name === 'NotAllowedError') hint = ' — you (or your browser) blocked camera access. Click the camera-permission icon in the address bar and re-allow.';
+    else if (e.name === 'NotFoundError') hint = ' — no camera device found.';
+    else if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      hint = ` — opened from "${location.hostname}". Camera requires a secure context; open <code>http://localhost:3000/medical.html</code> instead.`;
+    }
+    stage.innerHTML = '<div style="color:#fff; padding:10px;">Camera failed: <b>' + esc(e.name || 'Error') + '</b> ' + esc(e.message) + hint + '</div>';
   }
 }
 function _stopCamera() {
