@@ -1,28 +1,47 @@
 """Mode Buttons — sole owner of state.shared['home_mode'].
 
-Interprets base rule 2 ("Home/Away/Abroad Buttons", id `r_modebuttons_init`)
-sentences from `dashboard_settings.apartment.rule_sentences`. Watches the
-declared mode-button DPS state on the resolved device(s). Writes home_mode
-on every transition: 'home' / 'away' / 'abroad'.
+Sentence-driven mode-button controller. All behavior comes from sentences
+in the r_modebuttons_init container (`dashboard_settings.apartment.rule_sentences`).
+Edits in the dashboard re-resolve on the next heartbeat (≤ 60 s via the
+30 s bindings TTL + the engine's reload path).
 
-Default-to-HOME: if all three buttons are OFF, emits a `turn_on` command
-to the HOME button. The cooldown is read from the sentence
-`Mode Buttons: default-to-HOME cooldown is N seconds` (no hardcoded
-fallback — if the sentence is missing the default-to-HOME path is a
-safe no-op). The button's state-report flows back through the engine
-and on the next event the rule resolves to home_mode='home'.
+Sentences read:
 
-Sentence-driven — no hardcoded device IDs or DPS keys. Edit the sentence
-in the dashboard, the rule re-resolves on the next heartbeat (≤ 60 s).
+  s_mb1 (or any chip-bearing sentence)
+      `@<Device> <Channel> represents <mode> mode`
+      Declares one button → one mode mapping. Repeat for each mode.
+      Mode names are free-form lowercase ([a-z_]+).
 
-If the sentence container is missing OR any of HOME/AWAY/ABROAD bindings
-fail to resolve, the rule is a safe no-op (returns [] without writing
-home_mode or emitting commands).
+  s_mb_default
+      `Mode Buttons: default mode is <name>`
+      Names which mode to assert when all buttons stay off for the
+      cooldown window. The named mode must also appear as a binding.
+      If the sentence is missing OR names an unknown mode, the
+      default-to-X path is a safe no-op (mode detection still works
+      on real button presses).
 
-Sole writer guarantee: NO other rule writes state.shared['home_mode']
-(verified 2026-04-25 — people_home stripped; no other producer exists).
-Anyone else (evening_lights, future Coming-Home rule, dashboard widgets)
-reads home_mode but never writes it.
+  s_mb_cooldown
+      `Mode Buttons: default-to-<mode> cooldown is N seconds`
+      Engine-parsed via KNOB_PATTERNS into
+      `state.shared['mode_buttons.default_home_cooldown_sec']`.
+
+Safety guards (any failure → safe no-op, returns [] without writing
+home_mode or emitting commands):
+
+- Container missing.
+- Fewer than 2 chip→mode bindings declared (a single-mode rule has no
+  mutual-exclusivity meaning).
+- Cooldown sentence missing OR not numeric.
+
+Sole writer guarantee: NO other rule writes state.shared['home_mode'].
+Anyone else (evening_lights, morning_lights, move_in_corridor,
+start_away_mode, dashboard widgets) reads home_mode but never writes it.
+
+Note: downstream rules still hard-compare `home_mode` against literals
+'home' / 'away' / 'abroad'. Until those rules are migrated to be
+sentence-driven too, choosing mode names beyond those three works for
+the Mode Buttons rule itself but won't be recognised by downstream
+consumers.
 """
 
 import json
@@ -38,13 +57,14 @@ log = logging.getLogger('rule.mode_buttons')
 _BINDINGS_CACHE = {"data": None, "ts": 0.0}
 _BINDINGS_CACHE_TTL_SEC = 30
 
-_REPRESENTS_RE = re.compile(r'represents\s+(home|away|abroad)\s+mode', re.IGNORECASE)
+_REPRESENTS_RE = re.compile(r'represents\s+([a-z_]+)\s+mode', re.IGNORECASE)
+_DEFAULT_MODE_RE = re.compile(r'default\s+mode\s+is\s+([a-z_]+)', re.IGNORECASE)
 _TRUTHY_BUTTON_VALUES = (True, 1, 'true', 'True', 'on', 'ON', '1')
 
 
 RULE = {
     "name":        "Mode Buttons",
-    "description": "Interpret base rule 2 sentences. Sole owner of state.shared['home_mode'] — 8 Gang Switch button state → home/away/abroad. All-off triggers default-to-HOME via turn_on command.",
+    "description": "Sentence-driven mode-button controller. Sole owner of state.shared['home_mode']. Mode names + default-mode target both come from sentences in r_modebuttons_init.",
     "triggers":    ["*"],
     "controls":    [],
     "category":    "info",
@@ -57,7 +77,7 @@ RULE = {
 # ─────────────────────────── Helpers ───────────────────────────
 
 def _sentence_text(s):
-    """Flatten a sentence into plain text (mirrors home_state.py)."""
+    """Flatten a sentence into plain text — prefers segments, falls back to text."""
     segs = s.get('segments')
     if isinstance(segs, list) and segs:
         return ''.join((seg or {}).get('v', '') for seg in segs)
@@ -103,12 +123,7 @@ def _parse_dev_chip(chip_value, devices_by_name_desc):
 
 
 def _get_mode_bindings(state):
-    """Cached wrapper around _load_mode_bindings — TTL 30s.
-
-    Refreshes the parsed bindings at most once per `_BINDINGS_CACHE_TTL_SEC`
-    even if the rule fires per-event. Dashboard sentence edits propagate
-    within ≤ TTL seconds.
-    """
+    """Cached wrapper around _load_mode_bindings — TTL 30s."""
     now = time.time()
     if _BINDINGS_CACHE["data"] is not None and (now - _BINDINGS_CACHE["ts"]) < _BINDINGS_CACHE_TTL_SEC:
         return _BINDINGS_CACHE["data"]
@@ -119,30 +134,38 @@ def _get_mode_bindings(state):
 
 
 def _load_mode_bindings(state):
-    """Returns {'home': (dev_id, dps_key), 'away': (...), 'abroad': (...)} or {}.
+    """Returns {'modes': {<name>: (dev_id, dps_key), ...}, 'default': <name|None>}.
 
     Reads `dashboard_settings.apartment.rule_sentences`, finds the rule
     container by id `r_modebuttons_init` OR (case-insensitive) name
-    'home/away/abroad buttons'. For each sentence, scans for the pattern
-    `<dev chip> represents <mode> mode` to extract mode → device+dps.
+    'home/away/abroad buttons'. For each sentence:
+
+    - Scans chip+text for `represents <mode> mode` → adds chip resolution
+      to the modes dict.
+    - Scans flat text for `default mode is <name>` → records the default
+      mode name.
+
+    Empty modes dict means the container is missing OR no chip bindings
+    were declared. `default=None` means no default-mode sentence exists.
     """
     rows = state.db_query(
         "SELECT value FROM dashboard_settings WHERE key = %s",
         ('apartment.rule_sentences',),
     )
+    empty = {'modes': {}, 'default': None}
     if not rows:
-        return {}
+        return empty
     raw = rows[0][0]
     if isinstance(raw, str):
         try:
             rules = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             log.warning("mode_buttons: apartment.rule_sentences not valid JSON")
-            return {}
+            return empty
     elif isinstance(raw, list):
         rules = raw
     else:
-        return {}
+        return empty
 
     container = None
     for r in rules or []:
@@ -154,21 +177,21 @@ def _load_mode_bindings(state):
             container = r
             break
     if not container:
-        return {}
+        return empty
 
     devices_by_name_desc = _build_devices_by_name_desc(state.devices)
 
-    bindings = {}
+    modes = {}
+    default_mode = None
     for s in (container.get('sentences') or []):
         if not s.get('active'):
             continue
+        # 1) Chip+represents-mode parse
         segs = s.get('segments') or []
         for i, seg in enumerate(segs):
             if (seg.get('t') or '').lower() != 'dev':
                 continue
             chip = seg.get('v') or ''
-            # Concatenate following text segments (until the next dev chip)
-            # and scan for "represents <mode> mode".
             following = ''
             for next_seg in segs[i + 1:]:
                 if (next_seg.get('t') or '').lower() == 'text':
@@ -181,20 +204,20 @@ def _load_mode_bindings(state):
             mode = m.group(1).lower()
             parsed = _parse_dev_chip(chip, devices_by_name_desc)
             if parsed:
-                bindings[mode] = parsed
-    return bindings
+                modes[mode] = parsed
+        # 2) Flat-text default-mode parse
+        flat = _sentence_text(s)
+        dm = _DEFAULT_MODE_RE.search(flat)
+        if dm:
+            default_mode = dm.group(1).lower()
+    return {'modes': modes, 'default': default_mode}
 
 
 def _is_button_on(state, dev_id, dps_key):
-    """True if the device's current dps[dps_key] is a truthy button value.
-
-    Reads from state.devices (live snapshot). dps_key=None means whole-device
-    on (not common for these scene buttons but supported defensively).
-    """
+    """True if the device's current dps[dps_key] is a truthy button value."""
     dev = state.devices.get(dev_id) or {}
     dps = dev.get('dps') or {}
     if dps_key is None:
-        # Whole-device — accept truthy DPS '1' as a default heuristic.
         val = dps.get('1')
     else:
         val = dps.get(dps_key)
@@ -217,15 +240,12 @@ def _last_change_age(state, dev_id, dps_key):
         return float('inf')
     if transition is None:
         return float('inf')
-    # state_manager returns (transition_ts, from_value, to_value). We only
-    # need the timestamp — unpack defensively in case the contract evolves.
     try:
         ts = transition[0]
     except (TypeError, IndexError):
         return float('inf')
     if ts is None:
         return float('inf')
-    # ts may be a unix float or a datetime — normalise to datetime.
     try:
         if hasattr(ts, 'timestamp'):
             ts_dt = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
@@ -240,77 +260,65 @@ def _last_change_age(state, dev_id, dps_key):
 
 def evaluate(event, state):
     bindings = _get_mode_bindings(state)
-    if not bindings or not all(k in bindings for k in ('home', 'away', 'abroad')):
-        # Sentence missing or incomplete → safe no-op. Don't touch home_mode.
+    modes = bindings.get('modes') or {}
+    if len(modes) < 2:
+        # No usable bindings — safe no-op.
         return []
 
     # Wildcard early-filter — only fire on heartbeat OR events from the
-    # device(s) that hold our mode buttons. Saves ~99% of wildcard cost.
-    button_devs = {bindings[m][0] for m in ('home', 'away', 'abroad')}
+    # device(s) that hold our mode buttons.
+    button_devs = {dev for (dev, _) in modes.values()}
     dev_id = event.get('device_id', '')
     if dev_id != 'heartbeat' and dev_id not in button_devs:
         return []
 
-    # Determine which buttons are currently ON.
-    on_modes = []
-    for mode in ('home', 'away', 'abroad'):
-        b_dev, b_dps = bindings[mode]
-        if _is_button_on(state, b_dev, b_dps):
-            on_modes.append(mode)
+    # Which buttons are currently ON
+    on_modes = [m for m, (bd, bp) in modes.items() if _is_button_on(state, bd, bp)]
 
     # ── Track continuous all-off time ──
-    # We only assert HOME when ALL three buttons have been continuously off
-    # for the cooldown window (sentence-driven, e.g. 30 s). If a button goes
-    # on at any point during the wait, the window resets. This gives the user
-    # a grace period to re-press a button after the firmware auto-off, without
-    # the rule overriding their intent.
     if on_modes:
-        # Any button on → cancel the all-off wait.
         state.shared['_mode_buttons_all_off_armed'] = False
     else:
-        # All off → start the wait if not already started.
         if not state.shared.get('_mode_buttons_all_off_armed'):
             state.set_timer('mode_buttons_all_off_since')
             state.shared['_mode_buttons_all_off_armed'] = True
 
-    # ── All OFF for ≥ cooldown_sec → emit default-to-HOME turn_on ──
-    # Cooldown comes from the sentence
-    #   "Mode Buttons: default-to-HOME cooldown is N seconds"
-    # parsed by the engine's KNOB_PATTERNS into
-    # state.shared['mode_buttons.default_home_cooldown_sec'].
-    # No Python fallback: if the sentence is missing, the default-to-HOME
-    # path is a safe no-op (mode detection still works on real button state).
+    # ── All OFF for ≥ cooldown_sec → emit default-to-<mode> turn_on ──
     if not on_modes:
+        default_mode = bindings.get('default')
+        if not default_mode or default_mode not in modes:
+            log.debug("mode_buttons: default-mode sentence missing or names unknown mode %r — skipping default-to-X",
+                      default_mode)
+            return []
         cooldown_raw = state.shared.get('mode_buttons.default_home_cooldown_sec')
         if cooldown_raw is None:
-            log.debug("mode_buttons: cooldown sentence missing — skipping default-to-HOME")
+            log.debug("mode_buttons: cooldown sentence missing — skipping default-to-X")
             return []
         try:
             cooldown_sec = int(cooldown_raw)
         except (TypeError, ValueError):
-            log.warning("mode_buttons: invalid cooldown value %r — skipping default-to-HOME", cooldown_raw)
+            log.warning("mode_buttons: invalid cooldown value %r — skipping default-to-X", cooldown_raw)
             return []
         all_off_age = state.get_timer('mode_buttons_all_off_since')
         if all_off_age < cooldown_sec:
-            # Not enough continuous all-off time yet — keep waiting.
             return []
         # Disarm so we re-arm cleanly next time + don't refire on every event
         # while still in all-off (the device's response will flip this anyway).
         state.shared['_mode_buttons_all_off_armed'] = False
-        h_dev, h_dps = bindings['home']
+        d_dev, d_dps = modes[default_mode]
         cmd = {
-            'device_id':        h_dev,
+            'device_id':        d_dev,
             'action':           'turn_on',
             'rule':             'Mode Buttons',
             # Rule reacts to human button input — opt out of the engine's
             # loop-detection so rapid intentional presses can't disable us.
             '_skip_loop_guard': True,
         }
-        if h_dps is not None:
-            cmd['channel'] = h_dps
+        if d_dps is not None:
+            cmd['channel'] = d_dps
         log.info(
-            "mode_buttons: all buttons off for %ds (>= %ds) → asserting HOME (turn_on dev=%s dps=%s)",
-            int(all_off_age), cooldown_sec, h_dev, h_dps,
+            "mode_buttons: all buttons off for %ds (>= %ds) → asserting %s (turn_on dev=%s dps=%s)",
+            int(all_off_age), cooldown_sec, default_mode, d_dev, d_dps,
         )
         return [cmd]
 
@@ -318,17 +326,16 @@ def evaluate(event, state):
     # The current event's payload is the freshest source of truth — it hasn't
     # been written to device_events yet at the moment evaluate() runs, so
     # querying the table for "last transition" misses this very event. If THIS
-    # event is from the button device and contains exactly one mode-button
+    # event is from a button device and contains exactly one mode-button
     # going TRUE, that mode wins immediately.
     fresh_mode = None
     event_dps = event.get('dps') or {}
-    if event.get('device_id', '') in {bindings[m][0] for m in ('home', 'away', 'abroad')}:
+    if dev_id in button_devs:
         truthy_modes = []
-        for mode in ('home', 'away', 'abroad'):
-            b_dev, b_dps = bindings[mode]
-            if event.get('device_id') != b_dev:
+        for mode, (bd, bp) in modes.items():
+            if dev_id != bd:
                 continue
-            v = event_dps.get(b_dps) if b_dps is not None else event_dps.get('1')
+            v = event_dps.get(bp) if bp is not None else event_dps.get('1')
             if v in _TRUTHY_BUTTON_VALUES:
                 truthy_modes.append(mode)
         if len(truthy_modes) == 1:
@@ -337,23 +344,15 @@ def evaluate(event, state):
     if fresh_mode:
         active_mode = fresh_mode
     elif len(on_modes) == 1:
-        # ── Exactly one ON → that mode wins ──
         active_mode = on_modes[0]
     else:
-        # ── Multiple ON — pick deterministically + fall through to mutual-exclusivity ──
-        # Priority: most-recent transition wins (the "natural" winner).
-        # Fallback for no transition history at all: prefer the previously-
-        # stored home_mode if it's still ON (preserves state across restarts),
-        # else first in canonical order. SAFETY NET — must NOT bail with
-        # `return []` here even when ambiguous: leaving multiple buttons ON
-        # would persist the multi-on state indefinitely (mutual-exclusivity
-        # only runs after this point). Worst case we pick the "wrong"
-        # winner — default-to-HOME corrects within 30 s of all-off if no
-        # one re-presses.
+        # Multiple ON — pick deterministically + fall through to mutual-exclusivity.
+        # Priority: most-recent transition wins. Fallback: previously-stored
+        # home_mode if still ON, else first declared mode (insertion order).
         latest_age = float('inf')
         active_mode = None
         for m in on_modes:
-            age = _last_change_age(state, *bindings[m])
+            age = _last_change_age(state, *modes[m])
             if age < latest_age:
                 latest_age = age
                 active_mode = m
@@ -372,30 +371,28 @@ def evaluate(event, state):
         state.shared['home_mode'] = active_mode
         log.info("mode_buttons: home_mode %s -> %s", prev or '(unset)', active_mode)
 
-    # ── Mutual exclusivity (s_mb2/3/4 sentences) ──
+    # ── Mutual exclusivity ──
     # Whenever a button is currently ON that is NOT the active mode, turn it
     # off. Runs on every event so any drift between panel state and the rule's
     # decision converges within a tick or two. Idempotent — if the OFF command
     # is already reflected in state.devices, _is_button_on returns False and
     # we skip emitting.
     commands = []
-    for mode in ('home', 'away', 'abroad'):
+    for mode, (bd, bp) in modes.items():
         if mode == active_mode:
             continue
-        b_dev, b_dps = bindings[mode]
-        if _is_button_on(state, b_dev, b_dps):
+        if _is_button_on(state, bd, bp):
             cmd = {
-                'device_id':        b_dev,
+                'device_id':        bd,
                 'action':           'turn_off',
                 'rule':             'Mode Buttons',
                 # Cleanup commands aren't a runaway — they're intentional
                 # mutual-exclusivity enforcement. Skip loop-guard counter
-                # so rapid user button presses (each triggering 1-2 turn_off
-                # cleanups) don't accumulate toward the 4-in-10s threshold.
+                # so rapid user button presses don't trigger auto-disable.
                 '_skip_loop_guard': True,
             }
-            if b_dps is not None:
-                cmd['channel'] = b_dps
+            if bp is not None:
+                cmd['channel'] = bp
             commands.append(cmd)
     if commands:
         log.info(

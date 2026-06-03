@@ -414,6 +414,62 @@
     el.innerHTML += `<button onclick="this.parentElement.style.display='none'" style="position:absolute;top:6px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:1rem;" title="Close">&times;</button>`;
   };
 
+  // Mode Buttons row test-fire — physically toggles the 8 Gang Switch relay
+  // for the chosen mode via the same endpoint the Home State Simulator uses
+  // (POST /api/corridor-sim/set-home-mode). The endpoint pre-cleans the other
+  // two channels (turn_off in parallel) before turning the target on, so the
+  // device never shows a transient multi-on state. The real device event then
+  // flows through device-agent → MQTT → rule engine, identical to a wall
+  // press. Mode Buttons rule reacts and updates home_mode.
+  // Mode-button color palette — shared by the tab-bar `home mode:` chip,
+  // the Home State Simulator card, and the Mode Buttons rule-row test buttons.
+  // IIFE-level so every caller sees the same constants.
+  const modeColor = m => (m === 'home'   ? '#27ae60'
+                        : m === 'away'   ? '#e67e22'
+                        : m === 'abroad' ? '#c0392b'
+                        : '#888');
+  window.testModeButton = async function (mode) {
+    const el = document.getElementById('test-result');
+    if (el) {
+      el.style.display = 'block';
+      el.style.background = '#f0ebe3';
+      el.style.borderLeft = '4px solid ' + modeColor(mode);
+      el.innerHTML = `Pressing <b>${escHtml(mode.toUpperCase())}</b> relay on 8 Gang Switch...`;
+    }
+    try {
+      const r = await fetch('/api/corridor-sim/set-home-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        if (el) {
+          el.style.background = 'rgba(231,76,60,0.1)';
+          el.style.borderLeft = '4px solid #e74c3c';
+          el.innerHTML = `Mode Buttons → <b>${escHtml(mode.toUpperCase())}</b> — <span style="color:#e74c3c;">${escHtml(data.error || 'failed')}</span>`;
+        }
+        return;
+      }
+      if (el) {
+        el.style.background = 'rgba(39,174,96,0.06)';
+        el.style.borderLeft = '4px solid ' + modeColor(mode);
+        el.innerHTML =
+          `Mode Buttons → <b style="color:${modeColor(mode)};">${escHtml(mode.toUpperCase())}</b> — relay press dispatched<br>` +
+          `<span style="color:#888;font-size:0.75rem;">channel=${escHtml(data.channel)}, cleared off=[${(data.cleared_off || []).map(escHtml).join(',')}]</span><br>` +
+          `<span style="color:#888;font-size:0.75rem;">Real device event will fire Mode Buttons; chip updates after the next state poll.</span>`;
+        el.innerHTML += `<button onclick="this.parentElement.style.display='none'" style="position:absolute;top:6px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:1rem;" title="Close">&times;</button>`;
+      }
+      setTimeout(() => { if (typeof loadState === 'function') loadState(); }, 1500);
+    } catch (e) {
+      if (el) {
+        el.style.background = 'rgba(231,76,60,0.1)';
+        el.style.borderLeft = '4px solid #e74c3c';
+        el.innerHTML = `Mode Buttons → <b>${escHtml(mode.toUpperCase())}</b> — <span style="color:#e74c3c;">Connection error</span>`;
+      }
+    }
+  };
+
   window.setHomeMode = async function (mode) {
     const resultEl = document.getElementById('hsm-result');
     try {
@@ -715,13 +771,6 @@
       const tmEl = document.getElementById('tmb-time-mode');
       const srEl = document.getElementById('tmb-next-sunrise');
       const ssEl = document.getElementById('tmb-next-sunset');
-      // Mode color palette shared between the tab-bar `home mode:` chip
-      // and the Corridor Simulator's Home State Simulator card so visual
-      // identity is consistent across the page.
-      const modeColor = (m) => (m === 'home'   ? '#27ae60'
-                              : m === 'away'   ? '#e67e22'
-                              : m === 'abroad' ? '#c0392b'
-                              : '#888');
       // Corridor transit colour palette:
       //   clear     = green  (idle / safe — default state)
       //   visit     = amber  (someone in corridor, unknown intent)
@@ -896,8 +945,14 @@
               </label>
             </td>
             <td style="white-space:nowrap;">
-              <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',false)" style="font-size:0.68rem;padding:2px 6px;" title="Dry-run test">Test</button>
-              <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#7a9ab8;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
+              ${r.name === 'Mode Buttons' ? `
+                <button class="btn btn-secondary btn-sm" onclick="testModeButton('home')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('home')};color:#fff;" title="Press the HOME relay on 8 Gang Switch (real switch event → rule fires)">HOME</button>
+                <button class="btn btn-secondary btn-sm" onclick="testModeButton('away')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('away')};color:#fff;" title="Press the AWAY relay on 8 Gang Switch (real switch event → rule fires)">AWAY</button>
+                <button class="btn btn-secondary btn-sm" onclick="testModeButton('abroad')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('abroad')};color:#fff;" title="Press the ABROAD relay on 8 Gang Switch (real switch event → rule fires)">ABROAD</button>
+              ` : `
+                <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',false)" style="font-size:0.68rem;padding:2px 6px;" title="Dry-run test">Test</button>
+                <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#7a9ab8;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
+              `}
               <button class="btn btn-secondary btn-sm" onclick="resetRuleRuns('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 6px;" title="Zero the Runs counter only (avg/max/last-fired stay) — engine applies within 60 s">↺</button>
             </td>
           </tr>`;
