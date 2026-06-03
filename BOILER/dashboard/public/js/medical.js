@@ -461,34 +461,114 @@ function _stopCamera() {
 }
 
 let _capturedBlob = null;
+let _origCanvas   = null;   // hidden full-res snapshot
+let _zoom = 1, _panX = 0, _panY = 0;
+const _VIEW_W = 720, _VIEW_H = 540;
+
+// Redraw the visible (viewport) canvas from the original snapshot using
+// the current _zoom and _pan offsets. Called on every zoom button + on
+// every mouse/touch drag tick. The viewport is fixed at _VIEW_W × _VIEW_H;
+// the upload payload is whatever pixels currently fit inside that area.
+function _renderViewport() {
+  if (!_origCanvas) return;
+  const c = document.getElementById('med-cam-canvas');
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(
+    _origCanvas,
+    _panX, _panY,
+    _origCanvas.width  * _zoom,
+    _origCanvas.height * _zoom,
+  );
+}
+
+window.medZoomIn  = function () { _zoom *= 1.25; _renderViewport(); };
+window.medZoomOut = function () { _zoom *= 0.8;  _renderViewport(); };
+window.medFitImage = function () {
+  if (!_origCanvas) return;
+  _zoom = Math.min(_VIEW_W / _origCanvas.width, _VIEW_H / _origCanvas.height);
+  _panX = (_VIEW_W - _origCanvas.width  * _zoom) / 2;
+  _panY = (_VIEW_H - _origCanvas.height * _zoom) / 2;
+  _renderViewport();
+};
+
+function _wireDragHandlers(c) {
+  let dragging = false, startX, startY, startPanX, startPanY;
+  const onDown = e => {
+    dragging = true;
+    const t = e.touches ? e.touches[0] : e;
+    startX = t.clientX; startY = t.clientY;
+    startPanX = _panX; startPanY = _panY;
+  };
+  const onMove = e => {
+    if (!dragging) return;
+    if (e.cancelable) e.preventDefault();
+    const t = e.touches ? e.touches[0] : e;
+    _panX = startPanX + (t.clientX - startX);
+    _panY = startPanY + (t.clientY - startY);
+    _renderViewport();
+  };
+  const onUp = () => { dragging = false; };
+  c.addEventListener('mousedown',  onDown);
+  c.addEventListener('mousemove',  onMove);
+  c.addEventListener('mouseup',    onUp);
+  c.addEventListener('mouseleave', onUp);
+  c.addEventListener('touchstart', onDown, { passive: true });
+  c.addEventListener('touchmove',  onMove, { passive: false });
+  c.addEventListener('touchend',   onUp);
+}
+
 window.medCameraSnap = function () {
   const v = document.getElementById('med-cam-video');
   const c = document.getElementById('med-cam-canvas');
-  c.width  = v.videoWidth;
-  c.height = v.videoHeight;
-  c.getContext('2d').drawImage(v, 0, 0);
-  c.toBlob(blob => {
-    _capturedBlob = blob;
-    _stopCamera();
-    // Show the captured image preview in place of the live video.
-    c.style.display = 'block';
-    v.style.display = 'none';
-    // Replace the Snap button with a "Re-snap" so the user can retry, and
-    // disable the camera picker (no live stream now). Keep Cancel.
-    const btns = document.querySelector('#med-camera-stage .cam-btns');
-    if (btns) {
-      btns.innerHTML = `
-        <span style="color:#7fff7f; font-size:0.84rem; align-self:center; margin-right:6px;">Captured ${_fmtSize(blob.size)}</span>
-        <button class="btn btn-secondary btn-sm" onclick="medOpenDocForm('camera')">↻ Re-snap</button>
-        <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>`;
-    }
-    const picker = document.getElementById('med-cam-picker');
-    if (picker) picker.disabled = true;
-  }, 'image/jpeg', 0.85);
+  // 1) Stash the full-res frame to an offscreen canvas — that's the
+  //    source pixels used by every zoom/pan re-render afterward.
+  _origCanvas = document.createElement('canvas');
+  _origCanvas.width  = v.videoWidth;
+  _origCanvas.height = v.videoHeight;
+  _origCanvas.getContext('2d').drawImage(v, 0, 0);
+  // 2) Resize the visible canvas to the fixed viewport + show it in place
+  //    of the live video. fit-to-viewport + render.
+  c.width  = _VIEW_W;
+  c.height = _VIEW_H;
+  c.style.display = 'block';
+  v.style.display = 'none';
+  medFitImage();
+  _wireDragHandlers(c);
+  _stopCamera();
+  // 3) Swap the button row: zoom controls + Re-snap + Cancel. The actual
+  //    upload payload is computed from the viewport at upload time
+  //    (medUploadDoc reads the canvas state, not _capturedBlob).
+  const btns = document.querySelector('#med-camera-stage .cam-btns');
+  if (btns) {
+    btns.innerHTML = `
+      <button class="btn btn-secondary btn-sm" onclick="medZoomIn()"  title="Zoom in">🔍+</button>
+      <button class="btn btn-secondary btn-sm" onclick="medZoomOut()" title="Zoom out">🔍−</button>
+      <button class="btn btn-secondary btn-sm" onclick="medFitImage()" title="Fit to frame">↺ Fit</button>
+      <button class="btn btn-secondary btn-sm" onclick="medOpenDocForm('camera')">↻ Re-snap</button>
+      <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>`;
+  }
+  // Helper text below the canvas
+  let help = document.getElementById('med-cam-help');
+  if (!help) {
+    help = document.createElement('div');
+    help.id = 'med-cam-help';
+    help.className = 'zoom-help';
+    const diag = document.getElementById('med-cam-diag');
+    if (diag) diag.before(help); else document.getElementById('med-camera-stage').appendChild(help);
+  }
+  help.textContent = 'Drag the image to arrange. Use 🔍+ / 🔍− to zoom. Upload uses what fits in the frame.';
+  // Disable camera picker while arranging the captured shot.
+  const picker = document.getElementById('med-cam-picker');
+  if (picker) picker.disabled = true;
+  _capturedBlob = true;   // truthy sentinel — actual blob built at upload time
 };
 window.medCameraCancel = function () {
   _stopCamera();
   _capturedBlob = null;
+  _origCanvas   = null;
+  _zoom = 1; _panX = 0; _panY = 0;
   medCloseDocForm();
 };
 
@@ -506,8 +586,13 @@ window.medUploadDoc = async function () {
   const fi = document.getElementById('df-file');
   if (fi && fi.files && fi.files[0]) {
     file = fi.files[0];
-  } else if (_capturedBlob) {
-    file = new File([_capturedBlob], (name || 'capture') + '.jpg', { type: 'image/jpeg' });
+  } else if (_capturedBlob && _origCanvas) {
+    // Serialize the CURRENT viewport canvas — gives the user the zoom/pan
+    // they arranged. (_origCanvas existing implies we're in camera mode.)
+    const c = document.getElementById('med-cam-canvas');
+    const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', 0.85));
+    if (!blob) { errEl.textContent = 'Failed to serialize captured image'; return; }
+    file = new File([blob], (name || 'capture') + '.jpg', { type: 'image/jpeg' });
   } else {
     errEl.textContent = 'Pick a PDF or capture an image first';
     return;
