@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Medical</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .med-form-row { display:grid; grid-template-columns:max-content 1fr; gap:8px 12px; align-items:center; margin-bottom:8px; }
+    .med-form-row label { font-size:0.82rem; color:#666; }
+    .med-form-row input, .med-form-row select, .med-form-row textarea {
+      padding:5px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem; width:100%; box-sizing:border-box;
+    }
+    .med-form-row textarea { min-height:60px; resize:vertical; }
+    .med-list-card { padding:10px 12px; border:1px solid #e3ddd2; border-radius:6px; margin-bottom:10px; background:#fff; }
+    .med-list-card h3 { margin:0 0 4px 0; font-size:0.95rem; color:#2e2e2e; }
+    .med-meta { font-size:0.74rem; color:#888; }
+    .med-chip { display:inline-block; padding:1px 8px; border-radius:10px; font-size:0.72rem; font-weight:600; margin-right:4px; }
+    .med-chip.kind-doctor   { background:#fce7f3; color:#9d174d; }
+    .med-chip.kind-clinic   { background:#dbeafe; color:#1e3a8a; }
+    .med-chip.kind-hospital { background:#fee2e2; color:#7f1d1d; }
+    .med-empty { padding:30px 12px; text-align:center; color:#aaa; font-size:0.88rem; }
+    .med-link-btn {
+      display:inline-block; padding:3px 8px; font-size:0.74rem; text-decoration:none;
+      background:#eef2f7; color:#2e2e2e; border-radius:3px; margin-right:4px;
+    }
+    .med-link-btn:hover { background:#dbe4f0; }
+  </style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a><a href="network.html" id="network-indicator"></a><a href="gateway.html" id="netbird-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="gateway.html">Project Gateway</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html">Project Boards</a>
+  <a href="power.html">Project Power</a>
+  <a href="project-general.html">Project General</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+  <a href="my-bathroom.html">My BathRoom Agent</a>
+
+  <div class="section-label">Personal</div>
+  <a href="medical.html" class="active">Medical</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Medical</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="medRefresh()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showMedTab('contacts', this)">Contacts</button>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Contacts (doctors / clinics / hospitals)             -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel active" id="tab-contacts">
+
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin-top:0;">+ Add contact</h2>
+      <button class="btn btn-success btn-sm" onclick="medOpenContactForm()">+ New</button>
+      <div id="med-contact-form" style="display:none; margin-top:12px;"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin-top:0;">Filter</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <select id="med-filter-kind" onchange="medRenderContacts()"
+          style="padding:5px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+          <option value="">All</option>
+          <option value="doctor">Doctors</option>
+          <option value="clinic">Clinics</option>
+          <option value="hospital">Hospitals</option>
+        </select>
+        <input type="text" id="med-filter-search" placeholder="Search name / specialty / fund"
+          oninput="medRenderContacts()"
+          style="flex:1; min-width:180px; padding:5px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">List</h2>
+      <div id="med-contact-list">—</div>
+    </div>
+
+  </div><!-- /tab-contacts -->
+
+</main>
+
+<script>
+  function showMedTab(name, btnEl) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    if (btnEl) btnEl.classList.add('active');
+    const tabEl = document.getElementById('tab-' + name);
+    if (tabEl) tabEl.classList.add('active');
+  }
+</script>
+<script src="js/alerts-monitor.js?v=11"></script>
+<script src="js/scroll-stabilizer.js"></script>
+<script src="js/medical.js?v=4"></script>
+</body>
+</html>

@@ -155,6 +155,9 @@
   <a href="balcony.html">Balcony Agent</a>
   <a href="my-bathroom.html">My BathRoom Agent</a>
 
+  <div class="section-label">Personal</div>
+  <a href="medical.html">Medical</a>
+
   <div class="section-label">Voice</div>
   <a href="voice.html">Voice</a>
 
@@ -216,12 +219,6 @@
             <span style="font-size:0.82rem; color:#888;">distance from center counted as "home"; outside this fires an <code>away</code> event</span>
           </div>
 
-          <label>Retention (days):</label>
-          <div style="display:flex; align-items:center; gap:12px;">
-            <input type="number" id="geo-retention" min="1" max="3650" style="width:120px;" />
-            <span style="font-size:0.82rem; color:#888;">location rows older than this are auto-deleted</span>
-          </div>
-
           <label>Low-accuracy filter (m):</label>
           <div style="display:flex; align-items:center; gap:12px;">
             <input type="number" id="geo-lo-acc" min="0" max="5000" style="width:120px;" />
@@ -264,28 +261,10 @@
             <span style="font-size:0.82rem; color:#888;">re-emit the current home/away state every N sec even without a crossing; 0 = transitions only (capped at ingest's 30 s cycle)</span>
           </div>
 
-          <label>Sensor veto (suppress bogus away):</label>
-          <div style="display:flex; align-items:center; gap:12px;">
-            <input type="checkbox" id="geo-veto-on" style="transform:scale(1.2);" />
-            <span style="font-size:0.82rem; color:#888;">use HA Companion sensors as ground truth — veto bogus away events when phone is actually at home</span>
-          </div>
-
-          <label>'Still' debounce (sec):</label>
-          <div style="display:flex; align-items:center; gap:12px;">
-            <input type="number" id="geo-veto-still-debounce" min="0" max="600" style="width:120px;" />
-            <span style="font-size:0.82rem; color:#888;">activity must report <code>still</code> for this long to veto (filters brief red-light stops in real trips)</span>
-          </div>
-
           <label>Use state machine:</label>
           <div style="display:flex; align-items:center; gap:12px;">
             <input type="checkbox" id="geo-sm-on" style="transform:scale(1.2);" />
-            <span style="font-size:0.82rem; color:#888;">defers <code>geofence:away</code> until WiFi confirms the exit — filters GPS jitter that creates fake "trips" while phone is actually at home. Uncheck to revert to legacy emit-on-first-crossing behavior.</span>
-          </div>
-
-          <label>WiFi min age (sec):</label>
-          <div style="display:flex; align-items:center; gap:12px;">
-            <input type="number" id="geo-sm-wifi-min-age" min="0" max="600" style="width:120px;" />
-            <span style="font-size:0.82rem; color:#888;">WiFi must have been off-Home for this many seconds before firing the away event (only used when state machine is on)</span>
+            <span style="font-size:0.82rem; color:#888;">defers <code>geofence:away</code> until the time-fallback or hard-cap threshold; filters GPS jitter that creates fake brief trips. Uncheck to revert to legacy emit-on-first-crossing behavior.</span>
           </div>
 
           <label>Time fallback (sec):</label>
@@ -303,23 +282,48 @@
           <label style="align-self:start;">Tracked devices:</label>
           <div>
             <table class="geo-dev-table" id="geo-dev-table">
-              <thead><tr><th>device_id</th><th>name</th><th>ha_entity</th><th>battery_entity</th><th></th></tr></thead>
+              <thead><tr><th>device_id</th><th>name</th><th>group_id</th><th>source</th><th></th></tr></thead>
               <tbody id="geo-dev-tbody"></tbody>
             </table>
             <button onclick="geoAddDeviceRow()" style="margin-top:6px; padding:4px 10px; font-size:0.78rem; border:1px solid #888; background:#fff; color:#444; border-radius:3px; cursor:pointer;">+ Add device</button>
+            <div style="font-size:0.78rem; color:#888; margin-top:6px;">
+              Geolocation tracks phones via OwnTracks MQTT only (HA Companion path was removed 2026-06-03). Each row is one OwnTracks device.
+            </div>
           </div>
 
-          <label style="align-self:start;">Sensor entities HA:</label>
+          <label style="align-self:start;">Filter test:</label>
           <div>
-            <table class="geo-dev-table" id="geo-veto-table">
-              <thead><tr><th>device_id</th><th>activity_entity</th><th>wifi_entity</th><th>home_ssid</th><th>android_auto_entity</th></tr></thead>
-              <tbody id="geo-veto-tbody"></tbody>
-            </table>
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <button onclick="geoStartFilterTest()" id="geo-test-btn" style="padding:5px 14px; font-size:0.82rem; border:1px solid #1565c0; color:#fff; background:#1565c0; border-radius:3px; cursor:pointer; font-weight:600;">▶ Run filter test</button>
+              <label style="display:inline-flex; align-items:center; gap:6px; font-size:0.82rem; cursor:pointer;">
+                <input type="checkbox" id="geo-test-show-data" />
+                Show test events on map + Recent events
+              </label>
+              <button onclick="geoClearFilterTestData()" id="geo-test-clear-btn" style="padding:4px 10px; font-size:0.78rem; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;" title="Emergency wipe of leftover sandbox rows from a crashed run">✕ Clear test data</button>
+            </div>
+            <div id="geo-test-progress-wrap" style="display:none; margin-top:10px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <div style="flex:1; height:14px; background:#f0eee8; border:1px solid #d0cbc4; border-radius:3px; overflow:hidden;">
+                  <div id="geo-test-bar" style="height:100%; width:0%; background:#1565c0; transition:width 0.3s;"></div>
+                </div>
+                <span id="geo-test-counter" style="font-size:0.82rem; color:#555; min-width:80px; text-align:right;">0 / 0</span>
+              </div>
+              <div id="geo-test-current" style="font-size:0.82rem; color:#666; margin-top:4px;"></div>
+              <div id="geo-test-summary" style="font-size:0.82rem; color:#555; margin-top:4px;"></div>
+              <div id="geo-test-failures" style="font-size:0.82rem; color:#c0392b; margin-top:4px;"></div>
+              <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+                <button onclick="geoFetchFilterTestLog()" id="geo-test-log-btn" style="padding:3px 10px; font-size:0.78rem; border:1px solid #888; color:#444; background:#fff; border-radius:3px; cursor:pointer;">📋 View log</button>
+                <button onclick="geoHideFilterTestPanel()" style="padding:3px 10px; font-size:0.78rem; border:1px solid #888; color:#444; background:#fff; border-radius:3px; cursor:pointer;">✕ Hide</button>
+              </div>
+              <pre id="geo-test-log-panel" style="display:none; margin-top:8px; padding:8px; max-height:300px; overflow:auto; background:#fafaf6; border:1px solid #d0cbc4; border-radius:3px; font-size:0.74rem; line-height:1.45; white-space:pre-wrap; word-break:break-word;"></pre>
+            </div>
+            <div style="font-size:0.78rem; color:#888; margin-top:6px;">
+              Publishes 20 synthetic MQTT pings to the live daemon and verifies the filter chain + state machine. ~30-90 s total. Sandbox device_id = <code>owntracks_test_filtertest</code>. Production data untouched. End-of-run cleanup is automatic. Log file on LXC 104: <code>/var/log/test-geolocation-filters.log</code>.
+            </div>
           </div>
         </div>
         <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
           <button onclick="geoSaveSettings()" style="padding:6px 18px; background:#3a7d44; color:#fff; border:none; border-radius:3px; cursor:pointer; font-weight:600;">💾 Save settings</button>
-          <button onclick="geoRunIngestNow()" style="padding:6px 18px; border:1px solid #888; background:#fff; color:#444; border-radius:3px; cursor:pointer;">▶ Run ingest now</button>
           <span id="geo-settings-msg" style="font-size:0.9rem;"></span>
         </div>
       </details>
@@ -735,7 +739,6 @@ setInterval(loadCurtains, 5000);
 let _geoMap = null, _geoCenter = null, _geoRadiusCircle = null;
 let _geoTrailLayer = null, _geoMarkers = [];
 let _geoSettings = null;
-let _geoSensorStates = {};  // entity_id → {state, last_changed} | null; populated by /api/geolocation/sensor-states, cached across re-renders so an HA blip doesn't blank the value cells.
 let _geoLastBoundsFit = false;
 let _geoPollTimer = null;
 
@@ -807,7 +810,6 @@ async function geoLoadSettings() {
     document.getElementById('geo-center-lat').value  = d.center?.lat ?? 32.1593;
     document.getElementById('geo-center-lon').value  = d.center?.lon ?? 34.8932;
     document.getElementById('geo-radius').value      = d.home_radius_m ?? 80;
-    document.getElementById('geo-retention').value   = d.retention_days ?? 30;
     document.getElementById('geo-lo-acc').value      = d.low_accuracy_filter_m ?? 100;
     document.getElementById('geo-outside-acc').value = d.outside_accuracy_threshold_m ?? 40;
     document.getElementById('geo-stale').value       = d.stale_alert_hours ?? 6;
@@ -815,120 +817,26 @@ async function geoLoadSettings() {
     document.getElementById('geo-dedup-s').value     = d.dedup_window_sec ?? 60;
     document.getElementById('geo-geofence-on').checked = d.geofence_events !== false;
     document.getElementById('geo-geofence-hb').value = d.geofence_heartbeat_sec ?? 0;
-    document.getElementById('geo-veto-on').checked = !!d.sensor_veto_enabled;
-    document.getElementById('geo-veto-still-debounce').value = d.sensor_veto_still_debounce_sec ?? 60;
     document.getElementById('geo-sm-on').checked = d.geofence_use_state_machine !== false;
-    document.getElementById('geo-sm-wifi-min-age').value = d.geofence_wifi_min_age_sec ?? 10;
     document.getElementById('geo-sm-time-fallback').value = d.geofence_time_fallback_sec ?? 60;
     document.getElementById('geo-sm-hard-cap').value = d.geofence_hard_cap_sec ?? 300;
-    geoRenderDeviceRows(d.tracked_devices || [], _geoSensorStates);
-    geoRenderVetoRows(d.tracked_devices || [], _geoSensorStates);
+    geoRenderDeviceRows(d.tracked_devices || []);
     geoUpdateCenterMarker();
-    // Fetch live sensor states and re-render both tables with values.
-    // Skipped if the user is mid-edit on a value cell — tearing down
-    // the DOM would wipe their typed input.
-    try {
-      const sr = await fetch('/api/geolocation/sensor-states');
-      const sd = await sr.json();
-      _geoSensorStates = sd.states || {};
-      if (!document.activeElement?.matches('[data-geo-veto-i],[data-geo-dev-i]')) {
-        geoRenderDeviceRows(d.tracked_devices || [], _geoSensorStates);
-        geoRenderVetoRows(d.tracked_devices || [], _geoSensorStates);
-      }
-    } catch (_) { /* keep cached states from previous open */ }
   } catch (e) { console.warn('geoLoadSettings:', e); }
 }
 
-// Shared cell renderer for both tables. `prefix` selects which
-// data-attribute namespace to write (`geo-veto-` or `geo-dev-`), so
-// each table's row-collector picks up its own inputs without touching
-// the other's. `suffix` is appended to the displayed value when the
-// state is a real reading (skipped for `unavailable` / `unknown`).
-function geoValueCell(prefix, idx, key, entityId, placeholder, states, suffix) {
-  const eid = (entityId || '').trim();
-  const safeEid = pgEsc(eid);
-  const safePh  = pgEsc(placeholder);
-  if (!eid) {
-    return `<input value="" data-${prefix}-i="${idx}" data-${prefix}-k="${key}" placeholder="${safePh}" />`;
-  }
-  const stateObj = states[eid];
-  const stateVal = stateObj && stateObj.state != null ? String(stateObj.state) : null;
-  const isReal   = stateVal != null && stateVal !== 'unavailable' && stateVal !== 'unknown';
-  const display  = stateVal == null ? '—' : pgEsc(stateVal) + (suffix && isReal ? suffix : '');
-  const color    = stateVal == null ? '#bbb' : '#2563eb';
-  const title    = stateVal == null
-    ? `${safeEid} (no value — entity not found or HA unreachable)`
-    : `${safeEid} — click to edit`;
-  return `<span class="geo-live-value"
-            title="${title}"
-            style="color:${color}; cursor:pointer; user-select:none;"
-            onclick="geoCellEdit(this, '${prefix}')">${display}</span>
-          <input type="hidden" value="${safeEid}" data-${prefix}-i="${idx}" data-${prefix}-k="${key}" data-${prefix}-placeholder="${safePh}" />`;
-}
-
-// Click handler: swap a value span for an editable input pre-filled
-// with the underlying entity ID. `prefix` tells us which data-* keys
-// to read off the hidden input.
-function geoCellEdit(span, prefix) {
-  const hidden = span.nextElementSibling;
-  if (!hidden || hidden.tagName !== 'INPUT') return;
-  const camel = prefix.replace(/-([a-z])/g, (_, c) => c.toUpperCase()); // geo-veto → geoVeto
-  const ph = hidden.dataset[camel + 'Placeholder'] || '';
-  const newInp = document.createElement('input');
-  newInp.type = 'text';
-  newInp.value = hidden.value;
-  newInp.placeholder = ph;
-  newInp.setAttribute(`data-${prefix}-i`, hidden.dataset[camel + 'I']);
-  newInp.setAttribute(`data-${prefix}-k`, hidden.dataset[camel + 'K']);
-  span.parentNode.replaceChild(newInp, span);
-  hidden.remove();
-  newInp.focus();
-  newInp.select();
-}
-
-function geoRenderVetoRows(devs, states) {
-  // Per-device sensor-veto rows. Each cell shows the LIVE VALUE of the
-  // configured HA entity (e.g. `still`, `Home`, `off`); entity NAME on
-  // hover; click to edit. `wifi_home_ssid` is plain text config (not
-  // an entity), shown as a normal editable input.
-  const tbody = document.getElementById('geo-veto-tbody');
-  if (!tbody) return;
-  states = states || {};
-  const vc = (i, k, eid, ph) => geoValueCell('geo-veto', i, k, eid, ph, states, '');
-  tbody.innerHTML = devs.map((d, i) => `
-    <tr>
-      <td><span class="geo-dev-cell-readonly" title="${pgEsc(d.device_id || '')}">${pgEsc(d.device_id || '')}</span></td>
-      <td>${vc(i, 'activity_entity', d.activity_entity, 'sensor.…_detected_activity')}</td>
-      <td>${vc(i, 'wifi_entity', d.wifi_entity, 'sensor.…_wi_fi_connection')}</td>
-      <td><input value="${pgEsc(d.wifi_home_ssid || '')}" data-geo-veto-i="${i}" data-geo-veto-k="wifi_home_ssid" placeholder="Home" /></td>
-      <td>${vc(i, 'android_auto_entity', d.android_auto_entity, 'binary_sensor.…_android_auto')}</td>
-    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center; color:#aaa; padding:8px;">No tracked devices yet — add one above first.</td></tr>`;
-}
-
-function geoCollectVetoRows() {
-  // Merge the veto-table inputs back into the tracked_devices list. Run
-  // BEFORE geoCollectDeviceRows so the veto fields are preserved when the
-  // main collector spreads `{...x}` over its own row collection.
-  const cur = _geoSettings?.tracked_devices || [];
-  document.querySelectorAll('[data-geo-veto-i]').forEach(inp => {
-    const i = parseInt(inp.dataset.geoVetoI, 10);
-    const k = inp.dataset.geoVetoK;
-    while (cur.length <= i) cur.push({});
-    cur[i][k] = inp.value.trim();
-  });
-  _geoSettings.tracked_devices = cur;
-}
-
-function geoRenderDeviceRows(devs, states) {
+function geoRenderDeviceRows(devs) {
+  // OwnTracks-only tracked devices (HA Companion path removed 2026-06-03).
+  // Columns: device_id / name / group_id / source (always 'owntracks_mqtt'
+  // — kept as an editable field for future OwnTracks-compatible sources).
   const tbody = document.getElementById('geo-dev-tbody');
-  states = states || {};
-  const vc = (i, k, eid, ph, suf) => geoValueCell('geo-dev', i, k, eid, ph, states, suf || '');
+  if (!tbody) return;
   tbody.innerHTML = devs.map((d, i) => `
     <tr>
-      <td><input value="${pgEsc(d.device_id || '')}" data-geo-dev-i="${i}" data-geo-dev-k="device_id" /></td>
-      <td><input value="${pgEsc(d.name || '')}" data-geo-dev-i="${i}" data-geo-dev-k="name" /></td>
-      <td>${vc(i, 'ha_entity', d.ha_entity, 'device_tracker.…')}</td>
-      <td>${vc(i, 'battery_entity', d.battery_entity, 'sensor.…_battery_level', '%')}</td>
+      <td><input value="${pgEsc(d.device_id || '')}" data-geo-dev-i="${i}" data-geo-dev-k="device_id" placeholder="owntracks_…" /></td>
+      <td><input value="${pgEsc(d.name || '')}" data-geo-dev-i="${i}" data-geo-dev-k="name" placeholder="Vadim Fold 5" /></td>
+      <td><input value="${pgEsc(d.group_id || '')}" data-geo-dev-i="${i}" data-geo-dev-k="group_id" placeholder="vadim_phone" /></td>
+      <td><input value="${pgEsc(d.source || 'owntracks_mqtt')}" data-geo-dev-i="${i}" data-geo-dev-k="source" placeholder="owntracks_mqtt" /></td>
       <td><button onclick="geoRemoveDeviceRow(${i})" style="padding:3px 8px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;">✕</button></td>
     </tr>`).join('') || `<tr><td colspan="5" style="text-align:center; color:#aaa; padding:8px;">No tracked devices — click "+ Add device".</td></tr>`;
 }
@@ -942,15 +850,12 @@ function geoCollectDeviceRows() {
     while (updated.length <= i) updated.push({});
     updated[i][k] = inp.value.trim();
   });
-  // Keep any entry with a device_id. ha_entity is only required for the
-  // HA-Companion source; MQTT-based sources (e.g. OwnTracks) carry mqtt_topic
-  // instead, so filtering on ha_entity used to silently drop them on save.
   return updated.filter(d => d.device_id);
 }
 
 function geoAddDeviceRow() {
   const cur = geoCollectDeviceRows();
-  cur.push({ device_id: '', name: '', ha_entity: '', battery_entity: '', source: 'ha_companion' });
+  cur.push({ device_id: '', name: '', group_id: '', source: 'owntracks_mqtt' });
   _geoSettings.tracked_devices = cur;
   geoRenderDeviceRows(cur);
 }
@@ -966,15 +871,8 @@ async function geoSaveSettings() {
   const msg = document.getElementById('geo-settings-msg');
   msg.style.color = '#888';
   msg.textContent = 'Saving…';
-  // Pull veto-table inputs into _geoSettings.tracked_devices BEFORE
-  // geoCollectDeviceRows runs, so the spread in tracked_devices.map(d => ({...d}))
-  // picks up activity_entity / wifi_entity / wifi_home_ssid / android_auto_entity.
-  geoCollectVetoRows();
   const body = {
-    sensor_veto_enabled:           document.getElementById('geo-veto-on').checked,
-    sensor_veto_still_debounce_sec: parseInt(document.getElementById('geo-veto-still-debounce').value, 10) || 60,
     geofence_use_state_machine:    document.getElementById('geo-sm-on').checked,
-    geofence_wifi_min_age_sec:     parseInt(document.getElementById('geo-sm-wifi-min-age').value, 10) || 10,
     geofence_time_fallback_sec:    parseInt(document.getElementById('geo-sm-time-fallback').value, 10) || 60,
     geofence_hard_cap_sec:         parseInt(document.getElementById('geo-sm-hard-cap').value, 10) || 300,
     center: {
@@ -982,7 +880,6 @@ async function geoSaveSettings() {
       lon: parseFloat(document.getElementById('geo-center-lon').value) || 0,
     },
     home_radius_m:         parseInt(document.getElementById('geo-radius').value, 10) || 80,
-    retention_days:        parseInt(document.getElementById('geo-retention').value, 10) || 30,
     low_accuracy_filter_m: parseInt(document.getElementById('geo-lo-acc').value, 10) || 100,
     outside_accuracy_threshold_m: parseInt(document.getElementById('geo-outside-acc').value, 10) || 40,
     stale_alert_hours:     parseInt(document.getElementById('geo-stale').value, 10) || 6,
@@ -990,17 +887,12 @@ async function geoSaveSettings() {
     dedup_window_sec:      parseInt(document.getElementById('geo-dedup-s').value, 10) || 60,
     geofence_events:        document.getElementById('geo-geofence-on').checked,
     geofence_heartbeat_sec: parseInt(document.getElementById('geo-geofence-hb').value, 10) || 0,
-    // Spread `d` first so EVERY field on the existing entry is preserved
-    // (group_id, mqtt_topic, future additions). Then apply defaults/transforms
-    // only to the fields the UI form actually edits. Without the spread,
-    // saving settings was silently dropping any field not explicitly listed
-    // here — which collapsed the vadim_phone group and turned one phone into
-    // two blue pins on the map.
-    tracked_devices:       geoCollectDeviceRows().map(d => ({
+    // OwnTracks-only after 2026-06-03 HA-removal cleanup. Spread `d` first so
+    // any extra field on the existing entry (e.g. mqtt_topic) is preserved.
+    tracked_devices: geoCollectDeviceRows().map(d => ({
       ...d,
-      name:           d.name || d.device_id,
-      source:         d.source || 'ha_companion',
-      battery_entity: d.battery_entity || null,
+      name:   d.name || d.device_id,
+      source: d.source || 'owntracks_mqtt',
     })),
   };
   try {
@@ -1022,24 +914,6 @@ async function geoSaveSettings() {
   }
 }
 
-async function geoRunIngestNow() {
-  const msg = document.getElementById('geo-settings-msg');
-  msg.style.color = '#888';
-  msg.textContent = 'Triggering ingest on LXC 104…';
-  try {
-    const r = await fetch('/api/geolocation/run-ingest', { method: 'POST' });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      msg.style.color = '#c0392b'; msg.textContent = `Error: ${d.error || r.statusText}`;
-      return;
-    }
-    msg.style.color = '#27ae60'; msg.textContent = `✓ ${d.summary || 'Done'}`;
-    setTimeout(() => { msg.textContent = ''; geoReloadStatus(); geoReloadTrail(); geoReloadEvents(); }, 500);
-  } catch (e) {
-    msg.style.color = '#c0392b'; msg.textContent = `Error: ${e.message}`;
-  }
-}
-
 function geoUseFirstPing() {
   // Convenience: pick the most recent ping's coordinates as apartment center.
   fetch('/api/geolocation/status').then(r => r.json()).then(d => {
@@ -1049,6 +923,194 @@ function geoUseFirstPing() {
     document.getElementById('geo-center-lon').value = dev.lon.toFixed(6);
   });
 }
+
+// ─── Filter test (since 2026-06-03) ───────────────────────────────
+// Drives the "Run filter test" button. POST starts the script on LXC 104;
+// polls /filter-test-status every 500ms until running=false.
+const GEO_TEST_SANDBOX_ID = 'owntracks_test_filtertest';
+let _geoTestPollTimer = null;
+let _geoTestT0 = null;
+
+// Show/hide checkbox state — persisted across page reloads.
+function geoShowTestData() {
+  try { return localStorage.getItem('geo.showTestData') === '1'; }
+  catch (e) { return false; }
+}
+function _wireShowTestDataCheckbox() {
+  const cb = document.getElementById('geo-test-show-data');
+  if (!cb) return;
+  cb.checked = geoShowTestData();
+  cb.addEventListener('change', () => {
+    try { localStorage.setItem('geo.showTestData', cb.checked ? '1' : '0'); } catch (e) {}
+    geoReloadEvents();
+    geoReloadTrips();
+  });
+}
+document.addEventListener('DOMContentLoaded', _wireShowTestDataCheckbox);
+
+// Client-side row filter — used by geoReloadEvents + geoReloadTrips renderers
+// to strip sandbox rows when checkbox is unchecked. Pure local function.
+window.geoFilterOutTestRows = function (rows) {
+  if (geoShowTestData()) return rows;
+  return (rows || []).filter(r =>
+    (r.device_id || r.group_id || '') !== GEO_TEST_SANDBOX_ID
+  );
+};
+
+async function geoStartFilterTest() {
+  const btn = document.getElementById('geo-test-btn');
+  const wrap = document.getElementById('geo-test-progress-wrap');
+  btn.disabled = true; btn.textContent = '… starting';
+  wrap.style.display = 'block';
+  document.getElementById('geo-test-current').textContent = 'Launching script on LXC 104…';
+  document.getElementById('geo-test-summary').textContent = '';
+  document.getElementById('geo-test-failures').textContent = '';
+  document.getElementById('geo-test-bar').style.width = '0%';
+  document.getElementById('geo-test-counter').textContent = '0 / 20';
+  _geoTestT0 = Date.now();
+  try {
+    const r = await fetch('/api/geolocation/run-filter-test', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      document.getElementById('geo-test-current').textContent = `Error: ${d.error || r.statusText}`;
+      btn.disabled = false; btn.textContent = '▶ Run filter test';
+      return;
+    }
+  } catch (e) {
+    document.getElementById('geo-test-current').textContent = `Error: ${e.message}`;
+    btn.disabled = false; btn.textContent = '▶ Run filter test';
+    return;
+  }
+  btn.textContent = '… running';
+  // First poll after a short delay so the script has time to write its first JSON.
+  setTimeout(geoPollFilterTest, 1500);
+}
+
+async function geoPollFilterTest() {
+  try {
+    const r = await fetch('/api/geolocation/filter-test-status');
+    const s = await r.json();
+    geoRenderFilterTestProgress(s);
+    if (s.running) {
+      _geoTestPollTimer = setTimeout(geoPollFilterTest, 500);
+    } else {
+      _geoTestPollTimer = null;
+      const btn = document.getElementById('geo-test-btn');
+      btn.disabled = false;
+      btn.textContent = '▶ Run filter test';
+      // Refresh events + trips so any leftover test rows disappear post-cleanup.
+      setTimeout(() => { geoReloadEvents(); geoReloadTrips(); }, 800);
+    }
+  } catch (e) {
+    document.getElementById('geo-test-current').textContent = `Status poll failed: ${e.message}`;
+  }
+}
+
+function geoRenderFilterTestProgress(s) {
+  const bar = document.getElementById('geo-test-bar');
+  const counter = document.getElementById('geo-test-counter');
+  const current = document.getElementById('geo-test-current');
+  if (!s || s.never_ran) {
+    current.textContent = '(no progress data yet — script may still be starting)';
+    return;
+  }
+  const total = s.total_scenarios || 20;
+  const done  = s.completed || 0;
+  if (s.running) {
+    // Live progress: blue bar fills as scenarios complete.
+    const pct = total ? Math.round(100 * done / total) : 0;
+    bar.style.width = pct + '%';
+    bar.style.background = '#1565c0';
+    counter.textContent = `${done} / ${total}`;
+    const elapsed = _geoTestT0 ? Math.round((Date.now() - _geoTestT0) / 1000) : 0;
+    const cur = s.current_scenario_id
+      ? `${s.current_scenario_id} ${s.current_scenario_name || ''}`
+      : 'starting…';
+    current.textContent = `Running: ${cur} · Elapsed ${elapsed}s`;
+  } else {
+    // Done — reset the bar to 0% so it's visually clear the run ended.
+    // Result is in the text below; bar is just a progress indicator, not a
+    // pass/fail meter.
+    bar.style.width = '0%';
+    counter.textContent = `${done} / ${total} · done`;
+    const elapsedTotal = s.started_at && s.finished_at
+      ? Math.round((new Date(s.finished_at) - new Date(s.started_at)) / 1000)
+      : null;
+    const ok = (s.passed || 0) === total;
+    current.innerHTML = ok
+      ? `<span style="color:#1a7a3a; font-weight:600;">✓ ${s.passed}/${total} passed${elapsedTotal !== null ? ` in ${elapsedTotal}s` : ''}</span>`
+      : `<span style="color:#c0392b; font-weight:600;">✗ ${s.failed || 0} failed</span> (${s.passed || 0}/${total} passed)${elapsedTotal !== null ? ` in ${elapsedTotal}s` : ''}`;
+  }
+  document.getElementById('geo-test-summary').textContent =
+    `Pass: ${s.passed || 0}  Fail: ${s.failed || 0}`;
+  const fails = (s.results || []).filter(r => r.status === 'FAIL');
+  if (fails.length) {
+    document.getElementById('geo-test-failures').innerHTML = fails.map(f =>
+      `✗ ${pgEsc(f.id)} ${pgEsc(f.name)}: ${pgEsc(f.diagnostic || '')}`
+    ).join('<br>');
+  } else {
+    document.getElementById('geo-test-failures').textContent = '';
+  }
+}
+
+async function geoFetchFilterTestLog() {
+  const panel = document.getElementById('geo-test-log-panel');
+  const btn = document.getElementById('geo-test-log-btn');
+  // Toggle: if open, close it.
+  if (panel.style.display !== 'none') {
+    panel.style.display = 'none';
+    btn.textContent = '📋 View log';
+    return;
+  }
+  btn.textContent = '… loading';
+  try {
+    const r = await fetch('/api/geolocation/filter-test-log?lines=200');
+    const text = await r.text();
+    panel.textContent = text;
+    panel.style.display = 'block';
+    panel.scrollTop = panel.scrollHeight;
+    btn.textContent = '📋 Hide log';
+  } catch (e) {
+    panel.textContent = 'Error fetching log: ' + e.message;
+    panel.style.display = 'block';
+    btn.textContent = '📋 View log';
+  }
+}
+
+function geoHideFilterTestPanel() {
+  document.getElementById('geo-test-progress-wrap').style.display = 'none';
+  document.getElementById('geo-test-log-panel').style.display = 'none';
+  document.getElementById('geo-test-log-btn').textContent = '📋 View log';
+}
+
+async function geoClearFilterTestData() {
+  if (!confirm('Wipe all sandbox test data (location pings, geofence events, trip rows, devices row)?')) return;
+  try {
+    const r = await fetch('/api/geolocation/clear-test-data', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { alert('Error: ' + (d.error || r.statusText)); return; }
+    const total = (d.trips_deleted || 0) + (d.events_deleted || 0) + (d.locations_deleted || 0) + (d.devices_deleted || 0);
+    document.getElementById('geo-test-summary').textContent =
+      `Cleared: ${d.trips_deleted} trips, ${d.events_deleted} events, ${d.locations_deleted} locations, ${d.devices_deleted} devices`;
+    setTimeout(() => { geoReloadEvents(); geoReloadTrips(); }, 300);
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+// Restore an in-flight test's polling on page load (in case the user
+// navigated away mid-run).
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const r = await fetch('/api/geolocation/filter-test-status');
+    const s = await r.json();
+    if (s && s.running) {
+      document.getElementById('geo-test-progress-wrap').style.display = 'block';
+      document.getElementById('geo-test-btn').disabled = true;
+      document.getElementById('geo-test-btn').textContent = '… running';
+      _geoTestT0 = s.started_at ? new Date(s.started_at).getTime() : Date.now();
+      geoPollFilterTest();
+    }
+  } catch (e) { /* not running — silent */ }
+});
 
 function geoUpdateCenterMarker() {
   if (!_geoMap || !_geoSettings) return;
@@ -1082,28 +1144,18 @@ async function geoReloadStatus() {
       const dist = (x.distance_m != null) ? ` · ${x.distance_m >= 1000 ? (x.distance_m/1000).toFixed(2) + ' km' : x.distance_m + ' m'}` : '';
       const age = (x.age_sec != null) ? ` · ${x.age_sec < 60 ? x.age_sec + ' s' : (x.age_sec < 3600 ? Math.round(x.age_sec/60) + ' min' : Math.round(x.age_sec/3600) + ' h')} ago` : '';
       const label = `${pgEsc(x.name || x.device_id)}: ${x.status}${dist}${age}${battery}`;
-      // Connection chip — same pill shape as the row above. WiFi SSID + NetBird
-      // tunnel state. Semantic colors:
-      //   good = on home WiFi (LAN direct, all ingest paths happy)
-      //   mid  = off-WiFi or foreign WiFi, but NetBird tunnel is up
-      //   bad  = off-WiFi AND NetBird down → away-pings will queue
+      // Connection chip — NetBird tunnel state. Since the 2026-06-03
+      // HA-removal cleanup, the chip no longer reads the phone's WiFi SSID
+      // (was an HA sensor). Semantic colors:
+      //   good = NetBird up (tunnel reachable, away-pings flow live)
+      //   mid  = NetBird state unknown (peer not yet matched / API blip)
+      //   bad  = NetBird down (away-pings will queue until reconnect)
       const c = x.connection || {};
-      const ssid = c.ssid;
-      const homeSsid = c.home_ssid;
-      const offWifi = !ssid || ssid === 'unavailable' || ssid === 'unknown' || ssid === '<not connected>';
-      const isHomeSsid = ssid && homeSsid && ssid.toLowerCase() === String(homeSsid).toLowerCase();
-      let wifiPart;
-      if (offWifi)         wifiPart = '📱 Off-WiFi';
-      else if (isHomeSsid) wifiPart = `📶 Home WiFi (${pgEsc(ssid)})`;
-      else                 wifiPart = `📶 ${pgEsc(ssid)}`;
-      let nbPart = '';
-      if (c.netbird_connected === true)  nbPart = ' · NetBird ✓';
-      else if (c.netbird_connected === false) nbPart = (offWifi || !isHomeSsid) ? ' · ⚠ NetBird off' : ' · NetBird off';
-      let connClass;
-      if (isHomeSsid)                                         connClass = 'conn-good';
-      else if (offWifi && c.netbird_connected !== true)       connClass = 'conn-bad';
-      else                                                    connClass = 'conn-mid';
-      const connChip = `<span class="geo-chip ${connClass}">${wifiPart}${nbPart}</span>`;
+      let connClass, connLabel;
+      if (c.netbird_connected === true)       { connClass = 'conn-good'; connLabel = '🔒 NetBird ✓'; }
+      else if (c.netbird_connected === false) { connClass = 'conn-bad';  connLabel = '⚠ NetBird off'; }
+      else                                    { connClass = 'conn-mid';  connLabel = '🔒 NetBird —'; }
+      const connChip = `<span class="geo-chip ${connClass}">${connLabel}</span>`;
       return `<div class="geo-status-block" style="display:inline-block; vertical-align:top; margin:0 8px 6px 0;"><div><span class="geo-chip ${x.status}">${label}</span></div><div style="margin-top:4px;">${connChip}</div></div>`;
     }).join('');
     const el = document.getElementById('geo-status-chips');
@@ -1295,8 +1347,11 @@ async function geoReloadEvents() {
   try {
     const r = await fetch('/api/geolocation/events?limit=20');
     const d = await r.json();
+    // Apply sandbox-row filter — strips test events when the "Show test
+    // events" checkbox is unchecked (default).
+    const events = window.geoFilterOutTestRows ? window.geoFilterOutTestRows(d.events) : (d.events || []);
     const tbody = document.getElementById('geo-events-tbody');
-    if (!d.events || !d.events.length) {
+    if (!events.length) {
       tbody.innerHTML = '<tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">No geofence events yet.</td></tr>';
       return;
     }
@@ -1305,8 +1360,8 @@ async function geoReloadEvents() {
     const haveCenter = !isNaN(cLat) && !isNaN(cLon);
     // Number from 1 = oldest, ascending toward newest, so the # matches the
     // sequence numbers on the map (lower # = earlier in time).
-    const total = d.events.length;
-    tbody.innerHTML = d.events.map((e, i) => {
+    const total = events.length;
+    tbody.innerHTML = events.map((e, i) => {
       const seq = total - i;
       const dps = typeof e.dps === 'string' ? JSON.parse(e.dps) : e.dps;
       const event = dps?.event || '?';
@@ -1332,21 +1387,23 @@ async function geoReloadTrips() {
   try {
     const r = await fetch('/api/geolocation/trips?limit=20');
     const d = await r.json();
+    // Apply sandbox-row filter — strips test trips when the checkbox is unchecked.
+    const trips = window.geoFilterOutTestRows ? window.geoFilterOutTestRows(d.trips) : (d.trips || []);
     const tbody = document.getElementById('geo-trips-tbody');
     if (!tbody) return;
-    if (!d.trips || !d.trips.length) {
+    if (!trips.length) {
       tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; text-align:center; color:#aaa;">No trips yet.</td></tr>';
       geoTripsUpdateDeleteBtn();
       return;
     }
-    const total = d.trips.length;
+    const total = trips.length;
     const fmtDur = s => {
       if (s == null) return '—';
       const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
       return h > 0 ? `${h}h ${m}m` : (m > 0 ? `${m}m ${sec}s` : `${sec}s`);
     };
     const fmtDist = m => m == null ? '—' : (m >= 1000 ? (m/1000).toFixed(2) + ' km' : m + ' m');
-    tbody.innerHTML = d.trips.map((t, i) => `
+    tbody.innerHTML = trips.map((t, i) => `
       <tr style="border-top:1px solid #f0eee8;">
         <td style="padding:5px 6px; text-align:center;"><input type="checkbox" class="geo-trip-cb" data-trip-id="${t.id}" onchange="geoTripsUpdateDeleteBtn()" /></td>
         <td style="padding:5px 12px; text-align:center; color:#1565c0; font-weight:600; font-family:monospace;">${total - i}</td>

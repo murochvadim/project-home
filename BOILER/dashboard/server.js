@@ -2393,34 +2393,11 @@ app.post('/api/health/vacuum', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── Documents ───────────────────────────────────────────────
+// ─── Documents: file viewer (legacy, used by viewer.html) ────
+// The `documents` table CRUD was removed 2026-06-02 when the Project Health
+// Documents tab was retired (legacy URL list, 2 stale rows). This endpoint
+// is a generic filesystem file viewer; it never touched the table.
 const DOCS_BASE = path.join('C:', 'Users', 'muroc', 'project_home', 'docs');
-
-app.get('/api/documents', async (req, res) => {
-  try {
-    const r = await db.query('SELECT * FROM documents ORDER BY theme, sort_order, created_at');
-    res.json(r.rows);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post('/api/documents', async (req, res) => {
-  const { title, url, theme, sort_order } = req.body;
-  if (!title || !url || !theme) return res.status(400).json({ error: 'title, url and theme are required' });
-  try {
-    const r = await db.query(
-      'INSERT INTO documents (title, url, theme, sort_order) VALUES ($1, $2, $3, $4) RETURNING *',
-      [title.trim(), url.trim(), theme, parseInt(sort_order) || 0]
-    );
-    res.json(r.rows[0]);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.delete('/api/documents/:id', async (req, res) => {
-  try {
-    await db.query('DELETE FROM documents WHERE id = $1', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
 
 app.get('/api/documents/file', (req, res) => {
   const rel = req.query.path;
@@ -2428,6 +2405,81 @@ app.get('/api/documents/file', (req, res) => {
   const abs = path.resolve(DOCS_BASE, rel.replace(/^\//, ''));
   if (!abs.startsWith(DOCS_BASE)) return res.status(403).json({ error: 'forbidden' });
   res.sendFile(abs);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ─── Medical Agent — Contacts only ──────────────────────────────
+// Single flat table `medical_contacts`. CRUD on doctors / clinics /
+// hospitals + health-fund affiliation. No file uploads, no visits,
+// no medication tables — those were dropped 2026-06-02 per user.
+// ═══════════════════════════════════════════════════════════════
+
+const _medErr = (res, e) => res.status(500).json({ error: e.message || String(e) });
+const _medTrim = v => {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+};
+
+app.get('/api/medical/contacts', async (_req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM medical_contacts ORDER BY kind, name');
+    res.json(r.rows);
+  } catch (e) { _medErr(res, e); }
+});
+
+app.post('/api/medical/contacts', async (req, res) => {
+  const b = req.body || {};
+  if (!b.kind || !b.name) return res.status(400).json({ error: 'kind and name are required' });
+  if (!['doctor', 'clinic', 'hospital'].includes(b.kind)) return res.status(400).json({ error: 'kind must be doctor/clinic/hospital' });
+  try {
+    const r = await db.query(`
+      INSERT INTO medical_contacts
+        (kind, name, specialty, health_fund, address,
+         phone_main, phone_private, phone_zimun_tor, phone_fax,
+         email, website_url, notes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `, [
+      b.kind, b.name.trim(),
+      _medTrim(b.specialty), _medTrim(b.health_fund), _medTrim(b.address),
+      _medTrim(b.phone_main), _medTrim(b.phone_private),
+      _medTrim(b.phone_zimun_tor), _medTrim(b.phone_fax),
+      _medTrim(b.email), _medTrim(b.website_url), _medTrim(b.notes),
+    ]);
+    res.json(r.rows[0]);
+  } catch (e) { _medErr(res, e); }
+});
+
+app.patch('/api/medical/contacts/:id', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const b = req.body || {};
+  const fields = ['kind', 'name', 'specialty', 'health_fund', 'address',
+                  'phone_main', 'phone_private', 'phone_zimun_tor', 'phone_fax',
+                  'email', 'website_url', 'notes'];
+  const sets = [], vals = [];
+  for (const f of fields) {
+    if (f in b) {
+      if (f === 'kind' && !['doctor', 'clinic', 'hospital'].includes(b[f])) {
+        return res.status(400).json({ error: 'kind must be doctor/clinic/hospital' });
+      }
+      sets.push(`${f} = $${sets.length + 1}`);
+      vals.push(typeof b[f] === 'string' ? b[f].trim() || null : b[f]);
+    }
+  }
+  if (sets.length === 0) return res.status(400).json({ error: 'no fields to update' });
+  vals.push(id);
+  try {
+    const r = await db.query(`UPDATE medical_contacts SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals);
+    res.json(r.rows[0] || null);
+  } catch (e) { _medErr(res, e); }
+});
+
+app.delete('/api/medical/contacts/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM medical_contacts WHERE id = $1', [parseInt(req.params.id)]);
+    res.json({ ok: true });
+  } catch (e) { _medErr(res, e); }
 });
 
 // ─── Network: latest scan summary ────────────────────────────
@@ -3131,19 +3183,16 @@ app.get('/api/geolocation/settings', async (req, res) => {
       center:                { lat: 32.1593, lon: 34.8932 },
       home_radius_m:         80,
       tracked_devices:       [],
-      retention_days:        30,
       geofence_events:       true,
-      trail_window_default:  '24h',
       low_accuracy_filter_m: 100,
       outside_accuracy_threshold_m: 40,
       stale_alert_hours:     6,
       dedup_radius_m:        25,
       dedup_window_sec:      60,
-      sensor_veto_enabled:           false,
-      sensor_veto_still_debounce_sec: 60,
-      // WiFi-confirmed state machine defaults — see GEOLOCATION/CLAUDE.md
+      // State machine (HA-free since 2026-06-03 — wifi_confirmed dropped).
+      // provisional opens on first outside ping; commits via time_fallback
+      // (60 s) or hard_cap (300 s). See GEOLOCATION/CLAUDE.md.
       geofence_use_state_machine:  true,
-      geofence_wifi_min_age_sec:   10,
       geofence_time_fallback_sec:  60,
       geofence_hard_cap_sec:       300,
     };
@@ -3159,15 +3208,12 @@ app.get('/api/geolocation/settings', async (req, res) => {
 app.post('/api/geolocation/settings', async (req, res) => {
   const cfg = req.body || {};
   // Allow-listed fields only; reject anything else to keep DB clean
-  const allowed = ['center', 'home_radius_m', 'tracked_devices', 'retention_days',
-                   'geofence_events', 'geofence_heartbeat_sec', 'trail_window_default',
+  const allowed = ['center', 'home_radius_m', 'tracked_devices',
+                   'geofence_events', 'geofence_heartbeat_sec',
                    'low_accuracy_filter_m', 'outside_accuracy_threshold_m',
                    'stale_alert_hours', 'dedup_radius_m', 'dedup_window_sec',
-                   'sensor_veto_enabled', 'sensor_veto_still_debounce_sec',
-                   // WiFi-confirmed state machine (since 2026-06-02). Master
-                   // switch + 3 commit-decision knobs. See GEOLOCATION/CLAUDE.md.
+                   // State machine (HA-free since 2026-06-03). Two commit knobs.
                    'geofence_use_state_machine',
-                   'geofence_wifi_min_age_sec',
                    'geofence_time_fallback_sec',
                    'geofence_hard_cap_sec'];
   const clean = {};
@@ -3227,10 +3273,9 @@ app.get('/api/geolocation/locations', async (req, res) => {
 
 // GET /api/geolocation/status — latest position per tracked-device GROUP
 // + home/away/offline classification. Multiple tracked_devices entries
-// can share a group_id (e.g. both HA Companion + OwnTracks of the same
-// phone). Each group collapses to a single returned row using the
-// freshest ping from any member. Entries without group_id stay
-// standalone (group_id defaults to the device_id itself).
+// can share a group_id; each group collapses to a single returned row
+// using the freshest ping from any member. Entries without group_id
+// stay standalone (group_id defaults to the device_id itself).
 app.get('/api/geolocation/status', async (req, res) => {
   try {
     const s = await db.query("SELECT value FROM dashboard_settings WHERE key = 'geolocation'");
@@ -3239,7 +3284,7 @@ app.get('/api/geolocation/status', async (req, res) => {
     const center = cfg.center || {};
     const radius = Number(cfg.home_radius_m) || 80;
     const staleHours = Number(cfg.stale_alert_hours) || 6;
-    // 1) Per-device latest ping (unchanged from before).
+    // 1) Per-device latest ping.
     const perDevice = await Promise.all(devices.map(async d => {
       const r = await db.query(
         `SELECT ts, lat, lon, accuracy_m, battery_pct FROM device_locations
@@ -3248,26 +3293,10 @@ app.get('/api/geolocation/status', async (req, res) => {
       );
       return { dev: d, last: r.rows[0] || null };
     }));
-    // 1b) Connection signals — current WiFi SSID per device + NetBird tunnel
-    // state per group. Both feed the second row of the Status chip ("📶 Home"
-    // / "📱 Off-WiFi · ⚠ NetBird off"). Failures degrade silently so a HA or
-    // NetBird outage doesn't blank the rest of the status card.
-    const haUrl = 'http://192.168.1.110:8123';
-    const haToken = (process.env.HA_TOKEN || '').trim();
-    const wifiEntities = new Set(devices.map(d => d.wifi_entity).filter(Boolean));
-    const wifiStates = {};
-    await Promise.all([...wifiEntities].map(async eid => {
-      try {
-        const r = await fetch(`${haUrl}/api/states/${encodeURIComponent(eid)}`, {
-          headers: { 'Authorization': `Bearer ${haToken}` },
-          signal: AbortSignal.timeout(2500),
-        });
-        if (r.ok) wifiStates[eid] = await r.json();
-      } catch (_) {}
-    }));
-    // NetBird peer lookup — match by tracked_devices[].name against either
-    // peer.name or netbird_peers_local.device_label (overlay). Reuse the
-    // existing 30 s peer cache so we don't hammer the upstream.
+    // 1b) NetBird peer lookup — match tracked_devices[].name against
+    // peer.name or netbird_peers_local.device_label (overlay). Reuses the
+    // 30 s peer cache so we don't hammer the upstream API. NetBird outage
+    // → leave nbPeers empty, connection chip degrades silently.
     let nbPeers = [];
     try {
       const now = Date.now();
@@ -3303,44 +3332,22 @@ app.get('/api/geolocation/status', async (req, res) => {
         groups.set(gid, item);
       }
     }
-    // Helper — assemble the `connection` sub-object for one group. Walks
-    // every member device, picks the WiFi state from whichever has a
-    // configured wifi_entity, and looks up the matching NetBird peer once
-    // per group.
+    // Build the `connection` sub-object — NetBird-only since the HA WiFi
+    // sensor read was removed 2026-06-03. The `ssid` / `home_ssid` fields
+    // were dropped along with HA; the dashboard chip renders NetBird state.
     function _connectionFor(group) {
-      const members = group.members || [group.dev];
-      let ssid = null, home_ssid = null;
-      for (const m of members) {
-        const eid = m && m.wifi_entity;
-        if (eid && wifiStates[eid]) {
-          ssid = wifiStates[eid].state || null;
-          home_ssid = m.wifi_home_ssid || home_ssid;
-          break;
-        }
-      }
       const peer = _findPeer((group.dev && group.dev.name) || null);
       return {
-        ssid,
-        home_ssid,
         netbird_connected: peer ? peer.connected : null,
         netbird_last_seen: peer ? peer.last_seen : null,
       };
     }
     // 3) Format each group as one status row.
-    // Rebuild groups to track ALL member devices (not just the freshest)
-    // so _connectionFor can scan every member's wifi_entity.
-    const groupMembers = new Map();
-    for (const item of perDevice) {
-      const gid = item.dev.group_id || item.dev.device_id;
-      if (!groupMembers.has(gid)) groupMembers.set(gid, []);
-      groupMembers.get(gid).push(item.dev);
-    }
     const rows = [...groups.values()].map(({ dev, last }) => {
       const groupId = dev.group_id || dev.device_id;
-      const members = groupMembers.get(groupId) || [dev];
       if (!last) {
         return { device_id: groupId, name: dev.name, status: 'no_data',
-                 connection: _connectionFor({ dev, members }) };
+                 connection: _connectionFor({ dev }) };
       }
       const ageMs = Date.now() - new Date(last.ts).getTime();
       const stale = ageMs > staleHours * 3600_000;
@@ -3367,7 +3374,7 @@ app.get('/api/geolocation/status', async (req, res) => {
         battery_pct:  last.battery_pct,
         distance_m:   distance != null ? Math.round(distance) : null,
         freshest_source: dev.source,
-        connection:   _connectionFor({ dev, members }),
+        connection:   _connectionFor({ dev }),
       };
     });
     res.json({ devices: rows });
@@ -3376,64 +3383,10 @@ app.get('/api/geolocation/status', async (req, res) => {
   }
 });
 
-// GET /api/geolocation/sensor-states — live values of the HA Companion
-// entities referenced by tracked_devices' veto config (activity, wifi,
-// android_auto). Used by the Settings card to display current sensor
-// state in the "Sensor entities HA" table cells.
-//
-// Narrow on purpose: only fetches entity IDs already in the tracked_devices
-// settings — no general HA-state proxy. Failed lookups become `null` per
-// entity; the dashboard renders these as a grey dash.
-app.get('/api/geolocation/sensor-states', async (req, res) => {
-  try {
-    const s = await db.query("SELECT value FROM dashboard_settings WHERE key = 'geolocation'");
-    const cfg  = s.rows[0]?.value || {};
-    const devs = Array.isArray(cfg.tracked_devices) ? cfg.tracked_devices : [];
-    const ids  = new Set();
-    for (const d of devs) {
-      for (const k of ['ha_entity', 'battery_entity', 'activity_entity', 'wifi_entity', 'android_auto_entity']) {
-        if (d[k]) ids.add(d[k]);
-      }
-    }
-    const token = (process.env.HA_TOKEN || '').trim();
-    const haUrl = 'http://192.168.1.110:8123';
-    const out = {};
-    await Promise.all([...ids].map(async eid => {
-      try {
-        const r = await fetch(`${haUrl}/api/states/${encodeURIComponent(eid)}`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-          signal: AbortSignal.timeout(3000),
-        });
-        if (!r.ok) { out[eid] = null; return; }
-        const d = await r.json();
-        out[eid] = { state: d.state, last_changed: d.last_changed };
-      } catch (_) { out[eid] = null; }
-    }));
-    res.json({ states: out });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/geolocation/run-ingest — manual trigger of the LXC 104
-// systemd unit. Same as `systemctl start geolocation-ingest.service`;
-// the user clicks this after editing settings or charging the phone
-// and doesn't want to wait for the next 30 s tick.
-app.post('/api/geolocation/run-ingest', async (req, res) => {
-  const { NodeSSH } = require('node-ssh');
-  const ssh = new NodeSSH();
-  try {
-    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
-    await ssh.execCommand('systemctl start geolocation-ingest.service');
-    // The unit runs oneshot, so by the time the start returns it's complete.
-    const r = await ssh.execCommand('tail -1 /var/log/geolocation-ingest.log');
-    ssh.dispose();
-    res.json({ ok: true, summary: r.stdout.trim() || 'started' });
-  } catch (e) {
-    try { ssh.dispose(); } catch (_) {}
-    res.status(500).json({ error: e.message });
-  }
-});
+// /api/geolocation/sensor-states + /api/geolocation/run-ingest were removed
+// 2026-06-03 along with the rest of the HA Companion geolocation path. The
+// only remaining ingest is `owntracks-ingest.service` (long-running daemon
+// on LXC 104) — no per-tick UI trigger is needed.
 
 // GET /api/geolocation/trips?limit=20 — closed trips with summary stats.
 //
@@ -3487,15 +3440,17 @@ app.delete('/api/geolocation/trips', async (req, res) => {
   }
 });
 
-// GET /api/geolocation/events?limit=20 — recent geofence crossings from
-// either ingest path (HA Companion → geolocation_ingest, MQTT → owntracks_ingest).
+// GET /api/geolocation/events?limit=20 — recent geofence crossings.
+// Source filter accepts both `owntracks_ingest` (current) and
+// `geolocation_ingest` (legacy historical rows from before the 2026-06-03
+// HA-removal cleanup) so old rows stay visible in the events table.
 app.get('/api/geolocation/events', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
   try {
     const r = await db.query(
       `SELECT id, ts, device_id, source, dps
        FROM device_events
-       WHERE source IN ('geolocation_ingest', 'owntracks_ingest')
+       WHERE source IN ('owntracks_ingest', 'geolocation_ingest')
        ORDER BY ts DESC LIMIT $1`,
       [limit],
     );
@@ -3505,17 +3460,118 @@ app.get('/api/geolocation/events', async (req, res) => {
   }
 });
 
-// DELETE /api/geolocation/events — wipe BOTH the geofence events AND every
-// device_locations row, so the "Clear all geolocation data" button on the
-// dashboard fully empties the map + the events table in one click. Both
-// ingest paths (HA Companion + OwnTracks) are covered.
+// DELETE /api/geolocation/events — wipes BOTH the geofence events AND
+// every device_locations row, fully emptying the map + events table in
+// one click ("Clear all geolocation data" button). Legacy `geolocation_ingest`
+// rows are included so old HA-era events are cleaned out too.
 app.delete('/api/geolocation/events', async (req, res) => {
   try {
     const evt = await db.query(
-      "DELETE FROM device_events WHERE source IN ('geolocation_ingest', 'owntracks_ingest')"
+      "DELETE FROM device_events WHERE source IN ('owntracks_ingest', 'geolocation_ingest')"
     );
     const loc = await db.query("DELETE FROM device_locations");
     res.json({ ok: true, events_deleted: evt.rowCount, locations_deleted: loc.rowCount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Filter test harness ─────────────────────────────────────
+// 3 endpoints back the "Run filter test" button in the Geolocation Settings
+// card. The test script lives at /opt/test_geolocation_filters.py on LXC 104
+// and uses sandbox device_id='owntracks_test_filtertest' (no overlap with
+// real phones). Progress JSON at /tmp/geolocation-test-progress.json.
+const GEO_TEST_PROGRESS_PATH = '/tmp/geolocation-test-progress.json';
+
+// POST /api/geolocation/run-filter-test — fire-and-forget kick the script
+// on LXC 104. Returns immediately; UI polls /filter-test-status for progress.
+app.post('/api/geolocation/run-filter-test', async (req, res) => {
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    // Refuse to start if a previous run is still in flight. Parse the JSON
+    // file rather than grep for it — robust to indent/whitespace changes.
+    const probe = await ssh.execCommand(`cat ${GEO_TEST_PROGRESS_PATH} 2>/dev/null`);
+    if (probe.stdout) {
+      try {
+        if (JSON.parse(probe.stdout).running === true) {
+          ssh.dispose();
+          return res.status(409).json({ error: 'a filter test is already running' });
+        }
+      } catch (_) { /* malformed JSON → treat as not running, proceed */ }
+    }
+    // Wipe stale progress file so a polling UI doesn't see old data.
+    await ssh.execCommand(`rm -f ${GEO_TEST_PROGRESS_PATH}`);
+    // Launch detached. nohup + setsid so the script survives SSH session close.
+    // Output (stdout+stderr) appended to the persistent log file the script
+    // itself also writes to.
+    await ssh.execCommand(
+      `nohup setsid python3 /opt/test_geolocation_filters.py ` +
+      `--progress-json=${GEO_TEST_PROGRESS_PATH} ` +
+      `>> /var/log/test-geolocation-filters.log 2>&1 < /dev/null &`
+    );
+    ssh.dispose();
+    res.json({ ok: true });
+  } catch (e) {
+    try { ssh.dispose(); } catch (_) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/geolocation/filter-test-status — reads the progress JSON via SSH.
+// Returns { running:false, never_ran:true } if the file doesn't exist yet.
+app.get('/api/geolocation/filter-test-status', async (req, res) => {
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    const r = await ssh.execCommand(`cat ${GEO_TEST_PROGRESS_PATH} 2>/dev/null`);
+    ssh.dispose();
+    const text = r.stdout.trim();
+    if (!text) return res.json({ running: false, never_ran: true });
+    try {
+      res.json(JSON.parse(text));
+    } catch (e) {
+      res.status(500).json({ error: 'progress JSON malformed: ' + e.message });
+    }
+  } catch (e) {
+    try { ssh.dispose(); } catch (_) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/geolocation/filter-test-log — tail of the persistent log file
+// on LXC 104. Returns plain text; UI renders in a <pre> block.
+app.get('/api/geolocation/filter-test-log', async (req, res) => {
+  const lines = Math.min(parseInt(req.query.lines, 10) || 200, 2000);
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: SSH_KEY });
+    const r = await ssh.execCommand(`tail -n ${lines} /var/log/test-geolocation-filters.log 2>/dev/null || echo "(log file empty or missing)"`);
+    ssh.dispose();
+    res.type('text/plain').send(r.stdout || '(no log content)');
+  } catch (e) {
+    try { ssh.dispose(); } catch (_) {}
+    res.status(500).type('text/plain').send('Error: ' + e.message);
+  }
+});
+
+// POST /api/geolocation/clear-test-data — emergency cleanup. The test's own
+// try/finally wipes sandbox data at the end; this endpoint is the fallback
+// for when the script crashed mid-run and left residual rows.
+app.post('/api/geolocation/clear-test-data', async (req, res) => {
+  const sandboxId = 'owntracks_test_filtertest';
+  try {
+    const trips = await db.query('DELETE FROM phone_trips      WHERE group_id  = $1', [sandboxId]);
+    const evts  = await db.query('DELETE FROM device_events    WHERE device_id = $1', [sandboxId]);
+    const locs  = await db.query('DELETE FROM device_locations WHERE device_id = $1', [sandboxId]);
+    const devs  = await db.query('DELETE FROM devices          WHERE id        = $1', [sandboxId]);
+    res.json({
+      ok: true,
+      trips_deleted:     trips.rowCount,
+      events_deleted:    evts.rowCount,
+      locations_deleted: locs.rowCount,
+      devices_deleted:   devs.rowCount,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """OwnTracks MQTT ingest daemon — runs on LXC 104.
 
-Subscribes to mqtt://192.168.1.189:1883 on topic `owntracks/+/+` and
-writes each incoming `_type=location` payload into device_locations on
-LXC 102 — same shape as the HA Companion path written by
-geolocation_ingest.py. Also handles geofence transition + heartbeat
-event emission against the apartment center configured in
-dashboard_settings.geolocation, identical to the HA Companion ingest.
+Sole ingest path for phone geolocation since the HA Companion side was
+removed 2026-06-03 (see GEOLOCATION/CLAUDE.md for the full removal log).
+Subscribes to mqtt://192.168.1.189:1883 on topic `owntracks/+/+`. On
+each `_type=location` payload:
+
+  1. Writes a row into device_locations on LXC 102 (with the OwnTracks
+     `tst` field as ts, so burst-flushed pings preserve chronology).
+  2. Runs the geofence state machine against the apartment center
+     configured in dashboard_settings.geolocation. The state machine
+     opens provisional trips, commits them via time_fallback (60 s) or
+     hard_cap (300 s), emits geofence:away / geofence:home events to
+     device_events, and closes trips in phone_trips with full
+     statistics (max_dist, path_length, outside_pings).
 
 Topic format expected: owntracks/<username>/<device_id>
 Device row identifier: f"owntracks_{username}_{device_id}"
@@ -25,8 +32,6 @@ import math
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
@@ -52,16 +57,33 @@ logging.basicConfig(
 )
 log = logging.getLogger('owntracks_ingest')
 
-# HA REST credentials for the sensor-veto cross-check. Loaded lazily from
-# /etc/owntracks-ingest.env (same env file as MQTT_PASS, supervised by
-# systemd). Optional — if absent, the sensor-veto step silently no-ops.
-HA_URL   = (os.environ.get('HA_URL')   or 'http://192.168.1.110:8123').rstrip('/')
-HA_TOKEN = os.environ.get('HA_TOKEN', '')
-
-# Flicker filter — keep in sync with geolocation_ingest. AND gate: trip is
-# discarded only if BOTH thresholds are unmet.
+# Flicker filter — trip is discarded on close if BOTH thresholds are unmet.
 TRIP_MIN_DURATION_SEC = 60
 TRIP_MIN_PATH_LENGTH_M = 100
+
+# Anti-teleport hard rule (since 2026-06-03 trip 301 incident).
+# If the previous ping was inside the home radius AND the new ping is
+# > IMPOSSIBLE_JUMP_M away, drop it UNCONDITIONALLY — no time-since-last
+# guard. Catches Android Fused Location replaying cached far-away coords
+# (e.g. Jerusalem) after the phone wakes from sleep while genuinely at
+# home. The OLD age_sec<30s guard let cache replays through whenever
+# OwnTracks had been silent long enough for the cache to refresh.
+#
+# Trade-off: a legitimate long trip where the phone sleeps for the entire
+# journey (OwnTracks publishes NO intermediate ping) won't get its trip
+# opened — first far-away ping is dropped, subsequent pings keep being
+# dropped because `last` in DB is still the old inside-home ping. To
+# recover, OwnTracks must publish at least one intermediate fix between
+# home and the destination. In practice OwnTracks publishes on significant
+# motion every few seconds-to-minutes, so this scenario is rare.
+IMPOSSIBLE_JUMP_M = 5_000
+
+# Teleport filter — drop pings whose implied speed exceeds this (m/s).
+# 50 m/s = 180 km/h: above any legitimate Israeli ground transport (the
+# Israel Railways express tops out at ~160 km/h; freeway speed limit is
+# 110 km/h). Lowered from 100 (the previous threshold let a 92 m/s
+# Jerusalem-from-home cache replay through — trip 301 incident 2026-06-03).
+MAX_SPEED_MS = 50
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -71,68 +93,6 @@ def haversine_m(lat1, lon1, lat2, lon2):
     dl = math.radians(lon2 - lon1)
     a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
-
-
-def _safe_ha_state(entity_id, max_age_sec=600):
-    """Returns (state_value, age_sec) if the HA entity is fresh, else
-    (None, None). Used by the sensor-veto cross-check. Silently no-ops if
-    HA_TOKEN is unset or the call fails (defense — never break ingest
-    just because HA is unreachable)."""
-    if not entity_id or not HA_TOKEN:
-        return None, None
-    try:
-        req = urllib.request.Request(
-            f'{HA_URL}/api/states/{entity_id}',
-            headers={
-                'Authorization': f'Bearer {HA_TOKEN}',
-                'Content-Type':  'application/json',
-            },
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            s = json.loads(resp.read().decode('utf-8'))
-        last_changed = s.get('last_changed') or s.get('last_updated')
-        age = None
-        if last_changed:
-            ts = datetime.fromisoformat(last_changed.replace('Z', '+00:00'))
-            age = (datetime.now(timezone.utc) - ts).total_seconds()
-            if age > max_age_sec:
-                return None, None
-        return s.get('state'), age
-    except Exception as e:
-        log.debug('safe_ha_state %s failed: %s', entity_id, e)
-        return None, None
-
-
-def phone_appears_at_home(dev, veto_enabled, still_debounce_sec):
-    """Returns True if phone's HA Companion sensors say it's SETTLED at
-    home. Mirrors geolocation_ingest.phone_appears_at_home — keep in
-    sync. Age guards on BOTH wifi and activity prevent the veto from
-    killing real `away` events as the user walks the last 50-60 m back
-    toward home (WiFi reconnects to home SSID a few seconds before the
-    geofence crossing inward; activity flips 'still' the moment they
-    stop at the door).
-    """
-    if not veto_enabled:
-        return False
-    # max_age_sec=86400 overrides _safe_ha_state's default 600s cap so
-    # settled-for-hours sensors aren't treated as stale (a phone on home
-    # WiFi for > 10 min would otherwise return None for wifi_state,
-    # silently disabling the veto). Same fix in geolocation_ingest.
-    aa_state, aa_age = _safe_ha_state(dev.get('android_auto_entity'), max_age_sec=86400)
-    if aa_state == 'on' and aa_age is not None and aa_age >= still_debounce_sec:
-        return False
-    wifi_ent  = dev.get('wifi_entity')
-    home_ssid = dev.get('wifi_home_ssid')
-    if wifi_ent and home_ssid:
-        wifi_state, wifi_age = _safe_ha_state(wifi_ent, max_age_sec=86400)
-        if wifi_state == home_ssid and wifi_age is not None and wifi_age >= still_debounce_sec:
-            return True
-    act_ent = dev.get('activity_entity')
-    if act_ent:
-        act_state, act_age = _safe_ha_state(act_ent, max_age_sec=86400)
-        if act_state == 'still' and act_age is not None and act_age >= still_debounce_sec:
-            return True
-    return False
 
 
 _db_conn = None
@@ -147,17 +107,18 @@ def get_conn():
 
 
 def read_settings():
-    """Read dashboard_settings.geolocation singleton. Defaults match
-    geolocation_ingest.py so behaviour is identical for OwnTracks pings."""
+    """Read dashboard_settings.geolocation singleton. HA-free configuration —
+    see 2026-06-03 cleanup. `geofence_wifi_min_age_sec` was dropped along
+    with the wifi_confirmed commit path (which read an HA sensor)."""
     defaults = {
         'center':                 {'lat': 32.1593, 'lon': 34.8932},
         'home_radius_m':          80,
         'tracked_devices':        [],
         'geofence_events':        True,
         'geofence_heartbeat_sec': 0,
-        # State-machine defaults — see geolocation_ingest.py for full doc.
+        # State machine: provisional opens on first outside ping; commits
+        # via time_fallback (60 s) or hard_cap (300 s). No WiFi-confirm path.
         'geofence_use_state_machine':  True,
-        'geofence_wifi_min_age_sec':   10,
         'geofence_time_fallback_sec':  60,
         'geofence_hard_cap_sec':       300,
     }
@@ -243,7 +204,10 @@ def get_last_location(device_id):
 
 
 def _group_info(cfg, device_id):
-    """Mirror of geolocation_ingest._group_info — keep in sync."""
+    """Resolve (group_id, sibling_device_ids, label) from settings.
+    Multiple tracked_devices entries can share a `group_id` so future
+    additional sources for the same phone are coalesced into a single
+    trip row. Entries without group_id fall back to device_id."""
     devs = cfg.get('tracked_devices') or []
     dev = next((d for d in devs if d.get('device_id') == device_id), None)
     if not dev:
@@ -256,9 +220,10 @@ def _group_info(cfg, device_id):
 
 
 def open_trip(group_id, label, started_at):
-    """Open a new trip row. Same shape as geolocation_ingest.open_trip —
-    `uq_phone_trips_open_per_group` partial unique index ensures only one
-    open trip per group across both ingest paths."""
+    """Open a NEW (already-confirmed) trip row — legacy revert path only.
+    Called when `geofence_use_state_machine=false`. The state-machine path
+    uses `_open_provisional` instead. The partial unique index
+    `uq_phone_trips_open_per_group` enforces one open trip per group."""
     conn = get_conn()
     with conn.cursor() as cur:
         cur.execute(
@@ -269,9 +234,16 @@ def open_trip(group_id, label, started_at):
         )
 
 
-# ─── WiFi-confirmed state machine (since 2026-06-02) ──────────────────
-# Mirror of geolocation_ingest helpers. Keep in sync. See that file for
-# the full state-machine doc.
+# ─── Trip state machine (HA-free since 2026-06-03) ───────────────────
+# Two-phase trip lifecycle:
+#   1. First outside ping  → _open_provisional        (confirmed=false)
+#   2a. inside ping while provisional → _delete_provisional (jitter filtered)
+#   2b. outside ping with age ≥ time_fallback (60 s) → _commit_away_atomic
+#       (UPDATE confirmed=true + INSERT geofence:away in one tx, backdated
+#       ts = trip.started_at). Hard cap at 300 s is the defensive ceiling.
+#   3. inside ping while confirmed → emit geofence:home + close_trip
+# The legacy revert path (open_trip → close_trip directly, no provisional)
+# is used when `geofence_use_state_machine=false` in settings.
 
 def _get_open_trip(group_id):
     conn = get_conn()
@@ -342,39 +314,26 @@ def _commit_away_atomic(trip_id, device_id, lat, lon, ts):
         conn.autocommit = prev_ac
 
 
-def should_commit(trip_row, ping_ts, cfg, dev):
-    """Mirror of geolocation_ingest.should_commit — see that file for doc.
-    Critical: time_fallback is SKIPPED when WiFi explicitly reports 'Home'
-    (prevents GPS drift from firing away events while phone is at home)."""
+def should_commit(trip_row, ping_ts, cfg):
+    """Pure GPS-only commit logic. Two gates:
+      - hard_cap    (default 300 s) — ultimate fail-safe ceiling
+      - time_fallback (default 60 s) — normal commit threshold
+    """
     age_outside_sec = (ping_ts - trip_row['started_at']).total_seconds()
     hard_cap = float(cfg.get('geofence_hard_cap_sec') or 300)
     if age_outside_sec >= hard_cap:
         return True, 'hard_cap'
-    wifi_min_age = float(cfg.get('geofence_wifi_min_age_sec') or 10)
-    wifi_entity  = dev.get('wifi_entity')
-    home_ssid    = dev.get('wifi_home_ssid')
-    wifi_verdict = 'unknown'
-    if wifi_entity and home_ssid:
-        # max_age_sec=86400 — see geolocation_ingest for rationale.
-        wifi_state, wifi_age = _safe_ha_state(wifi_entity, max_age_sec=86400)
-        # HA-reserved null states must NOT be treated as off-home SSID.
-        if wifi_state in (None, 'unavailable', 'unknown', ''):
-            wifi_verdict = 'unknown'
-        elif wifi_state == home_ssid:
-            wifi_verdict = 'home'
-        elif wifi_age is not None and wifi_age >= wifi_min_age:
-            return True, 'wifi_confirmed'
-    if wifi_verdict != 'home':
-        time_fallback = float(cfg.get('geofence_time_fallback_sec') or 60)
-        if age_outside_sec >= time_fallback:
-            return True, 'time_fallback'
+    time_fallback = float(cfg.get('geofence_time_fallback_sec') or 60)
+    if age_outside_sec >= time_fallback:
+        return True, 'time_fallback'
     return False, None
 
 
 def close_trip(group_id, returned_at, center_lat, center_lon, radius_m, sibling_device_ids):
-    """Close the open trip for this group, computing path length from
-    every sibling ping in the trip window. Mirror of
-    geolocation_ingest.close_trip — keep in sync."""
+    """Close the open trip for this group, computing path length + max
+    distance + outside-pings from every sibling ping in the trip window.
+    Applies the flicker filter on close (drop trips < 60 s AND < 100 m
+    path length) so micro-jitter doesn't pollute the trips table."""
     conn = get_conn()
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
@@ -507,40 +466,35 @@ def on_message(client, userdata, msg):
         center_lat = center.get('lat'); center_lon = center.get('lon')
         do_geo = bool(cfg.get('geofence_events', True))
         hb_sec = int(cfg.get('geofence_heartbeat_sec') or 0)
-        veto_on = bool(cfg.get('sensor_veto_enabled', False))
         state_machine_on = bool(cfg.get('geofence_use_state_machine', True))
-        veto_db = int(cfg.get('sensor_veto_still_debounce_sec') or 60)
-        # Locate this device's tracked_devices entry so we can read its
-        # per-device sensor entity IDs for the veto check.
-        dev_entry = next((td for td in (cfg.get('tracked_devices') or [])
-                          if td.get('device_id') == device_id), None) or {}
 
         last = get_last_location(device_id)
 
-        # WiFi-DB-poisoning sanity check — mirror of geolocation_ingest.
-        # See that file's comment for the trip 73 / trip 75 history.
-        # Drop pings claiming impossible distances while the phone is
-        # provably on home WiFi. Self-sufficient — no last-row precondition.
-        if (center_lat is not None and center_lon is not None and radius_m):
+        # Anti-teleport HARD rule. If previous ping was inside the home
+        # radius AND new ping is > IMPOSSIBLE_JUMP_M away → DROP. No time
+        # constraint — catches Android Fused Location replaying cached
+        # far-away coords (e.g. Jerusalem coords after the phone wakes
+        # from sleep while genuinely sitting at home). To get out, the
+        # phone must publish at least ONE intermediate ping between home
+        # and the destination.
+        if (last is not None and center_lat is not None
+                and center_lon is not None and radius_m):
             try:
-                _dist_home = haversine_m(center_lat, center_lon, lat, lon)
-                _impossible_dist = max(2000.0, radius_m * 50)
-                _wifi_state, _wifi_age = _safe_ha_state(
-                    dev_entry.get('wifi_entity'), max_age_sec=86400)
-                _home_ssid = dev_entry.get('wifi_home_ssid')
-                if (_home_ssid
-                        and _wifi_state == _home_ssid
-                        and _wifi_age is not None
-                        and _wifi_age >= 60
-                        and _dist_home > _impossible_dist):
-                    log.warning(
-                        'drop WiFi-DB-poisoned ping from %s: dist=%.0fm > %.0fm '
-                        'while wifi=%r (age=%.0fs)',
-                        device_id, _dist_home, _impossible_dist,
-                        _wifi_state, _wifi_age)
-                    return
+                _prev_dist = haversine_m(center_lat, center_lon,
+                                         float(last['lat']), float(last['lon']))
+                if _prev_dist <= radius_m:
+                    _new_dist = haversine_m(center_lat, center_lon, lat, lon)
+                    if _new_dist > IMPOSSIBLE_JUMP_M:
+                        _age_sec = ping_ts.timestamp() - last['ts'].timestamp()
+                        log.warning(
+                            'drop teleport-from-home ping from %s: prev_dist=%.0fm '
+                            '(inside radius %.0fm) → new_dist=%.0fm > %.0fm '
+                            '(age=%.0fs, acc=%s) — suspected Fused-Location cache replay',
+                            device_id, _prev_dist, radius_m, _new_dist,
+                            IMPOSSIBLE_JUMP_M, _age_sec, acc)
+                        return
             except Exception as e:
-                log.debug('wifi-anchored check error: %s', e)
+                log.debug('anti-teleport check error: %s', e)
 
         deduped = False
         if last:
@@ -561,13 +515,13 @@ def on_message(client, userdata, msg):
                 else:
                     # Teleport filter — separate `implied_speed` var so the
                     # device-reported `speed` (`vel` from OwnTracks) we'll
-                    # insert isn't overwritten.
+                    # insert isn't overwritten. Threshold is the module
+                    # constant MAX_SPEED_MS — not user-configurable.
                     implied_speed = dist / age_sec
-                    max_speed = float(cfg.get('max_speed_ms') or 100)
-                    if max_speed > 0 and implied_speed > max_speed:
+                    if implied_speed > MAX_SPEED_MS:
                         log.info('drop teleport ping from %s: %.0fm in %.0fs '
-                                 '= %.0fm/s (filter %sm/s)',
-                                 device_id, dist, age_sec, implied_speed, max_speed)
+                                 '= %.0fm/s (filter %dm/s)',
+                                 device_id, dist, age_sec, implied_speed, MAX_SPEED_MS)
                         return
                     if dist < dedup_r and age_sec < dedup_s:
                         deduped = True
@@ -586,8 +540,7 @@ def on_message(client, userdata, msg):
             gid, siblings, label = _group_info(cfg, device_id)
 
             if state_machine_on:
-                # ─── NEW: WiFi-confirmed state machine ─────────────────
-                # See geolocation_ingest.py for full state-machine doc.
+                # State machine — see helper-block comment above.
                 trip_row = _get_open_trip(gid)
                 # Track state evolution explicitly — heartbeat below MUST
                 # see post-state-machine status, not the stale pre-fetch.
@@ -614,19 +567,18 @@ def on_message(client, userdata, msg):
                                  gid, ping_ts.isoformat(), dist_home)
                         provisional_in_flight = True
                     elif not trip_row['confirmed']:
-                        if phone_appears_at_home(dev_entry, veto_on, veto_db):
-                            log.info('%s sensor veto blocking commit (provisional age %.0fs, dist %.0fm)',
-                                     gid, (ping_ts - trip_row['started_at']).total_seconds(), dist_home)
-                        else:
-                            commit, reason = should_commit(trip_row, ping_ts, cfg, dev_entry)
-                            if commit:
-                                _commit_away_atomic(trip_row['id'], device_id, lat, lon, trip_row['started_at'])
-                                event_emitted_this_pass = True
-                                log.info('%s geofence commit:%s -> away (started_at=%s, dist %.0f m)',
-                                         device_id, reason,
-                                         trip_row['started_at'].isoformat(),
-                                         dist_home)
-                                provisional_in_flight = False
+                        # HA-free commit logic. should_commit returns
+                        # (True, 'time_fallback'|'hard_cap') once an age
+                        # threshold trips; else (False, None) → wait.
+                        commit, reason = should_commit(trip_row, ping_ts, cfg)
+                        if commit:
+                            _commit_away_atomic(trip_row['id'], device_id, lat, lon, trip_row['started_at'])
+                            event_emitted_this_pass = True
+                            log.info('%s geofence commit:%s -> away (started_at=%s, dist %.0f m)',
+                                     device_id, reason,
+                                     trip_row['started_at'].isoformat(),
+                                     dist_home)
+                            provisional_in_flight = False
                 # Heartbeat — suppressed when EITHER a provisional is in
                 # flight OR an event already fired this pass. The latter
                 # protects against backdated away-commit ts leaving
@@ -659,10 +611,6 @@ def on_message(client, userdata, msg):
                             or (datetime.now(timezone.utc) - last_evt_ts).total_seconds()
                                 >= hb_sec):
                         emit_reason = 'heartbeat'
-                if emit_reason is not None and event == 'away' and phone_appears_at_home(dev_entry, veto_on, veto_db):
-                    log.info('%s sensor veto: phone says at home; suppressing AWAY event (would have been %s, dist %.0f m)',
-                             device_id, emit_reason, dist_home)
-                    emit_reason = None
                 if emit_reason is not None:
                     emit_geofence_event(device_id, event, lat, lon)
                     log.info('%s geofence %s -> %s (dist %.0f m)',

@@ -35,6 +35,9 @@
   <a href="balcony.html">Balcony Agent</a>
   <a href="my-bathroom.html">My BathRoom Agent</a>
 
+  <div class="section-label">Personal</div>
+  <a href="medical.html">Medical</a>
+
   <div class="section-label">Voice</div>
   <a href="voice.html">Voice</a>
 
@@ -56,7 +59,6 @@
     <button class="tab-btn active" onclick="showHealthTab('system', this)">System</button>
     <button class="tab-btn" onclick="showHealthTab('orch-log', this)">Orchestrator Log</button>
     <button class="tab-btn" onclick="showHealthTab('database', this)">Database</button>
-    <button class="tab-btn" onclick="showHealthTab('documents', this)">Documents</button>
     <button class="tab-btn" onclick="showHealthTab('backups', this)">Proxmox Backup</button>
     <button class="tab-btn" onclick="showHealthTab('win-backup', this)">Windows Backup</button>
     <button class="tab-btn" onclick="showHealthTab('ups', this)">UPS</button>
@@ -127,7 +129,7 @@
         </div>
         <div class="status-item">
           <label>UPS</label>
-          <div class="value small" id="svc-ups" style="cursor:pointer;" onclick="document.querySelector('.tab-btn:nth-of-type(8)')?.click()" title="Click to open UPS tab">—</div>
+          <div class="value small" id="svc-ups" style="cursor:pointer;" onclick="document.querySelectorAll('.tab-bar .tab-btn').forEach(b => { if (b.textContent.trim() === 'UPS') b.click(); })" title="Click to open UPS tab">—</div>
         </div>
       </div>
 
@@ -330,13 +332,6 @@
     </div>
 
   </div><!-- /tab-database -->
-
-  <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- TAB: Documents                                            -->
-  <!-- ══════════════════════════════════════════════════════════ -->
-  <div class="tab-panel" id="tab-documents">
-    <div id="docs-container"></div>
-  </div><!-- /tab-documents -->
 
   <!-- ══════════════════════════════════════════════════════════ -->
   <!-- TAB: Backups                                              -->
@@ -759,11 +754,6 @@ function showHealthTab(name, btn) {
   if (name === 'orch-log' && !window._orchLogTabLoaded) {
     window._orchLogTabLoaded = true;
     loadOrchLog();
-  }
-  // Load documents tab lazily on first visit
-  if (name === 'documents' && !window._docsTabLoaded) {
-    window._docsTabLoaded = true;
-    loadDocuments();
   }
   // Load backups tab lazily on first visit
   if (name === 'backups' && !window._backupsTabLoaded) {

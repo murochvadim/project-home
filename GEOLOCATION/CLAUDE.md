@@ -1,247 +1,239 @@
 # Geolocation Agent
 
-Phone movement tracking + geofence detection for any device reporting GPS
-through Home Assistant Companion (or future OwnTracks). First device is
-Vadim's Fold 5 (`device_tracker.sm_f946b`); schema + UI are N-device-ready
-so additional phones land without code changes.
+Phone movement tracking via **OwnTracks MQTT only**. The HA Companion ingest path was removed completely on 2026-06-03 after persistent WiFi-DB poisoning of `device_tracker.fold_5_vadim` caused the dual-source contention bug that erased real trips (trip 295 sliver-tail incident — see history at the bottom of this file).
+
+## Architecture (current — HA-free)
+
+```
+phone (OwnTracks app)
+   │ MQTT publish on owntracks/<user>/<device>
+   ▼
+LXC 107 mosquitto broker
+   │ subscribed by
+   ▼
+LXC 104  owntracks-ingest.service  (long-running paho-mqtt daemon)
+   │ on every location message:
+   │   1. low-accuracy filter (acc > 100 m → drop)
+   │   2. anti-teleport pure-GPS guard
+   │      (prev inside-radius AND new > 5 km AND age_sec < 30 → drop)
+   │   3. teleport filter (implied_speed > 100 m/s → drop)
+   │   4. stale-ts guard (age_sec ≤ 0 → skip)
+   │   5. dedup vs last ping (< 25 m AND < 60 s → skip insert)
+   │   6. INSERT device_locations row
+   │   7. STATE MACHINE:
+   │      - is_home (dist_home ≤ 40 m):
+   │          * provisional → DELETE (jitter, no event)
+   │          * confirmed   → emit geofence:home + close_trip
+   │      - else (outside radius):
+   │          * no open trip          → _open_provisional
+   │          * provisional (not confirmed):
+   │              - should_commit(trip, now, cfg, dev):
+   │                  if age ≥ hard_cap (300 s)       → commit (hard_cap)
+   │                  if age ≥ time_fallback (60 s)   → commit (time_fallback)
+   │                  else                            → wait
+   │              - commit → _commit_away_atomic
+   │                (UPDATE confirmed + INSERT geofence:away in one tx,
+   │                 backdated ts = trip.started_at)
+   │      - heartbeat (every 270 s while away, suppressed during provisional /
+   │        commit-this-pass) — re-emits the current state for rule subscribers
+   ▼
+LXC 102 PostgreSQL
+   - device_locations (30 d auto_clean)
+   - device_events (30 d auto_clean) — rules subscribe
+   - phone_trips (forever)
+```
 
 ## File locations
 
-| Artifact | Path |
-|---|---|
-| Dashboard tab | [BOILER/dashboard/public/project-general.html](../BOILER/dashboard/public/project-general.html) → "Geolocation" tab (status chips + collapsible Settings card + Leaflet map + events log) |
-| Dashboard JS | Inline in `project-general.html` (`geoOnTabShow`, `geoLoadSettings`, `geoReloadTrail`, etc.). Tab is lazy-init — map + polling start only when the tab is clicked. |
-| Server endpoints | [BOILER/dashboard/server.js](../BOILER/dashboard/server.js) → `/api/geolocation/{settings,locations,status,events,run-ingest}` cluster |
-| Ingest script (canonical) | [scripts/geolocation_ingest.py](../scripts/geolocation_ingest.py) |
-| Ingest deploy target | `/opt/geolocation_ingest.py` on LXC 104 |
-| systemd unit + timer | `/etc/systemd/system/geolocation-ingest.{service,timer}` on LXC 104 — `OnUnitActiveSec=30s` |
-| Env file (HA token) | `/etc/geolocation-ingest.env` on LXC 104 (chmod 600) |
-| Log file | `/var/log/geolocation-ingest.log` on LXC 104 |
-| DB tables (LXC 102) | `device_locations` (time-series GPS pings, retention 30 d auto_clean=true) + `phone_trips` (closed-trip summaries, retention forever) + geofence rows in `device_events` (source=`geolocation_ingest`, dps `{kind:geofence, event:home|away, lat, lon}`) |
-| Settings | `dashboard_settings.geolocation` (singleton JSONB row) |
-
-## Settings schema (`dashboard_settings.geolocation`)
-
-```jsonc
-{
-  "center":                 { "lat": 32.1593, "lon": 34.8932 },  // apartment center
-  "home_radius_m":          80,
-  "tracked_devices": [{
-    "device_id":      "fold_5_vadim",            // logical id, our convention
-    "name":           "Vadim Fold 5",            // display label
-    "source":         "ha_companion",            // 'ha_companion' | 'owntracks' (v2)
-    "ha_entity":      "device_tracker.sm_f946b", // HA's device_tracker entity_id
-    "battery_entity": "sensor.sm_f946b_battery_level"  // optional
-  }],
-  "retention_days":         30,
-  "geofence_events":        true,                // emit geofence:home/away to device_events
-  "trail_window_default":   "24h",
-  "low_accuracy_filter_m":  100,                 // drop pings with gps_accuracy > N m at ingest
-  "outside_accuracy_threshold_m": 40,            // hide outdoor pings with gps_accuracy > N m from the trail (server-side filter)
-  "stale_alert_hours":      6,                   // (reserved — future "no pings for N h" alert)
-  "dedup_radius_m":         25,                  // skip insert if within N m AND M sec of last ping
-  "dedup_window_sec":       60
-}
-```
-
-## Data flow
-
-```
-Fold 5 (HA Companion app)
-  ├─ pushes location to HA on adaptive cadence (~30 s when moving, 5-30 min when stationary)
-  │
-  └→ HA (`device_tracker.sm_f946b` with lat/lon/gps_accuracy/altitude/speed attributes)
-       │
-       │  GET /api/states/device_tracker.sm_f946b
-       ▼
-     LXC 104 — geolocation_ingest.py (every 30 s via systemd timer)
-       ├─ reads settings from dashboard_settings.geolocation
-       ├─ for each tracked device: fetch latest state from HA REST API
-       ├─ dedup: skip if within dedup_radius_m AND dedup_window_sec of last row
-       ├─ INSERT device_locations row
-       ├─ haversine_m(ping, center) → home/away
-       └─ on transition: INSERT device_events {kind:geofence, event:home|away}
-```
-
-## Dashboard tab structure
-
-Three cards on the **Geolocation** tab of `project-general.html`:
-
-1. **Status** — per-device chips (`home` green / `away` amber + distance + age + battery / `stale` grey / `no_data` grey). Auto-refreshes every 10 s while tab is visible.
-2. **⚙ Settings** (collapsible `<details>`)
-   - Apartment center (lat / lon) + "Use first available ping" auto-populate button
-   - Home radius (m)
-   - Retention (days)
-   - Low-accuracy filter, stale-alert threshold, dedup params
-   - Geofence-events toggle
-   - Tracked-devices table (inline edit, +/− rows)
-   - **💾 Save settings** + **▶ Run ingest now** (manual trigger via `/api/geolocation/run-ingest` → SSH to LXC 104 → `systemctl start geolocation-ingest.service`)
-3. **Map · trail** — Leaflet + OpenStreetMap tiles (no API key, free). Apartment marker + red radius circle + per-device trail polyline + latest position pin + sparse dots tooltipping ts + accuracy. Window selector: 1 h / 24 h / 7 d / 30 d.
-4. **Recent geofence events** — last 20 transitions from `device_events WHERE source='geolocation_ingest'`.
-
-## Trail outlier filter pipeline
-
-`GET /api/geolocation/locations` runs `_flagOutliers(rows, opts)` in `server.js` before returning, attaching an `is_outlier: true/false` per row. The dashboard renders only `!is_outlier` pings for the map. Three layers in order:
-
-1. **Stuck-source detector** — flags any ping whose lat/lon is bit-identical (to 5 decimal places) with the previous ping FROM THE SAME source. Real GPS chips ALWAYS jitter; identical fixes = cached replay. Catches HA Companion freeze mode where Samsung battery saver stops the location service but the app keeps republishing the last fix. Verified 2026-06-01: HA published the same coord 18 times while OwnTracks showed the phone walking 100–400 m away.
-
-2. **5-point median outlier** — for each ping, computes the median lat/lon of itself + 4 neighbors (2 each side). Flags the center ping when its distance from that median exceeds `max(3 × neighbor_spread, 30 m)`. Catches isolated single-ping outliers (e.g. WiFi-DB poisoning producing one Dead-Sea-style jump). Doesn't help against sustained drift across multiple consecutive pings.
-
-3. **Outdoor low-accuracy cap** — for pings outside the home radius, flags those whose reported `accuracy_m` exceeds `outside_accuracy_threshold_m` (default 40). Real walking GPS is 5–30 m accuracy; drift bursts are 40–100 m. Indoor (inside-radius) pings are exempt because their accuracy noise doesn't visibly clutter the map. Tunable via Settings card.
-
-Filter parameters are all in `dashboard_settings.geolocation`; threshold changes apply on the next 10 s dashboard poll cycle. No restart needed.
-
-Outliers stay in `device_locations` (raw data preserved for diagnostics). Only the API response marks them — the client hides them from render.
-
-## Trail rendering
-
-- ⚪ **Grey dots** — every accepted ping (one per ping). Outside-radius pings get a small numbered badge (`#1`, `#2`, …) for diagnostic feedback ("which ping is wrong?"); inside-radius pings are plain dots.
-- 🔵 **Blue polyline** — connects consecutive outside-radius pings AND the inside-bookend pings at each end of the outdoor run, so the line visually enters/exits the home circle on each excursion.
-- 🔵 **Blue last-position pin** — at the freshest accepted ping per `group_id`.
-- 🔴 **Red apartment center** + radius circle — drawn once.
-
-Both ingest sources contribute to the merged trail when grouped under one `group_id` (e.g. HA Companion + OwnTracks of the same phone collapse to one trail).
-
-## Trip tracking (`phone_trips` table, added 2026-06-01)
-
-Closed-trip summaries computed at the `away → home` crossing. Both ingest paths share the table via a partial unique index `uq_phone_trips_open_per_group` (group_id) WHERE returned_at IS NULL — so whichever source detects the crossing first opens/closes the row, the other becomes a no-op via `ON CONFLICT DO NOTHING`.
-
-**Per-trip columns**: `group_id`, `device_label`, `started_at`, `returned_at`, `duration_sec`, `max_dist_m`, `path_length_m`, `outside_pings`. Path length is summed point-to-point from ALL sibling devices' device_locations rows within the trip window.
-
-**Flicker filter**: on close, if `duration_sec < TRIP_MIN_DURATION_SEC` (60s) AND `path_length_m < TRIP_MIN_PATH_LENGTH_M` (100m), the row is DELETED instead of UPDATED. Reason: GPS oscillates 2-4 events around the radius boundary on every real crossing (verified 2026-06-01: the return crossing produced `away→home` flickers at 1s, 10s, 1s, 10s within ~20s). Without the filter, every real trip would accumulate 2-4 garbage rows. Thresholds in AND so a deliberate short walk (>100m) or a long stationary visit (>60s) still gets recorded. Constants live in both ingest scripts — keep in sync.
-
-## WiFi-confirmed state machine (since 2026-06-02)
-
-Goal: make `geofence:away` events accurate enough to drive rules. The close-time flicker filter cleans `phone_trips` but does NOT clean `device_events`, so rules consuming geofence events would still fire on every GPS jitter spike. Empirical evidence (2026-06-02 morning) showed 5 jitter "trips" where the phone never physically left home — each survived the flicker filter (durations 58-81 s) and would have fired bogus `geofence:away` events at rules.
-
-**Key insight**: the `wi_fi_connection` sensor is the discriminator. On a real exit it flips off-Home within seconds of physically leaving (verified during the user's first tracked trip — flipped at the door). During GPS jitter the phone never leaves home WiFi range, so the sensor stays `'Home'` the entire time. This gives both a fast-firing real-exit signal AND a deterministic jitter filter from the same data point.
-
-### State machine
-
-A `phone_trips` row is now opened on the FIRST outside ping in **provisional** state (`confirmed=false`), but **no `geofence:away` event fires yet**. The state machine commits to confirmed (and fires the event, backdated to the actual exit moment) only when one of three conditions is met:
-
-1. **`wifi_confirmed`** (fast path) — phone's `wi_fi_connection` sensor has been off-Home for at least `geofence_wifi_min_age_sec` (default 10 s). Typically fires within 10-30 s of physical exit.
-2. **`time_fallback`** — phone has been outside the radius continuously for at least `geofence_time_fallback_sec` (default 60 s). Catches broken/missing WiFi sensor.
-3. **`hard_cap`** — phone has been outside for `geofence_hard_cap_sec` (default 300 s). Defensive observability ceiling; should never trigger in normal operation.
-
-If the phone returns inside the radius before any of the three conditions fire, the provisional row is **silently DELETED** — no `device_events` row is ever written, no `phone_trips` row survives. Rules don't see jitter at all.
-
-Heartbeats (`geofence_heartbeat_sec`) are suppressed while a provisional trip is in flight so the pending state doesn't leak into events.
-
-`geofence:home` events still fire immediately on the first inside ping — symmetric delay isn't needed because spurious "I'm back" jitter is rare.
-
-### Event timestamp semantics
-
-| Event | `ts` column | Live MQTT delivery |
+| Artifact | Path | Note |
 |---|---|---|
-| `geofence:away` (committed) | `phone_trips.started_at` (the actual physical-exit moment) | At commit time (10-300 s after exit, typically wifi_confirmed → 10-30 s) |
-| `geofence:home` | `NOW()` | Immediate on first inside ping |
+| Ingest daemon | [scripts/owntracks_ingest.py](../scripts/owntracks_ingest.py) | repo source of truth |
+| Deployed copy | `root@192.168.1.227:/opt/owntracks_ingest.py` | LXC 104, long-running service |
+| Systemd unit | `owntracks-ingest.service` on LXC 104 | enabled, active |
+| Env file | `/etc/owntracks-ingest.env` on LXC 104 | `MQTT_USER`, `OWNTRACKS_MQTT_PASS`, `DB_PASS` (HA_TOKEN no longer used) |
+| Dashboard surface | [BOILER/dashboard/public/project-general.html](../BOILER/dashboard/public/project-general.html) Geolocation tab | Settings card + map + events + recent trips |
+| Server endpoints | `/api/geolocation/*` in [BOILER/dashboard/server.js](../BOILER/dashboard/server.js) | settings, status, locations, events, trips |
+| Settings row | `dashboard_settings.geolocation` JSONB | singleton |
 
-Historical queries on `device_events` reflect actual exit moments. Live rule-engine subscribers receive events when they're inserted (commit moment).
+## Settings (`dashboard_settings.geolocation`)
 
-### Settings (in `dashboard_settings.geolocation`)
+| Key | Default | Purpose |
+|---|---|---|
+| `center.{lat,lon}` | apartment GPS | reference for radius checks |
+| `home_radius_m` | 40 | inside radius defines "at home" |
+| `retention_days` | 3 | device_locations auto-clean horizon |
+| `tracked_devices` | `[{device_id, name, group_id, source:'owntracks_mqtt', mqtt_topic}]` | list of OwnTracks devices to ingest |
+| `dedup_radius_m` | 25 | ping-vs-last spatial dedup threshold |
+| `dedup_window_sec` | 60 | ping-vs-last temporal dedup threshold |
+| `low_accuracy_filter_m` | 100 | drop pings with acc > N |
+| `outside_accuracy_threshold_m` | 35 | trail outlier filter — hides outdoor pings with poor accuracy from map render |
+| `stale_alert_hours` | 1 | "stale" chip threshold |
+| `geofence_events` | true | master switch for emitting home/away events |
+| `geofence_heartbeat_sec` | 270 | re-emit current state every N seconds while away |
+| `geofence_use_state_machine` | true | master switch for provisional→confirmed flow |
+| `geofence_time_fallback_sec` | 60 | commit threshold after first outside ping |
+| `geofence_hard_cap_sec` | 300 | defensive ceiling — should never fire in normal use |
 
-| Key | Type | Default | Meaning |
-|---|---|---|---|
-| `geofence_use_state_machine` | bool | true | Master switch. `false` → revert to legacy "emit on first outside ping" path (preserved byte-for-byte). No service restart needed; ingests re-read settings every pass. |
-| `geofence_wifi_min_age_sec` | int | 10 | Primary knob — WiFi must be off-Home this long before commit. |
-| `geofence_time_fallback_sec` | int | 60 | Fallback for missing/broken WiFi sensor. |
-| `geofence_hard_cap_sec` | int | 300 | Defensive ceiling. |
+**Removed in 2026-06-03 cleanup**: `ha_ingest_enabled`, `sensor_veto_enabled`, `sensor_veto_still_debounce_sec`, `geofence_wifi_min_age_sec`, plus per-device `ha_entity` / `wifi_entity` / `battery_entity` / `activity_entity` / `android_auto_entity` / `wifi_home_ssid` fields.
 
-All four exposed on the Settings card under the existing geofence section. Allow-listed at `BOILER/dashboard/server.js`'s POST handler.
+## State machine
 
-### Revert path
+Two gates, both pure-time (no HA sensor reads):
 
-Toggle `geofence_use_state_machine` to `false` and save — the next ingest pass (geolocation: 30 s, owntracks: next message) switches to the legacy `emit_geofence_event + open_trip/close_trip` path preserved byte-for-byte in both scripts. Any pending provisional row stays in DB; manually DELETE it via the Recent trips card's multi-select button.
-
-### Dashboard
-
-`GET /api/geolocation/trips` defaults to `WHERE confirmed = TRUE AND returned_at IS NOT NULL`. Query flags `?include_open=1` and `?include_provisional=1` expose the wider set for diagnostics.
-
-`DELETE /api/geolocation/trips` body `{ids: int[]}` powers the Recent trips card's multi-select delete: tick row checkboxes → "🗑 Delete selected (N)" button enables in red → confirm → rows DELETEd by id.
-
-### Verifying behavior
-
-```bash
-# Provisional/confirmed state on phone_trips
-ssh root@192.168.1.219 "psql -U postgres -d home_data -c \"
-  SELECT id, group_id, confirmed, returned_at IS NOT NULL AS closed,
-         to_char(started_at AT TIME ZONE 'Asia/Jerusalem','HH24:MI:SS') AS started
-  FROM phone_trips ORDER BY id DESC LIMIT 10\""
-
-# Recent ingest log lines — look for 'provisional opened', 'provisional deleted', 'commit:wifi_confirmed'
-ssh root@192.168.1.227 "tail -50 /var/log/geolocation-ingest.log /var/log/owntracks-ingest.log"
-```
-
-**Surface**: `GET /api/geolocation/trips?limit=N[&include_open=1]` returns closed trips by default; dashboard renders them in the "Recent trips" card on the Geolocation tab.
-
-**Retention forever** — trips are intended to outlive their source pings (`device_locations` is 30 d).
-
-## Algorithm corrections (2026-06-01 audit)
-
-Three fixes landed after a side-to-side audit caught real defects in the original ingest:
-
-1. **Ping timestamp now comes from the payload, not `NOW()`** — OwnTracks publishes `tst` (unix seconds), HA Companion exposes `state.last_changed`. Both ingests parse those and pass to `INSERT INTO device_locations (ts, …)`. Two problems this fixed:
-   - **Teleport filter false-positives on burst delivery**: OwnTracks queues pings while offline + dumps them in 100ms on reconnect. With `NOW()` as ts, `age_sec` between consecutive pings was ~0ms → implied speed ~340 m/s → ALL but first dropped as "teleport." Using payload ts makes consecutive pings span their real seconds apart → speeds pass the filter.
-   - **Chronology** in the trail render: burst-delivered pings now sort correctly by their actual fix time, not arrival time.
-
-2. **Sensor veto requires settled state** — Both ingests' `phone_appears_at_home()` originally accepted `wifi == home_ssid` (or `activity == 'still'`) at face value. Returning from a real trip, WiFi reconnects to the home SSID a few seconds BEFORE the user crosses the geofence inward, and activity flips to `'still'` as soon as they stop at the door. The veto was then suppressing the real `away → home` crossing. Fix: require `age >= sensor_veto_still_debounce_sec` on BOTH wifi and activity (and on the Android Auto override too). Veto still catches WiFi-DB poisoning while the phone has been settled at home for hours (`wifi_age` very large), but no longer kills real boundary crossings.
-
-3. **`device_locations.speed` no longer overwritten** — Both ingests' teleport block previously reassigned `speed` to the computed inter-ping speed before INSERT, clobbering the GPS-reported value. Now uses a separate `implied_speed` local var so the column stores the device's actual speed reading.
-
-## v1 trade-offs
-
-- **30 s REST poll instead of HA WebSocket push** — simpler failure domain, follows the existing LXC 104 watchdog pattern. Misses sub-30-s movement between polls but captures every meaningful transition. Upgrade to WS later if "every micro-movement" matters.
-- **Inline JS in project-general.html** instead of separate `js/geolocation.js` — keeps the tab self-contained, only loaded when project-general is opened, no extra HTTP roundtrip. If logic grows, factor out.
-- **No mobile-app sensor subscription** beyond battery — could later subscribe to charging state, network type, motion sensors. Skipped for v1 to keep ingest narrow.
-
-## Phase-0 gotcha — HA Companion throttling
-
-Samsung's One UI aggressively kills background apps at low battery (and silently throttles them when the user hasn't interacted in ~24 h). When the Fold 5 reports stale (`last_changed` > a few hours ago):
-
-1. **Charge the phone** — battery < 15% triggers Samsung's "Battery saver" which throttles ALL apps regardless of app-level battery setting.
-2. **Settings → Apps → Home Assistant → Battery → "Unrestricted"** (One UI specific).
-3. **HA Companion → Settings → Companion app → Manage sensors → Location → confirm "Background tracking" is on** + force-refresh once from the app.
-4. Confirm freshness via HA REST API: `last_changed` should be within last minute or two.
-
-The ingest pipeline keeps polling regardless — once the phone resumes pushing to HA, new pings flow into `device_locations` without any action on the project side.
-
-## Adding more devices
-
-1. On the new phone: install HA Companion app, sign in to HA, grant location permission "Allow all the time"
-2. HA creates `device_tracker.<phone_model>` automatically
-3. On Project General → Geolocation → Settings: click "+ Add device", fill in `device_id` (your choice, e.g. `iphone_maya`), `name`, `ha_entity` (copy from HA's device list), optional `battery_entity`
-4. Save settings
-5. Click "▶ Run ingest now" to verify the first ping lands
-
-No code change. The schema + ingest are N-device.
-
-## What the geofence events enable downstream
-
-`device_events` rows with `source='geolocation_ingest'` and `dps.kind='geofence'` are first-class rule-engine triggers. To act on someone arriving home:
+1. `hard_cap` (default 300 s) — ultimate fail-safe
+2. `time_fallback` (default 60 s) — normal commit
 
 ```python
-# RULES/rules/example.py
+def should_commit(trip, ping_ts, cfg, dev):
+    age = (ping_ts - trip['started_at']).total_seconds()
+    if age >= cfg['geofence_hard_cap_sec']:      return True, 'hard_cap'
+    if age >= cfg['geofence_time_fallback_sec']: return True, 'time_fallback'
+    return False, None
+```
+
+Tradeoff vs the removed WiFi-confirmed path: commits now take 60 s minimum instead of ~10 s. Worth it — the WiFi path required reading `sensor.sm_f946b_wi_fi_connection` from HA, and we wanted zero HA dependency.
+
+## API endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/geolocation/settings`      | return current settings (defaults merged) |
+| POST   | `/api/geolocation/settings`      | replace settings (allow-list filtered) |
+| GET    | `/api/geolocation/status`        | per-group last-position summary + connection chips |
+| GET    | `/api/geolocation/locations`     | trail polyline pings (1h/24h/7d/30d window) — applies `_flagOutliers` filter pipeline |
+| GET    | `/api/geolocation/events`        | recent geofence events |
+| GET    | `/api/geolocation/trips`         | recent confirmed trips (multi-select source for the dashboard delete button) |
+| DELETE | `/api/geolocation/trips`         | body `{ids:[…]}` — multi-row delete |
+| POST   | `/api/geolocation/clear-all`     | wipes device_locations + device_events for tracked phones |
+
+**Removed in 2026-06-03 cleanup**: `GET /api/geolocation/sensor-states`, `POST /api/geolocation/run-ingest`.
+
+## Trail outlier filter
+
+Server-side in `_flagOutliers` on `/api/geolocation/locations` (since 2026-06-01):
+
+1. **Stuck-source** — bit-identical consecutive lat/lon from same source (catches frozen cached fixes)
+2. **5-point median** — flags pings > max(3×neighbor-spread, 30m) from the local median (catches isolated jumps)
+3. **Outdoor low-accuracy cap** — flags pings outside the home radius with `accuracy_m > outside_accuracy_threshold_m`
+
+Outliers stay in DB for diagnostics; client renders only non-outliers.
+
+## Rule integration
+
+Rules listen on `device_events` with the standard signature:
+
+```python
+RULE = {
+    'name': 'Greet on arrival',
+    'group': 'home',
+    'priority': 50,
+    'triggers': ['owntracks_owntracks_phone_fold5'],
+    'conditions': {},
+}
+
 def evaluate(event, state):
-    if event.get('device_id') != 'fold_5_vadim':
+    if event.get('source') != 'owntracks_ingest':
         return []
     dps = event.get('dps') or {}
     if dps.get('kind') == 'geofence' and dps.get('event') == 'home':
-        return [{'device_id': '<hallway_light>', 'action': 'turn_on', ...}]
+        return [{ ... welcome action ... }]
     return []
 ```
 
-Same pattern as any other device-event-driven rule. No special integration code needed.
+## Removed (2026-06-03 — full HA cleanup)
 
-## Future phases (not yet built)
+Everything below this line **no longer exists** in the repo or LXC 104:
 
-- **OwnTracks ingest** — alternative to HA Companion; MQTT-based. Schema already supports `source='owntracks'`. Just add a new `owntracks_ingest.py` that subscribes to mosquitto.
-- **Time-at-home stats card** — read `device_locations` over a window, compute time within radius. ~20 lines server-side.
-- **Heatmap** — bucket pings into 50 m cells, render as Leaflet heatLayer overlay.
-- **Smart-arrival prediction** — rolling 30 min window of pings; if approaching home at decreasing distance + non-zero speed, fire `geofence:arriving` event 2-5 min before actual entry.
-- **Multi-floor zones** — each named zone is a separate radius around an anchor lat/lon. Currently only "home" exists.
+- `scripts/geolocation_ingest.py` — the HA Companion 30-s polling script
+- `/opt/geolocation_ingest.py` on LXC 104
+- `geolocation-ingest.service` + `geolocation-ingest.timer` systemd units
+- `_safe_ha_state()` helper in owntracks_ingest.py
+- `phone_appears_at_home()` sensor-veto helper in owntracks_ingest.py
+- WiFi-DB-poisoning filter (HA-anchored variant — replaced by pure-GPS anti-teleport guard)
+- `wifi_confirmed` commit path in `should_commit`
+- `HA_TOKEN` env var read in owntracks_ingest.py
+- `urllib.request` import (was only used for HA REST)
+- Settings keys: `ha_ingest_enabled`, `sensor_veto_enabled`, `sensor_veto_still_debounce_sec`, `geofence_wifi_min_age_sec`
+- Per-device fields: `ha_entity`, `wifi_entity`, `battery_entity`, `activity_entity`, `android_auto_entity`, `wifi_home_ssid`
+- `/api/geolocation/sensor-states` endpoint
+- `/api/geolocation/run-ingest` endpoint
+- Dashboard UI: HA Companion ingest checkbox, Sensor entities HA table, Sensor veto controls + still-debounce input, WiFi-min-age input, "Run ingest now" button, sensor live-value cells in the Tracked devices table, `geoRenderVetoRows`/`geoCollectVetoRows`/`geoRunIngestNow`/`geoValueCell`/`geoCellEdit` JS functions, `_geoSensorStates` state var
 
-## Companion docs
+## Filter test harness (since 2026-06-03)
 
-- Root [CLAUDE.md](../CLAUDE.md) → Dashboard Pages table → Project General tab; Project Modules table → this folder; DB tables list → `device_locations`
-- Adjacent agent: [NETBIRD/CLAUDE.md](../NETBIRD/CLAUDE.md) — the phone reaches the home dashboard through NetBird, but geolocation tracking doesn't depend on NetBird (HA Companion publishes directly to HA whether the phone is at home or away).
+Dashboard-triggered regression test for every filter + state-machine branch.
+
+**Files:**
+- Source: `scripts/test_geolocation_filters.py`
+- Deployed: `/opt/test_geolocation_filters.py` on LXC 104
+- Persistent log: `/var/log/test-geolocation-filters.log`
+- Ephemeral progress JSON: `/tmp/geolocation-test-progress.json`
+
+**How it works:** publishes 20 synthetic OwnTracks MQTT messages to the production broker over ~90 sec. The live daemon processes them through the actual filter chain. After each scenario the script queries DB to verify expected outcomes. Time control is via `tst` field forward-dating (a "60-second time_fallback" assertion completes in ~2 sec wall-clock).
+
+**Test isolation:** all pings use sandbox `device_id='owntracks_test_filtertest'` (not in `tracked_devices`). Production phone data is never touched. Try/finally cleanup wipes every sandbox row at end (also runs at start to clear leftover from a crashed prior run).
+
+**Cross-system safety verified before shipping:**
+- Wildcard rules (`Home Activity`, `People Home`) gate on `device_type IN (presence, motion, switch, door_sensor)`. Test device is `phone` → wildcards see the event then early-return. No real rule action fires.
+- No rule has `triggers` matching the sandbox device_id.
+- MQTT topic `owntracks/+/+` is consumed only by the daemon.
+
+**Scenarios (20 total, ~90 sec runtime):**
+
+| ID | Category | What it tests |
+|---|---|---|
+| A1 | Fake | Anti-teleport-from-home (Jerusalem cache replay) |
+| A2 | Fake | Low-accuracy filter (acc > 80 m) |
+| A3 | Fake | Max-speed teleport (800 m/s extreme) |
+| A4 | Fake | Stale-ts guard (`age_sec ≤ 0`) |
+| A5 | Fake | Single outlier between stationary pings (no trip opens) |
+| A6 | Fake | Dedup spatial+temporal (< 25 m + < 60 s) |
+| B1 | True | Stationary at home (no trips) |
+| B2 | True | Real outbound + commit with backdated ts |
+| B3 | True | Real return + trip closes with stats |
+| B4 | True | Quick errand (provisional deletes, no event) |
+| B5 | True | Long round-trip |
+| B6 | True | Flicker filter behavior on close |
+| C1 | Walk | Walking out the door (3 m/s) |
+| C2 | Walk | Radius-edge jitter (no events) |
+| C3 | Walk | Short walk + return (60 s boundary) |
+| C4 | Walk | Walk with 5-min GPS dropout |
+| D1 | Car | City driving 25 m/s + red light |
+| D2 | Car | Above-threshold speed (60 m/s drops) |
+| D3 | Car | Just-under-threshold (43 m/s passes) |
+| D4 | Car | Tunnel mid-trip (5-min gap) |
+
+**Invocation:**
+- **Dashboard UI** (preferred): Project General → Geolocation tab → Settings card → "▶ Run filter test" button. Live progress bar + pass/fail counts. End-of-run state shown inline.
+- **SSH** (advanced): `ssh root@192.168.1.227 'python3 /opt/test_geolocation_filters.py'`. Flags: `--only A1,B2`, `--cleanup`, `--verbose`.
+
+**Show/hide test data on UI** (per-browser preference, default unchecked, in localStorage `geo.showTestData`):
+- Unchecked → Recent geofence events + Recent trips cards client-side filter out rows with `device_id='owntracks_test_filtertest'`. Map already gated by `tracked_devices` so test trail never renders.
+- Checked → test rows visible during the ~90 sec run; vanish at cleanup.
+
+**Endpoints:**
+- `POST /api/geolocation/run-filter-test` — fires the script on LXC 104 via SSH. Returns 409 if a previous test is still running.
+- `GET /api/geolocation/filter-test-status` — reads the progress JSON via SSH cat. Returns `{running:false, never_ran:true}` if no test has been run yet.
+- `POST /api/geolocation/clear-test-data` — emergency cleanup (wipes sandbox rows). Surfaced via "✕ Clear test data" link next to the test button.
+
+**Failure-mode visibility:** comment out the anti-teleport block in the daemon → run the suite → A1 fails with diagnostic showing the bogus Jerusalem row was inserted. Restore + re-run → A1 passes.
+
+**Heartbeat + hard_cap tests are NOT in the default fast suite** (would require 270s + 300s real-time waits). Available behind `--slow` opt-in on the script (no dashboard surface for that mode — SSH only).
+
+## History (why we got here)
+
+| Date | Event |
+|---|---|
+| 2026-05-31 | Phase 1 scoped. Dual-ingest (HA Companion + OwnTracks) writing to one shared `phone_trips` row per `group_id`. |
+| 2026-06-01 | Multiple fixes: trip flicker filter, ping-ts from payload not `NOW()`, sensor veto with age guards. |
+| 2026-06-02 morning | Discovered 5 phantom trips (58-81 s, never left home) — GPS jitter slipping through. Added WiFi-confirmed state machine (provisional / confirmed) to defer `geofence:away` until WiFi sensor confirmed the exit. |
+| 2026-06-02 evening | Discovered trip 295 was a 25-second tail of a real 35-min / 9 km trip — HA Companion's `device_tracker.fold_5_vadim` was reporting `state='home'` the whole time due to WiFi-DB poisoning. 294 prior provisional trips had been wrestled away by HA's false-home pings. |
+| 2026-06-02 evening | Added `ha_ingest_enabled` master toggle to silence HA ingest path. Confirmed OwnTracks alone records correctly. |
+| 2026-06-03 audit | Found Fix A (`hard_cap` was unreachable when veto blocked). Applied to both ingest scripts. |
+| 2026-06-03 cleanup | User decision: **remove HA from geolocation completely**. This file documents the post-cleanup state. |
+
+## Future considerations (NOT scoped)
+
+- Multi-phone support is already wired via `group_id` — just add another entry to `tracked_devices`.
+- Phase-2 rules that consume `phone_trips` for derived signals (step-counting, daily-distance summaries, etc.) can land any time; the OwnTracks-only data is sufficient.
+- If commit latency matters in the future, the WiFi-confirm path could be re-added against an MQTT-direct WiFi sensor source (not HA REST) — same algorithmic shape, different data source. Not planned now.
