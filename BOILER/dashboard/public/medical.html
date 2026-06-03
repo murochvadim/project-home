@@ -103,13 +103,15 @@
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel active" id="tab-contacts">
 
-    <div class="card" style="margin-bottom:16px;">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin-bottom:16px;">
+
+    <div class="card" style="margin-bottom:0;">
       <h2 style="margin-top:0;">+ Add contact</h2>
       <button class="btn btn-success btn-sm" onclick="medOpenContactForm()">+ New</button>
       <div id="med-contact-form" style="display:none; margin-top:12px;"></div>
     </div>
 
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card" style="margin-bottom:0;">
       <h2 style="margin-top:0;">Filter</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <select id="med-filter-kind" onchange="medRenderContacts()"
@@ -124,6 +126,8 @@
           style="flex:1; min-width:180px; padding:5px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
       </div>
     </div>
+
+    </div><!-- /grid: Add contact + Filter side-by-side -->
 
     <div class="card">
       <h2 style="margin-top:0;">List</h2>
@@ -263,6 +267,6 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=22"></script>
+<script src="js/medical.js?v=23"></script>
 </body>
 </html>
