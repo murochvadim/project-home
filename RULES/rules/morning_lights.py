@@ -36,7 +36,7 @@ Sentences (authored in the dashboard "Morning Lights" container):
          (mode names are fully sentence-driven — no `'home'`/`'away'`/
          `'abroad'` literals in code).
 
-  s_ml4: Morning Lights: also fire on arrival after sunrise+90
+  s_ml4: Morning Lights: also turn on when arriving home after sunrise+90
          (optional) Enables the arrival trigger. Threshold is an
          explicit sun-event anchor: <event>[±N] where event is
          dawn|sunrise|noon|sunset|dusk and ±N is minutes. Examples:
@@ -95,11 +95,10 @@ _GATE_RE = re.compile(
     re.IGNORECASE,
 )
 # Arrival-trigger sentence (s_ml4, optional) —
-#   "Morning Lights: also fire on arrival after <event>[±N]"
-# Plain English: also fire when you arrive home after this sun-anchor time.
+#   "Morning Lights: also turn on when arriving home after <event>[±N]"
 # `<event>[±N]` is e.g. `sunrise`, `sunrise+90`, `dawn-15`.
 _LATE_ARRIVAL_RE = re.compile(
-    r'morning\s+lights:\s*also\s+fire\s+on\s+arrival\s+after\s+(.+)',
+    r'morning\s+lights:\s*also\s+turn\s+on\s+when\s+arriving\s+home\s+after\s+(.+)',
     re.IGNORECASE,
 )
 
@@ -315,7 +314,7 @@ def _load_late_arrival_threshold(container, state):
     """Parse s_ml4. Returns the minute-of-day threshold for Scenario B,
     or None if no s_ml4 sentence is authored (Scenario B disabled).
 
-    Sentence: "Morning Lights: also fire on arrival after <event>[±N]"
+    Sentence: "Morning Lights: also turn on when arriving home after <event>[±N]"
     e.g. `... after sunrise`, `... after sunrise+90`, `... after dawn-15`.
     """
     if not container:
