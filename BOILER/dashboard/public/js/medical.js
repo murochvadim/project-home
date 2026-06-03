@@ -187,6 +187,7 @@ const DOC_TYPE_LABELS = {
 let DOCUMENTS    = [];
 let _camStream   = null;   // MediaStream when camera card is open
 let _docsLoaded  = false;  // first tab-switch triggers full load
+let _pickedFile  = null;   // file dropped onto / picked via the drop zone
 
 window.medLoadDocuments = async function () {
   // Make sure CONTACTS is fresh — the doctor + producer dropdowns reference it.
@@ -195,7 +196,47 @@ window.medLoadDocuments = async function () {
   }
   await medFetchDocuments();
   _populateDoctorFilter();
+  // Wire up the drop zone the first time we visit the Documents tab.
+  if (!_docsLoaded) _wireDropZone();
   _docsLoaded = true;
+};
+
+function _wireDropZone() {
+  const zone = document.getElementById('med-drop-zone');
+  if (!zone) return;
+  const stop = e => { e.preventDefault(); e.stopPropagation(); };
+  ['dragenter', 'dragover'].forEach(ev => {
+    zone.addEventListener(ev, e => {
+      stop(e);
+      zone.style.background = '#eef5ff';
+      zone.style.borderColor = '#2563eb';
+    });
+  });
+  ['dragleave', 'drop'].forEach(ev => {
+    zone.addEventListener(ev, e => {
+      stop(e);
+      zone.style.background = '#fafaf6';
+      zone.style.borderColor = '#b0a896';
+    });
+  });
+  zone.addEventListener('drop', e => {
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) window.medFileDropped(f);
+  });
+}
+
+// Triggered by the drop zone's <input type="file"> onchange OR by drag-drop
+// onto the zone. Opens the metadata form pre-attached to this file.
+window.medFileDropped = function (file) {
+  if (!file) return;
+  _pickedFile = file;
+  const stage = document.getElementById('med-camera-stage');
+  if (stage) stage.style.display = 'none';   // close camera if open
+  _stopCamera();
+  const el = document.getElementById('med-doc-form');
+  el.style.display = 'block';
+  el.innerHTML = renderDocForm({ _mode: 'picked', name: file.name.replace(/\.[^.]+$/, '') });
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 };
 
 async function medFetchDocuments() {
@@ -316,6 +357,11 @@ window.medCloseDocForm = function () {
   _stopCamera();
   document.getElementById('med-camera-stage').style.display = 'none';
   document.getElementById('med-upload-progress').style.display = 'none';
+  _pickedFile = null;
+  // Reset the drop-zone's hidden input so picking the SAME file twice in a
+  // row still fires onchange (browsers debounce identical filenames).
+  const inp = document.getElementById('med-drop-input');
+  if (inp) inp.value = '';
 };
 
 function renderDocForm(d) {
@@ -332,9 +378,10 @@ function renderDocForm(d) {
   const optType = Object.entries(DOC_TYPE_LABELS).map(([k, lbl]) =>
     `<option value="${k}"${k === d.doc_type ? ' selected' : ''}>${esc(lbl)}</option>`).join('');
   return `<div style="background:#fafaf6; padding:12px; border-radius:6px;">
-    ${editing ? '' : (mode === 'pdf'
-      ? `<div class="med-form-row"><label>File</label><input type="file" id="df-file" accept="application/pdf,image/jpeg,image/png,image/heic,image/webp" onchange="medFillNameFromFile()"></div>
-         <div class="med-form-row"><label></label><span style="font-size:0.78rem; color:#666; line-height:1.4;">Accepts PDF or image (JPEG/PNG/HEIC/WebP). Tip: take a photo with your phone's normal camera → drag it from the Phone Link app right onto this picker, or save it from Phone Link and pick it here.</span></div>`
+    ${editing ? '' : (mode === 'picked' && _pickedFile
+      ? `<div class="med-form-row"><label>File</label><span style="font-size:0.88rem;">📎 ${esc(_pickedFile.name)} (${_fmtSize(_pickedFile.size)})</span></div>`
+      : mode === 'pdf'
+      ? `<div class="med-form-row"><label>File</label><input type="file" id="df-file" accept="application/pdf,image/jpeg,image/png,image/heic,image/webp" onchange="medFillNameFromFile()"></div>`
       : `<div class="med-form-row"><label>Image</label><span style="font-size:0.84rem;color:#666;">Use Snap below to capture; preview will appear after.</span></div>`)}
     <div class="med-form-row"><label>Name</label><input type="text" id="df-name" value="${v('name')}" placeholder="auto from filename"></div>
     <div class="med-form-row"><label>Type</label><select id="df-type">${optType}</select></div>
@@ -666,9 +713,10 @@ window.medUploadDoc = async function () {
   const notes     = document.getElementById('df-notes').value.trim();
 
   let file = null;
-  const fi = document.getElementById('df-file');
-  if (fi && fi.files && fi.files[0]) {
-    file = fi.files[0];
+  if (_pickedFile) {
+    file = _pickedFile;
+  } else if (document.getElementById('df-file') && document.getElementById('df-file').files[0]) {
+    file = document.getElementById('df-file').files[0];
   } else if (_capturedBlob && _origCanvas) {
     // Build the final JPEG by extracting the user's crop rectangle from
     // the original full-res frame at upload time (sharper than re-encoding
