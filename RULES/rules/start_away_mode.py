@@ -1,6 +1,7 @@
-"""Start Away Mode — staged actions when home_mode transitions to 'away'.
+"""Start Away Mode — staged actions when home_mode transitions to the
+trigger mode declared in s_sa7 (typically `away`).
 
-Sentence-driven via the dashboard "Start Away Mode" container. Six sentences:
+Sentence-driven via the dashboard "Start Away Mode" container. Seven sentences:
 
   s_sa1: Start Away: turn off all lights and tvs
          (which device-type families to switch OFF on entry)
@@ -11,48 +12,71 @@ Sentence-driven via the dashboard "Start Away Mode" container. Six sentences:
   s_sa3: Start Away: keep on for 90 seconds
          (duration X — accepts seconds | minutes | hours, integer or decimal)
 
-  s_sa4: Start Away: initial preset is <PresetName>
-         (Pixoo preset pushed at entry — uses live `{{countdown}}` token)
+  s_sa4: Start Away: initial preset is @<DisplayChip>
+         (Pixoo/Awtrix preset pushed at entry — vars include live
+          {{countdown}} token if action is push_preset. Chip drives WHICH
+          device gets the command — Pixoo, Awtrix, HASP, Alexa, anything
+          parse_display_chip recognizes.)
 
-  s_sa5: Start Away: final preset is <PresetName>
-         (Pixoo preset pushed when X elapses)
+  s_sa5: Start Away: final preset is @<DisplayChip>
+         (Pushed when X elapses — same chip flexibility as s_sa4)
 
-  s_sa6: Start Away: do not turn off @<Chip1>, @<Chip2>, …
+  s_sa6_exclude: Start Away: do not turn off @<Chip1>, @<Chip2>, …
          (device IDs to PROTECT from Phase 1's bulk-OFF, e.g. fridge,
           security camera, router. Per-device granularity — a chip on
           one channel of a multi-gang switch excludes the whole device.
-          Empty/missing sentence = no exclusions, identical to legacy
-          5-sentence behavior.)
+          Empty/missing sentence = no exclusions.)
+
+  s_sa7: Start Away: fires when home_mode is away
+         (the trigger mode — replaces hardcoded literal. If absent or
+          names an unknown mode, rule is a safe no-op.)
 
 State machine (per home period):
 
-  idle  ──home_mode just entered 'away'──→  phase1
-                                              · turn_off all matching device_types
-                                              · turn_on s_sa2 device
-                                              · push s_sa3 preset (countdown=now+X)
-                                              · start timer start_away_t0
+  idle  ──home_mode just entered <trigger>──→  phase1
+                                                · turn_off all matching device_types
+                                                · turn_on s_sa2 device
+                                                · dispatch s_sa4 cmd (with countdown var if push_preset)
+                                                · start timer start_away_t0
 
-  phase1 ──elapsed ≥ X min, still away──→   phase2
-                                              · turn_off s_sa2 device
-                                              · push s_sa4 preset
+  phase1 ──elapsed ≥ X sec, still in trigger──→ phase2
+                                                · turn_off s_sa2 device
+                                                · dispatch s_sa5 cmd
 
-  any   ──home_mode leaves 'away'────────→  idle (latch reset; eligible to refire)
+  any   ──home_mode leaves <trigger>────────→  idle (latch reset; eligible to refire)
 
-  phase1 ──AWAY pressed again─────────────→  phase1 (latched, no refire)
+  phase1 ──trigger pressed again────────────→  phase1 (latched, no refire)
 
-If the configuration is incomplete (any of the 5 fields unparsed), the rule
+`prev_home` non-empty guard on the entry trigger prevents a false-fire
+right after a rule-engine restart, where the persisted state defaults
+to empty and would otherwise look like a transition.
+
+If the configuration is incomplete (any of the 6 fields unparsed), the rule
 is a safe no-op. Trigger is heartbeat (60 s) so transitions and the
 phase-2 timeout are caught within ≤ 60 s.
 
 Companion rules:
 - mode_buttons.py — sole writer of state.shared['home_mode'], rule depends_on it.
+
+Companion modules:
+- _display_chips.parse_display_chip — resolves @<Display>/@<Panel>/@<Alexa>
+  chips in s_sa4 / s_sa5 to complete command dicts.
 """
 
 import json
 import logging
+import os
 import re
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+# RULES/ is the parent of rules/ — needed for `import _display_chips` since
+# rule files are loaded via importlib.util but share sys.path with the engine.
+_RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RULES_DIR not in sys.path:
+    sys.path.insert(0, _RULES_DIR)
+from _display_chips import parse_display_chip, build_devices_by_name  # noqa: E402
 
 log = logging.getLogger('rule.start_away_mode')
 
@@ -84,11 +108,17 @@ _FINAL_RE     = re.compile(r'start\s+away:\s*final\s+preset\s+is\s+(.+)', re.IGN
 # turn off" / "do not touch" / "do not switch off". One device chip is
 # enough to activate; multiple chips comma-separated all get excluded.
 _EXCLUDE_RE   = re.compile(r"start\s+away:\s*do(?:n['']t|\s+not)\s+(?:turn\s+off|switch\s+off|touch)", re.IGNORECASE)
+# Trigger-mode sentence (s_sa7) — names which home_mode value the rule
+# reacts to. No hardcoded `'away'` literal in code.
+_TRIGGER_MODE_RE = re.compile(
+    r'start\s+away:\s*fires\s+when\s+home_mode\s+is\s+([a-z_]+)',
+    re.IGNORECASE,
+)
 
 
 RULE = {
     "name":        "Start Away Mode",
-    "description": "On home_mode→away: off all lights+tvs, keep one device on for X min with pixoo countdown, push final preset after.",
+    "description": "On entering the s_sa7 trigger mode: off s_sa1 device types (s_sa6 exclusions kept on), turn on s_sa2 device for s_sa3 duration, dispatch s_sa4 cmd with countdown, dispatch s_sa5 cmd after countdown.",
     "triggers":    ["heartbeat"],
     "controls":    [],
     "category":    "control",
@@ -178,18 +208,26 @@ def _read_container(state):
 
 
 def _parse_config(state, container):
-    """Parse the 4 (or fewer) sentences. Returns dict; missing fields → None."""
+    """Parse the 7 (or fewer) sentences. Returns dict; missing fields → None.
+
+    `initial_cmd` and `final_cmd` are full command dicts produced by
+    parse_display_chip — they carry their own device_id + protocol +
+    action + (optional) preset_name + (optional) channel/page_num/etc.
+    No hardcoded display device in this rule's dispatch.
+    """
     cfg = {
         'off_types':       set(),
         'exclude_ids':     set(),
         'keep_on_target':  None,
         'keep_on_sec':     None,
-        'initial_preset':  None,
-        'final_preset':    None,
+        'initial_cmd':     None,
+        'final_cmd':       None,
+        'trigger_mode':    None,
     }
     if not container:
         return cfg
     devices_by_name_desc = _build_devices_by_name_desc(state.devices)
+    devices_by_name      = build_devices_by_name(state.devices)
     for s in (container.get('sentences') or []):
         if not s.get('active'):
             continue
@@ -201,6 +239,12 @@ def _parse_config(state, container):
             for w in re.findall(r'[a-z_]+', rest):
                 if w in DEVICE_TYPE_ALIASES:
                     cfg['off_types'].update(DEVICE_TYPE_ALIASES[w])
+            continue
+
+        # Trigger-mode sentence (s_sa7). Plain-text only, no chips.
+        m = _TRIGGER_MODE_RE.search(text)
+        if m:
+            cfg['trigger_mode'] = m.group(1).lower()
             continue
 
         # Exclude sentence: any chip(s) here are added to the per-device
@@ -237,37 +281,20 @@ def _parse_config(state, container):
                 cfg['keep_on_sec'] = duration * 3600
             continue
 
-        m = _INIT_RE.search(text)
-        if m:
-            cfg['initial_preset'] = _extract_preset_name(s, m.group(1))
+        # Initial preset / final preset sentences — chip parsed via the
+        # shared display-chip parser. Cmd dict carries device + action info.
+        if _INIT_RE.search(text):
+            chips = _iter_dev_chips(s)
+            if chips:
+                cfg['initial_cmd'] = parse_display_chip(chips[0], devices_by_name)
             continue
 
-        m = _FINAL_RE.search(text)
-        if m:
-            cfg['final_preset'] = _extract_preset_name(s, m.group(1))
+        if _FINAL_RE.search(text):
+            chips = _iter_dev_chips(s)
+            if chips:
+                cfg['final_cmd'] = parse_display_chip(chips[0], devices_by_name)
             continue
     return cfg
-
-
-_PRESET_CHIP_RE = re.compile(r'^@(?P<dev>Pixoo|Awtrix)\s+(?:push\s+)?(?P<preset>.+)$', re.IGNORECASE)
-
-
-def _extract_preset_name(sentence, fallback_text):
-    """Pixoo presets are typically authored via @Pixoo or @Awtrix chip syntax.
-    Recognized formats:
-      @Pixoo <PresetName>        (legacy)
-      @Pixoo push <PresetName>   (display-picker action format)
-      @Awtrix push <SavedApp>    (Awtrix saved app — same shape)
-    """
-    chips = _iter_dev_chips(sentence)
-    if chips:
-        chip = chips[0]
-        m = _PRESET_CHIP_RE.match(chip.strip())
-        if m:
-            return m.group('preset').strip()
-        if chip.startswith('@'):
-            return chip[1:].strip()
-    return (fallback_text or '').strip()
 
 
 def _config_ok(cfg):
@@ -275,8 +302,9 @@ def _config_ok(cfg):
         bool(cfg['off_types']) and
         cfg['keep_on_target'] is not None and
         cfg['keep_on_sec'] is not None and
-        bool(cfg['initial_preset']) and
-        bool(cfg['final_preset'])
+        cfg['initial_cmd'] is not None and
+        cfg['final_cmd'] is not None and
+        cfg['trigger_mode'] is not None
     )
 
 
@@ -294,9 +322,11 @@ def evaluate(event, state):
     home_mode = state.shared.get('home_mode', '')
     prev_home = state.shared.get('_start_away_prev_home_mode', '')
     phase     = state.shared.get('_start_away_phase', 'idle')
+    trigger   = cfg.get('trigger_mode')
 
-    # Reset latch when home_mode leaves 'away'.
-    if prev_home == 'away' and home_mode != 'away':
+    # Reset latch when home_mode leaves the trigger mode (e.g. user
+    # presses HOME after being AWAY). Only runs when trigger_mode is set.
+    if trigger is not None and prev_home == trigger and home_mode != trigger:
         phase = 'idle'
         state.shared['_start_away_phase'] = 'idle'
 
@@ -307,12 +337,17 @@ def evaluate(event, state):
     if not _config_ok(cfg):
         return []
 
-    home_just_entered_away = (prev_home != 'away' and home_mode == 'away')
+    # `prev_home` non-empty guard prevents a spurious Phase 1 right after
+    # rule-engine restart, where the persisted state hasn't re-seeded yet
+    # and prev_home defaults to '' (≠ trigger → would fire).
+    home_just_entered = (prev_home
+                        and prev_home != trigger
+                        and home_mode == trigger)
 
     commands = []
 
-    # ── Phase 1 — entry into away ──
-    if phase == 'idle' and home_just_entered_away:
+    # ── Phase 1 — entry into trigger mode ──
+    if phase == 'idle' and home_just_entered:
         keep_dev_id, keep_dps = cfg['keep_on_target']
 
         # Turn OFF every device whose device_type matches the s_sa1 set,
@@ -345,30 +380,30 @@ def evaluate(event, state):
             cmd['channel'] = keep_dps
         commands.append(cmd)
 
-        # Push initial Pixoo preset; live `{{countdown}}` in the preset
-        # ticks down from end_ts to 0.
+        # Dispatch the s_sa4 chip's command (Pixoo/Awtrix/HASP/Alexa —
+        # whatever the chip resolved to). For push_preset actions, inject
+        # the `{{countdown}}` substitution var so the display can render
+        # a live countdown to phase 2. Non-preset actions (power_on,
+        # announce_template, page-nav etc.) get no vars injection.
         end_ts = datetime.now(_TZ).timestamp() + cfg['keep_on_sec']
-        commands.append({
-            'device_id':   'pixoo',
-            'protocol':    'pixoo',
-            'action':      'push_preset',
-            'preset_name': cfg['initial_preset'],
-            'vars':        {'countdown': end_ts},
-            'rule':        'Start Away Mode',
-        })
+        initial = {**cfg['initial_cmd'], 'rule': 'Start Away Mode'}
+        if initial.get('action') == 'push_preset':
+            initial['vars'] = {**(initial.get('vars') or {}), 'countdown': end_ts}
+        commands.append(initial)
 
         state.set_timer('start_away_t0')
         state.shared['_start_away_phase'] = 'phase1'
 
         log.info(
-            "start_away_mode: phase1 fired (off_types=%s keep_on=%s for %.0f sec initial=%s final=%s)",
-            sorted(cfg['off_types']), cfg['keep_on_target'], cfg['keep_on_sec'],
-            cfg['initial_preset'], cfg['final_preset'],
+            "start_away_mode: phase1 fired (trigger=%s off_types=%s keep_on=%s for %.0f sec initial=%s final=%s)",
+            trigger, sorted(cfg['off_types']), cfg['keep_on_target'], cfg['keep_on_sec'],
+            cfg['initial_cmd'].get('preset_name') or cfg['initial_cmd'].get('action'),
+            cfg['final_cmd'].get('preset_name') or cfg['final_cmd'].get('action'),
         )
         return commands
 
-    # ── Phase 2 — countdown elapsed, still away ──
-    if phase == 'phase1' and home_mode == 'away':
+    # ── Phase 2 — countdown elapsed, still in trigger mode ──
+    if phase == 'phase1' and home_mode == trigger:
         elapsed_sec = state.get_timer('start_away_t0')
         if elapsed_sec >= cfg['keep_on_sec']:
             keep_dev_id, keep_dps = cfg['keep_on_target']
@@ -381,18 +416,13 @@ def evaluate(event, state):
                 cmd['channel'] = keep_dps
             commands.append(cmd)
 
-            commands.append({
-                'device_id':   'pixoo',
-                'protocol':    'pixoo',
-                'action':      'push_preset',
-                'preset_name': cfg['final_preset'],
-                'rule':        'Start Away Mode',
-            })
+            commands.append({**cfg['final_cmd'], 'rule': 'Start Away Mode'})
 
             state.shared['_start_away_phase'] = 'phase2'
             log.info(
                 "start_away_mode: phase2 fired (elapsed=%.0f sec final=%s)",
-                elapsed_sec, cfg['final_preset'],
+                elapsed_sec,
+                cfg['final_cmd'].get('preset_name') or cfg['final_cmd'].get('action'),
             )
             return commands
 
