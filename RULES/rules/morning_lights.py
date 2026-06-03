@@ -105,7 +105,7 @@ _LATE_ARRIVAL_RE = re.compile(
 
 RULE = {
     "name":        "Morning Lights",
-    "description": "Turn on declared lights at sunrise±offset OR home arrival during active morning time modes (latched per home period + per day).",
+    "description": "Turn on declared lights once per day: at the s_ml2 sun anchor, OR (if s_ml4 is authored) on home arrival once the s_ml4 anchor has passed.",
     "triggers":    ["heartbeat"],
     "controls":    [],
     "category":    "control",
@@ -240,19 +240,17 @@ def _load_morning_light_targets(state, container):
     return targets
 
 
-def _load_active_triggers(container):
-    """Parse the s_ml2 sentence into (active_modes, sun_anchors).
+def _load_sun_anchors(container):
+    """Parse s_ml2 → list[(base, offset_min)] of sun-event anchors.
 
-    Sentence: "Morning Lights: active time modes are sunrise-15, dawn, morning"
-    Each comma-separated item is classified:
-      - sun-event token with optional ±N offset → sun_anchors list of (base, offset)
-      - any plain word (a-z, _) → active_modes set
-    Returns (active_modes:set, sun_anchors:list[tuple[str,int]]).
+    Sentence: "Morning Lights: active time modes are sunrise-15, dawn-5"
+    Only sun-event tokens with optional ±N offset are honored. Any plain
+    words (e.g. `morning`, `day`) are silently ignored — they were a
+    pre-2026-05-27 Scenario-B concept that no longer drives anything.
     """
-    active_modes = set()
     sun_anchors = []
     if not container:
-        return active_modes, sun_anchors
+        return sun_anchors
     for s in (container.get('sentences') or []):
         if not s.get('active'):
             continue
@@ -269,10 +267,8 @@ def _load_active_triggers(container):
                 base = ma.group(1).lower()
                 offset = int(ma.group(2)) if ma.group(2) else 0
                 sun_anchors.append((base, offset))
-            elif re.match(r'^[a-z_]+$', p):
-                active_modes.add(p)
-        return active_modes, sun_anchors
-    return active_modes, sun_anchors
+        return sun_anchors
+    return sun_anchors
 
 
 def _load_gates(container):
@@ -357,10 +353,11 @@ def evaluate(event, state):
         # Container not authored yet — no-op.
         return []
 
-    active_modes, sun_anchors = _load_active_triggers(container)
-    if not active_modes and not sun_anchors:
-        # s_ml2 missing or empty — no-op.
-        log.debug("morning_lights: active time modes sentence missing — skipping")
+    sun_anchors = _load_sun_anchors(container)
+    if not sun_anchors:
+        # s_ml2 missing or no sun-event anchors — rule has no time threshold,
+        # no-op. Plain time-mode words alone don't drive anything.
+        log.debug("morning_lights: no sun anchors in s_ml2 — skipping")
         return []
 
     home_mode = state.shared.get('home_mode', '')
