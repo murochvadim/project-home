@@ -2482,6 +2482,179 @@ app.delete('/api/medical/contacts/:id', async (req, res) => {
   } catch (e) { _medErr(res, e); }
 });
 
+// ─── Medical Documents — PDF + camera-capture uploads ─────────
+// Storage: \\192.168.1.155\Claude_Data\Medical_Documents\ (QNAP CIFS).
+// Windows-side `claude` user can read + write directly via UNC path.
+// DELETE goes through LXC 104 SSH because the Windows-side claude user
+// has no SMB delete permission on this share (QNAP ACL quirk); LXC 104's
+// CIFS mount has the rights. ~200 ms overhead on delete, native speed on
+// read + write.
+const MEDICAL_DOCS_ROOT  = '\\\\192.168.1.155\\Claude_Data\\Medical_Documents';
+const MEDICAL_DOCS_LINUX = '/mnt/qnap-claude/Medical_Documents';   // LXC 104 view of same path
+const MEDICAL_DOC_TYPES  = new Set([
+  'lab_result', 'imaging', 'prescription', 'visit_summary',
+  'referral', 'insurance', 'vaccine_record', 'id_card', 'other',
+]);
+
+// Auto-create the destination folder on startup if missing — fails loudly
+// if Windows can't see the share (so misconfig surfaces immediately).
+try {
+  fs.mkdirSync(MEDICAL_DOCS_ROOT, { recursive: true });
+} catch (e) {
+  console.error('Medical Documents storage root not reachable:', e.message);
+}
+
+// 25 MB cap — PDFs from labs are typically 1–5 MB, camera JPEGs 0.5–2 MB.
+// Plenty of headroom for the occasional multi-page scan.
+const medicalDocUpload = multer({
+  dest:   path.join(os.tmpdir(), 'medical-doc-uploads'),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
+
+function _sanitizeName(s) {
+  return String(s || '').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+// GET — list documents (with optional filters)
+app.get('/api/medical/documents', async (req, res) => {
+  try {
+    const filters = [];
+    const params = [];
+    if (req.query.type)        { params.push(req.query.type);              filters.push(`doc_type = $${params.length}`); }
+    if (req.query.doctor_id)   { params.push(parseInt(req.query.doctor_id));   filters.push(`doctor_id = $${params.length}`); }
+    if (req.query.producer_id) { params.push(parseInt(req.query.producer_id)); filters.push(`producer_id = $${params.length}`); }
+    if (req.query.q) {
+      params.push('%' + String(req.query.q).toLowerCase() + '%');
+      filters.push(`(LOWER(d.name) LIKE $${params.length} OR LOWER(d.notes) LIKE $${params.length})`);
+    }
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const r = await db.query(`
+      SELECT d.id, d.name, d.doc_type, d.doctor_id, d.producer_id,
+             d.file_path, d.file_size, d.mime_type,
+             to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date,
+             d.notes,
+             to_char(d.uploaded_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS uploaded_at,
+             dr.name AS doctor_name, pr.name AS producer_name, pr.kind AS producer_kind
+        FROM medical_documents d
+        LEFT JOIN medical_contacts dr ON dr.id = d.doctor_id
+        LEFT JOIN medical_contacts pr ON pr.id = d.producer_id
+        ${where}
+        ORDER BY d.uploaded_at DESC
+    `, params);
+    res.json(r.rows);
+  } catch (e) { _medErr(res, e); }
+});
+
+// POST — upload (multipart: `file` + JSON-stringified `meta`)
+app.post('/api/medical/documents', medicalDocUpload.single('file'), async (req, res) => {
+  let tmpPath = null;
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file required' });
+    tmpPath = req.file.path;
+    let meta = {};
+    try { meta = JSON.parse(req.body.meta || '{}'); } catch { return res.status(400).json({ error: 'meta must be JSON' }); }
+    const name     = _medTrim(meta.name) || _medTrim(req.file.originalname);
+    const docType  = _medTrim(meta.doc_type);
+    if (!name)    return res.status(400).json({ error: 'name required' });
+    if (!docType || !MEDICAL_DOC_TYPES.has(docType)) {
+      return res.status(400).json({ error: `doc_type must be one of: ${[...MEDICAL_DOC_TYPES].join(', ')}` });
+    }
+    const doctorId   = meta.doctor_id   != null && meta.doctor_id   !== '' ? parseInt(meta.doctor_id)   : null;
+    const producerId = meta.producer_id != null && meta.producer_id !== '' ? parseInt(meta.producer_id) : null;
+    const docDate    = _medTrim(meta.doc_date);
+    const notes      = _medTrim(meta.notes);
+    const ext        = (req.file.originalname.match(/\.[a-zA-Z0-9]+$/) || [''])[0].toLowerCase();
+    const mimeType   = req.file.mimetype || (ext === '.pdf' ? 'application/pdf' : 'application/octet-stream');
+
+    // Pre-allocate an id by inserting a row with a placeholder file_path so
+    // the final filename can include the id. Then UPDATE the file_path.
+    const insR = await db.query(`
+      INSERT INTO medical_documents
+        (name, doc_type, doctor_id, producer_id, file_path, file_size, mime_type, doc_date, notes)
+      VALUES ($1,$2,$3,$4,'',$5,$6,$7,$8) RETURNING id
+    `, [name, docType, doctorId, producerId, req.file.size, mimeType, docDate, notes]);
+    const id = insR.rows[0].id;
+    const filename = `${id}__${_sanitizeName(name)}${ext}`;
+    const absPath  = path.join(MEDICAL_DOCS_ROOT, filename);
+    fs.copyFileSync(tmpPath, absPath);
+    await db.query('UPDATE medical_documents SET file_path = $1 WHERE id = $2', [filename, id]);
+    res.json({ ok: true, id, file_path: filename, file_size: req.file.size });
+  } catch (e) {
+    _medErr(res, e);
+  } finally {
+    if (tmpPath) { try { fs.unlinkSync(tmpPath); } catch (_) {} }
+  }
+});
+
+// PATCH — metadata-only update (name / doc_type / doctor / producer / doc_date / notes)
+app.patch('/api/medical/documents/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const sets = [];
+    const params = [];
+    const add = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+    if (b.name !== undefined)        add('name',        _medTrim(b.name));
+    if (b.doc_type !== undefined)    {
+      if (!MEDICAL_DOC_TYPES.has(b.doc_type)) return res.status(400).json({ error: 'invalid doc_type' });
+      add('doc_type', b.doc_type);
+    }
+    if (b.doctor_id !== undefined)   add('doctor_id',   b.doctor_id === '' || b.doctor_id === null ? null : parseInt(b.doctor_id));
+    if (b.producer_id !== undefined) add('producer_id', b.producer_id === '' || b.producer_id === null ? null : parseInt(b.producer_id));
+    if (b.doc_date !== undefined)    add('doc_date',    _medTrim(b.doc_date));
+    if (b.notes !== undefined)       add('notes',       _medTrim(b.notes));
+    if (!sets.length) return res.status(400).json({ error: 'no updatable fields' });
+    params.push(parseInt(req.params.id));
+    await db.query(`UPDATE medical_documents SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+    res.json({ ok: true });
+  } catch (e) { _medErr(res, e); }
+});
+
+// DELETE — remove file (via LXC 104 SSH) + row
+app.delete('/api/medical/documents/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const r = await db.query('SELECT file_path FROM medical_documents WHERE id = $1', [id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    const filename = r.rows[0].file_path;
+    // Sanity-check the filename — no path traversal characters.
+    if (!filename || /[\\/]/.test(filename) || filename.includes('..')) {
+      return res.status(400).json({ error: 'invalid file_path on row — refusing to dispatch SSH delete' });
+    }
+    // SSH to LXC 104, rm the file from its CIFS mount of the same share.
+    const linuxPath = MEDICAL_DOCS_LINUX + '/' + filename;
+    const { NodeSSH } = require('node-ssh');
+    const ssh = new NodeSSH();
+    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: 'C:/Users/muroc/.ssh/id_rsa' });
+    const out = await ssh.execCommand(`rm -f "${linuxPath.replace(/"/g, '\\"')}"`);
+    ssh.dispose();
+    if (out.code !== 0) {
+      return res.status(500).json({ error: 'SSH rm failed: ' + (out.stderr || 'unknown') });
+    }
+    await db.query('DELETE FROM medical_documents WHERE id = $1', [id]);
+    res.json({ ok: true });
+  } catch (e) { _medErr(res, e); }
+});
+
+// GET file — streams the document for inline view / download.
+app.get('/api/medical/documents/:id/file', async (req, res) => {
+  try {
+    const r = await db.query('SELECT name, file_path, mime_type FROM medical_documents WHERE id = $1', [parseInt(req.params.id)]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    const { file_path, mime_type, name } = r.rows[0];
+    if (!file_path || /[\\/]/.test(file_path) || file_path.includes('..')) {
+      return res.status(400).json({ error: 'invalid file_path' });
+    }
+    const abs = path.join(MEDICAL_DOCS_ROOT, file_path);
+    if (!fs.existsSync(abs)) return res.status(404).json({ error: 'file missing on share' });
+    res.setHeader('Content-Type', mime_type || 'application/octet-stream');
+    // ?download=1 forces attachment; default is inline (browser-native PDF/image preview).
+    if (req.query.download === '1') {
+      res.setHeader('Content-Disposition', `attachment; filename="${_sanitizeName(name)}"`);
+    }
+    fs.createReadStream(abs).pipe(res);
+  } catch (e) { _medErr(res, e); }
+});
+
 // ─── Network: latest scan summary ────────────────────────────
 app.get('/api/network/summary', async (req, res) => {
   try {

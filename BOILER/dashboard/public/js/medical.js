@@ -163,3 +163,289 @@ window.medDeleteContact = async function (id) {
 // is registered (previously this was at the top and `medRefresh` was
 // undeclared, throwing ReferenceError + halting the rest of the script).
 document.addEventListener('DOMContentLoaded', medRefresh);
+
+// ══════════════════════════════════════════════════════════════
+// Medical Documents tab — PDF upload + camera capture.
+// Lazy-loaded: medLoadDocuments() runs on first tab-switch click.
+// Two upload modes: file picker (PDF) OR laptop camera (JPEG).
+// Storage: \\192.168.1.155\Claude_Data\Medical_Documents\ on QNAP
+// (server.js writes directly; delete tunneled via LXC 104 SSH).
+// ══════════════════════════════════════════════════════════════
+
+const DOC_TYPE_LABELS = {
+  lab_result:     'Lab Result',
+  imaging:        'Imaging',
+  prescription:   'Prescription',
+  visit_summary:  'Visit Summary',
+  referral:       'Referral',
+  insurance:      'Insurance',
+  vaccine_record: 'Vaccine Record',
+  id_card:        'ID / Card',
+  other:          'Other',
+};
+
+let DOCUMENTS    = [];
+let _camStream   = null;   // MediaStream when camera card is open
+let _docsLoaded  = false;  // first tab-switch triggers full load
+
+window.medLoadDocuments = async function () {
+  // Make sure CONTACTS is fresh — the doctor + producer dropdowns reference it.
+  if (CONTACTS.length === 0) {
+    try { CONTACTS = await fetch('/api/medical/contacts').then(r => r.json()); } catch (_) {}
+  }
+  await medFetchDocuments();
+  _populateDoctorFilter();
+  _docsLoaded = true;
+};
+
+async function medFetchDocuments() {
+  try {
+    const r = await fetch('/api/medical/documents').then(r => r.json());
+    DOCUMENTS = Array.isArray(r) ? r : [];
+    window.medRenderDocuments();
+  } catch (e) {
+    document.getElementById('med-doc-list').innerHTML =
+      '<div class="med-empty" style="color:#b55e5e;">Failed: ' + esc(e.message) + '</div>';
+  }
+}
+
+function _populateDoctorFilter() {
+  const sel = document.getElementById('med-doc-filter-doctor');
+  if (!sel) return;
+  const cur = sel.value;
+  const doctors = CONTACTS.filter(c => c.kind === 'doctor').sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">Any doctor</option>' +
+    doctors.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+
+window.medRenderDocuments = function () {
+  const t = document.getElementById('med-doc-filter-type').value;
+  const d = document.getElementById('med-doc-filter-doctor').value;
+  const q = document.getElementById('med-doc-filter-search').value.trim().toLowerCase();
+  let list = DOCUMENTS;
+  if (t) list = list.filter(x => x.doc_type === t);
+  if (d) list = list.filter(x => String(x.doctor_id) === d);
+  if (q) list = list.filter(x =>
+    (x.name && x.name.toLowerCase().includes(q)) ||
+    (x.notes && x.notes.toLowerCase().includes(q))
+  );
+  const el = document.getElementById('med-doc-list');
+  if (list.length === 0) {
+    el.innerHTML = '<div class="med-empty">No documents yet — click + Upload PDF or + Camera capture above.</div>';
+    return;
+  }
+  el.innerHTML = list.map(renderDocCard).join('');
+};
+
+function renderDocCard(d) {
+  const size = d.file_size != null ? _fmtSize(d.file_size) : '';
+  return `<div class="med-list-card">
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <span class="med-chip type-${esc(d.doc_type)}">${esc(DOC_TYPE_LABELS[d.doc_type] || d.doc_type)}</span>
+      <h3 style="margin:0; flex:1;">${esc(d.name)}</h3>
+      <a class="med-link-btn" href="/api/medical/documents/${d.id}/file" target="_blank">👁 View</a>
+      <a class="med-link-btn" href="/api/medical/documents/${d.id}/file?download=1">⬇ Download</a>
+      <button class="btn btn-secondary btn-sm" onclick="medEditDoc(${d.id})">Edit</button>
+      <button class="btn btn-secondary btn-sm" onclick="medDeleteDoc(${d.id})">✕</button>
+    </div>
+    ${d.doctor_name   ? `<div class="med-meta">👨‍⚕ ${esc(d.doctor_name)}</div>`   : ''}
+    ${d.producer_name ? `<div class="med-meta">🏥 ${esc(d.producer_name)} (${esc(d.producer_kind)})</div>` : ''}
+    ${d.doc_date      ? `<div class="med-meta">📅 ${esc(d.doc_date)}</div>` : ''}
+    <div class="med-meta">${esc(d.mime_type)} · ${size} · uploaded ${esc(d.uploaded_at)}</div>
+    ${d.notes ? `<div style="margin-top:4px; font-size:0.84rem;">${esc(d.notes)}</div>` : ''}
+  </div>`;
+}
+
+function _fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+window.medOpenDocForm = function (mode) {
+  // mode: 'pdf' | 'camera' | 'edit'
+  document.getElementById('med-camera-stage').style.display = 'none';
+  const el = document.getElementById('med-doc-form');
+  el.style.display = 'block';
+  el.innerHTML = renderDocForm({ _mode: mode });
+  if (mode === 'camera') {
+    document.getElementById('med-camera-stage').style.display = 'block';
+    _startCamera();
+  }
+};
+
+window.medEditDoc = function (id) {
+  const d = DOCUMENTS.find(x => x.id === id);
+  if (!d) return;
+  const el = document.getElementById('med-doc-form');
+  el.style.display = 'block';
+  el.innerHTML = renderDocForm({ ...d, _mode: 'edit' });
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+window.medCloseDocForm = function () {
+  document.getElementById('med-doc-form').style.display = 'none';
+  document.getElementById('med-doc-form').innerHTML = '';
+  _stopCamera();
+  document.getElementById('med-camera-stage').style.display = 'none';
+  document.getElementById('med-upload-progress').style.display = 'none';
+};
+
+function renderDocForm(d) {
+  const v   = k => esc(d[k] || '');
+  const idV = d.id || null;
+  const editing = d._mode === 'edit';
+  const mode    = d._mode || 'pdf';
+  const doctors  = CONTACTS.filter(c => c.kind === 'doctor').sort((a, b) => a.name.localeCompare(b.name));
+  const producers= CONTACTS.filter(c => c.kind === 'clinic' || c.kind === 'hospital').sort((a, b) => a.name.localeCompare(b.name));
+  const optDoctor = doctors.map(c =>
+    `<option value="${c.id}"${c.id === d.doctor_id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+  const optProducer = producers.map(c =>
+    `<option value="${c.id}"${c.id === d.producer_id ? ' selected' : ''}>${esc(c.name)} (${esc(c.kind)})</option>`).join('');
+  const optType = Object.entries(DOC_TYPE_LABELS).map(([k, lbl]) =>
+    `<option value="${k}"${k === d.doc_type ? ' selected' : ''}>${esc(lbl)}</option>`).join('');
+  return `<div style="background:#fafaf6; padding:12px; border-radius:6px;">
+    ${editing ? '' : (mode === 'pdf'
+      ? `<div class="med-form-row"><label>PDF file</label><input type="file" id="df-file" accept="application/pdf" onchange="medFillNameFromFile()"></div>`
+      : `<div class="med-form-row"><label>Image</label><span style="font-size:0.84rem;color:#666;">Use Snap below to capture; preview will appear after.</span></div>`)}
+    <div class="med-form-row"><label>Name</label><input type="text" id="df-name" value="${v('name')}" placeholder="auto from filename"></div>
+    <div class="med-form-row"><label>Type</label><select id="df-type">${optType}</select></div>
+    <div class="med-form-row"><label>Doctor</label>
+      <select id="df-doctor"><option value="">— none —</option>${optDoctor}</select>
+    </div>
+    <div class="med-form-row"><label>Producer</label>
+      <select id="df-producer"><option value="">— none —</option>${optProducer}</select>
+    </div>
+    <div class="med-form-row"><label>Doc date</label><input type="date" id="df-doc-date" value="${v('doc_date')}"></div>
+    <div class="med-form-row"><label>Notes</label><textarea id="df-notes">${v('notes')}</textarea></div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <button class="btn btn-success btn-sm" onclick="${editing ? `medSaveDocMeta(${idV})` : 'medUploadDoc()'}">
+        💾 ${editing ? 'Update' : 'Upload'}
+      </button>
+      <button class="btn btn-secondary btn-sm" onclick="medCloseDocForm()">Cancel</button>
+    </div>
+    <div id="df-err" style="color:#b55e5e; font-size:0.82rem; margin-top:6px;"></div>
+  </div>`;
+}
+
+window.medFillNameFromFile = function () {
+  const fi = document.getElementById('df-file');
+  const nm = document.getElementById('df-name');
+  if (fi && fi.files && fi.files[0] && nm && !nm.value) {
+    nm.value = fi.files[0].name.replace(/\.[^.]+$/, '');
+  }
+};
+
+async function _startCamera() {
+  try {
+    _camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    document.getElementById('med-cam-video').srcObject = _camStream;
+  } catch (e) {
+    document.getElementById('med-camera-stage').innerHTML =
+      '<div style="color:#fff; padding:10px;">Camera failed: ' + esc(e.message) + '</div>';
+  }
+}
+function _stopCamera() {
+  if (_camStream) {
+    _camStream.getTracks().forEach(t => t.stop());
+    _camStream = null;
+  }
+}
+
+let _capturedBlob = null;
+window.medCameraSnap = function () {
+  const v = document.getElementById('med-cam-video');
+  const c = document.getElementById('med-cam-canvas');
+  c.width  = v.videoWidth;
+  c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  c.toBlob(blob => {
+    _capturedBlob = blob;
+    _stopCamera();
+    // Show the captured image preview in place of the live video.
+    c.style.display = 'block';
+    v.style.display = 'none';
+    document.querySelector('#med-camera-stage .cam-btns').innerHTML =
+      '<span style="color:#fff; font-size:0.84rem;">Captured ' + _fmtSize(blob.size) + ' — fill form + Upload</span>';
+  }, 'image/jpeg', 0.85);
+};
+window.medCameraCancel = function () {
+  _stopCamera();
+  _capturedBlob = null;
+  medCloseDocForm();
+};
+
+window.medUploadDoc = async function () {
+  const errEl = document.getElementById('df-err');
+  errEl.textContent = '';
+  const name      = document.getElementById('df-name').value.trim();
+  const doc_type  = document.getElementById('df-type').value;
+  const doctor_id = document.getElementById('df-doctor').value;
+  const producer_id = document.getElementById('df-producer').value;
+  const doc_date  = document.getElementById('df-doc-date').value;
+  const notes     = document.getElementById('df-notes').value.trim();
+
+  let file = null;
+  const fi = document.getElementById('df-file');
+  if (fi && fi.files && fi.files[0]) {
+    file = fi.files[0];
+  } else if (_capturedBlob) {
+    file = new File([_capturedBlob], (name || 'capture') + '.jpg', { type: 'image/jpeg' });
+  } else {
+    errEl.textContent = 'Pick a PDF or capture an image first';
+    return;
+  }
+  if (!name) { errEl.textContent = 'Name is required'; return; }
+
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('meta', JSON.stringify({ name, doc_type, doctor_id, producer_id, doc_date, notes }));
+
+  const prog = document.getElementById('med-upload-progress');
+  prog.style.display = 'block';
+  prog.textContent = `Uploading ${_fmtSize(file.size)}…`;
+  try {
+    const r = await fetch('/api/medical/documents', { method: 'POST', body: fd }).then(r => r.json());
+    if (r.error) throw new Error(r.error);
+    prog.textContent = '✓ Uploaded';
+    setTimeout(() => { prog.style.display = 'none'; }, 1200);
+    _capturedBlob = null;
+    medCloseDocForm();
+    await medFetchDocuments();
+  } catch (e) {
+    prog.style.display = 'none';
+    errEl.textContent = e.message;
+  }
+};
+
+window.medSaveDocMeta = async function (id) {
+  const errEl = document.getElementById('df-err');
+  errEl.textContent = '';
+  const payload = {
+    name:        document.getElementById('df-name').value.trim(),
+    doc_type:    document.getElementById('df-type').value,
+    doctor_id:   document.getElementById('df-doctor').value || null,
+    producer_id: document.getElementById('df-producer').value || null,
+    doc_date:    document.getElementById('df-doc-date').value || null,
+    notes:       document.getElementById('df-notes').value.trim(),
+  };
+  if (!payload.name) { errEl.textContent = 'Name is required'; return; }
+  try {
+    const r = await fetch('/api/medical/documents/' + id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    }).then(r => r.json());
+    if (r.error) throw new Error(r.error);
+    medCloseDocForm();
+    await medFetchDocuments();
+  } catch (e) { errEl.textContent = e.message; }
+};
+
+window.medDeleteDoc = async function (id) {
+  if (!confirm('Delete this document? The file on QNAP will be removed too.')) return;
+  try {
+    const r = await fetch('/api/medical/documents/' + id, { method: 'DELETE' }).then(r => r.json());
+    if (r.error) throw new Error(r.error);
+    await medFetchDocuments();
+  } catch (e) { alert('Delete failed: ' + e.message); }
+};

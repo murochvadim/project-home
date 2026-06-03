@@ -25,6 +25,20 @@
       background:#eef2f7; color:#2e2e2e; border-radius:3px; margin-right:4px;
     }
     .med-link-btn:hover { background:#dbe4f0; }
+    .med-chip.type-lab_result       { background:#fee2e2; color:#991b1b; }
+    .med-chip.type-imaging          { background:#ede9fe; color:#5b21b6; }
+    .med-chip.type-prescription     { background:#dbeafe; color:#1e3a8a; }
+    .med-chip.type-visit_summary    { background:#dcfce7; color:#166534; }
+    .med-chip.type-referral         { background:#fef3c7; color:#854d0e; }
+    .med-chip.type-insurance        { background:#e0e7ff; color:#3730a3; }
+    .med-chip.type-vaccine_record   { background:#cffafe; color:#155e75; }
+    .med-chip.type-id_card          { background:#fce7f3; color:#9d174d; }
+    .med-chip.type-other            { background:#e5e5e5; color:#525252; }
+    #med-camera-stage { display:none; margin-top:10px; padding:12px; background:#1a1a1a; border-radius:8px; }
+    #med-camera-stage video { width:100%; max-width:480px; background:#000; border-radius:4px; }
+    #med-camera-stage canvas { display:none; }
+    #med-camera-stage .cam-btns { display:flex; gap:8px; margin-top:8px; }
+    #med-upload-progress { display:none; margin-top:8px; padding:8px 10px; background:#fff8b3; border-left:3px solid #d4a017; border-radius:4px; font-size:0.84rem; }
   </style>
 </head>
 <body>
@@ -72,7 +86,8 @@
 
   <!-- Tab bar -->
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="showMedTab('contacts', this)">Contacts</button>
+    <button class="tab-btn active" onclick="showMedTab('contacts',  this)">Contacts</button>
+    <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -109,6 +124,62 @@
 
   </div><!-- /tab-contacts -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Documents (PDF uploads + camera capture)              -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-documents">
+
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin-top:0;">+ Add document</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-success btn-sm" onclick="medOpenDocForm('pdf')">📄 Upload PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="medOpenDocForm('camera')">📷 Camera capture</button>
+      </div>
+      <div id="med-doc-form" style="display:none; margin-top:12px;"></div>
+      <div id="med-camera-stage">
+        <video id="med-cam-video" autoplay muted playsinline></video>
+        <canvas id="med-cam-canvas"></canvas>
+        <div class="cam-btns">
+          <button class="btn btn-success btn-sm" onclick="medCameraSnap()">📸 Snap</button>
+          <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>
+        </div>
+      </div>
+      <div id="med-upload-progress">Uploading…</div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin-top:0;">Filter</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <select id="med-doc-filter-type" onchange="medRenderDocuments()"
+          style="padding:5px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+          <option value="">All types</option>
+          <option value="lab_result">Lab Result</option>
+          <option value="imaging">Imaging</option>
+          <option value="prescription">Prescription</option>
+          <option value="visit_summary">Visit Summary</option>
+          <option value="referral">Referral</option>
+          <option value="insurance">Insurance</option>
+          <option value="vaccine_record">Vaccine Record</option>
+          <option value="id_card">ID / Card</option>
+          <option value="other">Other</option>
+        </select>
+        <select id="med-doc-filter-doctor" onchange="medRenderDocuments()"
+          style="padding:5px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+          <option value="">Any doctor</option>
+        </select>
+        <input type="text" id="med-doc-filter-search" placeholder="Search name / notes"
+          oninput="medRenderDocuments()"
+          style="flex:1; min-width:180px; padding:5px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">List</h2>
+      <div id="med-doc-list">—</div>
+    </div>
+
+  </div><!-- /tab-documents -->
+
 </main>
 
 <script>
@@ -122,6 +193,6 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=4"></script>
+<script src="js/medical.js?v=5"></script>
 </body>
 </html>

@@ -1,10 +1,13 @@
 # Medical Agent
 
-Flat address book of medical contacts — doctors, clinics, hospitals. Single
-sub-tab on a dedicated dashboard page. No service, no rules, no other tabs.
+Flat address book of medical contacts — doctors, clinics, hospitals — plus a
+Documents tab for PDF + camera-captured uploads. Dashboard-only agent. No
+service, no rules.
 
-Scoped + simplified 2026-06-02 (two rounds — the first scope was 5 sub-tabs +
-8 tables, dropped same day per user feedback).
+History:
+- 2026-06-02 (round 1): scoped 5-tab build (Today / Visits / Medications / Documents / Providers, 8 tables). Dropped same day per user — too wide.
+- 2026-06-02 (round 2): simplified to Contacts-only (1 table). Shipped.
+- 2026-06-03: Documents tab added back as the second sub-tab. PDF uploads + laptop-camera capture, stored on QNAP Claude_Data share.
 
 ## Purpose
 
@@ -86,16 +89,83 @@ Read: scope was too wide for the user's actual need today. Visits / prescription
 
 Migration `002_simplify_to_contacts.sql` is the clean break: drop 7 tables, drop 7 endpoint groups, rewrite `medical.html` + `js/medical.js` from scratch around just the Contacts form + list. The history is preserved in the migration files (run order setup → 002) so the path is traceable.
 
+## Documents tab (added 2026-06-03)
+
+Second sub-tab. PDF + camera-captured image uploads with metadata. Files
+live on QNAP at `\\192.168.1.155\Claude_Data\Medical_Documents\` (Option A
+of the storage-location choice — same share as project backups, with the
+`claude` SMB user as the writer).
+
+### Schema (`medical_documents`)
+
+| Column | Type | Note |
+|---|---|---|
+| `id` | SERIAL PK |  |
+| `name` | TEXT NOT NULL | user-set or auto-filled from filename |
+| `doc_type` | TEXT NOT NULL CHECK | one of: `lab_result`, `imaging`, `prescription`, `visit_summary`, `referral`, `insurance`, `vaccine_record`, `id_card`, `other` |
+| `doctor_id` | INTEGER REFERENCES medical_contacts(id) ON DELETE SET NULL | optional — links to a `kind='doctor'` row |
+| `producer_id` | INTEGER REFERENCES medical_contacts(id) ON DELETE SET NULL | optional — links to a `kind IN ('clinic','hospital')` row |
+| `file_path` | TEXT NOT NULL | basename only (`<id>__<sanitized-name>.<ext>`) — storage root in server.js |
+| `file_size` | BIGINT NOT NULL | bytes |
+| `mime_type` | TEXT NOT NULL | typically `application/pdf` or `image/jpeg` |
+| `doc_date` | DATE | optional — when doc was issued (not uploaded) |
+| `notes` | TEXT |  |
+| `uploaded_at` | TIMESTAMPTZ DEFAULT NOW() |  |
+
+Retention=forever (registered in `retention_policies`).
+
+### Storage location + permissions (Option A — Claude_Data share)
+
+- Path: `\\192.168.1.155\Claude_Data\Medical_Documents\` (UNC from Windows host) = `/mnt/qnap-claude/Medical_Documents/` (LXC 104 CIFS mount of same share).
+- Windows host needs `cmdkey /add:192.168.1.155 /user:claude /pass:<qnap-claude-pass>` set once for the `muroc` user. Then Node.js `fs.writeFile` / `createReadStream` to the UNC path works natively.
+- **QNAP SMB ACL quirk**: the `claude` user via Windows-side SMB has **read + write but NOT delete** on Claude_Data files. The same `claude` user via LXC 104's CIFS mount CAN delete (mount runs as root + uses different SMB flags). So the DELETE endpoint **tunnels through LXC 104 SSH** to run `rm /mnt/qnap-claude/Medical_Documents/<filename>`. Read + write stay direct from Windows (fast).
+
+### Server endpoints (`server.js`, after the contacts endpoints)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/medical/documents` | list — optional filters: `?type=`, `?doctor_id=`, `?producer_id=`, `?q=` (name+notes search) |
+| GET    | `/api/medical/documents/:id/file` | stream file inline (PDF browser-preview, JPEG inline); `?download=1` forces attachment |
+| POST   | `/api/medical/documents` | multipart upload — `file` + JSON-stringified `meta`. 25 MB cap. Inserts row then writes file as `<id>__<sanitized-name>.<ext>`. |
+| PATCH  | `/api/medical/documents/:id` | metadata-only update (rename / change type / retarget doctor or producer / edit notes / change doc_date) |
+| DELETE | `/api/medical/documents/:id` | SSH → LXC 104 → `rm` the file, then DELETE the row |
+
+### UI
+
+`medical.html` now has TWO tabs: **Contacts** (default) and **Documents** (lazy-loaded on first click).
+
+**+ Add document card** (top of Documents tab):
+- Two mode buttons: `📄 Upload PDF` and `📷 Camera capture`.
+- PDF mode shows a `<input type="file" accept="application/pdf">`.
+- Camera mode opens a dark stage with a live `<video>` from `getUserMedia({video:{facingMode:'environment'},audio:false})` + a `📸 Snap` button. Snap draws the frame to a canvas → `toBlob('image/jpeg', 0.85)` (~80% quality, good for paper docs).
+- Form fields (shared by both modes): name (auto-filled from filename if empty), doc_type (9 options), doctor (dropdown of `kind='doctor'` contacts), producer (dropdown of `kind IN ('clinic','hospital')`), doc_date (optional), notes.
+- Upload button POSTs `multipart/form-data` with the file + JSON meta.
+
+**Filter card**: type dropdown + doctor dropdown + free-text search (matches name and notes).
+
+**List card**: one row per document showing type chip, name, doctor name, producer name + kind, doc_date, mime_type + size + uploaded_at, notes. Per-row buttons: `👁 View` (opens in new tab via `/file`), `⬇ Download`, `Edit`, `✕ Delete`.
+
+### Storage root constant + sanity-check on startup
+
+`MEDICAL_DOCS_ROOT = '\\\\192.168.1.155\\Claude_Data\\Medical_Documents'` declared in server.js. Auto-`fs.mkdirSync(..., {recursive:true})` at startup so the folder gets created on first run if Windows credentials are set + UNC path is reachable. Console-error if not.
+
+### Pre-existing requirement before the tab works
+
+- **`cmdkey` setup for the Windows host** (one-time):
+  ```powershell
+  cmdkey /add:192.168.1.155 /user:claude /pass:<QNAP claude password>
+  ```
+- After cmdkey, `Test-Path '\\192.168.1.155\Claude_Data'` should return `True`. The dashboard's mkdirSync + writes will then succeed.
+
 ## Future (NOT scoped)
 
-Possible future tabs alongside Contacts, all gated on explicit user ask:
 - **Visits** — past doctor visits
 - **Medications** — active prescriptions + manual taken log
-- **Documents** — PDF / lab-result uploads
-- **AI Investigation** — Anthropic-API question over the address book + future visit/document data
+- **AI Investigation** — Anthropic-API question over the address book + documents (would also extract PDF text via `pdf-parse` for search)
 
-None of these are committed. Adding any of them = new migration, new endpoints, new sub-tab + JS section. The Contacts code is intentionally self-contained so future additions don't have to be aware of it.
+None committed. The Documents code is intentionally self-contained.
 
 ## Status
 
-Phase 1 = **Contacts only**, shipped 2026-06-02 after a same-day simplify. No further phases scoped.
+- 2026-06-02: Contacts tab shipped.
+- 2026-06-03: Documents tab added (PDF + camera capture). 9 doc types, FK links to doctor + producer (clinic/hospital).
