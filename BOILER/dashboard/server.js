@@ -2702,7 +2702,12 @@ app.get('/api/medical/documents/:id/file', async (req, res) => {
     res.setHeader('Content-Type', mime_type || 'application/octet-stream');
     // ?download=1 forces attachment; default is inline (browser-native PDF/image preview).
     if (req.query.download === '1') {
-      res.setHeader('Content-Disposition', `attachment; filename="${_sanitizeName(name)}"`);
+      // Append the original file extension to the user-set name so the
+      // download lands as e.g. "Lab Result Cohen.pdf" (was just
+      // "Lab-Result-Cohen" without an extension — Windows then couldn't
+      // figure out which app to open it with).
+      const ext = path.extname(file_path) || '';
+      res.setHeader('Content-Disposition', `attachment; filename="${_sanitizeName(name)}${ext}"`);
     }
     fs.createReadStream(abs).pipe(res);
   } catch (e) { _medErr(res, e); }
