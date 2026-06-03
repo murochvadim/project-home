@@ -455,24 +455,28 @@
           el.style.borderLeft = '4px solid #e74c3c';
           el.innerHTML = `Mode Buttons → <b>${escHtml(mode.toUpperCase())}</b> — <span style="color:#e74c3c;">${escHtml(data.error || 'failed')}</span>`;
         }
-        return;
+      } else {
+        if (el) {
+          el.style.background = 'rgba(39,174,96,0.06)';
+          el.style.borderLeft = '4px solid ' + modeColor(mode);
+          el.innerHTML =
+            `Mode Buttons → <b style="color:${modeColor(mode)};">${escHtml(mode.toUpperCase())}</b> — relay press dispatched<br>` +
+            `<span style="color:#888;font-size:0.75rem;">channel=${escHtml(data.channel)}, cleared off=[${(data.cleared_off || []).map(escHtml).join(',')}]</span><br>` +
+            `<span style="color:#888;font-size:0.75rem;">Real device event will fire Mode Buttons; chip updates after the next state poll.</span>`;
+        }
+        setTimeout(() => { if (typeof loadState === 'function') loadState(); }, 1500);
       }
-      if (el) {
-        el.style.background = 'rgba(39,174,96,0.06)';
-        el.style.borderLeft = '4px solid ' + modeColor(mode);
-        el.innerHTML =
-          `Mode Buttons → <b style="color:${modeColor(mode)};">${escHtml(mode.toUpperCase())}</b> — relay press dispatched<br>` +
-          `<span style="color:#888;font-size:0.75rem;">channel=${escHtml(data.channel)}, cleared off=[${(data.cleared_off || []).map(escHtml).join(',')}]</span><br>` +
-          `<span style="color:#888;font-size:0.75rem;">Real device event will fire Mode Buttons; chip updates after the next state poll.</span>`;
-        el.innerHTML += `<button onclick="this.parentElement.style.display='none'" style="position:absolute;top:6px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:1rem;" title="Close">&times;</button>`;
-      }
-      setTimeout(() => { if (typeof loadState === 'function') loadState(); }, 1500);
     } catch (e) {
       if (el) {
         el.style.background = 'rgba(231,76,60,0.1)';
         el.style.borderLeft = '4px solid #e74c3c';
         el.innerHTML = `Mode Buttons → <b>${escHtml(mode.toUpperCase())}</b> — <span style="color:#e74c3c;">Connection error</span>`;
       }
+    }
+    // Close button — added on EVERY path (success / error / catch) so the
+    // panel can always be dismissed. Mirrors testRule's pattern.
+    if (el) {
+      el.innerHTML += `<button onclick="this.parentElement.style.display='none'" style="position:absolute;top:6px;right:8px;background:none;border:none;cursor:pointer;color:#888;font-size:1rem;" title="Close">&times;</button>`;
     }
   };
 
