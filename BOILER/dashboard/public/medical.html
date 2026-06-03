@@ -218,6 +218,25 @@
 
 </main>
 
+<!-- Image viewer modal (image docs only — PDFs still open in a new tab) -->
+<div id="med-viewer-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:9999;">
+  <div style="position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; align-items:center; z-index:2;">
+    <div id="med-viewer-title" style="color:#fff; font-size:0.95rem; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">—</div>
+    <button class="btn btn-secondary btn-sm" onclick="medViewerZoomOut()" title="Zoom out (or scroll down)">🔍−</button>
+    <button class="btn btn-secondary btn-sm" onclick="medViewerZoomIn()" title="Zoom in (or scroll up)">🔍+</button>
+    <button class="btn btn-secondary btn-sm" onclick="medViewerFit()" title="Fit to screen">↺ Fit</button>
+    <button class="btn btn-secondary btn-sm" onclick="medViewerRecrop()" title="Crop this image and replace it (coming soon)" disabled>✂ Crop</button>
+    <button class="btn btn-secondary btn-sm" onclick="medViewerClose()" title="Close (Esc)">✕</button>
+  </div>
+  <div id="med-viewer-canvas-wrap" style="position:absolute; inset:0; overflow:hidden; cursor:grab; user-select:none;">
+    <img id="med-viewer-img" alt="" draggable="false"
+         style="position:absolute; top:0; left:0; transform-origin:0 0; max-width:none; max-height:none;">
+  </div>
+  <div style="position:absolute; bottom:8px; left:0; right:0; text-align:center; color:#aaa; font-size:0.78rem; pointer-events:none;">
+    Drag to pan · scroll wheel to zoom · Esc to close
+  </div>
+</div>
+
 <script>
   function showMedTab(name, btnEl) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -229,6 +248,6 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=20"></script>
+<script src="js/medical.js?v=21"></script>
 </body>
 </html>

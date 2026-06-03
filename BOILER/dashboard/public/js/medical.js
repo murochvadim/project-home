@@ -289,11 +289,15 @@ window.medRenderDocuments = function () {
 function renderDocCard(d) {
   const size = d.file_size != null ? _fmtSize(d.file_size) : '';
   const isImage = (d.mime_type || '').startsWith('image/');
+  // Thumbnail: image rows open the in-page viewer; PDF rows open in a new tab.
   const thumb = isImage
-    ? `<a href="/api/medical/documents/${d.id}/file" target="_blank" title="Click to open full size" style="flex-shrink:0;">
+    ? `<a href="#" onclick="medViewImage(${d.id}, ${JSON.stringify(d.name).replace(/"/g, '&quot;')}); return false;" title="Click to open viewer" style="flex-shrink:0;">
          <img src="/api/medical/documents/${d.id}/file" alt="" style="width:64px; height:64px; object-fit:cover; border-radius:4px; border:1px solid #ddd;">
        </a>`
     : `<a href="/api/medical/documents/${d.id}/file" target="_blank" title="Click to open PDF" style="flex-shrink:0; width:64px; height:64px; display:inline-flex; align-items:center; justify-content:center; background:#fce7f3; color:#9d174d; border-radius:4px; border:1px solid #f4c8d8; font-size:1.8rem; text-decoration:none;">📄</a>`;
+  const openBtn = isImage
+    ? `<a class="med-link-btn" href="#" onclick="medViewImage(${d.id}, ${JSON.stringify(d.name).replace(/"/g, '&quot;')}); return false;">👁 Open</a>`
+    : `<a class="med-link-btn" href="/api/medical/documents/${d.id}/file" target="_blank">👁 Open</a>`;
   return `<div class="med-list-card" id="med-doc-row-${d.id}">
     <div style="display:flex; gap:10px; align-items:flex-start;">
       ${thumb}
@@ -301,7 +305,7 @@ function renderDocCard(d) {
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <span class="med-chip type-${esc(d.doc_type)}">${esc(DOC_TYPE_LABELS[d.doc_type] || d.doc_type)}</span>
           <h3 style="margin:0; flex:1; overflow:hidden; text-overflow:ellipsis;">${esc(d.name)}</h3>
-          <a class="med-link-btn" href="/api/medical/documents/${d.id}/file" target="_blank">👁 Open</a>
+          ${openBtn}
           <a class="med-link-btn" href="/api/medical/documents/${d.id}/file?download=1">⬇ Download</a>
           <button class="btn btn-secondary btn-sm" onclick="medEditDoc(${d.id})">Edit</button>
           <button class="btn btn-secondary btn-sm" onclick="medDeleteDoc(${d.id})">✕</button>
@@ -314,6 +318,109 @@ function renderDocCard(d) {
       </div>
     </div>
   </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Image viewer — pan + zoom for uploaded image docs. PDFs still
+// open in a new browser tab (browser handles PDFs natively).
+// ══════════════════════════════════════════════════════════════
+let _viewerScale = 1, _viewerX = 0, _viewerY = 0;
+let _viewerDragging = false, _vsx, _vsy, _vstx, _vsty;
+let _viewerWired = false;
+
+window.medViewImage = function (id, name) {
+  const modal = document.getElementById('med-viewer-modal');
+  const img   = document.getElementById('med-viewer-img');
+  document.getElementById('med-viewer-title').textContent = name || ('Document ' + id);
+  img.onload = () => medViewerFit();
+  img.src = '/api/medical/documents/' + id + '/file';
+  modal.style.display = 'block';
+  _wireViewer();
+};
+
+window.medViewerClose = function () {
+  document.getElementById('med-viewer-modal').style.display = 'none';
+  document.getElementById('med-viewer-img').src = '';   // free memory
+};
+
+window.medViewerFit = function () {
+  const wrap = document.getElementById('med-viewer-canvas-wrap');
+  const img  = document.getElementById('med-viewer-img');
+  if (!img.naturalWidth) return;
+  const sw = wrap.clientWidth;
+  const sh = wrap.clientHeight;
+  _viewerScale = Math.min(sw / img.naturalWidth, sh / img.naturalHeight) * 0.96;
+  _viewerX = (sw - img.naturalWidth  * _viewerScale) / 2;
+  _viewerY = (sh - img.naturalHeight * _viewerScale) / 2;
+  _renderViewer();
+};
+
+window.medViewerZoomIn  = function () { _zoomViewerAt(1.25); };
+window.medViewerZoomOut = function () { _zoomViewerAt(0.8);  };
+
+// Placeholder — wired up but disabled in HTML for now. Will reuse the
+// crop UI from camera capture in a follow-up commit.
+window.medViewerRecrop = function () {
+  alert('Re-crop coming soon — for now, delete the doc and re-upload a cropped version, or use the live-camera workflow to capture + crop at the same time.');
+};
+
+function _zoomViewerAt(factor) {
+  // Zoom around the canvas centre so the same point stays under the cursor-equivalent.
+  const wrap = document.getElementById('med-viewer-canvas-wrap');
+  const cx = wrap.clientWidth / 2, cy = wrap.clientHeight / 2;
+  const oldS = _viewerScale;
+  _viewerScale *= factor;
+  // Adjust pan so the centre point stays at the centre.
+  _viewerX = cx - (cx - _viewerX) * (_viewerScale / oldS);
+  _viewerY = cy - (cy - _viewerY) * (_viewerScale / oldS);
+  _renderViewer();
+}
+
+function _renderViewer() {
+  const img = document.getElementById('med-viewer-img');
+  img.style.transform = `translate(${_viewerX}px, ${_viewerY}px) scale(${_viewerScale})`;
+}
+
+function _wireViewer() {
+  if (_viewerWired) return;
+  _viewerWired = true;
+  const wrap = document.getElementById('med-viewer-canvas-wrap');
+  wrap.addEventListener('mousedown', e => {
+    _viewerDragging = true;
+    _vsx = e.clientX; _vsy = e.clientY;
+    _vstx = _viewerX; _vsty = _viewerY;
+    wrap.style.cursor = 'grabbing';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!_viewerDragging) return;
+    _viewerX = _vstx + (e.clientX - _vsx);
+    _viewerY = _vsty + (e.clientY - _vsy);
+    _renderViewer();
+  });
+  document.addEventListener('mouseup', () => {
+    if (!_viewerDragging) return;
+    _viewerDragging = false;
+    wrap.style.cursor = 'grab';
+  });
+  wrap.addEventListener('wheel', e => {
+    if (document.getElementById('med-viewer-modal').style.display === 'none') return;
+    e.preventDefault();
+    // Zoom toward the cursor — feels much better than centre-zoom.
+    const r = wrap.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const oldS = _viewerScale;
+    _viewerScale *= (e.deltaY < 0 ? 1.1 : 0.9);
+    _viewerX = cx - (cx - _viewerX) * (_viewerScale / oldS);
+    _viewerY = cy - (cy - _viewerY) * (_viewerScale / oldS);
+    _renderViewer();
+  }, { passive: false });
+  document.addEventListener('keydown', e => {
+    if (document.getElementById('med-viewer-modal').style.display === 'none') return;
+    if (e.key === 'Escape')      medViewerClose();
+    else if (e.key === '+' || e.key === '=') medViewerZoomIn();
+    else if (e.key === '-')      medViewerZoomOut();
+    else if (e.key === '0')      medViewerFit();
+  });
 }
 
 // Brief yellow-flash + scroll-into-view on a doc row — used right after
