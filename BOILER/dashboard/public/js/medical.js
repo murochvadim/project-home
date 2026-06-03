@@ -462,94 +462,176 @@ function _stopCamera() {
 
 let _capturedBlob = null;
 let _origCanvas   = null;   // hidden full-res snapshot
-let _zoom = 1, _panX = 0, _panY = 0;
-const _VIEW_W = 720, _VIEW_H = 540;
+let _imgRect      = null;   // {x,y,w,h,scale} — image-on-canvas placement
+let _cropRect     = null;   // {x,y,w,h} crop region in canvas-display coords
+const _VIEW_W = 960, _VIEW_H = 640;
+const _HANDLE = 12;
 
-// Redraw the visible (viewport) canvas from the original snapshot using
-// the current _zoom and _pan offsets. Called on every zoom button + on
-// every mouse/touch drag tick. The viewport is fixed at _VIEW_W × _VIEW_H;
-// the upload payload is whatever pixels currently fit inside that area.
-function _renderViewport() {
+// Redraw: black background, image fit-to-canvas, dim overlay outside crop,
+// yellow crop border + 4 corner handles. Called on every drag tick.
+function _renderCrop() {
   if (!_origCanvas) return;
-  const c = document.getElementById('med-cam-canvas');
+  const c   = document.getElementById('med-cam-canvas');
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, c.width, c.height);
-  ctx.drawImage(
-    _origCanvas,
-    _panX, _panY,
-    _origCanvas.width  * _zoom,
-    _origCanvas.height * _zoom,
-  );
+  const scale = Math.min(c.width / _origCanvas.width, c.height / _origCanvas.height);
+  const w     = _origCanvas.width  * scale;
+  const h     = _origCanvas.height * scale;
+  const x     = (c.width  - w) / 2;
+  const y     = (c.height - h) / 2;
+  ctx.drawImage(_origCanvas, x, y, w, h);
+  _imgRect = { x, y, w, h, scale };
+  // Dim overlay outside the crop rectangle (4 strips).
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, c.width, _cropRect.y);
+  ctx.fillRect(0, _cropRect.y + _cropRect.h, c.width, c.height - (_cropRect.y + _cropRect.h));
+  ctx.fillRect(0, _cropRect.y, _cropRect.x, _cropRect.h);
+  ctx.fillRect(_cropRect.x + _cropRect.w, _cropRect.y, c.width - (_cropRect.x + _cropRect.w), _cropRect.h);
+  // Crop border
+  ctx.strokeStyle = '#ffd400';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(_cropRect.x + 1, _cropRect.y + 1, _cropRect.w - 2, _cropRect.h - 2);
+  // 4 corner handles
+  ctx.fillStyle = '#ffd400';
+  for (const [cx, cy] of [
+    [_cropRect.x,                 _cropRect.y                ],
+    [_cropRect.x + _cropRect.w,   _cropRect.y                ],
+    [_cropRect.x,                 _cropRect.y + _cropRect.h  ],
+    [_cropRect.x + _cropRect.w,   _cropRect.y + _cropRect.h  ],
+  ]) {
+    ctx.fillRect(cx - _HANDLE/2, cy - _HANDLE/2, _HANDLE, _HANDLE);
+  }
 }
 
-window.medZoomIn  = function () { _zoom *= 1.25; _renderViewport(); };
-window.medZoomOut = function () { _zoom *= 0.8;  _renderViewport(); };
-window.medFitImage = function () {
+window.medResetCrop = function () {
   if (!_origCanvas) return;
-  _zoom = Math.min(_VIEW_W / _origCanvas.width, _VIEW_H / _origCanvas.height);
-  _panX = (_VIEW_W - _origCanvas.width  * _zoom) / 2;
-  _panY = (_VIEW_H - _origCanvas.height * _zoom) / 2;
-  _renderViewport();
+  const c = document.getElementById('med-cam-canvas');
+  const scale = Math.min(c.width / _origCanvas.width, c.height / _origCanvas.height);
+  const w = _origCanvas.width  * scale;
+  const h = _origCanvas.height * scale;
+  const x = (c.width  - w) / 2;
+  const y = (c.height - h) / 2;
+  _cropRect = { x, y, w, h };
+  _renderCrop();
 };
 
-function _wireDragHandlers(c) {
-  let dragging = false, startX, startY, startPanX, startPanY;
-  const onDown = e => {
-    dragging = true;
+// Return which control region the (canvas-local) point hits:
+// 'nw'|'ne'|'sw'|'se' for resize-corner handles, 'move' for inside the
+// crop rectangle, null otherwise.
+function _hitTest(px, py) {
+  if (!_cropRect) return null;
+  const corners = {
+    nw: [_cropRect.x,               _cropRect.y              ],
+    ne: [_cropRect.x + _cropRect.w, _cropRect.y              ],
+    sw: [_cropRect.x,               _cropRect.y + _cropRect.h],
+    se: [_cropRect.x + _cropRect.w, _cropRect.y + _cropRect.h],
+  };
+  for (const [name, [cx, cy]] of Object.entries(corners)) {
+    if (Math.abs(px - cx) <= _HANDLE && Math.abs(py - cy) <= _HANDLE) return name;
+  }
+  if (px >= _cropRect.x && px <= _cropRect.x + _cropRect.w &&
+      py >= _cropRect.y && py <= _cropRect.y + _cropRect.h) return 'move';
+  return null;
+}
+
+function _wireCropHandlers(c) {
+  let mode = null;                  // 'move' | 'nw'|'ne'|'sw'|'se'
+  let startX, startY, startRect;
+  const localXY = e => {
+    const r = c.getBoundingClientRect();
     const t = e.touches ? e.touches[0] : e;
-    startX = t.clientX; startY = t.clientY;
-    startPanX = _panX; startPanY = _panY;
+    return [(t.clientX - r.left) * (c.width / r.width),
+            (t.clientY - r.top)  * (c.height / r.height)];
+  };
+  const updateCursor = (px, py) => {
+    const hit = _hitTest(px, py);
+    c.style.cursor =
+      hit === 'nw' || hit === 'se' ? 'nwse-resize' :
+      hit === 'ne' || hit === 'sw' ? 'nesw-resize' :
+      hit === 'move'                ? 'move'        : 'default';
+  };
+  const onDown = e => {
+    const [px, py] = localXY(e);
+    mode = _hitTest(px, py);
+    if (!mode) return;
+    startX = px; startY = py;
+    startRect = { ..._cropRect };
+    if (e.cancelable) e.preventDefault();
   };
   const onMove = e => {
-    if (!dragging) return;
+    const [px, py] = localXY(e);
+    if (!mode) { updateCursor(px, py); return; }
     if (e.cancelable) e.preventDefault();
-    const t = e.touches ? e.touches[0] : e;
-    _panX = startPanX + (t.clientX - startX);
-    _panY = startPanY + (t.clientY - startY);
-    _renderViewport();
+    const dx = px - startX;
+    const dy = py - startY;
+    let nx = startRect.x, ny = startRect.y, nw = startRect.w, nh = startRect.h;
+    if (mode === 'move') { nx += dx; ny += dy; }
+    else if (mode === 'nw') { nx += dx; ny += dy; nw -= dx; nh -= dy; }
+    else if (mode === 'ne') {           ny += dy; nw += dx; nh -= dy; }
+    else if (mode === 'sw') { nx += dx;           nw -= dx; nh += dy; }
+    else if (mode === 'se') {                     nw += dx; nh += dy; }
+    // Clamp to canvas bounds + minimum 30px size.
+    if (nw < 30 || nh < 30) return;
+    nx = Math.max(0, Math.min(c.width  - nw, nx));
+    ny = Math.max(0, Math.min(c.height - nh, ny));
+    nw = Math.min(nw, c.width  - nx);
+    nh = Math.min(nh, c.height - ny);
+    _cropRect = { x: nx, y: ny, w: nw, h: nh };
+    _renderCrop();
   };
-  const onUp = () => { dragging = false; };
+  const onUp = () => { mode = null; };
   c.addEventListener('mousedown',  onDown);
   c.addEventListener('mousemove',  onMove);
   c.addEventListener('mouseup',    onUp);
   c.addEventListener('mouseleave', onUp);
-  c.addEventListener('touchstart', onDown, { passive: true });
+  c.addEventListener('touchstart', onDown, { passive: false });
   c.addEventListener('touchmove',  onMove, { passive: false });
   c.addEventListener('touchend',   onUp);
+}
+
+// Build the final cropped JPEG by mapping the canvas-display crop rect
+// back to original-image pixel coordinates. Returns a Promise<Blob>.
+function _getCroppedBlob() {
+  return new Promise(resolve => {
+    if (!_origCanvas || !_cropRect || !_imgRect) return resolve(null);
+    const sx = (_cropRect.x - _imgRect.x) / _imgRect.scale;
+    const sy = (_cropRect.y - _imgRect.y) / _imgRect.scale;
+    const sw = _cropRect.w / _imgRect.scale;
+    const sh = _cropRect.h / _imgRect.scale;
+    const out = document.createElement('canvas');
+    out.width  = Math.round(sw);
+    out.height = Math.round(sh);
+    out.getContext('2d').drawImage(_origCanvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+    out.toBlob(resolve, 'image/jpeg', 0.85);
+  });
 }
 
 window.medCameraSnap = function () {
   const v = document.getElementById('med-cam-video');
   const c = document.getElementById('med-cam-canvas');
-  // 1) Stash the full-res frame to an offscreen canvas — that's the
-  //    source pixels used by every zoom/pan re-render afterward.
+  // 1) Stash full-res frame offscreen — the source for every render.
   _origCanvas = document.createElement('canvas');
   _origCanvas.width  = v.videoWidth;
   _origCanvas.height = v.videoHeight;
   _origCanvas.getContext('2d').drawImage(v, 0, 0);
-  // 2) Resize the visible canvas to the fixed viewport + show it in place
-  //    of the live video. fit-to-viewport + render.
+  // 2) Resize the visible canvas + show it in place of the live video.
   c.width  = _VIEW_W;
   c.height = _VIEW_H;
   c.style.display = 'block';
   v.style.display = 'none';
-  medFitImage();
-  _wireDragHandlers(c);
+  medResetCrop();
+  _wireCropHandlers(c);
   _stopCamera();
-  // 3) Swap the button row: zoom controls + Re-snap + Cancel. The actual
-  //    upload payload is computed from the viewport at upload time
-  //    (medUploadDoc reads the canvas state, not _capturedBlob).
+  // 3) Swap the button row: crop controls + Re-snap + Cancel. The actual
+  //    upload blob is computed by _getCroppedBlob() at upload time.
   const btns = document.querySelector('#med-camera-stage .cam-btns');
   if (btns) {
     btns.innerHTML = `
-      <button class="btn btn-secondary btn-sm" onclick="medZoomIn()"  title="Zoom in">🔍+</button>
-      <button class="btn btn-secondary btn-sm" onclick="medZoomOut()" title="Zoom out">🔍−</button>
-      <button class="btn btn-secondary btn-sm" onclick="medFitImage()" title="Fit to frame">↺ Fit</button>
+      <button class="btn btn-secondary btn-sm" onclick="medResetCrop()" title="Reset crop to full image">↺ Reset</button>
       <button class="btn btn-secondary btn-sm" onclick="medOpenDocForm('camera')">↻ Re-snap</button>
       <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>`;
   }
-  // Helper text below the canvas
   let help = document.getElementById('med-cam-help');
   if (!help) {
     help = document.createElement('div');
@@ -558,17 +640,17 @@ window.medCameraSnap = function () {
     const diag = document.getElementById('med-cam-diag');
     if (diag) diag.before(help); else document.getElementById('med-camera-stage').appendChild(help);
   }
-  help.textContent = 'Drag the image to arrange. Use 🔍+ / 🔍− to zoom. Upload uses what fits in the frame.';
-  // Disable camera picker while arranging the captured shot.
+  help.textContent = 'Drag the yellow corners to size the crop · drag inside to move · everything outside the box is discarded on Upload.';
   const picker = document.getElementById('med-cam-picker');
   if (picker) picker.disabled = true;
-  _capturedBlob = true;   // truthy sentinel — actual blob built at upload time
+  _capturedBlob = true;   // truthy sentinel — actual bytes built at upload
 };
 window.medCameraCancel = function () {
   _stopCamera();
   _capturedBlob = null;
   _origCanvas   = null;
-  _zoom = 1; _panX = 0; _panY = 0;
+  _imgRect      = null;
+  _cropRect     = null;
   medCloseDocForm();
 };
 
@@ -587,11 +669,11 @@ window.medUploadDoc = async function () {
   if (fi && fi.files && fi.files[0]) {
     file = fi.files[0];
   } else if (_capturedBlob && _origCanvas) {
-    // Serialize the CURRENT viewport canvas — gives the user the zoom/pan
-    // they arranged. (_origCanvas existing implies we're in camera mode.)
-    const c = document.getElementById('med-cam-canvas');
-    const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', 0.85));
-    if (!blob) { errEl.textContent = 'Failed to serialize captured image'; return; }
+    // Build the final JPEG by extracting the user's crop rectangle from
+    // the original full-res frame at upload time (sharper than re-encoding
+    // the on-screen canvas, which is downscaled to viewport size).
+    const blob = await _getCroppedBlob();
+    if (!blob) { errEl.textContent = 'Failed to serialize cropped image'; return; }
     file = new File([blob], (name || 'capture') + '.jpg', { type: 'image/jpeg' });
   } else {
     errEl.textContent = 'Pick a PDF or capture an image first';
