@@ -137,7 +137,7 @@
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-documents">
 
-    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:16px; margin-bottom:16px;">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px; margin-bottom:16px;">
 
     <div class="card" style="margin-bottom:0;">
       <h2 style="margin-top:0;">+ Add document</h2>
@@ -151,11 +151,18 @@
              accept="application/pdf,image/jpeg,image/png,image/heic,image/webp"
              style="display:none;"
              onchange="medFileDropped(this.files[0])">
-      <div style="text-align:center; margin-top:10px; font-size:0.84rem; color:#888;">
-        Need live camera instead?
-        <a href="#" onclick="medOpenDocForm('camera'); return false;" style="color:#2563eb; text-decoration:none;">📷 Open camera</a>
-      </div>
       <div id="med-doc-form" style="display:none; margin-top:12px;"></div>
+      <div id="med-upload-progress">Uploading…</div>
+    </div>
+
+    <div class="card" style="margin-bottom:0;">
+      <h2 style="margin-top:0;">📷 Live camera</h2>
+      <button onclick="medOpenDocForm('camera')"
+              style="display:block; width:100%; border:2px dashed #b0a896; border-radius:10px; padding:36px 16px;
+                     text-align:center; cursor:pointer; background:#fafaf6; transition:all 0.15s;">
+        <div style="font-size:1.4rem; color:#555;">📷 Use webcam</div>
+        <div style="font-size:0.85rem; color:#888; margin-top:6px;">Capture + crop directly from a webcam (laptop or phone)</div>
+      </button>
       <div id="med-camera-stage">
         <video id="med-cam-video" autoplay muted playsinline></video>
         <canvas id="med-cam-canvas"></canvas>
@@ -164,7 +171,6 @@
           <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>
         </div>
       </div>
-      <div id="med-upload-progress">Uploading…</div>
     </div>
 
     <div class="card" style="margin-bottom:0;">
@@ -215,6 +221,6 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=15"></script>
+<script src="js/medical.js?v=16"></script>
 </body>
 </html>
