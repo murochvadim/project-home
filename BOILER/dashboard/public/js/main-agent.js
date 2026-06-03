@@ -429,11 +429,22 @@
                         : m === 'abroad' ? '#c0392b'
                         : '#888');
 
-  // Rules whose Test/Force buttons are never useful — hidden from the rule
-  // table. Reason: rule's evaluate() guards on a specific trigger shape
-  // (e.g. heartbeat only) that the engine's synthesized test event can't
-  // satisfy. Result is always 'no_action'. Keep ↺ Reset Runs visible.
-  const RULES_NO_TEST = new Set(['Evening Lights', 'Morning Lights']);
+  // Rules whose Test/Force buttons are hidden from the rule table.
+  // Two reasons rules end up here:
+  //  1. Heartbeat-only rules — engine's synthesized presence-event test is
+  //     rejected by the rule's `device_id == 'heartbeat'` guard; result is
+  //     always 'no_action'. (Evening Lights, Morning Lights, Start Away Mode.)
+  //  2. Rules whose test fire would have real-world side effects user wants
+  //     to avoid accidentally triggering. (Move in Corridor — Force would
+  //     dispatch the full corridor light + monitor + Awtrix + FR + Pixoo
+  //     chain on real hardware.)
+  // Keep ↺ Reset Runs visible.
+  const RULES_NO_TEST = new Set([
+    'Evening Lights',
+    'Morning Lights',
+    'Start Away Mode',
+    'Move in Corridor',
+  ]);
   window.testModeButton = async function (mode) {
     const el = document.getElementById('test-result');
     if (el) {
