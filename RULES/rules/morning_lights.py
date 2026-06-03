@@ -1,33 +1,23 @@
-"""Morning Lights — turn ON a sentence-declared list of lights once per
-morning once the sun-anchor has passed AND gates pass.
+"""Morning Lights — turn ON a sentence-declared list of lights once per day.
 
-Single firing rule (revised 2026-05-27, second iteration):
+Two firing scenarios (both gated by s_ml3, both share the daily latch):
 
-  At every heartbeat tick: if today's earliest sun-event anchor has
-  PASSED (now_min >= anchor_min), all gate sentences pass, and the
-  daily latch isn't set, fire the chips and arm the daily latch.
+  A) Sun-anchor moment: if today's earliest s_ml2 anchor has PASSED
+     (now_min >= anchor_min) AND gates pass AND latch unset → fire.
+     Covers: home at sunrise+90 → fires at 07:08; home all morning →
+     fires once when the anchor crosses.
 
-This handles three real-life cases with one piece of logic:
+  B) Late arrival (NEW, sentence-driven via s_ml4): if home_mode
+     transitioned INTO the gated value AND now_min >= late-arrival
+     threshold → fire. Covers: away at 07:08, walked in at 07:30 —
+     fires immediately on the heartbeat after arrival. The threshold
+     can be "the anchor" (reuse earliest s_ml2 anchor) or any explicit
+     sun-event anchor like `sunrise+30`. If s_ml4 is absent, Scenario B
+     is disabled; only Scenario A fires.
 
-  • You're home AT sunrise+90 → fires at 07:08 (or the next heartbeat
-    right after), gates pass, latch arms for the day.
-  • Anchor crossed at 07:08 while you were away → no fire (gate blocks).
-    You walk in at 07:30; next heartbeat sees now >= 07:08, gates pass,
-    not-yet-fired → fires.
-  • You're continuously home → fires once at 07:08, daily latch blocks
-    re-fires until midnight.
-
-Previous design had separate Scenario A (anchor crossing) and Scenario B
-(home_mode away→home auto-fire). The combined "ready-to-fire latch"
-above replaces both — simpler and matches user intent ("fire any time
-the conditions align after the anchor").
-
-Firing is gated by sentence-driven gate(s) — see s_ml3 below.
-
-Latched per "home period" — once fired, the rule won't refire until
-home_mode leaves 'home' (i.e. you press AWAY or ABROAD), then comes back.
-Also latched per calendar day so a user who's continuously 'home'
-(vacation week, WFH) doesn't see it re-fire after the first morning.
+Daily latch ensures the rule fires at MOST once per calendar day, no
+matter which scenario triggers. No per-home-period latch reset (a brief
+AWAY+return shouldn't re-fire morning lights mid-morning).
 
 Sentences (authored in the dashboard "Morning Lights" container):
 
@@ -36,17 +26,23 @@ Sentences (authored in the dashboard "Morning Lights" container):
          display chips like @Pixoo / @Awtrix routed through the shared
          _display_chips parser)
 
-  s_ml2: Morning Lights: active time modes are sunrise-15, sunrise+30
+  s_ml2: Morning Lights: active time modes are sunrise+90
          List of sun-event anchors (`<event>[±N]` where event is
-         dawn|sunrise|noon|sunset|dusk and ±N is minutes). Plain time-
-         mode names (e.g. `morning`) used to drive Scenario B and are
-         now IGNORED — only the sun-event anchor tokens matter.
+         dawn|sunrise|noon|sunset|dusk and ±N is minutes). Earliest
+         anchor = "rule can fire from this minute onward today".
+         Plain time-mode names are ignored.
 
   s_ml3: Morning Lights: only fires when home_mode is home
-         A gate. Multiple gate sentences are AND-combined. Each gate
-         names a state.shared key and the value it must equal for the
-         rule to fire. If no gate sentence is authored, no gate is
-         applied — the rule fires at the sun anchor regardless of mode.
+         A gate. Multiple gate sentences are AND-combined. The
+         home_mode gate ALSO drives Scenario B's transition target
+         (mode names are fully sentence-driven — no `'home'`/`'away'`/
+         `'abroad'` literals in code).
+
+  s_ml4: Morning Lights: late arrival fires after the anchor
+         (optional) Enables Scenario B. Threshold can be:
+           - "the anchor" → reuse the earliest s_ml2 anchor
+           - "<event>[±N]" → explicit sun-event anchor (e.g. sunrise+30)
+         If absent, Scenario B is disabled.
 
 If s_ml1 is empty (no chips) or s_ml2 yields no anchors, the rule is a
 safe no-op.
@@ -56,8 +52,8 @@ Companion rules:
   strings for each event in {dawn, sunrise, noon, sunset, dusk}; this rule
   reads those for the anchor resolver.
 - mode_buttons.py writes state.shared['home_mode'].
-- Both happen on the same heartbeat tick, so the rule sees a consistent
-  set of values.
+- Both run before this rule in the same heartbeat tick (depends_on),
+  so the rule sees consistent values.
 """
 
 import json
@@ -97,6 +93,14 @@ _SUN_ANCHOR_RE = re.compile(
 # sentences in the container are AND-combined.
 _GATE_RE = re.compile(
     r'morning\s+lights:\s*only\s+fires\s+when\s+(\w+)\s+is\s+([\w-]+)',
+    re.IGNORECASE,
+)
+# Late-arrival sentence (s_ml4, optional) —
+#   "Morning Lights: late arrival fires after <threshold>"
+# <threshold> is either the literal phrase "the anchor" (reuse earliest s_ml2
+# anchor) or a sun-event anchor token (e.g. `sunrise+30`).
+_LATE_ARRIVAL_RE = re.compile(
+    r'morning\s+lights:\s*late\s+arrival\s+fires\s+after\s+(.+)',
     re.IGNORECASE,
 )
 
@@ -308,6 +312,43 @@ def _anchor_minutes(sun_anchors, state):
     return out
 
 
+def _load_late_arrival_threshold(container, state, default_min):
+    """Parse s_ml4. Returns the minute-of-day threshold for Scenario B,
+    or None if no s_ml4 sentence is authored (Scenario B disabled).
+
+    Sentence: "Morning Lights: late arrival fires after <threshold>"
+      - "the anchor" → return default_min (earliest s_ml2 anchor)
+      - "<event>[±N]" → resolve via state.shared['<event>'] ISO string
+    """
+    if not container:
+        return None
+    for s in (container.get('sentences') or []):
+        if not s.get('active'):
+            continue
+        text = _sentence_text(s)
+        m = _LATE_ARRIVAL_RE.search(text)
+        if not m:
+            continue
+        spec = m.group(1).strip().lower().rstrip('.,;')
+        if spec.startswith('the anchor'):
+            return default_min
+        ma = _SUN_ANCHOR_RE.match(spec.split()[0] if spec else '')
+        if ma:
+            base = ma.group(1).lower()
+            offset = int(ma.group(2)) if ma.group(2) else 0
+            iso = state.shared.get(base)
+            if not iso:
+                return None
+            try:
+                dt = datetime.fromisoformat(iso).astimezone(_TZ)
+            except (ValueError, TypeError):
+                return None
+            return (dt.hour * 60 + dt.minute + offset) % 1440
+        log.warning("morning_lights: s_ml4 threshold %r not recognized — Scenario B disabled", spec)
+        return None
+    return None
+
+
 # ─────────────────────────── Rule ───────────────────────────
 
 def evaluate(event, state):
@@ -329,55 +370,53 @@ def evaluate(event, state):
     home_mode = state.shared.get('home_mode', '')
     time_mode = state.shared.get('time_mode', '')
 
-    fired = bool(state.shared.get('_morning_lights_fired_this_period', False))
+    prev_home = state.shared.get('_morning_lights_prev_home_mode', '')
+    fired     = bool(state.shared.get('_morning_lights_fired_this_period', False))
 
     # Now-minute-of-day in local tz — used for sun-anchor matching.
     now = datetime.now(_TZ)
     now_min = now.hour * 60 + now.minute
 
-    # Daily latch reset (the ONLY latch reset since 2026-05-27): once
-    # fired today, can't re-fire until the calendar day changes. The
-    # old per-home-period reset (clear latch when user leaves home and
-    # comes back) was removed — it caused the rule to fire a SECOND
-    # time same day if the user briefly stepped out + returned within
-    # the rule's time window.
+    # Daily latch reset: once fired today, can't re-fire until the calendar
+    # day changes. Single latch path (no per-home-period reset) — a brief
+    # AWAY blip mid-morning shouldn't re-arm Scenario A; Scenario B's
+    # arrival check handles legitimate "left and came back" anyway.
     today_iso = now.date().isoformat()
     fired_date = state.shared.get('_morning_lights_fired_date', '')
     if fired and fired_date != today_iso:
         fired = False
 
-    # Ready-to-fire latch (revised 2026-05-27, second iteration):
-    # ANY moment after the earliest sun anchor has passed today, if
-    # the gates pass and the rule hasn't fired yet today, fire.
-    # Covers all three real-life cases at once:
-    #
-    #   * You're home AT sunrise+90 → fires immediately at 07:08 (the
-    #     heartbeat right after the anchor crosses, gates pass, latch arms)
-    #   * Anchor crosses at 07:08 while you're away → no fire (gate blocks).
-    #     You walk in at 07:30; next heartbeat at 07:30:xx sees
-    #     now_min >= 07:08 AND gates pass AND not-yet-fired → fires.
-    #   * You're continuously home from yesterday → anchor crosses at 07:08,
-    #     fires; daily latch latches; no double-fire even though now_min
-    #     stays ≥ 07:08 for the rest of the day.
-    #
-    # `earliest_anchor` is "first moment the rule is allowed to fire today".
-    # For `s_ml2 = sunrise+90` it's the one sunrise+90 minute. For multiple
-    # anchors (e.g. `sunrise-15, sunrise+30`), we take the EARLIEST one as
-    # the open-window-start; the rule fires once at the first eligible
-    # heartbeat after that.
+    # Resolve anchors + earliest. Scenario A's threshold; also the default
+    # threshold for Scenario B unless s_ml4 specifies a different anchor.
     anchor_minutes = _anchor_minutes(sun_anchors, state)
     state.shared['_morning_lights_last_eval_min'] = now_min        # diagnostic only
     earliest_anchor = min(anchor_minutes) if anchor_minutes else None
     anchor_passed   = earliest_anchor is not None and now_min >= earliest_anchor
 
     # Sentence-driven gates (s_ml3). All gates AND-combined. If no gate
-    # sentence is authored, gates_pass is True (no constraint).
+    # sentence is authored, gates_pass is True (no constraint). The home_mode
+    # gate doubles as Scenario B's transition target (no hardcoded literals).
     gates = _load_gates(container)
     gates_pass = all(state.shared.get(k) == v for k, v in gates)
+    home_gate_value = next((v for k, v in gates if k == 'home_mode'), None)
 
-    fire = (not fired) and gates_pass and anchor_passed
+    # Scenario B — late arrival. Enabled by the optional s_ml4 sentence.
+    # `prev_home` non-empty guard prevents a false-arrival at first heartbeat
+    # post-restart, where the persisted state hasn't re-seeded yet.
+    late_arrival_threshold = _load_late_arrival_threshold(container, state, earliest_anchor)
+    home_just_arrived = (home_gate_value is not None
+                         and prev_home
+                         and prev_home != home_gate_value
+                         and home_mode == home_gate_value)
+    late_arrival_hit = (late_arrival_threshold is not None
+                        and home_just_arrived
+                        and now_min >= late_arrival_threshold)
 
-    # Persist daily latch state for next tick (always — even when not firing).
+    # Fire when Scenario A OR Scenario B trigger AND gates pass AND latch unset.
+    fire = (not fired) and gates_pass and (anchor_passed or late_arrival_hit)
+
+    # Persist transitions + latch state (always — even when not firing).
+    state.shared['_morning_lights_prev_home_mode']    = home_mode
     state.shared['_morning_lights_fired_this_period'] = fired or fire
     if fire:
         state.shared['_morning_lights_fired_date'] = today_iso
@@ -403,10 +442,11 @@ def evaluate(event, state):
                 cmd['channel'] = dps_key
         commands.append(cmd)
 
+    scenario = 'B:late_arrival' if late_arrival_hit else 'A:anchor_passed'
     log.info(
-        "morning_lights: fired %d turn_on commands (time_mode=%s home_mode=%s "
-        "now_min=%d earliest_anchor=%s anchors=%s gates=%s)",
-        len(commands), time_mode, home_mode, now_min,
-        earliest_anchor, sorted(anchor_minutes), gates,
+        "morning_lights: fired %d turn_on commands (scenario=%s time_mode=%s "
+        "home_mode=%s now_min=%d earliest_anchor=%s late_threshold=%s gates=%s)",
+        len(commands), scenario, time_mode, home_mode, now_min,
+        earliest_anchor, late_arrival_threshold, gates,
     )
     return commands
