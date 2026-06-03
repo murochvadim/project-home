@@ -379,7 +379,11 @@ def evaluate(event, state):
     # value (the home_gate_value derived above) AND current time_mode is one
     # of the declared time_mode names. If no home_mode gate is authored,
     # Scenario B silently doesn't fire (no transition target known).
+    # `prev_home` non-empty guard prevents a false "arrival" right after
+    # rule-engine restart, where the persisted state hasn't been re-seeded
+    # yet and `prev_home` defaults to '' (≠ the gate value → would fire).
     home_just_arrived = (home_gate_value is not None
+                         and prev_home
                          and prev_home != home_gate_value
                          and home_mode == home_gate_value)
     late_arrival_hit  = home_just_arrived and time_mode in active_modes
