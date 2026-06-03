@@ -2621,10 +2621,12 @@ app.delete('/api/medical/documents/:id', async (req, res) => {
       return res.status(400).json({ error: 'invalid file_path on row — refusing to dispatch SSH delete' });
     }
     // SSH to LXC 104, rm the file from its CIFS mount of the same share.
+    // Uses the project-wide SSH_USER + SSH_KEY constants (id_ed25519 by
+    // default; same key + user every other LXC-104 endpoint here uses).
     const linuxPath = MEDICAL_DOCS_LINUX + '/' + filename;
     const { NodeSSH } = require('node-ssh');
     const ssh = new NodeSSH();
-    await ssh.connect({ host: '192.168.1.227', username: 'root', privateKeyPath: 'C:/Users/muroc/.ssh/id_rsa' });
+    await ssh.connect({ host: '192.168.1.227', username: SSH_USER, privateKeyPath: SSH_KEY });
     const out = await ssh.execCommand(`rm -f "${linuxPath.replace(/"/g, '\\"')}"`);
     ssh.dispose();
     if (out.code !== 0) {

@@ -333,7 +333,8 @@ function renderDocForm(d) {
     `<option value="${k}"${k === d.doc_type ? ' selected' : ''}>${esc(lbl)}</option>`).join('');
   return `<div style="background:#fafaf6; padding:12px; border-radius:6px;">
     ${editing ? '' : (mode === 'pdf'
-      ? `<div class="med-form-row"><label>PDF file</label><input type="file" id="df-file" accept="application/pdf" onchange="medFillNameFromFile()"></div>`
+      ? `<div class="med-form-row"><label>File</label><input type="file" id="df-file" accept="application/pdf,image/jpeg,image/png,image/heic,image/webp" onchange="medFillNameFromFile()"></div>
+         <div class="med-form-row"><label></label><span style="font-size:0.78rem; color:#666; line-height:1.4;">Accepts PDF or image (JPEG/PNG/HEIC/WebP). Tip: take a photo with your phone's normal camera → drag it from the Phone Link app right onto this picker, or save it from Phone Link and pick it here.</span></div>`
       : `<div class="med-form-row"><label>Image</label><span style="font-size:0.84rem;color:#666;">Use Snap below to capture; preview will appear after.</span></div>`)}
     <div class="med-form-row"><label>Name</label><input type="text" id="df-name" value="${v('name')}" placeholder="auto from filename"></div>
     <div class="med-form-row"><label>Type</label><select id="df-type">${optType}</select></div>

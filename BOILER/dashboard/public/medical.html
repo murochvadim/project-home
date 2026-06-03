@@ -35,10 +35,17 @@
     .med-chip.type-id_card          { background:#fce7f3; color:#9d174d; }
     .med-chip.type-other            { background:#e5e5e5; color:#525252; }
     #med-camera-stage { display:none; margin-top:10px; padding:12px; background:#1a1a1a; border-radius:8px; }
+    #med-cam-wrap { position:relative; display:inline-block; }
     #med-camera-stage video { width:100%; max-width:1000px; background:#000; border-radius:4px; display:block; }
     #med-camera-stage canvas { display:none; background:#000; border-radius:4px; user-select:none; touch-action:none; }
     #med-camera-stage .cam-btns { display:flex; gap:6px; margin-left:auto; flex-wrap:wrap; }
     #med-camera-stage .zoom-help { color:#888; font-size:0.74rem; margin-top:4px; }
+    #med-cam-countdown {
+      position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);
+      font-size:160px; line-height:1; font-weight:700;
+      color:#fff; text-shadow:0 0 20px #000, 0 0 50px #ff6b6b, 0 0 80px #ff6b6b;
+      pointer-events:none; font-family:monospace;
+    }
     #med-upload-progress { display:none; margin-top:8px; padding:8px 10px; background:#fff8b3; border-left:3px solid #d4a017; border-radius:4px; font-size:0.84rem; }
   </style>
 </head>
@@ -133,7 +140,7 @@
     <div class="card" style="margin-bottom:16px;">
       <h2 style="margin-top:0;">+ Add document</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn btn-success btn-sm" onclick="medOpenDocForm('pdf')">📄 Upload PDF</button>
+        <button class="btn btn-success btn-sm" onclick="medOpenDocForm('pdf')">📄 Upload PDF or image</button>
         <button class="btn btn-secondary btn-sm" onclick="medOpenDocForm('camera')">📷 Camera capture</button>
       </div>
       <div id="med-doc-form" style="display:none; margin-top:12px;"></div>
@@ -194,6 +201,6 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=11"></script>
+<script src="js/medical.js?v=12"></script>
 </body>
 </html>
