@@ -433,7 +433,7 @@
   // table. Reason: rule's evaluate() guards on a specific trigger shape
   // (e.g. heartbeat only) that the engine's synthesized test event can't
   // satisfy. Result is always 'no_action'. Keep ↺ Reset Runs visible.
-  const RULES_NO_TEST = new Set(['Evening Lights']);
+  const RULES_NO_TEST = new Set(['Evening Lights', 'Morning Lights']);
   window.testModeButton = async function (mode) {
     const el = document.getElementById('test-result');
     if (el) {
