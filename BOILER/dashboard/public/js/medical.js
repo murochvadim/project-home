@@ -271,9 +271,16 @@ window.medRenderDocuments = function () {
     (x.name && x.name.toLowerCase().includes(q)) ||
     (x.notes && x.notes.toLowerCase().includes(q))
   );
+  // Total + filtered count badge in the card heading.
+  const cnt = document.getElementById('med-doc-count');
+  if (cnt) {
+    cnt.textContent = DOCUMENTS.length === list.length
+      ? `(${DOCUMENTS.length})`
+      : `(${list.length} of ${DOCUMENTS.length})`;
+  }
   const el = document.getElementById('med-doc-list');
   if (list.length === 0) {
-    el.innerHTML = '<div class="med-empty">No documents yet — click + Upload PDF or + Camera capture above.</div>';
+    el.innerHTML = '<div class="med-empty">No documents yet — drop a file in the box above to get started.</div>';
     return;
   }
   el.innerHTML = list.map(renderDocCard).join('');
@@ -281,21 +288,44 @@ window.medRenderDocuments = function () {
 
 function renderDocCard(d) {
   const size = d.file_size != null ? _fmtSize(d.file_size) : '';
-  return `<div class="med-list-card">
-    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      <span class="med-chip type-${esc(d.doc_type)}">${esc(DOC_TYPE_LABELS[d.doc_type] || d.doc_type)}</span>
-      <h3 style="margin:0; flex:1;">${esc(d.name)}</h3>
-      <a class="med-link-btn" href="/api/medical/documents/${d.id}/file" target="_blank">👁 View</a>
-      <a class="med-link-btn" href="/api/medical/documents/${d.id}/file?download=1">⬇ Download</a>
-      <button class="btn btn-secondary btn-sm" onclick="medEditDoc(${d.id})">Edit</button>
-      <button class="btn btn-secondary btn-sm" onclick="medDeleteDoc(${d.id})">✕</button>
+  const isImage = (d.mime_type || '').startsWith('image/');
+  const thumb = isImage
+    ? `<a href="/api/medical/documents/${d.id}/file" target="_blank" title="Click to open full size" style="flex-shrink:0;">
+         <img src="/api/medical/documents/${d.id}/file" alt="" style="width:64px; height:64px; object-fit:cover; border-radius:4px; border:1px solid #ddd;">
+       </a>`
+    : `<a href="/api/medical/documents/${d.id}/file" target="_blank" title="Click to open PDF" style="flex-shrink:0; width:64px; height:64px; display:inline-flex; align-items:center; justify-content:center; background:#fce7f3; color:#9d174d; border-radius:4px; border:1px solid #f4c8d8; font-size:1.8rem; text-decoration:none;">📄</a>`;
+  return `<div class="med-list-card" id="med-doc-row-${d.id}">
+    <div style="display:flex; gap:10px; align-items:flex-start;">
+      ${thumb}
+      <div style="flex:1; min-width:0;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <span class="med-chip type-${esc(d.doc_type)}">${esc(DOC_TYPE_LABELS[d.doc_type] || d.doc_type)}</span>
+          <h3 style="margin:0; flex:1; overflow:hidden; text-overflow:ellipsis;">${esc(d.name)}</h3>
+          <a class="med-link-btn" href="/api/medical/documents/${d.id}/file" target="_blank">👁 Open</a>
+          <a class="med-link-btn" href="/api/medical/documents/${d.id}/file?download=1">⬇ Download</a>
+          <button class="btn btn-secondary btn-sm" onclick="medEditDoc(${d.id})">Edit</button>
+          <button class="btn btn-secondary btn-sm" onclick="medDeleteDoc(${d.id})">✕</button>
+        </div>
+        ${d.doctor_name   ? `<div class="med-meta">👨‍⚕ ${esc(d.doctor_name)}</div>`   : ''}
+        ${d.producer_name ? `<div class="med-meta">🏥 ${esc(d.producer_name)} (${esc(d.producer_kind)})</div>` : ''}
+        ${d.doc_date      ? `<div class="med-meta">📅 ${esc(d.doc_date)}</div>` : ''}
+        <div class="med-meta">${esc(d.mime_type)} · ${size} · uploaded ${esc(d.uploaded_at)}</div>
+        ${d.notes ? `<div style="margin-top:4px; font-size:0.84rem;">${esc(d.notes)}</div>` : ''}
+      </div>
     </div>
-    ${d.doctor_name   ? `<div class="med-meta">👨‍⚕ ${esc(d.doctor_name)}</div>`   : ''}
-    ${d.producer_name ? `<div class="med-meta">🏥 ${esc(d.producer_name)} (${esc(d.producer_kind)})</div>` : ''}
-    ${d.doc_date      ? `<div class="med-meta">📅 ${esc(d.doc_date)}</div>` : ''}
-    <div class="med-meta">${esc(d.mime_type)} · ${size} · uploaded ${esc(d.uploaded_at)}</div>
-    ${d.notes ? `<div style="margin-top:4px; font-size:0.84rem;">${esc(d.notes)}</div>` : ''}
   </div>`;
+}
+
+// Brief yellow-flash + scroll-into-view on a doc row — used right after
+// upload so the user can see exactly which row is the new one.
+function _highlightDoc(id) {
+  const row = document.getElementById('med-doc-row-' + id);
+  if (!row) return;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const orig = row.style.background;
+  row.style.transition = 'background 0.6s';
+  row.style.background = '#fff8b3';
+  setTimeout(() => { row.style.background = orig || ''; }, 1800);
 }
 
 function _fmtSize(n) {
@@ -740,11 +770,13 @@ window.medUploadDoc = async function () {
   try {
     const r = await fetch('/api/medical/documents', { method: 'POST', body: fd }).then(r => r.json());
     if (r.error) throw new Error(r.error);
-    prog.textContent = '✓ Uploaded';
-    setTimeout(() => { prog.style.display = 'none'; }, 1200);
+    prog.innerHTML = `✓ Uploaded — see "📁 Uploaded documents" below`;
+    setTimeout(() => { prog.style.display = 'none'; }, 2400);
     _capturedBlob = null;
     medCloseDocForm();
     await medFetchDocuments();
+    // Scroll + flash the new row so the user can immediately see it.
+    if (r.id) _highlightDoc(r.id);
   } catch (e) {
     prog.style.display = 'none';
     errEl.textContent = e.message;
