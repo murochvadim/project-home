@@ -2,7 +2,8 @@
 
 On Corridor Presence rising edge (DPS '1' transitions 'none' → 'presence'):
   1. ALWAYS — fire chips from the "on presence" sentence.
-  2. WHEN home_mode == 'home' — fire chips from the "when home" sentence(s).
+  2. WHEN home_mode == <gate> — fire chips from the "when home" sentence(s).
+     <gate> value comes from the s_mic_gate sentence — no hardcoded literal.
   3. AFTER `after_delay_sec` seconds — fire chips from the "after delay"
      sentence (Pixoo preset + Face Recognition start_recognition).
   4. AT cooldown end (T + cooldown_sec) — fire chips from the
@@ -16,12 +17,13 @@ Everything except the trigger device is sentence-driven via container
 or remove devices by editing chips in the dashboard — no code changes.
 
 Sentence classification (by text content):
-  - contains 'on presence'      → always bucket (every rising edge)
-  - contains 'when home'        → home-mode bucket (rising edge AND home_mode=home)
-  - contains 'after delay'      → delayed bucket (fired after_delay_sec later)
-  - contains 'on cooldown end'  → cleanup bucket (fired cooldown_sec later)
-  - contains 'delay is N seconds'    → sets after_delay_sec
-  - contains 'cooldown is N seconds' → sets cooldown_sec
+  - contains 'on presence'                  → always bucket (every rising edge)
+  - contains 'when home'                    → home-mode bucket (gated by s_mic_gate)
+  - contains 'after delay'                  → delayed bucket (fired after_delay_sec later)
+  - contains 'on cooldown end'              → cleanup bucket (fired cooldown_sec later)
+  - contains 'delay is N seconds'           → sets after_delay_sec
+  - contains 'cooldown is N seconds'        → sets cooldown_sec
+  - contains 'when-home bucket fires when'  → sets when-home gate value (s_mic_gate)
 
 Cooldown `cooldown_sec` between fires prevents flicker spam when the mmWave
 sensor flutters on the edge of the cone.
@@ -101,14 +103,24 @@ RULE = {
 }
 
 
+_WHEN_HOME_GATE_RE = re.compile(
+    r'when-home\s+bucket\s+fires\s+when\s+home_mode\s+is\s+([a-z_]+)',
+    re.IGNORECASE,
+)
+
+
 def _classify_sentence(text):
     """Return one of: 'always', 'when_home', 'delayed', 'cleanup',
-    'knob_delay', 'knob_cooldown', or None."""
+    'knob_delay', 'knob_cooldown', 'knob_gate', or None."""
     t = (text or '').lower()
     if 'cooldown is' in t:
         return 'knob_cooldown'
     if 'delay is' in t:
         return 'knob_delay'
+    # 'when-home bucket fires when home_mode is X' must be checked BEFORE
+    # 'when home' because it also matches that substring.
+    if 'when-home bucket fires' in t:
+        return 'knob_gate'
     # 'on cooldown end' must be checked before 'on presence' (substring match)
     if 'on cooldown end' in t:
         return 'cleanup'
@@ -179,6 +191,7 @@ def _read_config(state):
     cfg = {
         'cooldown_sec':    DEFAULTS_COOLDOWN_SEC,
         'after_delay_sec': DEFAULTS_AFTER_DELAY_SEC,
+        'when_home_gate':  None,         # set from s_mic_gate; None → bucket disabled
         'always_cmds':     [],
         'when_home_cmds':  [],
         'delayed_cmds':    [],
@@ -218,6 +231,11 @@ def _read_config(state):
                 m = re.search(r'delay is\s+(\d+)\s*seconds?', full_text, re.I)
                 if m:
                     cfg['after_delay_sec'] = int(m.group(1))
+                continue
+            if kind == 'knob_gate':
+                m = _WHEN_HOME_GATE_RE.search(full_text)
+                if m:
+                    cfg['when_home_gate'] = m.group(1).lower()
                 continue
 
             # Chip sentence — collect resolved commands
@@ -299,10 +317,16 @@ def evaluate(event, state):
     # 1. ALWAYS bucket — fires regardless of transit mode (corridor light)
     commands.extend(cfg['always_cmds'])
 
-    # 2. WHEN home_mode == 'home' bucket — gated by BOTH home_mode AND transit mode
-    home_mode = state.shared.get('home_mode', 'away')
-    if home_mode != 'home':
-        log.info("Move in Corridor: home_mode='%s' (not home) — skipping when-home bucket", home_mode)
+    # 2. WHEN-HOME bucket — gated by sentence-driven home_mode value AND transit mode.
+    # The gate value comes from s_mic_gate (`when-home bucket fires when home_mode is <value>`).
+    # If s_mic_gate is absent → cfg['when_home_gate'] is None → bucket silently skipped.
+    home_mode = state.shared.get('home_mode', '')
+    gate      = cfg.get('when_home_gate')
+    if gate is None:
+        log.debug("Move in Corridor: no when-home gate sentence — skipping when-home bucket")
+    elif home_mode != gate:
+        log.info("Move in Corridor: home_mode='%s' (!= gate '%s') — skipping when-home bucket",
+                 home_mode, gate)
     elif suppress_monitoring:
         log.info("Move in Corridor: transit_mode='%s' — skipping when-home bucket (monitor/awtrix/FR)", transit_mode)
     else:
