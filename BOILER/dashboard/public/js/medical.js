@@ -274,19 +274,22 @@ window.medOpenDocForm = function (mode) {
     // Rebuild the stage's innerHTML every time — a prior error inside
     // _startCamera() may have replaced it with a failure message that
     // doesn't include the <video> / <canvas> / button row.
+    // Header row: camera picker on the left, Snap + Cancel buttons pushed
+    // to the right via margin-left:auto on the button group. Video fills
+    // the full stage width below (no max-width cap).
     stage.innerHTML = `
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
         <label style="color:#ddd; font-size:0.84rem;">Camera:</label>
-        <select id="med-cam-picker" onchange="medSwitchCamera(this.value)" style="flex:1; padding:4px 6px; background:#222; color:#fff; border:1px solid #444; border-radius:3px; font-size:0.84rem;">
+        <select id="med-cam-picker" onchange="medSwitchCamera(this.value)" style="flex:1; max-width:280px; padding:4px 6px; background:#222; color:#fff; border:1px solid #444; border-radius:3px; font-size:0.84rem;">
           <option value="">— scanning… —</option>
         </select>
+        <div class="cam-btns">
+          <button class="btn btn-success btn-sm" onclick="medCameraSnap()">📸 Snap</button>
+          <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>
+        </div>
       </div>
       <video id="med-cam-video" autoplay muted playsinline style="display:block;"></video>
-      <canvas id="med-cam-canvas"></canvas>
-      <div class="cam-btns">
-        <button class="btn btn-success btn-sm" onclick="medCameraSnap()">📸 Snap</button>
-        <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>
-      </div>`;
+      <canvas id="med-cam-canvas"></canvas>`;
     stage.style.display = 'block';
     _startCamera();
   }
@@ -470,8 +473,17 @@ window.medCameraSnap = function () {
     // Show the captured image preview in place of the live video.
     c.style.display = 'block';
     v.style.display = 'none';
-    document.querySelector('#med-camera-stage .cam-btns').innerHTML =
-      '<span style="color:#fff; font-size:0.84rem;">Captured ' + _fmtSize(blob.size) + ' — fill form + Upload</span>';
+    // Replace the Snap button with a "Re-snap" so the user can retry, and
+    // disable the camera picker (no live stream now). Keep Cancel.
+    const btns = document.querySelector('#med-camera-stage .cam-btns');
+    if (btns) {
+      btns.innerHTML = `
+        <span style="color:#7fff7f; font-size:0.84rem; align-self:center; margin-right:6px;">Captured ${_fmtSize(blob.size)}</span>
+        <button class="btn btn-secondary btn-sm" onclick="medOpenDocForm('camera')">↻ Re-snap</button>
+        <button class="btn btn-secondary btn-sm" onclick="medCameraCancel()">Cancel</button>`;
+    }
+    const picker = document.getElementById('med-cam-picker');
+    if (picker) picker.disabled = true;
   }, 'image/jpeg', 0.85);
 };
 window.medCameraCancel = function () {
