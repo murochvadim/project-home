@@ -45,6 +45,9 @@ return as future scope, they'll come back as new tabs alongside Contacts.
 | `email` | TEXT |  |
 | `website_url` | TEXT |  |
 | `notes` | TEXT |  |
+| `next_appointment_at` | TIMESTAMPTZ | optional — single upcoming-appointment slot per contact, added 2026-06-03 (migration `005_appointment_fields.sql`); surfaces as a red nested card on the contact row |
+| `next_appointment_note` | TEXT | optional — short reason for the appointment (e.g. "Routine check", "fast 12h") |
+| `reminder_text` | TEXT | optional — standalone reminder text (no date), added 2026-06-03 (migration `006_reminder_text.sql`); surfaces as a blue nested card on the contact row, independent of the appointment slot |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() |  |
 
 Dropped vs original `medical_providers` shape:
@@ -165,7 +168,70 @@ Retention=forever (registered in `retention_policies`).
 
 None committed. The Documents code is intentionally self-contained.
 
+## Per-contact appointment slot + reminder (2026-06-03)
+
+Each `medical_contacts` row carries two **independent** optional fields:
+
+- **Appointment slot** — `next_appointment_at TIMESTAMPTZ` + `next_appointment_note TEXT`, added by migration `005_appointment_fields.sql`.
+- **Reminder text** — `reminder_text TEXT` (no date — just free-form text), added by migration `006_reminder_text.sql`.
+
+Both can be set simultaneously on the same contact. Setting one does not
+affect the other; cleared via independent ✕ clear buttons in the form.
+
+### UI
+
+**Edit form** has two color-coded sections at the bottom:
+
+- **📅 Next appointment** (red border) — three separate inputs for the
+  date+time: `<input type="date">` + `<input type="number" min="0" max="23">` (HH) +
+  `<input type="number" min="0" max="59">` (MM), plus a "Reason" text field.
+  The 3-input split exists because `<input type="datetime-local">` follows
+  OS locale and shows AM/PM on en-US Windows regardless of HTML attributes
+  — no way to force 24-hour there. Number inputs are always 24-hour.
+  Empty date → `next_appointment_at = NULL` + `next_appointment_note`
+  force-cleared client-side. A ✕ clear button blanks all 4 inputs at once.
+- **🔔 Reminder** (blue border) — a single text input + ✕ clear button.
+  No date logic; whatever text is typed stays on the contact until
+  manually edited or cleared.
+
+**Contact card in the List** renders up to two nested mini-cards (~260 px
+wide each) side-by-side in the middle of the contact row, between the
+address line and the contact-method link row. Both are centered via a
+`flex; flex-wrap:wrap; justify-content:center` container:
+
+- **Red card** when `next_appointment_at` is set — title "📅 NEXT APPOINTMENT" +
+  formatted date (`15 Jun 2026, 14:30`, always 24h via `toLocaleString('en-GB', {hour12:false})`) + italic reason.
+  Past appointments (`appointment_at < now`) switch to muted red bg/border + a small "past" pill in the title — visual nudge to clear via Edit.
+- **Blue card** when `reminder_text` is set — title "🔔 REMINDER" + the text.
+
+When both are set the cards render side-by-side; if only one is set it
+centers alone. If neither is set the whole flex container is omitted.
+
+### Timezone round-trip
+
+`<input type="date">` returns `YYYY-MM-DD` (no TZ). HH+MM are integers.
+On save the JS combines them: `new Date(\`${date}T${HH}:${MM}\`)` parses
+as **browser-local** time → `.toISOString()` → UTC ISO with `Z` suffix.
+The server stores that in TIMESTAMPTZ. Read-back: server returns ISO,
+JS Date parses to UTC then `getHours()/getMinutes()` returns browser-local
+values → same wall-clock the user originally typed. Works regardless of
+the Postgres session timezone (this is why the bare datetime-local
+approach failed before this round — it sent values without a timezone
+marker, so PG interpreted them in its session TZ and the round-trip lost hours).
+
+### Why no rule engine integration (yet)
+
+The Level-3 design discussed before shipping included an LXC 105 rule
+that would push reminders to Awtrix + Alexa N hours before each
+appointment. User chose Level 2 instead — dashboard surface only, no
+automated reminders. If/when automated reminders are wanted later, the
+rule would read `next_appointment_at` straight from `medical_contacts`
+(no schema change needed); the columns are designed to be rule-engine-
+friendly. The standalone `reminder_text` field is intentionally static —
+it's a sticky note, not a notification trigger.
+
 ## Status
 
 - 2026-06-02: Contacts tab shipped.
 - 2026-06-03: Documents tab added (PDF + camera capture). 9 doc types, FK links to doctor + producer (clinic/hospital).
+- 2026-06-03: Per-contact appointment slot + standalone reminder text — `next_appointment_at` + `next_appointment_note` + `reminder_text` on `medical_contacts`. Red + blue nested mini-cards rendered side-by-side on the contact row. Round-trip safe across timezones via UTC ISO wrap; 24h display forced via `hour12:false` + 3-input split form.

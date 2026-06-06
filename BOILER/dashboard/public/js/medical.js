@@ -54,6 +54,7 @@ function renderContactCard(c) {
     ${c.specialty ? `<div class="med-meta">${esc(c.specialty)}</div>` : ''}
     ${c.health_fund ? `<div class="med-meta">Health fund: ${esc(c.health_fund)}</div>` : ''}
     ${c.address ? `<div class="med-meta">📍 ${esc(c.address)}</div>` : ''}
+    ${_renderApptReminderArea(c)}
     <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">
       ${c.phone_main      ? `<a class="med-link-btn" href="tel:${esc(c.phone_main)}"      title="Main">📞 ${esc(c.phone_main)}</a>` : ''}
       ${c.phone_private   ? `<a class="med-link-btn" href="tel:${esc(c.phone_private)}"   title="Privet">🔒 ${esc(c.phone_private)}</a>` : ''}
@@ -63,6 +64,50 @@ function renderContactCard(c) {
       ${c.website_url ? `<a class="med-link-btn" href="${esc(c.website_url)}" target="_blank" rel="noopener">🌐 site</a>` : ''}
     </div>
     ${c.notes ? `<div style="margin-top:4px; font-size:0.84rem;">${esc(c.notes)}</div>` : ''}
+  </div>`;
+}
+
+// Render the appointment + reminder area as up to TWO nested cards (red
+// appointment with date, blue reminder text). Side-by-side if both set;
+// otherwise just the one that exists, centered. Returns '' if neither.
+function _renderApptReminderArea(c) {
+  const apptHtml = _renderApptCard(c);
+  const remHtml  = _renderReminderCard(c);
+  if (!apptHtml && !remHtml) return '';
+  return `<div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:6px 0;">${apptHtml}${remHtml}</div>`;
+}
+
+// Nested red card: date + reason. Past appointments turn muted red +
+// "past" badge — reminder to clear via Edit so the slot is free again.
+function _renderApptCard(c) {
+  if (!c.next_appointment_at) return '';
+  const d = new Date(c.next_appointment_at);
+  const when = isNaN(d) ? c.next_appointment_at :
+    d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const past = !isNaN(d) && d.getTime() < Date.now();
+  const borderColor = past ? '#d4a3a3' : '#e74c3c';
+  const bgColor     = past ? '#fdf4f4' : '#fef2f2';
+  const titleColor  = past ? '#a35858' : '#c0392b';
+  const dateColor   = past ? '#8e3e3e' : '#a82a1f';
+  const pastBadge   = past ? '<span style="margin-left:6px; padding:1px 8px; background:#a35858; color:#fff; border-radius:10px; font-size:0.7rem; font-weight:600;">past</span>' : '';
+  const note = c.next_appointment_note
+    ? `<div style="margin-top:1px; font-size:0.82rem; color:${dateColor}; font-style:italic; line-height:1.2;">${esc(c.next_appointment_note)}</div>`
+    : '';
+  return `<div style="flex:0 1 260px; padding:5px 14px; background:${bgColor}; border:1.5px solid ${borderColor}; border-radius:8px; box-shadow:0 1px 3px rgba(192,57,43,0.12); text-align:center; line-height:1.25;">
+    <div style="font-size:0.72rem; color:${titleColor}; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:1px;">📅 Next appointment${pastBadge}</div>
+    <div style="font-size:0.94rem; font-weight:700; color:${dateColor};">${esc(when)}</div>
+    ${note}
+  </div>`;
+}
+
+// Nested blue card: standalone reminder text — no date, just a note that
+// stays put until the user clears it (e.g. "renew prescription", "bring
+// last X-ray"). Matches the red card's vertical size for visual harmony.
+function _renderReminderCard(c) {
+  if (!c.reminder_text) return '';
+  return `<div style="flex:0 1 260px; padding:5px 14px; background:#eef5ff; border:1.5px solid #3b82f6; border-radius:8px; box-shadow:0 1px 3px rgba(59,130,246,0.15); text-align:center; line-height:1.25;">
+    <div style="font-size:0.72rem; color:#1e40af; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:1px;">🔔 Reminder</div>
+    <div style="font-size:0.92rem; font-weight:600; color:#1e3a8a;">${esc(c.reminder_text)}</div>
   </div>`;
 }
 
@@ -87,10 +132,39 @@ window.medEditContact = function (id) {
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 
+// Split a TIMESTAMPTZ ISO string into date / hour / minute pieces for the
+// three separate inputs. (Single `datetime-local` was dropped because the
+// browser-native widget follows OS locale and shows AM/PM on en-US Windows
+// regardless of HTML attributes — there's no way to force 24-hour there.)
+function _isoToLocalParts(iso) {
+  if (!iso) return { date: '', hour: '', minute: '' };
+  const d = new Date(iso);
+  if (isNaN(d)) return { date: '', hour: '', minute: '' };
+  const pad = n => String(n).padStart(2, '0');
+  return {
+    date:   `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    hour:   String(d.getHours()),
+    minute: pad(d.getMinutes()),
+  };
+}
+
+// Combine the 3 inputs into a UTC ISO. Date-only OR missing date → ''.
+// Hour/minute default to 0 if blank.
+function _partsToISO(date, hourStr, minStr) {
+  if (!date) return '';
+  const h = Math.max(0, Math.min(23, parseInt(hourStr || '0', 10) || 0));
+  const m = Math.max(0, Math.min(59, parseInt(minStr  || '0', 10) || 0));
+  const pad = n => String(n).padStart(2, '0');
+  const d = new Date(`${date}T${pad(h)}:${pad(m)}`);   // browser-local
+  if (isNaN(d)) return '';
+  return d.toISOString();
+}
+
 function renderContactForm(c) {
   const v = k => esc(c[k] || '');
   const kindVal = c.kind || 'doctor';
   const fundVal = c.health_fund || '';
+  const apptParts = _isoToLocalParts(c.next_appointment_at);
   const editing = !!c.id;
   return `<div style="background:#fafaf6; padding:12px; border-radius:6px;">
     <div class="med-form-row"><label>Kind</label>
@@ -116,6 +190,30 @@ function renderContactForm(c) {
     <div class="med-form-row"><label>Email</label><input type="email" id="cf-email" value="${v('email')}"></div>
     <div class="med-form-row"><label>Website</label><input type="url" id="cf-website" value="${v('website_url')}" placeholder="https://"></div>
     <div class="med-form-row"><label>Notes</label><textarea id="cf-notes">${v('notes')}</textarea></div>
+    <div style="margin-top:10px; padding:10px 12px; background:#fef2f2; border-left:3px solid #c0392b; border-radius:4px;">
+      <div style="font-weight:600; color:#c0392b; margin-bottom:6px; font-size:0.88rem;">📅 Next appointment</div>
+      <div class="med-form-row">
+        <label>When</label>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input type="date" id="cf-appt-date" value="${esc(apptParts.date)}" style="flex:1; min-width:130px;">
+          <input type="number" id="cf-appt-hour" min="0" max="23" step="1" placeholder="HH" value="${esc(apptParts.hour)}" style="width:62px; text-align:center;" title="Hour (0–23)">
+          <span style="font-weight:700; color:#666;">:</span>
+          <input type="number" id="cf-appt-min" min="0" max="59" step="1" placeholder="MM" value="${esc(apptParts.minute)}" style="width:62px; text-align:center;" title="Minute (0–59)">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="medClearAppt()" title="Clear appointment">✕ clear</button>
+        </div>
+      </div>
+      <div class="med-form-row"><label>Reason</label><input type="text" id="cf-appt-note" value="${v('next_appointment_note')}" placeholder="Routine check / Follow-up / fast 12h"></div>
+    </div>
+    <div style="margin-top:10px; padding:10px 12px; background:#eef5ff; border-left:3px solid #3b82f6; border-radius:4px;">
+      <div style="font-weight:600; color:#1e40af; margin-bottom:6px; font-size:0.88rem;">🔔 Reminder</div>
+      <div class="med-form-row">
+        <label>Text</label>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input type="text" id="cf-reminder" value="${v('reminder_text')}" placeholder="Renew prescription / bring last X-ray" style="flex:1;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="medClearReminder()" title="Clear reminder">✕ clear</button>
+        </div>
+      </div>
+    </div>
     <div style="display:flex; gap:8px; margin-top:8px;">
       <button class="btn btn-success btn-sm" onclick="medSaveContact(${editing ? c.id : 'null'})">💾 ${editing ? 'Update' : 'Save'}</button>
       <button class="btn btn-secondary btn-sm" onclick="medCloseContactForm()">Cancel</button>
@@ -124,7 +222,24 @@ function renderContactForm(c) {
   </div>`;
 }
 
+window.medClearAppt = function () {
+  for (const id of ['cf-appt-date', 'cf-appt-hour', 'cf-appt-min', 'cf-appt-note']) {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  }
+};
+
+window.medClearReminder = function () {
+  const el = document.getElementById('cf-reminder');
+  if (el) el.value = '';
+};
+
 window.medSaveContact = async function (id) {
+  const apptDate = document.getElementById('cf-appt-date').value.trim();
+  const apptHour = document.getElementById('cf-appt-hour').value.trim();
+  const apptMin  = document.getElementById('cf-appt-min').value.trim();
+  const apptISO  = _partsToISO(apptDate, apptHour, apptMin);
+  const apptNoteRaw = document.getElementById('cf-appt-note').value.trim();
   const payload = {
     kind: document.getElementById('cf-kind').value,
     name: document.getElementById('cf-name').value.trim(),
@@ -138,6 +253,11 @@ window.medSaveContact = async function (id) {
     email: document.getElementById('cf-email').value.trim(),
     website_url: document.getElementById('cf-website').value.trim(),
     notes: document.getElementById('cf-notes').value.trim(),
+    // Date + hour + minute combined to UTC ISO so the value stored is
+    // anchored to the exact wall-clock the user typed. Empty date → '' → NULL.
+    next_appointment_at:   apptISO,
+    next_appointment_note: apptISO ? apptNoteRaw : '',
+    reminder_text:         document.getElementById('cf-reminder').value.trim(),
   };
   if (!payload.name) { document.getElementById('cf-err').textContent = 'Name is required'; return; }
   try {

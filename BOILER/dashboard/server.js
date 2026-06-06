@@ -2437,8 +2437,9 @@ app.post('/api/medical/contacts', async (req, res) => {
       INSERT INTO medical_contacts
         (kind, name, specialty, health_fund, address,
          phone_main, phone_private, phone_zimun_tor, phone_fax,
-         email, website_url, notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         email, website_url, notes,
+         next_appointment_at, next_appointment_note, reminder_text)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING *
     `, [
       b.kind, b.name.trim(),
@@ -2446,6 +2447,8 @@ app.post('/api/medical/contacts', async (req, res) => {
       _medTrim(b.phone_main), _medTrim(b.phone_private),
       _medTrim(b.phone_zimun_tor), _medTrim(b.phone_fax),
       _medTrim(b.email), _medTrim(b.website_url), _medTrim(b.notes),
+      _medTrim(b.next_appointment_at), _medTrim(b.next_appointment_note),
+      _medTrim(b.reminder_text),
     ]);
     res.json(r.rows[0]);
   } catch (e) { _medErr(res, e); }
@@ -2456,7 +2459,8 @@ app.patch('/api/medical/contacts/:id', async (req, res) => {
   const b = req.body || {};
   const fields = ['kind', 'name', 'specialty', 'health_fund', 'address',
                   'phone_main', 'phone_private', 'phone_zimun_tor', 'phone_fax',
-                  'email', 'website_url', 'notes'];
+                  'email', 'website_url', 'notes',
+                  'next_appointment_at', 'next_appointment_note', 'reminder_text'];
   const sets = [], vals = [];
   for (const f of fields) {
     if (f in b) {
