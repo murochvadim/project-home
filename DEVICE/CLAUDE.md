@@ -78,6 +78,14 @@ ssh root@192.168.1.114 'systemctl restart device-agent'
 ssh root@192.168.1.114 'systemctl is-active device-agent && journalctl -u device-agent --since "30 sec ago" | grep -iE "error|started" | head'
 ```
 
+## Per-DPS merge & `cloud_authoritative_dps` (since 2026-06-06)
+
+`_db_write` persists state with a **blind JSONB merge**: `last_state = last_state || new_dps`. The documented source-priority ordering (`tcp_push > ha_api > local_poll`) is applied **only to the `last_source` label** (`_device_best_source`) — it is **NOT** enforced on the per-DPS *values*. So whichever source last touched a key wins, regardless of priority.
+
+This caused the **8 Gang Switch ch8 (AWAY) desync**: DPS 8 is a cloud-only datapoint — `ha_api` reports it on/off correctly, but the local link always reads `8:0`. Every `local_poll` full snapshot (`{3,4,7,8}`) clobbered the authoritative `ha_api 8:true` back to `0`, so the Devices page always showed AWAY off.
+
+**Fix — per-device `cloud_authoritative_dps` guard:** add a top-level list to the device's `dps_config`, e.g. `{"cloud_authoritative_dps": ["8"]}`. At config load it's cached in `self._cloud_authoritative_dps[device_id]`; in `_db_write`, for `source in (local_poll, tcp_push, initial)` those keys are **stripped from `dps` before the merge** (and before filtered events/MQTT), so only `ha_api` / cloud-push can write them. Generic — any future cloud-only DP just needs the `dps_config` entry, no code change. Caveat: such a DP only refreshes on an `ha_api` state-**change** event, so right after a device-agent restart its `last_state` value is stale until the next real toggle (HA pushes only on change). See [[incident_mode_buttons_away_latch]].
+
 ## Behavior reference
 
 The Device Agent System bullet in [root CLAUDE.md](../CLAUDE.md) under "Dashboard DB Tables" has the operational behavior reference: source priority ordering, keepalive cadence, net_devices writeback, the Tuya silent-freeze watchdog, etc. This file (DEVICE/CLAUDE.md) is the **file-location + adapter-inventory** index; root CLAUDE.md is the **behavior reference**.

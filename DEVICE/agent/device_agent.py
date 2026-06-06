@@ -73,6 +73,7 @@ class DeviceAgent:
         self._device_last_event = {}    # (device_id, source) → dps_json
         self._device_states = {}        # device_id → merged last_state dict (cache, filtered)
         self._allowed_dps = {}          # device_id → set of allowed DPS keys (None = all allowed)
+        self._cloud_authoritative_dps = {}  # device_id → set of DPS keys that ONLY cloud/HA sources may write
         self._device_net_info = {}      # device_id → (mac, ip) for local Tuya devices
         self._net_update_throttle = {}  # mac → last_update_timestamp
         self._connect_db()
@@ -147,6 +148,14 @@ class DeviceAgent:
                         allowed.discard(k)
                 self._allowed_dps[row['id']] = allowed
 
+                # Cloud-authoritative DPS: top-level dps_config list of keys that
+                # local sources must NOT write (their local value is unreliable —
+                # e.g. a cloud-only AWAY button whose local poll always reads a
+                # stale 0). Only ha_api / cloud-push sources may set these.
+                ca = (row.get('dps_config') or {}).get('cloud_authoritative_dps')
+                if isinstance(ca, list) and ca:
+                    self._cloud_authoritative_dps[row['id']] = {str(x) for x in ca}
+
             return devices
 
     def _filter_dps(self, device_id: str, dps: dict) -> dict:
@@ -201,6 +210,25 @@ class DeviceAgent:
                 if row and row[0] and row[1]:
                     self._update_net_device(str(row[0]), str(row[1]))
                 return
+
+            # Cloud-authoritative DPS guard: drop keys that only cloud/HA may
+            # write when this event came from a local source. Prevents a local
+            # snapshot (e.g. local_poll reporting a stale 0 for a cloud-only
+            # AWAY button) from clobbering the authoritative ha_api value in
+            # last_state. See 8 Gang Switch ch8 desync, 2026-06-06.
+            ca_keys = self._cloud_authoritative_dps.get(device_id)
+            if ca_keys and source in ('local_poll', 'tcp_push', 'initial'):
+                for k in list(dps.keys()):
+                    if k in ca_keys:
+                        del dps[k]
+                if not dps:
+                    # Only stripped keys were present — nothing authoritative to
+                    # write, but still refresh freshness so the device stays alive.
+                    cur.execute(
+                        "UPDATE devices SET last_seen = NOW() WHERE id = %s",
+                        (device_id,),
+                    )
+                    return
 
             for k, v in list(dps.items()):
                 if isinstance(v, float):

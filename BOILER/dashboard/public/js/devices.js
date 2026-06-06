@@ -230,8 +230,8 @@ function protoBadge(proto) {
 async function loadAll() {
   try {
     const [devRes, roomRes] = await Promise.all([
-      fetch('/api/devices'),
-      fetch('/api/rooms'),
+      fetch('/api/devices', { cache: 'no-store' }),
+      fetch('/api/rooms', { cache: 'no-store' }),
     ]);
     if (!devRes.ok) throw new Error(devRes.status);
     allDevices  = await devRes.json();
@@ -1840,3 +1840,12 @@ function renderDashSettingsTab() {
 
 loadAll();
 setInterval(loadAll, REFRESH_MS);
+
+// Refresh immediately when the tab regains focus. Browsers throttle/pause the
+// 5 s poll while a tab is backgrounded, so on return the view could be stale
+// (looked "frozen" until a manual hard-refresh). This forces a fresh fetch the
+// moment the page becomes visible again, so device state is always live.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') loadAll();
+});
+window.addEventListener('focus', loadAll);
