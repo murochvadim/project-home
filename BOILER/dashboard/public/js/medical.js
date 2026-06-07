@@ -409,13 +409,20 @@ window.medRenderDocuments = function () {
 function renderDocCard(d) {
   const size = d.file_size != null ? _fmtSize(d.file_size) : '';
   const isImage = (d.mime_type || '').startsWith('image/');
-  // Thumbnail: image rows open the in-page viewer; PDF rows open in a new tab.
+  const isZip   = (d.mime_type || '').includes('zip') || /\.zip$/i.test(d.file_path || '');
+  // Thumbnail: images open the in-page viewer; PDFs open in a new tab; zips
+  // (imaging studies) only download — no preview, distinct 📦 icon.
   const thumb = isImage
     ? `<a href="#" onclick="medViewImage(${d.id}, ${JSON.stringify(d.name).replace(/"/g, '&quot;')}); return false;" title="Click to open viewer" style="flex-shrink:0;">
          <img src="/api/medical/documents/${d.id}/file" alt="" style="width:64px; height:64px; object-fit:cover; border-radius:4px; border:1px solid #ddd;">
        </a>`
+    : isZip
+    ? `<a href="/api/medical/documents/${d.id}/file?download=1" title="Download archive (zip)" style="flex-shrink:0; width:64px; height:64px; display:inline-flex; align-items:center; justify-content:center; background:#fef3c7; color:#854d0e; border-radius:4px; border:1px solid #f3e2a8; font-size:1.8rem; text-decoration:none;">📦</a>`
     : `<a href="/api/medical/documents/${d.id}/file" target="_blank" title="Click to open PDF" style="flex-shrink:0; width:64px; height:64px; display:inline-flex; align-items:center; justify-content:center; background:#fce7f3; color:#9d174d; border-radius:4px; border:1px solid #f4c8d8; font-size:1.8rem; text-decoration:none;">📄</a>`;
-  const openBtn = isImage
+  // Zips (imaging studies): in-dashboard DICOM slice viewer instead of a raw Open.
+  const openBtn = isZip
+    ? `<a class="med-link-btn" href="#" onclick="medDicomOpen(${d.id}, ${JSON.stringify(d.name).replace(/"/g, '&quot;')}); return false;">🩻 View slices</a>`
+    : isImage
     ? `<a class="med-link-btn" href="#" onclick="medViewImage(${d.id}, ${JSON.stringify(d.name).replace(/"/g, '&quot;')}); return false;">👁 Open</a>`
     : `<a class="med-link-btn" href="/api/medical/documents/${d.id}/file" target="_blank">👁 Open</a>`;
   return `<div class="med-list-card" id="med-doc-row-${d.id}">
@@ -741,7 +748,7 @@ function renderDocForm(d) {
     ${editing ? '' : (mode === 'picked' && _pickedFile
       ? `<div class="med-form-row"><label>File</label><span style="font-size:0.88rem;">📎 ${esc(_pickedFile.name)} (${_fmtSize(_pickedFile.size)})</span></div>`
       : mode === 'pdf'
-      ? `<div class="med-form-row"><label>File</label><input type="file" id="df-file" accept="application/pdf,image/jpeg,image/png,image/heic,image/webp" onchange="medFillNameFromFile()"></div>`
+      ? `<div class="med-form-row"><label>File</label><input type="file" id="df-file" accept="application/pdf,image/jpeg,image/png,image/heic,image/webp,application/zip,application/x-zip-compressed,.zip" onchange="medFillNameFromFile()"></div>`
       : `<div class="med-form-row"><label>Image</label><span style="font-size:0.84rem;color:#666;">Use Snap below to capture; preview will appear after.</span></div>`)}
     <div class="med-form-row"><label>Name</label><input type="text" id="df-name" value="${v('name')}" placeholder="auto from filename"></div>
     <div class="med-form-row"><label>Type</label><select id="df-type">${optType}</select></div>

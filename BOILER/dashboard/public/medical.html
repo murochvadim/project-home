@@ -163,7 +163,7 @@
         <div style="font-size:0.78rem; color:#888; margin-top:4px;">or click to browse</div>
       </label>
       <input type="file" id="med-drop-input"
-             accept="application/pdf,image/jpeg,image/png,image/heic,image/webp"
+             accept="application/pdf,image/jpeg,image/png,image/heic,image/webp,application/zip,application/x-zip-compressed,.zip"
              style="display:none;"
              onchange="medFileDropped(this.files[0])">
       <div style="margin-top:10px; padding:8px 10px; background:#eef5ff; border-left:3px solid #2563eb; border-radius:4px; font-size:0.78rem; line-height:1.45; color:#333;">
@@ -347,6 +347,23 @@
   </div>
 </div>
 
+<!-- DICOM viewer — full-screen slice viewer for zipped imaging studies (MRI/CT) -->
+<div id="med-dicom-modal" style="display:none; position:fixed; inset:0; background:#000; z-index:10001;">
+  <div style="position:absolute; top:8px; left:10px; right:10px; display:flex; gap:8px; align-items:center; z-index:2;">
+    <div id="med-dicom-title" style="color:#fff; font-size:0.95rem; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">—</div>
+    <span id="med-dicom-counter" style="color:#bbb; font-size:0.85rem; white-space:nowrap;"></span>
+    <button class="btn btn-secondary btn-sm" onclick="medDicomZoom(1.25)" title="Zoom in">🔍+</button>
+    <button class="btn btn-secondary btn-sm" onclick="medDicomZoom(0.8)" title="Zoom out">🔍−</button>
+    <button class="btn btn-secondary btn-sm" onclick="medDicomReset()" title="Fit + reset window/level">↺ Fit</button>
+    <button class="btn btn-secondary btn-sm" onclick="medDicomClose()" title="Close (Esc)">✕</button>
+  </div>
+  <div id="med-dicom-element" style="position:absolute; top:46px; bottom:64px; left:0; right:0;"></div>
+  <div style="position:absolute; bottom:8px; left:10px; right:10px; z-index:2; text-align:center;">
+    <input id="med-dicom-slider" type="range" min="0" max="0" value="0" style="width:70%; max-width:600px;" oninput="medDicomShow(+this.value)">
+    <div id="med-dicom-status" style="color:#bbb; font-size:0.78rem; margin-top:4px;">Scroll = slices · drag = window/level · Esc to close</div>
+  </div>
+</div>
+
 <!-- Re-crop modal (image docs only — Apply replaces file on QNAP) -->
 <div id="med-recrop-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:10000;">
   <div style="position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; align-items:center; z-index:2;">
@@ -392,8 +409,14 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=31"></script>
+<script src="js/medical.js?v=34"></script>
 <script src="js/medical-hearing.js?v=5"></script>
 <script src="js/medical-vision.js?v=2"></script>
+<!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
+<script src="vendor/dicom/jszip.min.js"></script>
+<script src="vendor/dicom/dicomParser.min.js"></script>
+<script src="vendor/dicom/cornerstone.min.js"></script>
+<script src="vendor/dicom/cornerstoneWADOImageLoaderNoWebWorkers.bundle.min.js"></script>
+<script src="js/medical-dicom.js?v=1"></script>
 </body>
 </html>

@@ -2516,11 +2516,12 @@ try {
   console.error('Medical Documents storage root not reachable:', e.message);
 }
 
-// 25 MB cap — PDFs from labs are typically 1–5 MB, camera JPEGs 0.5–2 MB.
-// Plenty of headroom for the occasional multi-page scan.
+// 1 GB cap — PDFs/JPEGs are tiny, but imaging studies (MRI/CT) added as a
+// .zip can be hundreds of MB. The dashboard stores the zip as-is (no preview);
+// raise this if a study is larger.
 const medicalDocUpload = multer({
   dest:   path.join(os.tmpdir(), 'medical-doc-uploads'),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 1024 * 1024 * 1024 },
 });
 
 function _sanitizeName(s) {
@@ -2588,7 +2589,7 @@ app.post('/api/medical/documents', medicalDocUpload.single('file'), async (req, 
     const id = insR.rows[0].id;
     const filename = `${id}__${_sanitizeName(name)}${ext}`;
     const absPath  = path.join(MEDICAL_DOCS_ROOT, filename);
-    fs.copyFileSync(tmpPath, absPath);
+    await fs.promises.copyFile(tmpPath, absPath);   // async — won't block the event loop on large zips
     await db.query('UPDATE medical_documents SET file_path = $1 WHERE id = $2', [filename, id]);
     res.json({ ok: true, id, file_path: filename, file_size: req.file.size });
   } catch (e) {
