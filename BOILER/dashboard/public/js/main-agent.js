@@ -451,6 +451,7 @@
   // trigger moment simulated. Takes precedence over RULES_NO_TEST.
   const RULES_RUN_BUTTON = new Set([
     'Evening Lights',
+    'Morning Lights',
   ]);
   window.testModeButton = async function (mode) {
     const el = document.getElementById('test-result');

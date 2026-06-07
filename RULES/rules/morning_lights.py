@@ -112,6 +112,13 @@ RULE = {
     "group":       "lighting",
     "priority":    30,
     "depends_on":  ["Home Time Periods", "Mode Buttons"],
+    # Manual "Run" button (dashboard, Force path): builds a heartbeat event with
+    # source='force_run'. evaluate() treats that as a simulated trigger moment —
+    # sets anchor_passed=True and clears the per-day latch — and runs the rule
+    # otherwise EXACTLY as declared (s_ml3 home_mode gate + s_ml1 device list
+    # still apply). Only the timing (sun anchor / time_mode / engine window /
+    # latch) is bypassed. See the force_run block in evaluate().
+    "test_event":  {"device_id": "heartbeat", "source": "force_run"},
 }
 
 
@@ -404,6 +411,21 @@ def evaluate(event, state):
     late_arrival_hit = (late_arrival_threshold is not None
                         and home_just_arrived
                         and now_min >= late_arrival_threshold)
+
+    # Manual Run (dashboard red "Run" button → engine Force path). Simulate the
+    # trigger MOMENT so the rule fires on demand:
+    #   - anchor_passed=True → ignore the s_ml2 sun-anchor / time_mode timing
+    #   - fired=False        → clear the per-day latch (at a real trigger moment
+    #                          the latch is always clear — it's SET by the fire,
+    #                          not a precondition)
+    # The s_ml3 home_mode gate (gates_pass) + the resolved s_ml1 device list
+    # STILL apply, so Run dispatches exactly the same commands a real morning
+    # fire would. The Force harness deep-copies + restores state.shared, so the
+    # latch write during a Run is reverted and the real morning fire is never
+    # suppressed.
+    if event.get('source') == 'force_run':
+        anchor_passed = True
+        fired = False
 
     # Fire when Scenario A OR Scenario B trigger AND gates pass AND latch unset.
     fire = (not fired) and gates_pass and (anchor_passed or late_arrival_hit)
