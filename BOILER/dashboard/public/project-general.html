@@ -338,8 +338,9 @@
           <button onclick="geoFitToTrack()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #1565c0; color:#1565c0; background:#fff; border-radius:3px; cursor:pointer;" title="Zoom + pan the map so the entire trail is visible">🔍 Fit to track</button>
           <span>Window:</span>
           <select id="geo-window" onchange="try{localStorage.setItem('geo.trailWindow', this.value)}catch(e){}; geoReloadTrail()">
+            <option value="trip" selected>Last trip</option>
             <option value="1h">1 h</option>
-            <option value="24h" selected>24 h</option>
+            <option value="24h">24 h</option>
             <option value="7d">7 d</option>
             <option value="30d">30 d</option>
           </select>
@@ -1170,6 +1171,36 @@ function _geoHaversineM(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// Extract the most recent "trip" (leave-home → arrive-home) from a
+// chronologically-sorted ping list. READ-ONLY display helper — it does NOT
+// touch the ingest daemon, the geofence state machine, or phone_trips. A trip
+// is the latest contiguous outside-home excursion, bounded by the home ping
+// before departure and the home ping after arrival (or the newest ping if
+// still out). Brief inside dips shorter than dwellMs are absorbed as GPS
+// jitter so one journey isn't split. Returns a slice of `merged`, or null if
+// there's no excursion in the supplied pings.
+function _geoExtractLastTrip(merged, isOutside, dwellMs) {
+  if (dwellMs == null) dwellMs = 5 * 60 * 1000;   // 5 min inside = real "home"
+  if (!merged || !merged.length) return null;
+  const out = merged.map(p => isOutside(p.lat, p.lon));
+  let lastOut = -1;
+  for (let i = out.length - 1; i >= 0; i--) { if (out[i]) { lastOut = i; break; } }
+  if (lastOut === -1) return null;                 // never left home in the window
+  // arrival = first inside ping after the last outside ping (else still out → newest)
+  const arrivalIdx = (lastOut < out.length - 1) ? lastOut + 1 : lastOut;
+  // departure = the home boundary before this excursion, absorbing inside dips < dwellMs
+  let i = lastOut, departureIdx = 0;
+  while (i > 0) {
+    if (out[i - 1]) { i--; continue; }             // still outside going back
+    let j = i - 1;                                  // inside run ends at i-1; find its start
+    while (j > 0 && !out[j - 1]) j--;
+    const runMs = new Date(merged[i - 1].ts) - new Date(merged[j].ts);
+    if (runMs >= dwellMs || j === 0) { departureIdx = i - 1; break; }  // real home boundary
+    i = j;                                          // brief dip (jitter) → absorb, keep going
+  }
+  return merged.slice(departureIdx, arrivalIdx + 1);
+}
+
 async function geoReloadTrail() {
   if (!_geoMap) return;
   // Remove old trail + markers (trail is an array of polyline segments)
@@ -1181,8 +1212,10 @@ async function geoReloadTrail() {
   _geoMarkers = [];
   geoUpdateCenterMarker();
 
-  const window = document.getElementById('geo-window')?.value || '24h';
-  const hours = window === '1h' ? 1 : window === '7d' ? 24*7 : window === '30d' ? 24*30 : 24;
+  const window = document.getElementById('geo-window')?.value || 'trip';
+  const isTrip = window === 'trip';
+  // 'trip' mode fetches a wide window, then trims to the last excursion below.
+  const hours = isTrip ? 24*30 : window === '1h' ? 1 : window === '7d' ? 24*7 : window === '30d' ? 24*30 : 24;
   const since = new Date(Date.now() - hours*3600_000).toISOString();
   if (!_geoSettings) return;
   const devs = _geoSettings.tracked_devices || [];
@@ -1213,17 +1246,27 @@ async function geoReloadTrail() {
   for (const [gid, members] of groups) {
     try {
       const responses = await Promise.all(members.map(d =>
-        fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(d.device_id)}&since=${encodeURIComponent(since)}`)
+        fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(d.device_id)}&since=${encodeURIComponent(since)}${isTrip ? '&limit=10000' : ''}`)
           .then(r => r.json())
           .then(d => d.locations || [])
           .catch(() => [])
       ));
-      const merged = responses.flat()
+      let merged = responses.flat()
         .filter(p => !p.is_outlier)   // server's 5-point median filter flags noisy pings
         .map(p => ({ ts: p.ts, lat: Number(p.lat), lon: Number(p.lon), accuracy_m: p.accuracy_m }))
         .filter(p => !isNaN(p.lat) && !isNaN(p.lon))
         .sort((a, b) => new Date(a.ts) - new Date(b.ts));
       if (merged.length < 1) continue;
+
+      // 'Last trip' mode: trim to the most recent leave-home → arrive-home
+      // excursion so the drawn track is the whole journey and ENDS at home,
+      // regardless of how long it lasted. Read-only — derived from the pings
+      // already returned; the ingest daemon + phone_trips are untouched.
+      if (isTrip) {
+        const trip = _geoExtractLastTrip(merged, isOutside);
+        if (!trip || trip.length < 1) continue;   // no excursion in window → nothing to draw
+        merged = trip;
+      }
 
       // Polyline through outside-radius pings, INCLUDING the inside pings
       // that bracket each outdoor run. So the line visibly "enters" and
@@ -1305,23 +1348,32 @@ async function geoReloadTrail() {
 // any manual pan/zoom.
 async function geoFitToTrack() {
   if (!_geoMap || !_geoSettings) return;
-  const window = document.getElementById('geo-window')?.value || '24h';
-  const hours = window === '1h' ? 1 : window === '7d' ? 24*7 : window === '30d' ? 24*30 : 24;
+  const window = document.getElementById('geo-window')?.value || 'trip';
+  const isTrip = window === 'trip';
+  const hours = isTrip ? 24*30 : window === '1h' ? 1 : window === '7d' ? 24*7 : window === '30d' ? 24*30 : 24;
   const since = new Date(Date.now() - hours*3600_000).toISOString();
+  const cLat = parseFloat(_geoSettings?.center?.lat);
+  const cLon = parseFloat(_geoSettings?.center?.lon);
+  const radius = parseFloat(_geoSettings?.home_radius_m) || 80;
+  const haveCenter = !isNaN(cLat) && !isNaN(cLon);
+  const isOutside = (lat, lon) => haveCenter && _geoHaversineM(cLat, cLon, lat, lon) > radius;
   const devs = _geoSettings.tracked_devices || [];
   const bounds = L.latLngBounds([]);
   let count = 0;
   for (const dev of devs) {
     try {
-      const r = await fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(dev.device_id)}&since=${encodeURIComponent(since)}`);
+      const r = await fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(dev.device_id)}&since=${encodeURIComponent(since)}${isTrip ? '&limit=10000' : ''}`);
       const d = await r.json();
-      (d.locations || []).forEach(p => {
-        bounds.extend([Number(p.lat), Number(p.lon)]);
-        count++;
-      });
+      let pts = (d.locations || [])
+        .filter(p => !p.is_outlier)
+        .map(p => ({ ts: p.ts, lat: Number(p.lat), lon: Number(p.lon) }))
+        .filter(p => !isNaN(p.lat) && !isNaN(p.lon))
+        .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      if (isTrip) pts = _geoExtractLastTrip(pts, isOutside) || [];
+      pts.forEach(p => { bounds.extend([p.lat, p.lon]); count++; });
     } catch (e) {}
   }
-  if (count === 0) { alert('No locations in the current window to fit to.'); return; }
+  if (count === 0) { alert(isTrip ? 'No trip found to fit to.' : 'No locations in the current window to fit to.'); return; }
   _geoMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
 }
 

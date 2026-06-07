@@ -100,7 +100,7 @@ Tradeoff vs the removed WiFi-confirmed path: commits now take 60 s minimum inste
 | GET    | `/api/geolocation/settings`      | return current settings (defaults merged) |
 | POST   | `/api/geolocation/settings`      | replace settings (allow-list filtered) |
 | GET    | `/api/geolocation/status`        | per-group last-position summary + connection chips |
-| GET    | `/api/geolocation/locations`     | trail polyline pings (1h/24h/7d/30d window) — applies `_flagOutliers` filter pipeline |
+| GET    | `/api/geolocation/locations`     | trail polyline pings for a `since` window — applies `_flagOutliers`. **Returns the NEWEST `limit` rows** (inner `ORDER BY ts DESC LIMIT`, outer `ORDER BY ts ASC`) since 2026-06-06. Before that it used a bare `ORDER BY ts ASC LIMIT 5000` = the *oldest* N, which silently dropped recent pings on any window exceeding the limit (7d/30d and the 'Last trip' fetch missed the latest journey). ASC output is required by `_flagOutliers` (it compares consecutive fixes). |
 | GET    | `/api/geolocation/events`        | recent geofence events |
 | GET    | `/api/geolocation/trips`         | recent confirmed trips (multi-select source for the dashboard delete button) |
 | DELETE | `/api/geolocation/trips`         | body `{ids:[…]}` — multi-row delete |
@@ -117,6 +117,19 @@ Server-side in `_flagOutliers` on `/api/geolocation/locations` (since 2026-06-01
 3. **Outdoor low-accuracy cap** — flags pings outside the home radius with `accuracy_m > outside_accuracy_threshold_m`
 
 Outliers stay in DB for diagnostics; client renders only non-outliers.
+
+## Map trail display modes (`project-general.html`, since 2026-06-06)
+
+The Map · trail Window dropdown is `Last trip` (default) / `1h` / `24h` / `7d` / `30d`.
+
+**"Last trip"** shows the most recent **leave-home → arrive-home** excursion, so the drawn track is the *whole journey and ENDS at home, regardless of how long it lasted* — instead of a rolling time-window that ends at "now" and truncates long trips. This was the user-reported problem ("the track should finish only when I come back home, no matter how long").
+
+**This is a READ-ONLY display feature — the ingest daemon, the geofence state machine, and `phone_trips` are NOT touched** (explicit user constraint: don't change the working trip algorithm). Implementation, all client-side:
+- `_geoExtractLastTrip(merged, isOutside, dwellMs=5min)` — from the ASC ping list it finds the latest contiguous outside-home excursion: `arrival` = first inside ping after the last outside ping (or newest if still out); `departure` = the home boundary before the excursion, **absorbing inside dips shorter than `dwellMs` (5 min)** as GPS jitter so one journey isn't split. Returns the `[departure..arrival]` slice; `geoReloadTrail` + `geoFitToTrack` render only that.
+- Trip mode fetches a wide window (`since=30d`, `&limit=10000`) and relies on the newest-N endpoint fix above so the recent excursion is actually in the result.
+- Falls back to drawing nothing for a group with no excursion in the window.
+
+Known bound: depends on pings existing in the last 30 days (retention) and ≤ 10000 of them in-window; a trip older than that or a >10000-ping window would clip. Fine for normal use.
 
 ## Rule integration
 

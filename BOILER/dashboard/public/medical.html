@@ -47,7 +47,17 @@
       pointer-events:none; font-family:monospace;
     }
     #med-upload-progress { display:none; margin-top:8px; padding:8px 10px; background:#fff8b3; border-left:3px solid #d4a017; border-radius:4px; font-size:0.84rem; }
+    /* Tests tab */
+    .ht-note { font-size:0.78rem; color:#666; background:#eef5ff; border-left:3px solid #2563eb; border-radius:4px; padding:8px 10px; margin:8px 0; line-height:1.45; }
+    .ht-step-ear { font-size:1.15rem; font-weight:700; }
+    .ht-step-freq { font-size:2.2rem; font-weight:700; color:#1565c0; margin:4px 0; }
+    .ht-btn-big { padding:14px 18px; font-size:1rem; border-radius:8px; border:1px solid #cfcabf; cursor:pointer; min-width:150px; }
+    .ht-btn-yes { background:#dcfce7; border-color:#86efac; color:#166534; }
+    .ht-btn-no  { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
+    .ht-progress-bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; margin:8px 0; }
+    .ht-progress-fill { height:100%; background:#1565c0; width:0%; transition:width 0.2s; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -96,6 +106,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showMedTab('contacts',  this)">Contacts</button>
     <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
+    <button class="tab-btn"        onclick="showMedTab('tests',     this); medTestsInit();">Tests</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -220,6 +231,61 @@
 
   </div><!-- /tab-documents -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Tests (hearing now; eye test later)                    -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-tests">
+
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin-top:0;">🔊 Hearing test</h2>
+      <div id="ht-setup">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <input type="text" id="ht-headphones" placeholder="Headphones used (e.g. Sony WH-1000, wired)"
+                 style="flex:1; min-width:200px; padding:6px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+          <select id="ht-band" title="Which frequency band to test"
+                  style="padding:6px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+            <option value="standard" selected>Standard · 250 Hz–8 kHz</option>
+            <option value="extended">Extended · 250 Hz–16 kHz</option>
+            <option value="highfreq">High-freq · 8–16 kHz</option>
+          </select>
+          <button class="btn btn-success" onclick="htStart()">▶ Start test</button>
+        </div>
+      </div>
+      <div id="ht-runner" style="display:none; margin-top:14px; text-align:center;">
+        <div class="ht-progress-bar"><div id="ht-progress-fill" class="ht-progress-fill"></div></div>
+        <div id="ht-progress-label" style="font-size:0.8rem; color:#888;">Test 1 of 12</div>
+        <div class="ht-step-ear" id="ht-ear">RIGHT ear 👂</div>
+        <div class="ht-step-freq" id="ht-freq">1000 Hz</div>
+        <button class="btn btn-secondary btn-sm" onclick="htReplay()">🔈 Replay tone</button>
+        <div style="margin-top:14px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
+          <button class="ht-btn-big ht-btn-yes" onclick="htAnswer(true)">✅ I hear it</button>
+          <button class="ht-btn-big ht-btn-no"  onclick="htAnswer(false)">❌ I hear nothing</button>
+        </div>
+        <div><button class="btn btn-secondary btn-sm" style="margin-top:12px;" onclick="htCancel()">Cancel</button></div>
+      </div>
+      <div id="ht-finish" style="display:none; margin-top:14px;">
+        <div id="ht-finish-msg" style="font-size:0.86rem; color:#166534; margin-bottom:8px;">Test complete — see the audiogram below.</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <input type="text" id="ht-notes" placeholder="Notes (optional)"
+                 style="flex:1; min-width:200px; padding:6px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+          <button class="btn btn-success" onclick="htSave()">💾 Save to results</button>
+          <button class="btn btn-secondary" onclick="htCancel()">Discard</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Test Results <span id="ht-result-count" style="font-size:0.85rem; color:#888; font-weight:400; margin-left:6px;"></span></h2>
+      <div id="ht-chart-wrap" style="display:none; max-width:640px; margin:0 auto 12px;">
+        <div style="text-align:right; margin-bottom:4px;"><button class="btn btn-secondary btn-sm" onclick="htCloseChart()">✕ Close graph</button></div>
+        <canvas id="ht-audiogram" height="260"></canvas>
+        <div id="ht-chart-caption" style="font-size:0.74rem; color:#999; text-align:center; margin-top:4px;"></div>
+      </div>
+      <div id="ht-results-list">—</div>
+    </div>
+
+  </div><!-- /tab-tests -->
+
 </main>
 
 <!-- Re-crop modal (image docs only — Apply replaces file on QNAP) -->
@@ -268,5 +334,6 @@
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/medical.js?v=31"></script>
+<script src="js/medical-hearing.js?v=3"></script>
 </body>
 </html>

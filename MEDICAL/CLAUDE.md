@@ -230,8 +230,59 @@ rule would read `next_appointment_at` straight from `medical_contacts`
 friendly. The standalone `reminder_text` field is intentionally static —
 it's a sticky note, not a notification trigger.
 
-## Status
+## Tests tab (hearing test, 2026-06-07)
+
+Third sub-tab on `medical.html`: **Tests** — self-tests run in the browser, results
+stored in a generic DB table so future tests (e.g. an **Eye test**) reuse it.
+
+First test: **Hearing** — a pure-tone screening via the browser **Web Audio API**
+(our own code, no library). Per ear (right then left), per frequency, a
+**descending staircase**: the tone gets quieter each time the user taps "I hear
+it"; "I hear nothing" records the threshold = the last step heard. Hard-panned per
+ear via `StereoPannerNode`. **Frequency-band selector** in the setup row (2026-06-07):
+`standard` 250 Hz–8 kHz (6 freqs), `extended` 250 Hz–16 kHz (8), `highfreq` 8–16 kHz
+(5) — chosen band drives the step list (band × 2 ears = N steps) and is saved in
+`meta.band`. Renders an **audiogram** (Chart.js: Right = red circles, Left = blue
+crosses); the chart derives its X-axis frequencies from the result itself
+(`htFreqsOf`) so any band — incl. old saved tests — renders, and it can be hidden
+via **✕ Close graph** (also auto-hidden on start/discard/save). **Uncalibrated** —
+relative screening / left-right comparison / tracking, NOT clinical dB HL; wired
+headphones recommended. (The verbose inline disclaimer was removed 2026-06-07 per
+user — the card stays clean.)
+
+### Storage — generic `medical_test_results` table (LXC 102)
+| Column | Type | Note |
+|---|---|---|
+| `id` | SERIAL PK | |
+| `test_type` | TEXT NOT NULL | `hearing` now; `vision` later (no schema change) |
+| `tested_at` | TIMESTAMPTZ DEFAULT NOW() | |
+| `results` | JSONB NOT NULL | hearing: `{"right":{"250":dB,…,"8000":dB},"left":{…}}` — dB = attenuation tolerated below reference, **higher = better** |
+| `meta` | JSONB | `{headphones, notes}` |
+| `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
+
+Index `(test_type, tested_at DESC)`. Retention=forever. Migration:
+`MEDICAL/migrations/007_test_results.sql`.
+
+### Endpoints — `BOILER/dashboard/routes-medical-tests.js`
+A **separate route module** (not inline in `server.js`) wired via one line —
+`require('./routes-medical-tests')(app, db)` right after the pg pool. This keeps
+`server.js` free of new `app.<method>(` handlers, which the architecture-guard hook
+(`.claude/settings.local.json`, PreToolUse Edit on server.js) would otherwise block.
+Same `db` (pg Pool) query style as the contacts cluster.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/medical/test-results[?type=hearing]` | list, newest first |
+| POST   | `/api/medical/test-results` | `{test_type, results, meta?}` |
+| DELETE | `/api/medical/test-results/:id` | hard delete |
+
+### UI / files
+- `medical.html` — Chart.js CDN in `<head>`; **Tests** tab button; `#tab-tests` with a **Hearing test** card (headphones + Start + the step runner) and a **Test Results** card (`#ht-audiogram` + saved-tests list with View/Delete). The future Eye test card slots into the same panel.
+- `js/medical-hearing.js` — Web Audio tone generator + staircase + `renderAudiogram()` + list/save/delete via the endpoints above. No IIFE (inline onclick handlers must stay global); uses `htEsc()` to avoid colliding with medical.js's top-level `esc`.
+
+
 
 - 2026-06-02: Contacts tab shipped.
 - 2026-06-03: Documents tab added (PDF + camera capture). 9 doc types, FK links to doctor + producer (clinic/hospital).
 - 2026-06-03: Per-contact appointment slot + standalone reminder text — `next_appointment_at` + `next_appointment_note` + `reminder_text` on `medical_contacts`. Red + blue nested mini-cards rendered side-by-side on the contact row. Round-trip safe across timezones via UTC ISO wrap; 24h display forced via `hour12:false` + 3-input split form.
+- 2026-06-07: **Tests tab** added — Web Audio **hearing test** (descending-staircase pure-tone screening) + audiogram, stored in the generic `medical_test_results` table (`test_type='hearing'`; future Eye test reuses it). Endpoints in `routes-medical-tests.js` (separate module to clear the server.js architecture hook). See "Tests tab" section above.

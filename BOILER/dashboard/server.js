@@ -71,6 +71,12 @@ const db = new Pool({
   max:                         10,
 });
 
+// Medical Tests results routes (hearing/vision) live in their own module so
+// this file stays free of new route handlers (architecture-guard hook). The
+// module receives the express instance + the pg pool and registers its own
+// /api/medical/test-results endpoints.
+require('./routes-medical-tests')(app, db);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes
@@ -2232,6 +2238,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'power_consumption', 'power_devices', 'power_bills',
       'netbird_peers_local', 'netbird_tenant_settings', 'gateway_peer_transitions',
       'device_locations', 'phone_trips',
+      'medical_test_results',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2262,6 +2269,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       gateway_peer_transitions: 'ts',
       device_locations: 'ts',
       phone_trips: 'started_at',
+      medical_test_results: 'tested_at',
     };
 
     const sizes = await db.query(`
@@ -3481,12 +3489,20 @@ app.get('/api/geolocation/locations', async (req, res) => {
       where += ` AND ts >= $${params.length}`;
     }
     params.push(limit);
+    // Return the NEWEST `limit` rows in the window (inner DESC + LIMIT), then
+    // re-sort ASC for output. Without the inner DESC, `ORDER BY ts ASC LIMIT n`
+    // returns the OLDEST n — so any window with more than `limit` pings (7d/30d,
+    // or the 'Last trip' wide fetch) would silently drop the RECENT pings and
+    // miss the latest journey. ASC output is required by _flagOutliers (it
+    // compares consecutive fixes). Read-only — unrelated to the ingest/trip logic.
     const r = await db.query(
-      `SELECT id, ts, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source
-       FROM device_locations
-       WHERE ${where}
-       ORDER BY ts ASC
-       LIMIT $${params.length}`,
+      `SELECT * FROM (
+         SELECT id, ts, lat, lon, accuracy_m, altitude_m, speed, battery_pct, source
+         FROM device_locations
+         WHERE ${where}
+         ORDER BY ts DESC
+         LIMIT $${params.length}
+       ) sub ORDER BY ts ASC`,
       params,
     );
     // Pull center+radius once so the outdoor low-accuracy filter knows
