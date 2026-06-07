@@ -276,13 +276,35 @@ Same `db` (pg Pool) query style as the contacts cluster.
 | POST   | `/api/medical/test-results` | `{test_type, results, meta?}` |
 | DELETE | `/api/medical/test-results/:id` | hard delete |
 
+### Eye test (visual acuity, 2026-06-07)
+
+Second test in the Tests tab: **laptop-screen acuity screening** (`test_type='vision'`).
+**Calibrate once** (localStorage `med.vision.calib`): drag an on-screen outline to
+match a real credit/ID card (85.6 mm) → `px_per_mm`; enter viewing distance (cm).
+Then **per eye** (cover the other), a **read-down chart** of mixed letters+numbers at
+decreasing logMAR sizes (1.0→0.0, 6/60→6/6) computed from `px_per_mm` + distance via
+`vtSizePx` (optotype = 5 × 10^logMAR arcmin → mm → px); the user **taps the smallest
+line they can read** ("Can't read even the top line" → below-chart sentinel logMAR 1.3).
+Result = per-eye `{logmar, snellen}` + `distance_cm` + `px_per_mm`; `meta={correction
+(none/glasses/contacts), notes}`. **Screening only** — acuity WITH current correction,
+does NOT measure refractive error.
+
+### Unified Test Results card
+The single **Test Results** card lists **all** test types (`medTestsLoad` fetches
+`/api/medical/test-results` with no type filter). Rows branch by `test_type`: hearing →
+🔊 chip + band + R/L avg dB; vision → 👁 chip + correction + R/L Snellen. **View**
+(`medTestView`) dispatches: hearing → `renderAudiogram` (#ht-chart-wrap), vision →
+`renderVision` (#vt-result-body). Delete is type-agnostic.
+
 ### UI / files
-- `medical.html` — Chart.js CDN in `<head>`; **Tests** tab button; `#tab-tests` with a **Hearing test** card (headphones + Start + the step runner) and a **Test Results** card (`#ht-audiogram` + saved-tests list with View/Delete). The future Eye test card slots into the same panel.
-- `js/medical-hearing.js` — Web Audio tone generator + staircase + `renderAudiogram()` + list/save/delete via the endpoints above. No IIFE (inline onclick handlers must stay global); uses `htEsc()` to avoid colliding with medical.js's top-level `esc`.
+- `medical.html` — Chart.js CDN in `<head>`; **Tests** tab; `#tab-tests` with the **Hearing test** + **👁 Eye test** cards **side-by-side in a 2-col grid** (`minmax(340px,1fr)`, `align-items:stretch` → equal height; stacks on narrow screens), then a full-width unified **Test Results** card (`#ht-chart-wrap` audiogram + `#vt-result-wrap` acuity readout + saved list). The eye-test **runner is a full-screen centered overlay `#vt-overlay`** (white bg, chart in the middle of the screen — like a real eye chart) so the user can sit back; opens on Start, closes on finish/cancel. Saved-result rows show **date only** (`DD/MM/YYYY`, `toLocaleDateString('en-GB')`) in a fixed-width centered box so dates line up.
+- `js/medical-hearing.js` — Web Audio tone generator + staircase + `renderAudiogram()` + the **unified** list/view (`medTestView`) + save/delete. No IIFE (inline onclick handlers stay global); `htEsc()` avoids colliding with medical.js's top-level `esc`.
+- `js/medical-vision.js` — calibration + `vtSizePx`/`vtSnellen` + per-eye read-down flow + `renderVision()` + `vtRowSummary()` (called by the hearing.js list) + save. Reuses `htEsc()`; calls `medTestsLoad()` (hearing.js) after save.
 
 
 
 - 2026-06-02: Contacts tab shipped.
 - 2026-06-03: Documents tab added (PDF + camera capture). 9 doc types, FK links to doctor + producer (clinic/hospital).
 - 2026-06-03: Per-contact appointment slot + standalone reminder text — `next_appointment_at` + `next_appointment_note` + `reminder_text` on `medical_contacts`. Red + blue nested mini-cards rendered side-by-side on the contact row. Round-trip safe across timezones via UTC ISO wrap; 24h display forced via `hour12:false` + 3-input split form.
-- 2026-06-07: **Tests tab** added — Web Audio **hearing test** (descending-staircase pure-tone screening) + audiogram, stored in the generic `medical_test_results` table (`test_type='hearing'`; future Eye test reuses it). Endpoints in `routes-medical-tests.js` (separate module to clear the server.js architecture hook). See "Tests tab" section above.
+- 2026-06-07: **Tests tab** added — Web Audio **hearing test** (descending-staircase pure-tone screening) + audiogram, stored in the generic `medical_test_results` table. Endpoints in `routes-medical-tests.js` (separate module to clear the server.js architecture hook). See "Tests tab" section above.
+- 2026-06-07: **Eye test** (visual acuity) added to the same tab — laptop-screen, credit-card+distance calibration, per-eye read-down letters/numbers chart, tap-smallest-line → logMAR/Snellen, `test_type='vision'` in the same table. Test Results card unified across both types (`js/medical-vision.js`).

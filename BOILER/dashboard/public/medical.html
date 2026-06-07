@@ -236,7 +236,9 @@
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-tests">
 
-    <div class="card" style="margin-bottom:16px;">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:16px; margin-bottom:16px; align-items:stretch;">
+
+    <div class="card" style="margin-bottom:0;">
       <h2 style="margin-top:0;">🔊 Hearing test</h2>
       <div id="ht-setup">
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -274,6 +276,48 @@
       </div>
     </div>
 
+    <div class="card" style="margin-bottom:0;">
+      <h2 style="margin-top:0;">👁 Eye test (visual acuity)</h2>
+      <div id="vt-setup">
+        <details>
+          <summary style="cursor:pointer; font-size:0.9rem;">1) Calibrate screen + distance <span id="vt-calib-status" style="font-size:0.8rem; color:#888; margin-left:6px;"></span></summary>
+          <div style="margin-top:8px;">
+            <div style="font-size:0.8rem; color:#666;">Hold a credit / ID card flat against the screen and drag the slider until the blue outline matches its width (85.6 mm). Then enter how far you'll sit from the screen.</div>
+            <div id="vt-card" style="height:54px; border:2px solid #1565c0; border-radius:6px; background:#eef5ff; margin:8px 0; width:320px;"></div>
+            <input type="range" id="vt-card-slider" min="150" max="760" value="320" style="width:100%;" oninput="vtCardResize(this.value)">
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+              <label style="font-size:0.82rem;">Viewing distance (cm):
+                <input type="number" id="vt-distance" min="30" max="600" value="150"
+                       style="width:80px; padding:4px 6px; border:1px solid #d0cbc4; border-radius:4px;"></label>
+              <button class="btn btn-secondary btn-sm" onclick="vtSaveCalib()">Save calibration</button>
+            </div>
+          </div>
+        </details>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px;">
+          <label style="font-size:0.82rem;">Wearing:
+            <select id="vt-correction" style="padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+              <option value="none">nothing</option>
+              <option value="glasses">glasses</option>
+              <option value="contacts">contacts</option>
+            </select>
+          </label>
+          <button class="btn btn-success" onclick="vtStart()">▶ Start eye test</button>
+        </div>
+      </div>
+      <!-- runner moved to the full-screen centered #vt-overlay (below) -->
+      <div id="vt-finish" style="display:none; margin-top:14px;">
+        <div style="font-size:0.86rem; color:#166534; margin-bottom:8px;">Eye test complete — result below.</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <input type="text" id="vt-notes" placeholder="Notes (optional)"
+                 style="flex:1; min-width:200px; padding:6px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+          <button class="btn btn-success" onclick="vtSave()">💾 Save to results</button>
+          <button class="btn btn-secondary" onclick="vtCancel()">Discard</button>
+        </div>
+      </div>
+    </div>
+
+    </div><!-- /tests grid: Hearing + Eye side by side -->
+
     <div class="card">
       <h2 style="margin-top:0;">Test Results <span id="ht-result-count" style="font-size:0.85rem; color:#888; font-weight:400; margin-left:6px;"></span></h2>
       <div id="ht-chart-wrap" style="display:none; max-width:640px; margin:0 auto 12px;">
@@ -281,12 +325,27 @@
         <canvas id="ht-audiogram" height="260"></canvas>
         <div id="ht-chart-caption" style="font-size:0.74rem; color:#999; text-align:center; margin-top:4px;"></div>
       </div>
+      <div id="vt-result-wrap" style="display:none; max-width:640px; margin:0 auto 12px;">
+        <div style="text-align:right; margin-bottom:4px;"><button class="btn btn-secondary btn-sm" onclick="vtCloseResult()">✕ Close</button></div>
+        <div id="vt-result-body"></div>
+      </div>
       <div id="ht-results-list">—</div>
     </div>
 
   </div><!-- /tab-tests -->
 
 </main>
+
+<!-- Eye test — full-screen centered runner (chart sits in the middle of the screen) -->
+<div id="vt-overlay" style="display:none; position:fixed; inset:0; background:#fff; z-index:10000; overflow:auto;">
+  <div style="min-height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:24px; box-sizing:border-box;">
+    <div id="vt-eye-prompt" style="font-size:1.35rem; font-weight:700; color:#991b1b;">Cover your LEFT eye — test the RIGHT eye</div>
+    <div style="font-size:0.9rem; color:#888; margin-top:4px;">Tap the smallest line you can read clearly.</div>
+    <div id="vt-chart" style="margin:28px auto; text-align:center;"></div>
+    <button class="btn btn-secondary" onclick="vtCantRead()">Can't read even the top line</button>
+    <div><button class="btn btn-secondary btn-sm" style="margin-top:16px;" onclick="vtCancel()">✕ Cancel</button></div>
+  </div>
+</div>
 
 <!-- Re-crop modal (image docs only — Apply replaces file on QNAP) -->
 <div id="med-recrop-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:10000;">
@@ -334,6 +393,7 @@
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/medical.js?v=31"></script>
-<script src="js/medical-hearing.js?v=3"></script>
+<script src="js/medical-hearing.js?v=5"></script>
+<script src="js/medical-vision.js?v=2"></script>
 </body>
 </html>

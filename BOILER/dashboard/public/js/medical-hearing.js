@@ -69,6 +69,7 @@ function htStart() {
   for (const ear of HT_EARS) for (const freq of freqs) steps.push({ ear, freq });
   htState = { steps, idx: 0, currentStep: 1, lastHeard: null, results: { right: {}, left: {} }, band };
   htCloseChart();   // clear any graph from a previous test/view
+  if (typeof vtCloseResult === 'function') vtCloseResult();
   document.getElementById('ht-setup').style.display  = 'none';
   document.getElementById('ht-finish').style.display = 'none';
   document.getElementById('ht-runner').style.display = 'block';
@@ -207,7 +208,8 @@ function medTestsInit() { medTestsLoad(); }
 
 async function medTestsLoad() {
   try {
-    const r = await fetch('/api/medical/test-results?type=hearing').then(r => r.json());
+    // ALL test types (hearing + vision + future) — unified Test Results list.
+    const r = await fetch('/api/medical/test-results').then(r => r.json());
     HT_RESULTS = Array.isArray(r) ? r : [];
   } catch (e) { HT_RESULTS = []; }
   htRenderResultsList();
@@ -239,36 +241,53 @@ function htRenderResultsList() {
   const el = document.getElementById('ht-results-list');
   document.getElementById('ht-result-count').textContent = HT_RESULTS.length ? '(' + HT_RESULTS.length + ')' : '';
   if (!HT_RESULTS.length) {
-    el.innerHTML = '<div class="med-empty">No hearing tests yet — run one above.</div>';
+    el.innerHTML = '<div class="med-empty">No tests yet — run a hearing or eye test above.</div>';
     return;
   }
   el.innerHTML = HT_RESULTS.map(htRowHtml).join('');
 }
 
 function htRowHtml(t) {
-  const d  = new Date(t.tested_at).toLocaleString('en-GB', { hour12: false });
-  const hp = (t.meta && t.meta.headphones) || '';
+  const d  = new Date(t.tested_at).toLocaleDateString('en-GB');   // DD/MM/YYYY, no time
   const nt = (t.meta && t.meta.notes) || '';
+  let chips, summary;
+  if (t.test_type === 'vision') {
+    const corr = (t.meta && t.meta.correction) || '';
+    chips = `<span class="med-chip" style="background:#ede9fe; color:#5b21b6;">👁 Vision</span>` +
+            (corr ? `<span class="med-chip" style="background:#fef3c7; color:#854d0e;">${htEsc(corr)}</span>` : '');
+    summary = (typeof vtRowSummary === 'function') ? vtRowSummary(t) : '';
+  } else {
+    const hp = (t.meta && t.meta.headphones) || '';
+    chips = `<span class="med-chip" style="background:#e0f2fe; color:#075985;">🔊 Hearing</span>` +
+            `<span class="med-chip" style="background:#fef3c7; color:#854d0e;">${htEsc(htBandLabel(t))}</span>`;
+    summary = `Right avg ${htEsc(htAvgDb('right', t.results))} · Left avg ${htEsc(htAvgDb('left', t.results))}${hp ? ' · 🎧 ' + htEsc(hp) : ''}`;
+  }
   return `<div class="med-list-card">
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      <span class="med-chip" style="background:#e0f2fe; color:#075985;">🔊 Hearing</span>
-      <span class="med-chip" style="background:#fef3c7; color:#854d0e;">${htEsc(htBandLabel(t))}</span>
-      <b>${htEsc(d)}</b>
+      <b style="display:inline-block; min-width:92px; text-align:center;">${htEsc(d)}</b>
+      ${chips}
       <span style="flex:1;"></span>
-      <button class="btn btn-secondary btn-sm" onclick="htView(${t.id})">View</button>
+      <button class="btn btn-secondary btn-sm" onclick="medTestView(${t.id})">View</button>
       <button class="btn btn-secondary btn-sm" onclick="htDelete(${t.id})">✕</button>
     </div>
-    <div class="med-meta">Right avg ${htEsc(htAvgDb('right', t.results))} · Left avg ${htEsc(htAvgDb('left', t.results))}${hp ? ' · 🎧 ' + htEsc(hp) : ''}</div>
+    <div class="med-meta">${summary}</div>
     ${nt ? `<div class="med-meta">📝 ${htEsc(nt)}</div>` : ''}
   </div>`;
 }
 
-function htView(id) {
+// Unified View dispatcher — hearing → audiogram, vision → acuity readout.
+function medTestView(id) {
   const t = HT_RESULTS.find(x => x.id === id);
   if (!t) return;
-  const d = new Date(t.tested_at).toLocaleString('en-GB', { hour12: false });
-  renderAudiogram(t.results, d + ((t.meta && t.meta.headphones) ? ' · ' + t.meta.headphones : ''));
-  document.getElementById('ht-chart-wrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  htCloseChart();
+  if (typeof vtCloseResult === 'function') vtCloseResult();
+  if (t.test_type === 'vision') {
+    if (typeof renderVision === 'function') renderVision(t);
+  } else {
+    const d = new Date(t.tested_at).toLocaleDateString('en-GB');
+    renderAudiogram(t.results, d + ((t.meta && t.meta.headphones) ? ' · ' + t.meta.headphones : ''));
+    document.getElementById('ht-chart-wrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 
 async function htDelete(id) {
