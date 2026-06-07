@@ -440,7 +440,7 @@ function renderDocCard(d) {
         ${d.doctor_name   ? `<div class="med-meta">👨‍⚕ ${esc(d.doctor_name)}</div>`   : ''}
         ${d.producer_name ? `<div class="med-meta">🏥 ${esc(d.producer_name)} (${esc(d.producer_kind)})</div>` : ''}
         ${d.doc_date      ? `<div class="med-meta">📅 ${esc(d.doc_date)}</div>` : ''}
-        <div class="med-meta">${esc(d.mime_type)} · ${size} · uploaded ${esc(d.uploaded_at)}</div>
+        <div class="med-meta">${esc(d.mime_type)} · ${size}</div>
         ${d.notes ? `<div style="margin-top:4px; font-size:0.84rem;">${esc(d.notes)}</div>` : ''}
       </div>
     </div>
