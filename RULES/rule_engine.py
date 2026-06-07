@@ -1742,15 +1742,22 @@ class RuleEngine:
             self._write_test_result({'rule': rule_name, 'status': 'error', 'reason': 'Rule not found'})
             return
 
-        # Check conditions
-        ok, reason = self._check_conditions(rule)
-        if not ok:
-            self._write_test_result({
-                'rule': rule_name, 'status': 'skip',
-                'reason': f'Condition failed: {reason}',
-                'ts': datetime.now(tz=TZ).isoformat(),
-            })
-            return
+        # Check conditions (time/state). In FORCE mode we deliberately bypass
+        # this gate — Force means "fire it now regardless of the engine-level
+        # time/state window" (consistent with the force docstring "fake all
+        # conditions so rule fires"). A rule's OWN internal gates + latch still
+        # run inside evaluate(), so e.g. Evening Lights still honors its
+        # home_mode gate and per-period latch — only the outer 16:00-04:00 style
+        # window is skipped. Dry-run Test (force=false) still respects the gate.
+        if not force:
+            ok, reason = self._check_conditions(rule)
+            if not ok:
+                self._write_test_result({
+                    'rule': rule_name, 'status': 'skip',
+                    'reason': f'Condition failed: {reason}',
+                    'ts': datetime.now(tz=TZ).isoformat(),
+                })
+                return
 
         # Build synthetic event. Rules that react to custom payloads can
         # declare a RULE["test_event"] template; otherwise fall back to the

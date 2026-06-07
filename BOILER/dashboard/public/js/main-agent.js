@@ -445,6 +445,13 @@
     'Start Away Mode',
     'Move in Corridor',
   ]);
+  // Rules that get a single red "Run" button instead of Test/Force. Run uses
+  // the engine Force path with the rule's own test_event (source='force_run'),
+  // so the rule fires EXACTLY as declared — gates + latch honored, only the
+  // trigger moment simulated. Takes precedence over RULES_NO_TEST.
+  const RULES_RUN_BUTTON = new Set([
+    'Evening Lights',
+  ]);
   window.testModeButton = async function (mode) {
     const el = document.getElementById('test-result');
     if (el) {
@@ -970,6 +977,8 @@
                 <button class="btn btn-secondary btn-sm" onclick="testModeButton('home')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('home')};color:#fff;" title="Press the HOME relay on 8 Gang Switch (real switch event → rule fires)">HOME</button>
                 <button class="btn btn-secondary btn-sm" onclick="testModeButton('away')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('away')};color:#fff;" title="Press the AWAY relay on 8 Gang Switch (real switch event → rule fires)">AWAY</button>
                 <button class="btn btn-secondary btn-sm" onclick="testModeButton('abroad')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('abroad')};color:#fff;" title="Press the ABROAD relay on 8 Gang Switch (real switch event → rule fires)">ABROAD</button>
+              ` : RULES_RUN_BUTTON.has(r.name) ? `
+                <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#c0392b;color:#fff;" title="Run the rule exactly as declared (gates + latch honored, only the trigger moment is simulated) and dispatch for real">Run</button>
               ` : RULES_NO_TEST.has(r.name) ? `` : `
                 <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',false)" style="font-size:0.68rem;padding:2px 6px;" title="Dry-run test">Test</button>
                 <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#7a9ab8;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>

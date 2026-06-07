@@ -103,6 +103,12 @@ RULE = {
     "group":       "lighting",
     "priority":    30,
     "depends_on":  ["Home Time Periods", "Mode Buttons"],
+    # Manual "Run" button (dashboard, Force path): builds a heartbeat event with
+    # source='force_run'. evaluate() treats that as a simulated Scenario-A
+    # trigger (sun-anchor hit) and runs the rule EXACTLY as declared — gates +
+    # latch + device list all apply. Nothing is bypassed except the wall-clock
+    # anchor moment itself (otherwise Run could only fire at the exact minute).
+    "test_event":  {"device_id": "heartbeat", "source": "force_run"},
 }
 
 
@@ -374,6 +380,20 @@ def evaluate(event, state):
             if 0 < ((a - prev_now_min) % 1440) <= delta:
                 sun_anchor_hit = True
                 break
+
+    # Manual Run (dashboard red "Run" button → engine Force path). Simulate the
+    # trigger MOMENT so the rule fires on demand:
+    #   - sun_anchor_hit=True  → ignore the sunset / time_mode timing
+    #   - fired=False          → clear the per-period latch (at a real trigger
+    #                            moment the latch is always clear — it's SET by
+    #                            the fire, not a precondition)
+    # The home_mode gate (gates_pass) + the resolved device list STILL apply, so
+    # Run dispatches exactly the same commands a real trigger would. The Force
+    # harness deep-copies + restores state.shared, so the latch write during a
+    # Run is reverted and the real sunset fire is never suppressed.
+    if event.get('source') == 'force_run':
+        sun_anchor_hit = True
+        fired = False
 
     # Scenario B — late arrival: home_mode just transitioned to the gated
     # value (the home_gate_value derived above) AND current time_mode is one
