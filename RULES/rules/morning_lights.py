@@ -119,6 +119,10 @@ RULE = {
     # still apply). Only the timing (sun anchor / time_mode / engine window /
     # latch) is bypassed. See the force_run block in evaluate().
     "test_event":  {"device_id": "heartbeat", "source": "force_run"},
+    # The dashboard button is a real "Run" (not a debug Force), so a forced run
+    # that dispatches commands bumps the Runs counter + last_fired like a real
+    # fire. Honored in _test_rule_impl's force branch.
+    "count_force_fires": True,
 }
 
 

@@ -1854,6 +1854,19 @@ class RuleEngine:
                                 rule_name, cmd.get('device_id', '?'),
                                 cmd.get('action', '?'), e)
 
+            # Opt-in Run-button stats: a forced Run that actually dispatched
+            # commands bumps the Runs counter + last_fired, same as a real fire.
+            # Gated on RULE['count_force_fires'] so every OTHER rule's Force
+            # button still leaves stats clean (the 2026-05-16 "manual tests don't
+            # pollute counts" rule). Currently set by Evening + Morning Lights
+            # (their dashboard button is a "Run", not a debug Force). The bump
+            # lands in self._rule_stats (an engine attr), so the state.shared
+            # restore below doesn't undo it; the next heartbeat republishes it.
+            if commands and rule.RULE.get('count_force_fires'):
+                self._record_rule_fire(
+                    rule_name,
+                    self._rule_stats.get(rule_name, {}).get('_last_ms', 0))
+
             # Restore state + timers (hold the lock across both assignments so
             # the heartbeat thread can't snapshot a half-restored state).
             with self.state.lock:

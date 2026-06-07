@@ -109,6 +109,10 @@ RULE = {
     # latch + device list all apply. Nothing is bypassed except the wall-clock
     # anchor moment itself (otherwise Run could only fire at the exact minute).
     "test_event":  {"device_id": "heartbeat", "source": "force_run"},
+    # The dashboard button is a real "Run" (not a debug Force), so a forced run
+    # that dispatches commands bumps the Runs counter + last_fired like a real
+    # fire. Honored in _test_rule_impl's force branch.
+    "count_force_fires": True,
 }
 
 
