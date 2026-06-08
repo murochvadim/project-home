@@ -41,7 +41,9 @@ DEFAULT_SETTLING_SEC        = 2
 DEFAULT_TOL_LOW             = 0.7
 DEFAULT_TOL_HIGH            = 1.15
 DEFAULT_POST_FLIP_LOCK_SEC  = 5
-DEFAULT_DELTA_WINDOW_SEC    = 12   # compare power across this window, not event-to-event
+DEFAULT_DELTA_WINDOW_SEC    = 20   # compare power across this window, not event-to-event;
+                                   # wide enough to span a 3-phase load whose phases
+                                   # switch a few seconds apart (e.g. AC: T leads R/S ~15 s)
 
 _REGISTRY_CACHE_TTL_SEC     = 30
 
