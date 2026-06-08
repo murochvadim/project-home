@@ -108,24 +108,27 @@ function _waterComputeCost(tariff, periodM3, daysElapsed) {
   return Math.round(pretax * (1 + vat / 100) * 100) / 100;
 }
 
-// Water-bill text parser — tuned to the "מי הוד השרון" (Mei Hod HaSharon)
-// periodic water+sewage bill (חשבון תקופתי מים וביוב). Israeli water bills are
-// RTL Hebrew and pdf-parse may jumble word order, so each field is grabbed by
-// its Hebrew label with a tolerant window, trying BOTH label→number and
-// number→label orders. Never throws — anything not found stays null, and the
-// frontend's editable confirm modal lets the user fill/fix before saving.
+// Water-bill text parser — tuned to the "מי הוד השרון" / Maya Water bill
+// (חשבון תקופתי מים וביוב, mayawater.co.il). KEY FINDING: on these bills the
+// summary labels (סה"כ לחיוב / סה"כ לתשלום / נפשות) are rendered as GRAPHICS, so
+// pdf-parse never emits them — label anchoring is impossible. Instead we anchor
+// on the two signals that DO survive as text:
+//   • the total-to-pay amount printed after the shekel sign ("₪ 236.47"); and
+//   • the total consumption m³ printed immediately before it ("21.53\n₪ 236.47").
+// The excl-VAT subtotal keeps its text label ("סה"כ ללא מע"מ"), so VAT% derives
+// from subtotal + total. Validated on a real bill → period 03-04/2026,
+// total_m3 21.53, total_cost 236.47, vat 18%. Never throws; unmatched fields stay
+// null and the editable confirm modal lets the user fill/fix before saving.
 //
-// ⚠ Validate against the real pdf-parse output on first upload; other water
-// corporations (Hagihon, Mei Avivim, …) use different labels and will need
-// their own anchors added here.
+// ⚠ Tuned to the Maya Water layout per the user. Other corporations / older
+// layouts will mostly fall through to the confirm modal (parse returns nulls).
 function _parseWaterBill(text) {
   const out = { period_start: null, period_end: null, total_m3: null,
-                total_cost_ils: null, vat_pct: null, persons: null };
+                total_cost_ils: null, vat_pct: null };
   if (!text) return out;
   const t = String(text);
   try {
-    // Period like "07-08/2021" → start = 1st of first month, end = last day of
-    // the second month.
+    // Period "MM-MM/YYYY" → start = 1st of first month, end = last day of second.
     const per = t.match(/\b(\d{2})-(\d{2})\/(20\d{2})\b/);
     if (per) {
       const m1 = per[1], m2 = per[2], y = Number(per[3]);
@@ -134,45 +137,28 @@ function _parseWaterBill(text) {
       out.period_end   = `${y}-${m2}-${String(lastDay).padStart(2, '0')}`;
     }
 
-    // The "NNN.NN" amount CLOSEST to a Hebrew label (either side). Picking the
-    // nearest number — rather than the first in a wide window — avoids grabbing
-    // an unrelated earlier amount when pdf-parse interleaves RTL tokens.
-    // Hebrew quote variants: ASCII " ' , gershayim ״ (U+05F4), geresh ׳ (U+05F3).
-    const Q = '["\'\\u05f4\\u05f3]?';
-    const NUM = /(\d{1,6}(?:[.,]\d{2}))/;
-    const near = (labelSrc, win = 40) => {
-      const lab = t.match(new RegExp(labelSrc));
-      if (!lab) return null;
-      const idx = lab.index, end = idx + lab[0].length;
-      const after = t.slice(end, end + win);
-      const before = t.slice(Math.max(0, idx - win), idx);
-      let best = null, bestDist = Infinity;
-      const a = after.match(NUM);                 // nearest after = first match in `after`
-      if (a) { best = a[1]; bestDist = a.index; }
-      const bAll = [...before.matchAll(new RegExp(NUM.source, 'g'))];
-      if (bAll.length) {
-        const b = bAll[bAll.length - 1];          // nearest before = last match in `before`
-        const dist = before.length - (b.index + b[0].length);
-        if (dist < bestDist) { best = b[1]; bestDist = dist; }
-      }
-      return best ? Number(best.replace(/,/g, '')) : null;
-    };
+    // Total to pay — the amount printed after the shekel sign ("₪ 236.47").
+    const cost = t.match(/₪\s*([\d,]+\.\d{2})/);
+    if (cost) out.total_cost_ils = Number(cost[1].replace(/,/g, ''));
 
-    // Consume any unit/suffix marker that sits between the label and its number
-    // — "(מ"ק)" (m³) or "(כולל מע"מ)" — so the real amount is adjacent.
-    const UNIT = `\\s*(?:\\([^)]{0,14}\\))?`;
-    // Total to pay incl VAT (e.g. 144.85). "סה"כ לתשלום (כולל מע"מ)".
-    out.total_cost_ils = near(`(?:סה${Q}כ|הסכום)\\s*לתשלום${UNIT}`, 40);
-    // Total m³ charged (e.g. 18.95). "סה"כ לחיוב (מ"ק)".
-    out.total_m3 = near(`סה${Q}כ\\s*לחיוב${UNIT}`, 40);
-    // VAT %: derive from the excl-VAT subtotal + the incl total.
-    const excl = near(`סה${Q}כ\\s*ללא\\s*מע${Q}מ`, 25);
-    if (excl && out.total_cost_ils && out.total_cost_ils > excl) {
-      out.vat_pct = Math.round((out.total_cost_ils - excl) / excl * 100);
+    // Total consumption m³ — the decimal immediately before that "₪ <total>"
+    // block ("61\n21.53\n₪ 236.47" → 21.53). This is the real total (private +
+    // shared), not a tier sub-quantity from the breakdown table.
+    const m3 = t.match(/(\d{1,4}(?:[.,]\d{2}))\s*\n?\s*₪\s*[\d,]+\.\d{2}/);
+    if (m3) out.total_m3 = Number(m3[1].replace(/,/g, ''));
+
+    // VAT% — from the excl-VAT subtotal ("NNN.NN סה"כ ללא מע"מ") + the total.
+    const lab = t.search(/ללא\s*מע/);
+    if (lab >= 0 && out.total_cost_ils) {
+      const before = t.slice(Math.max(0, lab - 30), lab);
+      const e = [...before.matchAll(/(\d{1,6}(?:[.,]\d{2}))/g)];
+      if (e.length) {
+        const excl = Number(e[e.length - 1][1].replace(/,/g, ''));
+        if (excl > 0 && out.total_cost_ils > excl) {
+          out.vat_pct = Math.round((out.total_cost_ils - excl) / excl * 100);
+        }
+      }
     }
-    // Persons (מס' נפשות) — a small integer near the word נפשות.
-    const pp = t.match(/נפשות[\s\S]{0,12}?(\d{1,2})|(\d{1,2})[\s\S]{0,12}?נפשות/);
-    if (pp) out.persons = Number(pp[1] || pp[2]);
   } catch (_) { /* never throw on a best-effort parse */ }
   return out;
 }
