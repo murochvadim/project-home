@@ -125,7 +125,7 @@ function _waterComputeCost(tariff, periodM3, daysElapsed) {
 function _parseWaterBill(text) {
   const out = { period_start: null, period_end: null,
                 private_m3: null, shared_m3: null, total_m3: null,
-                total_cost_ils: null, vat_pct: null };
+                total_cost_ils: null, vat_pct: null, recognized_rate: null };
   if (!text) return out;
   const t = String(text);
   try {
@@ -176,6 +176,19 @@ function _parseWaterBill(text) {
         }
       }
     }
+
+    // Recognized-tier rate (₪/m³) for tariff-drift detection. The tier table
+    // prints rows "TOTAL RATE QTY <label>", e.g. "101.30 14.04 7.21 כמות מוכרת".
+    // Some bills split the recognized tier into water + sewage rows (9.67 + 4.37
+    // = 14.04); summing the RATE column recovers the combined rate. Reliable
+    // because every bill uses the recognized quantity. (The additional/high tier
+    // is intentionally NOT extracted — its rows are split inconsistently and the
+    // quota is rarely exceeded, so it would false-alarm.)
+    let recSum = 0, recN = 0;
+    for (const mm of t.matchAll(/([\d,]+\.\d{2})\s+(\d{1,3}\.\d{2})\s+(\d{1,3}\.\d{2})\s*כמות\s*מוכרת/g)) {
+      recSum += Number(mm[2]); recN++;
+    }
+    if (recN) out.recognized_rate = Math.round(recSum * 100) / 100;
   } catch (_) { /* never throw on a best-effort parse */ }
   return out;
 }
@@ -251,8 +264,10 @@ module.exports = (app, db) => {
 
   // Parse-and-RETURN: extracts best-effort fields from the PDF and hands them
   // back for the frontend's editable confirm modal. Does NOT insert — the
-  // confirmed values come back via POST /api/water/bills. (The parser is a stub
-  // pending a sample bill, so blind-inserting would store empty rows.)
+  // confirmed values come back via POST /api/water/bills. Also returns a `diff`
+  // array (tariff-drift detection, like the Project Power bill upload): if the
+  // bill's recognized rate or VAT differs > 1% from the saved Water Tariff, the
+  // frontend pops a "tariff changed → update?" modal to sync settings.
   app.post('/api/water/bills/upload', waterBillPdfUpload.single('pdf'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'pdf file required' });
     let text = '';
@@ -268,7 +283,28 @@ module.exports = (app, db) => {
         text = '';
       }
       const parsed = _parseWaterBill(text);
-      res.json({ ok: true, parsed, raw_text_preview: text.slice(0, 6000) });
+
+      // Tariff-drift detection — only the two reliably-extractable tariff fields
+      // (recognized/low-tier rate + VAT). The additional/high-tier rate is too
+      // erratic on these bills to auto-check (excluded on purpose).
+      const diff = [];
+      try {
+        const { tariff } = await _waterLoadSettings(db);
+        const _drift = (field, label, parsedVal, curVal) => {
+          if (parsedVal == null || !Number.isFinite(Number(parsedVal))) return;
+          const pv = Number(parsedVal), cur = Number(curVal);
+          const changed = !Number.isFinite(cur) || cur === 0
+            ? Math.abs(pv) > 0.001
+            : Math.abs(pv - cur) / Math.abs(cur) > 0.01;
+          if (changed && Math.abs(pv - (Number.isFinite(cur) ? cur : 0)) > 0.001) {
+            diff.push({ field, label, current: Number.isFinite(cur) ? cur : null, new: pv });
+          }
+        };
+        _drift('low_tier_rate_ils_per_m3', 'Recognized rate (₪/m³)', parsed.recognized_rate, tariff.low_tier_rate_ils_per_m3);
+        _drift('vat_pct', 'VAT (%)', parsed.vat_pct, tariff.vat_pct);
+      } catch (_) { /* drift is best-effort; never blocks the upload */ }
+
+      res.json({ ok: true, parsed, diff, raw_text_preview: text.slice(0, 6000) });
     } catch (e) {
       err(res, e);
     } finally {

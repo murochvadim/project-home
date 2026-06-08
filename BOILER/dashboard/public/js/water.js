@@ -182,6 +182,9 @@ async function wbUpload(event) {
     if (!r.ok) { msg.textContent = `Failed: ${d.error || r.statusText}`; msg.style.color = '#c0392b'; return; }
     msg.textContent = 'Parsed — review the values below.';
     msg.style.color = '#666';
+    // Stash any tariff drift so we can prompt to update Settings after the bill
+    // is saved (same idea as the Project Power bill upload).
+    window._wbDiff = Array.isArray(d.diff) ? d.diff : [];
     wbShowConfirmModal(d.parsed || {}, 'pdf_parsed');
   } catch (e) {
     msg.textContent = `Upload error: ${e.message}`; msg.style.color = '#c0392b';
@@ -192,6 +195,7 @@ async function wbUpload(event) {
 
 function wbOpenManual() {
   document.getElementById('wb-upload-msg').textContent = '';
+  window._wbDiff = [];
   wbShowConfirmModal({}, 'manual_confirmed');
 }
 
@@ -276,8 +280,77 @@ async function wbConfirmSave(source) {
     document.getElementById('wb-upload-msg').style.color = '#27ae60';
     setTimeout(() => { const m = document.getElementById('wb-upload-msg'); if (m) m.textContent = ''; }, 4000);
     wbLoad();
+    // If this bill's tariff differs from saved Settings, prompt to update.
+    if (Array.isArray(window._wbDiff) && window._wbDiff.length) {
+      wbShowDriftModal(window._wbDiff);
+    }
   } catch (e) {
     mMsg.textContent = `Save error: ${e.message}`; mMsg.style.color = '#c0392b';
+  }
+}
+
+// ─── Tariff-drift modal (like Project Power) ──────────────────────
+// Shown after a bill is saved whose recognized rate / VAT differs from the
+// saved Water Tariff. "Update settings" syncs the changed fields.
+function wbShowDriftModal(diff) {
+  wbCloseDrift();
+  const rows = diff.map(d => `
+    <tr style="border-bottom:1px solid #e6e1da;">
+      <td style="padding:8px 14px;">${wEscHtml(d.label)}</td>
+      <td style="padding:8px 14px; text-align:right; color:#888;">${d.current == null ? '—' : d.current}</td>
+      <td style="padding:8px 14px; text-align:right; color:#c0392b; font-weight:600;">→ ${d.new}</td>
+    </tr>`).join('');
+  const html = `
+    <div id="wb-drift-modal" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1011; display:flex; align-items:center; justify-content:center;">
+      <div style="background:#fff; max-width:560px; width:90%; max-height:90vh; overflow-y:auto; border-radius:8px; padding:24px;">
+        <h2 style="margin-top:0; color:#c0392b;">⚠ Tariff change detected</h2>
+        <p style="font-size:0.95rem; color:#444;">
+          This bill's rates don't match your current Water Tariff settings.
+          Update them to match?
+        </p>
+        <table style="width:100%; border-collapse:collapse; font-size:0.9rem; margin-top:14px;">
+          <thead><tr style="background:#fafaf6;">
+            <th style="text-align:left;  padding:8px 14px;">Field</th>
+            <th style="text-align:right; padding:8px 14px;">Current</th>
+            <th style="text-align:right; padding:8px 14px;">From bill</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div style="margin-top:22px; display:flex; gap:10px;">
+          <button class="btn btn-primary btn-sm"   onclick="wbApplyDrift()" style="padding:9px 22px; font-size:0.95rem;">Update settings</button>
+          <button class="btn btn-secondary btn-sm" onclick="wbCloseDrift()" style="padding:9px 18px; font-size:0.95rem;">Keep current</button>
+        </div>
+      </div>
+    </div>`;
+  window._wbDriftDiff = diff;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function wbCloseDrift() {
+  const el = document.getElementById('wb-drift-modal');
+  if (el) el.remove();
+  window._wbDriftDiff = null;
+  window._wbDiff = [];
+}
+
+async function wbApplyDrift() {
+  const diff = window._wbDriftDiff || [];
+  if (!diff.length) { wbCloseDrift(); return; }
+  try {
+    const cur = await (await fetch('/api/water/settings')).json();
+    const tariff = { ...(cur.tariff || {}) };
+    for (const d of diff) tariff[d.field] = d.new;
+    const r = await fetch('/api/water/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tariff, billing: cur.billing }),
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(`Update failed: ${data.error || r.statusText}`); return; }
+    wbCloseDrift();
+    wsLoad();   // refresh the Tariff card so the user sees the new values
+  } catch (e) {
+    alert(`Update error: ${e.message}`);
   }
 }
 
