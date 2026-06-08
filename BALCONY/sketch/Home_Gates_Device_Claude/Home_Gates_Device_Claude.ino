@@ -1,4 +1,9 @@
-/* Home_Gates_Device — Project Boards onboarding (ver11, ESP32, 2026-05-05)
+/* Home_Gates_Device — Project Boards onboarding (v12, ESP32; orig 2026-05-05, v12 2026-06-08)
+ *
+ *   v12 (2026-06-08): MQTT self-heal — reconnect ALWAYS retries the known broker
+ *   (awaiting_new_mqtt_ip is informational only, no longer blocks reconnect); the
+ *   /set_ip HTTP fallback opens only after MOSQ_FAIL_HTTP_THRESHOLD consecutive
+ *   failures. Mirrors the proven RemoteXY_ESP8266_Claude reconnect pattern.
  *
  *   Migrated from ESP8266 to ESP32 because the ESP8266 board's MAC
  *   (4c:eb:d6:1f:ef:c6) was stuck in REASON_AUTH_FAIL on the DECO mesh
@@ -166,6 +171,11 @@ void buzzer() {
 // ─── MQTT reconnect bookkeeping ──────────────────────────────────────────
 unsigned long last_mosq_attempt = 0;
 const unsigned long MOSQ_RETRY_MS = 1000;
+// Consecutive Mosquitto connect failures before the /set_ip HTTP fallback opens.
+// Mirrors RemoteXY's esp_params.mosq_fail_http_threshold — a transient blip must
+// NOT trip the fallback; loop() keeps retrying the known broker regardless.
+#define MOSQ_FAIL_HTTP_THRESHOLD 10
+static uint8_t mosq_fail_count = 0;
 unsigned long last_ip_print_time = 0;
 bool schedule_http_server_close = false;
 unsigned long http_server_close_time = 0;
@@ -256,6 +266,7 @@ void reconnect_Mosquitto() {
     Serial.println("Mosquitto Server connected (plain)");
     client_Moskuitto.subscribe("HOME_REQUEST");
     params.mqtt_flag = LINK_CONNECTED;
+    mosq_fail_count = 0;
     awaiting_new_mqtt_ip = false;
     if (http_server_enabled) { server.stop(); http_server_enabled = false; }
     espBaseOnMosquittoConnect();
@@ -264,13 +275,20 @@ void reconnect_Mosquitto() {
 
   Serial.println("MQTT connect failed across all paths.");
   params.mqtt_flag = LINK_DISCONNECTED;
-  awaiting_new_mqtt_ip = (tried_hardcoded && (tried_eeprom || !has_eeprom));
-  if (!http_server_enabled && tried_hardcoded && (tried_eeprom || !has_eeprom) && wifiIsUp()) {
-    server.on("/set_ip", handle_set_ip);
-    server.begin();
-    http_server_enabled = true;
-    last_ip_print_time = millis();
-    Serial.println("HTTP /set_ip enabled");
+  if (mosq_fail_count < 255) mosq_fail_count++;
+  // Mirror RemoteXY: only fall back to the /set_ip HTTP recovery after MANY
+  // consecutive failures — a transient blip must NOT latch us off the broker.
+  // loop() keeps calling reconnect_Mosquitto() every MOSQ_RETRY_MS regardless,
+  // so the board self-heals the moment the broker is reachable again.
+  if (mosq_fail_count >= MOSQ_FAIL_HTTP_THRESHOLD) {
+    awaiting_new_mqtt_ip = (tried_hardcoded && (tried_eeprom || !has_eeprom));
+    if (!http_server_enabled && tried_hardcoded && (tried_eeprom || !has_eeprom) && wifiIsUp()) {
+      server.on("/set_ip", handle_set_ip);
+      server.begin();
+      http_server_enabled = true;
+      last_ip_print_time = millis();
+      Serial.println("HTTP /set_ip enabled");
+    }
   }
 }
 
@@ -389,7 +407,7 @@ void setup() {
   static WiFiClient mosqPlain;
   client_Moskuitto.setClient(mosqPlain);
   client_Moskuitto.setCallback(callback_Mosquitto);
-  client_Moskuitto.setKeepAlive(15);
+  client_Moskuitto.setKeepAlive(15);   // matches RemoteXY — stable because reconnect always retries (the bug was the latch, not the keepalive)
   client_Moskuitto.setSocketTimeout(5);
   client_Moskuitto.setBufferSize(4096);
 
@@ -439,7 +457,13 @@ void loop() {
     }
   }
 
-  if (wifiIsUp() && !client_Moskuitto.connected() && !awaiting_new_mqtt_ip) {
+  // Always retry the known broker while WiFi is up — exactly like the proven
+  // RemoteXY sketch. The awaiting_new_mqtt_ip latch is INFORMATIONAL ONLY (it
+  // drives the optional /set_ip fallback server) and must NEVER block
+  // reconnection. Previously a single transient connect failure latched it and
+  // parked the board off MQTT until a manual reboot (the 2026-06-08 gates_01
+  // "offline but network ok" incident: WiFi/ping alive, MQTT dead forever).
+  if (wifiIsUp() && !client_Moskuitto.connected()) {
     if (millis() >= ip_handover_until_ms && now_ms - last_mosq_attempt > MOSQ_RETRY_MS) {
       reconnect_Mosquitto();
       last_mosq_attempt = now_ms;

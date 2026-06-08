@@ -55,7 +55,7 @@ const int   mqtt_port_moskuitto   = 1883;
 // ─── Sketch identity ─────────────────────────────────────────────────────
 const char* device_id      = "gates_01";
 const char* sketch_name    = "Home_Gates_Device_Claude";   // dashboard chip-detection: name contains no "ESP8266" substring → defaults to ESP32 OTA on port 3232 (correct for this ESP32 board)
-const char* sketch_version = "v11";
+const char* sketch_version = "v12";   // v12: MQTT self-heal — awaiting_new_mqtt_ip latch no longer blocks reconnect + 5-min MQTT-down restart backstop + keepalive 30s
 const char* build_ts       = __DATE__ " " __TIME__;
 
 #define OTA_PASSWORD "uZf-vPmFw!fho!@Q"
