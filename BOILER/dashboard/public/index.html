@@ -659,11 +659,11 @@
           <thead>
             <tr style="background:#fafaf6; border-bottom:2px solid #d0cbc4;">
               <th style="text-align:left;  padding:10px 14px;">Period</th>
-              <th style="text-align:right; padding:10px 14px;">Private m³</th>
-              <th style="text-align:right; padding:10px 14px;">Shared m³</th>
+              <th style="text-align:right; padding:10px 14px;" title="Private consumption, with the change vs the previous period">Private m³ <span style="font-weight:400; color:#aaa;">Δ</span></th>
+              <th style="text-align:right; padding:10px 14px;" title="Shared consumption, with the change vs the previous period">Shared m³ <span style="font-weight:400; color:#aaa;">Δ</span></th>
               <th style="text-align:right; padding:10px 14px;">Estimate ₪</th>
               <th style="text-align:right; padding:10px 14px;">Actual ₪</th>
-              <th style="text-align:right; padding:10px 14px;">Diff</th>
+              <th style="text-align:right; padding:10px 14px;" title="Cost difference: Actual − Estimate (₪)">Diff ₪ <span style="font-weight:400; color:#aaa;">(act−est)</span></th>
               <th style="text-align:center; padding:10px 14px;">Actions</th>
             </tr>
           </thead>
@@ -706,6 +706,6 @@ function handlePageRefresh() {
 <script src="js/main.js"></script>
 <script src="js/graph.js?v=3"></script>
 <script src="js/data.js?v=2"></script>
-<script src="js/water.js?v=3"></script>
+<script src="js/water.js?v=4"></script>
 </body>
 </html>

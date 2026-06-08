@@ -15,6 +15,18 @@ function wEscHtml(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Compact bimonthly period label: "2024-05-01"+"2024-06-30" → "5-6 2024".
+function wbPeriodLabel(b) {
+  const s = b.period_start, e = b.period_end;
+  if (!s && !e) return '<span style="color:#aaa;">—</span>';
+  const sm = s ? parseInt(s.slice(5, 7), 10) : null;
+  const em = e ? parseInt(e.slice(5, 7), 10) : null;
+  const yr = (s || e).slice(0, 4);
+  if (sm && em) return `${sm}-${em} ${yr}`;
+  if (sm) return `${sm} ${yr}`;
+  return yr;
+}
+
 // Entry point — called by index.html's showMainTab('water') + handlePageRefresh.
 window.waterOnTabShow = function () {
   wsLoad();
@@ -104,7 +116,10 @@ async function wbLoad() {
       tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; color:#aaa; text-align:center;">No water bills yet. Paste a PDF or add one manually with the buttons above.</td></tr>';
       return;
     }
-    tbody.innerHTML = rows.map(b => {
+    // Rows arrive newest-first; each row's "previous period" is the next (older)
+    // row, used for the Private/Shared consumption Δ.
+    tbody.innerHTML = rows.map((b, i) => {
+      const prev = rows[i + 1];
       const est = b.est_cost_ils != null ? Number(b.est_cost_ils).toFixed(2) : '—';
       const act = b.total_cost_ils != null ? Number(b.total_cost_ils).toFixed(2) : '<span style="color:#aaa;">—</span>';
       let diffCell = '—';
@@ -114,16 +129,26 @@ async function wbLoad() {
         const col  = Math.abs(pct) <= 5 ? '#27ae60' : Math.abs(pct) <= 15 ? '#e67e22' : '#c0392b';
         diffCell = `<span style="color:${col}; font-weight:600;">${diff >= 0 ? '+' : ''}${diff.toFixed(2)} (${pct.toFixed(1)}%)</span>`;
       }
-      const fmtDate = (s) => (s ? String(s).slice(0, 10) : '?');
-      const period = (b.period_start || b.period_end)
-        ? `${fmtDate(b.period_start)} → ${fmtDate(b.period_end)}`
-        : '<span style="color:#aaa;">—</span>';
-      const m3 = (v) => (v != null ? Number(v).toFixed(1) : '—');
+      // Compact bimonthly label, e.g. "5-6 2024".
+      const period = wbPeriodLabel(b);
+      // m³ value + Δ vs previous period (▲ more = red, ▼ less = green).
+      const m3cell = (val, prevVal) => {
+        if (val == null) return '—';
+        let d = '';
+        if (prevVal != null) {
+          const delta = Number(val) - Number(prevVal);
+          if (Math.abs(delta) >= 0.01) {
+            const up = delta > 0;
+            d = ` <span style="font-size:0.72rem; color:${up ? '#c0392b' : '#27ae60'};">${up ? '▲' : '▼'}${Math.abs(delta).toFixed(1)}</span>`;
+          }
+        }
+        return `${Number(val).toFixed(1)}${d}`;
+      };
       return `
         <tr style="border-bottom:1px solid #e6e1da;">
-          <td style="padding:10px 14px;">${period}</td>
-          <td style="padding:10px 14px; text-align:right;">${m3(b.private_m3)}</td>
-          <td style="padding:10px 14px; text-align:right;">${m3(b.shared_m3)}</td>
+          <td style="padding:10px 14px; white-space:nowrap;">${period}</td>
+          <td style="padding:10px 14px; text-align:right; white-space:nowrap;">${m3cell(b.private_m3, prev && prev.private_m3)}</td>
+          <td style="padding:10px 14px; text-align:right; white-space:nowrap;">${m3cell(b.shared_m3, prev && prev.shared_m3)}</td>
           <td style="padding:10px 14px; text-align:right;">${est}</td>
           <td style="padding:10px 14px; text-align:right;">${act}</td>
           <td style="padding:10px 14px; text-align:right;">${diffCell}</td>
