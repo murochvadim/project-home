@@ -113,21 +113,24 @@ async function wbLoad() {
     const rows = await (await fetch('/api/water/bills')).json();
     const tbody = document.getElementById('wb-tbody');
     if (!Array.isArray(rows) || rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; color:#aaa; text-align:center;">No water bills yet. Paste a PDF or add one manually with the buttons above.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:14px; color:#aaa; text-align:center;">No water bills yet. Paste a PDF or add one manually with the buttons above.</td></tr>';
       return;
     }
     // Rows arrive newest-first; each row's "previous period" is the next (older)
     // row, used for the Private/Shared consumption Δ.
     tbody.innerHTML = rows.map((b, i) => {
       const prev = rows[i + 1];
-      const est = b.est_cost_ils != null ? Number(b.est_cost_ils).toFixed(2) : '—';
       const act = b.total_cost_ils != null ? Number(b.total_cost_ils).toFixed(2) : '<span style="color:#aaa;">—</span>';
+      // Cost difference vs the previous bill (▲ red = costs more, ▼ green = less).
       let diffCell = '—';
-      if (b.total_cost_ils != null && b.est_cost_ils != null && Number(b.est_cost_ils) !== 0) {
-        const diff = Number(b.total_cost_ils) - Number(b.est_cost_ils);
-        const pct  = (Math.abs(diff) / Number(b.est_cost_ils)) * 100;
-        const col  = Math.abs(pct) <= 5 ? '#27ae60' : Math.abs(pct) <= 15 ? '#e67e22' : '#c0392b';
-        diffCell = `<span style="color:${col}; font-weight:600;">${diff >= 0 ? '+' : ''}${diff.toFixed(2)} (${pct.toFixed(1)}%)</span>`;
+      if (b.total_cost_ils != null && prev && prev.total_cost_ils != null) {
+        const diff = Number(b.total_cost_ils) - Number(prev.total_cost_ils);
+        if (Math.abs(diff) < 0.01) {
+          diffCell = '<span style="color:#888;">0.00</span>';
+        } else {
+          const up = diff > 0;
+          diffCell = `<span style="color:${up ? '#c0392b' : '#27ae60'}; font-weight:600;">${up ? '▲' : '▼'}${Math.abs(diff).toFixed(2)}</span>`;
+        }
       }
       // Compact bimonthly label, e.g. "5-6 2024".
       const period = wbPeriodLabel(b);
@@ -149,7 +152,6 @@ async function wbLoad() {
           <td style="padding:10px 14px; white-space:nowrap;">${period}</td>
           <td style="padding:10px 14px; text-align:right; white-space:nowrap;">${m3cell(b.private_m3, prev && prev.private_m3)}</td>
           <td style="padding:10px 14px; text-align:right; white-space:nowrap;">${m3cell(b.shared_m3, prev && prev.shared_m3)}</td>
-          <td style="padding:10px 14px; text-align:right;">${est}</td>
           <td style="padding:10px 14px; text-align:right;">${act}</td>
           <td style="padding:10px 14px; text-align:right;">${diffCell}</td>
           <td style="padding:10px 14px; text-align:center;">
@@ -159,7 +161,7 @@ async function wbLoad() {
     }).join('');
   } catch (e) {
     document.getElementById('wb-tbody').innerHTML =
-      `<tr><td colspan="7" style="padding:14px; color:#c0392b; text-align:center;">Load failed: ${wEscHtml(e.message)}</td></tr>`;
+      `<tr><td colspan="6" style="padding:14px; color:#c0392b; text-align:center;">Load failed: ${wEscHtml(e.message)}</td></tr>`;
   }
 }
 
