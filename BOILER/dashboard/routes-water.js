@@ -123,7 +123,8 @@ function _waterComputeCost(tariff, periodM3, daysElapsed) {
 // ⚠ Tuned to the Maya Water layout per the user. Other corporations / older
 // layouts will mostly fall through to the confirm modal (parse returns nulls).
 function _parseWaterBill(text) {
-  const out = { period_start: null, period_end: null, total_m3: null,
+  const out = { period_start: null, period_end: null,
+                private_m3: null, shared_m3: null, total_m3: null,
                 total_cost_ils: null, vat_pct: null };
   if (!text) return out;
   const t = String(text);
@@ -146,6 +147,22 @@ function _parseWaterBill(text) {
     // shared), not a tier sub-quantity from the breakdown table.
     const m3 = t.match(/(\d{1,4}(?:[.,]\d{2}))\s*\n?\s*₪\s*[\d,]+\.\d{2}/);
     if (m3) out.total_m3 = Number(m3[1].replace(/,/g, ''));
+
+    // Private + shared split (תמצית החשבון: צריכה פרטית / צריכה משותפת). On these
+    // bills they print as a consecutive decimal triple A,B,C where A+B = C
+    // ("15.00\n6.53\n21.53" → private 15.00, shared 6.53, total 21.53). Take the
+    // first such summing triple. Validated across 6 real bills (private always
+    // ≥ shared, A+B=C exactly).
+    const nums = [];
+    for (const mm of t.matchAll(/(\d{1,4}(?:[.,]\d{2}))/g)) nums.push(Number(mm[1].replace(/,/g, '')));
+    for (let i = 0; i + 2 < nums.length; i++) {
+      const A = nums[i], B = nums[i + 1], C = nums[i + 2];
+      if (A > 0 && B > 0 && C > 0 && Math.abs(A + B - C) < 0.05) {
+        out.private_m3 = A; out.shared_m3 = B;
+        if (out.total_m3 == null) out.total_m3 = C;
+        break;
+      }
+    }
 
     // VAT% — from the excl-VAT subtotal ("NNN.NN סה"כ ללא מע"מ") + the total.
     const lab = t.search(/ללא\s*מע/);
@@ -223,7 +240,7 @@ module.exports = (app, db) => {
         SELECT id, uploaded_at,
                to_char(period_start, 'YYYY-MM-DD') AS period_start,
                to_char(period_end,   'YYYY-MM-DD') AS period_end,
-               total_m3, total_cost_ils, est_cost_ils, source, notes
+               private_m3, shared_m3, total_m3, total_cost_ils, est_cost_ils, source, notes
         FROM water_bills
         ORDER BY COALESCE(period_start, uploaded_at::date) DESC, uploaded_at DESC
         LIMIT 200
@@ -264,10 +281,17 @@ module.exports = (app, db) => {
     const b = req.body || {};
     const periodStart = b.period_start || null;
     const periodEnd   = b.period_end || null;
-    const totalM3     = (b.total_m3 == null || b.total_m3 === '') ? null : Number(b.total_m3);
-    const totalCost   = (b.total_cost_ils == null || b.total_cost_ils === '') ? null : Number(b.total_cost_ils);
-    if (totalM3 != null && !Number.isFinite(totalM3)) return res.status(400).json({ error: 'total_m3 must be a number' });
-    if (totalCost != null && !Number.isFinite(totalCost)) return res.status(400).json({ error: 'total_cost_ils must be a number' });
+    const _opt = (v) => (v == null || v === '') ? null : Number(v);
+    const privateM3 = _opt(b.private_m3);
+    const sharedM3  = _opt(b.shared_m3);
+    // Total m³ = private + shared when either is given; else fall back to an
+    // explicit total_m3 (older callers / single-value entry).
+    let totalM3 = _opt(b.total_m3);
+    if (privateM3 != null || sharedM3 != null) totalM3 = (privateM3 || 0) + (sharedM3 || 0);
+    const totalCost = _opt(b.total_cost_ils);
+    for (const [k, v] of [['private_m3', privateM3], ['shared_m3', sharedM3], ['total_m3', totalM3], ['total_cost_ils', totalCost]]) {
+      if (v != null && !Number.isFinite(v)) return res.status(400).json({ error: `${k} must be a number` });
+    }
     const source = ['pdf_parsed', 'manual_confirmed', 'auto_rollover'].includes(b.source) ? b.source : 'manual_confirmed';
     try {
       const { tariff } = await _waterLoadSettings(db);
@@ -279,13 +303,13 @@ module.exports = (app, db) => {
       }
       const est = totalM3 != null ? _waterComputeCost(tariff, totalM3, days) : null;
       const r = await db.query(`
-        INSERT INTO water_bills (period_start, period_end, total_m3, total_cost_ils, est_cost_ils, parsed, source, notes)
-        VALUES ($1::date, $2::date, $3, $4, $5, $6::jsonb, $7, $8)
+        INSERT INTO water_bills (period_start, period_end, private_m3, shared_m3, total_m3, total_cost_ils, est_cost_ils, parsed, source, notes)
+        VALUES ($1::date, $2::date, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
         RETURNING id, uploaded_at,
                   to_char(period_start, 'YYYY-MM-DD') AS period_start,
                   to_char(period_end,   'YYYY-MM-DD') AS period_end,
-                  total_m3, total_cost_ils, est_cost_ils, source, notes
-      `, [periodStart, periodEnd, totalM3, totalCost, est, JSON.stringify(b.parsed || {}), source, b.notes || null]);
+                  private_m3, shared_m3, total_m3, total_cost_ils, est_cost_ils, source, notes
+      `, [periodStart, periodEnd, privateM3, sharedM3, totalM3, totalCost, est, JSON.stringify(b.parsed || {}), source, b.notes || null]);
       res.json({ ok: true, row: r.rows[0] });
     } catch (e) { err(res, e); }
   });

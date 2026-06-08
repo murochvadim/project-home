@@ -101,7 +101,7 @@ async function wbLoad() {
     const rows = await (await fetch('/api/water/bills')).json();
     const tbody = document.getElementById('wb-tbody');
     if (!Array.isArray(rows) || rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" style="padding:14px; color:#aaa; text-align:center;">No water bills yet. Paste a PDF or add one manually with the buttons above.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; color:#aaa; text-align:center;">No water bills yet. Paste a PDF or add one manually with the buttons above.</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(b => {
@@ -118,16 +118,15 @@ async function wbLoad() {
       const period = (b.period_start || b.period_end)
         ? `${fmtDate(b.period_start)} → ${fmtDate(b.period_end)}`
         : '<span style="color:#aaa;">—</span>';
-      const upISO = b.uploaded_at ? new Date(b.uploaded_at).toLocaleDateString() : '—';
+      const m3 = (v) => (v != null ? Number(v).toFixed(1) : '—');
       return `
         <tr style="border-bottom:1px solid #e6e1da;">
           <td style="padding:10px 14px;">${period}</td>
-          <td style="padding:10px 14px; text-align:right;">${b.total_m3 != null ? Number(b.total_m3).toFixed(1) : '—'}</td>
+          <td style="padding:10px 14px; text-align:right;">${m3(b.private_m3)}</td>
+          <td style="padding:10px 14px; text-align:right;">${m3(b.shared_m3)}</td>
           <td style="padding:10px 14px; text-align:right;">${est}</td>
           <td style="padding:10px 14px; text-align:right;">${act}</td>
           <td style="padding:10px 14px; text-align:right;">${diffCell}</td>
-          <td style="padding:10px 14px; color:#666; font-size:0.78rem;">${wEscHtml(b.source || '')}</td>
-          <td style="padding:10px 14px; color:#888;">${upISO}</td>
           <td style="padding:10px 14px; text-align:center;">
             <button class="btn btn-secondary btn-sm" style="color:#c0392b; padding:4px 10px;" onclick="wbDelete(${b.id})">×</button>
           </td>
@@ -135,7 +134,7 @@ async function wbLoad() {
     }).join('');
   } catch (e) {
     document.getElementById('wb-tbody').innerHTML =
-      `<tr><td colspan="8" style="padding:14px; color:#c0392b; text-align:center;">Load failed: ${wEscHtml(e.message)}</td></tr>`;
+      `<tr><td colspan="7" style="padding:14px; color:#c0392b; text-align:center;">Load failed: ${wEscHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -192,8 +191,12 @@ function wbShowConfirmModal(parsed, source) {
             <input id="wb-m-end" type="date" class="w-form-input" value="${wEscHtml(p.period_end || '')}">
           </div>
           <div>
-            <label class="w-form-label">Consumption (m³)</label>
-            <input id="wb-m-m3" type="number" min="0" step="0.1" class="w-form-input" value="${p.total_m3 != null ? wEscHtml(p.total_m3) : ''}">
+            <label class="w-form-label">Private consumption (m³)</label>
+            <input id="wb-m-private" type="number" min="0" step="0.01" class="w-form-input" value="${p.private_m3 != null ? wEscHtml(p.private_m3) : ''}">
+          </div>
+          <div>
+            <label class="w-form-label">Shared consumption (m³)</label>
+            <input id="wb-m-shared" type="number" min="0" step="0.01" class="w-form-input" value="${p.shared_m3 != null ? wEscHtml(p.shared_m3) : ''}">
           </div>
           <div>
             <label class="w-form-label">Actual total (₪)</label>
@@ -220,11 +223,12 @@ function wbCloseModal() {
 async function wbConfirmSave(source) {
   const start = document.getElementById('wb-m-start').value || null;
   const end   = document.getElementById('wb-m-end').value || null;
-  const m3    = document.getElementById('wb-m-m3').value;
+  const priv  = document.getElementById('wb-m-private').value;
+  const shar  = document.getElementById('wb-m-shared').value;
   const cost  = document.getElementById('wb-m-cost').value;
   const mMsg  = document.getElementById('wb-m-msg');
-  if (m3 === '' && cost === '' && !start && !end) {
-    mMsg.textContent = 'Enter at least the period + m³.'; mMsg.style.color = '#c0392b'; return;
+  if (priv === '' && shar === '' && cost === '' && !start && !end) {
+    mMsg.textContent = 'Enter at least the period + consumption.'; mMsg.style.color = '#c0392b'; return;
   }
   try {
     const r = await fetch('/api/water/bills', {
@@ -232,7 +236,8 @@ async function wbConfirmSave(source) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         period_start: start, period_end: end,
-        total_m3: m3 === '' ? null : Number(m3),
+        private_m3: priv === '' ? null : Number(priv),
+        shared_m3:  shar === '' ? null : Number(shar),
         total_cost_ils: cost === '' ? null : Number(cost),
         source, parsed: window._wbParsed || {},
       }),
