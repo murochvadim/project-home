@@ -32,7 +32,72 @@ window.waterOnTabShow = function () {
   wsLoad();
   wbLoad();
   wcLoad();
+  wgLoad();
 };
+
+// ─── Consumption graph (Private vs Shared m³) ─────────────────────
+let _wgChart = null;
+async function wgLoad() {
+  const canvas = document.getElementById('water-consumption-chart');
+  const empty = document.getElementById('wg-empty');
+  if (!canvas || typeof Chart === 'undefined') return;
+  try {
+    const rows = await (await fetch('/api/water/bills')).json();
+    // Chronological ascending, only rows with a period + some consumption.
+    const bills = (Array.isArray(rows) ? rows : [])
+      .filter(b => b.period_start)
+      .sort((a, b) => (a.period_start < b.period_start ? -1 : 1));
+    const mode = document.getElementById('wg-range')?.value || 'monthly';
+    let labels = [], priv = [], shar = [];
+
+    if (mode === 'yearly') {
+      const byYear = {};
+      for (const b of bills) {
+        const y = b.period_start.slice(0, 4);
+        (byYear[y] = byYear[y] || { p: 0, s: 0 });
+        byYear[y].p += Number(b.private_m3 || 0);
+        byYear[y].s += Number(b.shared_m3 || 0);
+      }
+      const years = Object.keys(byYear).sort();
+      labels = years; priv = years.map(y => byYear[y].p); shar = years.map(y => byYear[y].s);
+    } else {
+      let list = bills;
+      const nYears = { '2': 2, '3': 3, '4': 4, '5': 5 }[mode];
+      if (nYears && bills.length) {
+        const newestYear = Number(bills[bills.length - 1].period_start.slice(0, 4));
+        const cutoff = newestYear - nYears + 1;
+        list = bills.filter(b => Number(b.period_start.slice(0, 4)) >= cutoff);
+      }
+      labels = list.map(b => `${wbPeriodLabel(b)}`.replace(/<[^>]+>/g, ''));
+      priv = list.map(b => Number(b.private_m3 || 0));
+      shar = list.map(b => Number(b.shared_m3 || 0));
+    }
+
+    const hasData = labels.length > 0;
+    canvas.style.display = hasData ? '' : 'none';
+    if (empty) empty.style.display = hasData ? 'none' : '';
+    if (!hasData) { if (_wgChart) { _wgChart.destroy(); _wgChart = null; } return; }
+
+    if (_wgChart) _wgChart.destroy();
+    _wgChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Private m³', data: priv, backgroundColor: '#4a9eff' },
+          { label: 'Shared m³',  data: shar, backgroundColor: '#27ae60' },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' } },
+        scales: { y: { beginAtZero: true, title: { display: true, text: 'm³' } } },
+      },
+    });
+  } catch (e) {
+    if (empty) { empty.style.display = ''; empty.textContent = `Graph error: ${e.message}`; }
+  }
+}
 
 // ─── Settings (billing + tariff) ──────────────────────────────────
 function wsShowSewage() {

@@ -547,6 +547,28 @@
       </div>
     </div>
 
+    <!-- Consumption graph -->
+    <div class="card">
+      <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:14px;">
+        <span>Consumption — Private vs Shared (m³)</span>
+        <span style="display:inline-flex; align-items:center; gap:8px; font-size:0.82rem; font-weight:400; text-transform:none; letter-spacing:0;">
+          <label for="wg-range" style="color:#888;">View</label>
+          <select id="wg-range" class="w-form-input" style="width:auto; padding:6px 10px;" onchange="wgLoad()">
+            <option value="monthly">By bill (each period)</option>
+            <option value="yearly">Yearly totals</option>
+            <option value="2">Last 2 years</option>
+            <option value="3">Last 3 years</option>
+            <option value="4">Last 4 years</option>
+            <option value="5">Last 5 years</option>
+          </select>
+        </span>
+      </h2>
+      <div style="position:relative; height:300px; margin-top:10px;">
+        <canvas id="water-consumption-chart"></canvas>
+      </div>
+      <div id="wg-empty" style="display:none; padding:14px; color:#aaa; text-align:center; font-size:0.9rem;">No bills yet — add some in the Past Water Bills card below.</div>
+    </div>
+
     <!-- Water Billing Cycle -->
     <div class="card">
       <h2>Water Billing Cycle
@@ -705,6 +727,6 @@ function handlePageRefresh() {
 <script src="js/main.js"></script>
 <script src="js/graph.js?v=3"></script>
 <script src="js/data.js?v=2"></script>
-<script src="js/water.js?v=6"></script>
+<script src="js/water.js?v=7"></script>
 </body>
 </html>
