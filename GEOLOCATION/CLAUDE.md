@@ -50,6 +50,7 @@ LXC 102 PostgreSQL
 | Ingest daemon | [scripts/owntracks_ingest.py](../scripts/owntracks_ingest.py) | repo source of truth |
 | Deployed copy | `root@192.168.1.227:/opt/owntracks_ingest.py` | LXC 104, long-running service |
 | Systemd unit | `owntracks-ingest.service` on LXC 104 | enabled, active |
+| Trip janitor | [scripts/geo_trip_janitor.py](../scripts/geo_trip_janitor.py) → `/opt/geo_trip_janitor.py` | LXC 104, cron `*/5`; deletes GPS bounce-storm fake trips (see below) |
 | Env file | `/etc/owntracks-ingest.env` on LXC 104 | `MQTT_USER`, `OWNTRACKS_MQTT_PASS`, `DB_PASS` (HA_TOKEN no longer used) |
 | Dashboard surface | [BOILER/dashboard/public/project-general.html](../BOILER/dashboard/public/project-general.html) Geolocation tab | Settings card + map + events + recent trips |
 | Server endpoints | `/api/geolocation/*` in [BOILER/dashboard/server.js](../BOILER/dashboard/server.js) | settings, status, locations, events, trips |
@@ -244,6 +245,63 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 | 2026-06-02 evening | Added `ha_ingest_enabled` master toggle to silence HA ingest path. Confirmed OwnTracks alone records correctly. |
 | 2026-06-03 audit | Found Fix A (`hard_cap` was unreachable when veto blocked). Applied to both ingest scripts. |
 | 2026-06-03 cleanup | User decision: **remove HA from geolocation completely**. This file documents the post-cleanup state. |
+| 2026-06-08 | Fake trips #520/#542 (phone stationary at home, GPS oscillating to a ~150 m "ghost" spot, crossing the radius 21–26×). Per firm user constraint **did NOT touch the trip-detection algorithm** — added a separate deferred **bounce-storm janitor** instead (see below). |
+
+## Bounce-storm trip janitor (`scripts/geo_trip_janitor.py`, 2026-06-08)
+
+Separate cleanup pass on LXC 104 (cron `*/5`, log `/var/log/geo-trip-janitor.log`).
+It deletes fake trips caused by GPS multipath jitter — the phone physically
+stationary at home while its GPS oscillates between the real spot and a ~150 m
+"ghost" coordinate, flapping across the 40 m radius and tripping the state
+machine's `time_fallback` commit.
+
+- **Why separate + deferred, not a close-time filter:** the bouncing only becomes
+  visible ~10 min AFTER the trip closes (at close the data looks like a normal
+  short trip). A timer-based janitor sees the full picture; the live
+  `owntracks_ingest.py` state machine is left completely unchanged.
+- **Fingerprint:** count home↔outside boundary crossings over
+  `started_at−10m … returned_at+15m`. A real trip = 2 crossings (out, back); a
+  bounce storm = 4+ (the incident showed 21–26). `CROSSINGS_DELETE=4`.
+- **Scope/guards:** only confirmed trips with `duration < 1 h`, closed within the
+  last 48 h; delete requires `MIN_PINGS ≥ 6` in the window so sparse/pruned old
+  data can never reach the threshold. Reuses the same haversine + center/radius
+  from `dashboard_settings.geolocation` as the ingest.
+- **`--dry-run`** prints the per-trip crossing count + verdict without deleting
+  (used to validate before enabling).
+- **ALSO removes the fake trip's geofence markers** (`geofence:away`/`home` rows
+  in `device_events`), scoped to the deleted trip's OWN span
+  `[started_at..returned_at]` — so it can never touch a real away/home event
+  outside that span. (Extended 2026-06-08: initially it left the markers; the
+  same day they were wired in so a future away-mode rule can't be fooled by storm
+  "away" events. The orphans left by the very first deletions, #520/#542/#552,
+  were swept once by hand.)
+
+### Companion display fixes (2026-06-08, server.js — DISPLAY only, ingest untouched)
+
+The janitor cleans the trips table, but the same ghost pings also fooled two
+read-only surfaces. Both fixed in `BOILER/dashboard/server.js`:
+
+- **Map** — `_flagOutliers` gained **Step 4 (bounce-storm cluster)**: an OUTSIDE
+  ping whose **±10-MINUTE window** crosses the home boundary ≥ 4 times is flagged
+  (hidden client-side). A TIME window, not a fixed ±4-ping count — the ping
+  version missed the boundary ghost at the start of a sparse trail (no 4 pings
+  *before* it), so the map drew a track to it; the time window uses the
+  after-context within 10 min. The ghost cluster defeats Steps 1–3 because it
+  alternates (not bit-identical-consecutive), is frequent (median spread
+  inflates), and has good accuracy (under the 40 m cap).
+- **Live status chip** — `/api/geolocation/status` now classifies off the last 12
+  fixes, not just the newest. If they flap across the boundary ≥ 4 times it reports
+  **home** off the newest INSIDE fix (`gps_unstable:true`) instead of letting one
+  ghost ping show "away · 153 m". Verified: chip went `away·153m` → `home·19m`.
+- **Trips list** — `/api/geolocation/trips` hides recent short (`<1 h`, last 48 h)
+  trips whose `started_at−10m … returned_at+15m` window crosses the boundary ≥ 4
+  times (≥ 6 pings), so an ongoing storm never flashes a fake trip in the
+  Recent-trips card between the janitor's 5-min runs (immediate, vs the DB delete).
+
+All three leave `device_locations`/`phone_trips` rows and the ingest/trip algorithm
+untouched — they only change what the dashboard *draws*. Same 4-crossing fingerprint
+as the janitor. Caveat: a crossing-based filter needs the ping history — clearing
+`device_locations` (the Clear button) disables it until the trail refills.
 
 ## Future considerations (NOT scoped)
 

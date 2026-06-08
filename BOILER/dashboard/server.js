@@ -3416,6 +3416,38 @@ function _flagOutliers(locs, opts) {
       if (dist > opts.radiusM) out[i].is_outlier = true;
     }
   }
+
+  // Step 4 — bounce-storm cluster. A stationary phone whose GPS oscillates
+  // between home and a "ghost" spot ~150 m away produces a tight far cluster
+  // with GOOD accuracy that Steps 1-3 all miss: it alternates (not bit-identical
+  // consecutive → Step 1 miss), it's frequent (median window spread inflates →
+  // Step 2 miss), and its accuracy is fine (under the cap → Step 3 miss). Detect
+  // it by local boundary-crossing density: an OUTSIDE ping whose ±4-ping
+  // neighbourhood crosses the home boundary >= 4 times is part of a flapping
+  // storm, not a real journey (a real trip crosses the boundary twice total, far
+  // apart). Same fingerprint the trip janitor uses. Display-only — raw pings
+  // stay in device_locations untouched; the client just doesn't draw flagged
+  // points.
+  if (opts && opts.centerLat != null && opts.centerLon != null && opts.radiusM > 0) {
+    const WIN_MS = 10 * 60 * 1000, CROSS_MIN = 4;
+    const isHome = locs.map(p =>
+      _haversineM(opts.centerLat, opts.centerLon, Number(p.lat), Number(p.lon)) <= opts.radiusM);
+    const t = locs.map(p => new Date(p.ts).getTime());
+    for (let i = 0; i < locs.length; i++) {
+      if (out[i].is_outlier || isHome[i]) continue;   // only outside pings
+      // Count home<->outside crossings among all fixes within ±10 MIN of this
+      // one. A TIME window (not a fixed ±4-ping count) catches ghosts even at
+      // the start/end of a sparse trail — where there aren't 4 pings on one
+      // side, the boundary ghost previously slipped through and the map drew a
+      // track to it. The after-context within 10 min supplies the crossings.
+      let lo = i, hi = i;
+      while (lo > 0 && t[i] - t[lo - 1] <= WIN_MS) lo--;
+      while (hi < locs.length - 1 && t[hi + 1] - t[i] <= WIN_MS) hi++;
+      let crossings = 0;
+      for (let j = lo + 1; j <= hi; j++) if (isHome[j] !== isHome[j - 1]) crossings++;
+      if (crossings >= CROSS_MIN) out[i].is_outlier = true;
+    }
+  }
   return out;
 }
 
@@ -3538,12 +3570,15 @@ app.get('/api/geolocation/status', async (req, res) => {
     const staleHours = Number(cfg.stale_alert_hours) || 6;
     // 1) Per-device latest ping.
     const perDevice = await Promise.all(devices.map(async d => {
+      // Pull the last 12 fixes (not just 1) so the home/away classifier can
+      // recognise a GPS bounce-storm and not be flipped to "away" by a single
+      // ghost ping. Display-only — does not touch the ingest/trip logic.
       const r = await db.query(
         `SELECT ts, lat, lon, accuracy_m, battery_pct FROM device_locations
-         WHERE device_id = $1 ORDER BY ts DESC LIMIT 1`,
+         WHERE device_id = $1 ORDER BY ts DESC LIMIT 12`,
         [d.device_id],
       );
-      return { dev: d, last: r.rows[0] || null };
+      return { dev: d, last: r.rows[0] || null, recent: r.rows };
     }));
     // 1b) NetBird peer lookup — match tracked_devices[].name against
     // peer.name or netbird_peers_local.device_label (overlay). Reuses the
@@ -3595,7 +3630,7 @@ app.get('/api/geolocation/status', async (req, res) => {
       };
     }
     // 3) Format each group as one status row.
-    const rows = [...groups.values()].map(({ dev, last }) => {
+    const rows = [...groups.values()].map(({ dev, last, recent }) => {
       const groupId = dev.group_id || dev.device_id;
       if (!last) {
         return { device_id: groupId, name: dev.name, status: 'no_data',
@@ -3603,15 +3638,28 @@ app.get('/api/geolocation/status', async (req, res) => {
       }
       const ageMs = Date.now() - new Date(last.ts).getTime();
       const stale = ageMs > staleHours * 3600_000;
+
+      // Bounce-aware position: if the recent fixes are flapping across the home
+      // boundary (a stationary phone with glitchy GPS oscillating to a "ghost"
+      // spot), the phone is effectively HOME — don't let the single newest ghost
+      // ping report "away". Same fingerprint the trip janitor + map filter use:
+      // >= 4 boundary crossings among the recent fixes. When detected, classify
+      // off the newest INSIDE fix instead of the raw newest fix.
+      let effective = last, gpsUnstable = false;
+      if (recent && recent.length >= 5 && center.lat != null && center.lon != null) {
+        const homeFlags = recent.map(p =>
+          _haversineM(center.lat, center.lon, Number(p.lat), Number(p.lon)) <= radius);
+        let crossings = 0;
+        for (let k = 1; k < homeFlags.length; k++) if (homeFlags[k] !== homeFlags[k - 1]) crossings++;
+        if (crossings >= 4) {
+          const insideIdx = homeFlags.findIndex(h => h);   // recent is newest-first
+          if (insideIdx !== -1) { effective = recent[insideIdx]; gpsUnstable = true; }
+        }
+      }
+
       let distance = null, isHome = null;
       if (center.lat != null && center.lon != null) {
-        const R = 6_371_000;
-        const p1 = center.lat * Math.PI / 180;
-        const p2 = Number(last.lat) * Math.PI / 180;
-        const dp = (Number(last.lat) - center.lat) * Math.PI / 180;
-        const dl = (Number(last.lon) - center.lon) * Math.PI / 180;
-        const a  = Math.sin(dp/2)**2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2)**2;
-        distance = 2 * R * Math.asin(Math.sqrt(a));
+        distance = _haversineM(center.lat, center.lon, Number(effective.lat), Number(effective.lon));
         isHome   = distance <= radius;
       }
       return {
@@ -3620,11 +3668,12 @@ app.get('/api/geolocation/status', async (req, res) => {
         status:       stale ? 'stale' : (isHome === true ? 'home' : (isHome === false ? 'away' : 'unknown')),
         ts:           last.ts,
         age_sec:      Math.round(ageMs / 1000),
-        lat:          Number(last.lat),
-        lon:          Number(last.lon),
-        accuracy_m:   last.accuracy_m,
+        lat:          Number(effective.lat),
+        lon:          Number(effective.lon),
+        accuracy_m:   effective.accuracy_m,
         battery_pct:  last.battery_pct,
         distance_m:   distance != null ? Math.round(distance) : null,
+        gps_unstable: gpsUnstable,
         freshest_source: dev.source,
         connection:   _connectionFor({ dev }),
       };
@@ -3667,7 +3716,44 @@ app.get('/api/geolocation/trips', async (req, res) => {
        ORDER BY started_at DESC LIMIT $1`,
       [limit],
     );
-    res.json({ trips: r.rows });
+    // Hide bounce-storm fake trips at DISPLAY time — same fingerprint as the
+    // geo_trip_janitor (a short trip whose surrounding pings flap across the
+    // home boundary >= 4 times). The janitor deletes them from the DB on its
+    // 5-min cron; doing it here too makes them invisible IMMEDIATELY so an
+    // ongoing GPS storm never flashes a fake trip in the list between janitor
+    // runs. Display-only — rows stay in the DB until the janitor removes them.
+    let trips = r.rows;
+    try {
+      const g = (await db.query("SELECT value FROM dashboard_settings WHERE key='geolocation'")).rows[0]?.value || {};
+      const cLat = g.center?.lat, cLon = g.center?.lon, rad = Number(g.home_radius_m) || 80;
+      if (cLat != null && cLon != null) {
+        const keep = [];
+        for (const t of trips) {
+          const ageMs = t.returned_at ? (Date.now() - new Date(t.returned_at).getTime()) : 0;
+          // Only re-check recent short trips; old/long trips pass through (their
+          // pings are pruned anyway, and long journeys are never bounce storms).
+          if (!t.returned_at || (t.duration_sec || 0) >= 3600 || ageMs > 48 * 3600_000) { keep.push(t); continue; }
+          const w = await db.query(
+            `SELECT lat::float AS lat, lon::float AS lon FROM device_locations
+             WHERE source='owntracks_mqtt'
+               AND ts BETWEEN $1::timestamptz - interval '10 min'
+                          AND $2::timestamptz + interval '15 min'
+             ORDER BY ts ASC`,
+            [t.started_at, t.returned_at],
+          );
+          let crossings = 0, prev = null;
+          for (const p of w.rows) {
+            const home = _haversineM(cLat, cLon, p.lat, p.lon) <= rad;
+            if (prev !== null && home !== prev) crossings++;
+            prev = home;
+          }
+          if (crossings >= 4 && w.rows.length >= 6) continue;   // bounce storm → hide
+          keep.push(t);
+        }
+        trips = keep;
+      }
+    } catch (_) { /* on any error, fall back to unfiltered rows */ }
+    res.json({ trips });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
