@@ -101,11 +101,6 @@ async function wgLoad() {
 }
 
 // ─── Settings (billing + tariff) ──────────────────────────────────
-function wsShowSewage() {
-  const mode = document.getElementById('ws-tariff-sewage-mode').value;
-  document.getElementById('ws-sewage-rate-wrap').style.display = (mode === 'separate') ? '' : 'none';
-}
-
 async function wsLoad() {
   try {
     const d = await (await fetch('/api/water/settings')).json();
@@ -119,12 +114,8 @@ async function wsLoad() {
     document.getElementById('ws-tariff-quota-base').value       = t.low_tier_quota_base_m3 ?? '';
     document.getElementById('ws-tariff-quota-per-person').value = t.low_tier_quota_per_person_m3 ?? '';
     document.getElementById('ws-tariff-high-rate').value        = t.high_tier_rate_ils_per_m3 ?? '';
-    document.getElementById('ws-tariff-sewage-mode').value      = t.sewage_mode ?? 'bundled';
-    document.getElementById('ws-tariff-sewage-rate').value      = t.sewage_rate_ils_per_m3 ?? '';
-    document.getElementById('ws-tariff-fixed-charge').value     = t.fixed_charge_ils ?? '';
     document.getElementById('ws-tariff-vat').value              = t.vat_pct ?? '';
     document.getElementById('ws-tariff-currency').value         = t.currency_symbol ?? '₪';
-    wsShowSewage();
   } catch (e) {
     const msg = document.getElementById('ws-save-msg');
     if (msg) { msg.textContent = `Load error: ${e.message}`; msg.style.color = '#c0392b'; }
@@ -146,9 +137,6 @@ async function wsSave() {
       low_tier_quota_base_m3:       parseFloat(document.getElementById('ws-tariff-quota-base').value),
       low_tier_quota_per_person_m3: parseFloat(document.getElementById('ws-tariff-quota-per-person').value),
       high_tier_rate_ils_per_m3:    parseFloat(document.getElementById('ws-tariff-high-rate').value),
-      sewage_mode:                  document.getElementById('ws-tariff-sewage-mode').value,
-      sewage_rate_ils_per_m3:       parseFloat(document.getElementById('ws-tariff-sewage-rate').value),
-      fixed_charge_ils:             parseFloat(document.getElementById('ws-tariff-fixed-charge').value),
       vat_pct:                      parseFloat(document.getElementById('ws-tariff-vat').value),
       currency_symbol:              document.getElementById('ws-tariff-currency').value,
     },
