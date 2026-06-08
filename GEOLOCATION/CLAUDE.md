@@ -262,6 +262,21 @@ machine's `time_fallback` commit.
 - **Fingerprint:** count home↔outside boundary crossings over
   `started_at−10m … returned_at+15m`. A real trip = 2 crossings (out, back); a
   bounce storm = 4+ (the incident showed 21–26). `CROSSINGS_DELETE=4`.
+- **⚠ Real-trip guard (added 2026-06-08 — fixes a false-positive that erased a real trip):**
+  the padded `±10/15 min` window reaches into the home GPS-jitter *before/after* a
+  trip, so a **genuine** trip that happens during a bouncy spell can hit 4+ padded
+  crossings and be wrongly deleted. (Incident: a real 681 m / 23 min out-and-back
+  walk crossed the boundary only **twice** within its own span but **13×** in the
+  padded window → deleted as #1075; reconstructed as #1102 from the surviving
+  `device_locations` pings.) Fix: a trip is **REAL and never deleted** if it
+  **`max_dist_m > real_trip_min_far_m` (default 250 m, above the ~150 m ghost)** OR
+  its **longest contiguous OUTSIDE run within its OWN span ≥ `real_trip_min_dwell_sec`
+  (default 180 s)**. The crossing test only applies to trips failing both bars
+  (genuine short bounces, max ≈ 150 m, no dwell). Verified: #1102 (681 m, run 1353 s)
+  → keep(real) despite 32 padded crossings; a 153 m / 71 s bounce → DELETE. Both
+  thresholds overridable via `dashboard_settings.geolocation`. **Trip-detection
+  algorithm (`owntracks_ingest.py`) still completely untouched** — this only makes
+  the cleanup smarter.
 - **Scope/guards:** only confirmed trips with `duration < 1 h`, closed within the
   last 48 h; delete requires `MIN_PINGS ≥ 6` in the window so sparse/pruned old
   data can never reach the threshold. Reuses the same haversine + center/radius
@@ -279,7 +294,12 @@ machine's `time_fallback` commit.
 ### Companion display fixes (2026-06-08, server.js — DISPLAY only, ingest untouched)
 
 The janitor cleans the trips table, but the same ghost pings also fooled two
-read-only surfaces. Both fixed in `BOILER/dashboard/server.js`:
+read-only surfaces. Both fixed in `BOILER/dashboard/server.js`. **Both carry the
+same real-trip guard as the janitor (2026-06-08):** `/api/geolocation/trips` keeps
+a trip if `max_dist_m > 250` OR its longest own-span outside run ≥ 180 s (so a real
+trip isn't hidden by surrounding bounce); `_flagOutliers` Step 4 skips any OUTSIDE
+ping whose distance `> real_trip_min_far_m` (250 m) — a far excursion ping can't be
+a ~150 m ghost, so a real trip's far points are never clipped from the map.
 
 - **Map** — `_flagOutliers` gained **Step 4 (bounce-storm cluster)**: an OUTSIDE
   ping whose **±10-MINUTE window** crosses the home boundary ≥ 4 times is flagged

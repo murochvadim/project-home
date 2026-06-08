@@ -3439,11 +3439,13 @@ function _flagOutliers(locs, opts) {
   // points.
   if (opts && opts.centerLat != null && opts.centerLon != null && opts.radiusM > 0) {
     const WIN_MS = 10 * 60 * 1000, CROSS_MIN = 4;
-    const isHome = locs.map(p =>
-      _haversineM(opts.centerLat, opts.centerLon, Number(p.lat), Number(p.lon)) <= opts.radiusM);
+    const FAR_M = opts.realTripFarM || 250;   // a ping this far can't be a ~150 m ghost
+    const dist = locs.map(p => _haversineM(opts.centerLat, opts.centerLon, Number(p.lat), Number(p.lon)));
+    const isHome = dist.map(d => d <= opts.radiusM);
     const t = locs.map(p => new Date(p.ts).getTime());
     for (let i = 0; i < locs.length; i++) {
       if (out[i].is_outlier || isHome[i]) continue;   // only outside pings
+      if (dist[i] > FAR_M) continue;                   // real far excursion — never a ghost
       // Count home<->outside crossings among all fixes within ±10 MIN of this
       // one. A TIME window (not a fixed ±4-ping count) catches ghosts even at
       // the start/end of a sparse trail — where there aren't 4 pings on one
@@ -3557,6 +3559,7 @@ app.get('/api/geolocation/locations', async (req, res) => {
       centerLon: cfg.center?.lon,
       radiusM:   Number(cfg.home_radius_m) || 80,
       outsideAccThresholdM: Number(cfg.outside_accuracy_threshold_m) || 40,
+      realTripFarM: Number(cfg.real_trip_min_far_m) || 250,
     };
     res.json({ device_id: deviceId, locations: _flagOutliers(r.rows, opts) });
   } catch (e) {
@@ -3742,8 +3745,15 @@ app.get('/api/geolocation/trips', async (req, res) => {
           // Only re-check recent short trips; old/long trips pass through (their
           // pings are pruned anyway, and long journeys are never bounce storms).
           if (!t.returned_at || (t.duration_sec || 0) >= 3600 || ageMs > 48 * 3600_000) { keep.push(t); continue; }
+          // Real-trip guard (same as geo_trip_janitor): a trip that went FAR
+          // (max_dist beyond the ~150 m ghost) or DWELLED away is never a bounce —
+          // protect it before the crossing test so surrounding home-jitter can't
+          // hide a genuine trip.
+          const FAR_M = Number(g.real_trip_min_far_m) || 250;
+          const DWELL_SEC = Number(g.real_trip_min_dwell_sec) || 180;
+          if ((t.max_dist_m || 0) > FAR_M) { keep.push(t); continue; }
           const w = await db.query(
-            `SELECT lat::float AS lat, lon::float AS lon FROM device_locations
+            `SELECT lat::float AS lat, lon::float AS lon, ts FROM device_locations
              WHERE source='owntracks_mqtt'
                AND ts BETWEEN $1::timestamptz - interval '10 min'
                           AND $2::timestamptz + interval '15 min'
@@ -3751,11 +3761,22 @@ app.get('/api/geolocation/trips', async (req, res) => {
             [t.started_at, t.returned_at],
           );
           let crossings = 0, prev = null;
+          // Longest contiguous OUTSIDE run within the trip's OWN span (dwell guard).
+          let bestRun = 0, runStart = null;
+          const sStart = new Date(t.started_at).getTime(), sEnd = new Date(t.returned_at).getTime();
           for (const p of w.rows) {
             const home = _haversineM(cLat, cLon, p.lat, p.lon) <= rad;
             if (prev !== null && home !== prev) crossings++;
             prev = home;
+            const pt = new Date(p.ts).getTime();
+            if (pt >= sStart && pt <= sEnd && !home) {
+              if (runStart === null) runStart = pt;
+              bestRun = Math.max(bestRun, (pt - runStart) / 1000);
+            } else if (!(pt >= sStart && pt <= sEnd) || home) {
+              runStart = null;
+            }
           }
+          if (bestRun >= DWELL_SEC) { keep.push(t); continue; }   // real away-stay → keep
           if (crossings >= 4 && w.rows.length >= 6) continue;   // bounce storm → hide
           keep.push(t);
         }

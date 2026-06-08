@@ -65,6 +65,17 @@ CROSSINGS_DELETE = 4
 # so sparse/pruned old data can't accidentally reach the crossing threshold.
 MIN_PINGS = 6
 
+# Real-trip guard (added 2026-06-08). A genuine trip GOES somewhere or DWELLS
+# away; a GPS bounce never leaves a tight home<->ghost (~150 m) oscillation. A
+# trip that clears EITHER bar is REAL and is never deleted — no matter how much
+# home GPS-jitter surrounds it (which the ±PRE/POST padded window would otherwise
+# count as crossings). This is why a real 681 m / 26 min walk was wrongly erased:
+# the padded crossings hit 13 even though the trip itself crossed the boundary
+# exactly twice. Both bars are settings-overridable (real_trip_min_far_m /
+# real_trip_min_dwell_sec in dashboard_settings.geolocation).
+REAL_TRIP_MIN_FAR_M   = 250    # max_dist beyond the ~150 m ghost range => real
+REAL_TRIP_MIN_DWELL_S = 180    # longest unbroken time outside the radius => real
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('geo_trip_janitor')
 
@@ -89,7 +100,9 @@ def read_geo_settings(conn):
     lat = center.get('lat')
     lon = center.get('lon')
     radius = float(val.get('home_radius_m') or 80)
-    return lat, lon, radius
+    far_m  = float(val.get('real_trip_min_far_m')   or REAL_TRIP_MIN_FAR_M)
+    dwell  = float(val.get('real_trip_min_dwell_sec') or REAL_TRIP_MIN_DWELL_S)
+    return lat, lon, radius, far_m, dwell
 
 
 def count_crossings(conn, center_lat, center_lon, radius_m, t_from, t_to):
@@ -116,6 +129,34 @@ def count_crossings(conn, center_lat, center_lon, radius_m, t_from, t_to):
     return crossings, len(pings)
 
 
+def longest_outside_run_sec(conn, center_lat, center_lon, radius_m, t_from, t_to):
+    """Longest contiguous time (seconds) the phone stayed OUTSIDE the radius
+    within the trip's OWN span. A real away-stay produces a long unbroken run; a
+    bounce is chopped into short runs (it keeps snapping home). Uses the strict
+    [started_at, returned_at] span — NOT the padded window — so surrounding home
+    jitter can't shorten or lengthen it."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT lat::float AS lat, lon::float AS lon, ts
+               FROM device_locations
+               WHERE source = 'owntracks_mqtt' AND ts BETWEEN %s AND %s
+               ORDER BY ts ASC""",
+            (t_from, t_to),
+        )
+        pings = cur.fetchall()
+    best = 0.0
+    run_start = None
+    for p in pings:
+        outside = haversine_m(center_lat, center_lon, p['lat'], p['lon']) > radius_m
+        if outside:
+            if run_start is None:
+                run_start = p['ts']
+            best = max(best, (p['ts'] - run_start).total_seconds())
+        else:
+            run_start = None
+    return best
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true',
@@ -125,7 +166,7 @@ def main():
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
 
-    center_lat, center_lon, radius_m = read_geo_settings(conn)
+    center_lat, center_lon, radius_m, far_m, dwell_sec = read_geo_settings(conn)
     if center_lat is None or center_lon is None:
         log.error('no geolocation center configured — nothing to do')
         sys.exit(0)
@@ -156,11 +197,16 @@ def main():
         t_to   = t['returned_at'] + timedelta(seconds=POST_SEC)
         crossings, npings = count_crossings(conn, center_lat, center_lon,
                                             radius_m, t_from, t_to)
-        is_storm = crossings >= CROSSINGS_DELETE and npings >= MIN_PINGS
-        verdict = 'DELETE' if is_storm else 'keep'
-        log.info('trip #%d  dur=%ds max=%dm path=%dm  crossings=%d (pings=%d) -> %s',
+        # Real-trip guard: went far OR stayed away — never a bounce. Checked on
+        # the trip's OWN span so surrounding home-jitter can't condemn it.
+        away_run = longest_outside_run_sec(conn, center_lat, center_lon,
+                                           radius_m, t['started_at'], t['returned_at'])
+        is_real = (t['max_dist_m'] or 0) > far_m or away_run >= dwell_sec
+        is_storm = (not is_real) and crossings >= CROSSINGS_DELETE and npings >= MIN_PINGS
+        verdict = 'DELETE' if is_storm else ('keep(real)' if is_real else 'keep')
+        log.info('trip #%d  dur=%ds max=%dm path=%dm  crossings=%d (pings=%d) away_run=%.0fs -> %s',
                  t['id'], t['duration_sec'], t['max_dist_m'],
-                 t['path_length_m'], crossings, npings, verdict)
+                 t['path_length_m'], crossings, npings, away_run, verdict)
         if is_storm:
             to_delete.append((t, crossings))
 
