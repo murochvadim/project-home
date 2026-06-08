@@ -5,21 +5,6 @@
  *   /set_ip HTTP fallback opens only after MOSQ_FAIL_HTTP_THRESHOLD consecutive
  *   failures. Mirrors the proven RemoteXY_ESP8266_Claude reconnect pattern.
  *
- *   Migrated from ESP8266 to ESP32 because the ESP8266 board's MAC
- *   (4c:eb:d6:1f:ef:c6) was stuck in REASON_AUTH_FAIL on the DECO mesh
- *   after a flash storm. ESP32 has a fresh MAC + association state.
- *
- *   ESP32 Dev Module → Wi-Fi → Mosquitto on LXC 107.
- *   Topics: mur/home/esp/gates_01/...
- *
- *   Behavior unchanged from the ESP8266 build:
- *     - Listens on legacy MQTT topic "HOME_REQUEST" for "12" (barrier),
- *       "13" (both gates) — keeps existing publishers working.
- *     - Listens on mur/home/esp/gates_01/command for the new action keys.
- *     - Publishes live progress to /status (gates_state /
- *       barrier_progress / gates_progress) on every state machine
- *       transition.
- *
  *   ESP32-specific changes vs the ESP8266 build:
  *     - <WiFi.h> + <WebServer.h> (not the ESP8266 variants)
  *     - esp_task_wdt_* watchdog API (not ESP.wdtEnable)
