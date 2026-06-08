@@ -18,6 +18,7 @@ apartment.rule_sentences:
   - "Power Discovery: tolerance low is X.XX"       → power_discovery.tol_low
   - "Power Discovery: tolerance high is X.XX"      → power_discovery.tol_high
   - "Power Discovery: post-flip lock is N seconds" → power_discovery.post_flip_lock_sec
+  - "Power Discovery: delta window is N seconds"   → power_discovery.delta_window_sec
 
 Cost: queries power_devices once per 30 s (TTL cache); no DB read per event.
 Per-device cooldown after each flip filters Shelly's oscillation on sharp
@@ -40,6 +41,7 @@ DEFAULT_SETTLING_SEC        = 2
 DEFAULT_TOL_LOW             = 0.7
 DEFAULT_TOL_HIGH            = 1.15
 DEFAULT_POST_FLIP_LOCK_SEC  = 5
+DEFAULT_DELTA_WINDOW_SEC    = 12   # compare power across this window, not event-to-event
 
 _REGISTRY_CACHE_TTL_SEC     = 30
 
@@ -217,10 +219,27 @@ def evaluate(event, state):
     if not all(isinstance(x, (int, float)) for x in (r_w, s_w, t_w)):
         return []
 
-    prev = state.shared.get('_power_discovery.prev_w') or {}
-    state.shared['_power_discovery.prev_w'] = {'r': r_w, 's': s_w, 't': t_w}
+    # Windowed plateau baseline (fix 2026-06-08). The Shelly pushes ~1 event/s,
+    # but a real load (e.g. an inverter AC) ramps up over ~10+ s — so an
+    # event-to-event delta is far below any device's threshold and auto devices
+    # were NEVER recognized. Instead we compare against the last STABLE level
+    # ("plateau") and only sample once per `delta_window_sec`, so a gradual ramp
+    # accumulates into one big step (mirrors the 13 s ingest snapshots that DO
+    # capture the AC's ~1145 W turn-on). The plateau is re-anchored to the
+    # current level when power is steady or a transition has resolved (end of
+    # evaluate); it is HELD while a candidate is settling so the full delta stays
+    # measurable across the window boundary.
+    now     = time.time()
+    window  = _knob_float(state, 'power_discovery.delta_window_sec', DEFAULT_DELTA_WINDOW_SEC)
+    prev    = state.shared.get('_power_discovery.prev_w') or {}
+    prev_ts = float(state.shared.get('_power_discovery.prev_w_ts', 0))
     if not prev:
+        state.shared['_power_discovery.prev_w']    = {'r': r_w, 's': s_w, 't': t_w}
+        state.shared['_power_discovery.prev_w_ts'] = now
         return []   # first sample — nothing to compare to
+    if (now - prev_ts) < window:
+        return []   # throttle — one plateau comparison per window
+    state.shared['_power_discovery.prev_w_ts'] = now
 
     delta_r = r_w - prev.get('r', r_w)
     delta_s = s_w - prev.get('s', s_w)
@@ -228,6 +247,8 @@ def evaluate(event, state):
 
     noise_floor = _knob_float(state, 'power_discovery.noise_floor_w', DEFAULT_NOISE_FLOOR_W)
     if max(abs(delta_r), abs(delta_s), abs(delta_t)) < noise_floor:
+        # Power steady near the plateau — re-anchor (tracks slow drift) + stop.
+        state.shared['_power_discovery.prev_w'] = {'r': r_w, 's': s_w, 't': t_w}
         return []
 
     tol_low   = _knob_float(state, 'power_discovery.tol_low',  DEFAULT_TOL_LOW)
@@ -239,7 +260,6 @@ def evaluate(event, state):
     if not registry:
         return []
 
-    now    = time.time()
     # All per-device state is keyed by row_id (synthetic PK on power_devices),
     # since one device_id can now have multiple registered rows (one per
     # channel of a multi-gang switch).
@@ -293,6 +313,12 @@ def evaluate(event, state):
 
     for rid in to_clear:
         cands.pop(rid, None)
+
+    # Re-anchor the plateau to the current level once no transition is pending,
+    # so the next window measures from here. While a candidate is still settling
+    # we KEEP the old plateau so its full delta stays measurable next window.
+    if not cands:
+        state.shared['_power_discovery.prev_w'] = {'r': r_w, 's': s_w, 't': t_w}
 
     state.shared['_power_discovery.candidates'] = cands
     state.shared['_power_discovery.lock_until'] = locks
