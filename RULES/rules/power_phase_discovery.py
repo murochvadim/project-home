@@ -219,37 +219,36 @@ def evaluate(event, state):
     if not all(isinstance(x, (int, float)) for x in (r_w, s_w, t_w)):
         return []
 
-    # Windowed plateau baseline (fix 2026-06-08). The Shelly pushes ~1 event/s,
-    # but a real load (e.g. an inverter AC) ramps up over ~10+ s — so an
-    # event-to-event delta is far below any device's threshold and auto devices
-    # were NEVER recognized. Instead we compare against the last STABLE level
-    # ("plateau") and only sample once per `delta_window_sec`, so a gradual ramp
-    # accumulates into one big step (mirrors the 13 s ingest snapshots that DO
-    # capture the AC's ~1145 W turn-on). The plateau is re-anchored to the
-    # current level when power is steady or a transition has resolved (end of
-    # evaluate); it is HELD while a candidate is settling so the full delta stays
-    # measurable across the window boundary.
-    now     = time.time()
-    window  = _knob_float(state, 'power_discovery.delta_window_sec', DEFAULT_DELTA_WINDOW_SEC)
-    prev    = state.shared.get('_power_discovery.prev_w') or {}
-    prev_ts = float(state.shared.get('_power_discovery.prev_w_ts', 0))
-    if not prev:
-        state.shared['_power_discovery.prev_w']    = {'r': r_w, 's': s_w, 't': t_w}
-        state.shared['_power_discovery.prev_w_ts'] = now
-        return []   # first sample — nothing to compare to
-    if (now - prev_ts) < window:
-        return []   # throttle — one plateau comparison per window
-    state.shared['_power_discovery.prev_w_ts'] = now
+    # Sliding-window delta (fix 2026-06-08). The Shelly pushes ~1 event/s, but a
+    # real load (e.g. an inverter AC) ramps over ~10+ s — so an event-to-event
+    # delta is far below any device's threshold and auto devices were NEVER
+    # recognized. We instead measure each phase against the sample from
+    # ~`delta_window_sec` ago (a TRAILING window over a small in-memory history),
+    # so a gradual ramp accumulates into one big step REGARDLESS of when it
+    # started — no window-boundary straddle (the earlier fixed-tick "plateau"
+    # variant could re-anchor mid-ramp and miss the step). Mirrors the 13 s
+    # ingest snapshots that empirically caught the AC's ~1145 W turn-on.
+    now    = time.time()
+    window = _knob_float(state, 'power_discovery.delta_window_sec', DEFAULT_DELTA_WINDOW_SEC)
+    hist = state.shared.get('_power_discovery.history') or []
+    hist.append([now, r_w, s_w, t_w])
+    hist = [h for h in hist if h[0] >= now - (window * 2)]   # keep ~2 windows of samples
+    state.shared['_power_discovery.history'] = hist
+    # Baseline = the most-recent sample that is at least `window` seconds old.
+    baseline = None
+    for h in hist:
+        if (now - h[0]) >= window:
+            baseline = h
+    if baseline is None:
+        return []   # history doesn't span the window yet (warm-up after start/reload)
 
-    delta_r = r_w - prev.get('r', r_w)
-    delta_s = s_w - prev.get('s', s_w)
-    delta_t = t_w - prev.get('t', t_w)
+    delta_r = r_w - baseline[1]
+    delta_s = s_w - baseline[2]
+    delta_t = t_w - baseline[3]
 
     noise_floor = _knob_float(state, 'power_discovery.noise_floor_w', DEFAULT_NOISE_FLOOR_W)
     if max(abs(delta_r), abs(delta_s), abs(delta_t)) < noise_floor:
-        # Power steady near the plateau — re-anchor (tracks slow drift) + stop.
-        state.shared['_power_discovery.prev_w'] = {'r': r_w, 's': s_w, 't': t_w}
-        return []
+        return []   # no significant change across the window
 
     tol_low   = _knob_float(state, 'power_discovery.tol_low',  DEFAULT_TOL_LOW)
     tol_high  = _knob_float(state, 'power_discovery.tol_high', DEFAULT_TOL_HIGH)
@@ -313,12 +312,6 @@ def evaluate(event, state):
 
     for rid in to_clear:
         cands.pop(rid, None)
-
-    # Re-anchor the plateau to the current level once no transition is pending,
-    # so the next window measures from here. While a candidate is still settling
-    # we KEEP the old plateau so its full delta stays measurable next window.
-    if not cands:
-        state.shared['_power_discovery.prev_w'] = {'r': r_w, 's': s_w, 't': t_w}
 
     state.shared['_power_discovery.candidates'] = cands
     state.shared['_power_discovery.lock_until'] = locks
