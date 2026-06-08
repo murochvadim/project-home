@@ -260,6 +260,77 @@ async function loadPower() {
 loadPower();
 pollTimer = setInterval(loadPower, POLL_INTERVAL_MS);
 
+// ─── Power Outage Log card (Settings tab) ─────────────────────
+// Reads /api/power/outages — the ups_power_events table, fed by the 60-s UPS
+// poller from the apcupsd onbattery/offbattery hooks. Shows each mains-power
+// loss: when it started, when power returned, how long it lasted. Ongoing
+// outages render a live elapsed timer + a red "ON BATTERY" badge.
+function poFmtDur(sec) {
+  if (sec == null || sec < 0) return '—';
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const parts = [];
+  if (h) parts.push(`${h}h`);
+  if (h || m) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+  return parts.join(' ');
+}
+function poFmtTs(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', { hour12: false });
+}
+async function loadPowerOutages() {
+  try {
+    const r = await fetch('/api/power/outages');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { outages } = await r.json();
+    const tbody = document.getElementById('po-tbody');
+    const summary = document.getElementById('po-summary');
+    if (!tbody) return;
+    if (!outages || !outages.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:#888; text-align:center; padding:14px;">No power outages recorded 🎉</td></tr>';
+      if (summary) summary.textContent = '0 outages';
+      return;
+    }
+    const ongoing = outages.filter(o => o.ongoing).length;
+    if (summary) {
+      summary.textContent = ongoing
+        ? `${outages.length} recorded · ${ongoing} ongoing`
+        : `${outages.length} recorded`;
+    }
+    const now = Date.now();
+    tbody.innerHTML = outages.map(o => {
+      if (o.ongoing) {
+        const elapsed = Math.max(0, (now - new Date(o.started_at).getTime()) / 1000);
+        return `<tr style="border-bottom:1px solid #f0ece6; background:#fff5f5;">
+          <td style="padding:8px 10px;">${poFmtTs(o.started_at)}</td>
+          <td style="padding:8px 10px; color:#c0392b; font-weight:600;">— ongoing —</td>
+          <td style="padding:8px 10px; font-weight:600;">${poFmtDur(elapsed)}</td>
+          <td style="padding:8px 10px;"><span style="background:#c0392b; color:#fff; padding:2px 8px; border-radius:10px; font-size:0.75rem; font-weight:700;">ON BATTERY</span></td>
+        </tr>`;
+      }
+      return `<tr style="border-bottom:1px solid #f0ece6;">
+        <td style="padding:8px 10px;">${poFmtTs(o.started_at)}</td>
+        <td style="padding:8px 10px;">${poFmtTs(o.ended_at)}</td>
+        <td style="padding:8px 10px; font-weight:600;">${poFmtDur(o.duration_sec)}</td>
+        <td style="padding:8px 10px;"><span style="background:#e8f5e9; color:#2e7d32; padding:2px 8px; border-radius:10px; font-size:0.75rem; font-weight:600;">restored</span></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    const tbody = document.getElementById('po-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="4" style="color:#c0392b; text-align:center; padding:14px;">Fetch error: ${e.message}</td></tr>`;
+  }
+}
+// Card lives on the Settings tab — loaded on tab-show (see powerSwitchTab) and
+// refreshed here only while Settings is visible, so an ongoing outage's live
+// elapsed timer ticks without polling a hidden card.
+setInterval(() => {
+  const t = document.getElementById('tab-settings');
+  if (t && t.classList.contains('active')) loadPowerOutages();
+}, POLL_INTERVAL_MS);
+
 // Device Registry auto-refresh — paired with the LCD's 5 s tick so the
 // table's Live W + Last-seen cells + DEVICES ON/OFF header strip stay
 // current without the user needing to manually reload. Skipped while a
@@ -275,7 +346,7 @@ setInterval(() => {
 function powerSwitchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
-  if (tab === 'settings') { psLoad(); pbLoad(); }
+  if (tab === 'settings') { psLoad(); pbLoad(); loadPowerOutages(); }
 }
 
 // ─── Past Bills card — list + paste modal + AI extract ────────

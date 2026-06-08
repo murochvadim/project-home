@@ -77,6 +77,10 @@ const db = new Pool({
 // /api/medical/test-results endpoints.
 require('./routes-medical-tests')(app, db);
 
+// Power Outage Log — read endpoint (/api/power/outages) for the Project Power
+// page card. Own module for the same architecture-guard reason as above.
+require('./routes-power-outages')(app, db);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes
@@ -2232,7 +2236,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'rule_events', 'rule_engine_state', 'rule_engine_log',
       'pixoo_presets', 'pixoo_log', 'analyzer_settings', 'analyzer_log',
       'retention_policies', 'dashboard_settings', 'room_device_placements',
-      'manual_people_log', 'ups_status',
+      'manual_people_log', 'ups_status', 'ups_power_events',
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
       'esp_boards',
       'power_consumption', 'power_devices', 'power_bills',
@@ -2258,7 +2262,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       face_crops: null, person_embeddings: null, documents: null,
       retention_policies: null,
       dashboard_settings: 'updated_at', room_device_placements: 'updated_at',
-      manual_people_log: 'ts', ups_status: 'ts',
+      manual_people_log: 'ts', ups_status: 'ts', ups_power_events: 'started_at',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
       power_consumption: 'ts',

@@ -102,6 +102,26 @@ def main():
                      WHERE alert_type = 'ups_commlost'
                        AND resolved_at IS NULL
                 """)
+            # Promote each ups_onbattery alert (precise start/end written by the
+            # apcupsd onbattery/offbattery hooks) into the permanent
+            # ups_power_events outage log. Creates the row when an outage starts
+            # (on the next poll) and fills ended_at + duration_sec when it
+            # resolves. Idempotent via the alert_id UNIQUE key; the 2-day window
+            # keeps the scan cheap (every outage is promoted within 60 s of
+            # starting, long before it ages out). Backfills existing rows on
+            # first run. Permanent log — retention 'forever'.
+            cur.execute("""
+                INSERT INTO ups_power_events (alert_id, started_at, ended_at, duration_sec)
+                SELECT a.id, a.ts, a.resolved_at,
+                       CASE WHEN a.resolved_at IS NOT NULL
+                            THEN EXTRACT(EPOCH FROM a.resolved_at - a.ts)::int END
+                FROM system_alerts a
+                WHERE a.alert_type = 'ups_onbattery'
+                  AND a.ts > NOW() - INTERVAL '2 days'
+                ON CONFLICT (alert_id) DO UPDATE
+                  SET ended_at = EXCLUDED.ended_at,
+                      duration_sec = EXCLUDED.duration_sec
+            """)
         conn.commit()
 
     print(f"[ups_poll] {now.isoformat()} status={row['status']} "

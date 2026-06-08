@@ -99,6 +99,29 @@ CREATE INDEX idx_ups_status_ts ON ups_status (ts DESC);
 
 Retention: 30 days, auto-cleaned by `retention_policies`. ~1440 rows/day at 60-s cadence ≈ 8.6 MB at 30 days.
 
+### `ups_power_events` — permanent mains-outage log (added 2026-06-08)
+
+A dedicated, **forever-retained** table holding one row per mains-power loss, so the user can see *when each outage started, when power returned, and how long it lasted*. Distinct from `ups_status` (which is a 30-day rolling telemetry sample) and from `system_alerts` (90-day, mixed with every other alert).
+
+```sql
+CREATE TABLE ups_power_events (
+  id           BIGSERIAL PRIMARY KEY,
+  alert_id     BIGINT UNIQUE,            -- source system_alerts.id (idempotent promote)
+  started_at   TIMESTAMPTZ NOT NULL,     -- mains lost
+  ended_at     TIMESTAMPTZ,             -- mains restored; NULL = ongoing
+  duration_sec INT,                      -- set when it ends
+  source       TEXT DEFAULT 'apcupsd_pve',
+  notes        TEXT
+);
+CREATE INDEX idx_ups_power_events_started ON ups_power_events (started_at DESC);
+```
+
+Retention: **forever** (`retention_policies` row, `keep_days=NULL`, low volume — a handful of rows/year). Listed in the Health page DB-Volumes view (`tables[]` + `tsCol.started_at='started_at'`).
+
+**How it's filled — `ups_poll.py` reconcile (no apcupsd hook edits).** The detection already exists: the tested PVE `onbattery`/`offbattery` hooks write `ups_onbattery` rows to `system_alerts` (`ts`=lost, `resolved_at`=restored). The 60-s poller (`scripts/ups_poll.py` on LXC 105) runs one idempotent upsert each tick that **promotes** every recent `ups_onbattery` alert into `ups_power_events` — creating the row when an outage starts (next poll) and filling `ended_at` + `duration_sec` when it resolves. `ON CONFLICT (alert_id)` makes it safe to re-run; a 2-day scan window keeps it cheap (every outage is promoted within 60 s of starting). The 2 pre-existing alerts backfilled automatically on first run. The safety-critical apcupsd hooks were **not** touched.
+
+Read endpoint: **`GET /api/power/outages`** (own module `routes-power-outages.js`, wired into server.js via one `require()` line — same architecture-guard dodge as `routes-medical-tests.js`, because the `/api/power/*` routes are inline in server.js and a new `app.get(` there would be blocked). Returns the last 50 outages newest-first with an `ongoing` flag (`ended_at IS NULL`). Surface: **Power Outage Log** card on the **Project Power** page → **Settings** tab (table: Started · Ended · Duration · Status; ongoing rows show a live elapsed timer + red `ON BATTERY` badge; loaded on Settings tab-show + refreshed every 5 s while Settings is visible). `js/power.js` `loadPowerOutages()`.
+
 ## Dashboard endpoints
 
 All in-handler proxies on the existing `/api/dashboard-settings/:key` route — zero new `app.X(` calls (architecture-guard hook safe):
@@ -190,5 +213,6 @@ The `/pss-update` skill (in `.claude/skills/pss-update/SKILL.md`) automates rout
 - **2026-04-30 Phase 4 Part A — auto-recovery infrastructure installed (default OFF, safe).** Marker pattern: `doshutdown` writes `/etc/apcupsd/last_shutdown_reason` just before `shutdown -h now`. On next PVE boot, systemd unit `apcupsd-auto-recover.service` checks `ConditionPathExists` for the marker. If present, runs `doshutdown_auto_recover` (6 gates: master switch / marker age / boot delay / STATUS=ONLINE / online soak / battery charge), and on all-pass delegates to `doshutdown_recover` (WoL QNAP → wait → `mount -a` re-mounts NFS shares → start LXCs/VM). `flock` prevents concurrent runs (boot auto-recovery + dashboard manual Recover button). `check_mains_or_abort()` between phases exits cleanly if mains drop again mid-recovery. **Master switch** (`RECOVER_AUTO=yes` in `recover.conf`) keeps machinery dormant until explicit go-live. `apcupsd-auto-recover.service` is enabled but harmless without the marker file. Dashboard UPS tab → Trigger Settings card extended with **Auto-Recovery Settings** sub-section + made all 11 settings inline-editable with validation (apcupsd 4 ints, SAFETY_MODE flag, apcupsd-at-boot service toggle, recover.conf 1 enum + 4 ints). Live test validated: orchestrator halt sequence + marker write + systemd unit fire on boot + gate 1 exit + marker cleanup + concurrency guard. NFS remount step `[3.5/4]` added after live test exposed gap (analyzer crashed when LXC 100's bind mount pointed at empty `/mnt/qnap-media` because PVE's NFS mount silently failed when QNAP was still off at boot).
 - **2026-04-30 Hardening (post-Phase 4 Part A test):** `onboot=1` set on all 7 LXCs + VM 101 (was only 100, 102, 101) so PVE auto-starts every guest on its own boot — `recover.conf` recovery script just adds QNAP WoL + NFS remount on top. apcupsd enabled at boot (was disabled — caused "UPS COMMUNICATION LOST" alert post-test when PVE rebooted without apcupsd auto-starting). Decision recorded in memory `feedback_ups_all_or_nothing.md`: shutdown and recovery always include every device, no per-device selection in production UI, no `onboot=1` subset.
 - **2026-05-08 QNAP autorun.sh deployed** — addresses the QNAP `/share/homes` symlink wiped on cold boot. Previously the only fix was `doshutdown_recover` step `[3.4/4]` running on PVE boot, which only helped UPS-driven recoveries; manual QNAP power cycles still left SSH key auth broken. Now [`UPS/autorun.sh`](autorun.sh) is installed on QNAP at `/etc/config/autorun.sh` (executable) + `Autorun = TRUE` set in `/etc/config/uLinux.conf` `[Misc]` section so QTS invokes it on every boot. Script waits up to 60 s for `/share/CACHEDEV1_DATA/homes` to be ready, then `ln -sfn` recreates `/share/homes` if missing. Logs every run to `/var/log/autorun.log`. Deployed via `claude` user with sudo (sudo password = SMB password from `/etc/apcupsd/qnap_claude_pass` on PVE — same one). Validation: script runs cleanly when invoked manually; the next QNAP cold boot is the real test of `Autorun = TRUE` honoring.
+- **2026-06-08 Power Outage Log** — permanent `ups_power_events` table (forever retention) + `ups_poll.py` reconcile that promotes `ups_onbattery` alerts into it (no apcupsd hook edits) + `GET /api/power/outages` (own `routes-power-outages.js` module) + **Power Outage Log** card on the Project Power → Settings tab. See the `ups_power_events` DB-schema sub-section above. Shows when each mains loss started/ended + duration; ongoing outages show a live elapsed timer + `ON BATTERY` badge. Backfilled the 2 pre-existing outage rows automatically.
 - **(pending)** Phase 4 Part B — going live: BATTERYLEVEL=30 + MINUTES=8 (runtime safety net), `RECOVER_AUTO=yes`, SAFETY_MODE removed, BATTERYLEVEL=95 mains-pull test passed, KILLPOWER + auto-boot verified.
 - **(out of scope today)** Phase 5+ — rule engine integration (`state.shared['ups.*']` keys → rules push Pixoo "POWER OUT" preset, etc.), battery-aging alerts.
