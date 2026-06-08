@@ -59,7 +59,8 @@ async function wgLoad() {
         byYear[y].s += Number(b.shared_m3 || 0);
       }
       const years = Object.keys(byYear).sort();
-      labels = years; priv = years.map(y => byYear[y].p); shar = years.map(y => byYear[y].s);
+      const rnd = (v) => Math.round(v * 100) / 100;   // kill float-sum artifacts (39.6500…006)
+      labels = years; priv = years.map(y => rnd(byYear[y].p)); shar = years.map(y => rnd(byYear[y].s));
     } else {
       let list = bills;
       const nYears = { '2': 2, '3': 3, '4': 4, '5': 5 }[mode];
@@ -164,7 +165,6 @@ async function wsSave() {
     if (!r.ok) { msg.textContent = `Save failed: ${d.error || r.statusText}`; msg.style.color = '#c0392b'; return; }
     msg.textContent = '✓ Saved'; msg.style.color = '#27ae60';
     setTimeout(() => { msg.textContent = ''; }, 2500);
-    wbLoad();   // estimates depend on tariff — refresh the bills table
   } catch (e) {
     msg.textContent = `Save error: ${e.message}`; msg.style.color = '#c0392b';
   } finally {
