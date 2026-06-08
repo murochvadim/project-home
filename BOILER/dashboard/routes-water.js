@@ -1,0 +1,323 @@
+// Water Consumption — settings + bills for the Boiler Agent page's "Water" tab.
+//
+// Kept in its own module (wired from server.js via a single require line) so
+// server.js stays free of new route handlers — the repo's architecture-guard
+// hook blocks adding `app.<method>(` (and new top-level `async function`)
+// directly to server.js. Same `db` (pg Pool) query style + the same
+// billing/tariff/bills shape as the inline /api/power/* routes, adapted for
+// Israeli household WATER billing (two-tier volume tariff + sewage + VAT).
+//
+// Phase 1 (this module): works entirely from manually entered / pasted bills.
+// No water meter exists yet — GET /api/water/status returns meter_connected:false
+// so the frontend Current-Period card renders a "meter not connected" placeholder.
+// Phase 2 (future, when a flow sensor is added): a live ingest fills period m3
+// and this status endpoint computes the live cost.
+//
+// Endpoints:
+//   GET    /api/water/settings          billing + tariff (merged with defaults)
+//   PUT    /api/water/settings          { billing, tariff }
+//   GET    /api/water/bills             list, newest first
+//   POST   /api/water/bills/upload      multipart pdf -> parse-and-RETURN (no insert)
+//   POST   /api/water/bills             { period_start, period_end, total_m3, total_cost_ils, source? } -> insert
+//   DELETE /api/water/bills/:id
+//   GET    /api/water/status            Phase 1: { meter_connected:false }
+
+const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
+
+// 8 MB cap — plenty for a water-corp bill PDF (typically 100-300 KB).
+const waterBillPdfUpload = multer({
+  dest: path.join(os.tmpdir(), 'water-bills'),
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
+
+// ── Defaults ────────────────────────────────────────────────────────────────
+// Israeli household water is billed bi-monthly (every 2 months).
+const _WATER_BILLING_DEFAULTS = {
+  start_day:                 15,
+  length_months:              2,
+  current_period_start_date: null,
+};
+
+// Full Israeli household water tariff. Water is billed in two volume tiers:
+//   - a "recognized / low" quantity tier (cheaper ₪/m³), with a monthly quota of
+//     m³ = household base + persons × per-person allowance;
+//   - a "high / additional" tier (more expensive ₪/m³) for anything above quota.
+// Plus a sewage component (often bundled INTO the tier rates; some corporations
+// bill it as a separate ₪/m³ line), a fixed/standing charge, and VAT.
+//
+// ⚠ These numbers are PLACEHOLDERS — Israeli water rates + quotas are set per
+// period by the Water Authority and differ by corporation (תאגיד מים). VERIFY
+// every value against your actual bill via the Settings card.
+const _WATER_TARIFF_DEFAULTS = {
+  persons_in_household:          2,
+  low_tier_rate_ils_per_m3:      6.50,        // recognized-quantity tier ₪/m³
+  low_tier_quota_base_m3:        3.5,         // m³ / household / month at low tier
+  low_tier_quota_per_person_m3:  3.5,         // extra m³ / additional person / month
+  high_tier_rate_ils_per_m3:     13.00,       // above-quota tier ₪/m³
+  sewage_mode:                   'bundled',   // 'bundled' (in tier rates) | 'separate'
+  sewage_rate_ils_per_m3:        0,           // only used when sewage_mode = 'separate'
+  fixed_charge_ils:              0,           // standing charge ₪ / period
+  vat_pct:                       18,          // Israel VAT (2025: 17% → 18%)
+  currency_symbol:               '₪',
+};
+
+async function _waterLoadSettings(db) {
+  const r = await db.query(
+    "SELECT key, value FROM dashboard_settings WHERE key IN ('water.billing','water.tariff')",
+  );
+  const map = {};
+  for (const row of r.rows) map[row.key] = row.value || {};
+  return {
+    billing: { ..._WATER_BILLING_DEFAULTS, ...(map['water.billing'] || {}) },
+    tariff:  { ..._WATER_TARIFF_DEFAULTS,  ...(map['water.tariff']  || {}) },
+  };
+}
+
+// Estimated cost of `periodM3` cubic metres over `daysElapsed` days, using the
+// two-tier Israeli tariff. Pro-rates the low-tier quota + fixed charge to the
+// elapsed fraction of the period, so it works for a full closed bill OR a live
+// partial period. Mirrors the structure of _powerComputeCost (volume + fixed
+// pro-rated + VAT) but swaps the flat rate for the two-tier split.
+function _waterComputeCost(tariff, periodM3, daysElapsed) {
+  const t = tariff || {};
+  const m3 = Math.max(0, Number(periodM3) || 0);
+  const days = Math.max(0, Number(daysElapsed) || 0);
+  const monthsElapsed = days / 30.42;
+
+  const persons = Math.max(0, Number(t.persons_in_household) || 0);
+  const quotaPerMonth =
+    (Number(t.low_tier_quota_base_m3) || 0) +
+    persons * (Number(t.low_tier_quota_per_person_m3) || 0);
+  const quotaForElapsed = quotaPerMonth * monthsElapsed;
+
+  const lowM3 = Math.min(m3, quotaForElapsed);
+  const highM3 = Math.max(0, m3 - quotaForElapsed);
+
+  const waterCost =
+    lowM3 * (Number(t.low_tier_rate_ils_per_m3) || 0) +
+    highM3 * (Number(t.high_tier_rate_ils_per_m3) || 0);
+  const sewageCost =
+    t.sewage_mode === 'separate' ? m3 * (Number(t.sewage_rate_ils_per_m3) || 0) : 0;
+  const fixedCost = (Number(t.fixed_charge_ils) || 0) * monthsElapsed;
+
+  const pretax = waterCost + sewageCost + fixedCost;
+  const vat = Math.max(0, Number(t.vat_pct) || 0);
+  return Math.round(pretax * (1 + vat / 100) * 100) / 100;
+}
+
+// Water-bill text parser — tuned to the "מי הוד השרון" (Mei Hod HaSharon)
+// periodic water+sewage bill (חשבון תקופתי מים וביוב). Israeli water bills are
+// RTL Hebrew and pdf-parse may jumble word order, so each field is grabbed by
+// its Hebrew label with a tolerant window, trying BOTH label→number and
+// number→label orders. Never throws — anything not found stays null, and the
+// frontend's editable confirm modal lets the user fill/fix before saving.
+//
+// ⚠ Validate against the real pdf-parse output on first upload; other water
+// corporations (Hagihon, Mei Avivim, …) use different labels and will need
+// their own anchors added here.
+function _parseWaterBill(text) {
+  const out = { period_start: null, period_end: null, total_m3: null,
+                total_cost_ils: null, vat_pct: null, persons: null };
+  if (!text) return out;
+  const t = String(text);
+  try {
+    // Period like "07-08/2021" → start = 1st of first month, end = last day of
+    // the second month.
+    const per = t.match(/\b(\d{2})-(\d{2})\/(20\d{2})\b/);
+    if (per) {
+      const m1 = per[1], m2 = per[2], y = Number(per[3]);
+      const lastDay = new Date(y, Number(m2), 0).getDate(); // day 0 of next month
+      out.period_start = `${y}-${m1}-01`;
+      out.period_end   = `${y}-${m2}-${String(lastDay).padStart(2, '0')}`;
+    }
+
+    // The "NNN.NN" amount CLOSEST to a Hebrew label (either side). Picking the
+    // nearest number — rather than the first in a wide window — avoids grabbing
+    // an unrelated earlier amount when pdf-parse interleaves RTL tokens.
+    // Hebrew quote variants: ASCII " ' , gershayim ״ (U+05F4), geresh ׳ (U+05F3).
+    const Q = '["\'\\u05f4\\u05f3]?';
+    const NUM = /(\d{1,6}(?:[.,]\d{2}))/;
+    const near = (labelSrc, win = 40) => {
+      const lab = t.match(new RegExp(labelSrc));
+      if (!lab) return null;
+      const idx = lab.index, end = idx + lab[0].length;
+      const after = t.slice(end, end + win);
+      const before = t.slice(Math.max(0, idx - win), idx);
+      let best = null, bestDist = Infinity;
+      const a = after.match(NUM);                 // nearest after = first match in `after`
+      if (a) { best = a[1]; bestDist = a.index; }
+      const bAll = [...before.matchAll(new RegExp(NUM.source, 'g'))];
+      if (bAll.length) {
+        const b = bAll[bAll.length - 1];          // nearest before = last match in `before`
+        const dist = before.length - (b.index + b[0].length);
+        if (dist < bestDist) { best = b[1]; bestDist = dist; }
+      }
+      return best ? Number(best.replace(/,/g, '')) : null;
+    };
+
+    // Consume any unit/suffix marker that sits between the label and its number
+    // — "(מ"ק)" (m³) or "(כולל מע"מ)" — so the real amount is adjacent.
+    const UNIT = `\\s*(?:\\([^)]{0,14}\\))?`;
+    // Total to pay incl VAT (e.g. 144.85). "סה"כ לתשלום (כולל מע"מ)".
+    out.total_cost_ils = near(`(?:סה${Q}כ|הסכום)\\s*לתשלום${UNIT}`, 40);
+    // Total m³ charged (e.g. 18.95). "סה"כ לחיוב (מ"ק)".
+    out.total_m3 = near(`סה${Q}כ\\s*לחיוב${UNIT}`, 40);
+    // VAT %: derive from the excl-VAT subtotal + the incl total.
+    const excl = near(`סה${Q}כ\\s*ללא\\s*מע${Q}מ`, 25);
+    if (excl && out.total_cost_ils && out.total_cost_ils > excl) {
+      out.vat_pct = Math.round((out.total_cost_ils - excl) / excl * 100);
+    }
+    // Persons (מס' נפשות) — a small integer near the word נפשות.
+    const pp = t.match(/נפשות[\s\S]{0,12}?(\d{1,2})|(\d{1,2})[\s\S]{0,12}?נפשות/);
+    if (pp) out.persons = Number(pp[1] || pp[2]);
+  } catch (_) { /* never throw on a best-effort parse */ }
+  return out;
+}
+
+module.exports = (app, db) => {
+  const err = (res, e) => res.status(500).json({ error: (e && e.message) || String(e) });
+
+  // ── Settings ──────────────────────────────────────────────────────────────
+  app.get('/api/water/settings', async (req, res) => {
+    try { res.json(await _waterLoadSettings(db)); }
+    catch (e) { err(res, e); }
+  });
+
+  app.put('/api/water/settings', async (req, res) => {
+    const body = req.body || {};
+    const existing = await db.query("SELECT value FROM dashboard_settings WHERE key = 'water.billing' LIMIT 1");
+    const existingBilling = existing.rows[0]?.value || {};
+    const cleanedBilling = {
+      start_day:     Math.min(28, Math.max(1, parseInt(body?.billing?.start_day, 10) || _WATER_BILLING_DEFAULTS.start_day)),
+      length_months: Math.min(12, Math.max(1, parseInt(body?.billing?.length_months, 10) || _WATER_BILLING_DEFAULTS.length_months)),
+      current_period_start_date: body?.billing?.current_period_start_date || existingBilling.current_period_start_date || _WATER_BILLING_DEFAULTS.current_period_start_date,
+    };
+    const tt = body?.tariff || {};
+    const _num = (v, dflt, { min = 0 } = {}) => {
+      const x = Number(v);
+      if (!Number.isFinite(x)) return dflt;
+      return Math.max(min, x);
+    };
+    const cleanedTariff = {
+      persons_in_household:         Math.min(20, Math.max(1, parseInt(tt.persons_in_household, 10) || _WATER_TARIFF_DEFAULTS.persons_in_household)),
+      low_tier_rate_ils_per_m3:     _num(tt.low_tier_rate_ils_per_m3,     _WATER_TARIFF_DEFAULTS.low_tier_rate_ils_per_m3),
+      low_tier_quota_base_m3:       _num(tt.low_tier_quota_base_m3,       _WATER_TARIFF_DEFAULTS.low_tier_quota_base_m3),
+      low_tier_quota_per_person_m3: _num(tt.low_tier_quota_per_person_m3, _WATER_TARIFF_DEFAULTS.low_tier_quota_per_person_m3),
+      high_tier_rate_ils_per_m3:    _num(tt.high_tier_rate_ils_per_m3,    _WATER_TARIFF_DEFAULTS.high_tier_rate_ils_per_m3),
+      sewage_mode:                  ['bundled','separate'].includes(tt.sewage_mode) ? tt.sewage_mode : _WATER_TARIFF_DEFAULTS.sewage_mode,
+      sewage_rate_ils_per_m3:       _num(tt.sewage_rate_ils_per_m3,       _WATER_TARIFF_DEFAULTS.sewage_rate_ils_per_m3),
+      fixed_charge_ils:             _num(tt.fixed_charge_ils,             _WATER_TARIFF_DEFAULTS.fixed_charge_ils),
+      vat_pct:                      Math.max(0, Math.min(100, Number(tt.vat_pct) || _WATER_TARIFF_DEFAULTS.vat_pct)),
+      currency_symbol:              String(tt.currency_symbol || _WATER_TARIFF_DEFAULTS.currency_symbol).slice(0, 4),
+    };
+    try {
+      const writes = [
+        ['water.billing', cleanedBilling],
+        ['water.tariff',  cleanedTariff],
+      ];
+      for (const [key, value] of writes) {
+        await db.query(`
+          INSERT INTO dashboard_settings (key, value, updated_at)
+          VALUES ($1, $2::jsonb, NOW())
+          ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = NOW()
+        `, [key, JSON.stringify(value)]);
+      }
+      res.json({ ok: true, billing: cleanedBilling, tariff: cleanedTariff });
+    } catch (e) { err(res, e); }
+  });
+
+  // ── Bills ─────────────────────────────────────────────────────────────────
+  app.get('/api/water/bills', async (req, res) => {
+    try {
+      const r = await db.query(`
+        SELECT id, uploaded_at,
+               to_char(period_start, 'YYYY-MM-DD') AS period_start,
+               to_char(period_end,   'YYYY-MM-DD') AS period_end,
+               total_m3, total_cost_ils, est_cost_ils, source, notes
+        FROM water_bills
+        ORDER BY COALESCE(period_start, uploaded_at::date) DESC, uploaded_at DESC
+        LIMIT 200
+      `);
+      res.json(r.rows);
+    } catch (e) { err(res, e); }
+  });
+
+  // Parse-and-RETURN: extracts best-effort fields from the PDF and hands them
+  // back for the frontend's editable confirm modal. Does NOT insert — the
+  // confirmed values come back via POST /api/water/bills. (The parser is a stub
+  // pending a sample bill, so blind-inserting would store empty rows.)
+  app.post('/api/water/bills/upload', waterBillPdfUpload.single('pdf'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'pdf file required' });
+    let text = '';
+    try {
+      const pdfBytes = fs.readFileSync(req.file.path);
+      try {
+        const { PDFParse } = require('pdf-parse');
+        const result = await (new PDFParse({ data: pdfBytes })).getText();
+        text = result.text || '';
+      } catch (pe) {
+        // pdf-parse failure is non-fatal — return empty parsed fields so the
+        // user can still type the values into the confirm modal.
+        text = '';
+      }
+      const parsed = _parseWaterBill(text);
+      res.json({ ok: true, parsed, raw_text_preview: text.slice(0, 6000) });
+    } catch (e) {
+      err(res, e);
+    } finally {
+      fs.unlink(req.file.path, () => {});
+    }
+  });
+
+  // Confirmed insert (from the editable modal, or a manual entry).
+  app.post('/api/water/bills', async (req, res) => {
+    const b = req.body || {};
+    const periodStart = b.period_start || null;
+    const periodEnd   = b.period_end || null;
+    const totalM3     = (b.total_m3 == null || b.total_m3 === '') ? null : Number(b.total_m3);
+    const totalCost   = (b.total_cost_ils == null || b.total_cost_ils === '') ? null : Number(b.total_cost_ils);
+    if (totalM3 != null && !Number.isFinite(totalM3)) return res.status(400).json({ error: 'total_m3 must be a number' });
+    if (totalCost != null && !Number.isFinite(totalCost)) return res.status(400).json({ error: 'total_cost_ils must be a number' });
+    const source = ['pdf_parsed', 'manual_confirmed', 'auto_rollover'].includes(b.source) ? b.source : 'manual_confirmed';
+    try {
+      const { tariff } = await _waterLoadSettings(db);
+      // Estimate over the bill's own span (fallback to a 2-month period if dates absent).
+      let days = 61;
+      if (periodStart && periodEnd) {
+        const d = (new Date(periodEnd) - new Date(periodStart)) / 86400000;
+        if (Number.isFinite(d) && d > 0) days = d;
+      }
+      const est = totalM3 != null ? _waterComputeCost(tariff, totalM3, days) : null;
+      const r = await db.query(`
+        INSERT INTO water_bills (period_start, period_end, total_m3, total_cost_ils, est_cost_ils, parsed, source, notes)
+        VALUES ($1::date, $2::date, $3, $4, $5, $6::jsonb, $7, $8)
+        RETURNING id, uploaded_at,
+                  to_char(period_start, 'YYYY-MM-DD') AS period_start,
+                  to_char(period_end,   'YYYY-MM-DD') AS period_end,
+                  total_m3, total_cost_ils, est_cost_ils, source, notes
+      `, [periodStart, periodEnd, totalM3, totalCost, est, JSON.stringify(b.parsed || {}), source, b.notes || null]);
+      res.json({ ok: true, row: r.rows[0] });
+    } catch (e) { err(res, e); }
+  });
+
+  app.delete('/api/water/bills/:id', async (req, res) => {
+    try {
+      const r = await db.query('DELETE FROM water_bills WHERE id = $1', [parseInt(req.params.id, 10)]);
+      if (r.rowCount === 0) return res.status(404).json({ error: 'not found' });
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+
+  // ── Live meter status (Phase 2 stub) ──────────────────────────────────────
+  // No water meter exists yet. Returns meter_connected:false so the frontend
+  // Current-Period card renders its "meter not connected" placeholder. When a
+  // flow sensor is added (Phase 2), this returns live period m3 + cost via
+  // _waterComputeCost, and the card lights up automatically.
+  app.get('/api/water/status', async (req, res) => {
+    res.json({ meter_connected: false });
+  });
+};

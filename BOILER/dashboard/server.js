@@ -81,6 +81,10 @@ require('./routes-medical-tests')(app, db);
 // page card. Own module for the same architecture-guard reason as above.
 require('./routes-power-outages')(app, db);
 
+// Water Consumption — /api/water/* (settings + bills) for the Boiler Agent
+// page's Water tab. Own module for the same architecture-guard reason as above.
+require('./routes-water')(app, db);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes
@@ -2239,7 +2243,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'manual_people_log', 'ups_status', 'ups_power_events',
       'hasp_panels', 'hasp_buttons', 'hasp_displays',
       'esp_boards',
-      'power_consumption', 'power_devices', 'power_bills',
+      'power_consumption', 'power_devices', 'power_bills', 'water_bills',
       'netbird_peers_local', 'netbird_tenant_settings', 'gateway_peer_transitions',
       'device_locations', 'phone_trips',
       'medical_test_results',
@@ -2268,6 +2272,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       power_consumption: 'ts',
       power_devices: 'updated_at',
       power_bills: 'uploaded_at',
+      water_bills: 'uploaded_at',
       netbird_peers_local: 'updated_at',
       netbird_tenant_settings: 'updated_at',
       gateway_peer_transitions: 'ts',

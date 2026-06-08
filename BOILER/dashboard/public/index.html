@@ -57,6 +57,7 @@
     <button class="tab-btn"        onclick="showMainTab('ai', this)">AI</button>
     <button class="tab-btn"        onclick="showMainTab('data', this)">Data</button>
     <button class="tab-btn"        onclick="showMainTab('settings', this)">Settings</button>
+    <button class="tab-btn"        onclick="showMainTab('water', this)">Water</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -514,6 +515,168 @@
 
   </div><!-- /tab-settings -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Water Consumption                                    -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-water">
+
+    <style>
+      .w-form-input { width:100%; padding:10px 12px; font-size:0.95rem; border:1px solid #d0cbc4; border-radius:5px; background:#fff; box-sizing:border-box; }
+      .w-form-input:focus { outline:none; border-color:#7a9ab8; box-shadow:0 0 0 2px rgba(122,154,184,0.18); }
+      .w-form-label { display:block; font-size:0.82rem; color:#444; margin-bottom:6px; font-weight:600; letter-spacing:0.3px; }
+      .w-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:20px 26px; max-width:900px; margin-top:14px; }
+      .w-hint { margin-top:4px; font-size:0.78rem; color:#888; }
+    </style>
+
+    <!-- Current Period (Water) — meter-ready placeholder -->
+    <div class="card" id="water-current-card" data-meter-state="none">
+      <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:14px;">
+        <span>Current Period (Water)</span>
+        <span id="wc-meter-state-tag" style="font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; color:#555;">- meter not connected</span>
+      </h2>
+      <div id="wc-placeholder" style="margin-top:10px; padding:14px 16px; background:#fafaf6; border:1px dashed #d0cbc4; border-radius:6px; color:#888; font-size:0.9rem;">
+        💧 Water meter not connected yet — period m³ and live cost will appear here once a flow sensor feeds data. Until then, track usage from your bills below.
+      </div>
+      <div id="wc-live" style="display:none; margin-top:14px;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:16px;">
+          <div><div class="w-form-label">Period consumption</div><div id="wc-period-m3" style="font-size:1.6rem; font-weight:700;">—</div></div>
+          <div><div class="w-form-label">Estimated cost</div><div id="wc-period-cost" style="font-size:1.6rem; font-weight:700;">—</div></div>
+          <div><div class="w-form-label">Period start</div><div id="wc-period-start" style="font-size:1rem;">—</div></div>
+          <div><div class="w-form-label">Last meter update</div><div id="wc-meter-last-update" style="font-size:1rem;">—</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Water Billing Cycle -->
+    <div class="card">
+      <h2>Water Billing Cycle
+        <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
+          — when each water billing period starts + how long it lasts
+        </span>
+      </h2>
+      <div class="w-grid">
+        <div>
+          <label class="w-form-label">Start day (1-28)</label>
+          <input id="ws-billing-start-day" type="number" min="1" max="28" step="1" class="w-form-input" style="max-width:120px;">
+          <div class="w-hint">Day-of-month each cycle starts.</div>
+        </div>
+        <div>
+          <label class="w-form-label">Length (months)</label>
+          <input id="ws-billing-length" type="number" min="1" max="12" step="1" class="w-form-input" style="max-width:120px;">
+          <div class="w-hint">Israeli water is bi-monthly: 2.</div>
+        </div>
+        <div>
+          <label class="w-form-label">Current period start date</label>
+          <input id="ws-billing-current-start" type="date" class="w-form-input" style="max-width:200px;">
+          <div class="w-hint">Override once to match your bill.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Water Tariff — full Israeli two-tier model -->
+    <div class="card">
+      <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:14px;">
+        <span>Water Tariff
+          <span style="font-size:0.72rem; color:#aaa; font-weight:400; text-transform:none; letter-spacing:0;">
+            — two-tier Israeli water rates. ⚠ verify every value against your bill.
+          </span>
+        </span>
+        <a href="https://www.gov.il/he/departments/water_authority" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="font-size:0.78rem; font-weight:500; text-transform:none; letter-spacing:0; padding:6px 14px;">
+          ↗ Water Authority — tariffs
+        </a>
+      </h2>
+      <div class="w-grid">
+        <div>
+          <label class="w-form-label">Persons in household</label>
+          <input id="ws-tariff-persons" type="number" min="1" max="20" step="1" class="w-form-input" style="max-width:120px;">
+          <div class="w-hint">Drives the low-tier quota.</div>
+        </div>
+        <div>
+          <label class="w-form-label">Low-tier rate (₪/m³)</label>
+          <input id="ws-tariff-low-rate" type="number" min="0" step="0.0001" class="w-form-input" style="max-width:160px;">
+          <div class="w-hint">Recognized-quantity tier.</div>
+        </div>
+        <div>
+          <label class="w-form-label">Low-tier base quota (m³/household/month)</label>
+          <input id="ws-tariff-quota-base" type="number" min="0" step="0.1" class="w-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="w-form-label">Quota per extra person (m³/person/month)</label>
+          <input id="ws-tariff-quota-per-person" type="number" min="0" step="0.1" class="w-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="w-form-label">High-tier rate (₪/m³)</label>
+          <input id="ws-tariff-high-rate" type="number" min="0" step="0.0001" class="w-form-input" style="max-width:160px;">
+          <div class="w-hint">Above-quota tier.</div>
+        </div>
+        <div>
+          <label class="w-form-label">Sewage handling</label>
+          <select id="ws-tariff-sewage-mode" class="w-form-input" style="max-width:180px;" onchange="wsShowSewage()">
+            <option value="bundled">Bundled in tier rates</option>
+            <option value="separate">Separate line</option>
+          </select>
+        </div>
+        <div id="ws-sewage-rate-wrap" style="display:none;">
+          <label class="w-form-label">Sewage rate (₪/m³)</label>
+          <input id="ws-tariff-sewage-rate" type="number" min="0" step="0.0001" class="w-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="w-form-label">Fixed/standing charge (₪/period)</label>
+          <input id="ws-tariff-fixed-charge" type="number" min="0" step="0.01" class="w-form-input" style="max-width:160px;">
+        </div>
+        <div>
+          <label class="w-form-label">VAT (%)</label>
+          <input id="ws-tariff-vat" type="number" min="0" max="100" step="0.1" class="w-form-input" style="max-width:120px;">
+        </div>
+        <div>
+          <label class="w-form-label">Currency symbol</label>
+          <input id="ws-tariff-currency" type="text" maxlength="4" class="w-form-input" style="max-width:80px;">
+        </div>
+      </div>
+    </div>
+
+    <!-- Shared Save button -->
+    <div class="card" style="background:transparent; box-shadow:none; padding:8px 0;">
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button id="ws-save-btn" class="btn btn-primary btn-sm" onclick="wsSave()" style="padding:9px 22px; font-size:0.95rem;">Save all settings</button>
+        <span id="ws-save-msg" style="font-size:0.88rem; font-weight:600;"></span>
+      </div>
+    </div>
+
+    <!-- Past Water Bills -->
+    <div class="card">
+      <h2 style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:14px;">
+        <span>Past Water Bills</span>
+        <span style="display:inline-flex; gap:8px; align-items:center;">
+          <input id="wb-file-input" type="file" accept="application/pdf,.pdf" style="display:none;" onchange="wbUpload(event)">
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wb-file-input').click()" style="padding:6px 14px; font-size:0.85rem;">+ Paste bill (PDF)</button>
+          <button class="btn btn-secondary btn-sm" onclick="wbOpenManual()" style="padding:6px 14px; font-size:0.85rem;">+ Add manually</button>
+          <span id="wb-upload-msg" style="font-size:0.82rem;"></span>
+        </span>
+      </h2>
+      <div style="overflow-x:auto; margin-top:10px;">
+        <table id="wb-table" style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+          <thead>
+            <tr style="background:#fafaf6; border-bottom:2px solid #d0cbc4;">
+              <th style="text-align:left;  padding:10px 14px;">Period</th>
+              <th style="text-align:right; padding:10px 14px;">m³</th>
+              <th style="text-align:right; padding:10px 14px;">Estimate ₪</th>
+              <th style="text-align:right; padding:10px 14px;">Actual ₪</th>
+              <th style="text-align:right; padding:10px 14px;">Diff</th>
+              <th style="text-align:left;  padding:10px 14px;">Source</th>
+              <th style="text-align:left;  padding:10px 14px;">Uploaded</th>
+              <th style="text-align:center; padding:10px 14px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="wb-tbody">
+            <tr><td colspan="8" style="padding:14px; color:#aaa; text-align:center;">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-water -->
+
 </main>
 
 <script>
@@ -527,6 +690,7 @@ function showMainTab(name, btn) {
     const stored = localStorage.getItem('boiler_ai_investigation');
     if (stored) { try { renderInvestigation(JSON.parse(stored), true); } catch(e) {} }
   }
+  if (name === 'water' && window.waterOnTabShow) window.waterOnTabShow();
 }
 
 function handlePageRefresh() {
@@ -534,6 +698,7 @@ function handlePageRefresh() {
   if (activeId === 'tab-ai') return;
   if (activeId === 'tab-graph') { loadGraph(); return; }
   if (activeId === 'tab-data') { refreshDataAll(); return; }
+  if (activeId === 'tab-water') { window.waterOnTabShow?.(); return; }
   refreshAll();
 }
 </script>
@@ -542,5 +707,6 @@ function handlePageRefresh() {
 <script src="js/main.js"></script>
 <script src="js/graph.js?v=3"></script>
 <script src="js/data.js?v=2"></script>
+<script src="js/water.js?v=1"></script>
 </body>
 </html>
