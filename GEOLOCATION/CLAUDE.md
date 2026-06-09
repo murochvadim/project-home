@@ -247,59 +247,58 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 | 2026-06-03 cleanup | User decision: **remove HA from geolocation completely**. This file documents the post-cleanup state. |
 | 2026-06-08 | Fake trips #520/#542 (phone stationary at home, GPS oscillating to a ~150 m "ghost" spot, crossing the radius 21–26×). Per firm user constraint **did NOT touch the trip-detection algorithm** — added a separate deferred **bounce-storm janitor** instead (see below). |
 
-## Bounce-storm trip janitor (`scripts/geo_trip_janitor.py`, 2026-06-08)
+## Phantom-trip janitor (`scripts/geo_trip_janitor.py`, 2026-06-08, rewritten distance-only 2026-06-09)
 
 Separate cleanup pass on LXC 104 (cron `*/5`, log `/var/log/geo-trip-janitor.log`).
-It deletes fake trips caused by GPS multipath jitter — the phone physically
-stationary at home while its GPS oscillates between the real spot and a ~150 m
-"ghost" coordinate, flapping across the 40 m radius and tripping the state
-machine's `time_fallback` commit.
+It deletes fake trips caused by a **single FIXED GPS-multipath phantom ~154 m SW of
+home** — the phone sits physically at home while its GPS periodically reports a
+"ghost" coordinate ~154 m away (with *good* ~20 m accuracy, so accuracy filters miss
+it), crossing the 40 m radius and tripping the state machine's `time_fallback`
+commit. Proven 2026-06-09 from 4 days of pings: 700+ pings cluster at one spot; the
+dense cluster never exceeds ~167 m.
 
-- **Why separate + deferred, not a close-time filter:** the bouncing only becomes
-  visible ~10 min AFTER the trip closes (at close the data looks like a normal
-  short trip). A timer-based janitor sees the full picture; the live
-  `owntracks_ingest.py` state machine is left completely unchanged.
-- **Fingerprint:** count home↔outside boundary crossings over
-  `started_at−10m … returned_at+15m`. A real trip = 2 crossings (out, back); a
-  bounce storm = 4+ (the incident showed 21–26). `CROSSINGS_DELETE=4`.
-- **⚠ Real-trip guard (added 2026-06-08 — fixes a false-positive that erased a real trip):**
-  the padded `±10/15 min` window reaches into the home GPS-jitter *before/after* a
-  trip, so a **genuine** trip that happens during a bouncy spell can hit 4+ padded
-  crossings and be wrongly deleted. (Incident: a real 681 m / 23 min out-and-back
-  walk crossed the boundary only **twice** within its own span but **13×** in the
-  padded window → deleted as #1075; reconstructed as #1102 from the surviving
-  `device_locations` pings.) Fix: a trip is **REAL and never deleted** if it
-  **`max_dist_m > real_trip_min_far_m` (default 250 m, above the ~150 m ghost)** OR
-  its **longest contiguous OUTSIDE run within its OWN span ≥ `real_trip_min_dwell_sec`
-  (default 180 s)**. The crossing test only applies to trips failing both bars
-  (genuine short bounces, max ≈ 150 m, no dwell). Verified: #1102 (681 m, run 1353 s)
-  → keep(real) despite 32 padded crossings; a 153 m / 71 s bounce → DELETE. Both
-  thresholds overridable via `dashboard_settings.geolocation`. **Trip-detection
-  algorithm (`owntracks_ingest.py`) still completely untouched** — this only makes
-  the cleanup smarter.
-- **Scope/guards:** only confirmed trips with `duration < 1 h`, closed within the
-  last 48 h; delete requires `MIN_PINGS ≥ 6` in the window so sparse/pruned old
-  data can never reach the threshold. Reuses the same haversine + center/radius
-  from `dashboard_settings.geolocation` as the ingest.
-- **`--dry-run`** prints the per-trip crossing count + verdict without deleting
-  (used to validate before enabling).
-- **ALSO removes the fake trip's geofence markers** (`geofence:away`/`home` rows
-  in `device_events`), scoped to the deleted trip's OWN span
-  `[started_at..returned_at]` — so it can never touch a real away/home event
-  outside that span. (Extended 2026-06-08: initially it left the markers; the
-  same day they were wired in so a future away-mode rule can't be fooled by storm
-  "away" events. The orphans left by the very first deletions, #520/#542/#552,
-  were swept once by hand.)
+- **The rule — distance-only (bulletproof):** a confirmed short trip
+  (`duration < 1 h`, closed within 48 h) whose **`max_dist_m ≤ real_trip_min_far_m`
+  (default 250 m)** never left the phantom → delete it. Proof it's safe: across the
+  FULL trip history every fake reaches ≤156 m and every real trip reaches ≥324 m —
+  the 171–250 m band is **empty** (a 168 m buffer). Uses the trip row's own stored
+  `max_dist_m`; **no ping re-query, no crossing count, no dwell math**.
+- **Why distance, not the old crossings/dwell (history — do NOT reintroduce):** the
+  original 2026-06-08 version counted home↔outside crossings over a padded
+  `±10/15 min` window plus a "real-trip guard" (`max_dist > 250` OR longest own-span
+  outside-run ≥ 180 s). The **dwell half was fatally wrong** — a *sustained*
+  phantom-sit parks the phone at the 154 m ghost for 190–360 s, clearing the 180 s
+  bar, so it was mislabeled "real" and **28 fakes accumulated** (e.g. #1145/#1152).
+  The crossings half also conflated a real trip's edge-jitter with bouncing (it once
+  erased a real 681 m walk, #1075→reconstructed as #1102). Distance alone has none of
+  these failure modes (phantom fixed + close; reals far), so the crossings + dwell
+  logic — `count_crossings`, `longest_outside_run_sec`, `CROSSINGS_DELETE`,
+  `MIN_PINGS`, `real_trip_min_dwell_sec` — was **deleted entirely** 2026-06-09.
+- **Trip-detection algorithm (`owntracks_ingest.py`) still completely untouched** —
+  pure cleanup; `real_trip_min_far_m` overridable via `dashboard_settings.geolocation`.
+- **`--dry-run`** prints the per-trip `max_dist` + verdict without deleting.
+- **ALSO removes the fake trip's geofence markers** (`geofence:away`/`home` rows in
+  `device_events`), scoped to the deleted trip's OWN span `[started_at..returned_at]`
+  — never touches a real away/home event outside it.
+- **Caveat (never observed):** a hypothetical NEW phantom landing beyond 250 m
+  wouldn't be caught by distance alone. The phantom is a fixed 154 m reflection — it
+  has never drifted. Extend then if it ever happens.
 
 ### Companion display fixes (2026-06-08, server.js — DISPLAY only, ingest untouched)
 
-The janitor cleans the trips table, but the same ghost pings also fooled two
-read-only surfaces. Both fixed in `BOILER/dashboard/server.js`. **Both carry the
-same real-trip guard as the janitor (2026-06-08):** `/api/geolocation/trips` keeps
-a trip if `max_dist_m > 250` OR its longest own-span outside run ≥ 180 s (so a real
-trip isn't hidden by surrounding bounce); `_flagOutliers` Step 4 skips any OUTSIDE
-ping whose distance `> real_trip_min_far_m` (250 m) — a far excursion ping can't be
-a ~150 m ghost, so a real trip's far points are never clipped from the map.
+The janitor cleans the trips table on its 5-min cron, but a fresh phantom must be
+hidden INSTANTLY too. Both fixed in `BOILER/dashboard/server.js`.
+**`GET /api/geolocation/trips` runs the SAME distance-only rule as the janitor**
+(rewritten 2026-06-09): hide any trip with `duration_sec < 3600 && max_dist_m ≤
+real_trip_min_far_m (250)`. Display-only — rows stay in the DB until the janitor
+deletes them; a new phantom is invisible on the very next page load instead of
+flashing for up to 5 min. (No ping re-query now → faster endpoint. The earlier
+crossings+dwell version shared the janitor's dwell bug and showed sustained
+phantoms.) The separate **map** ghost-ping filter (`_flagOutliers`, below) still
+uses its own per-ping logic and was NOT changed — it operates on individual map
+pings, not trips: it skips any OUTSIDE ping whose distance `> real_trip_min_far_m`
+(a far excursion ping can't be a ~150 m ghost, so a real trip's far points are
+never clipped).
 
 - **Map** — `_flagOutliers` gained **Step 4 (bounce-storm cluster)**: an OUTSIDE
   ping whose **±10-MINUTE window** crosses the home boundary ≥ 4 times is flagged

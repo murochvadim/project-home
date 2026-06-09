@@ -3728,60 +3728,22 @@ app.get('/api/geolocation/trips', async (req, res) => {
        ORDER BY started_at DESC LIMIT $1`,
       [limit],
     );
-    // Hide bounce-storm fake trips at DISPLAY time — same fingerprint as the
-    // geo_trip_janitor (a short trip whose surrounding pings flap across the
-    // home boundary >= 4 times). The janitor deletes them from the DB on its
-    // 5-min cron; doing it here too makes them invisible IMMEDIATELY so an
-    // ongoing GPS storm never flashes a fake trip in the list between janitor
-    // runs. Display-only — rows stay in the DB until the janitor removes them.
+    // Hide phantom fake trips at DISPLAY time — same proven rule as the
+    // geo_trip_janitor: a short trip (< 1 h) whose max distance from home stayed
+    // within the ~154 m fixed GPS-multipath phantom (max_dist_m <=
+    // real_trip_min_far_m, default 250 m) never actually left — it's fake. Every
+    // genuine trip in history reaches >= 324 m, so this can't hide a real one.
+    // The janitor deletes these on its 5-min cron; hiding here makes them
+    // invisible IMMEDIATELY so an ongoing GPS storm never flashes a fake trip in
+    // the list between janitor runs. Display-only — rows stay in the DB until the
+    // janitor removes them. (No ping re-query / crossings / dwell math: the trip's
+    // own stored max_dist_m is the whole signal.)
     let trips = r.rows;
     try {
       const g = (await db.query("SELECT value FROM dashboard_settings WHERE key='geolocation'")).rows[0]?.value || {};
-      const cLat = g.center?.lat, cLon = g.center?.lon, rad = Number(g.home_radius_m) || 80;
-      if (cLat != null && cLon != null) {
-        const keep = [];
-        for (const t of trips) {
-          const ageMs = t.returned_at ? (Date.now() - new Date(t.returned_at).getTime()) : 0;
-          // Only re-check recent short trips; old/long trips pass through (their
-          // pings are pruned anyway, and long journeys are never bounce storms).
-          if (!t.returned_at || (t.duration_sec || 0) >= 3600 || ageMs > 48 * 3600_000) { keep.push(t); continue; }
-          // Real-trip guard (same as geo_trip_janitor): a trip that went FAR
-          // (max_dist beyond the ~150 m ghost) or DWELLED away is never a bounce —
-          // protect it before the crossing test so surrounding home-jitter can't
-          // hide a genuine trip.
-          const FAR_M = Number(g.real_trip_min_far_m) || 250;
-          const DWELL_SEC = Number(g.real_trip_min_dwell_sec) || 180;
-          if ((t.max_dist_m || 0) > FAR_M) { keep.push(t); continue; }
-          const w = await db.query(
-            `SELECT lat::float AS lat, lon::float AS lon, ts FROM device_locations
-             WHERE source='owntracks_mqtt'
-               AND ts BETWEEN $1::timestamptz - interval '10 min'
-                          AND $2::timestamptz + interval '15 min'
-             ORDER BY ts ASC`,
-            [t.started_at, t.returned_at],
-          );
-          let crossings = 0, prev = null;
-          // Longest contiguous OUTSIDE run within the trip's OWN span (dwell guard).
-          let bestRun = 0, runStart = null;
-          const sStart = new Date(t.started_at).getTime(), sEnd = new Date(t.returned_at).getTime();
-          for (const p of w.rows) {
-            const home = _haversineM(cLat, cLon, p.lat, p.lon) <= rad;
-            if (prev !== null && home !== prev) crossings++;
-            prev = home;
-            const pt = new Date(p.ts).getTime();
-            if (pt >= sStart && pt <= sEnd && !home) {
-              if (runStart === null) runStart = pt;
-              bestRun = Math.max(bestRun, (pt - runStart) / 1000);
-            } else if (!(pt >= sStart && pt <= sEnd) || home) {
-              runStart = null;
-            }
-          }
-          if (bestRun >= DWELL_SEC) { keep.push(t); continue; }   // real away-stay → keep
-          if (crossings >= 4 && w.rows.length >= 6) continue;   // bounce storm → hide
-          keep.push(t);
-        }
-        trips = keep;
-      }
+      const FAR_M = Number(g.real_trip_min_far_m) || 250;
+      trips = trips.filter(t =>
+        !((t.duration_sec || 0) < 3600 && (t.max_dist_m || 0) <= FAR_M));
     } catch (_) { /* on any error, fall back to unfiltered rows */ }
     res.json({ trips });
   } catch (e) {
