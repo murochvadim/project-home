@@ -171,6 +171,16 @@ Caveat that bit during dev: the `protocol='cloud'` and `protocol='gateway'` adap
 
 Future callers (other tabs, future agents) should hit this endpoint instead of writing their own MQTT publish path — keeps the validation + publish wrapping + response routing in one place.
 
+### Rule control — on/off from rules + scenes (Layer 1, added 2026-06-09)
+
+The projector is `protocol='local'` and NOT mirrored in HA, so a rule emitting `turn_on`/`turn_off` would fail (those resolve through an HA entity the device-agent can't find). Layer 1 makes it rule-addressable for **power on/off** by reusing the `set_dps` path above:
+
+- The device's `dps_config` declares a raw DPS payload per channel: `{"power": {"name":"Power", "dps_on":{"20":true}, "dps_off":{"20":false}}}` (DB-only, not git).
+- `rule_engine._dispatch_command` default branch calls `_resolve_local_dps(dev, cmd)`: for `turn_on`/`turn_off` it looks up `dps_config.<channel>.dps_on/dps_off` (cmd's `channel` first, else the first channel that declares one) and **rewrites the command to `{action:'set_dps', dps:{...}}`** — same device-agent path as the dashboard. Devices without `dps_on`/`dps_off` keep the old pass-through (no regression).
+- The shared `device-picker.js` renders `[on]/[off]` for any `dps_on`/`dps_off` channel (token `@Star Projector on`/`off`), so the projector is selectable in **scenes** + rule sentences. It's used in the *Away Devices Off* (off) and *Evening Lights* (on) scenes, and runnable via the Scenes-tab ▶ Run button / Start Away Mode.
+
+**Layer 2 (pending) — richer DPS from rules:** mode (DPS 21) / brightness (22) / colour HSV (24) / scene (25). The plan is named "looks" (saved DPS snapshots like Pixoo presets) surfaced as `@Star Projector <LookName>` chips → dispatched as `set_dps`. Not built yet — Layer 1 covers power on/off only.
+
 ### API endpoints (panel-scoped CRUD; `:panel = balcony` for now)
 
 | Endpoint | Purpose |
