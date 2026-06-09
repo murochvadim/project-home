@@ -1479,7 +1479,7 @@
       rule.updated_at = s.updated_at;
       brsMarkDirty();
       brsRender();
-    });
+    }, {includeScenes: true});
   };
 
   window.brsRemoveDevice = function (ruleId, sentId, segIdx) {
@@ -1509,7 +1509,7 @@
       rule.updated_at = s.updated_at;
       brsMarkDirty();
       brsRender();
-    });
+    }, {includeScenes: true});
   };
 
   function brsHandleEdit(el) {
@@ -1695,6 +1695,14 @@
   function scenesClearDirty() { scenesDirty = false; const b = document.getElementById('scenes-dirty-badge'); if (b) b.style.display = 'none'; }
   window.addEventListener('beforeunload', (e) => { if (scenesDirty) { e.preventDefault(); e.returnValue = ''; return ''; } });
 
+  // Per-scene collapse state (localStorage, like BRS section collapse).
+  function scenesCollapsed(id) { return localStorage.getItem('scene_collapsed_' + id) === '1'; }
+  window.scenesToggleCollapse = function (id) {
+    const k = 'scene_collapsed_' + id;
+    if (localStorage.getItem(k) === '1') localStorage.removeItem(k); else localStorage.setItem(k, '1');
+    scenesRender();
+  };
+
   function scenesRender() {
     const c = document.getElementById('scenes-container');
     if (!c) return;
@@ -1703,8 +1711,9 @@
       return;
     }
     c.innerHTML = scenesList.map((s, i) => {
+      const collapsed = scenesCollapsed(s.id);
       const devs = Array.isArray(s.devices) ? s.devices : [];
-      const chips = devs.map((seg, di) => {
+      const chips = collapsed ? '' : devs.map((seg, di) => {
         const p = scenesParseChip(seg && seg.v);
         const baseTxt = (p.base || '').replace(/^@/, '') || '(device)';
         const onSel = p.action === 'on', offSel = p.action === 'off';
@@ -1715,19 +1724,10 @@
         const specialNote = p.special ? `<span style="font-size:0.68rem;color:#999;">(${scenesEscText(p.special)})</span>` : '';
         return `<span style="display:inline-flex;align-items:center;gap:4px;background:#ece6f5;border:1px solid #cfc1e6;border-radius:12px;padding:2px 6px 2px 9px;margin:2px;font-size:0.78rem;">${scenesEscText(baseTxt)} ${onBtn}${offBtn}${specialNote}<button onclick="scenesRemoveDevice(${i},${di})" title="Remove device" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.95rem;line-height:1;padding:0 0 0 2px;">×</button></span>`;
       }).join('');
-      return `
-      <div style="border:1px solid #ddd;border-radius:6px;padding:12px;margin-bottom:10px;background:#fafafa;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-          <label style="font-size:0.78rem;color:#666;display:flex;align-items:center;gap:5px;white-space:nowrap;">
-            <input type="checkbox" ${s.active !== false ? 'checked' : ''} onchange="scenesSetActive(${i},this.checked)"> active
-          </label>
-          <input type="text" value="${scenesEsc(s.name)}" placeholder="Scene name (e.g. Away Off)"
-                 oninput="scenesSetField(${i},'name',this.value)"
-                 style="flex:1;font-weight:600;font-size:0.95rem;padding:5px 8px;border:1px solid #ccc;border-radius:4px;">
-          <span style="font-size:0.72rem;color:#aaa;white-space:nowrap;">${scenesFmtDate(s.updated_at || s.added_at)}</span>
-          <button onclick="scenesDelete(${i})" title="Delete scene"
-                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:3px 9px;font-size:0.8rem;cursor:pointer;white-space:nowrap;">× Delete</button>
-        </div>
+      const caret = `<button onclick="scenesToggleCollapse('${s.id}')" title="${collapsed ? 'Expand' : 'Collapse'} scene"
+        style="background:none;border:none;cursor:pointer;font-size:1rem;color:#6c4f9f;padding:0 2px;line-height:1;">${collapsed ? '▸' : '▾'}</button>`;
+      const collapsedHint = collapsed ? `<span style="font-size:0.72rem;color:#aaa;white-space:nowrap;margin-left:4px;">(${devs.length} device${devs.length === 1 ? '' : 's'})</span>` : '';
+      const body = collapsed ? '' : `
         <input type="text" value="${scenesEsc(s.notes)}" placeholder="Notes (what this scene does)"
                oninput="scenesSetField(${i},'notes',this.value)"
                style="width:100%;font-size:0.82rem;padding:5px 8px;border:1px solid #ddd;border-radius:4px;color:#444;box-sizing:border-box;">
@@ -1739,8 +1739,25 @@
           ${devs.length ? `<button onclick="scenesSetAllActions(${i},'on')" title="Set ALL devices on"
                   style="background:#fff;color:#3a7d44;border:1px solid #bcdcc2;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;margin-left:6px;">All on</button>
           <button onclick="scenesSetAllActions(${i},'off')" title="Set ALL devices off"
-                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;">All off</button>` : ''}
+                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;">All off</button>
+          <span style="font-size:0.72rem;color:#c0392b;font-weight:600;margin-left:8px;">Set required Device state after loading !!!</span>` : ''}
+        </div>`;
+      return `
+      <div style="border:1px solid #ddd;border-radius:6px;padding:12px;margin-bottom:10px;background:#fafafa;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:${collapsed ? '0' : '8px'};">
+          ${caret}
+          <label style="font-size:0.78rem;color:#666;display:flex;align-items:center;gap:5px;white-space:nowrap;">
+            <input type="checkbox" ${s.active !== false ? 'checked' : ''} onchange="scenesSetActive(${i},this.checked)"> active
+          </label>
+          <input type="text" value="${scenesEsc(s.name)}" placeholder="Scene name (e.g. Away Off)"
+                 oninput="scenesSetField(${i},'name',this.value)"
+                 style="flex:1;font-weight:600;font-size:0.95rem;padding:5px 8px;border:1px solid #ccc;border-radius:4px;">
+          ${collapsedHint}
+          <span style="font-size:0.72rem;color:#aaa;white-space:nowrap;">${scenesFmtDate(s.updated_at || s.added_at)}</span>
+          <button onclick="scenesDelete(${i})" title="Delete scene"
+                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:3px 9px;font-size:0.8rem;cursor:pointer;white-space:nowrap;">× Delete</button>
         </div>
+        ${body}
       </div>`;
     }).join('');
   }
@@ -1779,6 +1796,11 @@
   window.scenesAddDevice = function (i) {
     if (!scenesList[i]) return;
     if (typeof window.openDevicePicker !== 'function') { alert('Device picker not loaded.'); return; }
+    // Hide devices/channels already in THIS scene: the picker's bare token
+    // equals each chip's base (its on/off stripped via scenesParseChip).
+    const exclude = (scenesList[i].devices || [])
+      .map(seg => scenesParseChip(seg && seg.v).base)
+      .filter(Boolean);
     // Multi-select: the picker returns an ARRAY of tokens. (Falls back to a
     // single token defensively if some caller ever runs it single-pick.)
     window.openDevicePicker(function (tokens) {
@@ -1789,7 +1811,7 @@
       scenesList[i].updated_at = new Date().toISOString();
       scenesMarkDirty();
       scenesRender();
-    }, { multi: true });
+    }, { multi: true, exclude: exclude });
   };
   window.scenesRemoveDevice = function (i, di) {
     if (!scenesList[i] || !Array.isArray(scenesList[i].devices)) return;

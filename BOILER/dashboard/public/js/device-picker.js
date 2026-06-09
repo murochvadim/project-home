@@ -14,6 +14,9 @@
   let _multi = false;               // multi-select mode (scenes batch-add)
   let _selectedTokens = new Set();  // tokens checked in multi mode
   let _multiRowTokens = [];         // index→token map for the current multi render
+  let _includeScenes = false;       // also offer Scenes as pickable chips (rule-sentence authoring)
+  let _scenes = [];                 // loaded from apartment.scenes when _includeScenes
+  let _exclude = new Set();         // tokens to hide in multi mode (e.g. already-in-scene)
 
   const MULTI_CHANNEL_TYPES = new Set(['switch', 'circuit_breaker']);
 
@@ -100,9 +103,12 @@
     const el = document.getElementById('dp-type-filter');
     if (!el) return;
     const types = ['__all__', ...Array.from(new Set(_devices.map(d => d.device_type || 'unknown'))).sort()];
+    if (_includeScenes) types.push('scene');
     el.innerHTML = types.map(t => {
       const label = t === '__all__' ? 'all' : t;
-      const count = t === '__all__' ? _devices.length : _devices.filter(d => (d.device_type || 'unknown') === t).length;
+      const count = t === '__all__' ? _devices.length
+        : (t === 'scene' ? (_scenes || []).length
+          : _devices.filter(d => (d.device_type || 'unknown') === t).length);
       const active = t === _selectedType;
       return `<button data-dp-type="${t}" style="padding:3px 8px;border:1px solid ${active ? '#6c4f9f' : '#d0cbc4'};background:${active ? '#6c4f9f' : '#fff'};color:${active ? '#fff' : '#333'};border-radius:3px;cursor:pointer;font-size:0.72rem;">${label} (${count})</button>`;
     }).join('');
@@ -130,7 +136,17 @@
       ));
     }
     filtered.sort((a, b) => (a.room || 'zzz').localeCompare(b.room || 'zzz') || (a.name || '').localeCompare(b.name || ''));
-    if (!filtered.length) {
+    // Scenes (single-pick + includeScenes only) — rows at the top of the list.
+    let sceneRowsHtml = '';
+    if (_includeScenes && !_multi && (_selectedType === '__all__' || _selectedType === 'scene')) {
+      sceneRowsHtml = (_scenes || [])
+        .filter(s => !q || (s.name || '').toLowerCase().includes(q))
+        .map(s => `<div data-dp-scene="${(s.name || '').replace(/"/g, '&quot;')}" title="Insert this scene"
+                        style="padding:6px 10px;cursor:pointer;background:#f3eefb;border-bottom:1px solid #e8e3d8;">
+             <strong>🎬 ${s.name || '(unnamed)'}</strong><span style="color:#6c4f9f;font-size:0.7rem;margin-left:6px;">[scene]</span>
+           </div>`).join('');
+    }
+    if (!filtered.length && !sceneRowsHtml) {
       listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#999;">No match.</div>';
       if (_multi) _updateAddSelectedBtn();
       return;
@@ -138,10 +154,10 @@
     if (_multi) {
       // Multi-select: a checkbox per selectable reference, no action buttons.
       _multiRowTokens = [];
-      listEl.innerHTML = filtered.map(d => {
+      const rowsHtml = filtered.map(d => {
         const roomStr = d.room ? `<span style="color:#888;font-size:0.72rem;margin-left:6px;">(${d.room})</span>` : '';
         const typeStr = `<span style="color:#6c4f9f;font-size:0.7rem;margin-left:6px;">[${d.device_type || 'device'}]</span>`;
-        return _multiTokensFor(d).map(o => {
+        return _multiTokensFor(d).filter(o => !_exclude.has(o.token)).map(o => {
           const idx = _multiRowTokens.length;
           _multiRowTokens.push(o.token);
           const checked = _selectedTokens.has(o.token) ? 'checked' : '';
@@ -152,6 +168,7 @@
           </label>`;
         }).join('');
       }).join('');
+      listEl.innerHTML = rowsHtml || '<div style="padding:14px;text-align:center;color:#999;">All matching devices are already in this scene.</div>';
       listEl.querySelectorAll('[data-dp-idx]').forEach(cb => {
         cb.addEventListener('change', () => {
           const tok = _multiRowTokens[parseInt(cb.getAttribute('data-dp-idx'), 10)];
@@ -163,7 +180,7 @@
       _updateAddSelectedBtn();
       return;
     }
-    listEl.innerHTML = filtered.map(d => {
+    listEl.innerHTML = sceneRowsHtml + filtered.map(d => {
       const isDisplay = _isDisplayDevice(d);
       const isAlexa   = _isAlexaDevice(d);
       const channelPairs = _virtualChannelsFor(d);
@@ -289,6 +306,16 @@
 
       return `<div style="border-bottom:1px solid #e8e3d8;">${baseRow}${extrasHtml}</div>`;
     }).join('');
+
+    // Scene picks (includeScenes) → "@scene <Name>" token.
+    listEl.querySelectorAll('[data-dp-scene]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = el.getAttribute('data-dp-scene') || '';
+        if (name && _onPick) _onPick('@scene ' + name);
+        window._dpClose();
+      });
+    });
 
     // Channel/bare-name picks (legacy + multi-gang switches)
     listEl.querySelectorAll('[data-dp-pick]').forEach(el => {
@@ -443,6 +470,8 @@
     _ensureModal();
     _onPick = callback;
     _multi = !!(opts && opts.multi);
+    _includeScenes = !!(opts && opts.includeScenes);
+    _exclude = new Set((opts && opts.exclude) || []);
     _selectedTokens = new Set();
     _selectedType = '__all__';
     document.getElementById('dp-search').value = '';
@@ -476,6 +505,16 @@
         _awtrixApps = [];
         _alexaAnns = [];
       }
+    }
+    // Scenes for rule-sentence authoring (refetched each open so renames show).
+    if (_includeScenes) {
+      try {
+        const r = await fetch('/api/dashboard-settings/apartment.scenes');
+        const j = await r.json();
+        _scenes = Array.isArray(j.value) ? j.value.filter(s => s && s.name && s.active !== false) : [];
+      } catch (e) { _scenes = []; }
+    } else {
+      _scenes = [];
     }
     _renderTypeFilter();
     _renderList();
