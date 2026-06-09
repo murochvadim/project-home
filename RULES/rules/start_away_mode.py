@@ -286,6 +286,10 @@ def evaluate(event, state):
         for c in scene_cmds:
             if c.get('device_id') == keep_dev_id and c.get('channel') == keep_dps:
                 continue
+            # Deliberate mode-triggered fan-out — exempt from the engine's
+            # 4-cmd/10s loop guard (parity with Scene Runner), so a scene with a
+            # 4+-gang switch all-off can't auto-disable this rule mid-run.
+            c['_skip_loop_guard'] = True
             commands.append(c)
 
         # Turn ON the keep-on (fake-presence) target.

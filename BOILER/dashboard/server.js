@@ -85,6 +85,11 @@ require('./routes-power-outages')(app, db);
 // page's Water tab. Own module for the same architecture-guard reason as above.
 require('./routes-water')(app, db);
 
+// Scenes — POST /api/scenes/run (Main Agent → Scenes ▶ Run). Own module for the
+// same architecture-guard reason. Gets a getter for the mqtt client (declared
+// below) since server.js can swap it on the auto-heal path.
+require('./routes-scenes')(app, db, () => mqttClient);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes

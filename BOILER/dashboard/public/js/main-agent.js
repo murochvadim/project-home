@@ -1754,8 +1754,10 @@
                  style="flex:1;font-weight:600;font-size:0.95rem;padding:5px 8px;border:1px solid #ccc;border-radius:4px;">
           ${collapsedHint}
           <span style="font-size:0.72rem;color:#aaa;white-space:nowrap;">${scenesFmtDate(s.updated_at || s.added_at)}</span>
+          <button onclick="scenesRun(${i})" title="Run this scene now — fires its device on/off list"
+                  style="background:#fff;color:#2e7d32;border:1px solid #bcdcc2;border-radius:4px;padding:3px 9px;font-size:0.8rem;cursor:pointer;white-space:nowrap;min-width:84px;text-align:center;">▶ Run</button>
           <button onclick="scenesDelete(${i})" title="Delete scene"
-                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:3px 9px;font-size:0.8rem;cursor:pointer;white-space:nowrap;">× Delete</button>
+                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:3px 9px;font-size:0.8rem;cursor:pointer;white-space:nowrap;min-width:84px;text-align:center;">× Delete</button>
         </div>
         ${body}
       </div>`;
@@ -1787,6 +1789,30 @@
     scenesList.splice(i, 1);
     scenesMarkDirty();
     scenesRender();
+  };
+  // Run a scene now — the dashboard only POSTs a trigger; the rule engine's
+  // `Scene Runner` rule does the actual dispatch (same path as Start Away Mode).
+  // Run fires the SAVED scene, so block while there are unsaved edits.
+  window.scenesRun = async function (i) {
+    const s = scenesList[i];
+    if (!s) return;
+    const name = (s.name || '').trim();
+    if (!name) { alert('Give the scene a name (and Save) first.'); return; }
+    if (scenesDirty) { alert('You have unsaved changes — Save All first. Run fires the saved scene.'); return; }
+    if (s.active === false) { alert('This scene is inactive. Tick "active" + Save before running.'); return; }
+    if (!confirm('Run scene "' + name + '" now? This will switch its devices.')) return;
+    try {
+      const r = await fetch('/api/scenes/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+      alert('▶ Scene "' + name + '" sent' + (j.devices != null ? ' (' + j.devices + ' devices)' : '') + '.');
+    } catch (e) {
+      alert('Run failed: ' + e.message);
+    }
   };
   // Add a device to a scene via the shared picker (lists ALL devices). The
   // picker returns a token string ("@Name", "@Name Channel", "@Name on", …);
