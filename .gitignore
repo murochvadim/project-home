@@ -5,3 +5,6 @@ __pycache__/
 *.env
 ecosystem.config.js
 .mcp.json
+
+# Claude scheduled-tasks runtime lock (transient: sessionId + pid)
+.claude/scheduled_tasks.lock
