@@ -11,6 +11,9 @@
   let _alexaAnns = [];       // saved announcement templates from dashboard_settings.media-agents.alexa_announcements
   let _modal = null;
   let _onPick = null;
+  let _multi = false;               // multi-select mode (scenes batch-add)
+  let _selectedTokens = new Set();  // tokens checked in multi mode
+  let _multiRowTokens = [];         // index→token map for the current multi render
 
   const MULTI_CHANNEL_TYPES = new Set(['switch', 'circuit_breaker']);
 
@@ -79,7 +82,10 @@
                style="padding:5px 8px;border:1px solid #d0cbc4;border-radius:3px;font-size:0.85rem;margin-bottom:8px;" />
         <div id="dp-type-filter" style="display:flex;gap:4px;font-size:0.72rem;margin-bottom:8px;flex-wrap:wrap;"></div>
         <div id="dp-list" style="flex:1;overflow-y:auto;border:1px solid #e8e3d8;border-radius:3px;"></div>
-        <div style="margin-top:6px;font-size:0.72rem;color:#888;">Click a device (or a channel) to insert its reference.</div>
+        <div style="margin-top:6px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span id="dp-hint" style="font-size:0.72rem;color:#888;">Click a device (or a channel) to insert its reference.</span>
+          <button id="dp-add-selected" onclick="window._dpAddSelected()" style="display:none;padding:5px 14px;border:none;border-radius:4px;background:#6c4f9f;color:#fff;font-size:0.82rem;cursor:pointer;">Add selected (0)</button>
+        </div>
       </div>
     `;
     document.body.appendChild(_modal);
@@ -126,6 +132,35 @@
     filtered.sort((a, b) => (a.room || 'zzz').localeCompare(b.room || 'zzz') || (a.name || '').localeCompare(b.name || ''));
     if (!filtered.length) {
       listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#999;">No match.</div>';
+      if (_multi) _updateAddSelectedBtn();
+      return;
+    }
+    if (_multi) {
+      // Multi-select: a checkbox per selectable reference, no action buttons.
+      _multiRowTokens = [];
+      listEl.innerHTML = filtered.map(d => {
+        const roomStr = d.room ? `<span style="color:#888;font-size:0.72rem;margin-left:6px;">(${d.room})</span>` : '';
+        const typeStr = `<span style="color:#6c4f9f;font-size:0.7rem;margin-left:6px;">[${d.device_type || 'device'}]</span>`;
+        return _multiTokensFor(d).map(o => {
+          const idx = _multiRowTokens.length;
+          _multiRowTokens.push(o.token);
+          const checked = _selectedTokens.has(o.token) ? 'checked' : '';
+          const sub = o.label ? `<span style="color:#666;font-size:0.74rem;"> — ${o.label}</span>` : '';
+          return `<label style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;border-bottom:1px solid #f0ece3;">
+            <input type="checkbox" data-dp-idx="${idx}" ${checked} style="cursor:pointer;">
+            <span><strong>${d.name || '(unnamed)'}</strong>${sub}${typeStr}${roomStr}</span>
+          </label>`;
+        }).join('');
+      }).join('');
+      listEl.querySelectorAll('[data-dp-idx]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const tok = _multiRowTokens[parseInt(cb.getAttribute('data-dp-idx'), 10)];
+          if (!tok) return;
+          if (cb.checked) _selectedTokens.add(tok); else _selectedTokens.delete(tok);
+          _updateAddSelectedBtn();
+        });
+      });
+      _updateAddSelectedBtn();
       return;
     }
     listEl.innerHTML = filtered.map(d => {
@@ -329,6 +364,39 @@
   window._dpClose = function () {
     if (_modal) _modal.style.display = 'none';
     _onPick = null;
+    _multi = false;
+    _selectedTokens = new Set();
+    const addBtn = document.getElementById('dp-add-selected');
+    if (addBtn) addBtn.style.display = 'none';
+  };
+
+  // Multi-select helpers (scenes batch-add).
+  // Selectable references for a device in multi mode: per-channel for multi-gang
+  // switches / multi-actionable boards, else the bare device. No action is set
+  // here — the scene chip's on/off toggle sets it afterwards.
+  function _multiTokensFor(d) {
+    const channelPairs = _virtualChannelsFor(d);
+    if (channelPairs && channelPairs.length) {
+      return channelPairs.map(([key, label]) => ({
+        token: `@${d.name} ${(label && label !== '(unnamed)') ? label : `Ch${key}`}`,
+        label: `${key}: ${label || '(unnamed)'}`,
+      }));
+    }
+    const act = (!_isDisplayDevice(d) && !_isAlexaDevice(d)) ? _actionableChannelsFor(d) : [];
+    if (act.length > 1) {
+      return act.map(([key, label]) => ({ token: `@${d.name} ${label || key}`, label: `${label || key}` }));
+    }
+    return [{ token: `@${d.name}`, label: '' }];
+  }
+  function _updateAddSelectedBtn() {
+    const btn = document.getElementById('dp-add-selected');
+    if (btn) btn.textContent = `Add selected (${_selectedTokens.size})`;
+  }
+  window._dpAddSelected = function () {
+    const tokens = Array.from(_selectedTokens);
+    const cb = _onPick;
+    window._dpClose();          // clears _onPick + multi state
+    if (cb) cb(tokens);
   };
 
   // Shared helpers for migrating legacy "@Name:dpsKey" tokens to "@Name Label"
@@ -371,11 +439,19 @@
   // Public API — call from sentence rows.
   //   openDevicePicker(callback)
   // callback receives a string token like "@Main Switch Ch1" or "@Pixoo Daily_Welcome".
-  window.openDevicePicker = async function (callback) {
+  window.openDevicePicker = async function (callback, opts) {
     _ensureModal();
     _onPick = callback;
+    _multi = !!(opts && opts.multi);
+    _selectedTokens = new Set();
     _selectedType = '__all__';
     document.getElementById('dp-search').value = '';
+    const hintEl = document.getElementById('dp-hint');
+    if (hintEl) hintEl.textContent = _multi
+      ? 'Check devices, then "Add selected". Set on/off on each chip afterwards.'
+      : 'Click a device (or a channel) to insert its reference.';
+    const addBtn = document.getElementById('dp-add-selected');
+    if (addBtn) { addBtn.style.display = _multi ? 'inline-block' : 'none'; addBtn.textContent = 'Add selected (0)'; }
     _modal.style.display = 'flex';
     // Load devices + pixoo presets in parallel (cache for 30s)
     const fresh = !_devices.length || (Date.now() - (_devices._loadedAt || 0)) > 30000;

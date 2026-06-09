@@ -1651,6 +1651,212 @@
   window.addEventListener('DOMContentLoaded', brsLoad);
 })();
 
+// ─── Scenes tab (STEP 1: create / name / note / save / delete) ──────────
+// A scene is a named, reusable list of device actions stored in
+// dashboard_settings.apartment.scenes. Step 1 captures name + notes only;
+// the `devices` array is reserved for a later step (the +Dev chips). Mirrors
+// the Base Rule Settings (brs*) CRUD + dirty/Save-All/Discard pattern.
+(function () {
+  const SCENES_STORAGE_KEY = 'apartment.scenes';
+  let scenesList = [];
+  let scenesDirty = false;
+
+  function scenesNewId(p) { return p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+  function scenesEsc(s) { return (s || '').replace(/"/g, '&quot;'); }
+  function scenesEscText(s) { const d = document.createElement('div'); d.textContent = (s == null ? '' : String(s)); return d.innerHTML; }
+  // Split a device chip token into its device/channel BASE and its current
+  // action. Recognizes the picker's grammar: trailing " on"/" off" (the scene
+  // on/off state), or a special action (" push X" / " Page N" / " say …" /
+  // " speak X" / " announce X" / " vol N" / transport words). `base` is the
+  // token with the action stripped, so the on/off toggle can rewrite it as
+  // "<base> on" / "<base> off".
+  const _SCENES_ONOFF_RE   = /\s+(on|off)$/i;
+  const _SCENES_SPECIAL_RE = /\s+(push|page|say|speak|announce|vol)\b.*$/i;
+  const _SCENES_XPORT_RE   = /\s+(stop|pause|resume|next|prev)$/i;
+  function scenesParseChip(token) {
+    const t = String(token == null ? '' : token).trim();
+    let m = t.match(_SCENES_ONOFF_RE);
+    if (m) return { base: t.slice(0, m.index).trim(), action: m[1].toLowerCase(), special: null };
+    m = t.match(_SCENES_SPECIAL_RE);
+    if (m) return { base: t.slice(0, m.index).trim(), action: null, special: t.slice(m.index).trim() };
+    m = t.match(_SCENES_XPORT_RE);
+    if (m) return { base: t.slice(0, m.index).trim(), action: null, special: m[1].toLowerCase() };
+    return { base: t, action: null, special: null };
+  }
+  function scenesFmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    const dd = String(d.getDate()).padStart(2, '0'), mm = String(d.getMonth() + 1).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0'), mi = String(d.getMinutes()).padStart(2, '0');
+    return `${dd}-${mm} ${hh}:${mi}`;
+  }
+  function scenesMarkDirty() { scenesDirty = true; const b = document.getElementById('scenes-dirty-badge'); if (b) b.style.display = 'inline'; }
+  function scenesClearDirty() { scenesDirty = false; const b = document.getElementById('scenes-dirty-badge'); if (b) b.style.display = 'none'; }
+  window.addEventListener('beforeunload', (e) => { if (scenesDirty) { e.preventDefault(); e.returnValue = ''; return ''; } });
+
+  function scenesRender() {
+    const c = document.getElementById('scenes-container');
+    if (!c) return;
+    if (!scenesList.length) {
+      c.innerHTML = '<div style="color:#888;font-size:0.85rem;padding:10px 2px;">No scenes yet. Click <b>+ New Scene</b> to create one.</div>';
+      return;
+    }
+    c.innerHTML = scenesList.map((s, i) => {
+      const devs = Array.isArray(s.devices) ? s.devices : [];
+      const chips = devs.map((seg, di) => {
+        const p = scenesParseChip(seg && seg.v);
+        const baseTxt = (p.base || '').replace(/^@/, '') || '(device)';
+        const onSel = p.action === 'on', offSel = p.action === 'off';
+        const onBtn = `<button onclick="scenesSetDeviceAction(${i},${di},'on')" title="Turn on in this scene"
+          style="border:1px solid #3a7d44;border-radius:3px;padding:1px 6px;font-size:0.7rem;cursor:pointer;${onSel ? 'background:#3a7d44;color:#fff;font-weight:600;' : 'background:#fff;color:#3a7d44;'}">on</button>`;
+        const offBtn = `<button onclick="scenesSetDeviceAction(${i},${di},'off')" title="Turn off in this scene"
+          style="border:1px solid #c0392b;border-radius:3px;padding:1px 6px;font-size:0.7rem;cursor:pointer;${offSel ? 'background:#c0392b;color:#fff;font-weight:600;' : 'background:#fff;color:#c0392b;'}">off</button>`;
+        const specialNote = p.special ? `<span style="font-size:0.68rem;color:#999;">(${scenesEscText(p.special)})</span>` : '';
+        return `<span style="display:inline-flex;align-items:center;gap:4px;background:#ece6f5;border:1px solid #cfc1e6;border-radius:12px;padding:2px 6px 2px 9px;margin:2px;font-size:0.78rem;">${scenesEscText(baseTxt)} ${onBtn}${offBtn}${specialNote}<button onclick="scenesRemoveDevice(${i},${di})" title="Remove device" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.95rem;line-height:1;padding:0 0 0 2px;">×</button></span>`;
+      }).join('');
+      return `
+      <div style="border:1px solid #ddd;border-radius:6px;padding:12px;margin-bottom:10px;background:#fafafa;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <label style="font-size:0.78rem;color:#666;display:flex;align-items:center;gap:5px;white-space:nowrap;">
+            <input type="checkbox" ${s.active !== false ? 'checked' : ''} onchange="scenesSetActive(${i},this.checked)"> active
+          </label>
+          <input type="text" value="${scenesEsc(s.name)}" placeholder="Scene name (e.g. Away Off)"
+                 oninput="scenesSetField(${i},'name',this.value)"
+                 style="flex:1;font-weight:600;font-size:0.95rem;padding:5px 8px;border:1px solid #ccc;border-radius:4px;">
+          <span style="font-size:0.72rem;color:#aaa;white-space:nowrap;">${scenesFmtDate(s.updated_at || s.added_at)}</span>
+          <button onclick="scenesDelete(${i})" title="Delete scene"
+                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:3px 9px;font-size:0.8rem;cursor:pointer;white-space:nowrap;">× Delete</button>
+        </div>
+        <input type="text" value="${scenesEsc(s.notes)}" placeholder="Notes (what this scene does)"
+               oninput="scenesSetField(${i},'notes',this.value)"
+               style="width:100%;font-size:0.82rem;padding:5px 8px;border:1px solid #ddd;border-radius:4px;color:#444;box-sizing:border-box;">
+        <div style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:3px;">
+          <span style="font-size:0.74rem;color:#888;margin-right:2px;">Devices:</span>
+          ${chips || '<span style="font-size:0.74rem;color:#bbb;">none yet</span>'}
+          <button onclick="scenesAddDevice(${i})" title="Add devices (multi-select — check several, then Add selected)"
+                  style="background:#fff;color:#6c4f9f;border:1px solid #cfc1e6;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;margin-left:4px;">+ Dev</button>
+          ${devs.length ? `<button onclick="scenesSetAllActions(${i},'on')" title="Set ALL devices on"
+                  style="background:#fff;color:#3a7d44;border:1px solid #bcdcc2;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;margin-left:6px;">All on</button>
+          <button onclick="scenesSetAllActions(${i},'off')" title="Set ALL devices off"
+                  style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;">All off</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  window.scenesSetField = function (i, field, val) {
+    if (!scenesList[i]) return;
+    scenesList[i][field] = val;
+    scenesList[i].updated_at = new Date().toISOString();
+    scenesMarkDirty();
+  };
+  window.scenesSetActive = function (i, checked) {
+    if (!scenesList[i]) return;
+    scenesList[i].active = checked;
+    scenesList[i].updated_at = new Date().toISOString();
+    scenesMarkDirty();
+  };
+  window.scenesNew = function () {
+    const now = new Date().toISOString();
+    scenesList.push({ id: scenesNewId('scene'), name: '', notes: '', active: true, devices: [], added_at: now, updated_at: now });
+    scenesMarkDirty();
+    scenesRender();
+  };
+  window.scenesDelete = function (i) {
+    if (!scenesList[i]) return;
+    const nm = scenesList[i].name || '(unnamed)';
+    if (!confirm('Delete scene "' + nm + '"?')) return;
+    scenesList.splice(i, 1);
+    scenesMarkDirty();
+    scenesRender();
+  };
+  // Add a device to a scene via the shared picker (lists ALL devices). The
+  // picker returns a token string ("@Name", "@Name Channel", "@Name on", …);
+  // we store it as a {t:'dev', v:token} chip — the same shape the rule parser
+  // (_parse_dev_chip / parse_display_chip) already understands, so a future
+  // rule-engine scene expansion can consume scene.devices directly.
+  window.scenesAddDevice = function (i) {
+    if (!scenesList[i]) return;
+    if (typeof window.openDevicePicker !== 'function') { alert('Device picker not loaded.'); return; }
+    // Multi-select: the picker returns an ARRAY of tokens. (Falls back to a
+    // single token defensively if some caller ever runs it single-pick.)
+    window.openDevicePicker(function (tokens) {
+      const arr = Array.isArray(tokens) ? tokens : (tokens ? [tokens] : []);
+      if (!arr.length) return;
+      if (!Array.isArray(scenesList[i].devices)) scenesList[i].devices = [];
+      arr.forEach(tok => { if (tok) scenesList[i].devices.push({ t: 'dev', v: tok }); });
+      scenesList[i].updated_at = new Date().toISOString();
+      scenesMarkDirty();
+      scenesRender();
+    }, { multi: true });
+  };
+  window.scenesRemoveDevice = function (i, di) {
+    if (!scenesList[i] || !Array.isArray(scenesList[i].devices)) return;
+    scenesList[i].devices.splice(di, 1);
+    scenesList[i].updated_at = new Date().toISOString();
+    scenesMarkDirty();
+    scenesRender();
+  };
+  // Set (or clear) a device's on/off state for this scene. Clicking the
+  // already-active state clears it back to bare (no action). Any prior special
+  // action (push/Page/say/…) is replaced — a scene is an on/off state list.
+  window.scenesSetDeviceAction = function (i, di, action) {
+    const seg = scenesList[i] && scenesList[i].devices && scenesList[i].devices[di];
+    if (!seg) return;
+    const p = scenesParseChip(seg.v);
+    seg.v = (p.action === action) ? p.base : ((p.base || '') + ' ' + action);
+    scenesList[i].updated_at = new Date().toISOString();
+    scenesMarkDirty();
+    scenesRender();
+  };
+  // Set EVERY device in a scene to on (or off) at once. Normalizes any prior
+  // action (incl. special push/Page chips) to the chosen on/off state.
+  window.scenesSetAllActions = function (i, action) {
+    const s = scenesList[i];
+    if (!s || !Array.isArray(s.devices) || !s.devices.length) return;
+    s.devices.forEach(seg => { const p = scenesParseChip(seg.v); seg.v = (p.base || '') + ' ' + action; });
+    s.updated_at = new Date().toISOString();
+    scenesMarkDirty();
+    scenesRender();
+  };
+  window.scenesSave = async function () {
+    try {
+      const r = await fetch('/api/dashboard-settings/' + encodeURIComponent(SCENES_STORAGE_KEY), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: scenesList }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      scenesClearDirty();
+      alert('Saved ' + scenesList.length + ' scene(s).');
+    } catch (e) {
+      alert('Save failed: ' + (e.message || e));
+    }
+  };
+  window.scenesDiscard = async function () {
+    if (scenesDirty && !confirm('Discard all unsaved changes and reload from server?')) return;
+    await scenesLoad();
+  };
+
+  async function scenesLoad() {
+    try {
+      const r = await fetch('/api/dashboard-settings/' + encodeURIComponent(SCENES_STORAGE_KEY));
+      if (!r.ok) { scenesList = []; scenesClearDirty(); scenesRender(); return; }
+      const j = await r.json();
+      scenesList = Array.isArray(j.value) ? j.value : [];
+      scenesClearDirty();
+      scenesRender();
+    } catch (e) {
+      scenesList = [];
+      scenesClearDirty();
+      scenesRender();
+    }
+  }
+  window.scenesLoad = scenesLoad;
+  window.addEventListener('DOMContentLoaded', scenesLoad);
+})();
+
 // ─── Corridor Simulator tab ────────────────────────────────────────────
 // Monitor + trigger surface for the planned Corridor → FR → RemoteXY door
 // chain. Architecture: server.js owns the MQTT client (rule_engine creds,

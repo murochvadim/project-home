@@ -115,6 +115,7 @@
     <button class="tab-btn" onclick="showTab('activity',this)">Home Activity</button>
     <button class="tab-btn" onclick="showTab('base-rules',this)">Base Rule Settings</button>
     <button class="tab-btn" onclick="showTab('corridor-sim',this)">Corridor Simulator</button>
+    <button class="tab-btn" onclick="showTab('scenes',this)">Scenes</button>
     <div class="time-mode-bar" id="time-mode-bar">
       <span class="tmb-item"><span class="tmb-label">home mode:</span> <span class="tmb-value" id="tmb-home-mode">—</span></span>
       <span class="tmb-sep">·</span>
@@ -445,11 +446,35 @@
     </div>
   </div>
 
+  <!-- TAB: Scenes —
+       Reusable named device-action lists ("scenes") defined once and reused
+       across rules / bindings / buttons. STEP 1: create / name / note / save /
+       delete scenes. The device list (chips) + rule consumption come in later
+       steps. See scenes* functions in main-agent.js; stored in
+       dashboard_settings.apartment.scenes. -->
+  <div class="tab-panel" id="tab-scenes">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <h2 style="margin:0;">Scenes</h2>
+        <button onclick="scenesNew()" style="background:#6c4f9f;color:#fff;border:none;border-radius:4px;padding:5px 14px;font-size:0.82rem;cursor:pointer;">+ New Scene</button>
+      </div>
+      <div style="font-size:0.82rem;color:#c0392b;font-weight:600;margin-bottom:12px;">
+        Set required Device state after loading !!!
+      </div>
+      <div id="scenes-container"></div>
+      <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px;">
+        <span id="scenes-dirty-badge" style="display:none;color:#c0392b;font-size:0.78rem;">● Unsaved changes</span>
+        <button class="btn-save" onclick="scenesSave()" style="padding:5px 16px;">Save All</button>
+        <button onclick="scenesDiscard()" title="Discard all unsaved changes and reload from DB" style="padding:5px 12px;background:#fff;color:#666;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.82rem;">Discard</button>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/device-picker.js?v=12"></script>
-<script src="js/main-agent.js?v=85"></script>
+<script src="js/device-picker.js?v=13"></script>
+<script src="js/main-agent.js?v=89"></script>
 </body>
 </html>
