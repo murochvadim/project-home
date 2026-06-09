@@ -118,6 +118,14 @@ def evaluate(event, state):
             }]
         return []
 
+    # Held off by another rule (e.g. Start Away Mode keeping a countdown preset
+    # on screen). Skip ONLY the periodic re-push so we don't clobber it — the
+    # wipe above still runs, and the cooldown timer is left untouched so normal
+    # 30-min cadence resumes the instant the window passes. Epoch flag that
+    # self-expires; set by the producer, never cleared (a past ts is inert).
+    if now_local.timestamp() < float(state.shared.get("daily_welcome.suppress_until_ts", 0) or 0):
+        return []
+
     # Cooldown short-circuit — the vast majority of heartbeats return here.
     if state.get_timer("daily_welcome_cooldown") < COOLDOWN_SEC:
         return []
