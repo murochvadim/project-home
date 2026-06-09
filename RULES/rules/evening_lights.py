@@ -94,10 +94,17 @@ _GATE_RE = re.compile(
 )
 
 
+# Mode-button device (8 Gang Switch). Added to triggers so Scenario B (home
+# arrival) fires in the SAME event cycle as the button press (~1 s) instead of
+# waiting up to 60 s for the heartbeat. Mode Buttons (depends_on) runs first and
+# sets home_mode. Scenario A (sunset anchor) stays HEARTBEAT-ONLY — see evaluate().
+_MODE_BUTTON_DEVICE_ID = 'bf85e819855d686918q6hz'
+
+
 RULE = {
     "name":        "Evening Lights",
     "description": "Turn on declared lights on evening kick-in OR home arrival during active time modes (latched per home period).",
-    "triggers":    ["heartbeat"],
+    "triggers":    ["heartbeat", _MODE_BUTTON_DEVICE_ID],
     "controls":    [],
     "category":    "control",
     "group":       "lighting",
@@ -317,9 +324,12 @@ def _anchor_minutes(sun_anchors, state):
 # ─────────────────────────── Rule ───────────────────────────
 
 def evaluate(event, state):
-    # Belt-and-braces — engine already filters by trigger.
-    if event.get('device_id') != 'heartbeat':
+    # Heartbeat drives Scenario A (sunset anchor) + acts as fallback; a
+    # mode-button event drives instant Scenario B (arrival). Mode Buttons
+    # (depends_on) ran first this cycle, so home_mode is fresh. Other devices ignored.
+    if event.get('device_id') not in ('heartbeat', _MODE_BUTTON_DEVICE_ID):
         return []
+    is_heartbeat = event.get('device_id') == 'heartbeat'
 
     container = _read_evening_lights_container(state)
     if container is None:
@@ -374,16 +384,24 @@ def evaluate(event, state):
     # how the tick aligns with the wall clock. Crossing-edge detection
     # tolerates drift while the daily + period latches still prevent
     # double-firing.
+    # HEARTBEAT-ONLY: a mode-button event must NOT advance _last_eval_min or run
+    # the anchor check (it would shift the crossing window and could make sunset
+    # miss). So sun_anchor_hit stays False on mode events; sunset still fires on
+    # the tick. Scenario B (arrival) below is what the mode event is for.
+    # anchor_minutes computed unconditionally — it's also read by the fire log
+    # below, which runs on a Scenario-B (mode-event) fire too. Only the
+    # _last_eval_min mutation + crossing check are heartbeat-gated.
     anchor_minutes = _anchor_minutes(sun_anchors, state)
-    prev_now_min = state.shared.get('_evening_lights_last_eval_min')
-    state.shared['_evening_lights_last_eval_min'] = now_min
     sun_anchor_hit = False
-    if isinstance(prev_now_min, int) and anchor_minutes:
-        delta = (now_min - prev_now_min) % 1440
-        for a in anchor_minutes:
-            if 0 < ((a - prev_now_min) % 1440) <= delta:
-                sun_anchor_hit = True
-                break
+    if is_heartbeat:
+        prev_now_min = state.shared.get('_evening_lights_last_eval_min')
+        state.shared['_evening_lights_last_eval_min'] = now_min
+        if isinstance(prev_now_min, int) and anchor_minutes:
+            delta = (now_min - prev_now_min) % 1440
+            for a in anchor_minutes:
+                if 0 < ((a - prev_now_min) % 1440) <= delta:
+                    sun_anchor_hit = True
+                    break
 
     # Manual Run (dashboard red "Run" button → engine Force path). Simulate the
     # trigger MOMENT so the rule fires on demand:
