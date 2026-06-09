@@ -63,7 +63,10 @@
     const out = [];
     for (const [k, ch] of Object.entries(cfg)) {
       if (!ch || typeof ch !== 'object') continue;
-      if (ch.action_on || ch.action_off) {
+      // action_on/action_off = string alias (ESP/HASP/Awtrix). dps_on/dps_off
+      // = raw Tuya DPS payload for local-only devices (e.g. Star Projector)
+      // that aren't HA-mediated — same on/off UX, engine writes via set_dps.
+      if (ch.action_on || ch.action_off || ch.dps_on || ch.dps_off) {
         out.push([k, labels[k] || ch.name || k]);
       }
     }
@@ -287,9 +290,9 @@
           // RemoteXY door_open — open is a real pulse, "close" has no
           // hardware counterpart) get a single button instead of both.
           return [
-            ch.action_on ? `<button data-dp-action="esp-on"  data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
+            (ch.action_on || ch.dps_on) ? `<button data-dp-action="esp-on"  data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
                      style="padding:2px 8px;margin:2px;border:1px solid #3a7d44;color:#3a7d44;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}on</button>` : '',
-            ch.action_off ? `<button data-dp-action="esp-off" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
+            (ch.action_off || ch.dps_off) ? `<button data-dp-action="esp-off" data-dp-name="${(d.name||'').replace(/"/g,'&quot;')}" data-dp-channel="${key}" data-dp-suffix="${suffix.replace(/"/g,'&quot;')}"
                      style="padding:2px 8px;margin:2px;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:3px;cursor:pointer;font-size:0.72rem;font-weight:600;">${lblPrefix}off</button>` : '',
           ];
         }).join('');

@@ -1616,7 +1616,19 @@ class RuleEngine:
             return
 
         else:
-            # Default: Tuya / BSH / other
+            # Default: Tuya / BSH / other.
+            # Local-only Tuya devices (not HA-mediated, e.g. Star Projector)
+            # can't use turn_on/turn_off — those resolve through an HA entity
+            # the device-agent can't find. If the device declares a raw DPS
+            # payload via dps_config.<channel>.dps_on/dps_off, rewrite the
+            # command into a `set_dps` so the device-agent writes it over local
+            # TCP. Devices without such a mapping keep the old pass-through.
+            if action in ('turn_on', 'turn_off'):
+                dps = self._resolve_local_dps(dev, cmd)
+                if dps is not None:
+                    cmd = {'device_id': device_id, 'action': 'set_dps',
+                           'dps': dps, 'rule': rule_name}
+                    action = 'set_dps'
             self.mqtt.publish_command(f'mur/home/device/{device_id}/command', cmd)
 
         log.info("Rule '%s' -> %s %s", rule_name, action, device_name)
@@ -1648,6 +1660,34 @@ class RuleEngine:
                 continue
             if action == 'turn_on'  and ch_cfg.get('action_on'):  return ch_cfg['action_on']
             if action == 'turn_off' and ch_cfg.get('action_off'): return ch_cfg['action_off']
+        return None
+
+    # Local-only Tuya turn_on/turn_off → raw DPS payload.
+    #
+    # A local Tuya device that isn't mirrored in HA (e.g. the Star Projector)
+    # can't be driven by turn_on/turn_off — those resolve through an HA entity
+    # the device-agent can't find. Such a device declares, per channel:
+    #     dps_config.<channel>.dps_on  = {"20": true}
+    #     dps_config.<channel>.dps_off = {"20": false}
+    # carrying the raw Tuya DPS to write. This returns the payload for the
+    # cmd's turn_on/turn_off (resolving cmd['channel'] first, else the first
+    # channel that declares one), or None if the device has no such mapping —
+    # in which case the caller keeps the old turn_on/turn_off pass-through.
+    def _resolve_local_dps(self, dev, cmd):
+        action = cmd.get('action', '')
+        if action not in ('turn_on', 'turn_off'):
+            return None
+        key = 'dps_on' if action == 'turn_on' else 'dps_off'
+        dps_cfg = dev.get('dps_config') or {}
+        channel = cmd.get('channel')
+        if channel:
+            cfg = dps_cfg.get(channel)
+            if isinstance(cfg, dict) and isinstance(cfg.get(key), dict):
+                return cfg[key]
+            return None
+        for cfg in dps_cfg.values():
+            if isinstance(cfg, dict) and isinstance(cfg.get(key), dict):
+                return cfg[key]
         return None
 
     def _check_loop(self, device_id, action, rule_name):
