@@ -85,10 +85,20 @@ _TRIGGER_MODE_RE = re.compile(
 )
 
 
+# Mode-button device (8 Gang Switch — HOME=DPS4 / AWAY=DPS8 / ABROAD=DPS3).
+# Start Away triggers on it so Phase 1 fires in the SAME event cycle as the
+# button press (~1 s) instead of waiting up to 60 s for the next heartbeat tick.
+# Mode Buttons (depends_on) runs first in that cycle and sets home_mode, so this
+# rule sees the fresh value. Heartbeat stays a trigger for Phase 2 (countdown →
+# keep-on off) and as a fallback. If the mode buttons ever move to a different
+# device, update this id; the heartbeat fallback still catches it within 60 s.
+_MODE_BUTTON_DEVICE_ID = 'bf85e819855d686918q6hz'
+
+
 RULE = {
     "name":        "Start Away Mode",
     "description": "On entering the s_sa7 trigger mode: RUN the s_sa1 Scene's device on/off list, turn on the s_sa2 keep-on device for s_sa3 duration, dispatch s_sa4 preset (+countdown), dispatch s_sa5 preset after the countdown.",
-    "triggers":    ["heartbeat"],
+    "triggers":    ["heartbeat", _MODE_BUTTON_DEVICE_ID],
     "controls":    [],
     "category":    "control",
     "group":       "away",
@@ -237,7 +247,10 @@ def _config_ok(cfg):
 # ─────────────────────────── Rule ───────────────────────────
 
 def evaluate(event, state):
-    if event.get('device_id') != 'heartbeat':
+    # Fire on the heartbeat (Phase 2 timing + fallback) OR on a mode-button
+    # event (instant Phase 1 — Mode Buttons ran first this cycle and set
+    # home_mode). Any other device event is ignored.
+    if event.get('device_id') not in ('heartbeat', _MODE_BUTTON_DEVICE_ID):
         return []
 
     container = _read_container(state)
