@@ -282,9 +282,7 @@ def evaluate(event, state):
 
     # ── Phase 1 — entry into trigger mode ──
     if phase == 'idle' and home_just_entered:
-        scene = load_scene(state, cfg['scene_name'])
-        scene_cmds = expand_scene(state, scene, 'Start Away Mode')
-        if not scene_cmds:
+        if not load_scene(state, cfg['scene_name']):
             # SAFETY: no scene → do nothing. NO fallback to the old bulk-off.
             log.warning("start_away_mode: scene %r missing/empty — Phase 1 NO-OP "
                         "(no bulk-off fallback)", cfg['scene_name'])
@@ -292,24 +290,17 @@ def evaluate(event, state):
 
         keep_dev_id, keep_dps = cfg['keep_on_target']
 
-        # Run the scene — but never toggle the keep-on CHANNEL (it goes ON below).
-        # Match device_id AND channel so OTHER channels of the same multi-gang
-        # switch still get their scene action (e.g. the keep-on is one gang of
-        # "Entrance Switch"; its other gangs in the scene must still turn off).
-        for c in scene_cmds:
-            if c.get('device_id') == keep_dev_id and c.get('channel') == keep_dps:
-                continue
-            # Deliberate mode-triggered fan-out — exempt from the engine's
-            # 4-cmd/10s loop guard (parity with Scene Runner), so a scene with a
-            # 4+-gang switch all-off can't auto-disable this rule mid-run.
-            c['_skip_loop_guard'] = True
-            commands.append(c)
-
-        # Turn ON the keep-on (fake-presence) target.
-        cmd = {'device_id': keep_dev_id, 'action': 'turn_on', 'rule': 'Start Away Mode'}
+        # Run the whole Away scene off-thread via the engine's async run_scene
+        # (ONE command — Start Away is freed instantly; the scene's per-device
+        # dispatch happens on the engine's run_scene thread). The keep-on turn_on
+        # is DEFERRED a few seconds so it lands AFTER the async scene — so even if
+        # the scene turns the keep-on's channel off, the fake-presence device
+        # ends ON (replaces the old in-line "skip the keep-on channel" logic).
+        commands.append({'action': 'run_scene', 'scene': cfg['scene_name'], 'rule': 'Start Away Mode'})
+        kc = {'device_id': keep_dev_id, 'action': 'turn_on', 'rule': 'Start Away Mode', '_delay_sec': 4}
         if keep_dps is not None:
-            cmd['channel'] = keep_dps
-        commands.append(cmd)
+            kc['channel'] = keep_dps
+        commands.append(kc)
 
         # Initial preset + {{countdown}} (push_preset only) + Daily_Welcome hold.
         end_ts = datetime.now(_TZ).timestamp() + cfg['keep_on_sec']
@@ -324,9 +315,9 @@ def evaluate(event, state):
         state.set_timer('start_away_t0')
         state.shared['_start_away_phase'] = 'phase1'
         log.info(
-            "start_away_mode: phase1 fired (trigger=%s scene=%r scene_cmds=%d total=%d "
+            "start_away_mode: phase1 fired (trigger=%s scene=%r via run_scene total=%d "
             "keep_on=%s for %.0f sec initial=%s final=%s)",
-            trigger, cfg['scene_name'], len(scene_cmds), len(commands),
+            trigger, cfg['scene_name'], len(commands),
             cfg['keep_on_target'], cfg['keep_on_sec'],
             cfg['initial_cmd'].get('preset_name') or cfg['initial_cmd'].get('action'),
             cfg['final_cmd'].get('preset_name') or cfg['final_cmd'].get('action'),

@@ -26,7 +26,6 @@ from _display_chips import (  # noqa: E402
     build_alexa_cmd  as _build_alexa_cmd,
     build_vacuum_cmd as _build_vacuum_cmd,
 )
-from _scenes import load_scene, expand_scene  # noqa: E402
 
 log = logging.getLogger("rule.wallmote_handler")
 
@@ -207,18 +206,14 @@ def evaluate(event, state):
             })
             continue
         if btype == "scene":
-            # Run a named Scene (authored on Main Agent → Scenes), same path as
-            # Evening Lights / Start Away Mode. expand_scene honors per-device
-            # on/off + display/Alexa/panel chips. _skip_loop_guard on every cmd
-            # because a big all-off scene legitimately fires many commands.
-            scene = load_scene(state, b.get("target"))
-            scmds = expand_scene(state, scene, "Wallmote Handler")
-            if not scmds:
-                log.warning("scene binding %r in %s missing/empty — skipped",
-                            b.get("target"), slot_key)
-                continue
-            for c in scmds:
-                commands.append({**c, "_skip_loop_guard": True})
+            # Run a named Scene (Main Agent → Scenes) via the engine's async
+            # run_scene — ONE command; the handler returns instantly and the
+            # scene's per-device dispatch happens on the engine's run_scene thread.
+            tgt = b.get("target")
+            if tgt:
+                commands.append({"action": "run_scene", "scene": tgt, "rule": "Wallmote Handler"})
+            else:
+                log.warning("scene binding in %s missing target — skipped", slot_key)
             continue
 
         device_id = b.get("device_id")

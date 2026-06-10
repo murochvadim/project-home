@@ -67,7 +67,6 @@ _RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RULES_DIR not in sys.path:
     sys.path.insert(0, _RULES_DIR)
 from _display_chips import parse_display_chip, build_devices_by_name  # noqa: E402
-from _scenes import load_scene, expand_scene  # noqa: E402
 
 log = logging.getLogger('rule.evening_lights')
 
@@ -473,12 +472,11 @@ def evaluate(event, state):
     # fall back to the legacy device-list path when no scene chip is present.
     scene_name = _load_scene_name(container)
     if scene_name:
-        scene = load_scene(state, scene_name)
-        commands = expand_scene(state, scene, 'Evening Lights')
-        if not commands:
-            log.warning("evening_lights: scene %r missing/empty — no-op", scene_name)
-            return []
-        src = f'scene:{scene_name}'
+        # Hand the whole scene to the engine's async run_scene (ONE command,
+        # expanded + dispatched off-thread by rule_engine._run_scene) — the rule
+        # is freed instantly instead of expanding + firing every device here.
+        commands = [{'action': 'run_scene', 'scene': scene_name, 'rule': 'Evening Lights'}]
+        src = f'run_scene:{scene_name}'
     else:
         targets = _load_evening_light_targets(state, container)
         if not targets:

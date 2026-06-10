@@ -533,6 +533,12 @@ class RuleEngine:
             'source': source,
             'ts': datetime.now(tz=TZ).isoformat(),
         }
+        # Dashboard ▶ Run / Living Room ▶ Test publish mur/home/device/scene_runner/event
+        # {scene}. Run it directly via the async run_scene — one engine capability
+        # for every scene run (rules + dashboard). No Scene Runner rule needed.
+        if device_id == 'scene_runner':
+            self._run_scene(event['dps'].get('scene'), 'dashboard')
+            return
         self._fire_rules_for_event(event)
 
     def _fire_rules_for_event(self, event):
@@ -1469,6 +1475,28 @@ class RuleEngine:
         log.info("Rule '%s' -> awtrix preset '%s' (%s) -> %r",
                  rule_name, preset_name, device_id, text)
 
+    def _run_scene(self, name, rule_name):
+        """Expand + dispatch a named scene. Run OFF-THREAD (daemon) by the
+        run_scene dispatch branch so the triggering rule/cycle returns instantly
+        — the scene's per-device commands fire on this thread instead of inside
+        the rule's firing cycle. One engine-level capability: any rule can emit
+        {action:'run_scene', scene:'X'} and forget. Reuses _scenes.expand_scene
+        (same commands the dashboard ▶ Run / Scene Runner produce)."""
+        from _scenes import load_scene, expand_scene
+        try:
+            scene = load_scene(self.state, name)
+            if not scene:
+                log.warning("run_scene: scene %r not found/inactive — nothing run (rule '%s')",
+                            name, rule_name)
+                return
+            cmds = expand_scene(self.state, scene, rule_name)
+            for c in cmds:
+                c['_skip_loop_guard'] = True
+                self._dispatch_command(c, rule_name)
+            log.info("run_scene: '%s' -> %d command(s) (rule '%s')", name, len(cmds), rule_name)
+        except Exception:
+            log.exception("run_scene failed for %r", name)
+
     def _dispatch_command(self, cmd, rule_name):
         """Route a command dict to the correct MQTT topic.
 
@@ -1484,6 +1512,15 @@ class RuleEngine:
 
         device_id = cmd.get('device_id', '')
         action = cmd.get('action', '')
+
+        # Run a whole named Scene off-thread — one engine-level capability so a
+        # rule just returns {action:'run_scene', scene:'X'} and is freed instantly;
+        # the scene's commands are expanded + dispatched on a daemon thread.
+        if action == 'run_scene':
+            threading.Thread(target=self._run_scene,
+                             args=(cmd.get('scene'), rule_name),
+                             daemon=True).start()
+            return
 
         if not device_id:
             log.warning("Rule '%s' returned command without device_id", rule_name)
