@@ -439,17 +439,13 @@
   //     dispatch the full corridor light + monitor + Awtrix + FR + Pixoo
   //     chain on real hardware.)
   // Keep ↺ Reset Runs visible.
-  const RULES_NO_TEST = new Set([
-    'Evening Lights',
-    'Morning Lights',
-    'Start Away Mode',
-    'Move in Corridor',
-    'Wallmote Handler',  // device-event rule: Test/Force would fire an arbitrary button1 binding, not meaningful
-  ]);
-  // Rules that get a single red "Run" button instead of Test/Force. Run uses
-  // the engine Force path with the rule's own test_event (source='force_run'),
-  // so the rule fires EXACTLY as declared — gates + latch honored, only the
-  // trigger moment simulated. Takes precedence over RULES_NO_TEST.
+  // Test/Force buttons were removed from ALL rules (2026-06-11) — the rule-row
+  // default renders no per-rule action buttons. Only Mode Buttons
+  // (HOME/AWAY/ABROAD), the RULES_RUN_BUTTON "Run", and ↺ Reset Runs remain.
+  // Rules that get a single red "Run" button. Run uses the engine Force path
+  // with the rule's own test_event (source='force_run'), so the rule fires
+  // EXACTLY as declared — gates + latch honored, only the trigger moment
+  // simulated.
   const RULES_RUN_BUTTON = new Set([
     'Evening Lights',
     'Morning Lights',
@@ -982,10 +978,7 @@
                 <button class="btn btn-secondary btn-sm" onclick="testModeButton('abroad')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('abroad')};color:#fff;" title="Press the ABROAD relay on 8 Gang Switch (real switch event → rule fires)">ABROAD</button>
               ` : RULES_RUN_BUTTON.has(r.name) ? `
                 <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#c0392b;color:#fff;" title="Run the rule exactly as declared (gates + latch honored, only the trigger moment is simulated) and dispatch for real">Run</button>
-              ` : RULES_NO_TEST.has(r.name) ? `` : `
-                <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',false)" style="font-size:0.68rem;padding:2px 6px;" title="Dry-run test">Test</button>
-                <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#7a9ab8;color:#fff;" title="Reset cooldowns and dispatch for real">Force</button>
-              `}
+              ` : ``}
               <button class="btn btn-secondary btn-sm" onclick="resetRuleRuns('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 6px;" title="Zero the Runs counter only (avg/max/last-fired stay) — engine applies within 60 s">↺</button>
             </td>
           </tr>`;
