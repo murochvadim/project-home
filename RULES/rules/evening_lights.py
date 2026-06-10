@@ -93,8 +93,9 @@ _GATE_RE = re.compile(
     re.IGNORECASE,
 )
 # Scene sentence (s_el1 alt) — "Evening Lights: scene is @scene <Name>". When a
-# scene chip is present the rule RUNS that scene (via _scenes.expand_scene)
-# instead of the legacy device list — mirrors Start Away Mode's s_sa1.
+# scene chip is present the rule emits one {action:'run_scene'} command and the
+# ENGINE runs it async (rule_engine._run_scene) instead of the legacy device
+# list — mirrors Start Away Mode's s_sa1.
 _SCENE_RE = re.compile(r'evening\s+lights:\s*scene\s+is\s+(.+)', re.IGNORECASE)
 
 
@@ -468,8 +469,9 @@ def evaluate(event, state):
         return []
 
     # Resolve what to fire — fresh each fire. Prefer a Scene (s_el1 = "scene is
-    # @scene <Name>") run via _scenes.expand_scene, exactly like Start Away Mode;
-    # fall back to the legacy device-list path when no scene chip is present.
+    # @scene <Name>") → emit ONE run_scene command (engine runs it async), exactly
+    # like Start Away Mode; fall back to the legacy device-list path when no scene
+    # chip is present.
     scene_name = _load_scene_name(container)
     if scene_name:
         # Hand the whole scene to the engine's async run_scene (ONE command,

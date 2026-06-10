@@ -45,7 +45,9 @@ restart. Trigger is heartbeat (60 s).
 
 Companion:
 - mode_buttons.py — sole writer of state.shared['home_mode']; depends_on it.
-- _scenes.py — load_scene / expand_scene + device-chip resolution.
+- _scenes.py — load_scene (existence check) + device-chip resolution. The
+  scene's per-device dispatch is handled by the engine's run_scene (Phase 1
+  emits {action:'run_scene'}), not expand_scene here.
 - _display_chips.parse_display_chip — resolves the s_sa4/s_sa5 display chips.
 """
 
@@ -63,7 +65,7 @@ _RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RULES_DIR not in sys.path:
     sys.path.insert(0, _RULES_DIR)
 from _display_chips import parse_display_chip, build_devices_by_name  # noqa: E402
-from _scenes import load_scene, expand_scene, build_devices_by_name_desc, parse_dev_chip  # noqa: E402
+from _scenes import load_scene, build_devices_by_name_desc, parse_dev_chip  # noqa: E402
 
 log = logging.getLogger('rule.start_away_mode')
 

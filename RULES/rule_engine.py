@@ -1490,8 +1490,9 @@ class RuleEngine:
         run_scene dispatch branch so the triggering rule/cycle returns instantly
         — the scene's per-device commands fire on this thread instead of inside
         the rule's firing cycle. One engine-level capability: any rule can emit
-        {action:'run_scene', scene:'X'} and forget. Reuses _scenes.expand_scene
-        (same commands the dashboard ▶ Run / Scene Runner produce)."""
+        {action:'run_scene', scene:'X'} and forget. Reuses _scenes.expand_scene —
+        the single scene-execution path for both rules and the dashboard ▶ Run
+        (the old Scene Runner rule was deleted 2026-06-10)."""
         from _scenes import load_scene, expand_scene
         try:
             _t0 = time.time()
