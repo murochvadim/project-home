@@ -19,18 +19,23 @@ Balcony home-theater built from three boxes (a projector is not "smart" and an a
 | | **Photon Beam PK52** | **UHD38x** |
 |---|---|---|
 | Screen @ 3 m | **~112″** (throw ratio 1.21–1.59:1) | ~82–90″ |
-| Lens shift | ✅ yes (easy placement) | ❌ none (exact mount height) |
-| Image | 4K **dual-laser**, high contrast | 4K lamp |
+| Lens shift | ❌ **none** — digital keystone only (H/V 30°, auto-vertical) + fixed 105% offset | ❌ none (exact mount height) |
+| Light source | 4K **DuraCore laser** — 30,000 h, no lamp swaps | 4K **lamp** (consumable) |
 | Brightness | 3500 lm | 4000 lm |
 | **RS-232 serial control** | ✅ | ✅ (DB-9) |
 | **LAN / RJ45** | ❌ **no** | ❌ **no** |
 | **HDMI-CEC** | ✅ | ✅ |
-| **Digital audio out → WiiM** | **HDMI 1 ARC** | **Optical S/PDIF** |
-| 3.5 mm audio out | ✅ | ✅ |
+| **Digital audio out → WiiM** | ❌ **none — no ARC, no optical** (3.5 mm analog only) | ✅ **Optical S/PDIF** |
+| 3.5 mm analog audio out | ✅ | ✅ |
 | 12 V trigger (motorized screen) | ✅ | ✅ |
+| Always-on rated | ✅ **24/7 + 360°** (good for a continuous aquarium) | not rated 24/7 |
 | Built-in smart / Wi-Fi | ❌ (needs Xiaomi) | ❌ (needs Xiaomi) |
 
-**Recommendation: PK52** for a balcony — bigger image + lens shift + dual-laser, and it loses nothing on connectivity or the integration path. UHD38x only if cost matters and ~90″ is enough.
+**Recommendation: still PK52** for a balcony — bigger image (~112″), **laser light source (30,000 h, no lamp swaps)**, and **24/7 + 360° rated** (ideal for an always-on aquarium). Honest trade-offs vs UHD38x: **no lens shift** (both rely on keystone anyway) and **no digital audio out** (3.5 mm analog only — or add an HDMI extractor; the UHD38x's optical out is the cleaner audio path). Pick UHD38x if clean optical audio to the WiiM + lower cost matter more than image size and laser longevity.
+
+> **Corrections (2026-06-10, against the official PK52 spec sheet):** earlier notes claimed the PK52 had **lens shift** and **HDMI ARC** — both are WRONG. The PK52 has **digital keystone only** (H/V 30° + auto-vertical, fixed 105% offset) and **no ARC / no optical** (3.5 mm analog audio out only). Sources had conflicted; the official spec is authoritative.
+
+**Placement note (no lens shift):** the PK52 aligns the image with **digital keystone** (H/V 30°, auto-vertical) on a **fixed 105% offset**, not optical shift. Keystone on a 4K projector slightly softens the picture, so mount it square to the screen at the right height and use keystone only for fine trim.
 
 **Screen sizing reference (16:9):** width = diagonal × 0.872, height = diagonal × 0.490. So 82″ = 181 cm wide, 90″ = 199 cm wide, 100″ = 221 cm wide (≈ 125 cm tall). A **100″ image needs the PK52** (out of UHD38x's reach at 3 m).
 
@@ -52,17 +57,17 @@ All three run as `device_agent` adapters on LXC 103, publish to MQTT, write `dev
 
 ---
 
-## Audio routing — NO extractor needed
+## Audio routing — depends on the model
 
-The projector itself splits the audio off for you, so the earlier HDMI-audio-extractor idea is dropped:
+How audio reaches the WiiM differs by projector (the PK52 has **no** ARC/optical — corrected 2026-06-10):
 
 ```
-Xiaomi ──HDMI──► Projector ──(ARC or Optical)──► WiiM Amp ──speaker wire──► L + R speakers
+Xiaomi ──HDMI──► Projector ──(audio out)──► WiiM Amp ──speaker wire──► L + R speakers
                 (video to screen)
 ```
 
-- **PK52:** HDMI 1 **ARC** → WiiM Amp HDMI-ARC input (digital).
-- **UHD38x:** **Optical S/PDIF** → WiiM Amp optical input (digital).
+- **UHD38x:** **Optical S/PDIF** out → WiiM Amp optical in (digital, **no extractor needed**).
+- **PK52:** ⚠️ **no ARC, no optical — 3.5 mm analog out only.** Two choices: (a) **3.5 mm analog → WiiM line-in** (stereo, simplest, no extractor), or (b) an **HDMI audio extractor** between the Xiaomi and the projector → optical → WiiM (digital). *(The earlier "PK52 via ARC, no extractor" was wrong — corrected against the official spec.)*
 - **Music / radio:** push straight to the WiiM (cast / HTTP API) — projector not involved.
 
 **Two things to set/verify on hardware:**
