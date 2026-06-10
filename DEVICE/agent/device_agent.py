@@ -52,6 +52,16 @@ MQTT_PASS   = os.environ.get('MQTT_PASS', '')
 
 LOG_INTERVAL = 300   # write device_agent_log every 5 min
 
+# Local-TCP control allowlist (TEST 2026-06-10). Local Tuya devices whose
+# turn_on/turn_off should SKIP the HA -> Tuya-cloud roundtrip and write the
+# channel's DPS directly over the LAN (~150 ms vs the 3-6 s, jittery cloud
+# path). For Tuya multi-gang switches the command's `channel` == the DPS key
+# (Corridor Switch: channel '1' = DPS '1' = Light). Start with one device to
+# verify the latency win + stability, then widen or generalize.
+LOCAL_CONTROL_IDS = {
+    'bfe47a84d7cb783f59inot',   # Corridor Switch (Light = DPS 1)
+}
+
 # Higher number = better/faster source — only upgrade, never downgrade
 SOURCE_PRI = {
     'initial': 0, 'gateway_init': 0,
@@ -543,6 +553,23 @@ class DeviceAgent:
                 return
 
             channel = payload.get('channel')
+
+            # Local-TCP fast path (allowlist): write the channel's DPS directly
+            # over the LAN instead of the HA -> Tuya-cloud roundtrip. channel ==
+            # DPS key for Tuya multi-gang switches. Falls through to HA if the
+            # local adapter isn't loaded.
+            if action in ('turn_on', 'turn_off') and device_id in LOCAL_CONTROL_IDS:
+                tuya_local = self.adapters.get('tuya')
+                if tuya_local:
+                    dps_key = str(channel) if channel else '1'
+                    val = (action == 'turn_on')
+                    ok = tuya_local.set_state(device_id, {dps_key: val})
+                    log.info(f'cmd LOCAL {device_id} {{{dps_key}: {val}}} ok={ok} rule={rule}')
+                    self._mqtt.publish(resp_topic, {
+                        'ok': ok, 'dps': {dps_key: val}, 'rule': rule, 'local': True,
+                    })
+                    return
+
             entity = self._resolve_entity(device_id, channel)
             if not entity:
                 self._mqtt.publish(resp_topic, {
