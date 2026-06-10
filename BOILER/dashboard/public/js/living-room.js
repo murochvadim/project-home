@@ -28,6 +28,10 @@
   // rule engine's wallmote_handler.py reads the `type:'pixoo_preset'` +
   // `target:<name>` shape and emits the push command.
   let _pixooPresets = [];         // [{name, ...}] — only `name` is used
+  // Scenes (Main Agent → Scenes) — a wallmote button can run a whole named
+  // scene. Binding stored as {type:'scene', target:<name>}; wallmote_handler.py
+  // runs it via _scenes.expand_scene (honors per-device on/off).
+  let _scenes = [];               // [{name, devices:[...]}]
 
   // Encode/decode the Alexa-action option value used in the picker
   // dropdown. Format: '<verb>' or '<verb>:<name>'. Trusts that user-
@@ -50,6 +54,7 @@
   // Chip-tag for a binding: page-select bindings show `P<n>`; Alexa speak/play
   // show the template/station name appended so the user sees the target.
   function bindingTag(b) {
+    if (b && b.type === 'scene') return `scene:${b.target || '?'}`;
     if (b && b.type === 'pixoo_preset') return `preset:${b.target || '?'}`;
     if (b && b.page_num != null) return `P${b.page_num}`;
     if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
@@ -79,16 +84,19 @@
 
   async function loadData() {
     try {
-      const [devs, saved, anns, stations, presets] = await Promise.all([
+      const [devs, saved, anns, stations, presets, scenes] = await Promise.all([
         fetch('/api/devices').then(r => r.json()),
         fetch(`/api/dashboard-settings/${encodeURIComponent(STORAGE_KEY)}`).then(r => r.json()).catch(() => ({ value: null })),
         fetch('/api/dashboard-settings/media-agents.alexa_announcements').then(r => r.json()).catch(() => ({ value: [] })),
         fetch('/api/dashboard-settings/media-agents.alexa_quick_music').then(r => r.json()).catch(() => ({ value: [] })),
         fetch('/api/pixoo/presets').then(r => r.json()).catch(() => []),
+        fetch('/api/dashboard-settings/apartment.scenes').then(r => r.json()).catch(() => ({ value: [] })),
       ]);
       _alexaAnnouncements = Array.isArray(anns && anns.value) ? anns.value : [];
       _alexaStations      = Array.isArray(stations && stations.value) ? stations.value : [];
       _pixooPresets       = (Array.isArray(presets) ? presets : []).filter(p => p && p.name);
+      _scenes             = (Array.isArray(scenes && scenes.value) ? scenes.value : [])
+                              .filter(s => s && s.name && s.active !== false);
 
       // Wallmote status (both)
       const fmtWm = (devId, prefix) => {
@@ -238,6 +246,36 @@
     let visibleCount = 0;
     const defaultAct = defaultActionFor(activePicker.event);
 
+    // Scene rows at the top — bind a whole named Scene (Main Agent → Scenes)
+    // to this button. Stored {type:'scene', target:<name>}; wallmote_handler.py
+    // runs it via _scenes.expand_scene (honors per-device on/off).
+    const sceneMatches = (_scenes || []).filter(sc =>
+      !f || (sc.name || '').toLowerCase().includes(f) || 'scene'.includes(f));
+    if (sceneMatches.length) {
+      const rl = document.createElement('div');
+      rl.className = 'picker-room-label';
+      rl.textContent = '★ Scenes';
+      list.appendChild(rl);
+      for (const sc of sceneMatches) {
+        const nm = sc.name;
+        const checkedScene = selectedByKey.has('scene:' + nm + ':');
+        const item = document.createElement('div');
+        item.className = 'picker-item';
+        item.innerHTML = `
+          <input type="checkbox" ${checkedScene ? 'checked' : ''}>
+          <div class="picker-item-name">${escHtml(nm)}</div>
+          <div class="picker-item-meta">scene · ${(sc.devices || []).length} devices</div>
+        `;
+        const cb = item.querySelector('input');
+        item.addEventListener('click', (e) => {
+          if (e.target !== cb) cb.checked = !cb.checked;
+          toggleSceneSelection(nm, cb.checked);
+        });
+        list.appendChild(item);
+        visibleCount++;
+      }
+    }
+
     for (const d of controllableDevices) {
       const rowKey = d.device_id + ':' + (d.channel || '');
       const displayName = d.label ? `${d.name} — ${d.label}` : d.name;
@@ -377,6 +415,26 @@
     updatePickerCount();
   }
 
+  function toggleSceneSelection(sceneName, checked) {
+    if (!activePicker) return;
+    const slotKey = key(activePicker.wallmote, activePicker.button, activePicker.event);
+    if (!bindings[slotKey]) bindings[slotKey] = [];
+    const devId = 'scene:' + sceneName;
+    const idx = bindings[slotKey].findIndex(s => s.device_id === devId);
+    if (checked) {
+      if (idx < 0) {
+        bindings[slotKey].push({
+          type: 'scene', target: sceneName,
+          device_id: devId, channel: null,
+          name: sceneName, label: null,
+        });
+      }
+    } else if (idx >= 0) {
+      bindings[slotKey].splice(idx, 1);
+    }
+    updatePickerCount();
+  }
+
   function toggleSelection(dev, checked, action, isPageSelect, isAlexa, isVacuum, isPixoo) {
     if (!activePicker) return;
     const slotKey = key(activePicker.wallmote, activePicker.button, activePicker.event);
@@ -484,7 +542,9 @@
         `${escHtml(s.label ? s.name + ':' + s.label : s.name)}<span class="action-tag ${bindingTag(s)}">${bindingTag(s)}</span>`;
       pickerEl.innerHTML = sel.map(makeTag).join(' · ');
       pickerEl.title = sel.map(s => {
-        const verb = s.type === 'pixoo_preset' ? `push preset '${s.target}'` : actionLabel(s.action);
+        const verb = s.type === 'scene' ? `run scene '${s.target}'`
+                   : s.type === 'pixoo_preset' ? `push preset '${s.target}'`
+                   : actionLabel(s.action);
         return `${s.name}${s.label?':'+s.label:''} → ${verb}`;
       }).join('\n');
     }
@@ -569,6 +629,19 @@
           const r = await fetch('/api/pixoo/command', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'push_preset', preset_name: s.target }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          ok++;
+          continue;
+        }
+
+        // Scene binding → run the whole scene via the Scene Runner endpoint
+        // (same path the Scenes-tab ▶ Run button uses). Honors per-device on/off.
+        if (s.type === 'scene') {
+          if (!s.target) throw new Error('no scene name');
+          const r = await fetch('/api/scenes/run', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: s.target }),
           });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           ok++;
