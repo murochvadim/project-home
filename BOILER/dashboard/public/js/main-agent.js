@@ -333,8 +333,8 @@
           // — but with section grouping we now have 11 columns, runs is 7th.
           // Cell indexing instead: find by the 'text-align:center' cells positioning.
           const cells = tr.querySelectorAll('td');
-          // Order: dot, name, group, pri, time, runs, avg, max, last_fired, enabled, actions
-          if (cells.length >= 11 && cells[5]) cells[5].textContent = '0';
+          // Order: dot, name, group, pri, time, runs, dispatch, last_fired, enabled, actions (10 cols)
+          if (cells.length >= 10 && cells[5]) cells[5].textContent = '0';
         }
       });
     } catch (e) {
@@ -931,8 +931,11 @@
           const enabled = !disabledRules.has(r.name);
           const st = r.stats || {};
           const runs = st.count || 0;
-          const avg = runs > 0 ? (st.total_ms / runs).toFixed(1) + 'ms' : '—';
-          const max = st.max_ms ? st.max_ms.toFixed(1) + 'ms' : '—';
+          // Dispatch time = evaluate + dispatch (engine records it as total_ms).
+          // Show the avg; max on hover. Scene rules read ~0 — their per-device
+          // work runs async on the engine's run_scene thread (see its log line).
+          const dispatch = runs > 0 ? (st.total_ms / runs).toFixed(1) + 'ms' : '—';
+          const dispatchMax = st.max_ms ? st.max_ms.toFixed(1) + 'ms' : '—';
           const lastFired = st.last_fired ? formatTimestamp(st.last_fired) : '—';
           const group = r.group || '';
           const pri = r.priority != null ? r.priority : 10;
@@ -964,8 +967,7 @@
             <td style="text-align:center">${priHtml}</td>
             <td style="text-align:center">${timeHtml}</td>
             <td style="text-align:center">${runs}</td>
-            <td style="text-align:center">${avg}</td>
-            <td style="text-align:center">${max}</td>
+            <td style="text-align:center" title="max ${dispatchMax}">${dispatch}</td>
             <td style="font-size:0.75rem;color:#888;">${lastFired}</td>
             <td>
               <label class="toggle">

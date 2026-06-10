@@ -593,6 +593,7 @@ class RuleEngine:
                 # orphan IDs (deleted device row but stale binding) or offline.
                 # Exception in any single _dispatch_command call previously
                 # bubbled up and stopped every later command in the list.
+                _disp_t0 = time.time()
                 for cmd in commands:
                     try:
                         self._dispatch_command(cmd, rule_name)
@@ -601,8 +602,17 @@ class RuleEngine:
                                     rule_name, cmd.get('device_id', '?'),
                                     cmd.get('action', '?'), e)
 
+                # avg/max now reflect TOTAL cycle time = evaluate + DISPATCH (the
+                # rule's real cost), not evaluate alone (which was always sub-ms
+                # and uninformative). Scene rules dispatch only the single
+                # run_scene command here — the heavy per-device work runs on the
+                # run_scene daemon thread — so they correctly read ~0 (proof they
+                # no longer block; the scene's real ms is in the run_scene log).
+                # Info rules that only mutate state.shared have no dispatch, so
+                # this stays their evaluate (compute) time.
+                _disp_ms = (time.time() - _disp_t0) * 1000
                 # Detect what changed
-                elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0)
+                elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0) + _disp_ms
                 changed_keys = [k for k in self.state.shared
                                if self.state.shared.get(k) != rule_shared_before.get(k)
                                and not k.startswith('_')]
@@ -1484,6 +1494,7 @@ class RuleEngine:
         (same commands the dashboard ▶ Run / Scene Runner produce)."""
         from _scenes import load_scene, expand_scene
         try:
+            _t0 = time.time()
             scene = load_scene(self.state, name)
             if not scene:
                 log.warning("run_scene: scene %r not found/inactive — nothing run (rule '%s')",
@@ -1493,7 +1504,8 @@ class RuleEngine:
             for c in cmds:
                 c['_skip_loop_guard'] = True
                 self._dispatch_command(c, rule_name)
-            log.info("run_scene: '%s' -> %d command(s) (rule '%s')", name, len(cmds), rule_name)
+            log.info("run_scene: '%s' -> %d command(s) in %.0f ms (rule '%s')",
+                     name, len(cmds), (time.time() - _t0) * 1000, rule_name)
         except Exception:
             log.exception("run_scene failed for %r", name)
 
