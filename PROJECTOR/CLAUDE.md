@@ -1,77 +1,104 @@
 # Projector Agent
 
 > **Status:** PLANNED / scoped 2026-06-10. Hardware not yet purchased. This doc is the design + integration contract for when the gear arrives. No DB rows, dashboard surface, or service exist yet.
+>
+> **Hard constraint (user):** controlled by **OUR OWN integration — NO Home Assistant.** Everything talks direct over the LAN from `device_agent` (LXC 103) → MQTT `mur/home/device/#` → `devices` table → dashboard (UI only). Matches the root HARD ARCHITECTURE RULE.
 
-Home-theater playback surface built from two boxes:
+Balcony home-theater built from three boxes (a projector is not "smart" and an audio amp doesn't run video apps, so all three are required — no single box combines video-streaming + speaker-amp):
 
-| Role | Hardware | Job |
-|------|----------|-----|
-| **Display** | **Optoma HD30LV** (Full HD 1080p, 4500 lm DLP) | the "dumb" screen — power on/off, input select, status. No smart-TV apps, no WiFi. |
-| **Brain** | **Chromecast with Google TV 4K** (Android TV / Google TV) | what actually *plays* — video, music, internet-radio stations; navigation; app launch; volume. |
-
-Design decision (confirmed with user 2026-06-10): **projector controlled DIRECT over LAN; Chromecast controlled VIA HA.** Both *can* be done either way, but this split is the sweet spot — the projector is a trivial TCP socket (matches the local-Tuya pattern), while HA already wraps the Chromecast's two control protocols and handles their re-pairing/tokens/reconnects for free.
-
----
-
-## Optoma HD30LV — control (DIRECT over LAN)
-
-Confirmed connectors: **RJ-45 wired LAN**, 2× HDMI (1.4a + 2.0), USB, 3.5 mm audio-out, 3 W mono speaker. No WiFi. Supports Crestron RoomView.
-
-| Function | Path | Notes |
-|----------|------|-------|
-| Power on/off | Telnet **port 23** → Optoma RS-232 ASCII commands over TCP, **OR** HDMI-CEC | CEC = lazy path: when the Chromecast wakes it powers the projector on automatically |
-| Input/source select | same RS-232-over-TCP commands | HDMI1 / HDMI2 |
-| Power/lamp status query | network query command | confirms real state vs. assumed |
-| Web management | HTTP **port 80** | manual fallback |
-
-**Integration plan:** add a `devices` row treated like a local-TCP device (handled by `device_agent` on LXC 103, or a thin direct-TCP sender). Power/source via the documented Optoma RS-232 strings sent over the Telnet socket. **Caveat to validate on real hardware once:** the projector's network power command + CEC behavior both vary unit-to-unit — confirm on the physical device before trusting in a scene.
-
-RS-232 command reference: [Optoma RS232 Protocol Function List](https://www.optomausa.com/ContentStorage/Documents/471bc1d6-63f6-4825-aeef-2414e9cc5f99.pdf). HA-side telnet precedent: [HA Community — RS232 control of Optoma](https://community.home-assistant.io/t/using-rs232-to-control-an-optoma-projector/246045).
+| Role | Hardware | Decision |
+|------|----------|----------|
+| **Display** | **Optoma projector** — candidates **Photon Beam PK52** (recommended) vs **UHD38x** | ⏳ pending — see comparison below |
+| **Brain (video)** | **Xiaomi Android TV streamer** (Mi Box S / TV Stick 4K) | ✅ chosen |
+| **Audio** | **WiiM Amp** (regular, *not* Pro) + passive speakers | ✅ chosen |
 
 ---
 
-## Chromecast with Google TV 4K — control (VIA HA)
+## Projector decision — PK52 vs UHD38x (at 3 m throw)
 
-Two HA integrations together cover everything:
+| | **Photon Beam PK52** | **UHD38x** |
+|---|---|---|
+| Screen @ 3 m | **~112″** (throw ratio 1.21–1.59:1) | ~82–90″ |
+| Lens shift | ✅ yes (easy placement) | ❌ none (exact mount height) |
+| Image | 4K **dual-laser**, high contrast | 4K lamp |
+| Brightness | 3500 lm | 4000 lm |
+| **RS-232 serial control** | ✅ | ✅ (DB-9) |
+| **LAN / RJ45** | ❌ **no** | ❌ **no** |
+| **HDMI-CEC** | ✅ | ✅ |
+| **Digital audio out → WiiM** | **HDMI 1 ARC** | **Optical S/PDIF** |
+| 3.5 mm audio out | ✅ | ✅ |
+| 12 V trigger (motorized screen) | ✅ | ✅ |
+| Built-in smart / Wi-Fi | ❌ (needs Xiaomi) | ❌ (needs Xiaomi) |
 
-| Function | HA integration | Underlying lib |
-|----------|----------------|----------------|
-| Play video / station / music (cast) | **Google Cast** | `pychromecast` |
-| Play / pause / next / volume | Google Cast (`media_player`) | `pychromecast` |
-| Power on/off (wake / standby) | **Android TV Remote** (`androidtv_remote`) | `androidtvremote2` |
-| Navigate (D-pad / home / back) + launch apps | Android TV Remote | `androidtvremote2` |
+**Recommendation: PK52** for a balcony — bigger image + lens shift + dual-laser, and it loses nothing on connectivity or the integration path. UHD38x only if cost matters and ~90″ is enough.
 
-**Integration plan:** both surface as HA `media_player` entities → flow into the `devices` table via the existing **`HA_DIRECT_DEVICES`** WebSocket-adapter pattern ([DEVICE/CLAUDE.md](../DEVICE/CLAUDE.md)). **No new LXC, no new ingest service** — same as the TVs and Alexas.
+**Screen sizing reference (16:9):** width = diagonal × 0.872, height = diagonal × 0.490. So 82″ = 181 cm wide, 90″ = 199 cm wide, 100″ = 221 cm wide (≈ 125 cm tall). A **100″ image needs the PK52** (out of UHD38x's reach at 3 m).
 
-Direct (no-HA) alternative exists — `pychromecast` (cast) + `androidtvremote2` (power/keys) over LAN — but rejected for the Chromecast because it means self-maintaining those two libs + their auth for little gain.
+**Brightness reality:** for **evening / after-dark** balcony use, 3500 lm is plenty; 3500 vs 4000 is only ~14% (below the just-noticeable threshold). Ambient light is the dominant factor — **no consumer projector looks good in daylight**. An ALR screen helps far more than 500 lm.
 
 ---
 
-## Audio routing — decide before install
+## Control — OUR integration, over LAN, no HA
 
-The projector's only audio out is a **3 W mono speaker** or the **3.5 mm jack**. Chromecast audio rides HDMI into the projector. For real sound, route audio out to a soundbar/Echo (the Media Agent already controls a Samsung soundbar). This is an installation choice, **not** a control limitation.
+| Device | Direct protocol | Method |
+|--------|----------------|--------|
+| **Projector** (PK52 / UHD38x) | RS-232 ASCII commands | ⚠️ **both are RS-232-only, no LAN** → add a **RS-232 → Ethernet adapter** (serial device server, ~$25, e.g. USR-TCP232). LXC sends Optoma ASCII over TCP → adapter → serial. **HDMI-CEC** is the free on/off fallback (Xiaomi wake powers the projector); IR via the [IR/RF/Somfy tool](../IR_RF_SOMFY_TOOL/CLAUDE.md) as last resort. |
+| **Xiaomi streamer** | Android TV Remote v2 (TLS) + Cast | **`androidtvremote2`** (power / nav / app launch) + **`pychromecast`** (cast video/audio/stations). One-time 6-digit pairing; token stored locally. |
+| **WiiM Amp** | **LinkPlay HTTP API** | plain HTTP GET — `http://<ip>/httpapi.asp?command=…` : `setPlayerCmd:vol:NN`, `:pause`, `:play:<url>`, `getPlayerStatus`. Trivial to wrap. |
+
+All three run as `device_agent` adapters on LXC 103, publish to MQTT, write `devices.last_state` — same shape as the local Tuya devices. Dashboard stays UI-only. **No HA in the path.**
+
+> Note: the original "Telnet :23" plan assumed a LAN port — neither home model has one. The RS-232→Ethernet adapter restores the exact same "control over TCP, no HA" behavior with one cheap box in between.
 
 ---
 
-## What "we can control all" means (user's question, answered)
+## Audio routing — NO extractor needed
 
-✅ on/off (both boxes) · ✅ play video · ✅ play audio/music · ✅ play internet-radio station · ✅ navigate / launch apps / volume / pause. All achievable. The only soft spot is the Optoma's community-grade control surface (validate once on hardware) and audio loudness (route to a soundbar).
+The projector itself splits the audio off for you, so the earlier HDMI-audio-extractor idea is dropped:
+
+```
+Xiaomi ──HDMI──► Projector ──(ARC or Optical)──► WiiM Amp ──speaker wire──► L + R speakers
+                (video to screen)
+```
+
+- **PK52:** HDMI 1 **ARC** → WiiM Amp HDMI-ARC input (digital).
+- **UHD38x:** **Optical S/PDIF** → WiiM Amp optical input (digital).
+- **Music / radio:** push straight to the WiiM (cast / HTTP API) — projector not involved.
+
+**Two things to set/verify on hardware:**
+1. Set the **Xiaomi audio output = Stereo / 2-ch PCM** (WiiM digital inputs accept 2-ch PCM; a Dolby bitstream may not decode).
+2. **Lip-sync** — routing movie audio through the projector can add latency; verify by eye. If bad, an HDMI audio extractor tapped *before* the projector avoids it.
+
+**WiiM Amp vs Amp Pro:** get the **regular Amp** ($299). Same power (60 W/8Ω, 120 W/4Ω), same HDMI ARC + optical, same LinkPlay HTTP API. The Pro's gains (ES9038Q2M DAC, PFFB, auto room correction, Wi-Fi 6E, Roon) target a treated *indoor* room and are inaudible/irrelevant on an open balcony — not worth the +$80 here.
+
+**Alternative audio hub (if you ever want surround / HDMI switching):** a small **AV receiver** (Denon/Marantz expose a **Telnet :23** control API; Yamaha has the **MusicCast HTTP/YNC** API) consolidates HDMI switching + decode + amp and is also LAN-controllable with no HA — but it's bigger/pricier and **still needs the Xiaomi**. Stick with the WiiM Amp for balcony stereo.
+
+---
+
+## Shopping list (PK52 path)
+
+1. **Optoma Photon Beam PK52**
+2. **Xiaomi Android TV streamer** (Mi Box S / TV Stick 4K — genuine Google TV, has Chromecast built-in)
+3. **WiiM Amp** (regular)
+4. **Passive speakers** — weather-rated for the balcony
+5. **RS-232 → Ethernet adapter** (serial device server)
+6. HDMI cable + speaker wire (no audio extractor, no optical cable — audio rides ARC)
 
 ---
 
 ## Implementation checklist (pending hardware)
 
-1. `devices` row for the projector (local-TCP / Telnet sender) — power, source, status.
-2. Add the Chromecast (Google Cast) + Android TV Remote integrations in HA; register in `HA_DIRECT_DEVICES`; `devices` rows auto-flow.
-3. Optional **"Movie / Projector On" scene** (Main Agent → Scenes): Chromecast wake → CEC powers projector → soundbar on → input select. Run on demand or bind to a wallmote/panel button.
-4. Decide audio path (HDMI extractor vs. 3.5 mm → soundbar) and wire it.
-5. Validate Optoma network power + CEC on the physical unit before relying on it in automations.
+1. `devices` rows: projector (RS-232-over-TCP sender), Xiaomi (androidtvremote2 + pychromecast adapter), WiiM (LinkPlay HTTP adapter).
+2. New `device_agent` adapters for each on LXC 103 → publish to `mur/home/device/#`.
+3. Dashboard control surface (UI only) calling the LXC API.
+4. Optional **"Movie / Projector On" scene** (Main Agent → Scenes): Xiaomi wake → CEC powers projector → WiiM on + source → input select.
+5. Validate on hardware: Optoma RS-232 power/source over the adapter, HDMI-CEC behavior, audio lip-sync, Xiaomi PCM setting.
 
 ---
 
 ## Sources
 
-- [Optoma HD30LV specs — ProjectorCentral](https://www.projectorcentral.com/optoma-hd30lv.htm)
-- [Optoma HD30LV product page](https://www.optomausa.com/product/hd30lv)
+- [Optoma Photon Beam PK52 — ProjectorCentral / specs](https://www.projectorcentral.com/pdf/projector_manual_10211.pdf)
+- [Optoma UHD38x specs — ProjectorCentral](https://www.projectorcentral.com/Optoma-UHD38x.htm)
 - [Optoma RS232 Protocol Function List](https://www.optomausa.com/ContentStorage/Documents/471bc1d6-63f6-4825-aeef-2414e9cc5f99.pdf)
-- [HA Community — RS232 control of an Optoma projector](https://community.home-assistant.io/t/using-rs232-to-control-an-optoma-projector/246045)
+- [WiiM Amp vs Amp Pro — Crutchfield](https://www.crutchfield.com/compare_399WAMPPRO_399WIMAMPG/WiiM-Amp-Pro-vs-WiiM-Amp.html)

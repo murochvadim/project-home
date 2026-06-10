@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 600" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+    <marker id="aho" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ea580c"/></marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/></marker>
+    <marker id="ahy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ca8a04"/></marker>
+    <marker id="ahp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9333ea"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="1080" height="600" fill="#ffffff"/>
+  <text x="540" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Balcony Cinema — Video / Audio Connections</text>
+  <text x="540" y="52" text-anchor="middle" font-size="12.5" fill="#475569">No HDMI audio extractor &#8212; audio rides the projector's ARC (PK52) or Optical (UHD38x) out</text>
+
+  <!-- ===== BOXES ===== -->
+  <!-- Xiaomi streamer -->
+  <rect x="40" y="110" width="180" height="76" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+  <text x="130" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Xiaomi</text>
+  <text x="130" y="156" text-anchor="middle" font-size="13" fill="#0f172a">Android TV Streamer</text>
+  <text x="130" y="174" text-anchor="middle" font-size="11" fill="#475569">(video source &#183; HDMI out)</text>
+
+  <!-- Projector -->
+  <rect x="370" y="106" width="210" height="84" rx="8" fill="#fef9c3" stroke="#ca8a04" stroke-width="2"/>
+  <text x="475" y="134" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Optoma Projector</text>
+  <text x="475" y="152" text-anchor="middle" font-size="11.5" fill="#475569">PK52 (ARC out)  /  UHD38x (Optical out)</text>
+  <text x="475" y="172" text-anchor="middle" font-size="11" fill="#475569">audio out splits off here &#8212; no extractor</text>
+
+  <!-- Screen -->
+  <rect x="730" y="98" width="200" height="96" rx="6" fill="#ffffff" stroke="#334155" stroke-width="2"/>
+  <rect x="744" y="110" width="172" height="62" rx="2" fill="#e2e8f0" stroke="#94a3b8"/>
+  <text x="830" y="187" text-anchor="middle" font-size="12" font-weight="600" fill="#0f172a">Screen &#183; PK52 ~112&quot; / UHD38x ~90&quot; @ 3 m</text>
+
+  <!-- WiiM Amp -->
+  <rect x="370" y="270" width="210" height="76" rx="8" fill="#ecfdf5" stroke="#16a34a" stroke-width="2"/>
+  <text x="475" y="300" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">WiiM Amp</text>
+  <text x="475" y="319" text-anchor="middle" font-size="11" fill="#475569">LinkPlay HTTP API</text>
+  <text x="475" y="336" text-anchor="middle" font-size="11" fill="#475569">ARC + Optical inputs</text>
+
+  <!-- Speakers -->
+  <rect x="730" y="248" width="200" height="48" rx="6" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <text x="830" y="277" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">Speaker L (passive)</text>
+  <rect x="730" y="320" width="200" height="48" rx="6" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <text x="830" y="349" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">Speaker R (passive)</text>
+
+  <!-- ===== CONNECTIONS ===== -->
+  <!-- HDMI: Xiaomi -> Projector -->
+  <line x1="220" y1="148" x2="366" y2="148" stroke="#2563eb" stroke-width="3" marker-end="url(#ahb)"/>
+  <text x="293" y="140" text-anchor="middle" font-size="11.5" font-weight="600" fill="#2563eb">HDMI (4K video + audio)</text>
+
+  <!-- Projection: Projector -> Screen -->
+  <line x1="580" y1="146" x2="726" y2="146" stroke="#ca8a04" stroke-width="3" stroke-dasharray="7 5" marker-end="url(#ahy)"/>
+  <text x="653" y="138" text-anchor="middle" font-size="11" font-weight="600" fill="#a16207">projected image</text>
+
+  <!-- Audio: Projector -> WiiM (ARC / Optical) -->
+  <line x1="475" y1="190" x2="475" y2="266" stroke="#ea580c" stroke-width="3" marker-end="url(#aho)"/>
+  <text x="486" y="234" font-size="11" font-weight="600" fill="#ea580c">ARC / Optical</text>
+  <text x="486" y="249" font-size="11" font-weight="600" fill="#ea580c">&#8212; movie audio</text>
+
+  <!-- Speaker wire: WiiM -> speakers -->
+  <line x1="580" y1="298" x2="726" y2="272" stroke="#16a34a" stroke-width="3" marker-end="url(#ahg)"/>
+  <line x1="580" y1="312" x2="726" y2="344" stroke="#16a34a" stroke-width="3" marker-end="url(#ahg)"/>
+  <text x="600" y="290" font-size="11" font-weight="600" fill="#16a34a">speaker wire</text>
+
+  <!-- Music / radio cast: Xiaomi -> WiiM -->
+  <path d="M 130,186 V 388 H 430 V 346" fill="none" stroke="#9333ea" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#ahp)"/>
+  <text x="150" y="382" font-size="11.5" font-weight="600" fill="#9333ea">&#9834; Music / radio &#8212; cast straight to WiiM (projector not needed)</text>
+
+  <!-- ===== CONTROL PANEL ===== -->
+  <rect x="40" y="408" width="500" height="166" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="56" y="432" font-size="13.5" font-weight="700" fill="#0f172a">CONTROL &#8212; over LAN &#183; our integration &#183; NO Home Assistant</text>
+  <text x="56" y="457" font-size="12" fill="#0f172a"><tspan font-weight="700">Projector</tspan>  &#8594;  RS-232 &#8594; Ethernet adapter (TCP)  +  HDMI-CEC</text>
+  <text x="56" y="481" font-size="12" fill="#0f172a"><tspan font-weight="700">Xiaomi</tspan>  &#8594;  androidtvremote2  +  pychromecast</text>
+  <text x="56" y="505" font-size="12" fill="#0f172a"><tspan font-weight="700">WiiM Amp</tspan>  &#8594;  LinkPlay HTTP API (http://&lt;ip&gt;/httpapi.asp)</text>
+  <line x1="56" y1="519" x2="524" y2="519" stroke="#cbd5e1"/>
+  <text x="56" y="540" font-size="11.5" fill="#475569">device_agent (LXC 103) &#8594; MQTT mur/home/device/#</text>
+  <text x="56" y="558" font-size="11.5" fill="#475569">&#8594; devices table  &#8594;  dashboard (UI only)</text>
+
+  <!-- ===== LEGEND ===== -->
+  <rect x="560" y="408" width="480" height="166" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="576" y="432" font-size="13.5" font-weight="700" fill="#0f172a">SIGNAL LEGEND</text>
+  <line x1="578" y1="454" x2="624" y2="454" stroke="#2563eb" stroke-width="3"/>
+  <text x="636" y="458" font-size="12" fill="#0f172a">HDMI &#8212; digital video + audio</text>
+  <line x1="578" y1="480" x2="624" y2="480" stroke="#ea580c" stroke-width="3"/>
+  <text x="636" y="484" font-size="12" fill="#0f172a">ARC / Optical &#8212; audio to WiiM (no extractor)</text>
+  <line x1="578" y1="506" x2="624" y2="506" stroke="#16a34a" stroke-width="3"/>
+  <text x="636" y="510" font-size="12" fill="#0f172a">Speaker wire &#8212; WiiM &#8594; passive speakers</text>
+  <line x1="578" y1="532" x2="624" y2="532" stroke="#ca8a04" stroke-width="3" stroke-dasharray="7 5"/>
+  <text x="636" y="536" font-size="12" fill="#0f172a">Projected image &#8212; projector &#8594; screen</text>
+  <line x1="578" y1="558" x2="624" y2="558" stroke="#9333ea" stroke-width="2.5" stroke-dasharray="6 5"/>
+  <text x="636" y="562" font-size="12" fill="#0f172a">Music / radio cast &#8212; source &#8594; WiiM</text>
+</svg>
