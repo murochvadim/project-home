@@ -931,11 +931,10 @@
           const enabled = !disabledRules.has(r.name);
           const st = r.stats || {};
           const runs = st.count || 0;
-          // Dispatch time = evaluate + dispatch (engine records it as total_ms).
-          // Show the avg; max on hover. Scene rules read ~0 — their per-device
-          // work runs async on the engine's run_scene thread (see its log line).
+          // Dispatch time = avg evaluate + dispatch per fire (engine records
+          // total_ms/count). Scene rules read ~0 — their per-device work runs
+          // async on the engine's run_scene thread (see its log line).
           const dispatch = runs > 0 ? (st.total_ms / runs).toFixed(1) + 'ms' : '—';
-          const dispatchMax = st.max_ms ? st.max_ms.toFixed(1) + 'ms' : '—';
           const lastFired = st.last_fired ? formatTimestamp(st.last_fired) : '—';
           const group = r.group || '';
           const pri = r.priority != null ? r.priority : 10;
@@ -967,7 +966,7 @@
             <td style="text-align:center">${priHtml}</td>
             <td style="text-align:center">${timeHtml}</td>
             <td style="text-align:center">${runs}</td>
-            <td style="text-align:center" title="max ${dispatchMax}">${dispatch}</td>
+            <td style="text-align:center">${dispatch}</td>
             <td style="font-size:0.75rem;color:#888;">${lastFired}</td>
             <td>
               <label class="toggle">

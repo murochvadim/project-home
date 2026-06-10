@@ -1007,11 +1007,10 @@ class RuleEngine:
         because the engine sees ~100-300 device events per second and
         wildcards early-return on most of them.
         """
-        stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+        stats = self._rule_stats.get(rule_name, {'count': 0, 'total_ms': 0})
         stats['count']    += 1
         stats['total_ms'] += elapsed_ms
-        if elapsed_ms > stats.get('max_ms', 0):
-            stats['max_ms'] = elapsed_ms
+        stats.pop('max_ms', None)   # max no longer tracked (dropped 2026-06-10) — cleans stale keys on fire
         stats['last_fired'] = datetime.now(tz=TZ).isoformat()
         self._rule_stats[rule_name] = stats
 
