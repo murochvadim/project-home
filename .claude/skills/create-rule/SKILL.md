@@ -496,6 +496,22 @@ The `NOT EXISTS` guard makes the INSERT idempotent — running deploy twice does
 - **Scaling ceiling on current hardware:** 30-50 mixed rules comfortable; 15-20 wildcard rules is a soft cap; 20+ heavy wildcard rules (iterating `state.devices`, O(n²) scans) is a design smell — consolidate into aggregator rules before crossing.
 - **First rule of performance:** prefer specific triggers. **Second rule:** consume `virtual:*` events rather than scanning raw state. **Third rule:** cache DB queries with TTL. If you're doing none of those, your rule is probably too heavy.
 
+### Running a Scene from a rule — emit ONE `run_scene` command, never expand inline (since 2026-06-10)
+
+If a rule needs to fire a whole named **Scene** (authored on Main Agent → Scenes), return a **single** command and let the engine do the work:
+
+```python
+return [{'action': 'run_scene', 'scene': '<Scene Name>', 'rule': '<Rule Name>'}]
+```
+
+The engine's `rule_engine._run_scene` loads the scene + `_scenes.expand_scene` + dispatches every per-device command **on a daemon thread**, so the rule's `evaluate()` returns instantly and the heavy dispatch happens **off** the firing cycle (and off the `_dispatch_lock`).
+
+- ❌ **Do NOT** call `_scenes.load_scene`/`expand_scene` inside `evaluate()` and return the expanded device list — that blocks the firing cycle on every device. This is the pattern we migrated **away** from; the old **Scene Runner rule was deleted** and `run_scene` is now the **single** scene-execution path (rules AND the dashboard ▶ Run both route through `_run_scene`).
+- ✅ Need a device ON **after** the scene (e.g. a keep-on / fake-presence device the scene itself might switch off)? Emit that `turn_on` with **`_delay_sec: N`** so it lands after the async scene — don't rely on command order, the scene runs on its own thread.
+- ✅ A scene name can come from a sentence chip (`@scene <Name>`, parsed like Evening Lights' `_load_scene_name`) or a binding (`{type:'scene', target}`, like the Wallmote handler). Either way the rule's job is just to emit the one `run_scene` command.
+- Existing consumers to copy from: **Evening Lights** (s_el1 scene chip), **Wallmote Handler** (scene binding), **Start Away Mode** (s_sa1 + deferred keep-on).
+- Timing note: such a rule reads **~0** in the dashboard **Dispatch** column (it doesn't block); the scene's real ms is in the engine log line `run_scene: '<name>' -> N command(s) in M ms`.
+
 ---
 
 ## Audit Procedure (when action = Audit)
