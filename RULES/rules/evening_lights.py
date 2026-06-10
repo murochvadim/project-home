@@ -67,6 +67,7 @@ _RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RULES_DIR not in sys.path:
     sys.path.insert(0, _RULES_DIR)
 from _display_chips import parse_display_chip, build_devices_by_name  # noqa: E402
+from _scenes import load_scene, expand_scene  # noqa: E402
 
 log = logging.getLogger('rule.evening_lights')
 
@@ -92,6 +93,10 @@ _GATE_RE = re.compile(
     r'evening\s+lights:\s*only\s+fires\s+when\s+(\w+)\s+is\s+([\w-]+)',
     re.IGNORECASE,
 )
+# Scene sentence (s_el1 alt) — "Evening Lights: scene is @scene <Name>". When a
+# scene chip is present the rule RUNS that scene (via _scenes.expand_scene)
+# instead of the legacy device list — mirrors Start Away Mode's s_sa1.
+_SCENE_RE = re.compile(r'evening\s+lights:\s*scene\s+is\s+(.+)', re.IGNORECASE)
 
 
 # Mode-button device (8 Gang Switch). Added to triggers so Scenario B (home
@@ -245,6 +250,24 @@ def _load_evening_light_targets(state, container):
                 targets.append(parsed)
                 seen.add(parsed)
     return targets
+
+
+def _load_scene_name(container):
+    """If s_el1 declares a scene ('Evening Lights: scene is @scene <Name>'),
+    return the scene name; else None → fall back to the legacy device list."""
+    if not container:
+        return None
+    for s in (container.get('sentences') or []):
+        if not s.get('active'):
+            continue
+        for chip in _iter_dev_chips(s):
+            if chip.lower().startswith('@scene '):
+                return chip[len('@scene '):].strip()
+        m = _SCENE_RE.search(_sentence_text(s))
+        if m:  # plain-text "scene is <Name>" with no chip
+            name = m.group(1).strip()
+            return name[len('@scene '):].strip() if name.lower().startswith('@scene ') else name
+    return None
 
 
 def _load_active_triggers(container):
@@ -445,27 +468,38 @@ def evaluate(event, state):
     if not fire:
         return []
 
-    # Resolve the device list — fresh each fire.
-    targets = _load_evening_light_targets(state, container)
-    if not targets:
-        log.info("evening_lights: trigger met but no targets parsed — skipping")
-        return []
-
-    commands = []
-    for t in targets:
-        if isinstance(t, dict):
-            # Display chip (already a complete command dict)
-            cmd = {**t, 'rule': 'Evening Lights'}
-        else:
-            dev_id, dps_key = t
-            cmd = {'device_id': dev_id, 'action': 'turn_on', 'rule': 'Evening Lights'}
-            if dps_key is not None:
-                cmd['channel'] = dps_key
-        commands.append(cmd)
+    # Resolve what to fire — fresh each fire. Prefer a Scene (s_el1 = "scene is
+    # @scene <Name>") run via _scenes.expand_scene, exactly like Start Away Mode;
+    # fall back to the legacy device-list path when no scene chip is present.
+    scene_name = _load_scene_name(container)
+    if scene_name:
+        scene = load_scene(state, scene_name)
+        commands = expand_scene(state, scene, 'Evening Lights')
+        if not commands:
+            log.warning("evening_lights: scene %r missing/empty — no-op", scene_name)
+            return []
+        src = f'scene:{scene_name}'
+    else:
+        targets = _load_evening_light_targets(state, container)
+        if not targets:
+            log.info("evening_lights: trigger met but no targets parsed — skipping")
+            return []
+        commands = []
+        for t in targets:
+            if isinstance(t, dict):
+                # Display chip (already a complete command dict)
+                commands.append({**t, 'rule': 'Evening Lights'})
+            else:
+                dev_id, dps_key = t
+                cmd = {'device_id': dev_id, 'action': 'turn_on', 'rule': 'Evening Lights'}
+                if dps_key is not None:
+                    cmd['channel'] = dps_key
+                commands.append(cmd)
+        src = 'devlist'
 
     scenario = 'A:sun_anchor' if sun_anchor_hit else 'B:home_arrival'
     log.info(
-        "evening_lights: fired %d turn_on commands (scenario=%s time_mode=%s home_mode=%s now_min=%d anchors=%s gates=%s)",
-        len(commands), scenario, time_mode, home_mode, now_min, sorted(anchor_minutes), gates,
+        "evening_lights: fired %d commands via %s (scenario=%s time_mode=%s home_mode=%s now_min=%d anchors=%s gates=%s)",
+        len(commands), src, scenario, time_mode, home_mode, now_min, sorted(anchor_minutes), gates,
     )
     return commands
