@@ -76,6 +76,11 @@ _TZ = ZoneInfo('Asia/Jerusalem')
 
 # Sentence regex anchors — case-insensitive, tolerant of surrounding text.
 _DEVICES_TRIGGER_RE = re.compile(r'morning\s+lights\s+are', re.IGNORECASE)
+# Scene sentence (s_ml1 alt) — "Morning Lights: scene is @scene <Name>". When a
+# scene chip is present the rule emits one {action:'run_scene'} command and the
+# ENGINE runs it async (rule_engine._run_scene) instead of the legacy device
+# list — mirrors Evening Lights' s_el1.
+_SCENE_RE = re.compile(r'morning\s+lights:\s*scene\s+is\s+(.+)', re.IGNORECASE)
 _ACTIVE_MODES_RE    = re.compile(
     r'morning\s+lights:\s*active\s+time\s+modes?\s+are\s+(.+)',
     re.IGNORECASE,
@@ -249,6 +254,24 @@ def _load_morning_light_targets(state, container):
                 targets.append(parsed)
                 seen.add(parsed)
     return targets
+
+
+def _load_scene_name(container):
+    """If s_ml1 declares a scene ('Morning Lights: scene is @scene <Name>'),
+    return the scene name; else None → fall back to the legacy device list."""
+    if not container:
+        return None
+    for s in (container.get('sentences') or []):
+        if not s.get('active'):
+            continue
+        for chip in _iter_dev_chips(s):
+            if chip.lower().startswith('@scene '):
+                return chip[len('@scene '):].strip()
+        m = _SCENE_RE.search(_sentence_text(s))
+        if m:  # plain-text "scene is <Name>" with no chip
+            name = m.group(1).strip()
+            return name[len('@scene '):].strip() if name.lower().startswith('@scene ') else name
+    return None
 
 
 def _load_sun_anchors(container):
@@ -443,29 +466,37 @@ def evaluate(event, state):
     if not fire:
         return []
 
-    # Resolve the device list — fresh each fire.
-    targets = _load_morning_light_targets(state, container)
-    if not targets:
-        log.info("morning_lights: trigger met but no targets parsed — skipping")
-        return []
-
-    commands = []
-    for t in targets:
-        if isinstance(t, dict):
-            # Display / panel chip (already a complete command dict)
-            cmd = {**t, 'rule': 'Morning Lights'}
-        else:
-            dev_id, dps_key = t
-            cmd = {'device_id': dev_id, 'action': 'turn_on', 'rule': 'Morning Lights'}
-            if dps_key is not None:
-                cmd['channel'] = dps_key
-        commands.append(cmd)
+    # Resolve what to fire — fresh each fire. Prefer a Scene (s_ml1 = "scene is
+    # @scene <Name>") → emit ONE run_scene command (engine runs it async), exactly
+    # like Evening Lights; fall back to the legacy device-list path when no scene
+    # chip is present.
+    scene_name = _load_scene_name(container)
+    if scene_name:
+        commands = [{'action': 'run_scene', 'scene': scene_name, 'rule': 'Morning Lights'}]
+        src = f'run_scene:{scene_name}'
+    else:
+        targets = _load_morning_light_targets(state, container)
+        if not targets:
+            log.info("morning_lights: trigger met but no targets parsed — skipping")
+            return []
+        commands = []
+        for t in targets:
+            if isinstance(t, dict):
+                # Display / panel chip (already a complete command dict)
+                commands.append({**t, 'rule': 'Morning Lights'})
+            else:
+                dev_id, dps_key = t
+                cmd = {'device_id': dev_id, 'action': 'turn_on', 'rule': 'Morning Lights'}
+                if dps_key is not None:
+                    cmd['channel'] = dps_key
+                commands.append(cmd)
+        src = 'devlist'
 
     scenario = 'B:late_arrival' if late_arrival_hit else 'A:anchor_passed'
     log.info(
-        "morning_lights: fired %d turn_on commands (scenario=%s time_mode=%s "
+        "morning_lights: fired %d commands via %s (scenario=%s time_mode=%s "
         "home_mode=%s now_min=%d earliest_anchor=%s late_threshold=%s gates=%s)",
-        len(commands), scenario, time_mode, home_mode, now_min,
+        len(commands), src, scenario, time_mode, home_mode, now_min,
         earliest_anchor, late_arrival_threshold, gates,
     )
     return commands
