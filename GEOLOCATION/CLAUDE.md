@@ -247,7 +247,7 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 | 2026-06-03 cleanup | User decision: **remove HA from geolocation completely**. This file documents the post-cleanup state. |
 | 2026-06-08 | Fake trips #520/#542 (phone stationary at home, GPS oscillating to a ~150 m "ghost" spot, crossing the radius 21–26×). Per firm user constraint **did NOT touch the trip-detection algorithm** — added a separate deferred **bounce-storm janitor** instead (see below). |
 
-## Phantom-trip janitor (`scripts/geo_trip_janitor.py`, 2026-06-08, rewritten distance-only 2026-06-09)
+## Phantom-trip janitor (`scripts/geo_trip_janitor.py`, 2026-06-08, distance-only 2026-06-09, + accuracy gate 2026-06-10)
 
 Separate cleanup pass on LXC 104 (cron `*/5`, log `/var/log/geo-trip-janitor.log`).
 It deletes fake trips caused by a **single FIXED GPS-multipath phantom ~154 m SW of
@@ -257,12 +257,9 @@ it), crossing the 40 m radius and tripping the state machine's `time_fallback`
 commit. Proven 2026-06-09 from 4 days of pings: 700+ pings cluster at one spot; the
 dense cluster never exceeds ~167 m.
 
-- **The rule — distance-only (bulletproof):** a confirmed short trip
-  (`duration < 1 h`, closed within 48 h) whose **`max_dist_m ≤ real_trip_min_far_m`
-  (default 250 m)** never left the phantom → delete it. Proof it's safe: across the
-  FULL trip history every fake reaches ≤156 m and every real trip reaches ≥324 m —
-  the 171–250 m band is **empty** (a 168 m buffer). Uses the trip row's own stored
-  `max_dist_m`; **no ping re-query, no crossing count, no dwell math**.
+- **The rule — distance + accuracy gate:** a confirmed short trip
+  (`duration < 1 h`, closed within 48 h) is a phantom when its **clean max distance ≤ `real_trip_min_far_m` (default 250 m)** → delete it. *Clean max* = the farthest home-distance reached on a ping whose **accuracy ≤ `phantom_accuracy_gate_m` (default 50 m)** — a far reading with junk accuracy is multipath, not movement, so it can't define the trip's reach. Originally distance-only on the stored `max_dist_m` (every fake ≤156 m, every real ≥324 m — a 168 m empty buffer), but **trip #2344 (2026-06-10)** broke that: a ghost ping was flung to **268 m at 73 m accuracy** — over the 250 m line — so the fake showed. The janitor now **re-queries the trip's pings** and drops junk-accuracy readings before measuring reach (#2344's clean reach = 153 m → deleted).
+- **Why it's strictly safe (proof):** `clean_max ≤ stored_max` always (max over a subset of pings). So every trip the old distance-only rule deleted is STILL deleted, and the ONLY new deletions are trips that crossed 250 m *solely* via low-accuracy pings — i.e. never credibly left ~250 m. Real >250 m trips reach their distance on GOOD-accuracy pings outdoors → `clean_max > 250` → kept (verified live: real #2398, 686 m, 76-of-77 good pings → kept). **Fallback:** a trip with NO good-accuracy pings (e.g. `device_locations` aged out — older trips log `0/0 pings`) falls back to the stored `max_dist_m`, so it is never deleted on empty evidence. **No crossing count, no dwell math.**
 - **Why distance, not the old crossings/dwell (history — do NOT reintroduce):** the
   original 2026-06-08 version counted home↔outside crossings over a padded
   `±10/15 min` window plus a "real-trip guard" (`max_dist > 250` OR longest own-span
@@ -280,19 +277,23 @@ dense cluster never exceeds ~167 m.
 - **ALSO removes the fake trip's geofence markers** (`geofence:away`/`home` rows in
   `device_events`), scoped to the deleted trip's OWN span `[started_at..returned_at]`
   — never touches a real away/home event outside it.
-- **Caveat (never observed):** a hypothetical NEW phantom landing beyond 250 m
-  wouldn't be caught by distance alone. The phantom is a fixed 154 m reflection — it
-  has never drifted. Extend then if it ever happens.
+- **Caveat:** a future phantom that reaches >250 m on *good-accuracy* pings still
+  wouldn't be caught (the accuracy gate only strips junk readings). That needs the
+  **spike / out-and-back physics test** (a point far from both close neighbors = an
+  impossible round-trip) — designed but not built, since the accuracy gate is
+  lower-risk and provable on the data. Add it if a good-accuracy >250 m ghost appears.
 
 ### Companion display fixes (2026-06-08, server.js — DISPLAY only, ingest untouched)
 
 The janitor cleans the trips table on its 5-min cron, but a fresh phantom must be
 hidden INSTANTLY too. Both fixed in `BOILER/dashboard/server.js`.
-**`GET /api/geolocation/trips` runs the SAME distance-only rule as the janitor**
-(rewritten 2026-06-09): hide any trip with `duration_sec < 3600 && max_dist_m ≤
-real_trip_min_far_m (250)`. Display-only — rows stay in the DB until the janitor
-deletes them; a new phantom is invisible on the very next page load instead of
-flashing for up to 5 min. (No ping re-query now → faster endpoint. The earlier
+**`GET /api/geolocation/trips` applies the simpler distance-only rule** — hide any
+trip with `duration_sec < 3600 && max_dist_m ≤ real_trip_min_far_m (250)`, using the
+stored `max_dist_m`. It does **NOT** include the janitor's accuracy gate: server.js is
+UI-only, so the ping-requery clean-max logic lives ONLY in the LXC-104 janitor.
+Consequence: a fresh ghost that peaks >250 m on a junk ping (like #2344) is NOT hidden
+instantly — it shows for at most one cron tick (≤5 min) until the janitor deletes it,
+then it's gone. Sub-250 m phantoms are still hidden instantly. (No ping re-query now → faster endpoint. The earlier
 crossings+dwell version shared the janitor's dwell bug and showed sustained
 phantoms.) The separate **map** ghost-ping filter (`_flagOutliers`, below) still
 uses its own per-ping logic and was NOT changed — it operates on individual map
