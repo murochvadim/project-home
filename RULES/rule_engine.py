@@ -1066,7 +1066,7 @@ class RuleEngine:
         # stats only when work happened. See the matching block alongside
         # last_fired updates.
         elapsed_ms = (time.time() - t0) * 1000
-        stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0, 'max_ms': 0})
+        stats = self._rule_stats.get(name, {'count': 0, 'total_ms': 0})
         stats['_last_ms'] = elapsed_ms
         self._rule_stats[name] = stats
         return result
