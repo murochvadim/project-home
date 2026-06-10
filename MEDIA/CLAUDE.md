@@ -166,6 +166,11 @@ Dashboard: user labels clusters → person_embeddings updated
 | TV-60 Guy Room | `tv_guy` | HA |
 | TV-49 Bedroom | `tv_bed` | HA |
 
+### Power state + control source (updated 2026-06-10)
+`tv_control.py` (`/opt/media-agent/tv_control.py`, **now also tracked at `scripts/tv_control.py`** — it was previously untracked) derives **power status from the HA `media_player.*` entity, NOT the SmartThings `switch.*`**. The SmartThings switches lag badly — they don't reflect a *remote-initiated* power-on, so they sat at stale `off` for hours while the TV + soundbar were physically on (the "shows off while on" bug). Helper `mp_power(player, fallback_switch)` maps `on`/`idle`/`playing`/`paused`/`buffering` → on, `off`/`standby` → off, and falls back to the `switch` only when the media_player is `unavailable`/`unknown`. (The device-agent's `ha_api.py` already had `media_player.samsung_85_qled` as the fresh source, so the Devices/Power pages were already correct.)
+
+**Control is HA-only.** The SmartThings **Personal Access Token (`ST_TOKEN` in `/etc/environment`) is expired** — Samsung now expires PATs in 24 h, and `st_cmd()` was silently failing (401, return value discarded). Soundbar + TV-Bed power/volume/mute/source were migrated off `st_cmd` onto HA `media_player` services: soundbar = `media_player.samsung_soundbar_2` (features 318399 → turn_on/off, volume_set, mute, select_source), TV-Bed = `media_player.samsung_q49_ba_tv`. Soundbar volume_up/down uses `ha_sb_volume()` (read `volume_level` + `volume_set ±0.05`) because the soundbar has `VOLUME_SET` but **not** `VOLUME_STEP`. **Residual:** the soundbar **source/input list is empty** (it came from SmartThings via `st_get`; HA exposes no `source_list` for it) — power/volume/mute work, only the source picker is degraded until a fresh PAT is added. The `st_get()` state reads in `media_state()` still target SmartThings but 401 harmlessly → `None`, with HA covering power/volume. TV (`tv`) + TV-Guy (`tv_guy`) were already HA-only.
+
 ### Playback flow
 
 > ⛔ **HARD RULE: Video ALWAYS uses MiniDLNA → TV. Audio ALWAYS uses Cast → Soundbar.**
@@ -247,7 +252,7 @@ The active queue's `shuffle` and `repeat` flags can be toggled mid-playback via 
 
 ### Soundbar power — HA-direct, not via tv_control.py
 
-`_soundbar_off()` calls HA's `switch.samsung_soundbar` turn_off service directly (`http://192.168.1.110:8123/api/services/switch/turn_off`). Bypasses `tv_control.py` because that path uses a SmartThings Personal Access Token in `/etc/environment` that **expires periodically** — when it does, `st_cmd()` returns False but the dashboard endpoint discards the return value, so the soundbar stays on without any error surfacing. HA's own SmartThings integration stays authenticated via OAuth refresh.
+`_soundbar_off()` calls HA's `switch.samsung_soundbar` turn_off service directly (`http://192.168.1.110:8123/api/services/switch/turn_off`). Bypasses `tv_control.py` because that path uses a SmartThings Personal Access Token in `/etc/environment` that **expires periodically** — when it does, `st_cmd()` returns False but the dashboard endpoint discards the return value, so the soundbar stays on without any error surfacing. HA's own SmartThings integration stays authenticated via OAuth refresh. **(Update 2026-06-10: `tv_control.py`'s soundbar + TV-Bed control was itself migrated off `st_cmd`/the PAT onto HA `media_player` services — see "Power state + control source" above — so the expired PAT no longer breaks tv_control either. `_soundbar_off()` stays HA-direct regardless, as the simplest path for the auto-off-on-stop.)**
 
 The auto-off runs ONLY on `/api/queue/stop` (manual user click). It is fail-silent: a soundbar offline / HA outage doesn't fail the Stop call.
 
