@@ -285,7 +285,7 @@ def evaluate(event, state):
     log.info(
         "Wallmote %s %s %s → %d commands: %s",
         wm_slug, button, event_type, len(commands),
-        [(c["device_id"], c.get("channel"), c.get("action") or c.get("path", "?"))
+        [(c.get("device_id") or c.get("scene", "?"), c.get("channel"), c.get("action") or c.get("path", "?"))
          for c in commands],
     )
     return commands
