@@ -185,6 +185,19 @@ async def media_state(_req):
         })(parse_st(sb_raw, soundbar=True), sb_switch, sb_player),
     })
 
+# Soundbar volume: it advertises VOLUME_SET but NOT VOLUME_STEP, so HA's
+# volume_up/down service would 400. Emulate by reading the current level and
+# setting it ±step (clamped 0..1).
+async def ha_sb_volume(session, direction, step=0.05):
+    st  = await ha_get(session, f'/api/states/{SB_PLAYER}')
+    cur = ((st or {}).get('attributes') or {}).get('volume_level')
+    if cur is None:
+        return
+    new = max(0.0, min(1.0, cur + direction * step))
+    await ha_post(session, '/api/services/media_player/volume_set',
+                  {'entity_id': SB_PLAYER, 'volume_level': round(new, 3)})
+
+
 # ── POST /media/command ───────────────────────────────────────────────────────
 async def media_command(req):
     data    = await req.json()
@@ -215,20 +228,24 @@ async def media_command(req):
                 elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': TV_GUY_ENTITY, 'source': value})
 
             elif entity == 'tv_bed':
-                if   command == 'turn_on':    await st_cmd(s, ST_TVB_ID, 'switch', 'on')
-                elif command == 'turn_off':   await st_cmd(s, ST_TVB_ID, 'switch', 'off')
+                # Migrated off the expired SmartThings PAT to HA media_player.
+                if   command == 'turn_on':    await ha_post(s, '/api/services/media_player/turn_on',  {'entity_id': TV_BED_ENTITY})
+                elif command == 'turn_off':   await ha_post(s, '/api/services/media_player/turn_off', {'entity_id': TV_BED_ENTITY})
                 elif command == 'volume_up':  await ha_post(s, '/api/services/media_player/volume_up',   {'entity_id': TV_BED_ENTITY})
                 elif command == 'volume_down':await ha_post(s, '/api/services/media_player/volume_down', {'entity_id': TV_BED_ENTITY})
                 elif command == 'mute':       await ha_post(s, '/api/services/media_player/volume_mute', {'entity_id': TV_BED_ENTITY, 'is_volume_muted': value})
                 elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': TV_BED_ENTITY, 'source': value})
 
             elif entity == 'soundbar':
-                if   command == 'turn_on':    await st_cmd(s, ST_SB_ID, 'switch', 'on')
-                elif command == 'turn_off':   await st_cmd(s, ST_SB_ID, 'switch', 'off')
-                elif command == 'volume_up':  await st_cmd(s, ST_SB_ID, 'audioVolume', 'volumeUp')
-                elif command == 'volume_down':await st_cmd(s, ST_SB_ID, 'audioVolume', 'volumeDown')
-                elif command == 'mute':       await st_cmd(s, ST_SB_ID, 'audioMute', 'mute' if value else 'unmute')
-                elif command == 'source':     await st_cmd(s, ST_SB_ID, 'samsungvd.audioInputSource', 'setInputSource', [value])
+                # Migrated off the expired SmartThings PAT to HA media_player
+                # (media_player.samsung_soundbar_2 supports turn_on/off, volume_set,
+                # mute, select_source — features 318399). volume_up/down via helper.
+                if   command == 'turn_on':    await ha_post(s, '/api/services/media_player/turn_on',  {'entity_id': SB_PLAYER})
+                elif command == 'turn_off':   await ha_post(s, '/api/services/media_player/turn_off', {'entity_id': SB_PLAYER})
+                elif command == 'volume_up':  await ha_sb_volume(s, +1)
+                elif command == 'volume_down':await ha_sb_volume(s, -1)
+                elif command == 'mute':       await ha_post(s, '/api/services/media_player/volume_mute', {'entity_id': SB_PLAYER, 'is_volume_muted': value})
+                elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': SB_PLAYER, 'source': value})
             else:
                 return web.json_response({'error': 'Unknown entity'}, status=400)
 
