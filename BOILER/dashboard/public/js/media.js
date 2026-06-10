@@ -703,11 +703,14 @@ function renderUnassignedList() {
     for (const sub of subFolders) {
       const child = _unassigned.curPath + '/' + sub;
       const cnt = subRecCount.get(sub) || 0;
-      parts.push(`<a href="#" data-uan-nav="${escHtmlSafe(child)}" style="display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:3px; color:#2e2e2e; text-decoration:none;" onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background=''">
-        <span style="font-size:1.05rem; flex-shrink:0;">📁</span>
-        <span style="flex:1; font-weight:500;">${escHtmlSafe(sub)}</span>
-        <span style="color:#888; font-size:0.78rem;">${cnt} unassigned</span>
-      </a>`);
+      parts.push(`<div style="display:flex; align-items:center; gap:4px;">
+        <a href="#" data-uan-nav="${escHtmlSafe(child)}" style="display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:3px; color:#2e2e2e; text-decoration:none; flex:1;" onmouseover="this.style.background='#f0ede8'" onmouseout="this.style.background=''">
+          <span style="font-size:1.05rem; flex-shrink:0;">📁</span>
+          <span style="flex:1; font-weight:500;">${escHtmlSafe(sub)}</span>
+          <span style="color:#888; font-size:0.78rem;">${cnt} unassigned</span>
+        </a>
+        <span data-uan-del-folder="${escHtmlSafe(child)}" title="Delete this folder's unassigned files" style="cursor:pointer; padding:4px 8px; color:#c0392b; flex-shrink:0;" onmouseover="this.style.opacity='0.6'" onmouseout="this.style.opacity='1'">🗑</span>
+      </div>`);
     }
     // Direct files at this level.
     if (filesHere.length > 0) {
@@ -733,6 +736,13 @@ function renderUnassignedList() {
     el.addEventListener('click', (ev) => {
       ev.preventDefault();
       unassignedNavigate(el.getAttribute('data-uan-nav'));
+    });
+  });
+  list.querySelectorAll('[data-uan-del-folder]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      deleteUnassignedFolder(el.getAttribute('data-uan-del-folder'));
     });
   });
   updateUnassignedCounts();
@@ -770,6 +780,8 @@ function updateUnassignedCounts() {
   const t = document.getElementById('unassigned-total');
   if (c) c.textContent = _unassigned.checked.size;
   if (t) t.textContent = _unassigned.files.length;
+  const del = document.getElementById('unassigned-del-btn');
+  if (del) del.disabled = (_unassigned.checked.size === 0);
   updateUnassignedAddState();
 }
 
@@ -783,6 +795,57 @@ function updateUnassignedAddState() {
 function closeUnassignedDialog() {
   const overlay = document.getElementById('unassigned-modal-overlay');
   if (overlay) overlay.style.display = 'none';
+}
+
+// Delete the currently-checked files from disk (via the media agent on
+// LXC 100 — the dashboard never touches the filesystem itself).
+async function deleteUnassignedSelected() {
+  const paths = Array.from(_unassigned.checked);
+  if (paths.length === 0) return;
+  if (!confirm(`Delete ${paths.length} selected file(s) from disk?\n\nThis is permanent and cannot be undone.`)) return;
+  await _doUnassignedDelete(paths);
+}
+
+// Delete every unassigned (orphan) file under a sub-folder. Only orphans
+// are sent — files that ARE in a playlist are left untouched — so a mixed
+// folder never loses playlist content. If the folder ends up empty the
+// server prunes it, so an all-orphan folder (like a junk download) vanishes.
+async function deleteUnassignedFolder(folderRel) {
+  const paths = _unassigned.files
+    .filter(f => f.folder === folderRel || f.folder.startsWith(folderRel + '/'))
+    .map(f => f.path);
+  if (paths.length === 0) return;
+  const name = folderRel.split('/').pop();
+  if (!confirm(`Delete all ${paths.length} unassigned file(s) under "${name}"?\n\nThis is permanent and cannot be undone.`)) return;
+  await _doUnassignedDelete(paths);
+}
+
+async function _doUnassignedDelete(paths) {
+  const msg = document.getElementById('unassigned-msg');
+  if (msg) { msg.style.color = '#555'; msg.textContent = `Deleting ${paths.length}…`; }
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/delete`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ paths }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+    // Drop successfully-deleted paths from local state — keeps the current
+    // folder view instead of re-scanning back to the root.
+    const okPaths = new Set((d.results || []).filter(x => x.ok).map(x => x.path));
+    _unassigned.files = _unassigned.files.filter(f => !okPaths.has(f.path));
+    okPaths.forEach(p => _unassigned.checked.delete(p));
+    renderUnassignedList();
+    const status = document.getElementById('unassigned-status');
+    if (status) status.textContent = `${_unassigned.files.length} orphans remaining`;
+    if (msg) {
+      msg.style.color = (d.deleted === d.total) ? '#27ae60' : '#e67e22';
+      msg.textContent = `✓ Deleted ${d.deleted}/${d.total}.` + (d.deleted < d.total ? ' Some could not be removed.' : '');
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = '#c0392b'; msg.textContent = 'Delete failed: ' + (e.message || e); }
+  }
 }
 
 async function addUnassignedToPlaylist() {

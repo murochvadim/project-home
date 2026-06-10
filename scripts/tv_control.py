@@ -114,9 +114,10 @@ def parse_st(d, soundbar=False):
 # to the switch only when the media_player is unavailable/unknown.
 _MP_ON  = {'on', 'idle', 'playing', 'paused', 'buffering'}
 _MP_OFF = {'off', 'standby'}
-def mp_power(player, fallback_switch=None):
+def mp_power(player, fallback_switch=None, idle_is_on=True):
     st = (player or {}).get('state')
-    if st in _MP_ON:
+    on_set = _MP_ON if idle_is_on else (_MP_ON - {'idle'})
+    if st in on_set:
         return 'on'
     if st in _MP_OFF:
         return 'off'
@@ -177,7 +178,7 @@ async def media_state(_req):
         'tvGuy':   tv_guy_data,
         'tvBed':   tv_bed_data,
         'soundbar': (lambda st, sw, pl: {
-            'power':           mp_power(pl, sw),
+            'power':           mp_power(pl, sw, idle_is_on=False),  # idle ≠ on: cast endpoint sits at idle in standby; trust switch.samsung_soundbar
             'volume':          round((pl or {}).get('attributes', {}).get('volume_level', 0) * 100) if (pl or {}).get('attributes', {}).get('volume_level') is not None else st['volume'],
             'muted':           (pl or {}).get('attributes', {}).get('is_volume_muted', st['muted']),
             'input':           st['input'],

@@ -1160,6 +1160,54 @@ def walk_dir():
         return jsonify({'error': str(e)}), 400
 
 
+# ── POST /api/media/delete ───────────────────────────────────────
+# Delete files (and their yt-dlp ".description" sidecars) — or a whole
+# folder — from the media library. Used by the dashboard's 🔍 Unassigned
+# modal so junk downloads can be removed without hitting the QNAP SMB
+# delete-permission wall (these files were created by THIS service, so it
+# can remove them). Every path is validated through safe_path() so nothing
+# outside MEDIA_MOUNT can be touched; empty parent folders are pruned.
+# Body: {"paths": ["/mnt/media/Music/.../x.m4a", "Music/SubFolder", ...]}.
+@app.route('/api/media/delete', methods=['POST'])
+def media_delete():
+    import shutil
+    data  = request.get_json(silent=True) or {}
+    paths = data.get('paths') or []
+    if not isinstance(paths, list) or not paths:
+        return jsonify({'error': 'no paths given'}), 400
+    base    = os.path.realpath(MEDIA_MOUNT)
+    results = []
+    for p in paths:
+        rel = p[len('/mnt/media/'):] if isinstance(p, str) and p.startswith('/mnt/media/') else p
+        try:
+            full = safe_path(rel)
+        except ValueError:
+            results.append({'path': p, 'ok': False, 'error': 'unsafe path'})
+            continue
+        try:
+            if os.path.isdir(full) and os.path.realpath(full) != base:
+                shutil.rmtree(full)
+            elif os.path.isfile(full):
+                os.remove(full)
+                sidecar = os.path.splitext(full)[0] + '.description'
+                if os.path.isfile(sidecar):
+                    try: os.remove(sidecar)
+                    except OSError: pass
+                parent = os.path.dirname(full)
+                if os.path.realpath(parent) != base and not os.listdir(parent):
+                    try: os.rmdir(parent)
+                    except OSError: pass
+            else:
+                results.append({'path': p, 'ok': False, 'error': 'not found'})
+                continue
+            results.append({'path': p, 'ok': True})
+        except Exception as e:
+            results.append({'path': p, 'ok': False, 'error': str(e)})
+    ok = sum(1 for r in results if r.get('ok'))
+    log.info(f"media delete: {ok}/{len(results)} removed")
+    return jsonify({'deleted': ok, 'total': len(results), 'results': results})
+
+
 # ── GET /api/media/stream/<path> ─────────────────────────────────
 @app.route('/api/media/stream/<path:rel_path>')
 def stream_file(rel_path):
@@ -2476,29 +2524,6 @@ def queue_pause():
         return jsonify({'error': str(e)}), 500
 
 
-def _soundbar_off():
-    """Power the Samsung 990C soundbar off via HA's switch.samsung_soundbar.
-    Used by /api/queue/stop so clicking Stop ends the listening session
-    cleanly. HA's SmartThings integration stays authenticated via OAuth,
-    unlike the raw SmartThings PAT in tv_control.py which expires. Fail-
-    silent so a soundbar offline / HA outage doesn't break Stop."""
-    import urllib.request as ureq
-    ha_token = os.environ.get('HA_TOKEN', '')
-    if not ha_token:
-        return
-    try:
-        req = ureq.Request(
-            'http://192.168.1.110:8123/api/services/switch/turn_off',
-            data=json.dumps({'entity_id': 'switch.samsung_soundbar'}).encode(),
-            headers={'Authorization': f'Bearer {ha_token}', 'Content-Type': 'application/json'},
-            method='POST',
-        )
-        with ureq.urlopen(req, timeout=5) as r:
-            log.info(f"soundbar off via HA: HTTP {r.status}")
-    except Exception:
-        log.exception('soundbar off')
-
-
 @app.route('/api/queue/stop', methods=['POST'])
 def queue_stop():
     with _queue_lock:
@@ -2516,9 +2541,6 @@ def queue_stop():
         dlna_soap('Stop', body)
     except Exception:
         pass
-    # Auto-power the soundbar off — playlist stop = "done listening".
-    # Fail-silent so soundbar/HA being unreachable doesn't fail Stop.
-    _soundbar_off()
     return jsonify({'ok': True})
 
 

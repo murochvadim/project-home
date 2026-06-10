@@ -563,6 +563,7 @@
           <option value="">— Add to playlist —</option>
         </select>
         <button class="btn btn-secondary btn-sm" onclick="closeUnassignedDialog()">Cancel</button>
+        <button class="btn btn-sm" id="unassigned-del-btn" onclick="deleteUnassignedSelected()" disabled style="background:#c0392b; color:#fff; border-color:#c0392b;">🗑 Delete</button>
         <button class="btn btn-success btn-sm" id="unassigned-add-btn" onclick="addUnassignedToPlaylist()" disabled>+ Add</button>
       </div>
     </div>
@@ -786,6 +787,6 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=110"></script>
+<script src="js/media.js?v=111"></script>
 </body>
 </html>
