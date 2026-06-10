@@ -444,6 +444,7 @@
     'Morning Lights',
     'Start Away Mode',
     'Move in Corridor',
+    'Wallmote Handler',  // device-event rule: Test/Force would fire an arbitrary button1 binding, not meaningful
   ]);
   // Rules that get a single red "Run" button instead of Test/Force. Run uses
   // the engine Force path with the rule's own test_event (source='force_run'),
