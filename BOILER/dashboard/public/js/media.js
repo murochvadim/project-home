@@ -486,6 +486,8 @@ async function ytStartDownload() {
       return;
     }
     _ytCurrentJob = data.job_id;
+    const stopBtn = document.getElementById('yt-stop-btn');
+    if (stopBtn) { stopBtn.style.display = ''; stopBtn.disabled = false; }
     ytSetMeta(`▶ downloading to ${data.target_dir}`, '#888');
     // Reveal progress area + start polling
     const prog = document.getElementById('yt-progress');
@@ -501,6 +503,23 @@ async function ytStartDownload() {
   } catch (e) {
     ytSetMeta('✗ ' + (e.message || 'fetch error'), '#c0392b');
     if (btn) btn.disabled = false;
+  }
+}
+
+async function ytStopDownload() {
+  if (!_ytCurrentJob) return;
+  if (!confirm('Stop the current download?\n\nFiles already downloaded stay in the folder — remove them later via 🔍 Unassigned 🗑.')) return;
+  const stopBtn = document.getElementById('yt-stop-btn');
+  if (stopBtn) stopBtn.disabled = true;
+  ytSetMeta('⏹ stopping…', '#888');
+  try {
+    const r = await fetch(YT_API + '/stop/' + _ytCurrentJob, { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok || data.error) ytSetMeta('✗ ' + (data.error || `HTTP ${r.status}`), '#c0392b');
+    // ytPollStatus picks up state='stopped' on the next tick and finalizes the UI.
+  } catch (e) {
+    ytSetMeta('✗ ' + (e.message || 'stop failed'), '#c0392b');
+    if (stopBtn) stopBtn.disabled = false;
   }
 }
 
@@ -537,13 +556,15 @@ async function ytPollStatus() {
     const elapsedEl = document.getElementById('yt-elapsed');
     if (elapsedEl) elapsedEl.textContent = `${data.elapsed_sec}s elapsed`;
     // Terminal state
-    if (data.state === 'done' || data.state === 'error') {
+    if (data.state === 'done' || data.state === 'error' || data.state === 'stopped') {
       if (_ytPollTimer) { clearInterval(_ytPollTimer); _ytPollTimer = null; }
       _ytCurrentJob = null;
       const pill = document.getElementById('yt-state-pill');
       if (pill) {
         pill.textContent = data.state;
-        pill.style.background = data.state === 'done' ? '#27ae60' : '#c0392b';
+        pill.style.background = data.state === 'done'    ? '#27ae60'
+                              : data.state === 'stopped' ? '#e67e22'
+                              : '#c0392b';
       }
       const sum = document.getElementById('yt-summary');
       if (sum) {
@@ -560,6 +581,10 @@ async function ytPollStatus() {
           sum.style.color = '#27ae60';
           // Refresh playlists card so the new playlist appears
           if (typeof loadPlaylists === 'function') loadPlaylists();
+        } else if (data.state === 'stopped') {
+          const n = (data.tracks || []).length;
+          sum.textContent = `⏹ Stopped — ${n} file${n === 1 ? '' : 's'} already saved remain in the folder (remove via 🔍 Unassigned 🗑).`;
+          sum.style.color = '#e67e22';
         } else {
           sum.textContent = '✗ ' + (data.error || 'failed');
           sum.style.color = '#c0392b';
@@ -567,6 +592,8 @@ async function ytPollStatus() {
       }
       const btn = document.getElementById('yt-download-btn');
       if (btn) btn.disabled = false;
+      const stopBtn = document.getElementById('yt-stop-btn');
+      if (stopBtn) stopBtn.style.display = 'none';
       ytSetMeta('', '#888');
     }
   } catch (e) {

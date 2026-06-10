@@ -1818,15 +1818,21 @@ def _yt_reader(job_id):
                 continue
         rc = proc.wait()
         with _yt_jobs_lock:
-            job['state']        = 'done' if rc == 0 else 'error'
+            if job.get('cancelled'):
+                # User hit Stop — not an error. Skip split/playlist so we
+                # never build a playlist from a half-finished download.
+                job['state'] = 'stopped'
+                job['error'] = None
+            else:
+                job['state'] = 'done' if rc == 0 else 'error'
+                if rc != 0:
+                    job['error'] = f'yt-dlp exited with rc={rc}'
             job['completed_at'] = time.time()
-            if rc != 0:
-                job['error'] = f'yt-dlp exited with rc={rc}'
         # Auto-split compilation videos before playlist creation, so the
         # playlist gets the split files instead of the long original.
-        if rc == 0 and job.get('auto_split'):
+        if rc == 0 and not job.get('cancelled') and job.get('auto_split'):
             _yt_try_split(job_id)
-        if rc == 0 and job.get('create_playlist'):
+        if rc == 0 and not job.get('cancelled') and job.get('create_playlist'):
             _yt_auto_create_playlist(job_id)
     except Exception as e:
         log.exception('yt-dlp reader[%s]', job_id[:8])
@@ -1910,6 +1916,7 @@ def yt_dlp_start():
             text=True,
             bufsize=1,
             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+            start_new_session=True,   # own process group → Stop can kill yt-dlp + any ffmpeg child
         )
     except Exception as e:
         log.exception('yt_dlp_start spawn')
@@ -1929,6 +1936,7 @@ def yt_dlp_start():
             'started_at':      time.time(),
             'completed_at':    None,
             'state':           'running',
+            'cancelled':       False,
             'error':           None,
             'playlist_id':     None,
             'playlist_error':  None,
@@ -1959,6 +1967,37 @@ def yt_dlp_status(job_id):
             'playlist_error': job.get('playlist_error'),
             'split_summary':  job.get('split_summary'),
         })
+
+
+# ── POST /api/media/yt-dlp/stop/<job_id> ─────────────────────────
+# Abort a running download. Kills the yt-dlp process GROUP (so any ffmpeg
+# extract child dies too — see start_new_session=True in yt_dlp_start).
+# Sets cancelled=True so the reader marks the job 'stopped' (not 'error')
+# and skips playlist/split. Partial files are LEFT on disk (clean them via
+# the 🔍 Unassigned 🗑 button). Prevents the runaway-download scenario.
+@app.route('/api/media/yt-dlp/stop/<job_id>', methods=['POST'])
+def yt_dlp_stop(job_id):
+    with _yt_jobs_lock:
+        job = _yt_jobs.get(job_id)
+        if not job:
+            return jsonify({'error': 'job not found'}), 404
+        if job['state'] != 'running':
+            return jsonify({'state': job['state'], 'note': 'not running'})
+        job['cancelled'] = True
+        proc = job.get('process')
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(pgid, signal.SIGKILL)
+    except Exception as e:
+        log.warning('yt_dlp_stop[%s] killpg failed (%s) — fallback to proc.kill()', job_id[:8], e)
+        try: proc.kill()
+        except Exception: pass
+    log.info('yt-dlp[%s] stopped by user', job_id[:8])
+    return jsonify({'state': 'stopped'})
 
 
 # ── Playlists CRUD (Phase 1) ─────────────────────────────────────
