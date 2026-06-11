@@ -65,7 +65,7 @@ Sentences (all editable in Base Rule Settings → My Bathroom Lights):
 | s_mbr3 | `My Bathroom Lights: day window is between 06:00 and 01:00` | day window (wraps past midnight → night band 01:00–06:00) |
 | s_mbr4 | `My Bathroom Lights: turn off after 10 minutes` | auto-off timeout |
 | s_mbr5 | `My Bathroom Lights: mirror @My Bathroom Switch My Bathroom Light to @My Bathroom Under Cabinet Light` | mirror master → slave |
-| s_mbr6 | `My Bathroom Lights: when main light off also turn off @My Bathroom Switch Laundry Light` | OFF-cascade (2026-06-11) — main light off → also off, **only if the Laundry is empty** (gated on the Laundry presence sensor `bfc3dedf…cd0v` so it doesn't fight the Laundry Light rule). One-way, OFF-only. |
+| s_mbr6 | `My Bathroom Lights: when main light off also turn off @My Bathroom Switch Laundry Light` | OFF-cascade (2026-06-11) — main light off → also off, **immediately, no occupancy gate** (the laundry-empty gate was dropped 2026-06-12: the adjacent laundry sensor still read "presence" at the off-instant so it blocked nearly every time). **Edge-gated** via `_mybathroom_master_was_on` — fires only on a real ch2 falling edge (was-on→off), NOT on steady-state local-poll snapshots showing ch2=false (which would otherwise keep re-killing the laundry light and fight the Laundry Light rule). One-way, OFF-only. |
 
 Implementation notes:
 - **No flood:** turn_on only emits for currently-off targets (`_is_on` state-diff) **plus** a **3 s burst debounce** (`_ON_DEBOUNCE_SEC`) — a `turn_on` takes >1 s to reflect back into `state.devices`, so the mmWave's entry flurry would otherwise re-emit; the debounce suppresses repeats and retries after 3 s if the light still reads off.

@@ -21,11 +21,14 @@ Behaviour
    Light) drives the slave (Under-Cabinet): master ON → slave ON, master OFF →
    slave OFF. Lets the main wall switch also control the under-cabinet strip.
 
-4. **OFF-cascade** (one-way, OFF-only, s_mbr6) — when the main light turns OFF
-   (manually or via auto-off), also turn off the listed lights (the Laundry
-   Light, My Bathroom Switch ch 1) — but ONLY if the Laundry presence sensor
-   (_LAUNDRY_PRESENCE_ID) reads clear, so it doesn't fight the separate Laundry
-   Light rule / flicker while someone's in the laundry. Nothing happens on ON.
+4. **OFF-cascade** (one-way, OFF-only, s_mbr6) — on a real FALLING EDGE of the
+   main light (was on, now off — manual or auto-off), also turn off the listed
+   lights (the Laundry Light, My Bathroom Switch ch 1), immediately. No occupancy
+   gate (the laundry-empty check was dropped 2026-06-12 — the adjacent laundry
+   sensor still read "presence" at the off-instant so it blocked nearly every
+   time). Edge-gated via `_mybathroom_master_was_on` so steady-state local-poll
+   snapshots showing ch2=false don't keep re-killing the laundry light (which
+   would fight the separate Laundry Light rule). Nothing happens on ON.
 
 Everything configurable lives in the dashboard container "My Bathroom Lights"
 (`r_mybathroom_init` in apartment.rule_sentences) — the rule parses it itself
@@ -69,7 +72,6 @@ _TZ = ZoneInfo("Asia/Jerusalem")
 _PRESENCE_ID = "bf23d6781f5f872648dd4n"               # My Bathroom Presence sens (dps "1")
 _DOOR_ID     = "66ac7365-7a9b-4706-bbd4-315a2793ecff"  # My Bathroom Door (dps "door")
 _SWITCH_ID   = "57317771ecfabcbd3d24"                  # My Bathroom Switch (mirror master, ch "2")
-_LAUNDRY_PRESENCE_ID = "bfc3dedf528a255313cd0v"        # Laundry Room Presence sens — gates the OFF-cascade (s_mbr6)
 
 # Sentence regex anchors (case-insensitive).
 _DAY_RE     = re.compile(r"my\s+bathroom\s+lights:\s*day\s+lights\s+are", re.IGNORECASE)
@@ -83,8 +85,10 @@ _TIMEOUT_RE = re.compile(
     re.IGNORECASE,
 )
 _MIRROR_RE  = re.compile(r"my\s+bathroom\s+lights:\s*mirror\b", re.IGNORECASE)
-# s_mbr6 — OFF-only cascade: when the main light turns OFF, also turn off these
-# lights, but ONLY if the Laundry is empty (gated on _LAUNDRY_PRESENCE_ID).
+# s_mbr6 — OFF-only cascade: on a real falling edge of the main light (was on,
+# now off), also turn off these lights immediately. No occupancy gate (the
+# laundry-empty check was dropped 2026-06-12). Edge-gated in evaluate() via
+# _mybathroom_master_was_on so steady-state local-poll snapshots don't re-fire.
 _OFF_CASCADE_RE = re.compile(r"my\s+bathroom\s+lights:\s*when\s+main\s+light\s+off", re.IGNORECASE)
 
 # Defaults used only if a sentence is missing/unparsable (container is seeded
@@ -391,8 +395,11 @@ def evaluate(event, state):
         if key not in dps:
             return []   # this event didn't change the master channel
         want_on = dps.get(key) in _ON_VALS
+        prev_master = state.shared.get("_mybathroom_master_was_on")
+        state.shared["_mybathroom_master_was_on"] = want_on
         cmds = []
-        # Primary slave — bidirectional (on→on, off→off).
+        # Primary slave — bidirectional (on→on, off→off). Idempotent via the
+        # _is_on guard, so steady-state local-poll snapshots are no-ops.
         if cfg["mirror_slave"]:
             slave_id, slave_ch = cfg["mirror_slave"]
             if _is_on(state, slave_id, slave_ch) != want_on:
@@ -402,22 +409,25 @@ def evaluate(event, state):
                 if slave_ch is not None:
                     c["channel"] = slave_ch
                 cmds.append(c)
-        # OFF-cascade (s_mbr6) — when the main light goes OFF, also turn off these
-        # lights, but ONLY if the Laundry is empty (don't fight the Laundry Light
-        # rule / cause a flicker while someone's in there).
-        if not want_on and cfg["off_cascade"]:
-            laundry_clear = not _present_val(_dps_of(state, _LAUNDRY_PRESENCE_ID).get("1"))
-            if laundry_clear:
-                for dev2, ch2 in cfg["off_cascade"]:
-                    if not _is_on(state, dev2, ch2):
-                        continue
-                    c = {"device_id": dev2, "action": "turn_off",
-                         "rule": "My Bathroom Lights", "_skip_loop_guard": True}
-                    if ch2 is not None:
-                        c["channel"] = ch2
-                    cmds.append(c)
+        # OFF-cascade (s_mbr6) — on a real FALLING EDGE of the main light (was on,
+        # now off), also turn off the listed lights. Fires immediately, NO
+        # occupancy gate (the laundry-empty check was dropped 2026-06-12 — the
+        # adjacent laundry sensor still read "presence" at the off-instant, so the
+        # gate blocked nearly every time). Edge-gated (not "ch2==false in this
+        # event") via _mybathroom_master_was_on so steady-state local-poll
+        # snapshots showing ch2=false don't keep turning the laundry light off and
+        # fight the Laundry Light rule (which turns it on for the laundry room).
+        if prev_master is True and not want_on and cfg["off_cascade"]:
+            for dev2, ch2 in cfg["off_cascade"]:
+                if not _is_on(state, dev2, ch2):
+                    continue
+                c = {"device_id": dev2, "action": "turn_off",
+                     "rule": "My Bathroom Lights", "_skip_loop_guard": True}
+                if ch2 is not None:
+                    c["channel"] = ch2
+                cmds.append(c)
         if cmds:
-            log.info("mybathroom: mirror master=%s → %d cmd(s) (laundry_clear gate on off-cascade)",
+            log.info("mybathroom: mirror master=%s → %d cmd(s)",
                      "on" if want_on else "off", len(cmds))
         return cmds
 
