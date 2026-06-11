@@ -91,7 +91,7 @@ Future:
 | `Smart Toilet AC breaker` | local (Tuya) | circuit_breaker | |
 | `My Bathroom Color` | local (Tuya) | light | |
 | `My Bathroom Under Cabinet Light` | zwave | switch | |
-| `My Bathroom Switch` | local (Tuya) | switch | |
+| `My Bathroom Switch` | local (Tuya) | switch | ch1 = "Laundry Light" (driven by the separate **Laundry Light** rule, group `laundry`, `RULES/rules/laundry_light.py` — Laundry room/sensor); ch2 = "My Bathroom Light" (driven by My Bathroom Lights here) |
 | `My Bathroom Presence sens` | local (Tuya) | presence | |
 
 ## Pending integration: TOTO toilet IR bridge

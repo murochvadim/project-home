@@ -450,6 +450,7 @@
     'Evening Lights',
     'Morning Lights',
     'My Bathroom Lights',
+    'Laundry Light',
   ]);
   window.testModeButton = async function (mode) {
     const el = document.getElementById('test-result');
@@ -903,7 +904,7 @@
         };
         const SECTION_ORDER = [
           'Apartment (Layer 0)', 'Activity', 'Lighting', 'Mode transitions',
-          'Corridor', 'Living Room', 'Balcony', 'My BathRoom', 'Boiler', 'Pixoo', 'Power', 'Other',
+          'Corridor', 'Living Room', 'Balcony', 'My BathRoom', 'Laundry', 'Boiler', 'Pixoo', 'Power', 'Other',
         ];
         // Capitalize each dash-separated word. Special-case my-bathroom so
         // the rendered label matches the project's canonical "My BathRoom"
