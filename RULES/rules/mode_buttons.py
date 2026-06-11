@@ -322,24 +322,38 @@ def evaluate(event, state):
         )
         return [cmd]
 
-    # ── Direct event check (race-safe) ──
-    # The current event's payload is the freshest source of truth — it hasn't
-    # been written to device_events yet at the moment evaluate() runs, so
-    # querying the table for "last transition" misses this very event. If THIS
-    # event is from a button device and contains exactly one mode-button
-    # going TRUE, that mode wins immediately.
+    # ── Rising-edge fast path (race-safe) ──
+    # A mode SWITCH always starts with the PREVIOUS mode's button still ON —
+    # mode buttons don't self-clear (this rule clears them via mutual-exclusivity
+    # afterwards), and AWAY/ch8 especially lingers ~14 s because it's the
+    # cloud-authoritative datapoint that only clears when HA reports it. So
+    # "exactly one button true" almost never holds at switch time, and the
+    # most-recent-transition tiebreaker below reads device_events — which does
+    # NOT yet contain the just-pressed transition when evaluate() runs. The net
+    # effect was that every switch deferred to the next heartbeat (0-60 s lag).
+    #
+    # Fix: detect which button went FALSE->TRUE in THIS event (a rising edge).
+    # That press wins immediately, regardless of other buttons still latched on.
+    # Per-button truthiness prefers this event's payload (authoritative for what
+    # changed) and falls back to live state for buttons not in the payload.
     fresh_mode = None
     event_dps = event.get('dps') or {}
-    if dev_id in button_devs:
-        truthy_modes = []
+    if dev_id != 'heartbeat' and dev_id in button_devs:
+        cur_truthy = {}
         for mode, (bd, bp) in modes.items():
-            if dev_id != bd:
-                continue
-            v = event_dps.get(bp) if bp is not None else event_dps.get('1')
-            if v in _TRUTHY_BUTTON_VALUES:
-                truthy_modes.append(mode)
-        if len(truthy_modes) == 1:
-            fresh_mode = truthy_modes[0]
+            key = bp if bp is not None else '1'
+            if key in event_dps:
+                cur_truthy[mode] = event_dps.get(key) in _TRUTHY_BUTTON_VALUES
+            else:
+                cur_truthy[mode] = _is_button_on(state, bd, bp)
+        last_vals = state.shared.get('_mode_buttons_last_vals') or {}
+        if last_vals:  # need a prior snapshot to compute edges
+            rising = [m for m, v in cur_truthy.items() if v and not last_vals.get(m, False)]
+            if len(rising) == 1:
+                fresh_mode = rising[0]
+        # Record this event's button truthiness for the next edge computation.
+        # Private (_-prefixed) key → doesn't pollute the Runs counter.
+        state.shared['_mode_buttons_last_vals'] = cur_truthy
 
     if fresh_mode:
         active_mode = fresh_mode
