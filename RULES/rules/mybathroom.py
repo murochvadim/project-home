@@ -21,6 +21,12 @@ Behaviour
    Light) drives the slave (Under-Cabinet): master ON → slave ON, master OFF →
    slave OFF. Lets the main wall switch also control the under-cabinet strip.
 
+4. **OFF-cascade** (one-way, OFF-only, s_mbr6) — when the main light turns OFF
+   (manually or via auto-off), also turn off the listed lights (the Laundry
+   Light, My Bathroom Switch ch 1) — but ONLY if the Laundry presence sensor
+   (_LAUNDRY_PRESENCE_ID) reads clear, so it doesn't fight the separate Laundry
+   Light rule / flicker while someone's in the laundry. Nothing happens on ON.
+
 Everything configurable lives in the dashboard container "My Bathroom Lights"
 (`r_mybathroom_init` in apartment.rule_sentences) — the rule parses it itself
 (30 s TTL cache), so edits + Reload take effect without an engine restart:
@@ -30,6 +36,7 @@ Everything configurable lives in the dashboard container "My Bathroom Lights"
   s_mbr3: My Bathroom Lights: day window is between 06:00 and 23:00
   s_mbr4: My Bathroom Lights: turn off after 10 minutes
   s_mbr5: My Bathroom Lights: mirror @<Master> <Channel> to @<Slave>
+  s_mbr6: My Bathroom Lights: when main light off also turn off @<Light> <Channel>
 
 Trigger device IDs (presence / door / switch) are fixed in RULE['triggers']
 (triggers are bound at module load and can't be sentence-driven); they are the
@@ -62,6 +69,7 @@ _TZ = ZoneInfo("Asia/Jerusalem")
 _PRESENCE_ID = "bf23d6781f5f872648dd4n"               # My Bathroom Presence sens (dps "1")
 _DOOR_ID     = "66ac7365-7a9b-4706-bbd4-315a2793ecff"  # My Bathroom Door (dps "door")
 _SWITCH_ID   = "57317771ecfabcbd3d24"                  # My Bathroom Switch (mirror master, ch "2")
+_LAUNDRY_PRESENCE_ID = "bfc3dedf528a255313cd0v"        # Laundry Room Presence sens — gates the OFF-cascade (s_mbr6)
 
 # Sentence regex anchors (case-insensitive).
 _DAY_RE     = re.compile(r"my\s+bathroom\s+lights:\s*day\s+lights\s+are", re.IGNORECASE)
@@ -75,6 +83,9 @@ _TIMEOUT_RE = re.compile(
     re.IGNORECASE,
 )
 _MIRROR_RE  = re.compile(r"my\s+bathroom\s+lights:\s*mirror\b", re.IGNORECASE)
+# s_mbr6 — OFF-only cascade: when the main light turns OFF, also turn off these
+# lights, but ONLY if the Laundry is empty (gated on _LAUNDRY_PRESENCE_ID).
+_OFF_CASCADE_RE = re.compile(r"my\s+bathroom\s+lights:\s*when\s+main\s+light\s+off", re.IGNORECASE)
 
 # Defaults used only if a sentence is missing/unparsable (container is seeded
 # with all five on deploy, so these are belt-and-braces).
@@ -209,6 +220,7 @@ def _parse_config(state):
         "win_start": _DEF_WIN_START, "win_end": _DEF_WIN_END,
         "timeout": _DEF_TIMEOUT,
         "mirror_master": None, "mirror_slave": None,
+        "off_cascade": [],
         "authored": container is not None,
     }
     if container:
@@ -231,6 +243,8 @@ def _parse_config(state):
                 n, unit = int(m.group(1)), m.group(2).lower()
                 mult = 3600 if unit in ("hour", "hr") else 1 if unit in ("second", "sec") else 60
                 cfg["timeout"] = n * mult
+            elif _OFF_CASCADE_RE.search(text):
+                cfg["off_cascade"] = [p for p in (_parse_dev_chip(c, devs) for c in _iter_dev_chips(s)) if p]
             elif _MIRROR_RE.search(text):
                 chips = _iter_dev_chips(s)
                 if len(chips) >= 2:
@@ -367,27 +381,45 @@ def evaluate(event, state):
             return cmds
         return []
 
-    # ── Mirror: master light change → slave follows ──
-    if dev_id == _SWITCH_ID and cfg["mirror_master"] and cfg["mirror_slave"]:
+    # ── Mirror: master light change → slave follows; on OFF also kill off-cascade ──
+    if dev_id == _SWITCH_ID and cfg["mirror_master"]:
         master_id, master_ch = cfg["mirror_master"]
         if master_id != dev_id:
             return []
         dps = event.get("dps", {}) or {}
         key = master_ch if master_ch is not None else "1"
         if key not in dps:
-            return []
-        slave_id, slave_ch = cfg["mirror_slave"]
+            return []   # this event didn't change the master channel
         want_on = dps.get(key) in _ON_VALS
-        if _is_on(state, slave_id, slave_ch) == want_on:
-            return []   # already matches — no-op
-        cmd = {"device_id": slave_id,
-               "action": "turn_on" if want_on else "turn_off",
-               "rule": "My Bathroom Lights", "_skip_loop_guard": True}
-        if slave_ch is not None:
-            cmd["channel"] = slave_ch
-        log.info("mybathroom: mirror master=%s → slave %s", "on" if want_on else "off",
-                 "on" if want_on else "off")
-        return [cmd]
+        cmds = []
+        # Primary slave — bidirectional (on→on, off→off).
+        if cfg["mirror_slave"]:
+            slave_id, slave_ch = cfg["mirror_slave"]
+            if _is_on(state, slave_id, slave_ch) != want_on:
+                c = {"device_id": slave_id,
+                     "action": "turn_on" if want_on else "turn_off",
+                     "rule": "My Bathroom Lights", "_skip_loop_guard": True}
+                if slave_ch is not None:
+                    c["channel"] = slave_ch
+                cmds.append(c)
+        # OFF-cascade (s_mbr6) — when the main light goes OFF, also turn off these
+        # lights, but ONLY if the Laundry is empty (don't fight the Laundry Light
+        # rule / cause a flicker while someone's in there).
+        if not want_on and cfg["off_cascade"]:
+            laundry_clear = not _present_val(_dps_of(state, _LAUNDRY_PRESENCE_ID).get("1"))
+            if laundry_clear:
+                for dev2, ch2 in cfg["off_cascade"]:
+                    if not _is_on(state, dev2, ch2):
+                        continue
+                    c = {"device_id": dev2, "action": "turn_off",
+                         "rule": "My Bathroom Lights", "_skip_loop_guard": True}
+                    if ch2 is not None:
+                        c["channel"] = ch2
+                    cmds.append(c)
+        if cmds:
+            log.info("mybathroom: mirror master=%s → %d cmd(s) (laundry_clear gate on off-cascade)",
+                     "on" if want_on else "off", len(cmds))
+        return cmds
 
     # ── Heartbeat: auto-off when empty + idle ──
     if dev_id == "heartbeat":
