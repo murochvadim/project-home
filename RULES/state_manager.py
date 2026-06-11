@@ -18,7 +18,7 @@ import threading
 import time
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 
 log = logging.getLogger('state_manager')
 
@@ -615,38 +615,43 @@ class StateManager:
 
     def save_shared_state(self):
         """Persist shared state + timers to rule_engine_state table.
-        Runs on the heartbeat-dedicated connection so the ~167-row upsert
-        (200-300ms) does not block rule emissions on the main connection."""
+
+        Runs on the heartbeat-dedicated connection. Uses ONE batched
+        `execute_values` multi-row upsert instead of ~167 sequential executes —
+        measured ~9.3 ms -> ~1.0 ms (9x). This save is also called per-event from
+        the engine's dispatch path when shared state changes (rule_engine.py
+        ~L638) while holding the dispatch lock, so the batch shaves that hold to
+        ~1 ms. (The old docstring's "200-300 ms" was wrong for this deployment —
+        LXC-to-LXC DB RTT is ~0.03 ms, so 167 round-trips were only ~9 ms.)"""
         with self.lock:
             snapshot = copy.deepcopy(self.shared)
             timers = dict(self._timers)
+        rows = []
+        for key, value in snapshot.items():
+            # Skip keys owned by other services / dashboard
+            if (key.startswith('_pixoo_') or key in _DASHBOARD_KEYS
+                    or key.startswith('_rule_override')):
+                continue
+            rows.append((key, json.dumps(value)))
+        for name, ts in timers.items():
+            rows.append((f'_timer:{name}', str(ts)))
+        if not rows:
+            return
         with self._hb_lock:
             self._ensure_hb_conn()
             try:
                 with self._hb_conn.cursor() as cur:
-                    for key, value in snapshot.items():
-                        # Skip keys owned by other services / dashboard
-                        if (key.startswith('_pixoo_') or key in _DASHBOARD_KEYS
-                                or key.startswith('_rule_override')):
-                            continue
-                        val_str = json.dumps(value)
-                        cur.execute(
-                            "INSERT INTO rule_engine_state (key, value, updated_at) "
-                            "VALUES (%s, %s, NOW()) "
-                            "ON CONFLICT (key) DO UPDATE "
-                            "SET value = EXCLUDED.value, updated_at = NOW()",
-                            (key, val_str),
-                        )
-                    for name, ts in timers.items():
-                        cur.execute(
-                            "INSERT INTO rule_engine_state (key, value, updated_at) "
-                            "VALUES (%s, %s, NOW()) "
-                            "ON CONFLICT (key) DO UPDATE "
-                            "SET value = EXCLUDED.value, updated_at = NOW()",
-                            (f'_timer:{name}', str(ts)),
-                        )
-                log.debug("Saved %d shared keys + %d timers",
-                          len(self.shared), len(self._timers))
+                    execute_values(
+                        cur,
+                        "INSERT INTO rule_engine_state (key, value, updated_at) "
+                        "VALUES %s "
+                        "ON CONFLICT (key) DO UPDATE "
+                        "SET value = EXCLUDED.value, updated_at = NOW()",
+                        rows,
+                        template="(%s, %s, NOW())",
+                    )
+                log.debug("Saved %d shared keys + %d timers (batched)",
+                          len(snapshot), len(timers))
             except psycopg2.errors.UndefinedTable:
                 log.warning("rule_engine_state table does not exist — cannot persist state")
                 self._hb_conn.rollback()

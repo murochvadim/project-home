@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import queue
 import signal
 import sys
 import threading
@@ -191,6 +192,13 @@ class RuleEngine:
         # (reentrant) so a nested acquire from the same thread is safe — cheap
         # insurance against future refactors.
         self._dispatch_lock = threading.RLock()
+        # Background command dispatch: rules ENQUEUE commands under the firing
+        # lock (fast, in-memory), a single worker thread dispatches them OFF the
+        # lock. A slow/blocking device call (e.g. an HA REST timeout, ~5 s) can
+        # therefore no longer stall event processing — the next event isn't
+        # queued behind it. Single worker → global FIFO command order preserved.
+        self._dispatch_queue = queue.Queue()
+        self._dispatch_q_warn_ts = 0.0  # throttle for queue-depth warnings
         self._rule_stats = {}           # rule_name -> {count, total_ms, max_ms, last_fired}
         self._group_active = {}         # group_name -> {rule, action, ts} (per event cycle)
         self._rule_originals = {}       # rule_name -> {priority, group, conditions} from file
@@ -587,30 +595,33 @@ class RuleEngine:
                 rule_shared_before = self.state.shared.copy()
 
                 commands = self._evaluate_rule(rule, event)
-                # Per-command try/except so ONE failing device doesn't cascade
-                # and abort the whole fan-out. Real-world trigger: a wallmote
-                # "Good Night" binding fanning out 40+ devices where 1-2 are
-                # orphan IDs (deleted device row but stale binding) or offline.
-                # Exception in any single _dispatch_command call previously
-                # bubbled up and stopped every later command in the list.
+                # ENQUEUE each command for the background dispatch worker instead
+                # of dispatching inline. This keeps the event-processing lock free
+                # of slow/blocking device I/O (an HA REST call can block ~5 s, line
+                # ~1296/1415) — so the NEXT event (e.g. a bathroom presence
+                # detection) is never stalled behind another rule's slow dispatch.
+                # The worker applies the per-command try/except so one failing
+                # device can't cascade. Single worker → global FIFO order kept.
                 _disp_t0 = time.time()
                 for cmd in commands:
-                    try:
-                        self._dispatch_command(cmd, rule_name)
-                    except Exception as e:
-                        log.warning("Rule '%s' dispatch failed for %s/%s: %s",
-                                    rule_name, cmd.get('device_id', '?'),
-                                    cmd.get('action', '?'), e)
+                    self._dispatch_queue.put((cmd, rule_name))
 
-                # avg/max now reflect TOTAL cycle time = evaluate + DISPATCH (the
-                # rule's real cost), not evaluate alone (which was always sub-ms
-                # and uninformative). Scene rules dispatch only the single
-                # run_scene command here — the heavy per-device work runs on the
-                # run_scene daemon thread — so they correctly read ~0 (proof they
-                # no longer block; the scene's real ms is in the run_scene log).
-                # Info rules that only mutate state.shared have no dispatch, so
-                # this stays their evaluate (compute) time.
+                # _disp_ms is now just the ENQUEUE time (~0) — dispatch latency
+                # moved off the firing cycle (intentional). avg/max therefore
+                # reflect EVALUATE cost (compute time), which is the rule's real
+                # blocking cost now that device I/O is off-cycle. Scene rules
+                # already read ~0 (run_scene daemon); this generalizes that to
+                # every rule. Info rules that only mutate state.shared stay at
+                # their evaluate time.
                 _disp_ms = (time.time() - _disp_t0) * 1000
+                # Throttled queue-depth warning — surfaces a sustained dispatch
+                # backlog (slow/unreachable device) without spamming. Self-drains
+                # on recovery; strictly better than the old inline stall.
+                _qsz = self._dispatch_queue.qsize()
+                if _qsz > 200 and (time.time() - self._dispatch_q_warn_ts) > 30:
+                    self._dispatch_q_warn_ts = time.time()
+                    log.warning("dispatch queue backlog: %d commands pending "
+                                "(a target device is slow/unreachable)", _qsz)
                 # Detect what changed
                 elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0) + _disp_ms
                 changed_keys = [k for k in self.state.shared
@@ -1509,6 +1520,29 @@ class RuleEngine:
         except Exception:
             log.exception("run_scene failed for %r", name)
 
+    def _dispatch_worker_loop(self):
+        """Drain the dispatch queue, running _dispatch_command OFF the event
+        lock so a slow/blocking device call (HA REST timeout, etc.) can't stall
+        event processing. Single worker → commands dispatch in global FIFO
+        order. Per-item try/except so one bad command can't kill the worker
+        (same cascade protection the old inline dispatch loop had)."""
+        while True:
+            item = self._dispatch_queue.get()
+            try:
+                if item is None:
+                    continue
+                cmd, rule_name = item
+                self._dispatch_command(cmd, rule_name)
+            except Exception as e:
+                cmd = item[0] if isinstance(item, tuple) and item else {}
+                rname = item[1] if isinstance(item, tuple) and len(item) > 1 else '?'
+                log.warning("dispatch worker failed for %s/%s (rule '%s'): %s",
+                            (cmd.get('device_id', '?') if isinstance(cmd, dict) else '?'),
+                            (cmd.get('action', '?') if isinstance(cmd, dict) else '?'),
+                            rname, e)
+            finally:
+                self._dispatch_queue.task_done()
+
     def _dispatch_command(self, cmd, rule_name):
         """Route a command dict to the correct MQTT topic.
 
@@ -2331,6 +2365,11 @@ class RuleEngine:
         self.mqtt.publish_bridge_online(len(self.rules))
 
         # Start background threads
+        dispatch_worker = threading.Thread(
+            target=self._dispatch_worker_loop, daemon=True, name='dispatch-worker',
+        )
+        dispatch_worker.start()
+
         heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop, daemon=True, name='heartbeat',
         )
