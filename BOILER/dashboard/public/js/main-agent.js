@@ -449,6 +449,7 @@
   const RULES_RUN_BUTTON = new Set([
     'Evening Lights',
     'Morning Lights',
+    'My Bathroom Lights',
   ]);
   window.testModeButton = async function (mode) {
     const el = document.getElementById('test-result');
@@ -897,6 +898,7 @@
           'Corridor Transit Classifier':'Corridor',
           'Daily_Welcome':           'Pixoo',
           'Wallmote Handler':        'Living Room',
+          'My Bathroom Lights':      'My BathRoom',
           'Boiler Consumption Classify': 'Boiler',
         };
         const SECTION_ORDER = [
