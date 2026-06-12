@@ -16,12 +16,10 @@ import os
 import re
 import queue
 import signal
-import sys
 import threading
 import time
 from datetime import datetime, timedelta
 
-import psycopg2
 import urllib.error
 import urllib.request
 
