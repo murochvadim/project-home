@@ -17,6 +17,8 @@ Everything configurable lives in the dashboard container "Laundry Light"
 
   s_ll1: Laundry Light: lights are @<Light> <Channel>, ...
   s_ll2: Laundry Light: turn off after 5 minutes
+  s_ll3: Laundry Light: only fires when home_mode is home   (gate — turn-on only;
+         AND-combined; auto-off ignores it)
 
 The presence trigger device id is fixed in RULE['triggers'] (triggers bind at
 module load and can't be sentence-driven). heartbeat is a trigger so the
@@ -50,6 +52,13 @@ _PRESENCE_ID = "bfc3dedf528a255313cd0v"   # Laundry Room Presence sens (dps "1")
 _LIGHTS_RE  = re.compile(r"laundry\s+light:\s*lights\s+are", re.IGNORECASE)
 _TIMEOUT_RE = re.compile(
     r"laundry\s+light:\s*turn\s+off\s+after\s+(\d+)\s*(hour|hr|minute|min|second|sec)",
+    re.IGNORECASE,
+)
+# Gate sentence (s_ll3) — "Laundry Light: only fires when <key> is <value>".
+# AND-combined; gates the TURN-ON paths only (presence / Run). Auto-off ignores it
+# so the light still clears when empty regardless of mode. First gate: home_mode is home.
+_GATE_RE = re.compile(
+    r"laundry\s+light:\s*only\s+fires\s+when\s+(\w+)\s+is\s+([\w-]+)",
     re.IGNORECASE,
 )
 
@@ -167,7 +176,7 @@ def _parse_config(state):
         return _cfg_cache["data"]
 
     container = _read_container(state)
-    cfg = {"lights": [], "timeout": _DEF_TIMEOUT, "authored": container is not None}
+    cfg = {"lights": [], "timeout": _DEF_TIMEOUT, "gates": [], "authored": container is not None}
     if container:
         devs = _build_devices_by_name_desc(state.devices)
         for s in (container.get("sentences") or []):
@@ -176,6 +185,9 @@ def _parse_config(state):
             text = _sentence_text(s)
             if _LIGHTS_RE.search(text):
                 cfg["lights"] = [p for p in (_parse_dev_chip(c, devs) for c in _iter_dev_chips(s)) if p]
+            elif _GATE_RE.search(text):
+                m = _GATE_RE.search(text)
+                cfg["gates"].append((m.group(1).lower(), m.group(2).lower()))
             elif _TIMEOUT_RE.search(text):
                 m = _TIMEOUT_RE.search(text)
                 n, unit = int(m.group(1)), m.group(2).lower()
@@ -250,6 +262,12 @@ def _turn_off_set(state, targets):
     return cmds
 
 
+def _gates_pass(state, cfg):
+    """All s_ll3 gates AND-combined (e.g. home_mode is home). No gates → True.
+    Gates the TURN-ON paths only (presence / Run); auto-off ignores them."""
+    return all(state.shared.get(k) == v for k, v in cfg["gates"])
+
+
 # ─────────────────────────── Rule ───────────────────────────
 
 def evaluate(event, state):
@@ -262,9 +280,12 @@ def evaluate(event, state):
 
     # ── Manual Run (Force path) — simulate a presence trigger NOW ──
     if event.get("source") == "force_run":
-        cmds = _turn_on_set(state, targets, now_ts)
         state.shared["_laundry_light_last_active_ts"] = now_ts
         state.shared["_laundry_light_prev_present"] = True
+        if not _gates_pass(state, cfg):
+            log.info("laundry_light: Run gated off (gates=%s)", cfg["gates"])
+            return []
+        cmds = _turn_on_set(state, targets, now_ts)
         log.info("laundry_light: Run → %d on-commands", len(cmds))
         return cmds
 
@@ -277,6 +298,8 @@ def evaluate(event, state):
         state.shared["_laundry_light_prev_present"] = cur_present
         if cur_present:
             state.shared["_laundry_light_last_active_ts"] = now_ts
+            if not _gates_pass(state, cfg):
+                return []   # e.g. home_mode != home → track activity but don't turn on
             cmds = _turn_on_set(state, targets, now_ts)
             if cmds:
                 log.info("laundry_light: presence → %d on-commands", len(cmds))
