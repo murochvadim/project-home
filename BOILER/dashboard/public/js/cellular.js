@@ -223,7 +223,11 @@ function cellZoomNearest(n) {
   if (!near.length) return;
   const pts = near.map((a) => [a.lat, a.lon]);
   if (_cellData.center) pts.push([_cellData.center.lat, _cellData.center.lon]);
-  _cellMap.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 17 });
+  const b = L.latLngBounds(pts);
+  // Compute the zoom that fits the nearest set, then go 2 steps tighter.
+  let z = _cellMap.getBoundsZoom(b, false, [50, 50]);
+  z = Math.min(z + 2, 19);
+  _cellMap.setView(b.getCenter(), z);
 }
 
 // Fit the whole radius circle (all antennas) back into view.
