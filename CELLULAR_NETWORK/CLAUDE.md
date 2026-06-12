@@ -4,6 +4,14 @@ Dashboard-only module. Ingests the Ministry of Environmental Protection's publis
 
 Surface: new sibling tab **"Cellular"** on existing Project Network page (`BOILER/dashboard/public/network.html`), alongside the planned WiFi tab and existing ARP / Ports tabs.
 
+## Scope (LOCKED 2026-06-12) — supersedes the "ingest all 8,423" framing below
+- **Your area only — 3 km radius around home** (`32.1676, 34.9001`, Hod HaSharon). **NOT the national 8,423.** The stored table holds only the ~30–60 nearby antennas. Home center is read from `dashboard_settings.geolocation.center` (same point the geolocation map uses).
+- **Ingest = ITM bounding-box query, not a full national pull.** Convert home + 3 km → an EPSG:2039 box (home ≈ ITM X 190000 / Y 672500 → box X 187000–193000, Y 669500–675500) and hit the API's `datastore_search_sql` with `WHERE "X_ITM" BETWEEN … AND "Y_ITM" BETWEEN …`; then refine the square to the exact 3 km circle (pyproj distance). **Fallback:** pull-then-filter (the national set is small) if the SQL endpoint is ever down.
+- **Surface = dedicated "Cellular" tab** that **reuses the same Leaflet + OpenStreetMap map as the Geolocation tab** (Project General): home pin + **3 km circle** + carrier-colored tower pins + hover/click tooltip (carrier · distance · tech · radiation % of threshold · permit PDFs) + a sortable closest-first list below the map. (User chose a standalone Cellular tab over a layer-toggle on the geolocation map.)
+- **API re-verified live 2026-06-12:** total 8,423, schema unchanged; Hod HaSharon city-match = 69 (the 3 km radius subset is fewer). Carriers in-area: Cellcom, Pelephone, PHI (serves HOT + Partner).
+
+The schema / coordinate-conversion / table / caveats sections below still apply — only the *scope* (area-only) and *surface* (geolocation-style map on a Cellular tab) changed.
+
 ## Why this is good news
 
 Israeli law requires public disclosure of cellular antenna sites + measured radiation values. The Ministry of Environmental Protection (המשרד להגנת הסביבה) actually publishes this via `data.gov.il` as a queryable CKAN API. **No scraping, no captchas, no rate limits encountered, full schema available** — confirmed by direct API test on 2026-05-21.
@@ -211,7 +219,7 @@ Dashboard tab content:
 
 ## Status
 
-Documentation only — no code written yet. API endpoints verified live on 2026-05-21. Build starts whenever; nothing in this module requires being on the home network (the data.gov.il API is public, and ingest can run from any LXC). Tab UI does need to be implemented in the dashboard.
+Documentation only — no code written yet. **API re-verified live 2026-06-12** (8,423 total, schema unchanged from the 2026-05-21 first test). **Scope locked 2026-06-12** (see Scope section): your-area-only (3 km radius around home via ITM bounding-box), dedicated **Cellular tab reusing the geolocation Leaflet+OSM map**. Build starts on the user's go; nothing requires being on the home network (the data.gov.il API is public, ingest can run from any LXC). Tab UI needs implementing in the dashboard.
 
 ## References
 
