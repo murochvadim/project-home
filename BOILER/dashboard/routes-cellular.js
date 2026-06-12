@@ -6,7 +6,7 @@
 //
 // The data is populated entirely by the LXC-104 ingest
 // (CELLULAR_NETWORK/ingest_antennas.py, weekly timer) into `cellular_antennas`
-// on LXC 102 — only the ~134 antennas within 3 km of home, never the national
+// on LXC 102 — only the ~76 antennas within 2 km of home, never the national
 // set. This module just SELECTs them, computes each one's distance from the
 // home center, and returns them sorted nearest-first. UI-only: no ingest, no
 // external calls, no business logic.
@@ -14,7 +14,7 @@
 // Endpoints:
 //   GET /api/cellular/nearby   { center, radius_m, count, generated_at, antennas[] }
 
-const RADIUS_M = 3000; // matches the ingest's filter radius
+const RADIUS_M = 2000; // matches the ingest's filter radius
 
 function _haversine(la1, lo1, la2, lo2) {
   const R = 6371000;

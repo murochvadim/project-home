@@ -1,8 +1,8 @@
 // Project Network → Cellular tab.
 //
 // Reuses the same Leaflet + OpenStreetMap free-tile approach as the Geolocation
-// tab (project-general.html): a home pin + 3 km radius circle + one
-// carrier-colored pin per cellular antenna within 3 km of home, with a hover
+// tab (project-general.html): a home pin + 2 km radius circle + one
+// carrier-colored pin per cellular antenna within 2 km of home, with a hover
 // tooltip + a sortable list below the map. Data comes from
 // GET /api/cellular/nearby (read-only; the actual ingest runs on LXC 104).
 //
@@ -93,7 +93,7 @@ async function _cellLoad() {
     const s = document.getElementById('cell-summary');
     if (s) s.textContent = 'Failed to load cellular data: ' + e.message;
   }
-  // Fit to the 3 km circle once, the first time we have a center.
+  // Fit to the 2 km circle once, the first time we have a center.
   if (!_cellLoaded && _cellData && _cellData.center && _cellCircle) {
     _cellMap.fitBounds(_cellCircle.getBounds(), { padding: [20, 20] });
     _cellLoaded = true;
@@ -107,7 +107,7 @@ function _cellRenderMap() {
 
   const center = _cellData.center;
   if (center) {
-    // Home pin + 3 km radius circle (same intent as the Geolocation tab).
+    // Home pin + 2 km radius circle (same intent as the Geolocation tab).
     _cellHomeMarker = L.marker([center.lat, center.lon])
       .bindTooltip('Apartment', { permanent: false })
       .addTo(_cellLayer);
@@ -213,4 +213,21 @@ function _cellFocus(id) {
   if (!m || !_cellMap) return;
   _cellMap.setView(m.getLatLng(), Math.max(_cellMap.getZoom(), 16));
   m.openTooltip();
+}
+
+// Fit the map to the N nearest antennas (+ home), like the Geolocation tab's
+// "fit to track" — antennas are already sorted nearest-first by the endpoint.
+function cellZoomNearest(n) {
+  if (!_cellMap || !_cellData) return;
+  const near = (_cellData.antennas || []).slice(0, n);
+  if (!near.length) return;
+  const pts = near.map((a) => [a.lat, a.lon]);
+  if (_cellData.center) pts.push([_cellData.center.lat, _cellData.center.lon]);
+  _cellMap.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 17 });
+}
+
+// Fit the whole radius circle (all antennas) back into view.
+function cellZoomAll() {
+  if (!_cellMap) return;
+  if (_cellCircle) _cellMap.fitBounds(_cellCircle.getBounds(), { padding: [20, 20] });
 }

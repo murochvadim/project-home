@@ -1,5 +1,5 @@
 [Unit]
-Description=Cellular antenna registry ingest (3 km around home, data.gov.il)
+Description=Cellular antenna registry ingest (2 km around home, data.gov.il)
 After=network-online.target
 Wants=network-online.target
 

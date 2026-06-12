@@ -246,7 +246,13 @@
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-cellular">
     <div class="card">
-      <h3 style="margin:0 0 4px;">Cellular antennas near home</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+        <h3 style="margin:0 0 4px;">Cellular antennas near home</h3>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="cellZoomNearest(5)">🔍 Zoom to 5 nearest</button>
+          <button class="btn btn-secondary btn-sm" onclick="cellZoomAll()">⤢ Fit all</button>
+        </div>
+      </div>
       <div id="cell-summary" style="font-size:0.82rem; color:#555; margin-bottom:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">Loading…</div>
       <div id="cell-map" style="height:460px; border-radius:8px; overflow:hidden;"></div>
     </div>
@@ -274,7 +280,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/cellular.js?v=1"></script>
+<script src="js/cellular.js?v=2"></script>
 <script src="js/network.js?v=11"></script>
 </body>
 </html>

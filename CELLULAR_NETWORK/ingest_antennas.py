@@ -30,7 +30,7 @@ from pyproj import Transformer
 
 DB = dict(host="192.168.1.219", dbname="home_data", user="postgres")
 RES = "8935c8e5-ec77-421f-af86-d970583195f8"   # antennaactive resource id
-RADIUS_M = 3000
+RADIUS_M = 2000
 PAGE = 1000
 UA = {"User-Agent": "Mozilla/5.0"}
 
