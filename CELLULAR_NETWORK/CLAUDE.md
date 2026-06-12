@@ -224,9 +224,14 @@ Dashboard tab content:
 - `cellular-antennas-ingest.{service,timer}` → `/etc/systemd/system/` on LXC 104; **weekly Sun 04:00** (`OnCalendar=Sun *-*-* 04:00:00`, `Persistent=true`). Additive only — existing crons/timers (backup, watchdogs, arp/snmp, owntracks) untouched.
 - Table `cellular_antennas` on LXC 102 (+ `retention_policies` row: forever, no auto-clean). Connects via subnet-trust (no password), reads home center from `dashboard_settings.geolocation.center`.
 - Method note: `datastore_search_sql` (server-side bbox) is **403 / disabled** → pull-then-filter (full pull ~4 s, store area-only). Atomic DELETE-all + INSERT per run (handles add/remove; never touches the table on fetch error).
-- **TODO (not done):** register `cellular_antennas` in the Health page DB-Volumes (`/api/health/db-volumes` in server.js — `tables` array + `tsCol['cellular_antennas']='last_ingest'`); deferred to Phase 2 (dashboard work).
+- Registered in the Health page DB-Volumes (`/api/health/db-volumes` in server.js — added to the `tables` array + `tsCol['cellular_antennas']='last_ingest'`).
 
-**Phase 2+ pending** (user's go): `/api/cellular/nearby` endpoint + the "Cellular" tab reusing the geolocation Leaflet+OSM map (home pin + 3 km circle + carrier-colored tower pins + tooltip + sortable list). Then Phase 4 (under-construction overlay) / 5 (new-antenna alert).
+**Phase 2 — BUILT & LIVE 2026-06-13.** The "Cellular" tab on **Project Network** (`network.html`), reusing the geolocation Leaflet+OSM map.
+- **`BOILER/dashboard/routes-cellular.js`** (own module, wired into server.js via one `require()` line — same architecture-guard pattern as routes-water/scenes/medical-tests). Single read endpoint **`GET /api/cellular/nearby`** → `{ center, radius_m, count, generated_at, antennas[] }`. Reads the home center from `dashboard_settings.geolocation.center` (so the circle + pin line up with the Geolocation tab), computes each antenna's haversine distance, returns nearest-first. No ingest / external calls — UI-only.
+- **`BOILER/dashboard/public/js/cellular.js`** (`cellularOnTabShow()` entry, called by network.js's `showTab`). Leaflet map: home pin + 3 km circle + one **carrier-colored** `circleMarker` per antenna (Cellcom `#8e44ad` purple / Pelephone `#2980b9` blue / PHI-HOT+Partner `#e74c3c` red / other grey) with a hover tooltip (carrier / address / technology / radiation % colored by level / distance). Below the map: a **sortable list** (click Carrier / Radiation / Distance headers) — each row click pans+zooms the map to that antenna and opens its tooltip; a 📄 link opens the operating/construction permit PDF. Summary strip shows count + per-carrier legend + last-ingest time. `invalidateSize()` on tab show (map div starts `display:none`). Leaflet 1.9.4 loaded in `network.html` `<head>`; cache-bust `cellular.js?v=1`, `network.js?v=11`.
+- 3 carriers near home: **Cellcom 47, PHI(HOT/Partner) 47, Pelephone 40**; radiation 0–9.93 % of threshold.
+
+**Phase 3+ pending** (optional, user's go): under-construction antennas overlay (separate `antennapermit` resource) + new-antenna-nearby alert (compare weekly ingests → write a `system_alert`).
 
 ## References
 

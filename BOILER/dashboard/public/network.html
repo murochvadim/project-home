@@ -6,6 +6,9 @@
   <title>Project Network</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- Leaflet for the Cellular tab's antenna map — free OSM tiles, no API key -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 </head>
 <body>
 
@@ -54,6 +57,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('status', this)">Status</button>
     <button class="tab-btn"        onclick="showTab('graph',  this)">Graph</button>
+    <button class="tab-btn"        onclick="showTab('cellular', this)">Cellular</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -237,10 +241,40 @@
     </div>
   </div><!-- /tab-graph -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Cellular                                             -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-cellular">
+    <div class="card">
+      <h3 style="margin:0 0 4px;">Cellular antennas near home</h3>
+      <div id="cell-summary" style="font-size:0.82rem; color:#555; margin-bottom:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">Loading…</div>
+      <div id="cell-map" style="height:460px; border-radius:8px; overflow:hidden;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 10px;">Antenna list</h3>
+      <table class="data-table" id="cell-list-table">
+        <thead>
+          <tr>
+            <th style="cursor:pointer;" onclick="_cellSortBy('carrier')">Carrier ⇅</th>
+            <th>Address</th>
+            <th>Technology</th>
+            <th style="cursor:pointer; text-align:center;" onclick="_cellSortBy('max_measured_pct_of_threshold')">Radiation ⇅</th>
+            <th style="cursor:pointer; text-align:right;" onclick="_cellSortBy('dist_m')">Distance ⇅</th>
+            <th style="text-align:center;">Last inspection</th>
+            <th style="text-align:center;">Permit</th>
+          </tr>
+        </thead>
+        <tbody id="cell-list-body"></tbody>
+      </table>
+    </div>
+  </div><!-- /tab-cellular -->
+
 </main>
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/network.js?v=10"></script>
+<script src="js/cellular.js?v=1"></script>
+<script src="js/network.js?v=11"></script>
 </body>
 </html>

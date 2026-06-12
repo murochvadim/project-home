@@ -11,6 +11,7 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'graph') loadNetGraph();
+  if (name === 'cellular' && typeof cellularOnTabShow === 'function') cellularOnTabShow();
 }
 
 function fmtTs(ts) {

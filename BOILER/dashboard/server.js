@@ -90,6 +90,11 @@ require('./routes-water')(app, db);
 // below) since server.js can swap it on the auto-heal path.
 require('./routes-scenes')(app, db, () => mqttClient);
 
+// Cellular antennas — GET /api/cellular/nearby for the Project Network →
+// Cellular tab map. Read-only; data populated by the LXC-104 ingest. Own module
+// for the same architecture-guard reason as above.
+require('./routes-cellular')(app, db);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes
@@ -2252,6 +2257,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'netbird_peers_local', 'netbird_tenant_settings', 'gateway_peer_transitions',
       'device_locations', 'phone_trips',
       'medical_test_results',
+      'cellular_antennas',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2284,6 +2290,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       device_locations: 'ts',
       phone_trips: 'started_at',
       medical_test_results: 'tested_at',
+      cellular_antennas: 'last_ingest',
     };
 
     const sizes = await db.query(`
