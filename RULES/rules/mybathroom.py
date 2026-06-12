@@ -40,6 +40,8 @@ Everything configurable lives in the dashboard container "My Bathroom Lights"
   s_mbr4: My Bathroom Lights: turn off after 10 minutes
   s_mbr5: My Bathroom Lights: mirror @<Master> <Channel> to @<Slave>
   s_mbr6: My Bathroom Lights: when main light off also turn off @<Light> <Channel>
+  s_mbr7: My Bathroom Lights: only fires when home_mode is home   (gate — turn-on
+          only; AND-combined; mirror / off-cascade / auto-off ignore it)
 
 Trigger device IDs (presence / door / switch) are fixed in RULE['triggers']
 (triggers are bound at module load and can't be sentence-driven); they are the
@@ -90,6 +92,14 @@ _MIRROR_RE  = re.compile(r"my\s+bathroom\s+lights:\s*mirror\b", re.IGNORECASE)
 # laundry-empty check was dropped 2026-06-12). Edge-gated in evaluate() via
 # _mybathroom_master_was_on so steady-state local-poll snapshots don't re-fire.
 _OFF_CASCADE_RE = re.compile(r"my\s+bathroom\s+lights:\s*when\s+main\s+light\s+off", re.IGNORECASE)
+# Gate sentence (s_mbr7) — "My Bathroom Lights: only fires when <key> is <value>".
+# AND-combined; gates the TURN-ON paths only (presence / door / Run). The mirror,
+# OFF-cascade, and auto-off all ignore it (they're manual-switch responses /
+# cleanup that should work regardless of mode). First gate: home_mode is home.
+_GATE_RE = re.compile(
+    r"my\s+bathroom\s+lights:\s*only\s+fires\s+when\s+(\w+)\s+is\s+([\w-]+)",
+    re.IGNORECASE,
+)
 
 # Defaults used only if a sentence is missing/unparsable (container is seeded
 # with all five on deploy, so these are belt-and-braces).
@@ -225,6 +235,7 @@ def _parse_config(state):
         "timeout": _DEF_TIMEOUT,
         "mirror_master": None, "mirror_slave": None,
         "off_cascade": [],
+        "gates": [],
         "authored": container is not None,
     }
     if container:
@@ -237,6 +248,9 @@ def _parse_config(state):
                 cfg["day"] = [p for p in (_parse_dev_chip(c, devs) for c in _iter_dev_chips(s)) if p]
             elif _NIGHT_RE.search(text):
                 cfg["night"] = [p for p in (_parse_dev_chip(c, devs) for c in _iter_dev_chips(s)) if p]
+            elif _GATE_RE.search(text):
+                m = _GATE_RE.search(text)
+                cfg["gates"].append((m.group(1).lower(), m.group(2).lower()))
             elif _WINDOW_RE.search(text):
                 m = _WINDOW_RE.search(text)
                 a, b = _hhmm_to_min(m.group(1)), _hhmm_to_min(m.group(2))
@@ -333,6 +347,13 @@ def _turn_off_set(state, targets):
     return cmds
 
 
+def _gates_pass(state, cfg):
+    """All s_mbr7 gates AND-combined (e.g. home_mode is home). No gates → True.
+    Gates the TURN-ON paths only (presence / door / Run); the mirror, OFF-cascade
+    and auto-off ignore it."""
+    return all(state.shared.get(k) == v for k, v in cfg["gates"])
+
+
 # ─────────────────────────── Rule ───────────────────────────
 
 def evaluate(event, state):
@@ -348,9 +369,12 @@ def evaluate(event, state):
 
     # ── Manual Run (Force path) — simulate a presence trigger NOW ──
     if event.get("source") == "force_run":
-        cmds = _turn_on_set(state, day_set, now_ts)
         state.shared["_mybathroom_last_active_ts"] = now_ts
         state.shared["_mybathroom_prev_present"] = True
+        if not _gates_pass(state, cfg):
+            log.info("mybathroom: Run gated off (gates=%s)", cfg["gates"])
+            return []
+        cmds = _turn_on_set(state, day_set, now_ts)
         log.info("mybathroom: Run → %d on-commands (in_day=%s)", len(cmds), _in_day(cfg, now_min))
         return cmds
 
@@ -363,6 +387,8 @@ def evaluate(event, state):
         state.shared["_mybathroom_prev_present"] = cur_present
         if cur_present:
             state.shared["_mybathroom_last_active_ts"] = now_ts
+            if not _gates_pass(state, cfg):
+                return []   # e.g. home_mode != home → track activity but don't turn on
             cmds = _turn_on_set(state, day_set, now_ts)
             if cmds:
                 log.info("mybathroom: presence → %d on-commands (in_day=%s)",
@@ -378,6 +404,8 @@ def evaluate(event, state):
         dps = event.get("dps", {}) or {}
         if "door" in dps:
             state.shared["_mybathroom_last_active_ts"] = now_ts
+            if not _gates_pass(state, cfg):
+                return []
             cmds = _turn_on_set(state, day_set, now_ts)
             if cmds:
                 log.info("mybathroom: door → %d on-commands (in_day=%s)",
