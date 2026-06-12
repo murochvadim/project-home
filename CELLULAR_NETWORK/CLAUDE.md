@@ -6,7 +6,7 @@ Surface: new sibling tab **"Cellular"** on existing Project Network page (`BOILE
 
 ## Scope (LOCKED 2026-06-12) — supersedes the "ingest all 8,423" framing below
 - **Your area only — 3 km radius around home** (`32.1676, 34.9001`, Hod HaSharon). **NOT the national 8,423.** The stored table holds only the ~30–60 nearby antennas. Home center is read from `dashboard_settings.geolocation.center` (same point the geolocation map uses).
-- **Ingest = ITM bounding-box query, not a full national pull.** Convert home + 3 km → an EPSG:2039 box (home ≈ ITM X 190000 / Y 672500 → box X 187000–193000, Y 669500–675500) and hit the API's `datastore_search_sql` with `WHERE "X_ITM" BETWEEN … AND "Y_ITM" BETWEEN …`; then refine the square to the exact 3 km circle (pyproj distance). **Fallback:** pull-then-filter (the national set is small) if the SQL endpoint is ever down.
+- **Ingest = pull-then-filter** (the planned server-side ITM bounding-box via `datastore_search_sql` **returns HTTP 403 — that endpoint is disabled on data.gov.il**, confirmed 2026-06-12). So we pull the full national set via the basic `datastore_search` (small — ~8.4k rows, ~4 s) and **filter to the 3 km circle locally** with pyproj (ITM→WGS84) + haversine. The STORED table holds **only the ~134 antennas near home**, never the national set. Home ITM = X 190746 / Y 674941.
 - **Surface = dedicated "Cellular" tab** that **reuses the same Leaflet + OpenStreetMap map as the Geolocation tab** (Project General): home pin + **3 km circle** + carrier-colored tower pins + hover/click tooltip (carrier · distance · tech · radiation % of threshold · permit PDFs) + a sortable closest-first list below the map. (User chose a standalone Cellular tab over a layer-toggle on the geolocation map.)
 - **API re-verified live 2026-06-12:** total 8,423, schema unchanged; Hod HaSharon city-match = 69 (the 3 km radius subset is fewer). Carriers in-area: Cellcom, Pelephone, PHI (serves HOT + Partner).
 
@@ -219,7 +219,14 @@ Dashboard tab content:
 
 ## Status
 
-Documentation only — no code written yet. **API re-verified live 2026-06-12** (8,423 total, schema unchanged from the 2026-05-21 first test). **Scope locked 2026-06-12** (see Scope section): your-area-only (3 km radius around home via ITM bounding-box), dedicated **Cellular tab reusing the geolocation Leaflet+OSM map**. Build starts on the user's go; nothing requires being on the home network (the data.gov.il API is public, ingest can run from any LXC). Tab UI needs implementing in the dashboard.
+**Phase 1 — BUILT & LIVE 2026-06-12.** Ingest + table + weekly timer done; **134 antennas within 3 km of home** populated (radiation 0–9.93 % of threshold). Files:
+- `CELLULAR_NETWORK/ingest_antennas.py` → deployed `/opt/cellular-network-agent/ingest_antennas.py` on **LXC 104** (venv at `/opt/cellular-network-agent/venv` — pyproj + psycopg2-binary).
+- `cellular-antennas-ingest.{service,timer}` → `/etc/systemd/system/` on LXC 104; **weekly Sun 04:00** (`OnCalendar=Sun *-*-* 04:00:00`, `Persistent=true`). Additive only — existing crons/timers (backup, watchdogs, arp/snmp, owntracks) untouched.
+- Table `cellular_antennas` on LXC 102 (+ `retention_policies` row: forever, no auto-clean). Connects via subnet-trust (no password), reads home center from `dashboard_settings.geolocation.center`.
+- Method note: `datastore_search_sql` (server-side bbox) is **403 / disabled** → pull-then-filter (full pull ~4 s, store area-only). Atomic DELETE-all + INSERT per run (handles add/remove; never touches the table on fetch error).
+- **TODO (not done):** register `cellular_antennas` in the Health page DB-Volumes (`/api/health/db-volumes` in server.js — `tables` array + `tsCol['cellular_antennas']='last_ingest'`); deferred to Phase 2 (dashboard work).
+
+**Phase 2+ pending** (user's go): `/api/cellular/nearby` endpoint + the "Cellular" tab reusing the geolocation Leaflet+OSM map (home pin + 3 km circle + carrier-colored tower pins + tooltip + sortable list). Then Phase 4 (under-construction overlay) / 5 (new-antenna alert).
 
 ## References
 

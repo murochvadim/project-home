@@ -1,0 +1,8 @@
+[Unit]
+Description=Cellular antenna registry ingest (3 km around home, data.gov.il)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cellular-network-agent/venv/bin/python /opt/cellular-network-agent/ingest_antennas.py
