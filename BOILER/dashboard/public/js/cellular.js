@@ -10,10 +10,11 @@
 
 let _cellMap = null;
 let _cellLayer = null;           // LayerGroup holding all antenna pins
+let _cellHeatLayer = null;       // leaflet.heat layer (estimated influence)
 let _cellHomeMarker = null;
 let _cellCircle = null;
 let _cellData = null;            // last /nearby payload
-let _cellSort = { key: 'dist_m', dir: 1 };   // 1 = asc, -1 = desc
+let _cellSort = { key: '_inflShare', dir: -1 };   // 1 = asc, -1 = desc (default: strongest influence first)
 let _cellMarkerById = {};        // id -> leaflet marker (for row → map focus)
 let _cellLoaded = false;
 
@@ -40,6 +41,44 @@ function _cellRadColor(pct) {
   if (pct == null) return '#999';
   if (pct < 5) return '#2e7d32';
   if (pct < 20) return '#e67e22';
+  return '#c0392b';
+}
+
+// ── Estimated influence at home ──────────────────────────────────────────────
+// THIS IS AN ESTIMATE, NOT A MEASUREMENT. The registry's radiation number is
+// measured at each tower's own worst-case point, not at our apartment. We model
+// the *relative* contribution each tower makes at home with the inverse-square
+// law: RF power density falls off ~1/distance². Source strength = the tower's
+// theoretical max power density (µW/cm²); influence ∝ strength / distance².
+// Results are normalised so they only mean something relative to each other —
+// they CANNOT be read as an absolute exposure at home. A real reading needs an
+// RF meter or a full propagation model (EIRP, azimuth, tilt, buildings).
+function _cellComputeInfluence() {
+  if (!_cellData) return;
+  const A = _cellData.antennas || [];
+  let total = 0, maxRaw = 0;
+  A.forEach((a) => {
+    const strength = (a.max_theoretical_uw_per_cm2 > 0)
+      ? a.max_theoretical_uw_per_cm2
+      : (a.max_measured_pct_of_threshold > 0 ? a.max_measured_pct_of_threshold : 0);
+    const d = a.dist_m && a.dist_m > 1 ? a.dist_m : 1;
+    a._inflRaw = strength > 0 ? strength / (d * d) : 0;
+    total += a._inflRaw;
+    if (a._inflRaw > maxRaw) maxRaw = a._inflRaw;
+  });
+  A.forEach((a) => {
+    a._inflShare = total > 0 ? (a._inflRaw / total) * 100 : 0;   // % of local RF
+    a._inflNorm = maxRaw > 0 ? a._inflRaw / maxRaw : 0;           // 0..1 vs strongest
+  });
+  _cellData._inflTotal = total;
+  _cellData._inflMaxRaw = maxRaw;
+}
+
+// Influence share % → color ramp (low grey-blue → high red).
+function _cellInflColor(share) {
+  if (share == null) return '#999';
+  if (share < 5) return '#7f8c8d';
+  if (share < 15) return '#e67e22';
   return '#c0392b';
 }
 
@@ -86,9 +125,12 @@ async function _cellLoad() {
     const r = await fetch('/api/cellular/nearby');
     const d = await r.json();
     _cellData = d;
+    _cellComputeInfluence();
     _cellRenderMap();
+    _cellRenderHeat();
     _cellRenderList();
     _cellRenderSummary();
+    _cellRenderInfluence();
   } catch (e) {
     const s = document.getElementById('cell-summary');
     if (s) s.textContent = 'Failed to load cellular data: ' + e.message;
@@ -125,19 +167,45 @@ function _cellRenderMap() {
     });
     const pct = a.max_measured_pct_of_threshold;
     const dist = a.dist_m == null ? '—' : a.dist_m + ' m';
+    const share = a._inflShare;
     m.bindTooltip(
       `<b>${_cellCarrierShort(a.carrier)}</b><br>` +
       `${a.address || ''}${a.city ? ', ' + a.city : ''}<br>` +
       `${a.technology || ''}<br>` +
       `Radiation: <b style="color:${_cellRadColor(pct)}">` +
         `${pct == null ? '—' : pct + '%'}</b> of threshold<br>` +
-      `Distance: ${dist}`,
+      `Distance: ${dist}<br>` +
+      `Est. influence at home: <b style="color:${_cellInflColor(share)}">` +
+        `${share == null ? '—' : share.toFixed(1) + '%'}</b>`,
       { direction: 'top', opacity: 0.95 }
     );
     m.addTo(_cellLayer);
     _cellMarkerById[a.id] = m;
   });
 }
+
+// Estimated-influence heatmap (leaflet.heat). Each tower contributes a heat
+// point weighted by its normalised influence (strength / distance²), so near +
+// strong towers glow hottest — you see which direction the strongest RF comes
+// from. Toggled by the "Influence heatmap" checkbox; estimate only.
+function _cellRenderHeat() {
+  if (!_cellMap || !_cellData) return;
+  const on = document.getElementById('cell-heat-toggle');
+  const show = on ? on.checked : false;
+  if (_cellHeatLayer) { _cellMap.removeLayer(_cellHeatLayer); _cellHeatLayer = null; }
+  if (!show || typeof L.heatLayer !== 'function') return;
+  const pts = (_cellData.antennas || [])
+    .filter((a) => a._inflNorm > 0)
+    // emphasise contrast: weight by sqrt so mid towers still register visually
+    .map((a) => [a.lat, a.lon, Math.max(0.15, Math.sqrt(a._inflNorm))]);
+  _cellHeatLayer = L.heatLayer(pts, {
+    radius: 38, blur: 28, maxZoom: 17, minOpacity: 0.25,
+    gradient: { 0.2: '#2c7fb8', 0.5: '#f0ad4e', 0.8: '#e8702a', 1.0: '#c0392b' },
+  }).addTo(_cellMap);
+}
+
+// Checkbox handler (wired from the markup).
+function cellToggleHeat() { _cellRenderHeat(); }
 
 function _cellRenderSummary() {
   const s = document.getElementById('cell-summary');
@@ -166,6 +234,38 @@ function _cellRenderSummary() {
     ` &nbsp;·&nbsp; <span style="color:#888;">last ingest: ${gen}</span>`;
 }
 
+// Estimated-influence summary: which tower dominates at home + per-carrier
+// share, with the mandatory "this is an estimate" caveat.
+function _cellRenderInfluence() {
+  const el = document.getElementById('cell-influence');
+  if (!el || !_cellData) return;
+  const A = (_cellData.antennas || []).filter((a) => a._inflShare > 0);
+  if (!A.length) { el.innerHTML = ''; return; }
+  const top = A.slice().sort((a, b) => b._inflShare - a._inflShare)[0];
+  // Per-carrier share
+  const byCarrier = {};
+  A.forEach((a) => {
+    const k = _cellCarrierShort(a.carrier);
+    byCarrier[k] = (byCarrier[k] || 0) + a._inflShare;
+  });
+  const carrierStr = Object.keys(byCarrier)
+    .sort((a, b) => byCarrier[b] - byCarrier[a])
+    .map((k) => `${k} ${byCarrier[k].toFixed(0)}%`)
+    .join(' · ');
+  el.innerHTML =
+    `<div style="font-size:0.82rem;line-height:1.5;">` +
+    `<b>Estimated influence at home</b> (relative, inverse-square model): ` +
+    `strongest is <b style="color:${_cellInflColor(top._inflShare)}">` +
+    `${_cellCarrierShort(top.carrier)}</b> @ ${top.dist_m} m ` +
+    `(${top._inflShare.toFixed(1)}% of the local RF). ` +
+    `By carrier: ${carrierStr}.` +
+    `<br><span style="color:#b00;">⚠ Estimate only — not a measurement.</span> ` +
+    `<span style="color:#888;">The registry's radiation figures are measured at each tower's own ` +
+    `worst-case point, not at your apartment. This ranks relative contributions using ` +
+    `strength ÷ distance²; a true reading needs an RF meter or a full propagation model.</span>` +
+    `</div>`;
+}
+
 function _cellSortBy(key) {
   if (_cellSort.key === key) _cellSort.dir *= -1;
   else { _cellSort.key = key; _cellSort.dir = 1; }
@@ -192,6 +292,8 @@ function _cellRenderList() {
     const insp = a.last_inspection_date
       ? new Date(a.last_inspection_date).toLocaleDateString('en-GB')
       : '—';
+    const share = a._inflShare || 0;
+    const barW = Math.round((a._inflNorm || 0) * 100);
     return `<tr style="cursor:pointer;" onclick="_cellFocus(${a.id})">
       <td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;
         background:${_cellCarrierColor(a.carrier)};margin-right:5px;"></span>
@@ -201,6 +303,13 @@ function _cellRenderList() {
       <td style="text-align:center;font-weight:600;color:${_cellRadColor(pct)};">
         ${pct == null ? '—' : pct + '%'}</td>
       <td style="text-align:right;">${a.dist_m == null ? '—' : a.dist_m + ' m'}</td>
+      <td style="min-width:120px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div style="flex:1;height:8px;background:#eee;border-radius:4px;overflow:hidden;">
+            <div style="width:${barW}%;height:100%;background:${_cellInflColor(share)};"></div>
+          </div>
+          <span style="font-size:0.78rem;color:${_cellInflColor(share)};font-weight:600;min-width:34px;text-align:right;">${share.toFixed(1)}%</span>
+        </div></td>
       <td style="text-align:center;">${insp}</td>
       <td style="text-align:center;">${pdf ? `<a href="${pdf}" target="_blank" onclick="event.stopPropagation()">📄</a>` : '—'}</td>
     </tr>`;
@@ -224,9 +333,9 @@ function cellZoomNearest(n) {
   const pts = near.map((a) => [a.lat, a.lon]);
   if (_cellData.center) pts.push([_cellData.center.lat, _cellData.center.lon]);
   const b = L.latLngBounds(pts);
-  // Compute the zoom that fits the nearest set, then go 2 steps tighter.
+  // Fit the nearest cluster, then one step tighter (between plain-fit and +2).
   let z = _cellMap.getBoundsZoom(b, false, [50, 50]);
-  z = Math.min(z + 2, 19);
+  z = Math.min(z + 1, 19);
   _cellMap.setView(b.getCenter(), z);
 }
 

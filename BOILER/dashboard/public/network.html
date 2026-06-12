@@ -9,6 +9,8 @@
   <!-- Leaflet for the Cellular tab's antenna map — free OSM tiles, no API key -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <!-- leaflet.heat plugin for the Cellular tab's estimated-influence heatmap -->
+  <script defer src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" crossorigin=""></script>
 </head>
 <body>
 
@@ -248,12 +250,16 @@
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
         <h3 style="margin:0 0 4px;">Cellular antennas near home</h3>
-        <div style="display:flex; gap:8px;">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <label style="font-size:0.8rem; display:flex; align-items:center; gap:5px; cursor:pointer;">
+            <input type="checkbox" id="cell-heat-toggle" onchange="cellToggleHeat()"> 🔥 Influence heatmap
+          </label>
           <button class="btn btn-secondary btn-sm" onclick="cellZoomNearest(5)">🔍 Zoom to nearest</button>
           <button class="btn btn-secondary btn-sm" onclick="cellZoomAll()">⤢ Fit all</button>
         </div>
       </div>
-      <div id="cell-summary" style="font-size:0.82rem; color:#555; margin-bottom:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">Loading…</div>
+      <div id="cell-summary" style="font-size:0.82rem; color:#555; margin-bottom:8px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">Loading…</div>
+      <div id="cell-influence" style="margin-bottom:10px;"></div>
       <div id="cell-map" style="height:460px; border-radius:8px; overflow:hidden;"></div>
     </div>
 
@@ -267,6 +273,7 @@
             <th>Technology</th>
             <th style="cursor:pointer; text-align:center;" onclick="_cellSortBy('max_measured_pct_of_threshold')">Radiation ⇅</th>
             <th style="cursor:pointer; text-align:right;" onclick="_cellSortBy('dist_m')">Distance ⇅</th>
+            <th style="cursor:pointer;" onclick="_cellSortBy('_inflShare')" title="Estimated relative influence at home (inverse-square model) — not a measurement">Est. influence ⇅</th>
             <th style="text-align:center;">Last inspection</th>
             <th style="text-align:center;">Permit</th>
           </tr>
@@ -280,7 +287,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/cellular.js?v=3"></script>
+<script src="js/cellular.js?v=6"></script>
 <script src="js/network.js?v=11"></script>
 </body>
 </html>
