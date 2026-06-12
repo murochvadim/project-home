@@ -12,9 +12,28 @@
 // external calls, no business logic.
 //
 // Endpoints:
-//   GET /api/cellular/nearby   { center, radius_m, count, generated_at, antennas[] }
+//   GET /api/cellular/nearby         { center, radius_m, count, generated_at, antennas[] }
+//   GET /api/cellular/phone-signal   live phone cellular signal (uplink-TX proxy)
 
 const RADIUS_M = 2000; // matches the ingest's filter radius
+
+const HA_URL = 'http://192.168.1.110:8123';
+// Companion-app sensor prefixes for the tracked phone (Galaxy Z Fold5).
+// Update here if the phone (and thus its HA entity prefix) changes.
+const PHONE_PREFIXES = ['sm_f946b', 'fold5'];
+
+// LTE RSRP / signal-strength (dBm) → quality + the IMPLIED uplink behaviour.
+// The honest point: a WEAK downlink makes the phone transmit HARDER (uplink TX
+// up), and the phone is centimetres from you — so weak signal = MORE personal
+// exposure. Strong signal = the phone throttles down = less exposure.
+function _signalQuality(dbm) {
+  if (dbm == null || isNaN(dbm)) return null;
+  if (dbm >= -80) return { label: 'Excellent', tx: 'low', exposure: 'low', color: '#2e7d32' };
+  if (dbm >= -90) return { label: 'Good', tx: 'low', exposure: 'low', color: '#2e7d32' };
+  if (dbm >= -100) return { label: 'Fair', tx: 'medium', exposure: 'medium', color: '#e67e22' };
+  if (dbm >= -110) return { label: 'Poor', tx: 'high', exposure: 'high', color: '#c0392b' };
+  return { label: 'Very poor', tx: 'very high', exposure: 'high', color: '#c0392b' };
+}
 
 function _haversine(la1, lo1, la2, lo2) {
   const R = 6371000;
@@ -28,7 +47,7 @@ function _haversine(la1, lo1, la2, lo2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-module.exports = function (app, db) {
+module.exports = function (app, db, getHaToken) {
   // Antennas within the ingest radius of home, nearest-first, plus the home
   // center (read from the same dashboard_settings.geolocation row the map uses
   // so the circle + pin line up exactly with the Geolocation tab).
@@ -81,6 +100,66 @@ module.exports = function (app, db) {
       });
     } catch (e) {
       console.error('[cellular] /nearby failed:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Live phone cellular signal — the most honest proxy for PERSONAL RF exposure
+  // (your phone's uplink TX, which rises when the tower signal is weak). Reads
+  // the HA Companion-app sensors for the tracked phone. Auto-discovers the
+  // cellular-signal entity by pattern so it works regardless of the exact name
+  // and lights up the moment the sensor is enabled in the companion app.
+  app.get('/api/cellular/phone-signal', async (_req, res) => {
+    try {
+      const r = await fetch(`${HA_URL}/api/states`, {
+        headers: { Authorization: `Bearer ${getHaToken()}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) return res.status(502).json({ error: 'HA ' + r.status });
+      const all = await r.json();
+      const mine = all.filter((e) =>
+        PHONE_PREFIXES.some((p) => e.entity_id.toLowerCase().includes(p)));
+      const isWifi = (id) => id.includes('wi_fi') || id.includes('wifi');
+
+      // Cellular signal: a sensor.*_signal_strength or *_cellular* that ISN'T wifi.
+      const cellEnt = mine.find((e) =>
+        e.entity_id.startsWith('sensor.') &&
+        /signal_strength|cellular/.test(e.entity_id) && !isWifi(e.entity_id));
+      const netEnt = mine.find((e) =>
+        e.entity_id.startsWith('sensor.') && /network_type|phone_state/.test(e.entity_id));
+      const wifiSig = mine.find((e) => e.entity_id.includes('wi_fi_signal'));
+      const wifiConn = mine.find((e) => e.entity_id.includes('wi_fi_connection'));
+      const battery = mine.find((e) => e.entity_id.endsWith('_battery_level'));
+
+      let dbm = cellEnt ? Number(cellEnt.state) : null;
+      // Some firmwares report the dBm in an attribute rather than the state.
+      if (cellEnt && (dbm == null || isNaN(dbm))) {
+        const a = cellEnt.attributes || {};
+        const cand = a.dbm ?? a.signal_strength ?? a.rsrp ?? null;
+        dbm = cand == null ? null : Number(cand);
+      }
+      const haveDbm = dbm != null && !isNaN(dbm);
+
+      res.json({
+        found: !!cellEnt,
+        cellular_dbm: haveDbm ? dbm : null,
+        cellular_raw: cellEnt ? cellEnt.state : null,
+        cellular_entity: cellEnt ? cellEnt.entity_id : null,
+        cellular_unit: cellEnt?.attributes?.unit_of_measurement || null,
+        network_type:
+          (cellEnt?.attributes?.network_type) ||
+          (netEnt && /[a-zA-Z]/.test(netEnt.state) ? netEnt.state : null),
+        quality: _signalQuality(haveDbm ? dbm : null),
+        wifi_dbm: wifiSig ? Number(wifiSig.state) : null,
+        wifi_connection: wifiConn ? wifiConn.state : null,
+        battery: battery ? Number(battery.state) : null,
+        hint: cellEnt ? null :
+          'Cellular signal sensor not enabled yet — turn it on in the HA Companion ' +
+          'app on the phone: Settings → Companion app → Manage sensors → ' +
+          '“Cellular signal strength” → enable.',
+      });
+    } catch (e) {
+      console.error('[cellular] /phone-signal failed:', e.message);
       res.status(500).json({ error: e.message });
     }
   });

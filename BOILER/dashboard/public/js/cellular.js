@@ -82,12 +82,64 @@ function _cellInflColor(share) {
   return '#c0392b';
 }
 
+let _cellPhoneTimer = null;
+
 function cellularOnTabShow() {
   if (!_cellMap) _cellInitMap();
   // The map div was display:none until this tab opened — Leaflet needs a nudge
   // to recompute its size, otherwise tiles render in the wrong place.
   if (_cellMap) setTimeout(() => _cellMap.invalidateSize(), 50);
   _cellLoad();
+  _cellLoadPhone();
+  if (!_cellPhoneTimer) _cellPhoneTimer = setInterval(_cellLoadPhone, 20_000);
+}
+
+// Live phone cellular signal — the honest personal-exposure proxy.
+async function _cellLoadPhone() {
+  try {
+    const r = await fetch('/api/cellular/phone-signal');
+    _cellRenderPhone(await r.json());
+  } catch (e) {
+    const el = document.getElementById('cell-phone');
+    if (el) el.innerHTML = `<span style="color:#888;">phone signal unavailable: ${e.message}</span>`;
+  }
+}
+
+function _cellRenderPhone(d) {
+  const el = document.getElementById('cell-phone');
+  if (!el) return;
+  if (!d || !d.found) {
+    el.innerHTML =
+      `<div style="font-size:0.82rem;color:#555;">` +
+      `<b>📱 Your phone (uplink) — the RF closest to you</b><br>` +
+      `<span style="color:#a60;">Cellular signal sensor not enabled yet.</span> ` +
+      `${d && d.hint ? d.hint : ''}` +
+      (d && d.wifi_dbm != null
+        ? `<br><span style="color:#888;">Wi-Fi: ${d.wifi_dbm} dBm` +
+          `${d.wifi_connection ? ' (' + d.wifi_connection + ')' : ''} — ` +
+          `Wi-Fi calling, if on, offloads the cellular uplink.</span>`
+        : '') +
+      `</div>`;
+    return;
+  }
+  const q = d.quality || {};
+  const dbm = d.cellular_dbm;
+  el.innerHTML =
+    `<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:0.85rem;">` +
+      `<div><b>📱 Your phone (uplink) — the RF closest to you</b></div>` +
+      `<div>Signal: <b style="color:${q.color || '#333'}">${dbm} dBm` +
+        `${d.cellular_unit && d.cellular_unit !== 'dBm' ? ' ' + d.cellular_unit : ''}</b> ` +
+        `<span style="color:${q.color || '#333'}">(${q.label || '—'})</span>` +
+        `${d.network_type ? ' · ' + d.network_type : ''}</div>` +
+      `<div>Phone transmit effort: <b style="color:${q.color || '#333'}">${q.tx || '—'}</b></div>` +
+      `<div>Est. personal exposure: <b style="color:${q.color || '#333'}">${q.exposure || '—'}</b></div>` +
+      (d.wifi_dbm != null ? `<div style="color:#888;">Wi-Fi ${d.wifi_dbm} dBm` +
+        `${d.wifi_connection ? ' (' + d.wifi_connection + ')' : ''}</div>` : '') +
+    `</div>` +
+    `<div style="font-size:0.76rem;color:#888;margin-top:4px;">` +
+    `Weaker tower signal → phone transmits harder → more exposure from the device in your hand. ` +
+    `Strong signal lets it throttle down. This is usually the dominant RF source at home, ` +
+    `more than the towers themselves.</div>`;
 }
 
 function _cellInitMap() {

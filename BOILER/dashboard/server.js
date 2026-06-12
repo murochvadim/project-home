@@ -92,8 +92,10 @@ require('./routes-scenes')(app, db, () => mqttClient);
 
 // Cellular antennas — GET /api/cellular/nearby for the Project Network →
 // Cellular tab map. Read-only; data populated by the LXC-104 ingest. Own module
-// for the same architecture-guard reason as above.
-require('./routes-cellular')(app, db);
+// for the same architecture-guard reason as above. Gets getHaToken (hoisted
+// function decl) so /api/cellular/phone-signal can read the phone's live
+// cellular-signal sensor from HA for the uplink-TX / personal-exposure card.
+require('./routes-cellular')(app, db, getHaToken);
 
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
