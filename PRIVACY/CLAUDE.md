@@ -29,6 +29,18 @@ A dedicated, private LXC to: (1) **store documents that can only be opened with 
 - **Suggest + generate a strong password on signup**, then auto-saves the login (like Chrome/Edge's built-in suggestion).
 - **Offline cache:** the Bitwarden apps keep an encrypted local copy → read/autofill when away; edits sync when back on the LAN.
 
+## Security review + hardening (2026-06-12)
+**Verdict: keep Vaultwarden + Cryptomator with the hardening below — do NOT switch to the no-server KeePassXC variant** (for this home, non-targeted user). Reasoning: KeePassXC's only security win is removing the self-hosted server surface, which is already contained here (LAN-only, HTTPS, native clients not the web vault, patched). Bitwarden's far better usability (autofill, generator, live sync) produces *better real-world* hygiene (unique strong passwords everywhere) than KeePassXC's friction. The dominant risks are identical in both designs (see below) and the user has the ops discipline to keep one more LAN-only service patched. **Flip to KeePassXC only if:** targeted high-value subject, or "zero self-hosted services" on principle.
+
+**The risks that actually dominate (independent of tool choice) + mandatory hardening:**
+1. **Master-password strength is the root of trust, and the encrypted blobs LEAVE the house (Drive + QNAP) → offline brute-force is the real threat.** → long, high-entropy, *unique* passphrases for Vaultwarden AND Cryptomator; **set Bitwarden KDF to Argon2id**. Non-negotiable.
+2. **Endpoints are the weak link** (plaintext in RAM when unlocked) → laptop/phone patched, **full-disk-encrypted (BitLocker)**, auto-lock.
+3. **Google account holds the offsite ciphertext** → strong **2FA (hardware key/TOTP, not SMS)** on the gmail.
+4. **Forgotten master password = permanent loss** → secure **recovery copy** (printed, in a physical safe) + Bitwarden Emergency Access.
+5. **Vaultwarden server hygiene** → HTTPS even on LAN; use native app + browser extension (avoid the web vault, which a compromised server could trojan to steal the master password); lock down `/admin`; patch discipline; Vaultwarden 2FA for online login.
+
+Component notes: Vaultwarden vault = client-side E2E (server never holds the key); Cryptomator = client-side AES-256, Cure53-audited. Metadata caveats: Vaultwarden DB leaks account email/timestamps/counts (contents encrypted); Cryptomator leaks file sizes/count/mtimes (names + content encrypted). Both acceptable for this use. **Pre-build TODO:** verify current Vaultwarden/Cryptomator CVEs + audit status before deploying (knowledge has a cutoff; do a quick web check at build time).
+
 ## Build plan (phases — pending approval, one at a time)
 1. **Provision the LXC** — Proxmox host `pct create`; Debian 12; 2 vCPU / 2 GB RAM / 16 GB disk (more if many docs); static IP.
 2. **Vaultwarden** — Docker compose (`vaultwarden/server`), persistent data volume, **signups disabled after account created**, HTTPS via Caddy / internal cert.
