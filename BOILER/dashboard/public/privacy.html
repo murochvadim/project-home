@@ -79,7 +79,7 @@
     <input type="hidden" id="pv-site-id">
     <div class="pv-form-grid">
       <label>Kind
-        <select id="pv-f-kind">
+        <select id="pv-f-kind" onchange="pvKindChanged()">
           <option value="">— choose —</option>
           <option>Bank</option>
           <option>Credit Card</option>
@@ -90,8 +90,9 @@
           <option>Phone / Internet</option>
           <option>Work</option>
           <option>Shopping</option>
-          <option>Other</option>
+          <option value="__custom__">Custom…</option>
         </select>
+        <input id="pv-f-kind-custom" placeholder="type a custom kind…" style="display:none; margin-top:5px;">
       </label>
       <label>Name * <input id="pv-f-name" placeholder="e.g. Bank Hapoalim"></label>
       <label>Main Tel <input id="pv-f-main_tel"></label>
@@ -185,6 +186,6 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/privacy.js?v=22"></script>
+<script src="js/privacy.js?v=34"></script>
 </body>
 </html>

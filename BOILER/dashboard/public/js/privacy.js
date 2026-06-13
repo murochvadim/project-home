@@ -77,15 +77,13 @@ function pvRenderSites() {
   const q = (document.getElementById('pv-filter').value || '').toLowerCase();
   const rows = _pvSites.filter(s => !q || (s.name + ' ' + (s.kind || '')).toLowerCase().includes(q));
   if (!rows.length) { host.innerHTML = '<div style="color:#aaa;">No sites yet — click “+ Add site”.</div>'; return; }
-  host.innerHTML = rows.map(s => {
-    // 1) all phones first (Main + additional), then 2) the rest of the fields.
-    // The 📄 Docs link sits on the Main Tel row (hard green, no background).
-    // Render as a 2-column grid so icons line up in one column and the data in the next.
-    const docsLink = `<a style="color:#137a2b; font-weight:700; cursor:pointer; margin-left:16px;" onclick="pvOpenDocs(${s.id})">📄 Docs (${s.doc_count})</a>`;
+  host.innerHTML = '<div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; align-items:stretch;">' + rows.map(s => {
+    // Phones first (Main + additional), then the rest, as a 2-column grid so the
+    // icons line up in one column and the data in the next. (Docs button is in
+    // the right action column now.)
     const cells = [];
     const addRow = (ic, html) => cells.push(`<span style="text-align:center;">${ic}</span><span>${html}</span>`);
-    if (s.main_tel) addRow('📞', `Main — <a href="tel:${_esc(s.main_tel)}">${_esc(s.main_tel)}</a>${docsLink}`);
-    else addRow('📄', `<a style="color:#137a2b;font-weight:700;cursor:pointer;" onclick="pvOpenDocs(${s.id})">Docs (${s.doc_count})</a>`);
+    if (s.main_tel) addRow('📞', `Main — <a href="tel:${_esc(s.main_tel)}">${_esc(s.main_tel)}</a>`);
     (s.add_tels || []).forEach(t => {
       const person = _esc(t.person || ''), tel = _esc(t.tel || '');
       if (tel || person) addRow('📞', `${person ? person + ' — ' : ''}${tel ? `<a href="tel:${tel}">${tel}</a>` : ''}`);
@@ -93,21 +91,29 @@ function pvRenderSites() {
     if (s.fax)     addRow('📠', `Fax — ${_esc(s.fax)}`);
     if (s.email)   addRow('✉', `<a href="mailto:${_esc(s.email)}">${_esc(s.email)}</a>`);
     if (s.website) addRow('🌐', `<a href="${_esc(s.website)}" target="_blank">${_esc(s.website)}</a>`);
-    return `<div class="card" style="margin-bottom:8px; padding:10px 12px;">
-      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-        ${s.kind ? `<span style="font-size:0.72rem; font-weight:600; letter-spacing:.5px; text-transform:uppercase; background:#e7ecfb; color:#3a55a8; padding:3px 10px; border-radius:12px;">${_esc(s.kind)}</span>` : ''}
-        <span style="font-size:1.2rem; font-weight:700; color:#222;">${_esc(s.name)}</span>
-      </div>
-      <div style="font-size:0.95rem; color:#555; margin-top:6px; display:grid; grid-template-columns:auto 1fr; gap:5px 8px; align-items:center;">${cells.join('')}</div>
-      ${_pvApptReminderArea(s)}
-      <div style="display:flex; gap:6px; margin-top:7px; align-items:center;">
-        ${s.vault_item ? `<a class="btn btn-secondary btn-sm" href="https://192.168.1.196" target="_blank" title="Open Vaultwarden (item: ${_esc(s.vault_item)})">🔑 Vaultwarden</a>` : ''}
-        <span style="flex:1;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="pvEditSite(${s.id})">Edit</button>
-        <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvDeleteSite(${s.id})">Del</button>
+    return `<div class="card" style="padding:10px 12px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div style="min-width:0;">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            ${s.kind ? `<span style="font-size:0.72rem; font-weight:600; letter-spacing:.5px; text-transform:uppercase; background:#e7ecfb; color:#3a55a8; padding:3px 10px; border-radius:12px;">${_esc(s.kind)}</span>` : ''}
+            <span style="font-size:1.2rem; font-weight:700; color:#222;">${_esc(s.name)}</span>
+          </div>
+          <div style="display:flex; gap:36px; align-items:flex-start; margin-top:6px; flex-wrap:wrap;">
+            <div style="font-size:0.95rem; color:#555; display:grid; grid-template-columns:auto 1fr; gap:5px 8px; align-items:center;">${cells.join('')}</div>
+            ${_pvApptReminderArea(s)}
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:5px; flex-shrink:0; width:132px;">
+          <button class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box;" onclick="pvOpenDocs(${s.id})">📄 Docs (${s.doc_count})</button>
+          ${s.vault_item ? `<a class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box; text-align:center;" href="https://192.168.1.196" target="_blank" title="Open Vaultwarden (item: ${_esc(s.vault_item)})">🔑 Vaultwarden</a>` : ''}
+          <div style="display:flex; gap:5px;">
+            <button class="btn btn-secondary btn-sm" style="flex:1;" onclick="pvEditSite(${s.id})">Edit</button>
+            <button class="btn btn-secondary btn-sm" style="flex:1; color:#c0392b;" onclick="pvDeleteSite(${s.id})">Del</button>
+          </div>
+        </div>
       </div>
     </div>`;
-  }).join('');
+  }).join('') + '</div>';
 }
 function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -138,7 +144,7 @@ function pvClearReminder() { const e = document.getElementById('pv-f-reminder');
 function _pvApptReminderArea(s) {
   const appt = _pvApptCard(s), rem = _pvReminderCard(s);
   if (!appt && !rem) return '';
-  return `<div style="display:flex; flex-wrap:wrap; gap:8px; margin:7px 0 2px;">${appt}${rem}</div>`;
+  return `<div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">${appt}${rem}</div>`;
 }
 function _pvApptCard(s) {
   if (!s.next_appointment_at) return '';
@@ -149,13 +155,13 @@ function _pvApptCard(s) {
   const bC = past ? '#d4a3a3' : '#e74c3c', bg = past ? '#fdf4f4' : '#fef2f2', tC = past ? '#a35858' : '#c0392b', dC = past ? '#8e3e3e' : '#a82a1f';
   const badge = past ? '<span style="margin-left:6px; padding:1px 8px; background:#a35858; color:#fff; border-radius:10px; font-size:0.7rem; font-weight:600;">past</span>' : '';
   const note = s.next_appointment_note ? `<div style="margin-top:1px; font-size:0.82rem; color:${dC}; font-style:italic; line-height:1.2;">${_esc(s.next_appointment_note)}</div>` : '';
-  return `<div style="flex:0 1 260px; padding:5px 14px; background:${bg}; border:1.5px solid ${bC}; border-radius:8px; text-align:center; line-height:1.25;">
+  return `<div style="width:240px; padding:5px 14px; background:${bg}; border:1.5px solid ${bC}; border-radius:8px; text-align:center; line-height:1.25;">
     <div style="font-size:0.72rem; color:${tC}; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">📅 Next appointment${badge}</div>
     <div style="font-size:0.94rem; font-weight:700; color:${dC};">${_esc(when)}</div>${note}</div>`;
 }
 function _pvReminderCard(s) {
   if (!s.reminder_text) return '';
-  return `<div style="flex:0 1 260px; padding:5px 14px; background:#eef5ff; border:1.5px solid #3b82f6; border-radius:8px; text-align:center; line-height:1.25;">
+  return `<div style="width:240px; padding:5px 14px; background:#eef5ff; border:1.5px solid #3b82f6; border-radius:8px; text-align:center; line-height:1.25;">
     <div style="font-size:0.72rem; color:#1e40af; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">🔔 Reminder</div>
     <div style="font-size:0.92rem; font-weight:600; color:#1e3a8a;">${_esc(s.reminder_text)}</div></div>`;
 }
@@ -164,11 +170,13 @@ function _pvReminderCard(s) {
 function pvOpenSiteForm(site) {
   document.getElementById('pv-site-modal-title').textContent = site ? 'Edit site' : 'Add site';
   document.getElementById('pv-site-id').value = site ? site.id : '';
-  // Kind is a <select> — preserve any custom value by adding it as an option.
+  // Kind: a <select> with a "Custom…" option that reveals a free-text input.
   const kindSel = document.getElementById('pv-f-kind');
+  const kindCustom = document.getElementById('pv-f-kind-custom');
   const kv = site ? (site.kind || '') : '';
-  if (kv && ![...kindSel.options].some(o => o.value === kv)) kindSel.add(new Option(kv, kv));
-  kindSel.value = kv;
+  const known = [...kindSel.options].some(o => o.value === kv && o.value !== '' && o.value !== '__custom__');
+  if (kv && !known) { kindSel.value = '__custom__'; kindCustom.value = kv; kindCustom.style.display = 'block'; }
+  else { kindSel.value = kv; kindCustom.value = ''; kindCustom.style.display = 'none'; }
   ['name', 'main_tel', 'fax', 'email', 'website', 'vault_item', 'notes'].forEach(f =>
     document.getElementById('pv-f-' + f).value = site ? (site[f] || '') : '');
   document.getElementById('pv-tels').innerHTML = '';
@@ -181,6 +189,12 @@ function pvOpenSiteForm(site) {
   document.getElementById('pv-f-appt-note').value = site ? (site.next_appointment_note || '') : '';
   document.getElementById('pv-f-reminder').value = site ? (site.reminder_text || '') : '';
   document.getElementById('pv-site-modal').style.display = 'flex';
+}
+function pvKindChanged() {
+  const sel = document.getElementById('pv-f-kind'), ci = document.getElementById('pv-f-kind-custom');
+  const isCustom = sel.value === '__custom__';
+  ci.style.display = isCustom ? 'block' : 'none';
+  if (isCustom) ci.focus();
 }
 function pvCloseSiteForm() { document.getElementById('pv-site-modal').style.display = 'none'; }
 function pvEditSite(id) { pvOpenSiteForm(_pvSites.find(s => s.id === id)); }
@@ -196,6 +210,7 @@ async function pvSaveSite() {
   const id = document.getElementById('pv-site-id').value;
   const body = {};
   ['kind', 'name', 'main_tel', 'fax', 'email', 'website', 'vault_item', 'notes'].forEach(f => body[f] = document.getElementById('pv-f-' + f).value.trim());
+  if (body.kind === '__custom__') body.kind = document.getElementById('pv-f-kind-custom').value.trim();
   if (!body.name) { alert('Name is required'); return; }
   body.add_tels = [...document.querySelectorAll('#pv-tels > div')].map(d => ({
     tel: d.querySelector('.pv-tel-num').value.trim(), person: d.querySelector('.pv-tel-person').value.trim(),
