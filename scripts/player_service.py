@@ -1502,13 +1502,21 @@ def results_image():
 @app.route('/api/media/minidlna/rescan', methods=['POST'])
 def minidlna_rescan():
     """Force a full MiniDLNA database rebuild. Stops the daemon, deletes
-    `/var/cache/minidlna/files.db`, starts the daemon, waits for the scan
-    to make visible progress (count > 0). Returns the final counts.
+    `/var/cache/minidlna/files.db`, starts the daemon, and **waits for the
+    scan to actually FINISH** (row count stops growing) before returning.
 
-    Idempotent — safe to click repeatedly. Typical runtime: ~30 sec for
-    a 1500-file library. NOT exposed via UI as a "fast" rescan because
-    SIGHUP-style incremental rescans don't reliably catch missed files;
-    the full-rebuild is the only reliable recovery."""
+    Why wait-for-completion (fixed 2026-06-13): the scan writes `details`
+    rows incrementally over several MINUTES (it thumbnails every file). The
+    old code returned as soon as count>0 (~1 s) and reported "complete" while
+    most folders — including Videos/ — were still unscanned. A user clicking
+    ▶ Play immediately got a spurious "Not indexed by MiniDLNA" because
+    `minidlna_id` couldn't find the not-yet-scanned file. New files can't be
+    caught any other way: the NFS client mount doesn't propagate inotify, so
+    MiniDLNA never auto-indexes files written via the mount — a rescan is
+    mandatory, and it must be honestly complete before Play is attempted.
+
+    Idempotent — safe to click repeatedly. Runtime: ~1–3 min for a ~1600-file
+    library (was mis-reported as ~30 s)."""
     log.info('minidlna_rescan: starting full DB rebuild')
     try:
         # Stop daemon (gracefully) — 5 sec timeout.
@@ -1525,21 +1533,36 @@ def minidlna_rescan():
                 os.remove(f)
         # Start daemon — kicks off a full scan
         subprocess.run(['systemctl', 'start', 'minidlna'], check=True, timeout=15)
-        # Poll until the DB has SOME entries (scan made visible progress)
-        # or 60 sec timeout. Scan continues in background after this returns.
-        t0 = time.time()
-        total = 0
-        while time.time() - t0 < 60:
+        # Wait for the scan to ACTUALLY finish, not just start. The scan writes
+        # `details` rows incrementally; we poll the row count and declare the
+        # scan complete once it has stopped growing for STABLE_FOR seconds.
+        # This is what makes "✓ Rescan complete" honest, so a Play click right
+        # after never hits a half-built index. Hard ceiling MAX_WAIT.
+        t0           = time.time()
+        MAX_WAIT     = 360      # safety ceiling (s)
+        STABLE_FOR   = 12       # count unchanged this long ⇒ scan finished (s)
+        POLL         = 2
+        total        = 0
+        last_total   = -1
+        stable_since = None
+        completed    = False
+        while time.time() - t0 < MAX_WAIT:
             try:
-                conn = sqlite3.connect(MINIDLNA_DB)
-                cur  = conn.execute('SELECT COUNT(*) FROM details')
-                total = cur.fetchone()[0]
+                conn  = sqlite3.connect(MINIDLNA_DB)
+                total = conn.execute('SELECT COUNT(*) FROM details').fetchone()[0]
                 conn.close()
-                if total > 0:
-                    break
             except Exception:
-                pass
-            time.sleep(1)
+                total = last_total   # DB momentarily locked mid-scan — ignore
+            if total > 0 and total == last_total:
+                if stable_since is None:
+                    stable_since = time.time()
+                elif time.time() - stable_since >= STABLE_FOR:
+                    completed = True
+                    break
+            else:
+                stable_since = None   # count moved (or first read) — reset timer
+            last_total = total
+            time.sleep(POLL)
         # Final stats — split by section
         try:
             conn = sqlite3.connect(MINIDLNA_DB)
@@ -1557,9 +1580,11 @@ def minidlna_rescan():
         log.info('minidlna_rescan: done — counts=%s elapsed=%.1fs', counts, time.time() - t0)
         return jsonify({
             'ok':         True,
+            'completed':  completed,
             'counts':     counts,
             'elapsed_sec': round(time.time() - t0, 1),
-            'note':       'scan continues in background; counts may grow further',
+            'note':       ('scan finished — index is complete' if completed
+                           else f'still scanning after {MAX_WAIT}s ceiling — counts may grow further'),
         })
     except subprocess.CalledProcessError as e:
         log.exception('minidlna_rescan systemctl failed')

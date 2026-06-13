@@ -387,12 +387,14 @@ const _unassigned = {
 // ── MiniDLNA Rescan button (since 2026-05-27) ─────────────────────────
 // Recovery path for "Not indexed by MiniDLNA" errors. Stops the daemon,
 // wipes /var/cache/minidlna/files.db, restarts → forces a full rescan.
-// Typical runtime: ~30 sec for a 1500-file library.
+// Since 2026-06-13 the endpoint WAITS for the scan to actually finish
+// (row count stabilizes) before returning, so "✓ complete" is honest —
+// no more clicking Play into a half-built index. Runtime ~1–3 min.
 
 async function rescanMiniDLNA() {
   const btn = document.getElementById('media-rescan-btn');
   const original = btn ? btn.textContent : '🔄 Rescan';
-  if (!confirm('Full MiniDLNA library rebuild?\n\nThis stops the daemon, wipes the index, restarts. Takes ~30 sec. Use when files don\'t appear in TV media library or you got a "Not indexed" error.')) return;
+  if (!confirm('Full MiniDLNA library rebuild?\n\nStops the daemon, wipes the index, restarts, and WAITS for the full scan to finish (~1–3 min — the button stays "Rescanning…" until done). Use after adding new files, or when you get a "Not indexed" error.')) return;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Rescanning…'; }
   try {
     const r = await fetch(MEDIA_API + '/api/media/minidlna/rescan', {

@@ -183,6 +183,14 @@ Dashboard: user labels clusters → person_embeddings updated
 - DIDL-Lite `<res>` element on video calls **must include** `protocolInfo="http-get:*:<mime>:*"` — Samsung TV rejects SetAVTransportURI without it
 - `_current_duration` global: set from `media_library.duration_sec` when play starts; used by `/api/media/position` as fallback when TV returns duration=0 (enabling dashboard progress bar — video path only; audio uses Cast's native position reporting)
 
+### MiniDLNA indexing of NEW files — "Not indexed" gotcha (root cause, 2026-06-13)
+
+`minidlna_id(full_path)` does `SELECT id FROM details WHERE path=?` against `/var/cache/minidlna/files.db`; the ▶ TV path (`/api/media/play`) returns **`Not indexed by MiniDLNA: <name>`** (404) when that returns None. Two facts make new downloads fail to play *unless* you rescan AND wait:
+
+1. **The NFS client mount does NOT propagate inotify.** Files the LXC writes to `/mnt/media` (yt-dlp downloads, etc.) are **never auto-indexed** by MiniDLNA — its inotify watch never fires. A rescan is the *only* way to index a new file. (This is NOT a filename/Unicode problem — a 2026-06-13 session chased a fullwidth-colon `：` + emoji red herring before proving the real cause. Special chars are fine.)
+2. **The rescan now WAITS for completion (fixed 2026-06-13).** `POST /api/media/minidlna/rescan` (`minidlna_rescan` in `scripts/player_service.py`) does stop → wipe `files.db` → start (full scan). The scan writes `details` rows incrementally over **~1–3 min** (it thumbnails every file; ~74 s for ~1600 files measured). The OLD code returned as soon as `count > 0` (~1 s) with `note:"scan continues in background"`, so the dashboard showed "✓ complete" while `Videos/` was still unscanned → clicking ▶ Play raced the scan → spurious "Not indexed". **Now it polls until the row count is stable for `STABLE_FOR=12 s` (ceiling `MAX_WAIT=360 s`) and returns `{completed:true, elapsed_sec, counts}`** — so "✓ complete" is honest and Play always works after it. The dashboard 🔄 Rescan button (`rescanMiniDLNA` in `js/media.js`, `?v=114`) stays "⏳ Rescanning…" for the full duration. **After any manual video download, click 🔄 Rescan once and wait for the ✓.** Deploy: `scp scripts/player_service.py root@192.168.1.138:/opt/media-agent/player_service.py && ssh … systemctl restart player`.
+   - Benign scan noise in the log: `Not a JPEG file: starts with 0x89 0x50` (PNG album-art) and `UNIQUE constraint failed: OBJECTS.OBJECT_ID` (duplicate browse-object ids) — neither blocks `details` indexing; ignore.
+
 ---
 
 ## Audio Playlists via Cast → Soundbar (since 2026-05-18)
