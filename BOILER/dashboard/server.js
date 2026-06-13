@@ -99,6 +99,10 @@ require('./routes-cellular')(app, db);
 // Media Agents → CD Player tab. Own module (gets callHA, a hoisted function).
 require('./routes-media-cd')(app, callHA);
 
+// Privacy page — Sites CRM + per-site documents (client-side encrypted or
+// plain). Own module; file bytes on QNAP, server stays blind to plaintext.
+require('./routes-privacy')(app, db);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes
@@ -2262,6 +2266,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'device_locations', 'phone_trips',
       'medical_test_results',
       'cellular_antennas',
+      'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2295,6 +2300,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       phone_trips: 'started_at',
       medical_test_results: 'tested_at',
       cellular_antennas: 'last_ingest',
+      privacy_sites: 'updated_at', privacy_site_docs: 'created_at', privacy_doc_crypto: 'created_at',
     };
 
     const sizes = await db.query(`

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a><a href="network.html" id="network-indicator"></a><a href="gateway.html" id="netbird-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="gateway.html">Project Gateway</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html">Project Boards</a>
+  <a href="power.html">Project Power</a>
+  <a href="project-general.html">Project General</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+  <a href="my-bathroom.html">My BathRoom Agent</a>
+  <a href="bedroom.html">Bedroom Agent</a>
+
+  <div class="section-label">Personal</div>
+  <a href="privacy.html" class="active">Privacy</a>
+  <a href="medical.html">Medical</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Privacy</h1>
+    <div class="refresh-bar">
+      <span id="pv-lock-state" style="font-size:0.82rem; color:#888;"></span>
+      <button class="btn btn-secondary btn-sm" onclick="pvRefresh()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('sites', this)">Sites</button>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Sites                                                 -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel active" id="tab-sites">
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+        <div style="display:flex; gap:10px; align-items:center;">
+          <input id="pv-filter" type="text" placeholder="filter by name/kind…" oninput="pvRenderSites()" style="font-size:0.85rem; padding:5px 8px; min-width:200px;">
+        </div>
+        <button class="btn btn-sm" style="background:#3a7d44; color:#fff;" onclick="pvOpenSiteForm()">+ Add site</button>
+      </div>
+      <div id="pv-sites-list"><div style="color:#aaa;">Loading…</div></div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Site add/edit modal ────────────────────────────────────── -->
+<div id="pv-site-modal" class="pv-modal" style="display:none;">
+  <div class="pv-modal-box" style="max-width:560px;">
+    <h2 id="pv-site-modal-title" style="margin:0 0 12px;">Add site</h2>
+    <input type="hidden" id="pv-site-id">
+    <div class="pv-form-grid">
+      <label>Kind <input id="pv-f-kind" list="pv-kinds" placeholder="Bank, Insurance, Gov…"></label>
+      <datalist id="pv-kinds"><option>Bank</option><option>Insurance</option><option>Government</option><option>Utility</option><option>Health Fund</option><option>Work</option><option>Other</option></datalist>
+      <label>Name * <input id="pv-f-name" placeholder="e.g. Bank Hapoalim"></label>
+      <label>Main Tel <input id="pv-f-main_tel"></label>
+      <label>Fax <input id="pv-f-fax"></label>
+      <label>Email <input id="pv-f-email" type="email"></label>
+      <label>Website <input id="pv-f-website" placeholder="https://…"></label>
+      <label>Vault item <input id="pv-f-vault_item" placeholder="Vaultwarden login name (for 🔑)"></label>
+      <label style="grid-column:1/-1;">Notes <textarea id="pv-f-notes" rows="2"></textarea></label>
+    </div>
+    <div style="margin-top:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <b style="font-size:0.85rem;">Additional phones</b>
+        <button class="btn btn-secondary btn-sm" onclick="pvAddTelRow()">+ phone</button>
+      </div>
+      <div id="pv-tels" style="margin-top:6px; display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+      <button class="btn btn-secondary btn-sm" onclick="pvCloseSiteForm()">Cancel</button>
+      <button class="btn btn-sm" style="background:#3a7d44; color:#fff;" onclick="pvSaveSite()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Documents modal (per site) ─────────────────────────────── -->
+<div id="pv-docs-modal" class="pv-modal" style="display:none;">
+  <div class="pv-modal-box" style="max-width:640px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <h2 id="pv-docs-title" style="margin:0;">Documents</h2>
+      <button class="btn btn-secondary btn-sm" onclick="pvCloseDocs()">✕ Close</button>
+    </div>
+
+    <!-- lock bar -->
+    <div id="pv-docs-lockbar" style="font-size:0.82rem; padding:8px 10px; border-radius:6px; background:#f3f4f6; margin-bottom:10px;"></div>
+
+    <!-- add row -->
+    <div style="border:1px dashed #ccc; border-radius:8px; padding:10px; margin-bottom:12px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="pv-doc-name" type="text" placeholder="document name…" style="flex:1; min-width:160px; font-size:0.85rem; padding:5px 8px;">
+        <label style="font-size:0.8rem; display:flex; align-items:center; gap:4px; cursor:pointer;" title="Encrypted = needs the Documents password to open. Plain = openable anytime (LAN-only).">
+          <input type="checkbox" id="pv-doc-enc" checked> 🔒 Encrypt
+        </label>
+        <input id="pv-doc-file" type="file" style="font-size:0.8rem; max-width:220px;">
+        <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvAddDoc()">⬆ Add</button>
+      </div>
+      <div id="pv-doc-add-status" style="font-size:0.78rem; color:#888; margin-top:6px;"></div>
+    </div>
+
+    <div id="pv-docs-list"><div style="color:#aaa;">—</div></div>
+  </div>
+</div>
+
+<!-- ── Password prompt modal ──────────────────────────────────── -->
+<div id="pv-pw-modal" class="pv-modal" style="display:none;">
+  <div class="pv-modal-box" style="max-width:420px;">
+    <h2 id="pv-pw-title" style="margin:0 0 8px;">Documents password</h2>
+    <p id="pv-pw-help" style="font-size:0.82rem; color:#666; margin:0 0 10px;"></p>
+    <input id="pv-pw-input" type="password" style="width:100%; font-size:0.95rem; padding:7px 9px;" placeholder="password" onkeydown="if(event.key==='Enter')pvPwSubmit()">
+    <input id="pv-pw-input2" type="password" style="width:100%; font-size:0.95rem; padding:7px 9px; margin-top:8px; display:none;" placeholder="confirm password" onkeydown="if(event.key==='Enter')pvPwSubmit()">
+    <div id="pv-pw-err" style="font-size:0.8rem; color:#c0392b; min-height:1.1em; margin-top:6px;"></div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+      <button class="btn btn-secondary btn-sm" onclick="pvPwCancel()">Cancel</button>
+      <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvPwSubmit()">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .pv-modal { position:fixed; inset:0; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; z-index:1000; padding:16px; }
+  .pv-modal-box { background:#fff; border-radius:10px; padding:18px 20px; width:100%; max-height:90vh; overflow:auto; box-shadow:0 10px 40px rgba(0,0,0,0.3); }
+  .pv-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
+  .pv-form-grid label { display:flex; flex-direction:column; font-size:0.78rem; color:#555; gap:3px; }
+  .pv-form-grid input, .pv-form-grid textarea { font-size:0.88rem; padding:5px 7px; }
+</style>
+
+<script src="js/alerts-monitor.js?v=11"></script>
+<script src="js/privacy.js?v=1"></script>
+</body>
+</html>

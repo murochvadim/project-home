@@ -13,7 +13,21 @@
 - **Cryptomator docs vault (Phase 4, 2026-06-13):** vault created by the user on the laptop at **`G:\My Drive\Privacy`** (named "Privacy") via the Cryptomator desktop app (v1.19.2) + WinFsp. Encrypted (client-side AES-256); Google Drive desktop syncs the ciphertext to the cloud + everywhere. Vault password is the user's alone (stored in Vaultwarden, never with the assistant) — separate from the Vaultwarden master password. To use: Cryptomator → Unlock → mounts a drive → drop files in.
 - **Read-only Drive access (Phase 4c):** `rclone` remote `gdrive` with **`scope = drive.readonly`** (OAuth token obtained via `rclone authorize` on the laptop, browser consent). Token copied to **LXC 109** (`/root/.config/rclone/rclone.conf`) AND **LXC 104**. Read-only = the servers can pull the vault but can NEVER modify/delete anything in the user's Drive. LXC 109 holds a manual ciphertext copy at `/opt/privacy/vault-copy/Privacy`.
 - **Nightly QNAP backup (Phase 5):** `scripts/privacy-vault-backup.sh` → `/opt/privacy-vault-backup.sh` on **LXC 104** (per the timers-on-104 rule). `rclone sync gdrive:Privacy → /mnt/qnap-claude/Privacy_Vault`, cron **`15 3 * * *`**, log `/var/log/privacy-vault-backup.log`. Ciphertext only (no vault password). **3 copies of the encrypted vault:** Google Drive (primary/offsite/view-anywhere) + LXC 109 (manual snapshot) + QNAP (nightly automated). Verified: backup ran, copy landed on QNAP.
-- **Pending (Phases 6–7):** install Bitwarden + Cryptomator + Caddy root CA on the **phone** (and Bitwarden extension on the laptop); optional Project Privacy dashboard tile.
+- **Pending (Phases 6–7):** install Bitwarden + Cryptomator + Caddy root CA on the **phone** (and Bitwarden extension on the laptop). Phone = user opted out (2026-06-13).
+
+## Dashboard page — Privacy (Personal group, first; since 2026-06-13)
+`BOILER/dashboard/public/privacy.html` + `js/privacy.js`, sidebar **Privacy** as the **first item in Personal** (above Medical). Backend: **`routes-privacy.js`** (own module, architecture-guard pattern). Tables on LXC 102: `privacy_sites`, `privacy_site_docs`, `privacy_doc_crypto` (migration `PRIVACY/migrations/002_privacy_dashboard.sql`).
+
+**Tab: Sites** — a CRM of services/accounts (bank, insurance, gov…). Each site: kind / name / Main Tel / **Additional phones** (list of `{tel, person}`, editable) / fax / email / website / optional **Vault item** (powers a **🔑 Vaultwarden** link that opens `https://192.168.1.196`) / notes. Add/edit (modal) + delete. Stored plaintext (LAN-only, like `medical_contacts`).
+
+**Per-site 📄 Docs window** — each site holds documents, each **🔒 encrypted OR 🔓 plain** (user chooses per doc at add time). Add / open / rename / delete; PDFs+images preview in a new tab, others download.
+
+**Encryption — server is BLIND, all client-side in `js/privacy.js`:**
+- **One "Documents password"** for the whole page (stored in Vaultwarden; forget it = encrypted docs unrecoverable). Per-session unlock; Lock button + lock-state indicator.
+- **WebCrypto AES-256-GCM**, key from **PBKDF2-SHA256 @ 600,000 iters** (OWASP 2025/2026-verified) + a random 16-byte salt; per-file random 12-byte IV. `privacy_doc_crypto` (singleton) stores ONLY the salt + a **verifier** (a known token encrypted with the key) → lets the page detect a wrong password without being able to decrypt anything. The password/key/plaintext/real filename **never reach the server**.
+- Encrypted docs: the **filename is encrypted too** (`enc_name`) — the real name is stored as `displayName||originalFilename` so the file TYPE is derived from the decrypted name on open (not leaked). File bytes uploaded as ciphertext.
+- Plain docs: stored as-is with plaintext name + mime.
+- **Storage:** file bytes on **QNAP** `\\192.168.1.155\Claude_Data\Privacy_Site_Docs\` (ciphertext for encrypted, as-is for plain); **DELETE tunnels via LXC 104 SSH** (same QNAP-ACL reason as Medical Documents). 25 MB cap (30 MB multer headroom). Verified end-to-end 2026-06-13.
 
 ---
 

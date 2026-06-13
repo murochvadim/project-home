@@ -1,0 +1,224 @@
+// Privacy page — Sites CRM + per-site documents (encrypted or plain).
+//
+// Own module (wired from server.js via one require line) so server.js stays
+// free of new handlers (architecture-guard hook). Mirrors the Medical Documents
+// storage pattern: file bytes live on QNAP (Claude_Data\Privacy_Site_Docs),
+// metadata in Postgres; DELETE tunnels through LXC 104 SSH because the
+// Windows-side `claude` SMB user can't delete on that share (QNAP ACL quirk).
+//
+// CRYPTO: the server is BLIND. For encrypted docs the browser does all AES-GCM
+// (PBKDF2-SHA256 600k, client-side) — it uploads ciphertext + an encrypted
+// filename; this module only stores/serves opaque blobs. The Documents password
+// is never sent. privacy_doc_crypto holds only the KDF salt + a verifier blob.
+//
+// Endpoints:
+//   GET/POST/PATCH/DELETE /api/privacy/sites[/:id]
+//   GET  /api/privacy/crypto              KDF salt + verifier (or {setup:false})
+//   POST /api/privacy/crypto              first-time set salt+verifier (browser-generated)
+//   GET  /api/privacy/sites/:id/docs      list doc metadata
+//   POST /api/privacy/sites/:id/docs      upload (multipart file + meta)
+//   GET  /api/privacy/docs/:id/file       stream stored bytes (cipher or plain)
+//   PATCH/DELETE /api/privacy/docs/:id    rename / delete
+
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const multer = require('multer');
+const { NodeSSH } = require('node-ssh');
+
+const DOCS_ROOT  = '\\\\192.168.1.155\\Claude_Data\\Privacy_Site_Docs';
+const DOCS_LINUX = '/mnt/qnap-claude/Privacy_Site_Docs';   // LXC 104 view of same share
+const SSH_HOST = '192.168.1.227';
+const SSH_USER = 'root';
+const SSH_KEY  = process.env.SSH_KEY_PATH || os.homedir() + '/.ssh/id_ed25519';
+
+try { fs.mkdirSync(DOCS_ROOT, { recursive: true }); }
+catch (e) { console.error('[privacy] docs storage root unreachable:', e.message); }
+
+// 30 MB cap (25 MB user files + AES-GCM/header overhead headroom).
+const docUpload = multer({
+  dest: path.join(os.tmpdir(), 'privacy-doc-uploads'),
+  limits: { fileSize: 30 * 1024 * 1024 },
+});
+
+const _san = (s) => String(s || '').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+const _trim = (s) => (s == null ? null : String(s).trim() || null);
+const _err = (res, e) => { console.error('[privacy]', e.message); res.status(500).json({ error: e.message }); };
+
+async function _sshRm(linuxPaths) {
+  const list = (Array.isArray(linuxPaths) ? linuxPaths : [linuxPaths]).filter(Boolean);
+  if (!list.length) return;
+  const ssh = new NodeSSH();
+  await ssh.connect({ host: SSH_HOST, username: SSH_USER, privateKeyPath: SSH_KEY });
+  for (const p of list) {
+    if (/[\n;]/.test(p)) continue;
+    await ssh.execCommand(`rm -f "${p.replace(/"/g, '\\"')}"`);
+  }
+  ssh.dispose();
+}
+
+module.exports = function (app, db) {
+  // ── Sites CRM ──────────────────────────────────────────────────────────────
+  app.get('/api/privacy/sites', async (_req, res) => {
+    try {
+      const r = await db.query(`
+        SELECT s.id, s.kind, s.name, s.main_tel, s.add_tels, s.fax, s.email,
+               s.website, s.vault_item, s.notes,
+               (SELECT COUNT(*) FROM privacy_site_docs d WHERE d.site_id = s.id) AS doc_count
+          FROM privacy_sites s ORDER BY s.kind NULLS LAST, s.name`);
+      res.json(r.rows);
+    } catch (e) { _err(res, e); }
+  });
+
+  app.post('/api/privacy/sites', async (req, res) => {
+    try {
+      const b = req.body || {};
+      if (!_trim(b.name)) return res.status(400).json({ error: 'name required' });
+      const tels = Array.isArray(b.add_tels) ? b.add_tels : [];
+      const r = await db.query(`
+        INSERT INTO privacy_sites (kind, name, main_tel, add_tels, fax, email, website, vault_item, notes)
+        VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9) RETURNING id`,
+        [_trim(b.kind), _trim(b.name), _trim(b.main_tel), JSON.stringify(tels),
+         _trim(b.fax), _trim(b.email), _trim(b.website), _trim(b.vault_item), _trim(b.notes)]);
+      res.json({ ok: true, id: r.rows[0].id });
+    } catch (e) { _err(res, e); }
+  });
+
+  app.patch('/api/privacy/sites/:id', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const sets = [], params = [];
+      const add = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+      if (b.kind !== undefined)       add('kind', _trim(b.kind));
+      if (b.name !== undefined)       add('name', _trim(b.name));
+      if (b.main_tel !== undefined)   add('main_tel', _trim(b.main_tel));
+      if (b.add_tels !== undefined)   { params.push(JSON.stringify(Array.isArray(b.add_tels) ? b.add_tels : [])); sets.push(`add_tels = $${params.length}::jsonb`); }
+      if (b.fax !== undefined)        add('fax', _trim(b.fax));
+      if (b.email !== undefined)      add('email', _trim(b.email));
+      if (b.website !== undefined)    add('website', _trim(b.website));
+      if (b.vault_item !== undefined) add('vault_item', _trim(b.vault_item));
+      if (b.notes !== undefined)      add('notes', _trim(b.notes));
+      if (!sets.length) return res.status(400).json({ error: 'no fields' });
+      sets.push('updated_at = NOW()');
+      params.push(parseInt(req.params.id));
+      await db.query(`UPDATE privacy_sites SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+      res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+
+  app.delete('/api/privacy/sites/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const docs = await db.query('SELECT file_path FROM privacy_site_docs WHERE site_id = $1', [id]);
+      const paths = docs.rows.map(r => r.file_path).filter(fp => fp && !/[\\/]/.test(fp)).map(fp => DOCS_LINUX + '/' + fp);
+      try { await _sshRm(paths); } catch (e) { console.error('[privacy] site delete file cleanup:', e.message); }
+      await db.query('DELETE FROM privacy_sites WHERE id = $1', [id]);  // cascade removes doc rows
+      res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+
+  // ── Documents-password crypto setup (server holds salt+verifier only) ──────
+  app.get('/api/privacy/crypto', async (_req, res) => {
+    try {
+      const r = await db.query('SELECT salt, verifier, verifier_iv, kdf_iters FROM privacy_doc_crypto WHERE id = 1');
+      if (!r.rows.length) return res.json({ setup: false });
+      res.json({ setup: true, ...r.rows[0] });
+    } catch (e) { _err(res, e); }
+  });
+
+  app.post('/api/privacy/crypto', async (req, res) => {
+    try {
+      const b = req.body || {};
+      if (!b.salt || !b.verifier || !b.verifier_iv) return res.status(400).json({ error: 'salt, verifier, verifier_iv required' });
+      const exists = await db.query('SELECT 1 FROM privacy_doc_crypto WHERE id = 1');
+      if (exists.rows.length) return res.status(409).json({ error: 'Documents password already set' });
+      await db.query(
+        `INSERT INTO privacy_doc_crypto (id, salt, verifier, verifier_iv, kdf_iters) VALUES (1,$1,$2,$3,$4)`,
+        [b.salt, b.verifier, b.verifier_iv, parseInt(b.kdf_iters) || 600000]);
+      res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+
+  // ── Documents ──────────────────────────────────────────────────────────────
+  app.get('/api/privacy/sites/:id/docs', async (req, res) => {
+    try {
+      const r = await db.query(
+        `SELECT id, encrypted, doc_name, enc_name, name_iv, file_iv, mime_type, file_size,
+                to_char(created_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS created_at
+           FROM privacy_site_docs WHERE site_id = $1 ORDER BY created_at DESC`, [parseInt(req.params.id)]);
+      res.json(r.rows);
+    } catch (e) { _err(res, e); }
+  });
+
+  // Upload. multipart: `file` (already ciphertext if encrypted) + `meta` JSON.
+  app.post('/api/privacy/sites/:id/docs', docUpload.single('file'), async (req, res) => {
+    let tmp = null;
+    try {
+      if (!req.file) return res.status(400).json({ error: 'file required' });
+      tmp = req.file.path;
+      let m = {};
+      try { m = JSON.parse(req.body.meta || '{}'); } catch { return res.status(400).json({ error: 'meta must be JSON' }); }
+      const siteId = parseInt(req.params.id);
+      const encrypted = !!m.encrypted;
+      if (encrypted && (!m.enc_name || !m.name_iv || !m.file_iv)) {
+        return res.status(400).json({ error: 'encrypted docs need enc_name, name_iv, file_iv' });
+      }
+      if (!encrypted && !_trim(m.doc_name)) return res.status(400).json({ error: 'doc_name required for plain docs' });
+
+      const ins = await db.query(
+        `INSERT INTO privacy_site_docs (site_id, encrypted, doc_name, enc_name, name_iv, file_path, file_iv, mime_type, file_size)
+         VALUES ($1,$2,$3,$4,$5,'',$6,$7,$8) RETURNING id`,
+        [siteId, encrypted, encrypted ? null : _trim(m.doc_name), encrypted ? m.enc_name : null,
+         encrypted ? m.name_iv : null, encrypted ? m.file_iv : null,
+         encrypted ? null : _trim(m.mime_type), req.file.size]);
+      const id = ins.rows[0].id;
+      const filename = `${id}__${encrypted ? 'enc' : _san(m.doc_name)}.bin`;
+      await fs.promises.copyFile(tmp, path.join(DOCS_ROOT, filename));
+      await db.query('UPDATE privacy_site_docs SET file_path = $1 WHERE id = $2', [filename, id]);
+      res.json({ ok: true, id });
+    } catch (e) { _err(res, e); }
+    finally { if (tmp) { try { fs.unlinkSync(tmp); } catch (_) {} } }
+  });
+
+  app.get('/api/privacy/docs/:id/file', async (req, res) => {
+    try {
+      const r = await db.query('SELECT encrypted, doc_name, file_path, mime_type FROM privacy_site_docs WHERE id = $1', [parseInt(req.params.id)]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      const d = r.rows[0];
+      if (!d.file_path || /[\\/]/.test(d.file_path)) return res.status(400).json({ error: 'bad file_path' });
+      const abs = path.join(DOCS_ROOT, d.file_path);
+      if (!fs.existsSync(abs)) return res.status(404).json({ error: 'file missing on storage' });
+      // Encrypted -> opaque octet-stream (browser decrypts). Plain -> its mime.
+      res.setHeader('Content-Type', d.encrypted ? 'application/octet-stream' : (d.mime_type || 'application/octet-stream'));
+      fs.createReadStream(abs).pipe(res);
+    } catch (e) { _err(res, e); }
+  });
+
+  // Rename: plain -> doc_name; encrypted -> enc_name + name_iv.
+  app.patch('/api/privacy/docs/:id', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const sets = [], params = [];
+      const add = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+      if (b.doc_name !== undefined) add('doc_name', _trim(b.doc_name));
+      if (b.enc_name !== undefined) add('enc_name', b.enc_name);
+      if (b.name_iv  !== undefined) add('name_iv', b.name_iv);
+      if (!sets.length) return res.status(400).json({ error: 'no fields' });
+      params.push(parseInt(req.params.id));
+      await db.query(`UPDATE privacy_site_docs SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+      res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+
+  app.delete('/api/privacy/docs/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const r = await db.query('SELECT file_path FROM privacy_site_docs WHERE id = $1', [id]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      const fp = r.rows[0].file_path;
+      if (fp && !/[\\/]/.test(fp)) { try { await _sshRm(DOCS_LINUX + '/' + fp); } catch (e) { console.error('[privacy] doc rm:', e.message); } }
+      await db.query('DELETE FROM privacy_site_docs WHERE id = $1', [id]);
+      res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+};
