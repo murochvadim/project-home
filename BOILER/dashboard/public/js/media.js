@@ -6,6 +6,23 @@ let _tvgMuted = false;
 let _sbMuted  = false;
 let _tvbMuted = false;
 
+// Bedroom CD player — fire an IR command via the HA-scene endpoint. IR is
+// one-way (no feedback), so this just flashes a short confirmation.
+async function cdSend(action, btn) {
+  const status = document.getElementById('cd-status');
+  if (btn) { btn.disabled = true; setTimeout(() => { btn.disabled = false; }, 600); }
+  try {
+    const r = await fetch('/api/cd/' + action, { method: 'POST' });
+    const d = await r.json();
+    if (status) {
+      status.textContent = d.ok ? `Sent: ${action} ✓` : `Failed: ${d.error || 'error'}`;
+      status.style.color = d.ok ? '#3a7d44' : '#b0392f';
+    }
+  } catch (e) {
+    if (status) { status.textContent = 'Failed: ' + e.message; status.style.color = '#b0392f'; }
+  }
+}
+
 function showTab(name, btn) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));

@@ -64,6 +64,7 @@
     <button class="tab-btn" onclick="showTab('ingest', this); loadIngest()">Ingest Agent</button>
     <button class="tab-btn" onclick="showTab('player', this); loadPlayer()">Player Agent</button>
     <button class="tab-btn" onclick="showTab('alexa', this); loadAlexa()">Alexa Devices</button>
+    <button class="tab-btn" onclick="showTab('cd', this)">CD Player</button>
     <button class="tab-btn" onclick="showTab('settings', this); loadMediaSettings()">Settings</button>
   </div>
 
@@ -785,10 +786,40 @@
 
   </div><!-- /tab-alexa -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: CD Player (Bedroom) — IR control via HA scenes        -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-cd">
+    <div class="card" style="max-width:460px;">
+      <h2 style="margin:0 0 4px;">Bedroom CD Player</h2>
+      <p style="color:#888; font-size:0.82rem; margin:0 0 16px;">
+        IR remote (via Home Assistant). Commands are one-way — there's no
+        status feedback, and Power is a toggle.
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <!-- transport -->
+        <div style="display:flex; gap:10px;">
+          <button class="btn" style="flex:1; background:#3a7d44; color:#fff;" onclick="cdSend('play', this)">▶ Play</button>
+          <button class="btn" style="flex:1; background:#b0392f; color:#fff;" onclick="cdSend('stop', this)">⏹ Stop</button>
+        </div>
+        <!-- volume -->
+        <div style="display:flex; gap:10px;">
+          <button class="btn btn-secondary" style="flex:1;" onclick="cdSend('vol-down', this)">🔉 Vol −</button>
+          <button class="btn btn-secondary" style="flex:1;" onclick="cdSend('vol-up', this)">🔊 Vol +</button>
+        </div>
+        <!-- power -->
+        <button class="btn btn-secondary" style="width:100%;" onclick="cdSend('power', this)">⏻ Power (toggle)</button>
+      </div>
+
+      <div id="cd-status" style="margin-top:14px; font-size:0.82rem; color:#888; min-height:1.2em;"></div>
+    </div>
+  </div><!-- /tab-cd -->
+
 </main>
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=112"></script>
+<script src="js/media.js?v=113"></script>
 </body>
 </html>

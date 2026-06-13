@@ -617,3 +617,19 @@ If HA goes down, the Echo is still on the LAN and ARP-scan still says "Online". 
 - **No state polling for `media_player` entities into `device_events`.** The HA WebSocket adapter on LXC 103 restricts itself to external devices; Alexa entity state changes flow only when the dashboard polls `/api/alexa/devices`. Sufficient for the use cases above.
 - **HA going down breaks Alexa control + announcements.** Direct AlexaPy would survive HA outages but would duplicate cookie auth — explicit trade-off accepted in the integration plan.
 - **Voice control of OUR devices** ("Alexa, turn on the boiler") requires building an Amazon Smart Home Skill (different integration path entirely — not in scope).
+
+## CD Player tab (Bedroom — IR via HA scenes, since 2026-06-13)
+
+A **CD Player** tab on the Media Agents page (`media.html`, between Alexa Devices and Settings) controls the **Bedroom CD player**. The player is IR-only — it is **not** a `media_player` entity. HA exposes 5 scenes (fired through the Maya Bedroom IR remote hub) that emit the IR codes:
+
+| Button | Action | HA scene |
+|--------|--------|----------|
+| ▶ Play | `play` | `scene.cd_bedroom_play` |
+| ⏹ Stop | `stop` | `scene.cd_bedroom_stop` |
+| 🔉 Vol − | `vol-down` | `scene.cd_vol` |
+| 🔊 Vol + | `vol-up` | `scene.cd_vol_2` |
+| ⏻ Power | `power` | `scene.cd_on_off` |
+
+**Flow:** button → `POST /api/cd/:action` → **`routes-media-cd.js`** (own module, wired into server.js via one `require()` line + gets the hoisted `callHA`; architecture-guard reason) → `callHA('scene','turn_on',{entity_id})`. Front-end `cdSend(action, btn)` in `js/media.js` (cache-bust bumped to `?v=113`) flashes a "Sent ✓" confirmation.
+
+**Limitation (hardware, not code):** IR is one-way → **no status feedback**. The tab is command-buttons only — no play/stop state, no track info, no volume level; **Power is a toggle** (sends the on/off IR pulse; can't know current power state). To add Pause / Next / Prev / Eject, first learn those IR codes into new HA scenes, then add buttons + entries to `CD_SCENES` in `routes-media-cd.js`.

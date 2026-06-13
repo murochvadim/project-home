@@ -95,6 +95,10 @@ require('./routes-scenes')(app, db, () => mqttClient);
 // for the same architecture-guard reason as above.
 require('./routes-cellular')(app, db);
 
+// Bedroom CD player — POST /api/cd/:action fires HA scenes (IR control) for the
+// Media Agents → CD Player tab. Own module (gets callHA, a hoisted function).
+require('./routes-media-cd')(app, callHA);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes
