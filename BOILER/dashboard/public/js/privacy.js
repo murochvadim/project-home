@@ -75,7 +75,10 @@ function pvRenderSites() {
   const rows = _pvSites.filter(s => !q || (s.name + ' ' + (s.kind || '')).toLowerCase().includes(q));
   if (!rows.length) { host.innerHTML = '<div style="color:#aaa;">No sites yet — click “+ Add site”.</div>'; return; }
   host.innerHTML = rows.map(s => {
-    const tels = (s.add_tels || []).map(t => `<div style="font-size:0.78rem;color:#666;">📞 ${_esc(t.tel || '')}${t.person ? ' — ' + _esc(t.person) : ''}</div>`).join('');
+    const tels = (s.add_tels || []).map(t => {
+      const person = _esc(t.person || ''), tel = _esc(t.tel || '');
+      return `<div style="font-size:0.78rem;color:#666;">📞 ${person ? person + ' — ' : ''}${tel}</div>`;
+    }).join('');
     const link = (u, t) => u ? `<a href="${_esc(u)}" ${t === 'web' ? 'target="_blank"' : ''}>${_esc(u)}</a>` : '<span style="color:#bbb;">—</span>';
     return `<div class="card" style="margin-bottom:8px; padding:10px 12px;">
       <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
@@ -107,7 +110,12 @@ function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ 
 function pvOpenSiteForm(site) {
   document.getElementById('pv-site-modal-title').textContent = site ? 'Edit site' : 'Add site';
   document.getElementById('pv-site-id').value = site ? site.id : '';
-  ['kind', 'name', 'main_tel', 'fax', 'email', 'website', 'vault_item', 'notes'].forEach(f =>
+  // Kind is a <select> — preserve any custom value by adding it as an option.
+  const kindSel = document.getElementById('pv-f-kind');
+  const kv = site ? (site.kind || '') : '';
+  if (kv && ![...kindSel.options].some(o => o.value === kv)) kindSel.add(new Option(kv, kv));
+  kindSel.value = kv;
+  ['name', 'main_tel', 'fax', 'email', 'website', 'vault_item', 'notes'].forEach(f =>
     document.getElementById('pv-f-' + f).value = site ? (site[f] || '') : '');
   document.getElementById('pv-tels').innerHTML = '';
   ((site && site.add_tels) || []).forEach(t => pvAddTelRow(t));
@@ -118,8 +126,8 @@ function pvEditSite(id) { pvOpenSiteForm(_pvSites.find(s => s.id === id)); }
 function pvAddTelRow(t) {
   const div = document.createElement('div');
   div.style.cssText = 'display:flex;gap:6px;';
-  div.innerHTML = `<input class="pv-tel-num" placeholder="phone" value="${_esc(t && t.tel)}" style="flex:1;font-size:0.85rem;padding:4px 7px;">
-    <input class="pv-tel-person" placeholder="person / label" value="${_esc(t && t.person)}" style="flex:1;font-size:0.85rem;padding:4px 7px;">
+  div.innerHTML = `<input class="pv-tel-person" placeholder="person / label" value="${_esc(t && t.person)}" style="flex:1;font-size:0.88rem;padding:5px 7px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
+    <input class="pv-tel-num" placeholder="phone" value="${_esc(t && t.tel)}" style="flex:1;font-size:0.88rem;padding:5px 7px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
     <button class="btn btn-secondary btn-sm" onclick="this.parentElement.remove()">×</button>`;
   document.getElementById('pv-tels').appendChild(div);
 }
@@ -227,7 +235,7 @@ async function pvRenderDocs() {
   const rows = await Promise.all(_pvDocs.map(async d => {
     let name, locked = false;
     if (d.encrypted) {
-      if (_pvKey) { try { name = await _pvDecStr(_pvKey, d.name_iv, d.enc_name); } catch (_) { name = '⚠ decrypt error'; } }
+      if (_pvKey) { try { name = (await _pvDecStr(_pvKey, d.name_iv, d.enc_name)).split('||')[0]; } catch (_) { name = '⚠ decrypt error'; } }
       else { name = 'Encrypted document'; locked = true; }
     } else { name = d.doc_name; }
     const icon = d.encrypted ? '🔒' : '🔓';
