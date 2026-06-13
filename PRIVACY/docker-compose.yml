@@ -1,0 +1,40 @@
+# Privacy Agent — Vaultwarden (passwords) behind Caddy (HTTPS via internal CA).
+# Deployed on LXC 109 "privacy" (192.168.1.196) at /opt/privacy/.
+# LAN-only; nothing exposed to the internet.
+#
+# Hardening (from the 2026-06-13 CVE check):
+#   - Vaultwarden >= 1.35.5 (running 1.36.0)
+#   - SIGNUPS_ALLOWED=false  -> locked after the single account was created
+#   - ORG_CREATION_USERS=none -> no organizations (removes the surface the
+#     2026 Vaultwarden CVEs targeted: 43912 / 27802 / 26012)
+#   - no ADMIN_TOKEN          -> /admin panel disabled
+#
+# Deploy: scp this + Caddyfile to /opt/privacy/ on 192.168.1.196, then
+#   cd /opt/privacy && docker compose up -d
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      DOMAIN: "https://192.168.1.196"
+      SIGNUPS_ALLOWED: "false"
+      ORG_CREATION_USERS: "none"
+    volumes:
+      - ./vw-data:/data
+    networks: [privnet]
+
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config
+    networks: [privnet]
+
+networks:
+  privnet:

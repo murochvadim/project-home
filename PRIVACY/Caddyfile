@@ -1,0 +1,13 @@
+# Caddy reverse proxy for Vaultwarden — HTTPS on the LAN via Caddy's internal CA.
+# default_sni is REQUIRED because the site is a bare IP: TLS clients can't send
+# an IP as SNI, so without this Caddy can't match the site and aborts the
+# handshake ("tlsv1 alert internal error"). default_sni makes Caddy serve the
+# IP cert for SNI-less connections. The internal CA root is at
+# caddy-data/caddy/pki/authorities/local/root.crt — install it on each device.
+{
+    default_sni 192.168.1.196
+}
+192.168.1.196 {
+    tls internal
+    reverse_proxy vaultwarden:80
+}

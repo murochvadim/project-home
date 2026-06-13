@@ -1,6 +1,19 @@
 # Privacy Agent
 
-**Status: PLANNED — scoped 2026-06-12. Nothing built yet** (no LXC, no installs). This file is the agreed design + build plan; the build is pending user go-ahead + Proxmox host access.
+**Status: BUILDING (started 2026-06-13).** Phases 1–3 done: LXC + Docker + Vaultwarden live & hardened. Phases 4–7 (Cryptomator vault → Google Drive, backups, clients, integration) pending.
+
+### Built so far (2026-06-13)
+- **LXC 109 `privacy`** on Proxmox host `192.168.1.101` — Debian 12.12, 2 vCPU / 2 GB / 16 GB, **static `192.168.1.196`**, privileged + `features: nesting=1,keyctl=1` (for Docker), `onboot=1`, SSH via the PVE `claude-code` key. Created with `pct create … local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst`.
+- **Docker** 29.5.3 + compose v5.1.4 (official docker.com repo).
+- **Vaultwarden 1.36.0** (≥ 1.35.5 ✓) + **Caddy** (HTTPS, internal CA) via `docker compose` at `/opt/privacy/` → repo copies: [docker-compose.yml](docker-compose.yml) + [Caddyfile](Caddyfile). URL **`https://192.168.1.196`**.
+  - Hardening applied: `SIGNUPS_ALLOWED=false` (locked after the 1 account `murochvadim@gmail.com` was created — register now returns 422), `ORG_CREATION_USERS=none` (orgs disabled → removes the 2026-CVE surface), **no `ADMIN_TOKEN` → `/admin` disabled**.
+  - **HTTPS gotcha solved:** serving on a bare IP failed TLS (`tlsv1 alert internal error`) because clients can't send an IP as SNI → fixed with Caddy global `default_sni 192.168.1.196`.
+  - **Caddy internal root CA** at `/opt/privacy/caddy-data/caddy/pki/authorities/local/root.crt` (copied to the Windows host `C:\Users\muroc\caddy-root-CA.crt`) — **install on each device** to trust the cert.
+- **User TODO:** in the web vault set **Settings → Security → Keys → KDF = Argon2id** (offsite-blob brute-force hardening). Data volume `/opt/privacy/vw-data` (NOT in git — contains the vault DB).
+
+---
+
+**Original plan below (design rationale + remaining phases).**
 
 ## Goal
 A dedicated, private LXC to: (1) **store documents that can only be opened with a password**, and (2) **self-host a password manager**. Redundancy to **Google Drive** (offsite) + **QNAP** (local). **LAN-only** (nothing exposed to the internet).
