@@ -99,6 +99,7 @@ function pvRenderSites() {
         <span style="font-size:1.2rem; font-weight:700; color:#222;">${_esc(s.name)}</span>
       </div>
       <div style="font-size:0.95rem; color:#555; margin-top:6px; display:grid; grid-template-columns:auto 1fr; gap:5px 8px; align-items:center;">${cells.join('')}</div>
+      ${_pvApptReminderArea(s)}
       <div style="display:flex; gap:6px; margin-top:7px; align-items:center;">
         ${s.vault_item ? `<a class="btn btn-secondary btn-sm" href="https://192.168.1.196" target="_blank" title="Open Vaultwarden (item: ${_esc(s.vault_item)})">🔑 Vaultwarden</a>` : ''}
         <span style="flex:1;"></span>
@@ -109,6 +110,55 @@ function pvRenderSites() {
   }).join('');
 }
 function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// ── Appointment + reminder (mirrors the Medical Contacts pattern) ────────────
+// Split a TIMESTAMPTZ ISO into date / hour / minute for the 3 inputs
+// (a single datetime-local follows OS locale → can't force 24h on en-US Windows).
+function _pvIsoToParts(iso) {
+  if (!iso) return { date: '', hour: '', minute: '' };
+  const d = new Date(iso);
+  if (isNaN(d)) return { date: '', hour: '', minute: '' };
+  const pad = n => String(n).padStart(2, '0');
+  return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, hour: String(d.getHours()), minute: pad(d.getMinutes()) };
+}
+// Combine the 3 inputs into a UTC ISO (anchored to the wall-clock typed). No date → ''.
+function _pvPartsToISO(date, hourStr, minStr) {
+  if (!date) return '';
+  const h = Math.max(0, Math.min(23, parseInt(hourStr || '0', 10) || 0));
+  const m = Math.max(0, Math.min(59, parseInt(minStr || '0', 10) || 0));
+  const pad = n => String(n).padStart(2, '0');
+  const d = new Date(`${date}T${pad(h)}:${pad(m)}`);
+  return isNaN(d) ? '' : d.toISOString();
+}
+function pvClearAppt() { ['pv-f-appt-date', 'pv-f-appt-hour', 'pv-f-appt-min', 'pv-f-appt-note'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; }); }
+function pvClearReminder() { const e = document.getElementById('pv-f-reminder'); if (e) e.value = ''; }
+
+// Up to two nested cards on the site: red appointment (date+reason, "past" badge
+// once elapsed) + blue reminder (standalone note).
+function _pvApptReminderArea(s) {
+  const appt = _pvApptCard(s), rem = _pvReminderCard(s);
+  if (!appt && !rem) return '';
+  return `<div style="display:flex; flex-wrap:wrap; gap:8px; margin:7px 0 2px;">${appt}${rem}</div>`;
+}
+function _pvApptCard(s) {
+  if (!s.next_appointment_at) return '';
+  const d = new Date(s.next_appointment_at);
+  const when = isNaN(d) ? s.next_appointment_at
+    : d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const past = !isNaN(d) && d.getTime() < Date.now();
+  const bC = past ? '#d4a3a3' : '#e74c3c', bg = past ? '#fdf4f4' : '#fef2f2', tC = past ? '#a35858' : '#c0392b', dC = past ? '#8e3e3e' : '#a82a1f';
+  const badge = past ? '<span style="margin-left:6px; padding:1px 8px; background:#a35858; color:#fff; border-radius:10px; font-size:0.7rem; font-weight:600;">past</span>' : '';
+  const note = s.next_appointment_note ? `<div style="margin-top:1px; font-size:0.82rem; color:${dC}; font-style:italic; line-height:1.2;">${_esc(s.next_appointment_note)}</div>` : '';
+  return `<div style="flex:0 1 260px; padding:5px 14px; background:${bg}; border:1.5px solid ${bC}; border-radius:8px; text-align:center; line-height:1.25;">
+    <div style="font-size:0.72rem; color:${tC}; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">📅 Next appointment${badge}</div>
+    <div style="font-size:0.94rem; font-weight:700; color:${dC};">${_esc(when)}</div>${note}</div>`;
+}
+function _pvReminderCard(s) {
+  if (!s.reminder_text) return '';
+  return `<div style="flex:0 1 260px; padding:5px 14px; background:#eef5ff; border:1.5px solid #3b82f6; border-radius:8px; text-align:center; line-height:1.25;">
+    <div style="font-size:0.72rem; color:#1e40af; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">🔔 Reminder</div>
+    <div style="font-size:0.92rem; font-weight:600; color:#1e3a8a;">${_esc(s.reminder_text)}</div></div>`;
+}
 
 // ── Site form ────────────────────────────────────────────────────
 function pvOpenSiteForm(site) {
@@ -123,6 +173,13 @@ function pvOpenSiteForm(site) {
     document.getElementById('pv-f-' + f).value = site ? (site[f] || '') : '');
   document.getElementById('pv-tels').innerHTML = '';
   ((site && site.add_tels) || []).forEach(t => pvAddTelRow(t));
+  // Appointment + reminder
+  const parts = _pvIsoToParts(site ? site.next_appointment_at : '');
+  document.getElementById('pv-f-appt-date').value = parts.date;
+  document.getElementById('pv-f-appt-hour').value = parts.hour;
+  document.getElementById('pv-f-appt-min').value = parts.minute;
+  document.getElementById('pv-f-appt-note').value = site ? (site.next_appointment_note || '') : '';
+  document.getElementById('pv-f-reminder').value = site ? (site.reminder_text || '') : '';
   document.getElementById('pv-site-modal').style.display = 'flex';
 }
 function pvCloseSiteForm() { document.getElementById('pv-site-modal').style.display = 'none'; }
@@ -143,6 +200,11 @@ async function pvSaveSite() {
   body.add_tels = [...document.querySelectorAll('#pv-tels > div')].map(d => ({
     tel: d.querySelector('.pv-tel-num').value.trim(), person: d.querySelector('.pv-tel-person').value.trim(),
   })).filter(t => t.tel || t.person);
+  const apptISO = _pvPartsToISO(document.getElementById('pv-f-appt-date').value.trim(),
+    document.getElementById('pv-f-appt-hour').value.trim(), document.getElementById('pv-f-appt-min').value.trim());
+  body.next_appointment_at = apptISO;
+  body.next_appointment_note = apptISO ? document.getElementById('pv-f-appt-note').value.trim() : '';
+  body.reminder_text = document.getElementById('pv-f-reminder').value.trim();
   const url = id ? `/api/privacy/sites/${id}` : '/api/privacy/sites';
   const r = await fetch(url, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) { alert('Save failed: ' + (await r.json()).error); return; }

@@ -60,3 +60,8 @@ VALUES
   ('privacy_site_docs',   NULL, false, 168, 'Privacy page — per-site document metadata'),
   ('privacy_doc_crypto',  NULL, false, 168, 'Privacy page — Documents-password KDF salt + verifier')
 ON CONFLICT (table_name) DO NOTHING;
+
+-- Appointment + reminder per site (mirrors medical_contacts; added 2026-06-13).
+ALTER TABLE privacy_sites ADD COLUMN IF NOT EXISTS next_appointment_at   TIMESTAMPTZ;
+ALTER TABLE privacy_sites ADD COLUMN IF NOT EXISTS next_appointment_note TEXT;
+ALTER TABLE privacy_sites ADD COLUMN IF NOT EXISTS reminder_text         TEXT;

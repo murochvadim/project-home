@@ -64,6 +64,7 @@ module.exports = function (app, db) {
       const r = await db.query(`
         SELECT s.id, s.kind, s.name, s.main_tel, s.add_tels, s.fax, s.email,
                s.website, s.vault_item, s.notes,
+               s.next_appointment_at, s.next_appointment_note, s.reminder_text,
                (SELECT COUNT(*) FROM privacy_site_docs d WHERE d.site_id = s.id) AS doc_count
           FROM privacy_sites s ORDER BY s.kind NULLS LAST, s.name`);
       res.json(r.rows);
@@ -76,10 +77,12 @@ module.exports = function (app, db) {
       if (!_trim(b.name)) return res.status(400).json({ error: 'name required' });
       const tels = Array.isArray(b.add_tels) ? b.add_tels : [];
       const r = await db.query(`
-        INSERT INTO privacy_sites (kind, name, main_tel, add_tels, fax, email, website, vault_item, notes)
-        VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9) RETURNING id`,
+        INSERT INTO privacy_sites (kind, name, main_tel, add_tels, fax, email, website, vault_item, notes,
+                                   next_appointment_at, next_appointment_note, reminder_text)
+        VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
         [_trim(b.kind), _trim(b.name), _trim(b.main_tel), JSON.stringify(tels),
-         _trim(b.fax), _trim(b.email), _trim(b.website), _trim(b.vault_item), _trim(b.notes)]);
+         _trim(b.fax), _trim(b.email), _trim(b.website), _trim(b.vault_item), _trim(b.notes),
+         _trim(b.next_appointment_at), _trim(b.next_appointment_note), _trim(b.reminder_text)]);
       res.json({ ok: true, id: r.rows[0].id });
     } catch (e) { _err(res, e); }
   });
@@ -98,6 +101,9 @@ module.exports = function (app, db) {
       if (b.website !== undefined)    add('website', _trim(b.website));
       if (b.vault_item !== undefined) add('vault_item', _trim(b.vault_item));
       if (b.notes !== undefined)      add('notes', _trim(b.notes));
+      if (b.next_appointment_at !== undefined)   add('next_appointment_at', _trim(b.next_appointment_at));
+      if (b.next_appointment_note !== undefined) add('next_appointment_note', _trim(b.next_appointment_note));
+      if (b.reminder_text !== undefined)         add('reminder_text', _trim(b.reminder_text));
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       sets.push('updated_at = NOW()');
       params.push(parseInt(req.params.id));

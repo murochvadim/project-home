@@ -18,7 +18,7 @@
 ## Dashboard page — Privacy (Personal group, first; since 2026-06-13)
 `BOILER/dashboard/public/privacy.html` + `js/privacy.js`, sidebar **Privacy** as the **first item in Personal** (above Medical). Backend: **`routes-privacy.js`** (own module, architecture-guard pattern). Tables on LXC 102: `privacy_sites`, `privacy_site_docs`, `privacy_doc_crypto` (migration `PRIVACY/migrations/002_privacy_dashboard.sql`).
 
-**Tab: Sites** — a CRM of services/accounts (bank, insurance, gov…). Each site: kind / name / Main Tel / **Additional phones** (list of `{tel, person}`, editable) / fax / email / website / optional **Vault item** (powers a **🔑 Vaultwarden** link that opens `https://192.168.1.196`) / notes. Add/edit (modal) + delete. Stored plaintext (LAN-only, like `medical_contacts`).
+**Tab: Sites** — a CRM of services/accounts (bank, insurance, gov…). Each site: kind / name / Main Tel / **Additional phones** (list of `{tel, person}`, editable) / fax / email / website / optional **Vault item** (powers a **🔑 Vaultwarden** link that opens `https://192.168.1.196`) / notes. Add/edit (modal) + delete. Stored plaintext (LAN-only, like `medical_contacts`). Also a **📅 Next appointment** (date + HH + MM 24h inputs + reason; `next_appointment_at` TIMESTAMPTZ + `next_appointment_note`) and a **🔔 Reminder** (standalone text; `reminder_text`) — same pattern as Medical Contacts: red appointment mini-card (turns muted + "past" pill once elapsed) + blue reminder mini-card on the site card; date+HH+MM combine to a UTC ISO client-side (`_pvPartsToISO`).
 
 **Per-site 📄 Docs window** — each site holds documents, each **🔒 encrypted OR 🔓 plain** (user chooses per doc at add time). Add / open / rename / delete; PDFs+images preview in a new tab, others download.
 

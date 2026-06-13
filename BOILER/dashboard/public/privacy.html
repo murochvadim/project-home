@@ -108,6 +108,24 @@
       </div>
       <div id="pv-tels" style="margin-top:6px; display:flex; flex-direction:column; gap:6px;"></div>
     </div>
+    <div style="margin-top:10px; padding:8px 10px; background:#fef2f2; border-left:3px solid #c0392b; border-radius:4px;">
+      <div style="font-weight:600; color:#c0392b; margin-bottom:6px; font-size:0.85rem;">📅 Next appointment</div>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <input type="date" id="pv-f-appt-date" style="flex:1; min-width:130px; font-size:0.88rem; padding:5px 7px;">
+        <input type="number" id="pv-f-appt-hour" min="0" max="23" placeholder="HH" style="width:58px; text-align:center; font-size:0.88rem; padding:5px 7px;" title="Hour 0–23">
+        <span style="font-weight:700; color:#666;">:</span>
+        <input type="number" id="pv-f-appt-min" min="0" max="59" placeholder="MM" style="width:58px; text-align:center; font-size:0.88rem; padding:5px 7px;" title="Minute 0–59">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="pvClearAppt()">✕ clear</button>
+      </div>
+      <input type="text" id="pv-f-appt-note" placeholder="Reason (e.g. mortgage review / fast 12h)" style="width:100%; margin-top:6px; font-size:0.88rem; padding:5px 7px; box-sizing:border-box;">
+    </div>
+    <div style="margin-top:8px; padding:8px 10px; background:#eef5ff; border-left:3px solid #3b82f6; border-radius:4px;">
+      <div style="font-weight:600; color:#1e40af; margin-bottom:6px; font-size:0.85rem;">🔔 Reminder</div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" id="pv-f-reminder" placeholder="e.g. renew card / send documents" style="flex:1; font-size:0.88rem; padding:5px 7px;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="pvClearReminder()">✕ clear</button>
+      </div>
+    </div>
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
       <button class="btn btn-secondary btn-sm" onclick="pvCloseSiteForm()">Cancel</button>
       <button class="btn btn-sm" style="background:#3a7d44; color:#fff;" onclick="pvSaveSite()">Save</button>
@@ -167,6 +185,6 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/privacy.js?v=21"></script>
+<script src="js/privacy.js?v=22"></script>
 </body>
 </html>
