@@ -56,12 +56,15 @@ async function pvLoadCrypto() {
 function pvRenderLockState() {
   const el = document.getElementById('pv-lock-state');
   if (!el) return;
-  if (!_pvCrypto || !_pvCrypto.setup) { el.innerHTML = '🔓 no Documents password set yet'; return; }
+  const btn = (label, fn, blue) => `<button class="btn btn-sm ${blue ? '' : 'btn-secondary'}" style="${blue ? 'background:#2563eb;color:#fff;' : ''}margin-left:6px;" onclick="${fn}">${label}</button>`;
+  if (!_pvCrypto || !_pvCrypto.setup) { el.innerHTML = '🔓 no Documents password yet' + btn('Set password', 'pvHeaderSet()', true); return; }
   el.innerHTML = _pvKey
-    ? '🔓 Docs unlocked <a href="#" onclick="pvLock();return false;" style="margin-left:6px;">Lock</a>'
-    : '🔒 Docs locked';
+    ? '🔓 Docs unlocked' + btn('Lock', 'pvLock()')
+    : '🔒 Docs locked' + btn('Unlock', 'pvHeaderUnlock()', true);
 }
 function pvLock() { _pvKey = null; pvRenderLockState(); if (_pvDocSite) pvRenderDocs(); }
+async function pvHeaderSet() { if (await pvPromptPassword('setup')) { pvRenderLockState(); if (_pvDocSite) pvRenderDocs(); } }
+async function pvHeaderUnlock() { if (await pvPromptPassword('unlock')) { pvRenderLockState(); if (_pvDocSite) pvRenderDocs(); } }
 
 // ── Sites CRM ────────────────────────────────────────────────────
 async function pvLoadSites() {
@@ -75,31 +78,32 @@ function pvRenderSites() {
   const rows = _pvSites.filter(s => !q || (s.name + ' ' + (s.kind || '')).toLowerCase().includes(q));
   if (!rows.length) { host.innerHTML = '<div style="color:#aaa;">No sites yet — click “+ Add site”.</div>'; return; }
   host.innerHTML = rows.map(s => {
-    const tels = (s.add_tels || []).map(t => {
+    // 1) all phones first (Main + additional), then 2) the rest of the fields.
+    // The 📄 Docs link sits on the Main Tel row (hard green, no background).
+    // Render as a 2-column grid so icons line up in one column and the data in the next.
+    const docsLink = `<a style="color:#137a2b; font-weight:700; cursor:pointer; margin-left:16px;" onclick="pvOpenDocs(${s.id})">📄 Docs (${s.doc_count})</a>`;
+    const cells = [];
+    const addRow = (ic, html) => cells.push(`<span style="text-align:center;">${ic}</span><span>${html}</span>`);
+    if (s.main_tel) addRow('📞', `Main — <a href="tel:${_esc(s.main_tel)}">${_esc(s.main_tel)}</a>${docsLink}`);
+    else addRow('📄', `<a style="color:#137a2b;font-weight:700;cursor:pointer;" onclick="pvOpenDocs(${s.id})">Docs (${s.doc_count})</a>`);
+    (s.add_tels || []).forEach(t => {
       const person = _esc(t.person || ''), tel = _esc(t.tel || '');
-      return `<div style="font-size:0.78rem;color:#666;">📞 ${person ? person + ' — ' : ''}${tel}</div>`;
-    }).join('');
-    const link = (u, t) => u ? `<a href="${_esc(u)}" ${t === 'web' ? 'target="_blank"' : ''}>${_esc(u)}</a>` : '<span style="color:#bbb;">—</span>';
+      if (tel || person) addRow('📞', `${person ? person + ' — ' : ''}${tel ? `<a href="tel:${tel}">${tel}</a>` : ''}`);
+    });
+    if (s.fax)     addRow('📠', `Fax — ${_esc(s.fax)}`);
+    if (s.email)   addRow('✉', `<a href="mailto:${_esc(s.email)}">${_esc(s.email)}</a>`);
+    if (s.website) addRow('🌐', `<a href="${_esc(s.website)}" target="_blank">${_esc(s.website)}</a>`);
     return `<div class="card" style="margin-bottom:8px; padding:10px 12px;">
-      <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
-        <div style="flex:1;">
-          <div style="font-weight:600;">${s.kind ? `<span style="font-size:0.7rem;background:#eef;color:#447;padding:1px 6px;border-radius:8px;margin-right:6px;">${_esc(s.kind)}</span>` : ''}${_esc(s.name)}</div>
-          <div style="display:grid; grid-template-columns:auto 1fr; gap:2px 10px; font-size:0.8rem; color:#555; margin-top:5px;">
-            ${s.main_tel ? `<span>📞 Main</span><a href="tel:${_esc(s.main_tel)}">${_esc(s.main_tel)}</a>` : ''}
-            ${s.fax ? `<span>📠 Fax</span><span>${_esc(s.fax)}</span>` : ''}
-            ${s.email ? `<span>✉ Email</span><a href="mailto:${_esc(s.email)}">${_esc(s.email)}</a>` : ''}
-            ${s.website ? `<span>🌐 Web</span>${link(s.website, 'web')}` : ''}
-          </div>
-          ${tels}
-        </div>
-        <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-end;">
-          <button class="btn btn-sm" style="background:#2563eb;color:#fff;width:120px;" onclick="pvOpenDocs(${s.id})">📄 Docs (${s.doc_count})</button>
-          ${s.vault_item ? `<a class="btn btn-secondary btn-sm" style="width:120px;text-align:center;" href="https://192.168.1.196" target="_blank" title="Open Vaultwarden (item: ${_esc(s.vault_item)})">🔑 Vaultwarden</a>` : ''}
-          <div style="display:flex; gap:5px;">
-            <button class="btn btn-secondary btn-sm" onclick="pvEditSite(${s.id})">Edit</button>
-            <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvDeleteSite(${s.id})">Del</button>
-          </div>
-        </div>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        ${s.kind ? `<span style="font-size:0.72rem; font-weight:600; letter-spacing:.5px; text-transform:uppercase; background:#e7ecfb; color:#3a55a8; padding:3px 10px; border-radius:12px;">${_esc(s.kind)}</span>` : ''}
+        <span style="font-size:1.2rem; font-weight:700; color:#222;">${_esc(s.name)}</span>
+      </div>
+      <div style="font-size:0.95rem; color:#555; margin-top:6px; display:grid; grid-template-columns:auto 1fr; gap:5px 8px; align-items:center;">${cells.join('')}</div>
+      <div style="display:flex; gap:6px; margin-top:7px; align-items:center;">
+        ${s.vault_item ? `<a class="btn btn-secondary btn-sm" href="https://192.168.1.196" target="_blank" title="Open Vaultwarden (item: ${_esc(s.vault_item)})">🔑 Vaultwarden</a>` : ''}
+        <span style="flex:1;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="pvEditSite(${s.id})">Edit</button>
+        <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvDeleteSite(${s.id})">Del</button>
       </div>
     </div>`;
   }).join('');
