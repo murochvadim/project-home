@@ -1,6 +1,6 @@
 # Privacy Agent
 
-**Status: BUILDING (started 2026-06-13).** Phases 1–3 done: LXC + Docker + Vaultwarden live & hardened. Phases 4–7 (Cryptomator vault → Google Drive, backups, clients, integration) pending.
+**Status: BUILDING (started 2026-06-13).** Phases 1–5 done: LXC + Docker + Vaultwarden (hardened) + Cryptomator docs vault in Google Drive + LXC copy + nightly QNAP backup. Phases 6–7 (phone/laptop clients, dashboard tile) pending.
 
 ### Built so far (2026-06-13)
 - **LXC 109 `privacy`** on Proxmox host `192.168.1.101` — Debian 12.12, 2 vCPU / 2 GB / 16 GB, **static `192.168.1.196`**, privileged + `features: nesting=1,keyctl=1` (for Docker), `onboot=1`, SSH via the PVE `claude-code` key. Created with `pct create … local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst`.
@@ -9,7 +9,11 @@
   - Hardening applied: `SIGNUPS_ALLOWED=false` (locked after the 1 account `murochvadim@gmail.com` was created — register now returns 422), `ORG_CREATION_USERS=none` (orgs disabled → removes the 2026-CVE surface), **no `ADMIN_TOKEN` → `/admin` disabled**.
   - **HTTPS gotcha solved:** serving on a bare IP failed TLS (`tlsv1 alert internal error`) because clients can't send an IP as SNI → fixed with Caddy global `default_sni 192.168.1.196`.
   - **Caddy internal root CA** at `/opt/privacy/caddy-data/caddy/pki/authorities/local/root.crt` (copied to the Windows host `C:\Users\muroc\caddy-root-CA.crt`) — **install on each device** to trust the cert.
-- **User TODO:** in the web vault set **Settings → Security → Keys → KDF = Argon2id** (offsite-blob brute-force hardening). Data volume `/opt/privacy/vw-data` (NOT in git — contains the vault DB).
+- **User DONE:** KDF = **Argon2id** (64 MB/3/4, verified in DB); Caddy root CA installed in the laptop's Trusted Root (HTTPS lock clean). Data volume `/opt/privacy/vw-data` (NOT in git — vault DB).
+- **Cryptomator docs vault (Phase 4, 2026-06-13):** vault created by the user on the laptop at **`G:\My Drive\Privacy`** (named "Privacy") via the Cryptomator desktop app (v1.19.2) + WinFsp. Encrypted (client-side AES-256); Google Drive desktop syncs the ciphertext to the cloud + everywhere. Vault password is the user's alone (stored in Vaultwarden, never with the assistant) — separate from the Vaultwarden master password. To use: Cryptomator → Unlock → mounts a drive → drop files in.
+- **Read-only Drive access (Phase 4c):** `rclone` remote `gdrive` with **`scope = drive.readonly`** (OAuth token obtained via `rclone authorize` on the laptop, browser consent). Token copied to **LXC 109** (`/root/.config/rclone/rclone.conf`) AND **LXC 104**. Read-only = the servers can pull the vault but can NEVER modify/delete anything in the user's Drive. LXC 109 holds a manual ciphertext copy at `/opt/privacy/vault-copy/Privacy`.
+- **Nightly QNAP backup (Phase 5):** `scripts/privacy-vault-backup.sh` → `/opt/privacy-vault-backup.sh` on **LXC 104** (per the timers-on-104 rule). `rclone sync gdrive:Privacy → /mnt/qnap-claude/Privacy_Vault`, cron **`15 3 * * *`**, log `/var/log/privacy-vault-backup.log`. Ciphertext only (no vault password). **3 copies of the encrypted vault:** Google Drive (primary/offsite/view-anywhere) + LXC 109 (manual snapshot) + QNAP (nightly automated). Verified: backup ran, copy landed on QNAP.
+- **Pending (Phases 6–7):** install Bitwarden + Cryptomator + Caddy root CA on the **phone** (and Bitwarden extension on the laptop); optional Project Privacy dashboard tile.
 
 ---
 

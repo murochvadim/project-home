@@ -329,9 +329,11 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
   */5 * * * * /opt/backup-script.sh >> /var/log/backup-script.log 2>&1
   */5 * * * * /usr/bin/python3 /opt/group_health_watchdog.py >> /var/log/group-health.log 2>&1
   */5 * * * * /usr/bin/python3 /opt/geo_trip_janitor.py >> /var/log/geo-trip-janitor.log 2>&1
+  15 3 * * * /opt/privacy-vault-backup.sh >> /var/log/privacy-vault-backup.log 2>&1
   # netbird watchdog (also */5)
   # systemd service: owntracks-ingest.service  (long-running MQTT daemon, /opt/owntracks_ingest.py)
   ```
+  - `privacy-vault-backup.sh` (repo: `scripts/privacy-vault-backup.sh`) — nightly `rclone sync gdrive:Privacy → /mnt/qnap-claude/Privacy_Vault` (read-only Drive token; ciphertext-only Cryptomator vault). See [PRIVACY/CLAUDE.md](PRIVACY/CLAUDE.md).
 - **Mounts**: `/mnt/qnap-claude` (QNAP Claude_Data), `/mnt/qnap-windows` (QNAP Windows_Data) — pre-mounted CIFS, always available
 - **DB tables**: `backup_storages`, `backup_jobs`, `backup_log`, `system_alerts` (watchdog writes here) on LXC 102
 - **Backup Logic**: reads jobs from DB → SSH-checks laptop reachability → scp source → QNAP mount → logs result → rotates old copies
