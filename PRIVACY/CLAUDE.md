@@ -41,6 +41,20 @@ A dedicated, private LXC to: (1) **store documents that can only be opened with 
 
 Component notes: Vaultwarden vault = client-side E2E (server never holds the key); Cryptomator = client-side AES-256, Cure53-audited. Metadata caveats: Vaultwarden DB leaks account email/timestamps/counts (contents encrypted); Cryptomator leaks file sizes/count/mtimes (names + content encrypted). Both acceptable for this use. **Pre-build TODO:** verify current Vaultwarden/Cryptomator CVEs + audit status before deploying (knowledge has a cutoff; do a quick web check at build time).
 
+## CVE / security web-check (done 2026-06-13)
+Web-checked current CVEs/audit status before committing to the build. **Verdict: design unchanged — Vaultwarden + Cryptomator remains sound for a single-user, LAN-only, patched setup.** Findings:
+
+- **Vaultwarden — 3 recent CVEs, all about MULTI-USER ORGS / the admin panel, all patched. None break single-user vault crypto.**
+  - `CVE-2026-43912` cross-organization data access → fixed in **1.35.5**
+  - `CVE-2026-27802` privilege escalation (bulk permission update) → fixed in **1.35.4**
+  - `CVE-2026-26012` org cipher auth bypass → fixed in **1.35.3**
+  - earlier 2025 advisories: CSRF + **RCE in the admin panel** + priv-esc.
+  - **→ Firm build requirements (added by this check):** deploy **Vaultwarden ≥ 1.35.5**, run **single-user (no organizations)**, **lock down `/admin`** (strong `ADMIN_TOKEN` or disable the admin panel), keep patched. The E2E vault is not affected by any of these.
+- **Cryptomator — clean.** Cure53-audited (crypto "exceptional robustness", no break). Only minor advisories: a low-severity Mar-2026 issue (two ciphertext files could be swapped) + a 2025 MSI-installer local priv-esc. No serious CVE. Verdict stays: solid.
+- **Argon2id KDF** — Bitwarden supports it (OWASP-recommended). At build time set concrete params (OWASP baseline ≥ 19 MiB / 2 iters / 1 parallelism, raised higher since our encrypted blobs go offsite to Drive/QNAP → offline brute-force is the real threat); bump memory in ~100 MB steps and test on all devices.
+
+Sources: [Vaultwarden advisories](https://github.com/dani-garcia/vaultwarden/security/advisories), [Cryptomator security](https://github.com/cryptomator/cryptomator/security), [Cryptomator audit](https://community.cryptomator.org/t/has-there-been-a-security-review-audit-of-cryptomator/44), [Bitwarden KDF](https://bitwarden.com/help/kdf-algorithms/). Re-check at actual build time if much later than 2026-06-13.
+
 ## Build plan (phases — pending approval, one at a time)
 1. **Provision the LXC** — Proxmox host `pct create`; Debian 12; 2 vCPU / 2 GB RAM / 16 GB disk (more if many docs); static IP.
 2. **Vaultwarden** — Docker compose (`vaultwarden/server`), persistent data volume, **signups disabled after account created**, HTTPS via Caddy / internal cert.
