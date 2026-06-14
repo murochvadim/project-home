@@ -20,6 +20,8 @@
 
 **Tab: Sites** — a CRM of services/accounts (bank, insurance, gov…). Each site: kind / name / Main Tel / **Additional phones** (list of `{tel, person}`, editable) / fax / email / website / optional **Vault item** (powers a **🔑 Vaultwarden** link that opens `https://192.168.1.196`) / notes. Add/edit (modal) + delete. Stored plaintext (LAN-only, like `medical_contacts`). Also a **📅 Next appointment** (date + HH + MM 24h inputs + reason; `next_appointment_at` TIMESTAMPTZ + `next_appointment_note`) and a **🔔 Reminder** (standalone text; `reminder_text`) — same pattern as Medical Contacts: red appointment mini-card (turns muted + "past" pill once elapsed) + blue reminder mini-card on the site card; date+HH+MM combine to a UTC ISO client-side (`_pvPartsToISO`).
 
+**Documents card launchers** (Sites tab top row, since 2026-06-14) — `pvRenderLockState()` renders, to the right of the lock action button (Set password / Unlock / Lock), two same-size `btn-sm` launchers: green **🔑 Vaultwarden** → `https://192.168.1.196` and dark (`#222`, the card name color) **📁 Google Drive** → `https://drive.google.com/drive/u/0/my-drive`. Plain `window.open` links — no vault access (password CRUD stays in the native Bitwarden clients by design).
+
 **Per-site 📄 Docs window** — each site holds documents, each **🔒 encrypted OR 🔓 plain** (user chooses per doc at add time). Add / open / rename / delete; PDFs+images preview in a new tab, others download.
 
 **Encryption — server is BLIND, all client-side in `js/privacy.js`:**

@@ -58,10 +58,13 @@ function pvRenderLockState() {
   const el = document.getElementById('pv-lock-state');
   if (!el) return;
   const btn = (label, fn, blue) => `<button class="btn btn-sm ${blue ? '' : 'btn-secondary'}" style="${blue ? 'background:#2563eb;color:#fff;' : ''}margin-left:6px;" onclick="${fn}">${label}</button>`;
-  if (!_pvCrypto || !_pvCrypto.setup) { el.innerHTML = '🔓 no Documents password yet' + btn('Set password', 'pvHeaderSet()', true); return; }
-  el.innerHTML = _pvKey
+  // Green Vaultwarden + orange Google Drive launchers, same btn-sm size, right of the action button.
+  const vw = `<button class="btn btn-sm" style="background:#3a7d44;color:#fff;margin-left:6px;" onclick="window.open('https://192.168.1.196','_blank')">🔑 Vaultwarden</button>`;
+  const gd = `<button class="btn btn-sm" style="background:#222;color:#fff;margin-left:6px;" onclick="window.open('https://drive.google.com/drive/u/0/my-drive','_blank')">📁 Google Drive</button>`;
+  if (!_pvCrypto || !_pvCrypto.setup) { el.innerHTML = '🔓 no Documents password yet' + btn('Set password', 'pvHeaderSet()', true) + vw + gd; return; }
+  el.innerHTML = (_pvKey
     ? '🔓 Docs unlocked' + btn('Lock', 'pvLock()')
-    : '🔒 Docs locked' + btn('Unlock', 'pvHeaderUnlock()', true);
+    : '🔒 Docs locked' + btn('Unlock', 'pvHeaderUnlock()', true)) + vw + gd;
 }
 function pvLock() { _pvKey = null; pvRenderLockState(); if (_pvDocSite) pvRenderDocs(); }
 async function pvHeaderSet() { if (await pvPromptPassword('setup')) { pvRenderLockState(); if (_pvDocSite) pvRenderDocs(); } }
