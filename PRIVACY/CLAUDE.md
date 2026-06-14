@@ -29,6 +29,12 @@
 - Plain docs: stored as-is with plaintext name + mime.
 - **Storage:** file bytes on **QNAP** `\\192.168.1.155\Claude_Data\Privacy_Site_Docs\` (ciphertext for encrypted, as-is for plain); **DELETE tunnels via LXC 104 SSH** (same QNAP-ACL reason as Medical Documents). 25 MB cap (30 MB multer headroom). Verified end-to-end 2026-06-13.
 
+**Tab: Doc Create** (since 2026-06-14) — generate a document from a **template ("kind")**, sign it, and export or save it. Logic in `js/privacy-doccreate.js` (`pvdc*`); all client-side, no new backend endpoint (save reuses the Sites docs upload). Vendored libs in `public/vendor/doccreate/`: `html2pdf.bundle.min.js` (HTML→PDF), `signature_pad.umd.min.js` (hand-drawn signature, v4 — `addEventListener('endStroke')`), `html-docx.js` (HTML→DOCX, `window.htmlDocx.asBlob`).
+- **Templates** — `PVDC_TEMPLATES` map; each entry = `{label, fields[], title, fileName(d), html(d, sigHtml)}`. Add a template by adding one entry + an `<option>` in the kind `<select>`. First template **`bank_transfer`** = Hebrew **בקשה לביצוע העברה בנקאית** (RTL form: date / requester name / ID / beneficiary / target bank / branch / account / amount + amount-in-words / purpose) rendered as a styled RTL document with a fields table.
+- **Visual e-signature** (NOT cryptographic PKI) — a dashed **חתימה אלקטרונית / ELECTRONIC SIGNATURE** box: requester name in a script font + "נחתם דיגיטלית ע"י" + ID + timestamp (`DD/MM/YYYY HH:MM IDT`) + **מאושר / CONFIRMED**, matching the user's example. Plus an **optional hand-drawn signature** (`signature_pad` canvas → PNG dataURL embedded below the box). Live preview updates on every field/stroke change.
+- **Export** — format radio **PDF** (`html2pdf().…outputPdf('blob')`) or **Google Doc (DOCX)** (`html-docx-js`, opens in Google Docs/Word). **⬇ Download** the blob, OR **💾 Save to site** — pick one of the Privacy Sites + 🔒 Encrypt checkbox; encrypted path reuses privacy.js `pvEnsureUnlocked` / `_pvEncBytes` / `_pvEncStr` / `_pvKey` and POSTs ciphertext to `/api/privacy/sites/:id/docs` (same contract as a Sites-tab upload), so generated docs land in the chosen site's 📄 Docs window encrypted or plain.
+- `js/privacy.js` `showTab()` calls `pvdcOnShow()` on the Doc Create tab (renders the form, inits the sig pad, fills the site dropdown from the global `_pvSites`). privacy.js must load BEFORE privacy-doccreate.js (shared global lexical scope; both are classic scripts).
+
 ---
 
 **Original plan below (design rationale + remaining phases).**

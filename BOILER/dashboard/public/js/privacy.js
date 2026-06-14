@@ -46,6 +46,7 @@ function showTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
+  if (name === 'doccreate' && typeof pvdcOnShow === 'function') pvdcOnShow();
 }
 async function pvRefresh() { await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); }
 window.addEventListener('DOMContentLoaded', pvRefresh);
