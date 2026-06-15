@@ -2114,7 +2114,30 @@
     if (el) { el.textContent = text; el.style.color = color; }
   }
 
+  // Keep the Stop/Start button visual + status badge matched to _paused. Called
+  // every poll AND on the paused early-return, so the state reliably survives
+  // page navigation (with the persisted _paused) without relying on the one-shot
+  // restore in wireButtons.
+  function syncPausedUI() {
+    setStatus(_paused ? '⏸ paused' : '● live', _paused ? '#888' : '#3a7d44');
+    const sb = document.getElementById('cs-events-stop');
+    const tb = document.getElementById('cs-events-start');
+    if (sb && tb) {
+      sb.style.display = _paused ? 'none' : '';
+      tb.style.display = _paused ? '' : 'none';
+    }
+  }
+
   async function poll() {
+    // Skip all work unless the simulator is the active, visible tab — switching
+    // to another Main Agent tab or backgrounding the browser does no network/DB.
+    const _tab = document.getElementById('tab-corridor-sim');
+    if (!_tab || !_tab.classList.contains('active') || document.hidden) return;
+    // "Stop update" FREEZES THE WHOLE VIEW — events feed AND the device-state
+    // cards (renderLiveState) AND the FR picker — and stops polling entirely.
+    // Previously only the events feed was gated by _paused, so the device cards
+    // kept refreshing every second after Stop ("it still updates itself").
+    if (_paused) { syncPausedUI(); return; }
     try {
       const r = await fetch('/api/corridor-sim/state');
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -2122,7 +2145,7 @@
       renderLiveState(s);
       const frUsers = s.fr && s.fr.board && s.fr.board.last_status && s.fr.board.last_status.users;
       renderFrUserPicker(frUsers);
-      if (!_paused && Array.isArray(s.events)) {
+      if (Array.isArray(s.events)) {
         const newKey = s.events.length ? `${s.events[0].ts}|${s.events[0].topic}` : '';
         const oldKey = _events.length  ? `${_events[0].ts}|${_events[0].topic}` : '';
         if (newKey !== oldKey) {
@@ -2130,7 +2153,7 @@
           renderEvents(_events);
         }
       }
-      setStatus(_paused ? '⏸ paused' : '● live', _paused ? '#888' : '#3a7d44');
+      syncPausedUI();
     } catch (e) {
       setStatus('✗ ' + e.message, '#c0392b');
     }
