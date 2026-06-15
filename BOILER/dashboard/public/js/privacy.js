@@ -135,7 +135,7 @@ function pvRenderSites() {
     if (s.fax)     addRow('📠', `Fax — ${_esc(s.fax)}`);
     if (s.email)   addRow('✉', `<a href="mailto:${_esc(s.email)}">${_esc(s.email)}</a>`);
     if (s.website) addRow('🌐', `<a href="${_esc(s.website)}" target="_blank">${_esc(s.website)}</a>`);
-    return `<div class="card" data-site-id="${s.id}" style="padding:10px 12px;">
+    return `<div class="card" data-site-id="${s.id}" style="padding:10px 12px; display:flex; flex-direction:column;">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
         <div style="min-width:0;">
           <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -145,7 +145,6 @@ function pvRenderSites() {
           </div>
           <div style="display:flex; gap:36px; align-items:flex-start; margin-top:6px; flex-wrap:wrap;">
             <div style="font-size:0.95rem; color:#555; display:grid; grid-template-columns:auto 1fr; gap:5px 8px; align-items:center;">${cells.join('')}</div>
-            ${_pvApptReminderArea(s)}
           </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:5px; flex-shrink:0; width:132px;">
@@ -157,8 +156,19 @@ function pvRenderSites() {
           </div>
         </div>
       </div>
+      <div style="flex:1; display:flex; align-items:center; justify-content:center; margin-top:8px;">${_pvApptReminderArea(s)}</div>
     </div>`;
   }).join('') + '</div>';
+  // Align the vertically-centred appointment rows between the two cards in each
+  // grid row: equalise their top-section height so the space below (where the
+  // appointment centres) matches, putting both appointments on the same level.
+  const _cards = [...host.querySelectorAll('[data-site-id]')];
+  for (let i = 0; i < _cards.length; i += 2) {
+    const tops = _cards.slice(i, i + 2).map(c => c.firstElementChild);
+    tops.forEach(t => { t.style.minHeight = ''; });
+    const mx = Math.max(...tops.map(t => t.offsetHeight));
+    tops.forEach(t => { t.style.minHeight = mx + 'px'; });
+  }
   if (!q) pvWireSiteDrag(host);   // drag-reorder only on the full (unfiltered) list
 }
 function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -228,12 +238,20 @@ function _pvPartsToISO(date, hourStr, minStr) {
 function pvClearAppt() { ['pv-f-appt-date', 'pv-f-appt-hour', 'pv-f-appt-min', 'pv-f-appt-note'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; }); }
 function pvClearReminder() { const e = document.getElementById('pv-f-reminder'); if (e) e.value = ''; }
 
-// Up to two nested cards on the site: red appointment (date+reason, "past" badge
-// once elapsed) + blue reminder (standalone note).
+// The appointment is ALWAYS centred in the card (the centre column of a 3-col
+// grid); the 🔔 reminder, when present, sits immediately to its LEFT (left column,
+// right-aligned), and the empty right column is a balancing spacer so the
+// appointment stays centred whether or not a reminder exists. If only a reminder
+// exists, it stays in the left column (left of centre). The wrapper in
+// pvRenderSites centres this block vertically in the middle of the card.
 function _pvApptReminderArea(s) {
   const appt = _pvApptCard(s), rem = _pvReminderCard(s);
   if (!appt && !rem) return '';
-  return `<div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">${appt}${rem}</div>`;
+  return `<div style="display:grid; grid-template-columns:minmax(0,1fr) 200px minmax(0,1fr); align-items:stretch; gap:8px; width:100%;">
+    <div style="display:flex; justify-content:flex-end; align-items:stretch; min-width:0;">${rem}</div>
+    <div style="display:flex; align-items:stretch;">${appt}</div>
+    <div></div>
+  </div>`;
 }
 // Pick the color band for an appointment date. Card text is always black (set in
 // _pvApptCard); a band only carries fill (bg), border (bC == bg = "no frame"),
@@ -260,13 +278,13 @@ function _pvApptCard(s) {
   const c = _pvApptBand(d);
   const badge = c.past ? `<span style="margin-left:6px; padding:1px 8px; background:#6b7280; color:#fff; border-radius:10px; font-size:0.7rem; font-weight:600;">past</span>` : '';
   const note = s.next_appointment_note ? `<div style="margin-top:1px; font-size:0.82rem; color:#000; font-style:italic; line-height:1.2;">${_esc(s.next_appointment_note)}</div>` : '';
-  return `<div style="width:240px; padding:5px 14px; background:${c.bg}; border:1.5px solid ${c.bC}; border-radius:8px; text-align:center; line-height:1.25;">
+  return `<div style="width:200px; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; padding:5px 14px; background:${c.bg}; border:1.5px solid ${c.bC}; border-radius:8px; text-align:center; line-height:1.25;">
     <div style="font-size:0.72rem; color:#000; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">📅 Next appointment${badge}</div>
     <div style="font-size:0.94rem; font-weight:700; color:#000;">${_esc(when)}</div>${note}</div>`;
 }
 function _pvReminderCard(s) {
   if (!s.reminder_text) return '';
-  return `<div style="width:240px; padding:5px 14px; background:#eef5ff; border:1.5px solid #eef5ff; border-radius:8px; text-align:center; line-height:1.25;">
+  return `<div style="width:200px; max-width:100%; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; padding:5px 14px; background:#eef5ff; border:1.5px solid #eef5ff; border-radius:8px; text-align:center; line-height:1.25;">
     <div style="font-size:0.72rem; color:#1e40af; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">🔔 Reminder</div>
     <div style="font-size:0.92rem; font-weight:600; color:#1e3a8a;">${_esc(s.reminder_text)}</div></div>`;
 }
