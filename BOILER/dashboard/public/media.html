@@ -113,7 +113,15 @@
               <select id="tv-source-select" onchange="cmd('tv','source',this.value)" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;"><option>—</option></select>
             </div>
           </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Laptop</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <button id="cast-tv85-btn" class="btn btn-sm" style="background:#2563eb; color:#fff; white-space:nowrap;" onclick="connectLaptopTv85()">🖥 Connect Laptop to tv85</button>
+            </div>
+          </div>
         </div>
+        <div id="cast-tv85-status" style="font-size:0.8rem; color:#888; margin-top:10px; min-height:1.1em;"></div>
       </div>
 
       <div class="card" style="flex:1; min-width:320px;">
@@ -821,6 +829,6 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=114"></script>
+<script src="js/media.js?v=116"></script>
 </body>
 </html>

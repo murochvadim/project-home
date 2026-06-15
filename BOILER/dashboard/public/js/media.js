@@ -139,6 +139,28 @@ function pollState(times, interval = 2000) {
   setTimeout(() => { refreshState(); pollState(times - 1, interval); }, interval);
 }
 
+// Trigger the laptop -> TV85 screen mirror. Hits a LOCAL endpoint on the
+// dashboard host (not MEDIA_API) which spawns PowerShell to open the Cast panel
+// and click the TV. The TV may still show an "Allow" prompt to accept once.
+async function connectLaptopTv85() {
+  const btn = document.getElementById('cast-tv85-btn');
+  const st = document.getElementById('cast-tv85-status');
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Opening…'; }
+  if (st) { st.style.color = '#555'; st.textContent = 'Opening the Cast panel on screen…'; }
+  try {
+    const r = await fetch('/api/cast/connect-tv85', { method: 'POST' });
+    const j = await r.json();
+    if (st) { st.style.color = j.ok ? '#2e7d32' : '#c0392b'; st.textContent = j.message || (j.ok ? 'Cast panel opened.' : 'Could not open the Cast panel.'); }
+    showFeedback(j.ok ? '✓ Cast panel opened — pick Samsung 85 + accept on TV' : '✗ Cast: ' + (j.message || 'failed'), !!j.ok);
+  } catch (e) {
+    if (st) { st.style.color = '#c0392b'; st.textContent = 'Error: ' + e.message; }
+    showFeedback('✗ Cast error: ' + e.message, false);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+}
+
 function toggleMute(entity) {
   const muted = entity === 'tv' ? _tvMuted : entity === 'tv_guy' ? _tvgMuted : entity === 'tv_bed' ? _tvbMuted : _sbMuted;
   cmd(entity, 'mute', !muted);

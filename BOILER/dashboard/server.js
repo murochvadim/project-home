@@ -103,6 +103,9 @@ require('./routes-media-cd')(app, callHA);
 // plain). Own module; file bytes on QNAP, server stays blind to plaintext.
 require('./routes-privacy')(app, db);
 
+// Cast laptop screen -> TV (Windows-host action; spawns PowerShell on this host).
+require('./routes-cast')(app);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes
