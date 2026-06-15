@@ -65,3 +65,7 @@ ON CONFLICT (table_name) DO NOTHING;
 ALTER TABLE privacy_sites ADD COLUMN IF NOT EXISTS next_appointment_at   TIMESTAMPTZ;
 ALTER TABLE privacy_sites ADD COLUMN IF NOT EXISTS next_appointment_note TEXT;
 ALTER TABLE privacy_sites ADD COLUMN IF NOT EXISTS reminder_text         TEXT;
+
+-- Manual drag-to-reorder of site cards (added 2026-06-15). NULL = never dragged
+-- → falls back to kind/name ordering (NULLS LAST). Set by POST /api/privacy/sites/reorder.
+ALTER TABLE privacy_sites ADD COLUMN IF NOT EXISTS sort_order INTEGER;

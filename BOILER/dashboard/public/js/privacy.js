@@ -95,10 +95,11 @@ function pvRenderSites() {
     if (s.fax)     addRow('📠', `Fax — ${_esc(s.fax)}`);
     if (s.email)   addRow('✉', `<a href="mailto:${_esc(s.email)}">${_esc(s.email)}</a>`);
     if (s.website) addRow('🌐', `<a href="${_esc(s.website)}" target="_blank">${_esc(s.website)}</a>`);
-    return `<div class="card" style="padding:10px 12px;">
+    return `<div class="card" data-site-id="${s.id}" style="padding:10px 12px;">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
         <div style="min-width:0;">
           <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <span style="cursor:grab; color:#bbb; user-select:none; font-size:1.05rem; line-height:1;" title="Drag to reorder" data-pv-drag-handle="1" draggable="true">⋮⋮</span>
             ${s.kind ? `<span style="font-size:0.72rem; font-weight:600; letter-spacing:.5px; text-transform:uppercase; background:#e7ecfb; color:#3a55a8; padding:3px 10px; border-radius:12px;">${_esc(s.kind)}</span>` : ''}
             <span style="font-size:1.2rem; font-weight:700; color:#222;">${_esc(s.name)}</span>
           </div>
@@ -118,8 +119,52 @@ function pvRenderSites() {
       </div>
     </div>`;
   }).join('') + '</div>';
+  if (!q) pvWireSiteDrag(host);   // drag-reorder only on the full (unfiltered) list
 }
 function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// Drag-to-reorder site cards by the ⋮⋮ handle (mirrors power.js mdWireDragReorder,
+// adapted for cards). On drop, POST the new order → sort_order, then reload.
+let _pvDragId = null;
+function pvWireSiteDrag(host) {
+  const cards = Array.from(host.querySelectorAll('[data-site-id]'));
+  for (const card of cards) {
+    const handle = card.querySelector('[data-pv-drag-handle]');
+    if (handle) {
+      handle.addEventListener('dragstart', (e) => {
+        _pvDragId = card.dataset.siteId;
+        card.style.opacity = '0.4';
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', _pvDragId); } catch (_) {}
+      });
+      handle.addEventListener('dragend', () => { card.style.opacity = ''; _pvDragId = null; });
+    }
+    card.addEventListener('dragover', (e) => {
+      if (!_pvDragId || card.dataset.siteId === _pvDragId) return;
+      e.preventDefault();
+      card.style.outline = '2px dashed #3a55a8';
+    });
+    card.addEventListener('dragleave', () => { card.style.outline = ''; });
+    card.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      card.style.outline = '';
+      if (!_pvDragId || card.dataset.siteId === _pvDragId) return;
+      const targetId = card.dataset.siteId;
+      const order = cards.map(c => c.dataset.siteId);
+      const from = order.indexOf(_pvDragId);
+      if (from >= 0) order.splice(from, 1);
+      order.splice(order.indexOf(targetId), 0, _pvDragId);
+      try {
+        const r = await fetch('/api/privacy/sites/reorder', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order: order.map(Number) }),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('Reorder failed: ' + (d.error || r.statusText)); }
+      } catch (err) { alert('Reorder failed: ' + (err.message || err)); }
+      await pvLoadSites();   // re-render in the server-confirmed order
+    });
+  }
+}
 
 // ── Appointment + reminder (mirrors the Medical Contacts pattern) ────────────
 // Split a TIMESTAMPTZ ISO into date / hour / minute for the 3 inputs

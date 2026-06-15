@@ -66,8 +66,21 @@ module.exports = function (app, db) {
                s.website, s.vault_item, s.notes,
                s.next_appointment_at, s.next_appointment_note, s.reminder_text,
                (SELECT COUNT(*) FROM privacy_site_docs d WHERE d.site_id = s.id) AS doc_count
-          FROM privacy_sites s ORDER BY s.kind NULLS LAST, s.name`);
+          FROM privacy_sites s
+         ORDER BY s.sort_order ASC NULLS LAST, s.kind NULLS LAST, s.name`);
       res.json(r.rows);
+    } catch (e) { _err(res, e); }
+  });
+
+  // Drag-to-reorder: persist the new card order (sort_order = position).
+  app.post('/api/privacy/sites/reorder', async (req, res) => {
+    try {
+      const order = (req.body && req.body.order) || [];
+      if (!Array.isArray(order) || !order.length) return res.status(400).json({ error: 'order array required' });
+      for (let i = 0; i < order.length; i++) {
+        await db.query('UPDATE privacy_sites SET sort_order = $1 WHERE id = $2', [i, parseInt(order[i])]);
+      }
+      res.json({ ok: true });
     } catch (e) { _err(res, e); }
   });
 
