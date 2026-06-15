@@ -260,7 +260,7 @@ function _pvApptReminderArea(s) {
 function _pvApptBand(d) {
   if (isNaN(d)) return { bg: '#f9fafb', bC: '#d1d5db', past: false };   // invalid date
   const k = _pvApptColors;
-  const RED = { bg: '#fee2e2', bC: '#fee2e2' };
+  const RED = { bg: '#fecaca', bC: '#fecaca' };
   const days = (d.getTime() - Date.now()) / 86400000;   // days until (negative = past)
   if (days < 0) {   // past the appointment day
     if (-days <= k.grey_days) return { ...RED, past: true };               // still red for grey_days after
