@@ -2018,7 +2018,7 @@ async function runHealthChecks() {
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
-    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result,
+    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
@@ -2075,6 +2075,7 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.188', 22),    // LXC 106 — Voice
     tcpCheck('192.168.1.189', 22),    // LXC 107 — MQTT
     tcpCheck('192.168.1.195', 22),    // LXC 108 — NetBird gateway
+    tcpCheck('192.168.1.196', 22),    // LXC 109 — Privacy
   ]);
 
   const r = {};
@@ -2091,6 +2092,7 @@ async function runHealthChecks() {
   r.lxc106 = { ok: lxc106Result.ok };
   r.lxc107 = { ok: lxc107Result.ok };
   r.lxc108 = { ok: lxc108Result.ok };
+  r.lxc109 = { ok: lxc109Result.ok };
   // Server
   r.pm2 = pm2Result;
   // Services — boiler_agent status from orchestrator's system_alerts

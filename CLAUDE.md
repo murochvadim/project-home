@@ -442,7 +442,7 @@ Each project has its own CLAUDE.md with full details:
 ### Project Health Page (sidebar: General → Project Health)
 - **System Status card**: live status of all services; fetched from `/api/health/status`; displayed in a 4-column grid:
   - All checks are performed **by the dashboard directly** (not by the orchestrator). Orchestrator contributes only via `system_alerts` table entries.
-  - **Infrastructure** (direct checks): `postgres` — DB query; `homeassistant` — HA API; `vm101`/`lxc100`–`lxc106` — TCP port 22 reachability; `ups` — latest row from `ups_status` (DB query). `ok` requires status ∈ {`ONLINE`, `ONLINE SLAVE`} AND `age_sec ≤ 180` (catches both `COMMLOST` and a stalled polling daemon). `svc-ups` cell on the page is clickable → opens UPS tab. Counted by the sidebar Status badge alongside the other infra checks (added 2026-04-29).
+  - **Infrastructure** (direct checks): `postgres` — DB query; `homeassistant` — HA API; `vm101`/`lxc100`–`lxc109` — TCP port 22 reachability (107 MQTT, 108 NetBird, 109 Privacy added later — shown on the System Status card; note the sidebar Status **badge** only counts vm101 + lxc100–106, so 107/108/109 are display-only there); `ups` — latest row from `ups_status` (DB query). `ok` requires status ∈ {`ONLINE`, `ONLINE SLAVE`} AND `age_sec ≤ 180` (catches both `COMMLOST` and a stalled polling daemon). `svc-ups` cell on the page is clickable → opens UPS tab. Counted by the sidebar Status badge alongside the other infra checks (added 2026-04-29).
   - **Server**: `pm2` — all pm2 processes online
   - **Services**:
     - `boiler_agent` — boiler service on LXC 103 (via `system_alerts`: red if active `service_down`/`service_ssh_failed`)
