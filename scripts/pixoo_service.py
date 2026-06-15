@@ -712,6 +712,101 @@ class PixooService:
         except Exception:
             log.exception("raw push re-render failed")
 
+    def _render_scroll_animation(self, items, pixels, image_data, _from_ticker=False):
+        """Render scroll-flagged text as a LOOPING GIF: the text is baked at a
+        shifting x across N frames and sent via SendHttpGif, so the device loops
+        it = continuous scroll. Static items + background (incl. an animated GIF
+        bg) are baked into every frame, so scroll works over animations too.
+        Returns the first frame (PIL image) for the dashboard preview, or None.
+        Self-contained: callers branch here when any item has item['scroll']."""
+        import requests as _req
+        from PIL import Image as PILImage
+
+        scroll_items = [it for it in items if it.get('scroll')]
+        static_items = [it for it in items if not it.get('scroll')]
+        if not scroll_items:
+            return None
+
+        def _text_px(it):
+            # Overestimate text width (px). Harmless: just more off-screen travel.
+            return max(8, len(str(it.get('t', ''))) * 6)
+
+        cycle = max(_text_px(it) + 64 for it in scroll_items)  # off-right → off-left
+        MAX_FRAMES = 60
+        steppx = max(1, -(-cycle // MAX_FRAMES))   # ceil(cycle / MAX_FRAMES)
+        frames = max(2, -(-cycle // steppx))       # ceil(cycle / steppx)
+        pic_speed = max(10, int(min(it.get('speed', 40) for it in scroll_items)))
+
+        # Background frames: animated GIF → its frames; static image → one frame.
+        bg_frames, static_bg = None, None
+        if image_data and ',' in image_data:
+            try:
+                bimg = PILImage.open(io.BytesIO(base64.b64decode(image_data.split(',')[1])))
+                if getattr(bimg, 'n_frames', 1) > 1:
+                    bg_frames = []
+                    for fi in range(bimg.n_frames):
+                        bimg.seek(fi)
+                        bg_frames.append(bimg.convert('RGB').resize((64, 64)))
+                else:
+                    static_bg = bimg.convert('RGB').resize((64, 64))
+            except Exception:
+                log.warning("scroll: bg image decode failed")
+
+        if not _from_ticker:
+            try:
+                self.pixoo.set_channel(4)
+                _req.post(f'http://{PIXOO_IP}:80/post', json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+                time.sleep(0.3)
+            except Exception:
+                pass
+        else:
+            try:
+                _req.post(f'http://{PIXOO_IP}:80/post', json={'Command': 'Draw/ResetHttpGifId'}, timeout=3)
+            except Exception:
+                pass
+
+        preview = None
+        for f in range(frames):
+            self.pixoo.clear()
+            if bg_frames:
+                self.pixoo.draw_image(bg_frames[f % len(bg_frames)])
+            elif static_bg is not None:
+                self.pixoo.draw_image(static_bg)
+            for pkey, pc in (pixels or {}).items():
+                try:
+                    ppx, ppy = pkey.split(',')
+                    self.pixoo.draw_pixel_at_location_rgb(
+                        int(ppx), int(ppy), pc.get('r', 255), pc.get('g', 255), pc.get('b', 255))
+                except Exception:
+                    pass
+            for it in static_items:
+                self.pixoo.draw_text(str(it.get('t', '')),
+                                     (it.get('x', 0), it.get('y', 0)),
+                                     (it.get('r', 255), it.get('g', 255), it.get('b', 255)))
+            offset = f * steppx
+            for it in scroll_items:
+                if it.get('dir'):                 # right
+                    sx = -_text_px(it) + offset
+                else:                             # left
+                    sx = 64 - offset
+                self.pixoo.draw_text(str(it.get('t', '')),
+                                     (int(sx), it.get('y', 0)),
+                                     (it.get('r', 255), it.get('g', 255), it.get('b', 255)))
+            fb64 = base64.b64encode(bytearray(self.pixoo._Pixoo__buffer)).decode()
+            if f == 0:
+                try:
+                    preview = PILImage.frombytes('RGB', (64, 64), bytes(bytearray(self.pixoo._Pixoo__buffer)))
+                except Exception:
+                    pass
+            _req.post(f'http://{PIXOO_IP}:80/post', json={
+                'Command': 'Draw/SendHttpGif',
+                'PicNum': frames, 'PicWidth': 64, 'PicOffset': f,
+                'PicID': 1, 'PicSpeed': pic_speed, 'PicData': fb64,
+            }, timeout=10)
+        log.info("scroll: pushed %d-frame marquee (cycle=%dpx step=%d speed=%dms)",
+                 frames, cycle, steppx, pic_speed)
+        return preview
+
     def _render_preset(self, preset_name, vars_dict=None, _from_ticker=False):
         """Load a preset by name, replace {{var}} placeholders, render to device.
 
@@ -772,6 +867,38 @@ class PixooService:
         # token is gone and we can't detect it any more.
         items_pre_subst = [dict(it) for it in items]
         has_live = self._substitute_live_tokens(items, vars_dict)
+
+        # Scroll items → render as a looping marquee GIF and we're done. Keeps
+        # the normal static/animated render path below untouched for everything
+        # else; the marquee method handles its own channel/canvas setup.
+        if any(it.get('scroll') for it in items):
+            preview_frame = self._render_scroll_animation(items, pixels, image_data, _from_ticker=_from_ticker)
+            self._paused = True
+            self._screen_items = items
+            self._publish_screen_info('preset:' + preset_name)
+            if preview_frame is not None:
+                try:
+                    _buf = io.BytesIO(); preview_frame.save(_buf, format='PNG')
+                    _pb64 = 'data:image/png;base64,' + base64.b64encode(_buf.getvalue()).decode()
+                    self._ensure_db()
+                    if self.db:
+                        with self.db.cursor() as _c:
+                            _c.execute(
+                                "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                "VALUES ('_pixoo_preview', %s::jsonb, NOW()) "
+                                "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                                (json.dumps(_pb64), json.dumps(_pb64)))
+                except Exception:
+                    log.warning("scroll: preview save failed")
+            if not _from_ticker:
+                log.info("Pushed scrolling preset '%s'", preset_name)
+                if has_live:
+                    self._start_ticker(
+                        lambda: self._render_preset(preset_name, vars_dict, _from_ticker=True),
+                        self._pick_ticker_cadence(items_pre_subst, vars_dict))
+                else:
+                    self._stop_ticker()
+            return
 
         # Stop any running sequence/GIF, then render.
         # SKIP this block on ticker re-renders — the 300 ms sleep + channel
@@ -1099,6 +1226,33 @@ class PixooService:
                                     int(px), int(py), c.get('r', 255), c.get('g', 255), c.get('b', 255))
                             except Exception:
                                 pass
+
+                        # Scroll items → looping marquee GIF (editor live Push).
+                        if any(it.get('scroll') for it in items):
+                            _pf = svc._render_scroll_animation(items, body.get('pixels', {}) or {}, image, _from_ticker=False)
+                            svc._paused = True
+                            svc._screen_items = items
+                            svc._publish_screen_info('custom')
+                            if _pf is not None:
+                                try:
+                                    _b = io.BytesIO(); _pf.save(_b, format='PNG')
+                                    _p64 = 'data:image/png;base64,' + base64.b64encode(_b.getvalue()).decode()
+                                    svc._ensure_db()
+                                    if svc.db:
+                                        with svc.db.cursor() as _c:
+                                            _c.execute(
+                                                "INSERT INTO rule_engine_state (key, value, updated_at) "
+                                                "VALUES ('_pixoo_preview', %s::jsonb, NOW()) "
+                                                "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                                                (json.dumps(_p64), json.dumps(_p64)))
+                                except Exception:
+                                    log.warning("scroll: preview save failed")
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'application/json')
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.end_headers()
+                            self.wfile.write(b'{"ok":true}')
+                            return
 
                         # Draw text items
                         for item in items:

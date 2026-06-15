@@ -139,6 +139,16 @@
               <input type="number" id="pixoo-ed-y" min="0" max="63" value="0" style="width:40px;padding:3px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
               <button class="btn btn-secondary btn-sm" onclick="pixooAddText()" style="font-size:0.72rem;">Add</button>
             </div>
+            <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+              <label style="font-size:0.72rem;color:#555;display:flex;align-items:center;gap:3px;cursor:pointer;"><input type="checkbox" id="pixoo-ed-scroll" onchange="pixooToggleScrollControls()"> ↔ Scroll</label>
+              <span id="pixoo-scroll-controls" style="display:none;gap:4px;align-items:center;">
+                <select id="pixoo-ed-scroll-dir" style="font-size:0.72rem;padding:2px;border:1px solid #d0cbc4;border-radius:4px;"><option value="0">← left</option><option value="1">right →</option></select>
+                <span style="font-size:0.72rem;color:#888;">spd:</span>
+                <input type="number" id="pixoo-ed-scroll-speed" min="1" max="200" value="40" title="ms per step — smaller = faster" style="width:42px;padding:3px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
+                <span style="font-size:0.72rem;color:#888;">font:</span>
+                <input type="number" id="pixoo-ed-scroll-font" min="0" max="7" value="2" title="Pixoo firmware font 0-7" style="width:38px;padding:3px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.78rem;">
+              </span>
+            </div>
             <div id="pixoo-ed-items" style="font-size:0.68rem;color:#888;margin-bottom:4px;max-height:50px;overflow-y:auto;"></div>
             <div id="pixoo-defaults-section" style="display:none;border-top:1px dashed #e0dcd6;padding-top:6px;margin-top:6px;">
               <div style="font-size:0.72rem;font-weight:600;color:#888;margin-bottom:3px;">DEFAULT VALUES</div>
@@ -209,7 +219,7 @@
 
 </main>
 
-<script src="js/corridor.js?v=7"></script>
+<script src="js/corridor.js?v=9"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
 </body>
 </html>

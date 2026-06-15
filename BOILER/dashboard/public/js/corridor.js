@@ -397,8 +397,44 @@ function pixooAddText() {
   const r = parseInt(hex.substring(1, 3), 16);
   const g = parseInt(hex.substring(3, 5), 16);
   const b = parseInt(hex.substring(5, 7), 16);
-  _pixooEditorItems.push({ t: text, x, y, r, g, b });
+  const item = { t: text, x, y, r, g, b };
+  if (document.getElementById('pixoo-ed-scroll') && document.getElementById('pixoo-ed-scroll').checked) {
+    item.scroll = true;
+    item.dir = parseInt(document.getElementById('pixoo-ed-scroll-dir').value) || 0;   // 0=left, 1=right
+    item.speed = parseInt(document.getElementById('pixoo-ed-scroll-speed').value) || 40; // ms/step
+    item.font = parseInt(document.getElementById('pixoo-ed-scroll-font').value) || 0;  // firmware font 0-7
+  }
+  _pixooEditorItems.push(item);
   document.getElementById('pixoo-ed-text').value = '';
+  pixooRedrawEditor();
+  pixooRenderItemsList();
+}
+// Show/hide the scroll dir/speed/font controls with the ↔ Scroll checkbox.
+function pixooToggleScrollControls() {
+  const on = document.getElementById('pixoo-ed-scroll').checked;
+  document.getElementById('pixoo-scroll-controls').style.display = on ? 'inline-flex' : 'none';
+}
+// Click an item in the list → load it (incl. scroll settings) back into the
+// controls and remove it; editing + Add re-inserts the updated version.
+function pixooEditItem(i) {
+  const it = _pixooEditorItems[i];
+  if (!it) return;
+  document.getElementById('pixoo-ed-text').value = it.t || '';
+  document.getElementById('pixoo-ed-x').value = it.x || 0;
+  document.getElementById('pixoo-ed-y').value = it.y || 0;
+  document.getElementById('pixoo-ed-color').value =
+    '#' + [it.r, it.g, it.b].map(v => ((v | 0) & 255).toString(16).padStart(2, '0')).join('');
+  const sc = document.getElementById('pixoo-ed-scroll');
+  if (sc) {
+    sc.checked = !!it.scroll;
+    pixooToggleScrollControls();
+    if (it.scroll) {
+      document.getElementById('pixoo-ed-scroll-dir').value = it.dir || 0;
+      document.getElementById('pixoo-ed-scroll-speed').value = it.speed || 40;
+      document.getElementById('pixoo-ed-scroll-font').value = it.font || 0;
+    }
+  }
+  _pixooEditorItems.splice(i, 1);
   pixooRedrawEditor();
   pixooRenderItemsList();
 }
@@ -409,7 +445,8 @@ function pixooRenderItemsList() {
   if (_pixooEditorItems.length === 0) { el.innerHTML = ''; pixooRenderDefaults(); return; }
   el.innerHTML = _pixooEditorItems.map((it, i) =>
     `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">` +
-    `<span style="color:rgb(${it.r},${it.g},${it.b});">"${it.t}"</span>` +
+    `<span onclick="pixooEditItem(${i})" title="click to edit" style="cursor:pointer;color:rgb(${it.r},${it.g},${it.b});">"${it.t}"</span>` +
+    (it.scroll ? `<span title="scrolling ${it.dir ? 'right' : 'left'}, spd ${it.speed}, font ${it.font}" style="color:#2980b9;">↔</span>` : '') +
     `<span>@ ${it.x},${it.y}</span>` +
     `<button onclick="pixooRemoveItem(${i})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.75rem;padding:0;">&#10005;</button>` +
     `</div>`
