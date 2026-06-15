@@ -735,7 +735,9 @@ class PixooService:
         MAX_FRAMES = 60
         steppx = max(1, -(-cycle // MAX_FRAMES))   # ceil(cycle / MAX_FRAMES)
         frames = max(2, -(-cycle // steppx))       # ceil(cycle / steppx)
-        pic_speed = max(10, int(min(it.get('speed', 40) for it in scroll_items)))
+        # speed is a 0-20 level (0=slow, 20=fast) → per-frame display ms.
+        _lvl = max(0, min(20, max(int(it.get('speed', 6) or 0) for it in scroll_items)))
+        pic_speed = max(20, 300 - _lvl * 14)   # level 0 → 300 ms/frame, 20 → 20 ms/frame
 
         # Background frames: animated GIF → its frames; static image → one frame.
         bg_frames, static_bg = None, None

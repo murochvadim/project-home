@@ -401,7 +401,8 @@ function pixooAddText() {
   if (document.getElementById('pixoo-ed-scroll') && document.getElementById('pixoo-ed-scroll').checked) {
     item.scroll = true;
     item.dir = parseInt(document.getElementById('pixoo-ed-scroll-dir').value) || 0;   // 0=left, 1=right
-    item.speed = parseInt(document.getElementById('pixoo-ed-scroll-speed').value) || 40; // ms/step
+    const _sp = parseInt(document.getElementById('pixoo-ed-scroll-speed').value);
+    item.speed = isNaN(_sp) ? 6 : Math.max(0, Math.min(20, _sp));                     // 0=slow .. 20=fast
     item.font = parseInt(document.getElementById('pixoo-ed-scroll-font').value) || 0;  // firmware font 0-7
   }
   _pixooEditorItems.push(item);
@@ -430,7 +431,7 @@ function pixooEditItem(i) {
     pixooToggleScrollControls();
     if (it.scroll) {
       document.getElementById('pixoo-ed-scroll-dir').value = it.dir || 0;
-      document.getElementById('pixoo-ed-scroll-speed').value = it.speed || 40;
+      document.getElementById('pixoo-ed-scroll-speed').value = (it.speed == null ? 6 : it.speed);
       document.getElementById('pixoo-ed-scroll-font').value = it.font || 0;
     }
   }
