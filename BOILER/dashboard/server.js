@@ -2266,7 +2266,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'power_consumption', 'power_devices', 'power_bills', 'water_bills',
       'netbird_peers_local', 'netbird_tenant_settings', 'gateway_peer_transitions',
       'device_locations', 'phone_trips',
-      'medical_test_results',
+      'medical_contacts', 'medical_documents', 'medical_test_results',
       'cellular_antennas',
       'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto',
     ];
@@ -2300,6 +2300,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       gateway_peer_transitions: 'ts',
       device_locations: 'ts',
       phone_trips: 'started_at',
+      medical_contacts: 'created_at', medical_documents: 'uploaded_at',
       medical_test_results: 'tested_at',
       cellular_antennas: 'last_ingest',
       privacy_sites: 'updated_at', privacy_site_docs: 'created_at', privacy_doc_crypto: 'created_at',
