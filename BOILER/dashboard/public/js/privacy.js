@@ -11,6 +11,12 @@ let _pvSites = [];
 let _pvCrypto = null;        // {setup, salt, verifier, verifier_iv, kdf_iters}
 let _pvKey = null;           // unlocked AES-GCM CryptoKey (session only), or null
 let _pvDocSite = null;       // site whose Docs modal is open
+// Appointment card color bands (Settings tab). red_days = days right before the
+// appointment (red); yellow_days = days before red (yellow); grey_days = days
+// AFTER the appointment that it STAYS RED, before turning grey forever. GREEN =
+// anything further out in the future (auto, no limit). Stored in
+// dashboard_settings key 'privacy.settings'.
+let _pvApptColors = { red_days: 3, yellow_days: 7, grey_days: 7 };
 
 // ── base64 <-> bytes ─────────────────────────────────────────────
 function _b64(buf) { let s = ''; const b = new Uint8Array(buf); for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); }
@@ -47,8 +53,42 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
   if (name === 'doccreate' && typeof pvdcOnShow === 'function') pvdcOnShow();
+  if (name === 'settings') _pvFillSettingsForm();
 }
-async function pvRefresh() { await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); }
+async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); }
+
+// Appointment color-band widths, stored as dashboard_settings key 'privacy.settings'.
+const _PV_BAND_KEYS = ['yellow_days', 'red_days', 'grey_days'];
+function _pvFillSettingsForm() {
+  _PV_BAND_KEYS.forEach(k => { const i = document.getElementById('pv-set-' + k); if (i) i.value = _pvApptColors[k]; });
+}
+async function pvLoadSettings() {
+  try {
+    const r = await fetch('/api/dashboard-settings/privacy.settings');
+    if (!r.ok) return;
+    const v = (await r.json() || {}).value || {};
+    _PV_BAND_KEYS.forEach(k => { const n = parseInt(v[k], 10); if (Number.isFinite(n) && n >= 0) _pvApptColors[k] = n; });
+  } catch (e) { /* keep defaults */ }
+}
+async function pvSaveSettings() {
+  const st = document.getElementById('pv-set-status');
+  const out = {};
+  for (const k of _PV_BAND_KEYS) {
+    const n = parseInt(document.getElementById('pv-set-' + k).value, 10);
+    if (!Number.isFinite(n) || n < 0 || n > 3650) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Each value must be a number 0–3650.'; } return; }
+    out[k] = n;
+  }
+  try {
+    const r = await fetch('/api/dashboard-settings/privacy.settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: out }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _pvApptColors = out;
+    if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; }
+    pvRenderSites();   // re-color appointment cards with the new bands
+  } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
+}
 window.addEventListener('DOMContentLoaded', pvRefresh);
 
 async function pvLoadCrypto() {
@@ -195,22 +235,38 @@ function _pvApptReminderArea(s) {
   if (!appt && !rem) return '';
   return `<div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">${appt}${rem}</div>`;
 }
+// Pick the color band for an appointment date. Card text is always black (set in
+// _pvApptCard); a band only carries fill (bg), border (bC == bg = "no frame"),
+// and the past flag. Red spans the days just before the appointment AND the
+// grey_days just after it; then grey forever. Future beyond yellow → green.
+function _pvApptBand(d) {
+  if (isNaN(d)) return { bg: '#f9fafb', bC: '#d1d5db', past: false };   // invalid date
+  const k = _pvApptColors;
+  const RED = { bg: '#fee2e2', bC: '#fee2e2' };
+  const days = (d.getTime() - Date.now()) / 86400000;   // days until (negative = past)
+  if (days < 0) {   // past the appointment day
+    if (-days <= k.grey_days) return { ...RED, past: true };               // still red for grey_days after
+    return { bg: '#f3f4f6', bC: '#f3f4f6', past: true };                   // grey — forever after that
+  }
+  if (days <= k.red_days)                  return { ...RED, past: false };                            // red — days before
+  if (days <= k.red_days + k.yellow_days)  return { bg: '#fef9c3', bC: '#fef9c3', past: false };      // yellow — before red
+  return { bg: '#f0fdf4', bC: '#f0fdf4', past: false };                                               // green — anything further out
+}
 function _pvApptCard(s) {
   if (!s.next_appointment_at) return '';
   const d = new Date(s.next_appointment_at);
   const when = isNaN(d) ? s.next_appointment_at
     : d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  const past = !isNaN(d) && d.getTime() < Date.now();
-  const bC = past ? '#d4a3a3' : '#e74c3c', bg = past ? '#fdf4f4' : '#fef2f2', tC = past ? '#a35858' : '#c0392b', dC = past ? '#8e3e3e' : '#a82a1f';
-  const badge = past ? '<span style="margin-left:6px; padding:1px 8px; background:#a35858; color:#fff; border-radius:10px; font-size:0.7rem; font-weight:600;">past</span>' : '';
-  const note = s.next_appointment_note ? `<div style="margin-top:1px; font-size:0.82rem; color:${dC}; font-style:italic; line-height:1.2;">${_esc(s.next_appointment_note)}</div>` : '';
-  return `<div style="width:240px; padding:5px 14px; background:${bg}; border:1.5px solid ${bC}; border-radius:8px; text-align:center; line-height:1.25;">
-    <div style="font-size:0.72rem; color:${tC}; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">📅 Next appointment${badge}</div>
-    <div style="font-size:0.94rem; font-weight:700; color:${dC};">${_esc(when)}</div>${note}</div>`;
+  const c = _pvApptBand(d);
+  const badge = c.past ? `<span style="margin-left:6px; padding:1px 8px; background:#6b7280; color:#fff; border-radius:10px; font-size:0.7rem; font-weight:600;">past</span>` : '';
+  const note = s.next_appointment_note ? `<div style="margin-top:1px; font-size:0.82rem; color:#000; font-style:italic; line-height:1.2;">${_esc(s.next_appointment_note)}</div>` : '';
+  return `<div style="width:240px; padding:5px 14px; background:${c.bg}; border:1.5px solid ${c.bC}; border-radius:8px; text-align:center; line-height:1.25;">
+    <div style="font-size:0.72rem; color:#000; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">📅 Next appointment${badge}</div>
+    <div style="font-size:0.94rem; font-weight:700; color:#000;">${_esc(when)}</div>${note}</div>`;
 }
 function _pvReminderCard(s) {
   if (!s.reminder_text) return '';
-  return `<div style="width:240px; padding:5px 14px; background:#eef5ff; border:1.5px solid #3b82f6; border-radius:8px; text-align:center; line-height:1.25;">
+  return `<div style="width:240px; padding:5px 14px; background:#eef5ff; border:1.5px solid #eef5ff; border-radius:8px; text-align:center; line-height:1.25;">
     <div style="font-size:0.72rem; color:#1e40af; font-weight:600; text-transform:uppercase; letter-spacing:0.4px;">🔔 Reminder</div>
     <div style="font-size:0.92rem; font-weight:600; color:#1e3a8a;">${_esc(s.reminder_text)}</div></div>`;
 }
