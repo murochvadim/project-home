@@ -178,7 +178,13 @@ async def media_state(_req):
         'tvGuy':   tv_guy_data,
         'tvBed':   tv_bed_data,
         'soundbar': (lambda st, sw, pl: {
-            'power':           mp_power(pl, sw, idle_is_on=False),  # idle ≠ on: cast endpoint sits at idle in standby; trust switch.samsung_soundbar
+            # Power: trust switch.samsung_soundbar ONLY. Verified 2026-06-16 it
+            # flips off->on and on->off in real time. The cast media_player
+            # (samsung_soundbar_2) freezes at 'paused'/'idle' for days and falsely
+            # reads "on" forever (mp_power treated 'paused' as on). Do NOT use the
+            # cast endpoint for power. (The fresh SmartThings media_player.samsung_
+            # soundbar agrees with the switch if a fallback is ever needed.)
+            'power':           'on' if (sw or {}).get('state') == 'on' else 'off',
             'volume':          round((pl or {}).get('attributes', {}).get('volume_level', 0) * 100) if (pl or {}).get('attributes', {}).get('volume_level') is not None else st['volume'],
             'muted':           (pl or {}).get('attributes', {}).get('is_volume_muted', st['muted']),
             'input':           st['input'],
