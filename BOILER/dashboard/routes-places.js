@@ -17,7 +17,7 @@ module.exports = function (app, db) {
                 lat, lon, visited_at, end_at, rating, notes
            FROM visited_places
           WHERE lat IS NOT NULL AND lon IS NOT NULL
-          ORDER BY visited_at NULLS LAST, id`);
+          ORDER BY visited_at DESC NULLS LAST, id DESC`);
       res.json(r.rows);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

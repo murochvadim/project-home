@@ -89,6 +89,7 @@ function pvPlacesRender() {
         <span style="width:10px; height:10px; border-radius:50%; background:${_pvpColor(p.source)}; flex-shrink:0;"></span>
         <span style="flex:1; min-width:0;"><b>${_esc(p.place_name)}</b>${loc ? ' <span style="color:#888;">— ' + _esc(loc) + '</span>' : ''}</span>
         <span style="color:#888; font-size:0.8rem; white-space:nowrap;">${_esc(when)}</span>
+        <button class="btn btn-secondary btn-sm" onclick="pvPlaceEdit(${p.id})">Edit</button>
         <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvPlaceDelete(${p.id})">Del</button>
       </div>`;
     }).join('');
@@ -181,6 +182,52 @@ async function pvPlaceAdd() {
     await pvPlacesLoad();
     if (_pvMap) _pvMap.setView([latlng.lat, latlng.lon], 6);
   } catch (e) { _pvpStatus('Save failed: ' + e.message, '#c0392b'); }
+}
+
+// ISO timestamp -> 'YYYY-MM-DD' (local components) for the date input.
+function _pvpIsoToDateInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// Edit a list row in a modal (PATCH /api/places/:id). Location is not edited here
+// (move = delete + re-add); name/city/country/date/kind/notes are.
+function pvPlaceEdit(id) {
+  const p = _pvPlaces.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('pvp-edit-id').value = p.id;
+  document.getElementById('pvp-edit-name').value = p.place_name || '';
+  document.getElementById('pvp-edit-city').value = p.city || '';
+  document.getElementById('pvp-edit-country').value = p.country || '';
+  document.getElementById('pvp-edit-date').value = _pvpIsoToDateInput(p.visited_at);
+  document.getElementById('pvp-edit-kind').value = p.kind || 'visit';
+  document.getElementById('pvp-edit-notes').value = p.notes || '';
+  document.getElementById('pvp-edit-status').textContent = '';
+  document.getElementById('pvp-edit-modal').style.display = 'flex';
+}
+function pvPlaceEditCancel() { document.getElementById('pvp-edit-modal').style.display = 'none'; }
+async function pvPlaceEditSave() {
+  const id = document.getElementById('pvp-edit-id').value;
+  const st = document.getElementById('pvp-edit-status');
+  const name = _pvpVal('pvp-edit-name');
+  if (!name) { if (st) st.textContent = 'Place name is required.'; return; }
+  const date = _pvpVal('pvp-edit-date');
+  const body = {
+    place_name: name,
+    city: _pvpVal('pvp-edit-city'),
+    country: _pvpVal('pvp-edit-country'),
+    kind: _pvpVal('pvp-edit-kind'),
+    notes: _pvpVal('pvp-edit-notes'),
+    visited_at: date ? new Date(date + 'T12:00:00').toISOString() : null,
+  };
+  try {
+    const r = await fetch('/api/places/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error((await r.json()).error || 'save failed');
+    pvPlaceEditCancel();
+    await pvPlacesLoad();
+  } catch (e) { if (st) st.textContent = 'Save failed: ' + e.message; }
 }
 
 async function pvPlaceDelete(id) {

@@ -327,6 +327,52 @@
   </div>
 </div>
 
+<!-- ── Place edit modal ───────────────────────────────────────── -->
+<div id="pvp-edit-modal" class="pv-modal" style="display:none;">
+  <div class="pv-modal-box" style="max-width:460px;">
+    <h2 style="margin:0 0 12px;">Edit place</h2>
+    <input type="hidden" id="pvp-edit-id">
+    <div style="display:flex; flex-direction:column; gap:8px; font-size:0.85rem;">
+      <label style="display:flex; flex-direction:column; gap:3px; color:#555;">Place name *
+        <input id="pvp-edit-name" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+      </label>
+      <div style="display:flex; gap:8px;">
+        <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">City
+          <input id="pvp-edit-city" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
+        </label>
+        <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Country
+          <input id="pvp-edit-country" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
+        </label>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Date visited
+          <input id="pvp-edit-date" type="date" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
+        </label>
+        <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Kind
+          <select id="pvp-edit-kind" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
+            <option value="stay">Stay / hotel</option>
+            <option value="visit">Visit</option>
+            <option value="dining">Dining</option>
+            <option value="review">Review</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+      </div>
+      <label style="display:flex; flex-direction:column; gap:3px; color:#555;">Notes
+        <input id="pvp-edit-notes" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+      </label>
+    </div>
+    <div id="pvp-edit-status" style="font-size:0.8rem; color:#c0392b; min-height:1.1em; margin-top:6px;"></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px;">
+      <span style="font-size:0.72rem; color:#aaa;">To move the location, delete &amp; re-add on the map.</span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="pvPlaceEditCancel()">Cancel</button>
+        <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvPlaceEditSave()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <style>
   .pv-modal { position:fixed; inset:0; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; z-index:1000; padding:16px; }
   .pv-modal-box { background:#fff; border-radius:10px; padding:18px 20px; width:100%; max-height:90vh; overflow:auto; box-shadow:0 10px 40px rgba(0,0,0,0.3); }
@@ -337,7 +383,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/privacy.js?v=63"></script>
-<script src="js/privacy-places.js?v=3"></script>
+<script src="js/privacy-places.js?v=4"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>
