@@ -91,11 +91,8 @@ async function refreshState() {
     document.getElementById('sb-volume').textContent = sb.volume != null ? sb.volume + '%' : '—';
     _sbMuted = sb.muted;
     document.getElementById('sb-mute-btn').style.opacity = _sbMuted ? '1' : '0.4';
-    const sbSrcSel = document.getElementById('sb-source-select');
-    const sbInputs = sb.supportedInputs?.length ? sb.supportedInputs : (sb.input ? [sb.input] : []);
-    sbSrcSel.innerHTML = sbInputs.map(i =>
-      `<option value="${i}"${i === sb.input ? ' selected' : ''}>${i}</option>`
-    ).join('') || `<option value="${sb.input||''}">${sb.input||'—'}</option>`;
+    // Soundbar Source picker removed 2026-06-16 — HA exposes no source_list for it
+    // (SmartThings token expired), so it was always empty.
 
     // Bedroom TV
     const tvb = s.tvBed;
