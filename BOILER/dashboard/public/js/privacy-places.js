@@ -4,8 +4,12 @@
 // _esc() from privacy.js. Backend: routes-places.js.
 
 let _pvMap = null;          // Leaflet map (inited once, when the tab is first shown)
-let _pvMapLayer = null;     // layer group holding the markers
+let _pvMapLayer = null;     // layer group holding the saved-place markers
 let _pvPlaces = [];         // last loaded rows
+let _pvPendingMarker = null; // the "where to add" pin (from Find pick or a map click)
+let _pvPendingLatLng = null; // {lat, lon} of the pending pin, or null
+let _pvPendingLabel = '';    // resolved address of the pending pin (for the address field)
+let _pvpFindResults = [];    // last 🔍 Find candidate list
 
 // Marker color by source so Google/manual/Booking are visually distinct.
 function _pvpColor(src) {
@@ -32,6 +36,7 @@ function pvPlacesOnShow() {
       maxZoom: 19, attribution: '© OpenStreetMap',
     }).addTo(_pvMap);
     _pvMapLayer = L.layerGroup().addTo(_pvMap);
+    _pvMap.on('click', e => pvPlaceSetPending(e.latlng.lat, e.latlng.lng, ''));   // click map = drop a manual pin
     setTimeout(() => { if (_pvMap) _pvMap.invalidateSize(); }, 80);   // ensure correct size after first paint
     pvPlacesLoad();
   } else {
@@ -90,39 +95,91 @@ function pvPlacesRender() {
   }
 }
 
-// Geocode a free-text query via Nominatim (OSM). Returns {lat, lon, display_name} or null.
-async function pvPlaceGeocode(q) {
+// Geocode via Nominatim (OSM). Returns up to `limit` matches: [{lat, lon, display_name}].
+async function pvPlaceGeocodeMulti(q, limit) {
   try {
-    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q);
+    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=' + (limit || 5) + '&q=' + encodeURIComponent(q);
     const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
-    if (!r.ok) return null;
+    if (!r.ok) return [];
     const j = await r.json();
-    if (!Array.isArray(j) || !j.length) return null;
-    return { lat: parseFloat(j[0].lat), lon: parseFloat(j[0].lon), display_name: j[0].display_name };
-  } catch (e) { return null; }
+    if (!Array.isArray(j)) return [];
+    return j.map(x => ({ lat: parseFloat(x.lat), lon: parseFloat(x.lon), display_name: x.display_name }));
+  } catch (e) { return []; }
 }
 
+// Place / move the pending "where to add" pin (orange) and remember it. Called by
+// 🔍 Find (a picked candidate) AND by clicking anywhere on the map (manual).
+function pvPlaceSetPending(lat, lon, label) {
+  _pvPendingLatLng = { lat, lon };
+  _pvPendingLabel = label || '';
+  if (!_pvMap) return;
+  if (_pvPendingMarker) { _pvPendingMarker.setLatLng([lat, lon]); }
+  else {
+    _pvPendingMarker = L.circleMarker([lat, lon], { radius: 10, color: '#111', weight: 2, fillColor: '#f59e0b', fillOpacity: 0.95 })
+      .addTo(_pvMap).bindTooltip('pin to add — fill the form, then ➕ Add');
+  }
+  _pvMap.panTo([lat, lon]);
+  _pvpStatus(label ? ('📍 Pinned: ' + label) : '📍 Pin dropped on the map — fill the form, then ➕ Add.', '#b45309');
+}
+function pvPlaceClearPending() {
+  _pvPendingLatLng = null; _pvPendingLabel = '';
+  if (_pvPendingMarker && _pvMap) _pvMap.removeLayer(_pvPendingMarker);
+  _pvPendingMarker = null;
+  const c = document.getElementById('pvp-candidates'); if (c) c.innerHTML = '';
+}
+
+// 🔍 Find — geocode the form query and list candidates to pick from.
+async function pvPlaceFind() {
+  const name = _pvpVal('pvp-name'), city = _pvpVal('pvp-city'), country = _pvpVal('pvp-country');
+  const query = [name, city, country].filter(Boolean).join(', ');
+  const cand = document.getElementById('pvp-candidates');
+  if (!query) { _pvpStatus('Type a place name (and ideally city + country).', '#c0392b'); return; }
+  _pvpStatus('Searching “' + query + '”…', '#555');
+  if (cand) cand.innerHTML = '';
+  let results = await pvPlaceGeocodeMulti(query, 5);
+  if (!results.length && (city || country)) results = await pvPlaceGeocodeMulti([city, country].filter(Boolean).join(', '), 5);
+  if (!results.length) { _pvpStatus('No match — check spelling, or just click the map to drop a pin manually.', '#c0392b'); return; }
+  _pvpFindResults = results;
+  if (cand) {
+    cand.innerHTML = results.map((g, i) =>
+      `<button class="btn btn-secondary btn-sm" style="text-align:left; font-size:0.75rem; line-height:1.25; white-space:normal; height:auto; padding:4px 7px;" onclick="pvPlacePickCandidate(${i})">${_esc(g.display_name)}</button>`
+    ).join('');
+  }
+  pvPlaceSetPending(results[0].lat, results[0].lon, results[0].display_name);   // auto-pin the top match
+  _pvpStatus('Found ' + results.length + ' match(es). Top one pinned — pick another below if wrong, then ➕ Add.', '#555');
+}
+function pvPlacePickCandidate(i) {
+  const g = _pvpFindResults[i]; if (g) pvPlaceSetPending(g.lat, g.lon, g.display_name);
+}
+
+// ➕ Add — save the pending pin (from Find OR a map click) + the form fields. If
+// there's no pending pin, try a quick one-shot geocode as a convenience.
 async function pvPlaceAdd() {
   const name = _pvpVal('pvp-name'), city = _pvpVal('pvp-city'), country = _pvpVal('pvp-country');
   const date = _pvpVal('pvp-date'), kind = _pvpVal('pvp-kind'), notes = _pvpVal('pvp-notes');
   if (!name) { _pvpStatus('Enter a place name.', '#c0392b'); return; }
-  const query = [name, city, country].filter(Boolean).join(', ');
-  _pvpStatus('Locating “' + query + '”…', '#555');
-  let g = await pvPlaceGeocode(query);
-  if (!g && (city || country)) g = await pvPlaceGeocode([city, country].filter(Boolean).join(', '));
-  if (!g) { _pvpStatus('Couldn’t locate that — add or refine the city & country, then try again.', '#c0392b'); return; }
+  let latlng = _pvPendingLatLng, label = _pvPendingLabel;
+  if (!latlng) {
+    const query = [name, city, country].filter(Boolean).join(', ');
+    _pvpStatus('Locating “' + query + '”…', '#555');
+    let results = await pvPlaceGeocodeMulti(query, 1);
+    if (!results.length && (city || country)) results = await pvPlaceGeocodeMulti([city, country].filter(Boolean).join(', '), 1);
+    if (!results.length) { _pvpStatus('Locate it first: click 🔍 Find (then pick a match) or click the map to drop a pin.', '#c0392b'); return; }
+    latlng = { lat: results[0].lat, lon: results[0].lon }; label = results[0].display_name;
+  }
   const visited_at = date ? new Date(date + 'T12:00:00').toISOString() : null;
   try {
     const r = await fetch('/api/places', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ place_name: name, city, country, lat: g.lat, lon: g.lon, visited_at, kind, notes, address: g.display_name }),
+      body: JSON.stringify({ place_name: name, city, country, lat: latlng.lat, lon: latlng.lon, visited_at, kind, notes, address: label || null }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'save failed');
-    _pvpStatus('✓ Added: ' + g.display_name, '#2e7d32');
+    _pvpStatus('✓ Added “' + name + '”', '#2e7d32');
     ['pvp-name', 'pvp-city', 'pvp-country', 'pvp-date', 'pvp-notes'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    pvPlaceClearPending();
     await pvPlacesLoad();
-    if (_pvMap) _pvMap.setView([g.lat, g.lon], 6);
+    if (_pvMap) _pvMap.setView([latlng.lat, latlng.lon], 6);
   } catch (e) { _pvpStatus('Save failed: ' + e.message, '#c0392b'); }
 }
 

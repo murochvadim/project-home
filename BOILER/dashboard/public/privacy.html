@@ -168,9 +168,13 @@
           <label style="display:flex; flex-direction:column; gap:3px; color:#555;">Notes
             <input id="pvp-notes" placeholder="optional" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
           </label>
-          <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvPlaceAdd()">📍 Find &amp; add to map</button>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary btn-sm" style="flex:1;" onclick="pvPlaceFind()">🔍 Find</button>
+            <button class="btn btn-sm" style="flex:1; background:#2563eb; color:#fff;" onclick="pvPlaceAdd()">➕ Add to map</button>
+          </div>
+          <div id="pvp-candidates" style="display:flex; flex-direction:column; gap:3px;"></div>
           <div id="pvp-status" style="font-size:0.8rem; color:#888; min-height:1.1em;"></div>
-          <div style="font-size:0.74rem; color:#aaa; line-height:1.4;">The place is located automatically from name + city + country. If it can't be found, add/refine the city &amp; country and try again.</div>
+          <div style="font-size:0.74rem; color:#aaa; line-height:1.4;">Click <b>🔍 Find</b>, pick the right match (or just <b>click the map</b> to drop a pin), then <b>➕ Add</b>. Use proper spelling + the <b>Country</b> field to disambiguate — e.g. “Heraklion”, country “Greece”.</div>
         </div>
       </div>
       <div style="flex:1; min-width:380px; display:flex; flex-direction:column; gap:12px;">
@@ -333,7 +337,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/privacy.js?v=63"></script>
-<script src="js/privacy-places.js?v=2"></script>
+<script src="js/privacy-places.js?v=3"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>
