@@ -106,6 +106,9 @@ require('./routes-privacy')(app, db);
 // Cast laptop screen -> TV (Windows-host action; spawns PowerShell on this host).
 require('./routes-cast')(app);
 
+// Travel map — visited_places CRUD (Privacy > Places tab).
+require('./routes-places')(app, db);
+
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
 // silently retry "Not authorized" forever and every button click that publishes

@@ -54,6 +54,7 @@ function showTab(name, btn) {
   if (btn) btn.classList.add('active');
   if (name === 'doccreate' && typeof pvdcOnShow === 'function') pvdcOnShow();
   if (name === 'settings') _pvFillSettingsForm();
+  if (name === 'places' && typeof pvPlacesOnShow === 'function') pvPlacesOnShow();
 }
 async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); }
 
