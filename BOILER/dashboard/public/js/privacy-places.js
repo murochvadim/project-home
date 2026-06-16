@@ -32,6 +32,7 @@ function pvPlacesOnShow() {
       maxZoom: 19, attribution: '© OpenStreetMap',
     }).addTo(_pvMap);
     _pvMapLayer = L.layerGroup().addTo(_pvMap);
+    setTimeout(() => { if (_pvMap) _pvMap.invalidateSize(); }, 80);   // ensure correct size after first paint
     pvPlacesLoad();
   } else {
     setTimeout(() => _pvMap.invalidateSize(), 60);   // fix sizing after the tab becomes visible
