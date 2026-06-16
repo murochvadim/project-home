@@ -195,7 +195,7 @@ function _pvpIsoToDateInput(iso) {
 // Edit a list row in a modal (PATCH /api/places/:id). Location is not edited here
 // (move = delete + re-add); name/city/country/date/kind/notes are.
 function pvPlaceEdit(id) {
-  const p = _pvPlaces.find(x => x.id === id);
+  const p = _pvPlaces.find(x => String(x.id) === String(id));   // id is a bigint string from pg; the onclick passes a number
   if (!p) return;
   document.getElementById('pvp-edit-id').value = p.id;
   document.getElementById('pvp-edit-name').value = p.place_name || '';
@@ -231,7 +231,7 @@ async function pvPlaceEditSave() {
 }
 
 async function pvPlaceDelete(id) {
-  const p = _pvPlaces.find(x => x.id === id);
+  const p = _pvPlaces.find(x => String(x.id) === String(id));   // id is a bigint string from pg; the onclick passes a number
   if (!confirm('Delete “' + (p ? p.place_name : 'this place') + '” from the map?')) return;
   try {
     const r = await fetch('/api/places/' + id, { method: 'DELETE' });
