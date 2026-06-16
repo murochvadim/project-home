@@ -2272,6 +2272,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'medical_contacts', 'medical_documents', 'medical_test_results',
       'cellular_antennas',
       'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto',
+      'visited_places',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2307,6 +2308,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       medical_test_results: 'tested_at',
       cellular_antennas: 'last_ingest',
       privacy_sites: 'updated_at', privacy_site_docs: 'created_at', privacy_doc_crypto: 'created_at',
+      visited_places: 'visited_at',
     };
 
     const sizes = await db.query(`
