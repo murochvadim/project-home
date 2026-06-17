@@ -306,11 +306,26 @@ def evaluate(event, state):
     # awtrix / FR / pixoo chain; only the ALWAYS bucket (corridor light)
     # fires so the user has light to walk out by.
     transit_mode = state.shared.get('corridor_transit.mode', 'Corridor_Clear_Home')
-    suppress_monitoring = (transit_mode == 'Corridor_From_Home')
+    # Suppress the welcome / monitor / awtrix / FR / pixoo chain when the user
+    # is LEAVING. Two signals OR'd together:
+    #   (a) the transit classifier reports Corridor_From_Home, OR
+    #   (b) an away countdown currently owns the Pixoo — Start Away set
+    #       daily_welcome.suppress_until_ts = end_ts. This catches the common
+    #       leaving case where, at rising-edge time, the classifier is still at
+    #       Corridor_Visit_Home (it only upgrades to From_Home a few seconds
+    #       later), so without (b) the delayed FR start_recognition would fire
+    #       while walking out. The Pixoo push is already blocked by the central
+    #       countdown lock; (b) also skips the wasted FR + deferred dispatch.
+    _away_cd = state.shared.get('daily_welcome.suppress_until_ts', 0) or 0
+    try:
+        away_countdown_active = float(_away_cd) > time.time()
+    except (TypeError, ValueError):
+        away_countdown_active = False
+    suppress_monitoring = (transit_mode == 'Corridor_From_Home') or away_countdown_active
 
     log.info("Move in Corridor: rising edge — firing chain "
-             "(transit=%s, always=%d, when_home=%d, delayed=%d, cooldown=%ds, after_delay=%ds, suppress_monitoring=%s)",
-             transit_mode, len(cfg['always_cmds']), len(cfg['when_home_cmds']),
+             "(transit=%s, away_countdown=%s, always=%d, when_home=%d, delayed=%d, cooldown=%ds, after_delay=%ds, suppress_monitoring=%s)",
+             transit_mode, away_countdown_active, len(cfg['always_cmds']), len(cfg['when_home_cmds']),
              len(cfg['delayed_cmds']), cfg['cooldown_sec'], cfg['after_delay_sec'],
              suppress_monitoring)
 
