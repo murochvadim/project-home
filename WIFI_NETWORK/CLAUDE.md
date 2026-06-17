@@ -196,9 +196,34 @@ Phases 1-3 should land same evening when user is home. The rest is iterative.
 - **Bluetooth signals** — different stack, separate plan if ever needed.
 - **Wired LAN performance** — out of scope; the `net_devices` + `net_ports` ARP/SNMP scanners on LXC 104 already cover that.
 
+## Deco direct integration — pull per-client WiFi data from the mesh (TODO — NEXT SESSION)
+
+**Decision (2026-06-17):** the preferred RSSI/coverage source is the **TP-Link Deco mesh itself**, not (only) the ESP-board probes. Pull the connected-client list from the Deco via its reverse-engineered **local admin API** (the same one the Deco app + the community `ha-tplink-deco` integration use — log into the main Deco with the **Deco-app / TP-Link-ID password**, RSA+AES-encrypted requests). This covers **every WiFi client** (phones, TVs, all 12 WiFi presence sensors, ESP boards) with **no firmware edits** — far more probe points than the boards. (The WiFi presence sensors are all on WiFi at known room positions but **expose no RSSI of their own** — Tuya/HomeKit don't surface it — which is why the Deco side is the unlock.)
+
+**Mesh inventory** (from `net_devices` — 6 units in **AP mode** behind the Technicolor gateway `192.168.1.1`):
+
+| Unit | Model | IP | MAC |
+|---|---|---|---|
+| DECO Living Room | X50 | 192.168.1.117 | b4:b0:24:d8:a6:b0 |
+| DECO Entrance | X50 | 192.168.1.121 | ac:84:c6:39:8e:98 |
+| DECO Guy Room | X20 | 192.168.1.139 | 54:af:97:73:be:98 |
+| DECO Balcony | X50 | 192.168.1.168 | b4:b0:24:d8:a6:a0 |
+| DECO Hallway | X50 | 192.168.1.177 | b4:b0:24:d8:a6:a8 |
+| DECO Laundry | M5 | 192.168.1.234 | d8:07:b6:ca:61:f8 |
+
+Home SSID is **`Home`** (single SSID across all units; replaces the `Oikos Living` placeholder used elsewhere in this doc).
+
+**What the Deco client list reliably gives:** per-client **which Deco unit + which band** → delivers the **Phase-2 coverage-zone map** for the whole apartment with zero ESP work (Deco unit names already map 1:1 to rooms). **Per-client RSSI in dBm is firmware-dependent** on X50/X20/M5 — it is NOT confirmed and must be verified with a live query before relying on it.
+
+**Open items for next session:**
+1. Get the **Deco app/admin password** from the user (logging into the router — explicit credential needed).
+2. **Feasibility query** against ONE unit (the main controller in AP mode): dump the client-list JSON and check whether a signal/RSSI field is present.
+3. If RSSI is present → feeds Phase 1/3 (per-room chip + heatmap) for ALL clients. If only unit+band → still delivers Phase 2 zones for free.
+4. Implement as a **poller on an LXC** (104 timers or 103 — NOT the Windows dashboard, per the architecture rule) writing per-client `{deco_unit, band, rssi?}` to the DB; dashboard reads it.
+
 ## Status
 
-Documentation only — no code written yet. Build starts when the user is back on the home network and Phase 1 sketch edits + Deco mapping discovery are done. Related work: [XIAO_STREAMING/CLAUDE.md](../XIAO_STREAMING/CLAUDE.md) — same evening's other documentation task.
+Documentation only — no code written yet. **Next session: the Deco direct-integration feasibility test above (needs the Deco app password).** Build starts when the user is back on the home network and Phase 1 sketch edits + Deco mapping discovery are done. Related work: [XIAO_STREAMING/CLAUDE.md](../XIAO_STREAMING/CLAUDE.md) — same evening's other documentation task.
 
 ## References
 
