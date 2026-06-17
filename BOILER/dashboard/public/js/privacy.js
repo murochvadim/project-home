@@ -53,7 +53,7 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
   if (name === 'doccreate' && typeof pvdcOnShow === 'function') pvdcOnShow();
-  if (name === 'settings') _pvFillSettingsForm();
+  if (name === 'settings') { _pvFillSettingsForm(); pvLoadUsers(); }
   if (name === 'places' && typeof pvPlacesOnShow === 'function') pvPlacesOnShow();
 }
 async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); }
@@ -88,6 +88,51 @@ async function pvSaveSettings() {
     _pvApptColors = out;
     if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; }
     pvRenderSites();   // re-color appointment cards with the new bands
+  } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
+}
+
+// ── Users (Settings tab) — household members + their smartphone, like the
+// Gateway peer→user overlay. Stored in dashboard_settings key 'privacy.users' as
+// [{name, smartphone}]. Editable rows auto-save on change.
+let _pvUsers = [];
+async function pvLoadUsers() {
+  try {
+    const r = await fetch('/api/dashboard-settings/privacy.users');
+    const j = r.ok ? await r.json() : {};
+    _pvUsers = Array.isArray(j && j.value) ? j.value : [];
+  } catch (e) { _pvUsers = []; }
+  pvRenderUsers();
+}
+function pvRenderUsers() {
+  const host = document.getElementById('pv-users-list');
+  if (!host) return;
+  if (!_pvUsers.length) { host.innerHTML = '<div style="color:#aaa; font-size:0.85rem;">No users yet — click “+ Add user”.</div>'; return; }
+  const inp = 'padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:0.85rem; min-width:0;';
+  host.innerHTML = _pvUsers.map((u, i) => `
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+      <input value="${_esc(u.name || '')}" placeholder="real name" onchange="pvUserSet(${i},'name',this.value)" style="flex:1; ${inp}">
+      <span style="color:#bbb;">📱</span>
+      <input value="${_esc(u.smartphone || '')}" placeholder="smartphone (e.g. Galaxy Fold5)" onchange="pvUserSet(${i},'smartphone',this.value)" style="flex:1.3; ${inp}">
+      <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvUserDelete(${i})">✕</button>
+    </div>`).join('');
+}
+function pvUserSet(i, field, val) { if (_pvUsers[i]) { _pvUsers[i][field] = (val || '').trim(); pvSaveUsers(); } }
+function pvUserDelete(i) { _pvUsers.splice(i, 1); pvRenderUsers(); pvSaveUsers(); }
+function pvAddUser() {
+  _pvUsers.push({ name: '', smartphone: '' });
+  pvRenderUsers();
+  const ins = document.querySelectorAll('#pv-users-list input');
+  if (ins.length) ins[ins.length - 2].focus();   // focus the new row's name input
+}
+async function pvSaveUsers() {
+  const st = document.getElementById('pv-users-status');
+  const clean = _pvUsers.filter(u => (u.name || '').trim() || (u.smartphone || '').trim());
+  try {
+    const r = await fetch('/api/dashboard-settings/privacy.users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: clean }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; clearTimeout(st._t); st._t = setTimeout(() => { st.textContent = ''; }, 1500); }
   } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
 }
 window.addEventListener('DOMContentLoaded', pvRefresh);
