@@ -247,6 +247,50 @@
 
     </div><!-- /row2 -->
 
+    <!-- Row 3: Balcony 55" Neo QLED (direct Tizen WS — no HA) -->
+    <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:16px;">
+      <div class="card" style="flex:1; min-width:320px;">
+        <h2>TV-55 Balcony Neo QLED</h2>
+        <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Status</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;"><div id="tv55-status" style="font-size:2rem;">—</div></div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Power</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-success btn-sm" onclick="cmd('tv55','turn_on')">ON</button>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv55','turn_off')">OFF</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Volume</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv55','volume_down')">▼</button>
+              <span id="tv55-volume" style="font-size:1.1rem; font-weight:600; min-width:36px; text-align:center;">—</span>
+              <button class="btn btn-secondary btn-sm" onclick="cmd('tv55','volume_up')">▲</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Mute</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <button id="tv55-mute-btn" class="btn btn-secondary btn-sm" onclick="toggleMute('tv55')">🔇</button>
+            </div>
+          </div>
+          <div style="width:1px; height:50px; background:#d0cbc4; margin-top:1.3rem;"></div>
+          <div style="text-align:center;">
+            <div style="font-size:0.75rem; color:#888; height:1.4rem; display:flex; align-items:center; justify-content:center;">Source</div>
+            <div style="height:2rem; display:flex; align-items:center; justify-content:center;">
+              <select id="tv55-source-select" onchange="cmd('tv55','source',this.value)" style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.82rem;"><option>—</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /row3 -->
+
     <!-- Feedback -->
     <div id="cmd-feedback" style="margin-top:4px; padding:8px 14px; border-radius:4px; font-size:0.82rem; opacity:0; transition:opacity 0.3s;">&nbsp;</div>
 
@@ -388,6 +432,17 @@
     <div id="media-feedback" style="display:flex; align-items:center; gap:10px; padding:9px 14px; border-radius:6px; font-size:0.84rem; opacity:0; transform:translateY(-4px); transition:opacity 0.25s, transform 0.25s; pointer-events:none; margin-bottom:6px;">
       <span id="mf-icon" style="font-size:1.1rem; flex-shrink:0;"></span>
       <span id="mf-text" style="flex:1;"></span>
+    </div>
+
+    <!-- Video playback target — which TV gets ▶ TV / video playlists (audio always → soundbar) -->
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.84rem; color:#555;">
+      <span style="font-weight:600;">📺 Play video on:</span>
+      <select id="video-target-select" onchange="setVideoTarget(this.value)"
+              style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.84rem;">
+        <option value="tv">Samsung 85&quot; QLED</option>
+        <option value="tv55">Balcony 55&quot; Neo QLED</option>
+      </select>
+      <span style="color:#999; font-size:0.76rem;">(audio playlists always play on the soundbar)</span>
     </div>
 
     <!-- Playback progress bar (hidden until playing) -->
@@ -822,6 +877,6 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=117"></script>
+<script src="js/media.js?v=119"></script>
 </body>
 </html>

@@ -5,6 +5,7 @@ let _tvMuted  = false;
 let _tvgMuted = false;
 let _sbMuted  = false;
 let _tvbMuted = false;
+let _tv55Muted = false;
 
 // Bedroom CD player — fire an IR command via the HA-scene endpoint. IR is
 // one-way (no feedback), so this just flashes a short confirmation.
@@ -106,6 +107,21 @@ async function refreshState() {
       `<option value="${i}"${i === tvb.input ? ' selected' : ''}>${i}</option>`
     ).join('') || `<option value="${tvb.input||''}">${tvb.input||'—'}</option>`;
 
+    // Balcony 55" Neo QLED (via HA media_player — full state like Guy Room)
+    const tv55 = s.tv55;
+    if (tv55) {
+      const el55 = document.getElementById('tv55-status');
+      if (el55) el55.innerHTML = statusDot(tv55.power);
+      document.getElementById('tv55-volume').textContent = tv55.volume != null ? tv55.volume + '%' : '—';
+      _tv55Muted = tv55.muted;
+      document.getElementById('tv55-mute-btn').style.opacity = _tv55Muted ? '1' : '0.4';
+      const tv55SrcSel = document.getElementById('tv55-source-select');
+      const tv55Inputs = tv55.supportedInputs?.length ? tv55.supportedInputs : (tv55.input ? [tv55.input] : []);
+      tv55SrcSel.innerHTML = tv55Inputs.map(i =>
+        `<option value="${i}"${i === tv55.input ? ' selected' : ''}>${i}</option>`
+      ).join('') || `<option value="${tv55.input||''}">${tv55.input||'—'}</option>`;
+    }
+
     document.getElementById('last-refresh').textContent =
       'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
   } catch (e) {
@@ -159,7 +175,7 @@ async function connectLaptopTv85() {
 }
 
 function toggleMute(entity) {
-  const muted = entity === 'tv' ? _tvMuted : entity === 'tv_guy' ? _tvgMuted : entity === 'tv_bed' ? _tvbMuted : _sbMuted;
+  const muted = entity === 'tv' ? _tvMuted : entity === 'tv_guy' ? _tvgMuted : entity === 'tv_bed' ? _tvbMuted : entity === 'tv55' ? _tv55Muted : _sbMuted;
   cmd(entity, 'mute', !muted);
 }
 
@@ -1205,17 +1221,32 @@ function stopProgressPoll() {
   btn.style.background = '#2980b9';
 }
 
+// Which TV video plays on (Player tab selector). Persists across navigation.
+let _videoTarget = localStorage.getItem('media.videoTarget') || 'tv';
+const _TARGET_LABEL = { tv: 'Samsung 85"', tv55: 'Balcony 55"' };
+function setVideoTarget(t) {
+  _videoTarget = (t === 'tv55') ? 'tv55' : 'tv';
+  localStorage.setItem('media.videoTarget', _videoTarget);
+  showMediaFeedback(`📺 Video target: ${_TARGET_LABEL[_videoTarget]}`, true);
+}
+// Restore the selector to the saved value on load.
+(function restoreVideoTarget() {
+  const sel = document.getElementById('video-target-select');
+  if (sel) sel.value = _videoTarget;
+})();
+
 async function playOnTv(relPath) {
-  showMediaFeedback('Sending to TV…', 'loading');
+  const label = _TARGET_LABEL[_videoTarget] || 'TV';
+  showMediaFeedback(`Sending to ${label}…`, 'loading');
   try {
     const r = await fetch(`${MEDIA_API}/api/media/play`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relPath })
+      body: JSON.stringify({ relPath, target: _videoTarget })
     });
     const d = await r.json();
     if (r.status !== 202 && !r.ok) throw new Error(d.error);
-    showMediaFeedback(`▶ Playing on TV: ${d.item}`, true);
+    showMediaFeedback(`▶ Playing on ${label}: ${d.item}`, true);
     startProgressPoll(d.item);
   } catch (e) {
     showMediaFeedback('✗ ' + e.message, false);
@@ -1570,7 +1601,7 @@ async function playPlaylist(id, shuffle, repeat) {
     const r = await fetch(`${MEDIA_API}/api/playlists/${id}/play`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ shuffle: !!shuffle, repeat: !!repeat }),
+      body:    JSON.stringify({ shuffle: !!shuffle, repeat: !!repeat, target: _videoTarget }),
     });
     const data = await r.json();
     if (!r.ok || data.error) alert('Play failed: ' + (data.error || `HTTP ${r.status}`));

@@ -35,6 +35,43 @@ SAMSUNG_AV_PATH = '/upnp/control/AVTransport1'
 TV_URL          = f'http://{SAMSUNG_TV_IP}:{SAMSUNG_TV_PORT}{SAMSUNG_AV_PATH}'
 MEDIA_LXC_IP    = '192.168.1.138'
 
+# ── Video playback targets ─────────────────────────────────────────
+# More than one TV can render video. dlna_soap() and the bar controls
+# (position/pause/resume/seek/stop/show-results) resolve the AVTransport URL
+# from _active_video_target, which _wake_and_play sets at the start of every
+# play. Default 'tv' (the 85") keeps the historical single-TV path
+# BYTE-IDENTICAL until a caller explicitly selects another target — so the
+# 85" behaviour cannot regress. 'wake_entity' is the tv_control.py entity used
+# to power the TV on before streaming.
+# 'audio_sink' decides where a target's AUDIO goes:
+#   'cast' → Chromecast on the living-room soundbar (85"/living room)
+#   'dlna' → the TV's own speakers, streamed via UPnP/DLNA (Balcony — no soundbar)
+# Video audio always comes out of the TV the video plays on, so audio_sink only
+# matters for music (single tracks + playlists).
+TV_TARGETS = {
+    'tv':   {'name': 'Samsung 85" QLED',
+             'av_url': TV_URL,
+             'wake_entity': 'tv',
+             'audio_sink': 'cast'},
+    'tv55': {'name': 'Balcony 55" Neo QLED',
+             'av_url': 'http://192.168.1.194:9197/upnp/control/AVTransport1',
+             'wake_entity': 'tv55',
+             'audio_sink': 'dlna'},
+}
+_active_video_target = 'tv'
+
+def _av_url(target=None):
+    """Resolve the AVTransport control URL for a target key (or the currently
+    active one). Unknown keys fall back to the 85" so a bad value can never
+    break playback."""
+    t = target or _active_video_target
+    return TV_TARGETS.get(t, TV_TARGETS['tv'])['av_url']
+
+def _audio_sink(target=None):
+    """'cast' (soundbar) or 'dlna' (the TV's own speakers) for a target."""
+    t = target or _active_video_target
+    return TV_TARGETS.get(t, TV_TARGETS['tv']).get('audio_sink', 'cast')
+
 # Samsung 990C Soundbar — Chromecast-capable (Google Cast protocol on
 # port 8009). Used for audio playback to bypass the TV's broken UPnP music
 # app. Video still goes to the TV via UPnP (which works).
@@ -97,10 +134,10 @@ def safe_path(rel, base=MEDIA_MOUNT):
 
 
 # ── DLNA helpers ──────────────────────────────────────────────────
-def dlna_soap(action, body_xml, timeout=10):
-    """POST a SOAP body to the TV's AVTransport endpoint. Returns (ok, body)
-    so callers can detect TV-unreachable failures instead of silently
-    treating empty / 5xx responses as success."""
+def dlna_soap(action, body_xml, timeout=10, tv_url=None):
+    """POST a SOAP body to the active TV's AVTransport endpoint (or an explicit
+    tv_url). Returns (ok, body) so callers can detect TV-unreachable failures
+    instead of silently treating empty / 5xx responses as success."""
     soap = (
         '<?xml version="1.0"?>'
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
@@ -112,7 +149,7 @@ def dlna_soap(action, body_xml, timeout=10):
         f.write(soap)
     try:
         r = subprocess.run(
-            ['curl', '-sS', '--fail-with-body', '-X', 'POST', TV_URL,
+            ['curl', '-sS', '--fail-with-body', '-X', 'POST', tv_url or _av_url(),
              '-H', 'Content-Type: text/xml; charset="utf-8"',
              '-H', f'SOAPACTION: "urn:schemas-upnp-org:service:AVTransport:1#{action}"',
              '--data', f'@{tmp}'],
@@ -187,15 +224,20 @@ def _wait_for_tv_ready(max_wait_sec=15):
     return False
 
 
-def _wake_and_play(full_path, ext, title, dlna_id, stream_url=None):
+def _wake_and_play(full_path, ext, title, dlna_id, stream_url=None, target='tv'):
     import urllib.request as ureq
+    # Select the target TV for THIS play. All subsequent dlna_soap /
+    # _get_transport_state / _wait_for_tv_ready calls (and the bar controls)
+    # resolve against _active_video_target. Unknown target → 85" fallback.
+    globals()['_active_video_target'] = target if target in TV_TARGETS else 'tv'
+    wake_entity = TV_TARGETS[globals()['_active_video_target']]['wake_entity']
     my_gen = _next_play_gen()
     def _aborted():
         return not _is_play_gen_current(my_gen)
     try:
         ureq.urlopen(
             ureq.Request(f'{TV_CONTROL_URL}/media/command',
-                         data=json.dumps({'entity': 'tv', 'command': 'turn_on'}).encode(),
+                         data=json.dumps({'entity': wake_entity, 'command': 'turn_on'}).encode(),
                          headers={'Content-Type': 'application/json'}, method='POST'),
             timeout=5
         )
@@ -204,9 +246,17 @@ def _wake_and_play(full_path, ext, title, dlna_id, stream_url=None):
     # Active wait — return as soon as TV's UPnP service answers. Beats the
     # old static sleep(3) which was the main source of "plays sometimes,
     # silent sometimes" behaviour: 3 s was a lucky-guess timing.
-    ready = _wait_for_tv_ready(max_wait_sec=15)
-    if not ready:
-        log.warning(f"_wake_and_play: TV did not respond within 15s for {title!r} — sending commands anyway")
+    # 45s ceiling: a TV that was OFF needs to WoL-wake AND boot its DLNA
+    # renderer, which can take ~20-35s on a cold Samsung. The poll returns the
+    # instant UPnP answers, so this costs nothing when the TV is already on.
+    _wait_t0 = time.time()
+    ready = _wait_for_tv_ready(max_wait_sec=45)
+    if ready:
+        _waited = time.time() - _wait_t0
+        if _waited > 3:
+            log.info(f"_wake_and_play: TV became UPnP-ready after {_waited:.0f}s (cold wake) for {title!r}")
+    else:
+        log.warning(f"_wake_and_play: TV did not respond within 45s for {title!r} — sending commands anyway")
     # UPnP AVTransport state machine: Samsung rejects SetAVTransportURI /
     # Play when transport is PLAYING. Force STOPPED before loading a new
     # URI. Fail-silent — fresh boots are already STOPPED and Stop returns
@@ -1286,6 +1336,10 @@ def thumb():
 @app.route('/api/media/play', methods=['POST'])
 def play():
     rel_path = (request.json or {}).get('relPath', '').lstrip('/')
+    # Which TV to render video on (default 85"). Audio ignores this — always soundbar.
+    target = (request.json or {}).get('target', 'tv')
+    if target not in TV_TARGETS:
+        target = 'tv'
     if not rel_path:
         return jsonify({'error': 'relPath required'}), 400
     # Manual single-item play clears any active queue — user's manual
@@ -1300,8 +1354,8 @@ def play():
     ext      = Path(rel_path).suffix.lstrip('.') or 'mp4'
     basename = Path(rel_path).stem
 
-    # Audio → Cast → soundbar (TV's UPnP music app is broken for queues).
-    # Video → UPnP → TV (works fine).
+    # Audio sink depends on the target: 'cast' → soundbar, 'dlna' → the TV's
+    # own speakers. Video → UPnP → selected TV (audio rides the video stream).
     is_audio = ('.' + ext.lower()) in AUDIO_EXTS
     dlna_id = minidlna_id(full_path)
     if is_audio:
@@ -1310,12 +1364,18 @@ def play():
         else:
             rel_enc = '/'.join(_urlq(seg) for seg in rel_path.split('/'))
             url = f'http://{MEDIA_LXC_IP}:{PORT}/api/media/stream/{rel_enc}'
-        threading.Thread(target=_cast_play_url, args=(url, basename), daemon=True).start()
+        if _audio_sink(target) == 'dlna':
+            # Music plays on the TV's own speakers via UPnP (no soundbar here).
+            threading.Thread(target=_wake_and_play, args=(full_path, ext, basename, dlna_id),
+                             kwargs={'target': target, 'stream_url': url}, daemon=True).start()
+        else:
+            threading.Thread(target=_cast_play_url, args=(url, basename), daemon=True).start()
     else:
         if not dlna_id:
             return jsonify({'error': f'Not indexed by MiniDLNA: {basename}'}), 404
-        threading.Thread(target=_wake_and_play, args=(full_path, ext, basename, dlna_id), daemon=True).start()
-    return jsonify({'ok': True, 'item': basename}), 202
+        threading.Thread(target=_wake_and_play, args=(full_path, ext, basename, dlna_id),
+                         kwargs={'target': target}, daemon=True).start()
+    return jsonify({'ok': True, 'item': basename, 'target': target}), 202
 
 
 # ── POST /api/media/play-number ───────────────────────────────────
@@ -1327,6 +1387,9 @@ def play_number():
         return jsonify({'error': 'number must be an integer'}), 400
     if not num:
         return jsonify({'error': 'number required'}), 400
+    target = (request.json or {}).get('target', 'tv')
+    if target not in TV_TARGETS:
+        target = 'tv'
     if time.time() - _search_session['timestamp'] > 600:
         return jsonify({'error': 'Search session expired — search again first'}), 400
     item = next((r for r in _search_session['results'] if r.get('number') == num), None)
@@ -1351,9 +1414,14 @@ def play_number():
         else:
             rel_enc = '/'.join(_urlq(seg) for seg in rel_path.split('/'))
             url = f'http://{MEDIA_LXC_IP}:{PORT}/api/media/stream/{rel_enc}'
-        threading.Thread(target=_cast_play_url, args=(url, title), daemon=True).start()
+        if _audio_sink(target) == 'dlna':
+            threading.Thread(target=_wake_and_play, args=(full_path, ext, title, dlna_id),
+                             kwargs={'target': target, 'stream_url': url}, daemon=True).start()
+        else:
+            threading.Thread(target=_cast_play_url, args=(url, title), daemon=True).start()
     elif dlna_id:
-        threading.Thread(target=_wake_and_play, args=(full_path, ext, title, dlna_id), daemon=True).start()
+        threading.Thread(target=_wake_and_play, args=(full_path, ext, title, dlna_id),
+                         kwargs={'target': target}, daemon=True).start()
     else:
         return jsonify({'error': f'Not indexed by MiniDLNA: {title}'}), 404
     return jsonify({'ok': True, 'playing': title, 'number': num}), 202
@@ -2267,6 +2335,55 @@ def _cast_advance_queue():
     _play_queue_item_cast(next_idx)
 
 
+# ── DLNA audio queue watcher ───────────────────────────────────────
+# The Balcony TV has no Chromecast, so audio playlists on it can't rely on the
+# Cast FINISHED event to advance. This thread polls the TV's UPnP transport
+# state and advances the queue when the current track ends. It mirrors the Cast
+# listener's gate — "saw PLAYING for this idx, then it STOPPED → advance" — so a
+# brief STOPPED during track setup never triggers a false advance. One watcher
+# runs per playlist; _dlna_watch_gen invalidates an old one when a new playlist
+# starts (or the queue stops / switches to a Cast target).
+_dlna_watch_gen = 0
+
+def _start_dlna_queue_watcher():
+    global _dlna_watch_gen
+    with _queue_lock:
+        _dlna_watch_gen += 1
+        mygen = _dlna_watch_gen
+    threading.Thread(target=_dlna_queue_watch_loop, args=(mygen,), daemon=True).start()
+    log.info(f"dlna-watch: started (gen {mygen})")
+
+def _dlna_queue_watch_loop(mygen):
+    saw_playing_idx = None
+    while True:
+        time.sleep(2)
+        with _queue_lock:
+            if mygen != _dlna_watch_gen or not _play_queue:
+                log.info(f"dlna-watch: exit (gen {mygen})")
+                return
+            target = _play_queue.get('video_target', 'tv')
+            idx    = _play_queue['current_idx']
+            items  = _play_queue['items']
+        if _audio_sink(target) != 'dlna':
+            return  # queue is no longer a DLNA-audio queue
+        cur_item = items[idx] if 0 <= idx < len(items) else None
+        if not cur_item:
+            return
+        ext_dot = os.path.splitext(cur_item.get('path', ''))[1].lower()
+        if ext_dot not in AUDIO_EXTS:
+            continue  # video items advance via their own path; keep watching
+        state = _get_transport_state(tv_url=_av_url(target))  # poll THIS TV explicitly
+        if state == 'PLAYING':
+            saw_playing_idx = idx
+        elif state in ('STOPPED', 'NO_MEDIA_PRESENT') and saw_playing_idx == idx:
+            saw_playing_idx = None
+            log.info(f"dlna-watch: track {idx} ended → advancing")
+            try:
+                _cast_advance_queue()
+            except Exception:
+                log.exception('dlna-watch: advance failed')
+
+
 def _play_queue_item_cast(idx):
     """Play queue item idx through Cast (audio) or fall back to UPnP (video).
     Updates _play_queue['current_idx'] under the lock and fires _cast_play_url
@@ -2297,22 +2414,31 @@ def _play_queue_item_cast(idx):
         return _play_queue_item_cast(next_idx)
     ext_dot = os.path.splitext(path)[1].lower()
     title = item.get('title') or os.path.basename(path)
+    with _queue_lock:
+        _qtarget = (_play_queue or {}).get('video_target', 'tv')
     try:
         if ext_dot in AUDIO_EXTS:
-            # Audio → Cast → soundbar. Use MiniDLNA URL when indexed (more
-            # robust MIME / Range handling than our Flask stream).
             dlna_id = minidlna_id(path)
+            ext_bare = ext_dot.lstrip('.') or 'mp3'
             if dlna_id:
-                ext_bare = ext_dot.lstrip('.') or 'mp3'
                 url = f'http://{MEDIA_LXC_IP}:8200/MediaItems/{dlna_id}.{ext_bare}'
             else:
                 rel = path[len(MEDIA_MOUNT):].lstrip('/') if path.startswith(MEDIA_MOUNT) else path.lstrip('/')
                 rel_enc = '/'.join(_urlq(seg) for seg in rel.split('/'))
                 url = f'http://{MEDIA_LXC_IP}:{PORT}/api/media/stream/{rel_enc}'
-            _cast_play_url(url, title)
-            log.info(f"cast: playing {idx + 1}/{_total} — {title}")
+            if _audio_sink(_qtarget) == 'dlna':
+                # Music → the TV's own speakers via UPnP. The DLNA queue watcher
+                # (started in playlist_play) advances tracks since the TV has no
+                # Chromecast to fire FINISHED events.
+                threading.Thread(target=_wake_and_play, args=(path, ext_bare, title, dlna_id),
+                                 kwargs={'target': _qtarget, 'stream_url': url}, daemon=True).start()
+                log.info(f"queue: dispatched (DLNA audio → {_qtarget}) {idx + 1}/{_total} — {title}")
+            else:
+                # Audio → Cast → soundbar (native gapless queue).
+                _cast_play_url(url, title)
+                log.info(f"cast: playing {idx + 1}/{_total} — {title}")
         else:
-            # Video → existing UPnP path to TV.
+            # Video → UPnP path to the selected TV.
             dlna_id = minidlna_id(path)
             if not dlna_id:
                 log.warning(f"queue: no DLNA id for {path} — stopping queue")
@@ -2320,21 +2446,23 @@ def _play_queue_item_cast(idx):
                     globals()['_play_queue'] = None
                 return False
             ext_bare = ext_dot.lstrip('.') or 'mp4'
-            threading.Thread(target=_wake_and_play, args=(path, ext_bare, title, dlna_id), daemon=True).start()
-            log.info(f"queue: dispatched (TV) {idx + 1}/{_total} — {title}")
+            threading.Thread(target=_wake_and_play, args=(path, ext_bare, title, dlna_id),
+                             kwargs={'target': _qtarget}, daemon=True).start()
+            log.info(f"queue: dispatched (TV → {_qtarget}) {idx + 1}/{_total} — {title}")
         return True
     except Exception:
         log.exception('cast: play failed')
         return False
 
 
-def _get_transport_state():
-    """Query Samsung TV via DLNA GetTransportInfo. Returns PLAYING / STOPPED /
-    PAUSED_PLAYBACK / TRANSITIONING / NO_MEDIA_PRESENT / UNKNOWN."""
+def _get_transport_state(tv_url=None):
+    """Query a Samsung TV via DLNA GetTransportInfo. Returns PLAYING / STOPPED /
+    PAUSED_PLAYBACK / TRANSITIONING / NO_MEDIA_PRESENT / UNKNOWN. Defaults to the
+    active video target; pass tv_url to query a specific TV explicitly."""
     body = ('<u:GetTransportInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
             '<InstanceID>0</InstanceID></u:GetTransportInfo>')
     try:
-        _ok, resp = dlna_soap('GetTransportInfo', body)
+        _ok, resp = dlna_soap('GetTransportInfo', body, tv_url=tv_url)
         m = re.search(r'<CurrentTransportState>([^<]+)</CurrentTransportState>', resp or '')
         if m:
             return m.group(1).strip()
@@ -2353,6 +2481,10 @@ def playlist_play(pid):
     shuffle = bool(body.get('shuffle', False))
     repeat = bool(body.get('repeat', False))
     start_idx = int(body.get('start_idx', 0) or 0)
+    # Target TV for any VIDEO items in the playlist (audio always → soundbar).
+    video_target = body.get('target', 'tv')
+    if video_target not in TV_TARGETS:
+        video_target = 'tv'
     try:
         rows = db_query(
             "SELECT name, items FROM media_playlists WHERE id = %s",
@@ -2379,18 +2511,25 @@ def playlist_play(pid):
                 'repeat':        repeat,
                 'started_at':    time.time(),
                 'current_path':  play_items[start_idx].get('path', ''),
+                'video_target':  video_target,
             }
-        # Apply preset volume before playback starts — soundbar's Cast
-        # reference level is hot, so each playlist starts at the user's
-        # preferred level instead of whatever the last session left.
-        try:
-            preset = _get_cast_preset_volume()
-            cast = _get_cast()
-            cast.set_volume(preset)
-        except Exception:
-            log.exception('cast preset volume apply')
-        # No watcher needed — Cast's media-status listener handles
-        # end-of-track and triggers _cast_advance_queue() natively.
+        if _audio_sink(video_target) == 'dlna':
+            # Balcony: audio plays on the TV's own speakers via UPnP. The TV has
+            # no Chromecast, so a server-side watcher advances tracks. Don't
+            # touch the soundbar's Cast preset volume here.
+            _start_dlna_queue_watcher()
+        else:
+            # Apply preset volume before playback starts — soundbar's Cast
+            # reference level is hot, so each playlist starts at the user's
+            # preferred level instead of whatever the last session left.
+            try:
+                preset = _get_cast_preset_volume()
+                cast = _get_cast()
+                cast.set_volume(preset)
+            except Exception:
+                log.exception('cast preset volume apply')
+            # No watcher needed — Cast's media-status listener handles
+            # end-of-track and triggers _cast_advance_queue() natively.
         _play_queue_item_cast(start_idx)
         return jsonify({
             'ok':           True,
@@ -2429,12 +2568,45 @@ def _set_cast_preset_volume(level):
     )
 
 
+def _active_queue_target():
+    """video_target of the active queue, or None when no queue is active."""
+    with _queue_lock:
+        return _play_queue.get('video_target', 'tv') if _play_queue else None
+
+def _tv_control_state():
+    """Fetch tv_control.py's /media/state (used to read the Balcony TV volume)."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f'{TV_CONTROL_URL}/media/state', timeout=4) as r:
+            return json.loads(r.read())
+    except Exception:
+        return {}
+
+def _tv_control_cmd(entity, command, value=None):
+    """Send a command to tv_control.py (e.g. set the Balcony TV volume)."""
+    import urllib.request
+    body = {'entity': entity, 'command': command}
+    if value is not None:
+        body['value'] = value
+    try:
+        req = urllib.request.Request(f'{TV_CONTROL_URL}/media/command',
+                                     data=json.dumps(body).encode(),
+                                     headers={'Content-Type': 'application/json'}, method='POST')
+        urllib.request.urlopen(req, timeout=5)
+        return True
+    except Exception as e:
+        log.warning(f'tv_control cmd {entity}/{command} failed: {e}')
+        return False
+
+
 @app.route('/api/cast/volume', methods=['GET', 'POST'])
 def cast_volume():
-    """GET → current Cast app volume + preset (0.0-1.0).
-    POST → set Cast app volume; optionally body.save=true to persist as preset.
-    Cast volume is independent of soundbar's physical buttons — adjusting
-    here keeps the Cast session alive."""
+    """Volume for the Now-Playing strip. For a Cast (soundbar) queue this drives
+    the Cast app volume + preset. For a DLNA (Balcony TV) queue it drives the
+    TV's volume via tv_control / HA. Both use 0.0-1.0 on the wire."""
+    qt = _active_queue_target()
+    dlna = qt is not None and _audio_sink(qt) == 'dlna'
+
     if request.method == 'POST':
         body = request.get_json(silent=True) or {}
         try:
@@ -2442,6 +2614,11 @@ def cast_volume():
         except (TypeError, ValueError):
             return jsonify({'error': 'level must be a number 0..1'}), 400
         level = max(0.0, min(1.0, level))
+        if dlna:
+            # Absolute set on the Balcony TV (0..100) via HA media_player.
+            ok = _tv_control_cmd(TV_TARGETS[qt]['wake_entity'], 'volume_set', round(level * 100))
+            return (jsonify({'ok': True, 'level': level}) if ok
+                    else (jsonify({'error': 'tv volume_set failed'}), 503))
         try:
             cast = _get_cast()
             cast.set_volume(level)
@@ -2453,7 +2630,12 @@ def cast_volume():
             except Exception:
                 log.exception('preset volume save')
         return jsonify({'ok': True, 'level': level})
+
     # GET
+    if dlna:
+        vol = (_tv_control_state().get(qt) or {}).get('volume')
+        cur = (vol / 100.0) if isinstance(vol, (int, float)) else 0.0
+        return jsonify({'level': cur, 'preset': cur})
     preset = _get_cast_preset_volume()
     try:
         cast = _get_cast()
@@ -2492,15 +2674,43 @@ def queue_mode():
 
 @app.route('/api/queue/status', methods=['GET'])
 def queue_status():
+    # Snapshot queue fields under the lock, then probe the player OUTSIDE the
+    # lock (the probe does network I/O — don't hold the queue lock during it).
     with _queue_lock:
         if not _play_queue:
             return jsonify({'active': False})
-        items = _play_queue['items']
-        cur = _play_queue['current_idx']
-        cast_vol = None
-        cast_pos = None
-        cast_dur = None
-        cast_state = None
+        items   = _play_queue['items']
+        cur     = _play_queue['current_idx']
+        qtarget = _play_queue.get('video_target', 'tv')
+        playlist_id   = _play_queue['playlist_id']
+        playlist_name = _play_queue['playlist_name']
+        shuffle = _play_queue['shuffle']
+        repeat  = _play_queue['repeat']
+
+    cast_vol = cast_pos = cast_dur = cast_state = None
+    if _audio_sink(qtarget) == 'dlna':
+        # Balcony TV: position/state via UPnP, volume via tv_control / HA. We
+        # reuse the cast_* response keys so the Now-Playing strip works as-is.
+        try:
+            _okp, xml = dlna_soap('GetPositionInfo',
+                '<u:GetPositionInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+                '<InstanceID>0</InstanceID></u:GetPositionInfo>', tv_url=_av_url(qtarget))
+            def _secs(t):
+                try:
+                    p = (t or '').split(':')
+                    return int(p[0])*3600 + int(p[1])*60 + int(float(p[2])) if len(p) == 3 else 0
+                except (ValueError, IndexError):
+                    return 0
+            cast_dur = float(_secs((re.search(r'<TrackDuration[^>]*>([^<]+)<', xml) or [None, '0:00:00'])[1]))
+            cast_pos = float(_secs((re.search(r'<RelTime[^>]*>([^<]+)<', xml) or [None, '0:00:00'])[1]))
+        except Exception:
+            pass
+        st = _get_transport_state()
+        cast_state = {'PLAYING': 'PLAYING', 'PAUSED_PLAYBACK': 'PAUSED',
+                      'TRANSITIONING': 'BUFFERING'}.get(st, 'IDLE')
+        vol = (_tv_control_state().get(qtarget) or {}).get('volume')
+        cast_vol = (vol / 100.0) if isinstance(vol, (int, float)) else None
+    else:
         try:
             cast = _get_cast()
             cast_vol = float(getattr(cast.status, 'volume_level', 0.0) or 0.0)
@@ -2519,20 +2729,22 @@ def queue_status():
             cast_state = getattr(ms, 'player_state', None)
         except Exception:
             pass
-        return jsonify({
-            'active':        True,
-            'playlist_id':   _play_queue['playlist_id'],
-            'playlist_name': _play_queue['playlist_name'],
-            'current_idx':   cur,
-            'total':         len(items),
-            'current_item':  items[cur] if 0 <= cur < len(items) else None,
-            'shuffle':       _play_queue['shuffle'],
-            'cast_volume':   cast_vol,
-            'cast_position': cast_pos,
-            'cast_duration': cast_dur,
-            'cast_state':    cast_state,
-            'repeat':        _play_queue['repeat'],
-        })
+
+    return jsonify({
+        'active':        True,
+        'playlist_id':   playlist_id,
+        'playlist_name': playlist_name,
+        'current_idx':   cur,
+        'total':         len(items),
+        'current_item':  items[cur] if 0 <= cur < len(items) else None,
+        'shuffle':       shuffle,
+        'cast_volume':   cast_vol,
+        'cast_position': cast_pos,
+        'cast_duration': cast_dur,
+        'cast_state':    cast_state,
+        'target':        qtarget,
+        'repeat':        repeat,
+    })
 
 
 @app.route('/api/queue/next', methods=['POST'])
@@ -2567,8 +2779,25 @@ def queue_prev():
 
 @app.route('/api/queue/pause', methods=['POST'])
 def queue_pause():
-    """Toggle Cast pause/resume on the soundbar. Reads current Cast state
-    and flips: PLAYING → pause, PAUSED → play. No-op when idle / loading."""
+    """Toggle pause/resume. Cast (soundbar) for a Cast queue; UPnP Pause/Play
+    on the Balcony TV for a DLNA queue. PLAYING → pause, PAUSED → resume."""
+    qt = _active_queue_target()
+    if qt is not None and _audio_sink(qt) == 'dlna':
+        state = _get_transport_state()
+        try:
+            if state == 'PLAYING':
+                dlna_soap('Pause',
+                    '<u:Pause xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+                    '<InstanceID>0</InstanceID></u:Pause>', tv_url=_av_url(qt))
+                return jsonify({'ok': True, 'action': 'paused'})
+            elif state in ('PAUSED_PLAYBACK', 'PAUSED'):
+                dlna_soap('Play',
+                    '<u:Play xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+                    '<InstanceID>0</InstanceID><Speed>1</Speed></u:Play>', tv_url=_av_url(qt))
+                return jsonify({'ok': True, 'action': 'resumed'})
+            return jsonify({'ok': True, 'action': 'noop', 'state': state})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
     try:
         cast = _get_cast()
     except Exception as e:

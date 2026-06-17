@@ -14,6 +14,17 @@ APP_NAME   = 'SmartHomeDashboard'
 TOKEN_FILE = '/opt/media-agent/tv_token.txt'
 PORT       = 8765
 
+# ── Balcony 55" Neo QLED (QE55QN85DBTXSQ) — via Home Assistant media_player ─────
+# The TV is integrated in HA (Samsung TV integration), which exposes the full
+# feature set (volume_level, is_volume_muted, source ['TV','HDMI'], turn on/off,
+# volume_step, select_source — supported_features 24509). We drive it exactly
+# like TV-Guy / TV-Bed through HA services, so no Tizen WS pairing popup is
+# needed and the card gets exact volume %, mute read-back, and a source list.
+# (IP/MAC kept for reference only — control is HA-mediated.)
+TV55_IP     = '192.168.1.194'
+TV55_MAC    = '2c:99:75:44:20:fb'
+TV55_ENTITY = 'media_player.55_neo_qled_qe55qn85dbtxsq'
+
 # ── Secrets from environment ──────────────────────────────────────────────────
 HA_URL   = os.environ.get('HA_URL',   'http://192.168.1.110:8123')
 HA_TOKEN = os.environ.get('HA_TOKEN', '')
@@ -34,11 +45,11 @@ SB_PLAYER      = 'media_player.samsung_soundbar_2'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
 
-# ── 85" TV WebSocket ──────────────────────────────────────────────────────────
-def get_ws():
+# ── Samsung Tizen WebSocket (85" + Balcony 55") ────────────────────────────────
+def get_ws(host=TV_IP, token_file=TOKEN_FILE, port=TV_PORT):
     return SamsungTVWSAsyncRemote(
-        host=TV_IP, port=TV_PORT,
-        token_file=TOKEN_FILE,
+        host=host, port=port,
+        token_file=token_file,
         name=APP_NAME, timeout=5,
     )
 
@@ -132,7 +143,7 @@ def mp_power(player, fallback_switch=None, idle_is_on=True):
 # ── GET /media/state ──────────────────────────────────────────────────────────
 async def media_state(_req):
     async with aiohttp.ClientSession() as s:
-        tv_switch, tv_player, tv_st, tv_guy, sb_raw, sb_switch, sb_player, tvb_st, tvb_ha = await asyncio.gather(
+        tv_switch, tv_player, tv_st, tv_guy, sb_raw, sb_switch, sb_player, tvb_st, tvb_ha, tv55_ha = await asyncio.gather(
             ha_get(s, f'/api/states/{TV_SWITCH}'),
             ha_get(s, f'/api/states/{TV_PLAYER}'),
             st_get(s, ST_TV_ID),
@@ -142,6 +153,7 @@ async def media_state(_req):
             ha_get(s, f'/api/states/{SB_PLAYER}'),
             st_get(s, ST_TVB_ID),
             ha_get(s, f'/api/states/{TV_BED_ENTITY}'),
+            ha_get(s, f'/api/states/{TV55_ENTITY}'),
         )
 
     tv_st_p = parse_st(tv_st)
@@ -173,10 +185,20 @@ async def media_state(_req):
         'supportedInputs': (tvb_ha or {}).get('attributes', {}).get('source_list') or [],
     }
 
+    tv55_vol = (tv55_ha or {}).get('attributes', {}).get('volume_level')
+    tv55_data = {
+        'power':           'on' if (tv55_ha or {}).get('state') == 'on' else 'off',
+        'volume':          round(tv55_vol * 100) if tv55_vol is not None else None,
+        'muted':           (tv55_ha or {}).get('attributes', {}).get('is_volume_muted', False),
+        'input':           (tv55_ha or {}).get('attributes', {}).get('source'),
+        'supportedInputs': (tv55_ha or {}).get('attributes', {}).get('source_list') or [],
+    }
+
     return web.json_response({
         'tv':      tv,
         'tvGuy':   tv_guy_data,
         'tvBed':   tv_bed_data,
+        'tv55':    tv55_data,
         'soundbar': (lambda st, sw, pl: {
             # Power: trust switch.samsung_soundbar ONLY. Verified 2026-06-16 it
             # flips off->on and on->off in real time. The cast media_player
@@ -242,6 +264,25 @@ async def media_command(req):
                 elif command == 'volume_down':await ha_post(s, '/api/services/media_player/volume_down', {'entity_id': TV_BED_ENTITY})
                 elif command == 'mute':       await ha_post(s, '/api/services/media_player/volume_mute', {'entity_id': TV_BED_ENTITY, 'is_volume_muted': value})
                 elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': TV_BED_ENTITY, 'source': value})
+
+            elif entity == 'tv55':
+                # Balcony 55" Neo QLED — HA media_player (same path as TV-Guy).
+                if   command == 'turn_on':
+                    # Wake-on-LAN first so it powers on even from a FULLY-off
+                    # state (wired TV; doesn't depend on HA knowing the MAC),
+                    # then HA turn_on. Mirrors the reliable 85" power-on.
+                    try:
+                        wakeonlan.send_magic_packet(TV55_MAC, ip_address='192.168.1.255', port=9)
+                        wakeonlan.send_magic_packet(TV55_MAC, ip_address=TV55_IP, port=9)
+                    except Exception as e:
+                        log.warning(f'tv55 WoL failed: {e}')
+                    await ha_post(s, '/api/services/media_player/turn_on',  {'entity_id': TV55_ENTITY})
+                elif command == 'turn_off':   await ha_post(s, '/api/services/media_player/turn_off', {'entity_id': TV55_ENTITY})
+                elif command == 'volume_up':  await ha_post(s, '/api/services/media_player/volume_up',   {'entity_id': TV55_ENTITY})
+                elif command == 'volume_down':await ha_post(s, '/api/services/media_player/volume_down', {'entity_id': TV55_ENTITY})
+                elif command == 'volume_set': await ha_post(s, '/api/services/media_player/volume_set',  {'entity_id': TV55_ENTITY, 'volume_level': max(0.0, min(1.0, (value or 0) / 100.0))})
+                elif command == 'mute':       await ha_post(s, '/api/services/media_player/volume_mute', {'entity_id': TV55_ENTITY, 'is_volume_muted': value})
+                elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': TV55_ENTITY, 'source': value})
 
             elif entity == 'soundbar':
                 # Migrated off the expired SmartThings PAT to HA media_player
