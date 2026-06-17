@@ -434,15 +434,14 @@
       <span id="mf-text" style="flex:1;"></span>
     </div>
 
-    <!-- Video playback target — which TV gets ▶ TV / video playlists (audio always → soundbar) -->
+    <!-- Playback target — which TV gets video + audio (85"=soundbar, Balcony=its own speakers) -->
     <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.84rem; color:#555;">
-      <span style="font-weight:600;">📺 Play video on:</span>
+      <span style="font-weight:600;">📺 Play video/audio</span>
       <select id="video-target-select" onchange="setVideoTarget(this.value)"
               style="padding:4px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.84rem;">
         <option value="tv">Samsung 85&quot; QLED</option>
         <option value="tv55">Balcony 55&quot; Neo QLED</option>
       </select>
-      <span style="color:#999; font-size:0.76rem;">(audio playlists always play on the soundbar)</span>
     </div>
 
     <!-- Playback progress bar (hidden until playing) -->
