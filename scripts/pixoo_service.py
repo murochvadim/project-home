@@ -117,6 +117,16 @@ class PixooService:
         # expired — drop from 1s to 60s) happens automatically on the next
         # tick, without needing a restart or a re-push from the rule.
         self._ticker_interval = 60
+        # ── Central Pixoo lock (countdown reservation) ───────────────
+        # A preset with an active {{countdown}} reserves the WHOLE screen until
+        # the countdown expires: any external draw (rule push, dashboard push,
+        # sequence, rotation) is ignored while locked, UNLESS it carries
+        # force:true or its own active countdown. The internal ticker re-render
+        # bypasses the gate (it calls _render_preset directly, not the gated
+        # entry points), so the locked countdown keeps refreshing. Auto-expires
+        # at _lock_until; cleared by force / the 'unlock' command.
+        self._lock_until = 0.0
+        self._lock_label = None
 
     # ------------------------------------------------------------------
     # MQTT callbacks
@@ -329,8 +339,9 @@ class PixooService:
     # ------------------------------------------------------------------
     def rotate_screen(self):
         """Call the current screen render function and advance index."""
-        # Check if paused by dashboard (manual channel switch)
-        if self._paused:
+        # Check if paused by dashboard (manual channel switch) or locked by an
+        # active countdown reservation.
+        if self._paused or self._pixoo_locked():
             return
         fn = self.screens[self.current_screen]
         screen_name = fn.__name__.replace('render_', '')
@@ -374,10 +385,102 @@ class PixooService:
     # MQTT command handler (Rule Engine → Pixoo)
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Central Pixoo lock (countdown reservation)
+    # ------------------------------------------------------------------
+    def _pixoo_locked(self):
+        return time.time() < self._lock_until
+
+    def _set_lock(self, end_ts, label):
+        """Reserve the screen until end_ts (epoch). Also stop any running
+        sequence so it can't draw over the locked content."""
+        self._lock_until = float(end_ts)
+        self._lock_label = label
+        self._stop_sequence()
+        self._publish_lock_state()
+        log.info("pixoo: screen LOCKED by '%s' for %.0fs", label, end_ts - time.time())
+
+    def _clear_lock(self, why=''):
+        if self._lock_until:
+            log.info("pixoo: lock released%s", (' (' + why + ')') if why else '')
+        self._lock_until = 0.0
+        self._lock_label = None
+        self._publish_lock_state()
+
+    def _publish_lock_state(self):
+        """Mirror the lock expiry to rule_engine_state so the dashboard /
+        Corridor-Sim can show a 'Pixoo reserved' indicator."""
+        self._ensure_db()
+        if not self.db:
+            return
+        try:
+            with self.db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO rule_engine_state (key, value, updated_at) "
+                    "VALUES ('_pixoo_lock_until', %s::jsonb, NOW()) "
+                    "ON CONFLICT (key) DO UPDATE SET value = %s::jsonb, updated_at = NOW()",
+                    (json.dumps(self._lock_until), json.dumps(self._lock_until)))
+        except Exception:
+            pass
+
+    def _push_has_active_countdown(self, payload):
+        """True if this external push carries — or its named preset bakes — a
+        countdown whose end is still in the future. Such a push is the lock
+        owner (or a new countdown that supersedes), so it's allowed through."""
+        try:
+            vars_dict = payload.get('vars') or {}
+            raw = vars_dict.get('countdown_end_ts', vars_dict.get('countdown'))
+            if raw is None and payload.get('preset_name'):
+                self._ensure_db()
+                if self.db:
+                    with self.db.cursor() as cur:
+                        cur.execute("SELECT content FROM pixoo_presets WHERE name=%s",
+                                    (payload['preset_name'],))
+                        row = cur.fetchone()
+                    if row:
+                        content = row[0] if isinstance(row[0], dict) else json.loads(row[0] or '{}')
+                        raw = (content.get('default_vars') or {}).get('countdown')
+            if raw is None:
+                return False
+            n = float(raw)
+            end_ts = (time.time() + n) if n < 1_000_000_000 else n
+            return end_ts > time.time()
+        except Exception:
+            return False
+
+    def _lock_blocks(self, payload, what):
+        """Gate for external draw entry points. True → drop the action because
+        the screen is locked. force:true clears the lock and allows through; an
+        active-countdown push is allowed (owner / supersede)."""
+        if not self._pixoo_locked():
+            return False
+        if payload.get('force'):
+            self._clear_lock('force override')
+            return False
+        if self._push_has_active_countdown(payload):
+            return False
+        log.info("pixoo: %s ignored — screen locked by '%s' for %.0fs more",
+                 what, self._lock_label, self._lock_until - time.time())
+        return True
+
     def _handle_command(self, payload):
         """Dispatch an MQTT command from the rule engine or test button."""
         action = payload.get('action', '')
         log.info("Pixoo command: %s | payload: %s", action, json.dumps(payload)[:300])
+        # ── Central lock gate ────────────────────────────────────────
+        if action in ('push_preset', 'play_sequence'):
+            if self._lock_blocks(payload, action):
+                return
+        elif action in ('wipe', 'resume'):
+            if self._pixoo_locked() and not payload.get('force'):
+                log.info("pixoo: %s ignored — screen locked by '%s' (pass force to override)",
+                         action, self._lock_label)
+                return
+            if payload.get('force'):
+                self._clear_lock('force ' + action)
+        elif action == 'unlock':
+            self._clear_lock('unlock command')
+            return
         try:
             if action == 'push_preset':
                 self._render_preset(payload.get('preset_name', ''), payload.get('vars'))
@@ -870,6 +973,21 @@ class PixooService:
         items_pre_subst = [dict(it) for it in items]
         has_live = self._substitute_live_tokens(items, vars_dict)
 
+        # Central lock: a preset with an active countdown reserves the whole
+        # screen until the countdown expires. Set only on the INITIAL push (not
+        # ticker re-renders, which would just re-set the same value harmlessly).
+        if not _from_ticker:
+            _cd = (merged_vars or {}).get('countdown_end_ts', (merged_vars or {}).get('countdown'))
+            _has_cd = any(isinstance(it.get('t'), str) and '{{countdown}}' in it['t']
+                          for it in items_pre_subst)
+            if _has_cd and _cd is not None:
+                try:
+                    _cd_end = float(_cd)
+                    if _cd_end > time.time():
+                        self._set_lock(_cd_end, preset_name)
+                except (TypeError, ValueError):
+                    pass
+
         # Scroll items → render as a looping marquee GIF and we're done. Keeps
         # the normal static/animated render path below untouched for everything
         # else; the marquee method handles its own channel/canvas setup.
@@ -1103,6 +1221,15 @@ class PixooService:
                     body = json.loads(self.rfile.read(length)) if length else {}
 
                     if self.path == '/push':
+                        # Central lock gate — drop raw pushes while a countdown
+                        # owns the screen (force:true overrides; see _lock_blocks).
+                        if svc._lock_blocks(body, '/push'):
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'application/json')
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.end_headers()
+                            self.wfile.write(b'{"ok":true,"ignored":"locked"}')
+                            return
                         items = body.get('items', [])
                         image = body.get('image')
                         wipe = body.get('wipe', False)

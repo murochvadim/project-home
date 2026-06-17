@@ -571,7 +571,7 @@ async function pixooWipeDisplay() {
     const r = await fetch('/api/pixoo/push-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: [], pixels: {}, image: null, wipe: true }),
+      body: JSON.stringify({ items: [], pixels: {}, image: null, wipe: true, force: true }),
     });
     if (r.ok) { label.textContent = 'Wiped'; label.style.color = '#27ae60'; }
     else { label.textContent = 'Wipe failed'; label.style.color = '#c0392b'; }
@@ -594,7 +594,7 @@ async function pixooPushCanvas() {
     const r = await fetch('/api/pixoo/push-items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: _pixooEditorItems, image: _pixooBgBase64, pixels: _pixooPixels }),
+      body: JSON.stringify({ items: _pixooEditorItems, image: _pixooBgBase64, pixels: _pixooPixels, force: true }),
     });
     if (r.ok) { label.textContent = 'Pushed'; label.style.color = '#27ae60'; }
     else { label.textContent = 'Push failed'; label.style.color = '#c0392b'; }
@@ -777,7 +777,7 @@ async function pixooPushPreset(id) {
     const r = await fetch('/api/pixoo/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'push_preset', preset_name: preset.name, vars: {} }),
+      body: JSON.stringify({ action: 'push_preset', preset_name: preset.name, vars: {}, force: true }),
     });
     if (r.ok) { label.textContent = 'Pushed: ' + preset.name; label.style.color = '#27ae60'; }
     else { label.textContent = 'Push failed'; label.style.color = '#c0392b'; }
@@ -855,7 +855,7 @@ async function simPushPreset() {
     const r = await fetch('/api/pixoo/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'push_preset', preset_name: preset.name, vars }),
+      body: JSON.stringify({ action: 'push_preset', preset_name: preset.name, vars, force: true }),
     });
     if (r.ok) {
       if (status) { status.textContent = 'Pushed: ' + preset.name; status.style.color = '#27ae60'; }
@@ -876,7 +876,7 @@ async function simWipe() {
     await fetch('/api/pixoo/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'wipe' }),
+      body: JSON.stringify({ action: 'wipe', force: true }),
     });
     // Reset the simulator card: drop the preset selection + any var inputs
     // so the card returns to its idle "— preset —" state. Wipe is conceptually
@@ -968,7 +968,7 @@ async function simSeqPlay() {
     const r = await fetch('/api/pixoo/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'play_sequence', presets }),
+      body: JSON.stringify({ action: 'play_sequence', presets, force: true }),
     });
     if (r.ok) {
       if (status) { status.textContent = 'Sequence playing: ' + presets.map(p => p.name).join(' → '); status.style.color = '#27ae60'; }

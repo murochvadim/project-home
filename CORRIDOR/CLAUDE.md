@@ -16,7 +16,19 @@ This file is the index. All artifacts live in canonical locations:
 | Pixoo service (LXC 100) | `/opt/media-agent/pixoo_service.py` — registered in `agents` table as `name='pixoo'` |
 | Rules | `RULES/rules/move_in_corridor.py` (`group='corridor'`) — corridor presence chain entry: light ON → conditional Awtrix preset + Entrance Monitor Ch.2 ON + Face Recognition screen ON when `home_mode=home` → Pixoo preset push after delay. **Fully sentence-driven** via `r_move_in_corridor` container in `apartment.rule_sentences` (refactored 2026-05-15 from the original hardcoded-device-IDs design — only the trigger device CORRIDOR_PRESENCE_ID stays hardcoded because `RULE['triggers']` is fixed at module load). Sentences classify by content keyword: `on presence` → always bucket, `when home` → home-mode bucket, `after delay` → delayed bucket; `cooldown is N seconds` and `pixoo delay is N seconds` tune knobs. Add/remove output devices by dragging `+Dev` chips into the appropriate sentence — no code change. |
 | DB preset storage | `pixoo_presets` table (managed by pixoo service + dashboard editor) |
-| Rule-engine-owned pixoo state | `rule_engine_state` keys prefixed `_pixoo_` (paused flag, etc.) |
+| Rule-engine-owned pixoo state | `rule_engine_state` keys prefixed `_pixoo_` (paused flag, `_pixoo_lock_until` countdown lock, etc.) |
+
+## Countdown screen lock (since 2026-06-17)
+
+A preset with an **active `{{countdown}}`** reserves the WHOLE Pixoo screen for the countdown's duration — enforced **centrally in `pixoo_service.py`**, so *every* pusher (any rule, the dashboard, sequences, screen rotation) is blocked while locked. This fixes the class of bug where Start Away's 90 s countdown was painted over ~1 s in by **Move in Corridor**'s Pixoo push when the user walked out through the corridor (the countdown was rendering fine — it was getting clobbered). It's a true reservation, not a per-rule opt-in flag, so no future Pixoo rule can accidentally clobber a countdown.
+
+- **Set:** `_render_preset` calls `_set_lock(end_ts, preset_name)` on the initial push of any preset whose items contain `{{countdown}}` with a future end_ts (also stops any running sequence). State: in-memory `self._lock_until` / `self._lock_label`, mirrored to `rule_engine_state._pixoo_lock_until` for dashboard visibility.
+- **Gate:** `_lock_blocks(payload, what)` guards both external entry points — MQTT `_handle_command` (`push_preset`/`play_sequence`; `wipe`/`resume` are force-only while locked) and HTTP `/push`. The **internal ticker re-render bypasses the gate** (it calls `_render_preset` directly, not the gated entries) so the locked countdown keeps refreshing every second. `rotate_screen` also early-returns while locked.
+- **Allowed through while locked:** a push carrying its **own active countdown** (owner / supersede), or **`force: true`** (which also clears the lock).
+- **Release:** auto-expire at `end_ts`; any `force` push; or the new `action: 'unlock'` command.
+- **Rule coordination:** `start_away_mode.py` Phase 2's final preset carries `force:true` (race-safe release + show); and on an **early home-return mid-countdown** the rule emits `{action:'unlock'}` so the welcome/idle screen can take over immediately instead of waiting out the lock.
+- **Dashboard:** all manual draw actions in `corridor.js` (wipe ×2, push-canvas, push-preset ×2, play-sequence) send `force:true` — a human action always wins over a lock. (`corridor.js?v=11`.)
+- The older `daily_welcome.suppress_until_ts` flag still exists (Daily_Welcome's own 30-min re-push respects it); the central lock supersedes it as the general mechanism.
 | MQTT user | `pixoo_service` on LXC 107 (mosquitto ACL) |
 
 ## Dashboard Page

@@ -267,8 +267,17 @@ def evaluate(event, state):
 
     # Reset latch when home_mode leaves the trigger mode.
     if trigger is not None and prev_home == trigger and home_mode != trigger:
-        phase = 'idle'
+        was_phase1 = (phase == 'phase1')
         state.shared['_start_away_phase'] = 'idle'
+        state.shared['_start_away_prev_home_mode'] = home_mode
+        if was_phase1:
+            # Returned home before the countdown finished — release the Pixoo
+            # reservation + clear the Daily_Welcome hold so the welcome/idle
+            # screen can take over immediately instead of waiting out the lock.
+            state.shared['daily_welcome.suppress_until_ts'] = 0
+            log.info("start_away_mode: left trigger mid-countdown — releasing Pixoo lock")
+            return [{'device_id': 'pixoo', 'action': 'unlock', 'rule': 'Start Away Mode'}]
+        return []
 
     state.shared['_start_away_prev_home_mode'] = home_mode
 
@@ -335,7 +344,9 @@ def evaluate(event, state):
             if keep_dps is not None:
                 cmd['channel'] = keep_dps
             commands.append(cmd)
-            commands.append({**cfg['final_cmd'], 'rule': 'Start Away Mode'})
+            # force:true releases the countdown lock + guarantees the final
+            # preset lands even if the lock hasn't auto-expired yet (race-safe).
+            commands.append({**cfg['final_cmd'], 'rule': 'Start Away Mode', 'force': True})
             state.shared['_start_away_phase'] = 'phase2'
             log.info(
                 "start_away_mode: phase2 fired (elapsed=%.0f sec final=%s)",
