@@ -304,6 +304,22 @@ class RuleEngine:
         log.info('Loaded %d rules (%d disabled, %d load errors)',
                  len(self.rules), len(self._disabled_rules), len(self._rule_load_errors))
 
+        # Record the on-disk signature (max mtime of rule files) loaded NOW so
+        # the heartbeat can flag a reload-pending when an EXISTING file is later
+        # edited — the _rules_on_disk count only catches NEWLY-ADDED files. Same
+        # file filter as the loader loop above. Runs on startup AND on every
+        # _reload_rules() (which calls load_rules), so a reload self-clears the
+        # flag in the same heartbeat cycle. Fail-safe to 0.0 → no false alarm.
+        try:
+            self._rules_loaded_mtime = max(
+                (os.path.getmtime(os.path.join(rules_dir, f))
+                 for f in os.listdir(rules_dir)
+                 if f.endswith('.py') and not f.startswith('_')),
+                default=0.0)
+        except Exception:
+            self._rules_loaded_mtime = 0.0
+        self.state.shared['_rules_reload_pending'] = False
+
     def _raise_load_error_alert(self, filename, msg):
         """Write a system_alerts row for a rule file that failed to load."""
         try:
@@ -2214,6 +2230,22 @@ class RuleEngine:
                     disk_count = len([f for f in os.listdir(rules_dir)
                                      if f.endswith('.py') and not f.startswith('_')]) if os.path.isdir(rules_dir) else 0
                     self.state.shared['_rules_on_disk'] = disk_count
+                    # Edited-rule detection (red "Reload needed" badge): compare
+                    # the max mtime on disk to the signature recorded at last
+                    # load. 1 s epsilon avoids float jitter / same-second saves.
+                    # Fail-safe to False so a stat error never shows a false
+                    # alarm. Runs AFTER any reload above, so a reload (which
+                    # re-records _rules_loaded_mtime) clears it this same cycle.
+                    try:
+                        _disk_mtime = max(
+                            (os.path.getmtime(os.path.join(rules_dir, f))
+                             for f in os.listdir(rules_dir)
+                             if f.endswith('.py') and not f.startswith('_')),
+                            default=0.0) if os.path.isdir(rules_dir) else 0.0
+                        self.state.shared['_rules_reload_pending'] = bool(
+                            _disk_mtime > getattr(self, '_rules_loaded_mtime', 0.0) + 1.0)
+                    except Exception:
+                        self.state.shared['_rules_reload_pending'] = False
                     self.state.shared['_rule_stats'] = self._rule_stats
                     self._update_rules_metadata()
                     self._save_state_tracked()

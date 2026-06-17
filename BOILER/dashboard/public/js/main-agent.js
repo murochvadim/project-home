@@ -712,13 +712,19 @@
     }
   };
 
-  window.updateReloadBadge = function (rulesLoaded, rulesOnDisk) {
+  window.updateReloadBadge = function (rulesLoaded, rulesOnDisk, reloadPending) {
     const btn = document.querySelector('[onclick="reloadRules()"]');
     if (!btn) return;
     const newCount = (rulesOnDisk || 0) - (rulesLoaded || 0);
     if (newCount > 0) {
+      // A brand-new rule file appeared (count went up).
       btn.textContent = `Reload (${newCount} new)`;
       btn.style.background = '#e67e22';
+      btn.style.color = '#fff';
+    } else if (reloadPending) {
+      // An existing rule file was edited on disk since the last load.
+      btn.textContent = '⟳ Reload needed';
+      btn.style.background = '#c0392b';
       btn.style.color = '#fff';
     } else {
       btn.textContent = 'Reload';
@@ -1002,7 +1008,7 @@
       }
 
       // ── Reload badge ──
-      updateReloadBadge(rules.length, s._rules_on_disk);
+      updateReloadBadge(rules.length, s._rules_on_disk, s._rules_reload_pending);
 
       // ── Room grid ──
       const occupiedSet = new Set(occupiedRooms.map(r => r.toLowerCase()));
