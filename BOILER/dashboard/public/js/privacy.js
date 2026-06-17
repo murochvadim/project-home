@@ -95,13 +95,39 @@ async function pvSaveSettings() {
 // Gateway peer→user overlay. Stored in dashboard_settings key 'privacy.users' as
 // [{name, smartphone}]. Editable rows auto-save on change.
 let _pvUsers = [];
+let _pvPhoneOpts = [];   // smartphone autocomplete suggestions (tracked + network)
 async function pvLoadUsers() {
   try {
     const r = await fetch('/api/dashboard-settings/privacy.users');
     const j = r.ok ? await r.json() : {};
     _pvUsers = Array.isArray(j && j.value) ? j.value : [];
   } catch (e) { _pvUsers = []; }
+  pvLoadPhoneOptions();   // fill the datalist (async, independent of the user rows)
   pvRenderUsers();
+}
+// Smartphone suggestions: geolocation tracked_devices + named net_devices.
+async function pvLoadPhoneOptions() {
+  const opts = new Set();
+  try {
+    const geo = await (await fetch('/api/geolocation/settings')).json();
+    (geo.tracked_devices || []).forEach(d => { const l = (d.label || d.name || d.device_id || '').trim(); if (l) opts.add(l); });
+  } catch (e) { /* ignore */ }
+  try {
+    // net_devices is mostly home-automation gear + TVs/soundbars/robots that
+    // share phone-maker vendors. Keep PHONE rows: a phone-model name OR a
+    // randomized ("Locally administered") MAC, MINUS an explicit non-phone list.
+    const PHONE_RE = /\b(galaxy|iphone|pixel|redmi|oneplus|huawei|honor|motorola|moto|oppo|vivo|realme|poco|fold|flip|phone)\b|\bnote\s?\d{1,2}\b|\b[sa]\s?\d{2}\b/i;
+    const NOT_PHONE_RE = /\b(tv|soundbar|robot|roborock|vacuum|cleaning|tablet|asus|laptop|pc|imac|macbook|switch|sensor|light|lamp|blind|curtain|presence|fridge|oven|hob|hood|hub|gateway|assistant|server|printer|camera|speaker|echo|alexa|nest|pixoo|awtrix|panel|plug|socket|thermostat|boiler|valve|projector|doorbell|chime|star)\b/i;
+    const nets = await (await fetch('/api/network/devices')).json();
+    (Array.isArray(nets) ? nets : []).forEach(n => {
+      const nm = (n.name || '').trim();
+      if (!nm || NOT_PHONE_RE.test(nm)) return;
+      if (/locally administered/i.test(n.vendor || '') || PHONE_RE.test(nm)) opts.add(nm);
+    });
+  } catch (e) { /* ignore */ }
+  _pvPhoneOpts = [...opts].sort((a, b) => a.localeCompare(b));
+  const dl = document.getElementById('pv-phones-datalist');
+  if (dl) dl.innerHTML = _pvPhoneOpts.map(o => `<option value="${_esc(o)}"></option>`).join('');
 }
 function pvRenderUsers() {
   const host = document.getElementById('pv-users-list');
@@ -112,7 +138,7 @@ function pvRenderUsers() {
     <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
       <input value="${_esc(u.name || '')}" placeholder="real name" onchange="pvUserSet(${i},'name',this.value)" style="flex:1; ${inp}">
       <span style="color:#bbb;">📱</span>
-      <input value="${_esc(u.smartphone || '')}" placeholder="smartphone (e.g. Galaxy Fold5)" onchange="pvUserSet(${i},'smartphone',this.value)" style="flex:1.3; ${inp}">
+      <input value="${_esc(u.smartphone || '')}" list="pv-phones-datalist" placeholder="pick a phone or type…" onchange="pvUserSet(${i},'smartphone',this.value)" style="flex:1.3; ${inp}">
       <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvUserDelete(${i})">✕</button>
     </div>`).join('');
 }

@@ -225,10 +225,12 @@
         Household members and the smartphone that belongs to each — use <b>real names</b> (like the Gateway peer overlay).
       </p>
       <div id="pv-users-list"></div>
+      <datalist id="pv-phones-datalist"></datalist>
       <div style="display:flex; align-items:center; gap:10px; margin-top:10px;">
         <button class="btn btn-secondary btn-sm" onclick="pvAddUser()">+ Add user</button>
         <span id="pv-users-status" style="font-size:0.82rem; color:#2e7d32; min-height:1.1em;"></span>
       </div>
+      <div style="font-size:0.74rem; color:#aaa; line-height:1.4; margin-top:6px;">📱 suggestions come from your tracked phones + named network devices — type to filter, or enter any text.</div>
     </div>
   </div>
 
@@ -394,7 +396,7 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/privacy.js?v=64"></script>
+<script src="js/privacy.js?v=65"></script>
 <script src="js/privacy-places.js?v=5"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
