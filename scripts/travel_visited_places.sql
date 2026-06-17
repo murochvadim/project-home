@@ -54,3 +54,7 @@ VALUES
    '12318393057909226729',
    '{"party_size":2,"service":"Dining Reservation"}'::jsonb)
 ON CONFLICT (source, source_id) DO NOTHING;
+
+-- Added 2026-06-17 (Privacy > Places extra fields): who visited + how many times.
+ALTER TABLE visited_places ADD COLUMN IF NOT EXISTS visitors    JSONB NOT NULL DEFAULT '[]'::jsonb;  -- list of user names (Settings > Users)
+ALTER TABLE visited_places ADD COLUMN IF NOT EXISTS visit_count INT;                                  -- number of times visited

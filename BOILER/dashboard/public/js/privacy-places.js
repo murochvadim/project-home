@@ -10,6 +10,7 @@ let _pvPendingMarker = null; // the "where to add" pin (from Find pick or a map 
 let _pvPendingLatLng = null; // {lat, lon} of the pending pin, or null
 let _pvPendingLabel = '';    // resolved address of the pending pin (for the address field)
 let _pvpFindResults = [];    // last 🔍 Find candidate list
+let _pvpUsers = [];          // registered user names (Settings > Users) for the Visited-by checkboxes
 
 // Marker color by source so Google/manual/Booking are visually distinct.
 function _pvpColor(src) {
@@ -26,10 +27,32 @@ function _pvpStatus(msg, color) {
 }
 function _pvpVal(id) { const e = document.getElementById(id); return e ? e.value.trim() : ''; }
 
+// Visited-by checkboxes (one per registered user). Source = Settings > Users.
+async function pvPlacesLoadUsers() {
+  try {
+    const j = await (await fetch('/api/dashboard-settings/privacy.users')).json();
+    _pvpUsers = (Array.isArray(j && j.value) ? j.value : []).map(u => (u.name || '').trim()).filter(Boolean);
+  } catch (e) { _pvpUsers = []; }
+  _pvpRenderVisitorChecks('pvp-visitors', []);   // the add-form checkboxes
+}
+function _pvpRenderVisitorChecks(containerId, selected) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  if (!_pvpUsers.length) { host.innerHTML = '<span style="color:#aaa;">No users yet — add them in Settings → Users.</span>'; return; }
+  const sel = new Set((selected || []).map(s => String(s)));
+  host.innerHTML = _pvpUsers.map(name =>
+    `<label style="display:flex; align-items:center; gap:4px; cursor:pointer;"><input type="checkbox" value="${_esc(name)}" ${sel.has(name) ? 'checked' : ''}> ${_esc(name)}</label>`
+  ).join('');
+}
+function _pvpChecked(containerId) {
+  return [...document.querySelectorAll('#' + containerId + ' input[type=checkbox]:checked')].map(c => c.value);
+}
+
 // Called by privacy.js showTab('places'). Init the map once (Leaflet needs the
 // container visible to size), then (re)load the places.
 function pvPlacesOnShow() {
   if (typeof L === 'undefined') { setTimeout(pvPlacesOnShow, 150); return; }   // wait for deferred leaflet.js
+  pvPlacesLoadUsers();   // refresh Visited-by checkboxes each time the tab opens
   if (!_pvMap) {
     _pvMap = L.map('pvp-map', { worldCopyJump: true }).setView([30, 10], 2);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -64,10 +87,15 @@ function pvPlacesRender() {
       pts.push([lat, lon]);
       const when = p.visited_at ? new Date(p.visited_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
       const loc = [p.city, p.country].filter(Boolean).join(', ');
+      const vs = Array.isArray(p.visitors) ? p.visitors : [];
+      const vstr = vs.length ? '👤 ' + vs.map(_esc).join(', ') : '';
+      const cstr = (p.visit_count != null) ? '×' + p.visit_count + ' visit' + (p.visit_count == 1 ? '' : 's') : '';
+      const meta2 = [vstr, cstr].filter(Boolean).join(' · ');
       const popup = `<div style="font-size:0.85rem; line-height:1.35;">
         <b>${_esc(p.place_name)}</b><br>
         ${loc ? _esc(loc) + '<br>' : ''}
         ${when ? '📅 ' + _esc(when) + '<br>' : ''}
+        ${meta2 ? '<span style="color:#555;">' + meta2 + '</span><br>' : ''}
         ${p.notes ? '<span style="color:#555;">' + _esc(p.notes) + '</span><br>' : ''}
         <span style="font-size:0.72rem; color:#999;">${_esc(p.source)}${p.kind ? ' · ' + _esc(p.kind) : ''}</span><br>
         <button onclick="pvPlaceDelete(${p.id})" style="margin-top:5px; font-size:0.72rem; color:#c0392b; background:none; border:1px solid #e0c0c0; border-radius:4px; padding:2px 8px; cursor:pointer;">🗑 Delete</button>
@@ -85,9 +113,18 @@ function pvPlacesRender() {
     host.innerHTML = _pvPlaces.map(p => {
       const when = p.visited_at ? new Date(p.visited_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
       const loc = [p.city, p.country].filter(Boolean).join(', ');
+      const vs = Array.isArray(p.visitors) ? p.visitors : [];
+      const meta = [
+        p.kind ? _esc(p.kind) : '',
+        vs.length ? '👤 ' + vs.map(_esc).join(', ') : '',
+        (p.visit_count != null) ? '×' + p.visit_count : '',
+      ].filter(Boolean).join(' · ');
       return `<div style="display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid #f0f0f0;">
         <span style="width:10px; height:10px; border-radius:50%; background:${_pvpColor(p.source)}; flex-shrink:0;"></span>
-        <span style="flex:1; min-width:0;"><b>${_esc(p.place_name)}</b>${loc ? ' <span style="color:#888;">— ' + _esc(loc) + '</span>' : ''}</span>
+        <div style="flex:1; min-width:0;">
+          <div><b>${_esc(p.place_name)}</b>${loc ? ' <span style="color:#888;">— ' + _esc(loc) + '</span>' : ''}</div>
+          ${meta ? `<div style="font-size:0.76rem; color:#999;">${meta}</div>` : ''}
+        </div>
         <span style="color:#888; font-size:0.8rem; white-space:nowrap;">${_esc(when)}</span>
         <button class="btn btn-secondary btn-sm" onclick="pvPlaceEdit(${p.id})">Edit</button>
         <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvPlaceDelete(${p.id})">Del</button>
@@ -158,6 +195,7 @@ function pvPlacePickCandidate(i) {
 async function pvPlaceAdd() {
   const name = _pvpVal('pvp-name'), city = _pvpVal('pvp-city'), country = _pvpVal('pvp-country');
   const date = _pvpVal('pvp-date'), kind = _pvpVal('pvp-kind'), notes = _pvpVal('pvp-notes');
+  const times = _pvpVal('pvp-times'), visitors = _pvpChecked('pvp-visitors');
   if (!name) { _pvpStatus('Enter a place name.', '#c0392b'); return; }
   let latlng = _pvPendingLatLng, label = _pvPendingLabel;
   if (!latlng) {
@@ -172,12 +210,13 @@ async function pvPlaceAdd() {
   try {
     const r = await fetch('/api/places', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ place_name: name, city, country, lat: latlng.lat, lon: latlng.lon, visited_at, kind, notes, address: label || null }),
+      body: JSON.stringify({ place_name: name, city, country, lat: latlng.lat, lon: latlng.lon, visited_at, kind, notes, address: label || null, visitors, visit_count: times || null }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'save failed');
     _pvpStatus('✓ Added “' + name + '”', '#2e7d32');
-    ['pvp-name', 'pvp-city', 'pvp-country', 'pvp-date', 'pvp-notes'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    ['pvp-name', 'pvp-city', 'pvp-country', 'pvp-date', 'pvp-notes', 'pvp-kind', 'pvp-times'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    _pvpRenderVisitorChecks('pvp-visitors', []);
     pvPlaceClearPending();
     await pvPlacesLoad();
     if (_pvMap) _pvMap.setView([latlng.lat, latlng.lon], 6);
@@ -202,8 +241,10 @@ function pvPlaceEdit(id) {
   document.getElementById('pvp-edit-city').value = p.city || '';
   document.getElementById('pvp-edit-country').value = p.country || '';
   document.getElementById('pvp-edit-date').value = _pvpIsoToDateInput(p.visited_at);
-  document.getElementById('pvp-edit-kind').value = p.kind || 'visit';
+  document.getElementById('pvp-edit-kind').value = p.kind || '';
+  document.getElementById('pvp-edit-times').value = (p.visit_count != null ? p.visit_count : '');
   document.getElementById('pvp-edit-notes').value = p.notes || '';
+  _pvpRenderVisitorChecks('pvp-edit-visitors', p.visitors || []);
   document.getElementById('pvp-edit-status').textContent = '';
   document.getElementById('pvp-edit-modal').style.display = 'flex';
 }
@@ -214,6 +255,7 @@ async function pvPlaceEditSave() {
   const name = _pvpVal('pvp-edit-name');
   if (!name) { if (st) st.textContent = 'Place name is required.'; return; }
   const date = _pvpVal('pvp-edit-date');
+  const times = _pvpVal('pvp-edit-times');
   const body = {
     place_name: name,
     city: _pvpVal('pvp-edit-city'),
@@ -221,6 +263,8 @@ async function pvPlaceEditSave() {
     kind: _pvpVal('pvp-edit-kind'),
     notes: _pvpVal('pvp-edit-notes'),
     visited_at: date ? new Date(date + 'T12:00:00').toISOString() : null,
+    visit_count: times || null,
+    visitors: _pvpChecked('pvp-edit-visitors'),
   };
   try {
     const r = await fetch('/api/places/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

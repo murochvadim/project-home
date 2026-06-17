@@ -14,7 +14,7 @@ module.exports = function (app, db) {
     try {
       const r = await db.query(
         `SELECT id, source, kind, place_name, address, city, country, country_code,
-                lat, lon, visited_at, end_at, rating, notes
+                lat, lon, visited_at, end_at, rating, notes, visitors, visit_count
            FROM visited_places
           WHERE lat IS NOT NULL AND lon IS NOT NULL
           ORDER BY visited_at DESC NULLS LAST, id DESC`);
@@ -30,14 +30,17 @@ module.exports = function (app, db) {
       if (!name) return res.status(400).json({ error: 'place_name is required' });
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ error: 'could not resolve a location (lat/lon)' });
       const trim = v => (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim();
+      const visitors = Array.isArray(b.visitors) ? b.visitors.map(s => String(s).trim()).filter(Boolean) : [];
+      const visitCount = (b.visit_count === '' || b.visit_count == null) ? null : parseInt(b.visit_count, 10);
       const r = await db.query(
         `INSERT INTO visited_places
-           (source, kind, place_name, address, city, country, country_code, lat, lon, visited_at, end_at, rating, notes, source_id)
-         VALUES ('manual', $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULL)
-         RETURNING id, source, kind, place_name, address, city, country, country_code, lat, lon, visited_at, end_at, rating, notes`,
+           (source, kind, place_name, address, city, country, country_code, lat, lon, visited_at, end_at, rating, notes, source_id, visitors, visit_count)
+         VALUES ('manual', $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13::jsonb,$14)
+         RETURNING id, source, kind, place_name, address, city, country, country_code, lat, lon, visited_at, end_at, rating, notes, visitors, visit_count`,
         [trim(b.kind) || 'visit', name, trim(b.address), trim(b.city), trim(b.country), trim(b.country_code),
          lat, lon, trim(b.visited_at), trim(b.end_at),
-         (b.rating === '' || b.rating == null) ? null : parseInt(b.rating, 10), trim(b.notes)]);
+         (b.rating === '' || b.rating == null) ? null : parseInt(b.rating, 10), trim(b.notes),
+         JSON.stringify(visitors), Number.isFinite(visitCount) ? visitCount : null]);
       res.json(r.rows[0]);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -45,10 +48,14 @@ module.exports = function (app, db) {
   app.patch('/api/places/:id', async (req, res) => {
     try {
       const b = req.body || {};
-      const cols = ['kind', 'place_name', 'address', 'city', 'country', 'country_code', 'lat', 'lon', 'visited_at', 'end_at', 'rating', 'notes'];
+      const cols = ['kind', 'place_name', 'address', 'city', 'country', 'country_code', 'lat', 'lon', 'visited_at', 'end_at', 'rating', 'notes', 'visit_count'];
       const sets = [], vals = []; let i = 1;
       for (const k of cols) {
         if (b[k] !== undefined) { sets.push(`${k} = $${i++}`); vals.push(b[k] === '' ? null : b[k]); }
+      }
+      if (b.visitors !== undefined) {
+        sets.push(`visitors = $${i++}::jsonb`);
+        vals.push(JSON.stringify(Array.isArray(b.visitors) ? b.visitors.map(s => String(s).trim()).filter(Boolean) : []));
       }
       if (!sets.length) return res.json({ ok: true });
       vals.push(req.params.id);

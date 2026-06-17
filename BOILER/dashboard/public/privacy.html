@@ -156,14 +156,16 @@
             <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Date visited
               <input id="pvp-date" type="date" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
             </label>
-            <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Kind
-              <select id="pvp-kind" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
-                <option value="stay">Stay / hotel</option>
-                <option value="visit">Visit</option>
-                <option value="dining">Dining</option>
-                <option value="other">Other</option>
-              </select>
+            <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Times visited
+              <input id="pvp-times" type="number" min="1" placeholder="1" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
             </label>
+          </div>
+          <label style="display:flex; flex-direction:column; gap:3px; color:#555;">Kind
+            <input id="pvp-kind" placeholder="e.g. hotel, beach, city trip…" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+          </label>
+          <div>
+            <div style="font-size:0.78rem; color:#555; margin-bottom:3px;">Visited by</div>
+            <div id="pvp-visitors" style="display:flex; gap:14px; flex-wrap:wrap; font-size:0.82rem;"></div>
           </div>
           <label style="display:flex; flex-direction:column; gap:3px; color:#555;">Notes
             <input id="pvp-notes" placeholder="optional" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
@@ -362,15 +364,16 @@
         <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Date visited
           <input id="pvp-edit-date" type="date" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
         </label>
-        <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Kind
-          <select id="pvp-edit-kind" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
-            <option value="stay">Stay / hotel</option>
-            <option value="visit">Visit</option>
-            <option value="dining">Dining</option>
-            <option value="review">Review</option>
-            <option value="other">Other</option>
-          </select>
+        <label style="flex:1; display:flex; flex-direction:column; gap:3px; color:#555;">Times visited
+          <input id="pvp-edit-times" type="number" min="1" placeholder="1" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; width:100%; box-sizing:border-box;">
         </label>
+      </div>
+      <label style="display:flex; flex-direction:column; gap:3px; color:#555;">Kind
+        <input id="pvp-edit-kind" placeholder="e.g. hotel, beach, city trip…" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+      </label>
+      <div>
+        <div style="font-size:0.78rem; color:#555; margin-bottom:3px;">Visited by</div>
+        <div id="pvp-edit-visitors" style="display:flex; gap:14px; flex-wrap:wrap; font-size:0.82rem;"></div>
       </div>
       <label style="display:flex; flex-direction:column; gap:3px; color:#555;">Notes
         <input id="pvp-edit-notes" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
@@ -397,7 +400,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/privacy.js?v=65"></script>
-<script src="js/privacy-places.js?v=5"></script>
+<script src="js/privacy-places.js?v=6"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>
