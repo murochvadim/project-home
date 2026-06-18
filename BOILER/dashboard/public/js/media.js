@@ -29,6 +29,10 @@ function showTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+  // Remember the tab so returning to the Media page reopens it (instead of
+  // snapping back to Control and "losing" the Player video bar / now-playing
+  // strip). Restored on page load by restoreActiveMediaTab().
+  try { localStorage.setItem('media.activeTab', name); } catch (_) {}
   // start/stop analyzer status polling
   clearInterval(window._azPollTimer);
   if (name === 'analyzer') {
@@ -211,6 +215,25 @@ setInterval(refreshState, 30000);
       startProgressPoll(d.title || 'Now playing');
     }
   } catch (_) {}
+})();
+
+// Reopen the Media tab you were last on, so the Player view (video timeline +
+// now-playing strip) survives navigating to another page and back — instead of
+// always snapping to Control and dropping the timeline until you re-click Player.
+(function restoreActiveMediaTab() {
+  let t = null;
+  try { t = localStorage.getItem('media.activeTab'); } catch (_) {}
+  if (!t || t === 'control') return;            // Control is the HTML default
+  const btn = Array.from(document.querySelectorAll('.tab-btn'))
+    .find(b => (b.getAttribute('onclick') || '').includes("showTab('" + t + "'"));
+  if (!btn || typeof showTab !== 'function') return;
+  showTab(t, btn);
+  // Run the tab's loader (mirrors the button's inline onclick), so e.g. the
+  // Player tab re-fetches the queue + renders the now-playing strip.
+  const loaders = { analyzer: 'loadAnalyzer', ingest: 'loadIngest', player: 'loadPlayer',
+                    alexa: 'loadAlexa', settings: 'loadMediaSettings' };
+  const fn = loaders[t] && window[loaders[t]];
+  if (typeof fn === 'function') fn();
 })();
 
 // ─── Media Browser ────────────────────────────────────────────
