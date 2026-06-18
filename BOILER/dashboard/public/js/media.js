@@ -198,6 +198,12 @@ setInterval(refreshState, 30000);
 // Restore playback bar if something is already playing (page navigation / reload)
 (async function restorePlayback() {
   try {
+    // If a MUSIC playlist is active, the now-playing strip owns the timeline —
+    // do NOT show the video bar. Audio on the Balcony TV plays through the same
+    // DLNA renderer the video bar reads, so /api/media/position reports the song
+    // and would otherwise wrongly show a "video" timeline on reload-and-return.
+    const qr = await fetch(`${MEDIA_API}/api/queue/status`);
+    if (qr.ok) { const q = await qr.json(); if (q && q.active) return; }
     const r = await fetch(`${MEDIA_API}/api/media/position`);
     if (!r.ok) return;
     const d = await r.json();
