@@ -358,7 +358,7 @@
           <select id="geo-trips-limit" onchange="geoReloadTrips()"
                   style="padding:3px 6px; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:4px;">
             <option value="20">last 20</option>
-            <option value="50">last 50</option>
+            <option value="50" selected>last 50</option>
             <option value="100">last 100</option>
             <option value="200">last 200</option>
           </select>
@@ -1448,7 +1448,7 @@ async function geoReloadEvents() {
 
 async function geoReloadTrips() {
   try {
-    const lim = parseInt(document.getElementById('geo-trips-limit')?.value || '20', 10) || 20;
+    const lim = parseInt(document.getElementById('geo-trips-limit')?.value || '50', 10) || 50;
     const r = await fetch(`/api/geolocation/trips?limit=${lim}`);
     const d = await r.json();
     // Apply sandbox-row filter — strips test trips when the checkbox is unchecked.
