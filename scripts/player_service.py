@@ -1936,10 +1936,17 @@ def _yt_reader(job_id):
                 # never build a playlist from a half-finished download.
                 job['state'] = 'stopped'
                 job['error'] = None
+            elif rc != 0:
+                job['state'] = 'error'
+                job['error'] = f'yt-dlp exited with rc={rc}'
+            elif job.get('mode') == 'video':
+                # NOT 'done' yet — the rescan runs next (below) and flips it to
+                # 'done'. Setting 'rescanning' here (not 'done') avoids a 'done'
+                # flash that a 1.5 s status poll could terminalize on, dropping
+                # the rescan phase from the UI.
+                job['state'] = 'rescanning'
             else:
-                job['state'] = 'done' if rc == 0 else 'error'
-                if rc != 0:
-                    job['error'] = f'yt-dlp exited with rc={rc}'
+                job['state'] = 'done'
             job['completed_at'] = time.time()
         # Post-completion: VIDEO mode finishes with a MiniDLNA rescan (so the
         # new file is indexed for the TV — NFS mounts don't fire inotify, so a
