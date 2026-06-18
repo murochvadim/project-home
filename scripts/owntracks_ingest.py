@@ -78,6 +78,22 @@ TRIP_MIN_PATH_LENGTH_M = 100
 # motion every few seconds-to-minutes, so this scenario is rare.
 IMPOSSIBLE_JUMP_M = 5_000
 
+# "At home" band for the teleport-from-home hard rule. The tight home_radius
+# (40 m) was too small: the home GPS scatter has a recurring multipath cluster
+# ~155 m SW (the SAME fixed phantom the trip janitor cleans for close fakes),
+# which sits just OUTSIDE the radius. That 155 m ping became `last` and
+# disqualified the hard rule (which required prev INSIDE the radius), so a
+# cached far-jump after a sleep gap (e.g. 115 km to the Jerusalem area) slipped
+# past — its implied speed over the ~38 min gap (~180 km/h) fell JUST under
+# MAX_SPEED_MS, and a pure speed cap can't go lower without nuking real Israel
+# Railways express trips (~160 km/h). Treating anything within this band as
+# "at home" drops the ENTIRE far glitch: dropped pings never become `last`, so
+# `last` stays pinned near home and every subsequent far ping is dropped too.
+# Real trips recover on the first intermediate fix beyond this band (same
+# trade-off the hard rule already documents above). Floor — actual band is
+# max(home_radius, this). Verified against fake trips 7279/7358 (2026-06-18).
+NEAR_HOME_M = 300
+
 # Teleport filter — drop pings whose implied speed exceeds this (m/s).
 # 50 m/s = 180 km/h: above any legitimate Israeli ground transport (the
 # Israel Railways express tops out at ~160 km/h; freeway speed limit is
@@ -482,15 +498,16 @@ def on_message(client, userdata, msg):
             try:
                 _prev_dist = haversine_m(center_lat, center_lon,
                                          float(last['lat']), float(last['lon']))
-                if _prev_dist <= radius_m:
+                _near_home = max(radius_m, NEAR_HOME_M)
+                if _prev_dist <= _near_home:
                     _new_dist = haversine_m(center_lat, center_lon, lat, lon)
                     if _new_dist > IMPOSSIBLE_JUMP_M:
                         _age_sec = ping_ts.timestamp() - last['ts'].timestamp()
                         log.warning(
                             'drop teleport-from-home ping from %s: prev_dist=%.0fm '
-                            '(inside radius %.0fm) → new_dist=%.0fm > %.0fm '
+                            '(near home <= %.0fm) → new_dist=%.0fm > %.0fm '
                             '(age=%.0fs, acc=%s) — suspected Fused-Location cache replay',
-                            device_id, _prev_dist, radius_m, _new_dist,
+                            device_id, _prev_dist, _near_home, _new_dist,
                             IMPOSSIBLE_JUMP_M, _age_sec, acc)
                         return
             except Exception as e:

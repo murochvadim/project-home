@@ -13,10 +13,16 @@ LXC 107 mosquitto broker
    ▼
 LXC 104  owntracks-ingest.service  (long-running paho-mqtt daemon)
    │ on every location message:
-   │   1. low-accuracy filter (acc > 100 m → drop)
-   │   2. anti-teleport pure-GPS guard
-   │      (prev inside-radius AND new > 5 km AND age_sec < 30 → drop)
-   │   3. teleport filter (implied_speed > 100 m/s → drop)
+   │   1. low-accuracy filter (acc > low_accuracy_filter_m → drop)
+   │   2. teleport-from-home HARD rule, NO time constraint
+   │      (prev within NEAR_HOME_M=max(radius,300 m) AND new > 5 km → drop).
+   │      Widened 2026-06-18 from "prev inside the 40 m radius": the recurring
+   │      ~155 m home-multipath cluster sat just outside the radius, became
+   │      `last`, and disqualified the rule — letting a 115 km Jerusalem-area
+   │      cache replay through (fake trips 7279/7358). Now `last` stays pinned
+   │      near home through the whole glitch, so every far ping is dropped.
+   │   3. teleport filter (implied_speed > MAX_SPEED_MS=50 m/s ≈ 180 km/h → drop;
+   │      can't go lower — Israel Railways express ≈ 160 km/h is legit)
    │   4. stale-ts guard (age_sec ≤ 0 → skip)
    │   5. dedup vs last ping (< 25 m AND < 60 s → skip insert)
    │   6. INSERT device_locations row
