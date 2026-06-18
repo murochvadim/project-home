@@ -353,7 +353,16 @@
 
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-        <h2 style="margin:0;">Recent trips</h2>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <h2 style="margin:0;">Recent trips</h2>
+          <select id="geo-trips-limit" onchange="geoReloadTrips()"
+                  style="padding:3px 6px; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:4px;">
+            <option value="20">last 20</option>
+            <option value="50">last 50</option>
+            <option value="100">last 100</option>
+            <option value="200">last 200</option>
+          </select>
+        </div>
         <button id="geo-trips-delete-btn" onclick="geoDeleteSelectedTrips()" disabled
                 style="padding:4px 12px; font-size:0.82rem; border:1px solid #ccc; color:#888; background:#fafafa; border-radius:3px; cursor:not-allowed;"
                 title="Tick rows below to enable">
@@ -1439,7 +1448,8 @@ async function geoReloadEvents() {
 
 async function geoReloadTrips() {
   try {
-    const r = await fetch('/api/geolocation/trips?limit=20');
+    const lim = parseInt(document.getElementById('geo-trips-limit')?.value || '20', 10) || 20;
+    const r = await fetch(`/api/geolocation/trips?limit=${lim}`);
     const d = await r.json();
     // Apply sandbox-row filter — strips test trips when the checkbox is unchecked.
     const trips = window.geoFilterOutTestRows ? window.geoFilterOutTestRows(d.trips) : (d.trips || []);
