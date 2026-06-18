@@ -322,6 +322,13 @@
         <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvAddDoc()">⬆ Add</button>
       </div>
       <div id="pv-doc-add-status" style="font-size:0.78rem; color:#888; margin-top:6px;"></div>
+      <!-- add a plain LINK (e.g. a Google Drive URL) — never encrypted -->
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px; padding-top:8px; border-top:1px dashed #e0e0e0;">
+        <input id="pv-link-name" type="text" placeholder="link name…" style="flex:1; min-width:140px; font-size:0.85rem; padding:5px 8px;">
+        <input id="pv-link-url" type="url" placeholder="https://drive.google.com/…" style="flex:2; min-width:200px; font-size:0.85rem; padding:5px 8px;">
+        <button class="btn btn-sm" style="background:#3a7d44; color:#fff;" onclick="pvAddLink()" title="A plain link (e.g. a Google Drive folder). Not encrypted — it's just a URL.">🔗 Add link</button>
+      </div>
+      <div id="pv-link-add-status" style="font-size:0.78rem; color:#888; margin-top:6px;"></div>
     </div>
 
     <div id="pv-docs-list"><div style="color:#aaa;">—</div></div>
@@ -399,7 +406,7 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/privacy.js?v=65"></script>
+<script src="js/privacy.js?v=66"></script>
 <script src="js/privacy-places.js?v=6"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>

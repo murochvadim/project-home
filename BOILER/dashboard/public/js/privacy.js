@@ -486,6 +486,9 @@ async function pvOpenDocs(siteId) {
   document.getElementById('pv-doc-name').value = '';
   document.getElementById('pv-doc-file').value = '';
   document.getElementById('pv-doc-add-status').textContent = '';
+  document.getElementById('pv-link-name').value = '';
+  document.getElementById('pv-link-url').value = '';
+  document.getElementById('pv-link-add-status').textContent = '';
   document.getElementById('pv-docs-modal').style.display = 'flex';
   await pvLoadDocs();
 }
@@ -509,6 +512,19 @@ async function pvRenderDocs() {
   const host = document.getElementById('pv-docs-list');
   if (!_pvDocs.length) { host.innerHTML = '<div style="color:#aaa;">No documents.</div>'; return; }
   const rows = await Promise.all(_pvDocs.map(async d => {
+    // Plain link (e.g. a Google Drive URL) — never encrypted; click opens it.
+    if (d.kind === 'link') {
+      const nm = d.doc_name || d.url;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid #eee;padding:7px 2px;">
+        <div style="min-width:0;"><span title="link">🔗</span>
+          <a href="${_esc(d.url)}" target="_blank" rel="noopener" style="font-size:0.88rem;">${_esc(nm)}</a>
+          <span style="font-size:0.72rem;color:#aaa;margin-left:6px;">link · ${_esc(d.created_at || '')}</span></div>
+        <div style="display:flex;gap:5px;flex-shrink:0;">
+          <button class="btn btn-secondary btn-sm" onclick="pvOpenLink(${d.id})">Open</button>
+          <button class="btn btn-secondary btn-sm" onclick="pvEditLink(${d.id})">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvDeleteDoc(${d.id})">Del</button></div>
+      </div>`;
+    }
     let name, locked = false;
     if (d.encrypted) {
       if (_pvKey) { try { name = (await _pvDecStr(_pvKey, d.name_iv, d.enc_name)).split('||')[0]; } catch (_) { name = '⚠ decrypt error'; } }
@@ -563,6 +579,37 @@ async function pvAddDoc() {
     document.getElementById('pv-doc-file').value = '';
     await pvLoadDocs(); await pvLoadSites();
   } catch (e) { st.textContent = 'Error: ' + e.message; }
+}
+
+// ── Plain links (no file, no encryption) ──────────────────────────
+async function pvAddLink() {
+  const name = document.getElementById('pv-link-name').value.trim();
+  const url  = document.getElementById('pv-link-url').value.trim();
+  const st = document.getElementById('pv-link-add-status');
+  if (!name || !url) { st.textContent = 'Name and URL required'; return; }
+  st.textContent = 'Working…';
+  try {
+    const r = await fetch(`/api/privacy/sites/${_pvDocSite.id}/links`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, url }) });
+    if (!r.ok) { st.textContent = 'Failed: ' + ((await r.json()).error || r.status); return; }
+    st.textContent = '✓ added';
+    document.getElementById('pv-link-name').value = '';
+    document.getElementById('pv-link-url').value = '';
+    await pvLoadDocs(); await pvLoadSites();
+  } catch (e) { st.textContent = 'Error: ' + e.message; }
+}
+function pvOpenLink(id) { const d = _pvDocs.find(x => x.id === id); if (d && d.url) window.open(d.url, '_blank', 'noopener'); }
+async function pvEditLink(id) {
+  const d = _pvDocs.find(x => x.id === id);
+  const nn = prompt('Link name:', d.doc_name || '');
+  if (nn == null) return;
+  const nu = prompt('URL:', d.url || '');
+  if (nu == null) return;
+  if (!nn.trim() || !nu.trim()) { alert('Name and URL are both required'); return; }
+  await fetch(`/api/privacy/docs/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ doc_name: nn.trim(), url: nu.trim() }) });
+  await pvLoadDocs();
 }
 
 async function pvViewDoc(id) {

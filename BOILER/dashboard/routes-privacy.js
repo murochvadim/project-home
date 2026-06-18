@@ -162,7 +162,7 @@ module.exports = function (app, db) {
   app.get('/api/privacy/sites/:id/docs', async (req, res) => {
     try {
       const r = await db.query(
-        `SELECT id, encrypted, doc_name, enc_name, name_iv, file_iv, mime_type, file_size,
+        `SELECT id, encrypted, kind, url, doc_name, enc_name, name_iv, file_iv, mime_type, file_size,
                 to_char(created_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS created_at
            FROM privacy_site_docs WHERE site_id = $1 ORDER BY created_at DESC`, [parseInt(req.params.id)]);
       res.json(r.rows);
@@ -199,6 +199,23 @@ module.exports = function (app, db) {
     finally { if (tmp) { try { fs.unlinkSync(tmp); } catch (_) {} } }
   });
 
+  // Add a plain LINK (e.g. a Google Drive URL) — no file, no encryption.
+  // Stored as a kind='link' row in the same docs table so it shows in the
+  // Docs window alongside files. file_path='' (no file → DELETE skips QNAP rm).
+  app.post('/api/privacy/sites/:id/links', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const name = _trim(b.name);
+      const url = _trim(b.url);
+      if (!name || !url) return res.status(400).json({ error: 'name and url required' });
+      const ins = await db.query(
+        `INSERT INTO privacy_site_docs (site_id, encrypted, kind, doc_name, url, file_path)
+         VALUES ($1, false, 'link', $2, $3, '') RETURNING id`,
+        [parseInt(req.params.id), name, url]);
+      res.json({ ok: true, id: ins.rows[0].id });
+    } catch (e) { _err(res, e); }
+  });
+
   app.get('/api/privacy/docs/:id/file', async (req, res) => {
     try {
       const r = await db.query('SELECT encrypted, doc_name, file_path, mime_type FROM privacy_site_docs WHERE id = $1', [parseInt(req.params.id)]);
@@ -220,6 +237,7 @@ module.exports = function (app, db) {
       const sets = [], params = [];
       const add = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
       if (b.doc_name !== undefined) add('doc_name', _trim(b.doc_name));
+      if (b.url      !== undefined) add('url', _trim(b.url));
       if (b.enc_name !== undefined) add('enc_name', b.enc_name);
       if (b.name_iv  !== undefined) add('name_iv', b.name_iv);
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
