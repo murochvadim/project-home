@@ -21,9 +21,12 @@ PORT       = 8765
 # like TV-Guy / TV-Bed through HA services, so no Tizen WS pairing popup is
 # needed and the card gets exact volume %, mute read-back, and a source list.
 # (IP/MAC kept for reference only — control is HA-mediated.)
-TV55_IP     = '192.168.1.194'
-TV55_MAC    = '2c:99:75:44:20:fb'
-TV55_ENTITY = 'media_player.55_neo_qled_qe55qn85dbtxsq'
+# 2026-06-18: TV swapped/reconnected → moved 192.168.1.194 (MAC 2c:99:75:44:20:fb)
+# → 192.168.1.217 (WiFi MAC e8:aa:cb:71:1f:b0). Same TV (model QE55QN85DBTXSQ,
+# UUID 918dbe62-…). Confirmed via the Samsung WS info API at the new IP.
+TV55_IP     = '192.168.1.217'
+TV55_MAC    = 'e8:aa:cb:71:1f:b0'
+TV55_ENTITY = 'media_player.55_neo_qled_qe55qn85dbtxsq_2'  # re-add 2026-06-18 → _2 (old id orphaned, stuck off)
 
 # ── Secrets from environment ──────────────────────────────────────────────────
 HA_URL   = os.environ.get('HA_URL',   'http://192.168.1.110:8123')
