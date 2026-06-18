@@ -1472,9 +1472,12 @@ def position():
             '<InstanceID>0</InstanceID></u:GetPositionInfo>'
         )
         def parse_secs(t):
+            # RelTime can carry fractional seconds ("0:03:00.134") — int() chokes
+            # on the decimal, so go via float() and floor. Without this, position
+            # came back 0 and the progress bar's fill sat frozen at 0%.
             try:
                 p = (t or '').split(':')
-                return int(p[0])*3600 + int(p[1])*60 + int(p[2]) if len(p) == 3 else 0
+                return int(p[0])*3600 + int(p[1])*60 + int(float(p[2])) if len(p) == 3 else 0
             except (ValueError, IndexError):
                 return 0
 
