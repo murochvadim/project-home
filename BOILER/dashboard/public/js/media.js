@@ -220,7 +220,7 @@ setInterval(refreshState, 30000);
 // Reopen the Media tab you were last on, so the Player view (video timeline +
 // now-playing strip) survives navigating to another page and back — instead of
 // always snapping to Control and dropping the timeline until you re-click Player.
-(function restoreActiveMediaTab() {
+function restoreActiveMediaTab() {
   let t = null;
   try { t = localStorage.getItem('media.activeTab'); } catch (_) {}
   if (!t || t === 'control') return;            // Control is the HTML default
@@ -233,8 +233,14 @@ setInterval(refreshState, 30000);
   const loaders = { analyzer: 'loadAnalyzer', ingest: 'loadIngest', player: 'loadPlayer',
                     alexa: 'loadAlexa', settings: 'loadMediaSettings' };
   const fn = loaders[t] && window[loaders[t]];
-  if (typeof fn === 'function') fn();
-})();
+  if (typeof fn === 'function') { try { fn(); } catch (e) { console.warn('restoreActiveMediaTab loader:', e); } }
+}
+// Defer to the next tick — the rest of this file (consts like PLAYLIST_MODES_KEY,
+// other module state) is still being initialized as this line runs. Calling a
+// tab loader (loadPlayer → loadPlaylists/loadMediaBrowser) synchronously here
+// would hit those not-yet-initialized consts (TDZ ReferenceError) and break the
+// QNAP Media browser. setTimeout(0) waits until the whole script has executed.
+setTimeout(restoreActiveMediaTab, 0);
 
 // ─── Media Browser ────────────────────────────────────────────
 
