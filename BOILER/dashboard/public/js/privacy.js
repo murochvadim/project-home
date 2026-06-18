@@ -520,9 +520,9 @@ async function pvRenderDocs() {
           <a href="${_esc(d.url)}" target="_blank" rel="noopener" style="font-size:0.88rem;">${_esc(nm)}</a>
           <span style="font-size:0.72rem;color:#aaa;margin-left:6px;">link · ${_esc(d.created_at || '')}</span></div>
         <div style="display:flex;gap:5px;flex-shrink:0;">
-          <button class="btn btn-secondary btn-sm" onclick="pvOpenLink(${d.id})">Open</button>
-          <button class="btn btn-secondary btn-sm" onclick="pvEditLink(${d.id})">Edit</button>
-          <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvDeleteDoc(${d.id})">Del</button></div>
+          <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;" onclick="pvOpenLink(${d.id})">Open</button>
+          <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;" onclick="pvEditLink(${d.id})">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;color:#c0392b;" onclick="pvDeleteDoc(${d.id})">Del</button></div>
       </div>`;
     }
     let name, locked = false;
@@ -533,15 +533,16 @@ async function pvRenderDocs() {
     const icon = d.encrypted ? '🔒' : '🔓';
     const kb = d.file_size ? Math.max(1, Math.round(d.file_size / 1024)) + ' KB' : '';
     const actions = locked
-      ? '<span style="color:#aaa;font-size:0.78rem;">unlock to open</span>'
-      : `<button class="btn btn-secondary btn-sm" onclick="pvViewDoc(${d.id})">Open</button>
-         <button class="btn btn-secondary btn-sm" onclick="pvRenameDoc(${d.id})">Rename</button>`;
+      ? `<button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;opacity:0.4;cursor:not-allowed;" disabled title="Unlock to open">Open</button>
+         <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;opacity:0.4;cursor:not-allowed;" disabled title="Unlock to edit">Edit</button>`
+      : `<button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;" onclick="pvViewDoc(${d.id})">Open</button>
+         <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;" onclick="pvRenameDoc(${d.id})">Edit</button>`;
     return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid #eee;padding:7px 2px;">
       <div style="min-width:0;"><span title="${d.encrypted ? 'encrypted' : 'plain'}">${icon}</span>
         <span style="font-size:0.88rem;">${_esc(name)}</span>
         <span style="font-size:0.72rem;color:#aaa;margin-left:6px;">${kb} · ${_esc(d.created_at || '')}</span></div>
       <div style="display:flex;gap:5px;flex-shrink:0;">${actions}
-        <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvDeleteDoc(${d.id})">Del</button></div>
+        <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;color:#c0392b;" onclick="pvDeleteDoc(${d.id})">Del</button></div>
     </div>`;
   }));
   host.innerHTML = rows.join('');

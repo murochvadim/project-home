@@ -313,19 +313,19 @@
 
     <!-- add row -->
     <div style="border:1px dashed #ccc; border-radius:8px; padding:10px; margin-bottom:12px;">
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="pv-doc-name" type="text" placeholder="document name…" style="flex:1; min-width:160px; font-size:0.85rem; padding:5px 8px;">
-        <label style="font-size:0.8rem; display:flex; align-items:center; gap:4px; cursor:pointer;" title="Encrypted = needs the Documents password to open. Plain = openable anytime (LAN-only).">
+      <div style="display:flex; gap:8px; flex-wrap:nowrap; align-items:center;">
+        <input id="pv-doc-name" type="text" placeholder="name…" style="flex:1; min-width:50px; font-size:0.85rem; padding:5px 8px;">
+        <label style="font-size:0.8rem; display:flex; align-items:center; gap:4px; cursor:pointer; flex-shrink:0; white-space:nowrap;" title="Encrypted = needs the Documents password to open. Plain = openable anytime (LAN-only).">
           <input type="checkbox" id="pv-doc-enc" checked> 🔒 Encrypt
         </label>
-        <input id="pv-doc-file" type="file" style="font-size:0.8rem; max-width:220px;">
+        <input id="pv-doc-file" type="file" style="font-size:0.8rem; flex:1; min-width:0; max-width:220px;">
         <button class="btn btn-sm" style="background:#2563eb; color:#fff; width:110px; flex-shrink:0;" onclick="pvAddDoc()">⬆ Add file</button>
       </div>
       <div id="pv-doc-add-status" style="font-size:0.78rem; color:#888; margin-top:6px;"></div>
       <!-- add a plain LINK (e.g. a Google Drive URL) — never encrypted -->
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px; padding-top:8px; border-top:1px dashed #e0e0e0;">
-        <input id="pv-link-name" type="text" placeholder="link name…" style="flex:1; min-width:140px; font-size:0.85rem; padding:5px 8px;">
-        <input id="pv-link-url" type="url" placeholder="https://drive.google.com/…" style="flex:2; min-width:200px; font-size:0.85rem; padding:5px 8px;">
+      <div style="display:flex; gap:8px; flex-wrap:nowrap; align-items:center; margin-top:8px; padding-top:8px; border-top:1px dashed #e0e0e0;">
+        <input id="pv-link-name" type="text" placeholder="link name…" style="flex:1; min-width:50px; font-size:0.85rem; padding:5px 8px;">
+        <input id="pv-link-url" type="url" placeholder="https://drive.google.com/…" style="flex:2; min-width:60px; font-size:0.85rem; padding:5px 8px;">
         <button class="btn btn-sm" style="background:#3a7d44; color:#fff; width:110px; flex-shrink:0;" onclick="pvAddLink()" title="A plain link (e.g. a Google Drive folder). Not encrypted — it's just a URL.">🔗 Add link</button>
       </div>
       <div id="pv-link-add-status" style="font-size:0.78rem; color:#888; margin-top:6px;"></div>
@@ -406,7 +406,7 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/privacy.js?v=66"></script>
+<script src="js/privacy.js?v=67"></script>
 <script src="js/privacy-places.js?v=6"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
