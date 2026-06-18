@@ -1567,93 +1567,97 @@ def results_image():
 # DB. The full-rebuild path is: stop service → rm files.db → start
 # service. Triggered from the dashboard 🔄 Rescan button (added 2026-05-27).
 
-@app.route('/api/media/minidlna/rescan', methods=['POST'])
-def minidlna_rescan():
+def _minidlna_full_rescan():
     """Force a full MiniDLNA database rebuild. Stops the daemon, deletes
     `/var/cache/minidlna/files.db`, starts the daemon, and **waits for the
     scan to actually FINISH** (row count stops growing) before returning.
+    Returns the result dict (raises on systemctl/other failure). Callable
+    from BOTH the HTTP route and the yt-dlp reader (video downloads finish
+    with a rescan instead of a playlist), so the logic lives here, not in
+    the route.
 
     Why wait-for-completion (fixed 2026-06-13): the scan writes `details`
     rows incrementally over several MINUTES (it thumbnails every file). The
     old code returned as soon as count>0 (~1 s) and reported "complete" while
-    most folders — including Videos/ — were still unscanned. A user clicking
-    ▶ Play immediately got a spurious "Not indexed by MiniDLNA" because
-    `minidlna_id` couldn't find the not-yet-scanned file. New files can't be
-    caught any other way: the NFS client mount doesn't propagate inotify, so
-    MiniDLNA never auto-indexes files written via the mount — a rescan is
+    most folders — including Videos/ — were still unscanned. New files can't
+    be caught any other way: the NFS client mount doesn't propagate inotify,
+    so MiniDLNA never auto-indexes files written via the mount — a rescan is
     mandatory, and it must be honestly complete before Play is attempted.
 
-    Idempotent — safe to click repeatedly. Runtime: ~1–3 min for a ~1600-file
-    library (was mis-reported as ~30 s)."""
+    Idempotent. Runtime: ~1–3 min for a ~1600-file library."""
     log.info('minidlna_rescan: starting full DB rebuild')
-    try:
-        # Stop daemon (gracefully) — 5 sec timeout.
-        subprocess.run(['systemctl', 'stop', 'minidlna'], check=True, timeout=15)
-        # Wipe DB
-        for f in ('/var/cache/minidlna/files.db', '/var/cache/minidlna/art_cache'):
-            if os.path.isdir(f):
-                # art_cache: keep dir, just clear contents
-                for inner in os.listdir(f):
-                    try: os.remove(os.path.join(f, inner))
-                    except IsADirectoryError: pass
-                    except Exception as e: log.debug('art cache cleanup: %s', e)
-            elif os.path.isfile(f):
-                os.remove(f)
-        # Start daemon — kicks off a full scan
-        subprocess.run(['systemctl', 'start', 'minidlna'], check=True, timeout=15)
-        # Wait for the scan to ACTUALLY finish, not just start. The scan writes
-        # `details` rows incrementally; we poll the row count and declare the
-        # scan complete once it has stopped growing for STABLE_FOR seconds.
-        # This is what makes "✓ Rescan complete" honest, so a Play click right
-        # after never hits a half-built index. Hard ceiling MAX_WAIT.
-        t0           = time.time()
-        MAX_WAIT     = 360      # safety ceiling (s)
-        STABLE_FOR   = 12       # count unchanged this long ⇒ scan finished (s)
-        POLL         = 2
-        total        = 0
-        last_total   = -1
-        stable_since = None
-        completed    = False
-        while time.time() - t0 < MAX_WAIT:
-            try:
-                conn  = sqlite3.connect(MINIDLNA_DB)
-                total = conn.execute('SELECT COUNT(*) FROM details').fetchone()[0]
-                conn.close()
-            except Exception:
-                total = last_total   # DB momentarily locked mid-scan — ignore
-            if total > 0 and total == last_total:
-                if stable_since is None:
-                    stable_since = time.time()
-                elif time.time() - stable_since >= STABLE_FOR:
-                    completed = True
-                    break
-            else:
-                stable_since = None   # count moved (or first read) — reset timer
-            last_total = total
-            time.sleep(POLL)
-        # Final stats — split by section
+    # Stop daemon (gracefully).
+    subprocess.run(['systemctl', 'stop', 'minidlna'], check=True, timeout=15)
+    # Wipe DB
+    for f in ('/var/cache/minidlna/files.db', '/var/cache/minidlna/art_cache'):
+        if os.path.isdir(f):
+            # art_cache: keep dir, just clear contents
+            for inner in os.listdir(f):
+                try: os.remove(os.path.join(f, inner))
+                except IsADirectoryError: pass
+                except Exception as e: log.debug('art cache cleanup: %s', e)
+        elif os.path.isfile(f):
+            os.remove(f)
+    # Start daemon — kicks off a full scan
+    subprocess.run(['systemctl', 'start', 'minidlna'], check=True, timeout=15)
+    # Wait for the scan to ACTUALLY finish, not just start. The scan writes
+    # `details` rows incrementally; we poll the row count and declare the
+    # scan complete once it has stopped growing for STABLE_FOR seconds.
+    t0           = time.time()
+    MAX_WAIT     = 360      # safety ceiling (s)
+    STABLE_FOR   = 12       # count unchanged this long ⇒ scan finished (s)
+    POLL         = 2
+    total        = 0
+    last_total   = -1
+    stable_since = None
+    completed    = False
+    while time.time() - t0 < MAX_WAIT:
         try:
-            conn = sqlite3.connect(MINIDLNA_DB)
-            row  = conn.execute(
-                "SELECT COUNT(*) AS total, "
-                "       SUM(CASE WHEN path LIKE '%/Videos/%' THEN 1 ELSE 0 END) AS videos, "
-                "       SUM(CASE WHEN path LIKE '%/Music/%' THEN 1 ELSE 0 END) AS music, "
-                "       SUM(CASE WHEN path LIKE '%/Photos/%' THEN 1 ELSE 0 END) AS photos "
-                "FROM details"
-            ).fetchone()
+            conn  = sqlite3.connect(MINIDLNA_DB)
+            total = conn.execute('SELECT COUNT(*) FROM details').fetchone()[0]
             conn.close()
-            counts = {'total': row[0] or 0, 'videos': row[1] or 0, 'music': row[2] or 0, 'photos': row[3] or 0}
-        except Exception as e:
-            counts = {'error': str(e)}
-        log.info('minidlna_rescan: done — counts=%s elapsed=%.1fs', counts, time.time() - t0)
-        return jsonify({
-            'ok':         True,
-            'completed':  completed,
-            'counts':     counts,
-            'elapsed_sec': round(time.time() - t0, 1),
-            'note':       ('scan finished — index is complete' if completed
-                           else f'still scanning after {MAX_WAIT}s ceiling — counts may grow further'),
-        })
+        except Exception:
+            total = last_total   # DB momentarily locked mid-scan — ignore
+        if total > 0 and total == last_total:
+            if stable_since is None:
+                stable_since = time.time()
+            elif time.time() - stable_since >= STABLE_FOR:
+                completed = True
+                break
+        else:
+            stable_since = None   # count moved (or first read) — reset timer
+        last_total = total
+        time.sleep(POLL)
+    # Final stats — split by section
+    try:
+        conn = sqlite3.connect(MINIDLNA_DB)
+        row  = conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "       SUM(CASE WHEN path LIKE '%/Videos/%' THEN 1 ELSE 0 END) AS videos, "
+            "       SUM(CASE WHEN path LIKE '%/Music/%' THEN 1 ELSE 0 END) AS music, "
+            "       SUM(CASE WHEN path LIKE '%/Photos/%' THEN 1 ELSE 0 END) AS photos "
+            "FROM details"
+        ).fetchone()
+        conn.close()
+        counts = {'total': row[0] or 0, 'videos': row[1] or 0, 'music': row[2] or 0, 'photos': row[3] or 0}
+    except Exception as e:
+        counts = {'error': str(e)}
+    log.info('minidlna_rescan: done — counts=%s elapsed=%.1fs', counts, time.time() - t0)
+    return {
+        'ok':         True,
+        'completed':  completed,
+        'counts':     counts,
+        'elapsed_sec': round(time.time() - t0, 1),
+        'note':       ('scan finished — index is complete' if completed
+                       else f'still scanning after {MAX_WAIT}s ceiling — counts may grow further'),
+    }
+
+
+@app.route('/api/media/minidlna/rescan', methods=['POST'])
+def minidlna_rescan():
+    """HTTP wrapper around _minidlna_full_rescan() (dashboard 🔄 Rescan button)."""
+    try:
+        return jsonify(_minidlna_full_rescan())
     except subprocess.CalledProcessError as e:
         log.exception('minidlna_rescan systemctl failed')
         return jsonify({'error': f'systemctl failed: {e}'}), 500
@@ -1682,6 +1686,11 @@ _YT_CMD       = ['python3', '-m', 'yt_dlp']
 _YT_FOLDER_RE = re.compile(r'[^a-zA-Z0-9 _\-À-￿]')   # allow unicode names
 _YT_DEST_RE   = re.compile(r'\[download\] Destination:\s+(.+?)\s*$')
 _YT_DONE_RE   = re.compile(r'\[download\]\s+100%\s+of\s')
+# Video downloads pull separate video+audio streams, then ffmpeg merges them.
+# The final on-disk filename only appears on the Merger line (the per-stream
+# Destination lines name the .fNNN.* parts that get deleted post-merge), so the
+# video reader path tracks this instead of _YT_DEST_RE.
+_YT_MERGER_RE = re.compile(r'\[Merger\] Merging formats into "(.+?)"\s*$')
 
 # Timestamp matcher for description-based auto-split. Captures H:MM:SS,
 # MM:SS, or M:SS — covers both bare timestamps ("17:18") and parenthesized
@@ -1909,6 +1918,17 @@ def _yt_reader(job_id):
                             t['status'] = 'done'
                             break
                 continue
+            # Video mode: the final merged file only shows on the Merger line.
+            # Replace the transient .fNNN.* part rows with the real filename.
+            mm = _YT_MERGER_RE.search(line)
+            if mm:
+                name = os.path.basename(mm.group(1).strip())
+                with _yt_jobs_lock:
+                    job['tracks'] = [t for t in job['tracks']
+                                     if not re.search(r'\.f\d+\.(mp4|m4a|webm)$', t['name'])]
+                    if not any(t['name'] == name for t in job['tracks']):
+                        job['tracks'].append({'name': name, 'status': 'downloading'})
+                continue
         rc = proc.wait()
         with _yt_jobs_lock:
             if job.get('cancelled'):
@@ -1921,12 +1941,28 @@ def _yt_reader(job_id):
                 if rc != 0:
                     job['error'] = f'yt-dlp exited with rc={rc}'
             job['completed_at'] = time.time()
-        # Auto-split compilation videos before playlist creation, so the
-        # playlist gets the split files instead of the long original.
-        if rc == 0 and not job.get('cancelled') and job.get('auto_split'):
-            _yt_try_split(job_id)
-        if rc == 0 and not job.get('cancelled') and job.get('create_playlist'):
-            _yt_auto_create_playlist(job_id)
+        # Post-completion: VIDEO mode finishes with a MiniDLNA rescan (so the
+        # new file is indexed for the TV — NFS mounts don't fire inotify, so a
+        # rescan is mandatory); AUDIO mode does the split + playlist creation.
+        if rc == 0 and not job.get('cancelled'):
+            if job.get('mode') == 'video':
+                try:
+                    with _yt_jobs_lock:
+                        job['state'] = 'rescanning'
+                    res = _minidlna_full_rescan()
+                    with _yt_jobs_lock:
+                        job['rescan'] = res
+                        job['state']  = 'done'
+                except Exception as e:
+                    log.exception('yt-dlp[%s] video rescan', job_id[:8])
+                    with _yt_jobs_lock:
+                        job['rescan_error'] = str(e)
+                        job['state']        = 'done'   # file is on disk; only indexing failed
+            else:
+                if job.get('auto_split'):
+                    _yt_try_split(job_id)
+                if job.get('create_playlist'):
+                    _yt_auto_create_playlist(job_id)
     except Exception as e:
         log.exception('yt-dlp reader[%s]', job_id[:8])
         with _yt_jobs_lock:
@@ -1975,32 +2011,69 @@ def yt_dlp_start():
     body            = request.get_json(silent=True) or {}
     url             = (body.get('url') or '').strip()
     folder_raw      = body.get('folder') or ''
-    create_playlist = bool(body.get('create_playlist', True))
-    auto_split      = bool(body.get('auto_split', True))   # default ON
+    mode            = (body.get('mode') or 'audio').strip().lower()
+    if mode not in ('audio', 'video'):
+        mode = 'audio'
+    # Create-playlist + auto-split are audio-only concepts — force off for video.
+    create_playlist = bool(body.get('create_playlist', True)) and mode == 'audio'
+    auto_split      = bool(body.get('auto_split', True))      and mode == 'audio'
 
     if not url or not url.startswith(('http://', 'https://')):
         return jsonify({'error': 'invalid url'}), 400
     folder = _yt_sanitize_folder(folder_raw)
-    try:
-        target_dir = safe_path(f'Music/{folder}')
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    os.makedirs(target_dir, exist_ok=True)
 
-    out_template = os.path.join(
-        target_dir, '%(playlist_index)03d - %(title)s.%(ext)s'
-    )
-    cmd = _YT_CMD + [
-        '-f', 'bestaudio[ext=m4a]/bestaudio',
-        '--extract-audio', '--audio-format', 'm4a',
-        '--newline',
-        '-o', out_template,
-        url,
-    ]
-    if auto_split:
-        # Save the YouTube description as .description sidecar — used
-        # post-download to parse timestamps for chapter-less compilations.
-        cmd.insert(-1, '--write-description')
+    if mode == 'video':
+        # Reject LIVE streams BEFORE spawning — a 24/7 live URL makes yt-dlp
+        # spawn ffmpeg to record forever. The /probe endpoint doesn't return
+        # is_live, so do a quick dedicated check here.
+        try:
+            live = subprocess.run(
+                _YT_CMD + ['--no-playlist', '--skip-download', '--print', '%(is_live)s', url],
+                capture_output=True, text=True, timeout=45,
+            )
+            if 'true' in (live.stdout or '').lower():
+                return jsonify({'error': 'refusing to download a LIVE stream (it would record forever)'}), 400
+        except subprocess.TimeoutExpired:
+            return jsonify({'error': 'yt-dlp live-check timed out (network/extractor issue)'}), 504
+        except Exception as e:
+            return jsonify({'error': f'live-check failed: {e}'}), 502
+        try:
+            target_dir = safe_path(f'Videos/{folder}')
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        os.makedirs(target_dir, exist_ok=True)
+        out_template = os.path.join(target_dir, '%(title)s.%(ext)s')
+        # 1080p H.264 + AAC → plays on the TV (NOT 4K). Always --no-playlist so
+        # a ?list= pseudo-playlist can't expand into a runaway batch.
+        cmd = _YT_CMD + [
+            '-f', ('bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/'
+                   'b[vcodec^=avc1][height<=1080]/b[ext=mp4]'),
+            '--merge-output-format', 'mp4',
+            '--no-playlist',
+            '--newline',
+            '-o', out_template,
+            url,
+        ]
+    else:
+        try:
+            target_dir = safe_path(f'Music/{folder}')
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        os.makedirs(target_dir, exist_ok=True)
+        out_template = os.path.join(
+            target_dir, '%(playlist_index)03d - %(title)s.%(ext)s'
+        )
+        cmd = _YT_CMD + [
+            '-f', 'bestaudio[ext=m4a]/bestaudio',
+            '--extract-audio', '--audio-format', 'm4a',
+            '--newline',
+            '-o', out_template,
+            url,
+        ]
+        if auto_split:
+            # Save the YouTube description as .description sidecar — used
+            # post-download to parse timestamps for chapter-less compilations.
+            cmd.insert(-1, '--write-description')
     try:
         proc = subprocess.Popen(
             cmd,
@@ -2021,6 +2094,7 @@ def yt_dlp_start():
         _yt_jobs[job_id] = {
             'url':             url,
             'folder':          folder,
+            'mode':            mode,
             'target_dir':      target_dir,
             'create_playlist': create_playlist,
             'auto_split':      auto_split,
@@ -2052,6 +2126,7 @@ def yt_dlp_status(job_id):
         elapsed = (job['completed_at'] or time.time()) - job['started_at']
         return jsonify({
             'state':          job['state'],
+            'mode':           job.get('mode', 'audio'),
             'tracks':         list(job['tracks']),
             'elapsed_sec':    round(elapsed, 1),
             'error':          job['error'],
@@ -2059,6 +2134,8 @@ def yt_dlp_status(job_id):
             'playlist_id':    job.get('playlist_id'),
             'playlist_error': job.get('playlist_error'),
             'split_summary':  job.get('split_summary'),
+            'rescan':         job.get('rescan'),
+            'rescan_error':   job.get('rescan_error'),
         })
 
 

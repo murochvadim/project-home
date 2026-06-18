@@ -478,6 +478,24 @@ async function ytUrlChanged() {
   ytSetMeta('', '#888');
 }
 
+function ytMode() {
+  const el = document.querySelector('input[name="yt-mode"]:checked');
+  return el ? el.value : 'audio';
+}
+
+// Audio↔Video toggle: swap the folder hint, hide the audio-only options
+// (playlist/auto-split don't apply to video), show the video note.
+function ytModeChanged() {
+  const video = ytMode() === 'video';
+  const hint = document.getElementById('yt-folder-hint');
+  const opts = document.getElementById('yt-audio-opts');
+  const note = document.getElementById('yt-video-note');
+  if (hint) hint.innerHTML = 'in&nbsp;<code>/mnt/media/' + (video ? 'Videos' : 'Music') + '/</code>';
+  if (opts) opts.style.display = video ? 'none' : 'flex';
+  if (note) note.style.display = video ? 'inline' : 'none';
+  ytSetMeta('', '#888');
+}
+
 async function ytDetect() {
   const url = document.getElementById('yt-url').value.trim();
   if (!url) { ytSetMeta('✗ paste a URL first', '#c0392b'); return; }
@@ -515,6 +533,7 @@ async function ytDetect() {
 async function ytStartDownload() {
   const url        = document.getElementById('yt-url').value.trim();
   const folder     = document.getElementById('yt-folder').value.trim();
+  const mode       = ytMode();
   const create     = document.getElementById('yt-create-playlist').checked;
   const auto_split = document.getElementById('yt-auto-split').checked;
   if (!url) { ytSetMeta('✗ paste a URL first', '#c0392b'); return; }
@@ -531,7 +550,7 @@ async function ytStartDownload() {
     const r = await fetch(YT_API + '/start', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ url, folder, create_playlist: create, auto_split }),
+      body:    JSON.stringify({ url, folder, mode, create_playlist: create, auto_split }),
     });
     const data = await r.json();
     if (!r.ok || data.error) {
@@ -609,6 +628,13 @@ async function ytPollStatus() {
     // Elapsed
     const elapsedEl = document.getElementById('yt-elapsed');
     if (elapsedEl) elapsedEl.textContent = `${data.elapsed_sec}s elapsed`;
+    // Mid-state pill (video mode finishes with a 'rescanning' phase before 'done')
+    const pillMid = document.getElementById('yt-state-pill');
+    if (pillMid && (data.state === 'running' || data.state === 'rescanning')) {
+      pillMid.textContent   = data.state === 'rescanning' ? 'rescanning…' : 'running';
+      pillMid.style.background = data.state === 'rescanning' ? '#8e44ad' : '#3498db';
+      pillMid.style.color   = '#fff';
+    }
     // Terminal state
     if (data.state === 'done' || data.state === 'error' || data.state === 'stopped') {
       if (_ytPollTimer) { clearInterval(_ytPollTimer); _ytPollTimer = null; }
@@ -622,7 +648,13 @@ async function ytPollStatus() {
       }
       const sum = document.getElementById('yt-summary');
       if (sum) {
-        if (data.state === 'done') {
+        if (data.state === 'done' && data.mode === 'video') {
+          let txt = `✓ Downloaded video to /Videos/${data.folder}`;
+          if (data.rescan && data.rescan.counts) txt += ` · TV library rescanned (${data.rescan.counts.videos} videos)`;
+          else if (data.rescan_error) txt += ` · ⚠ file saved but rescan failed: ${data.rescan_error} — click 🔄 Rescan`;
+          sum.textContent = txt;
+          sum.style.color = '#27ae60';
+        } else if (data.state === 'done') {
           const n = (data.tracks || []).length;
           let txt = `✓ Downloaded ${n} track${n === 1 ? '' : 's'}`;
           if (data.split_summary && data.split_summary.length) {
