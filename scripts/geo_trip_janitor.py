@@ -76,6 +76,25 @@ REAL_TRIP_MIN_FAR_M = 250
 # occasionally ~45 m) while excluding the junk ghost pings (70 m+).
 PHANTOM_ACCURACY_GATE_M = 50
 
+# ── Far-teleport rule (forever fix, 2026-06-18) ──────────────────────────────
+# A confirmed trip can also be a GPS glitch when the phone CACHE-REPLAYS to a
+# fixed FAR coordinate (observed: ~115 km SE, Jerusalem area — fake trips
+# 7279/7358), teleporting out and back with NO path in between. The close-
+# phantom rule above misses these (they're >250 m AND >1 h, outside its scope),
+# and a speed cap can't help (115 km / 38 min ≈ 180 km/h looks legit, right on
+# the Israel-Railways-express axis). The robust, distance- and launch-agnostic
+# signal is CONTINUITY: a real journey to X km has fixes at intermediate
+# distances (5, 20, 50 …); a teleport has fixes ONLY near home and at X, with an
+# empty band between. So a trip whose good-accuracy reach exceeds TELEPORT_FAR_M
+# but has ZERO good pings in the intermediate band [INNER, reach-INNER] is a
+# teleport => fake. Applies at ANY duration (unlike the close-phantom rule).
+# Safe for real trips: a genuine far trip — even one silent on the way OUT —
+# still has return-leg fixes in the band; only a trip silent BOTH ways over
+# tens of km (physically implausible, and it returns to the exact origin) would
+# trip it. Overridable via teleport_far_m / teleport_inner_m.
+TELEPORT_FAR_M = 20000      # only jumps beyond 20 km are teleport candidates
+TELEPORT_INNER_M = 1500     # band = [INNER, reach - INNER]
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('geo_trip_janitor')
 
@@ -92,13 +111,15 @@ def haversine_m(lat1, lon1, lat2, lon2):
 def read_cfg(conn):
     """Read the dashboard_settings.geolocation singleton so this janitor and the
     dashboard display filter stay in lock-step. Returns
-    (far_m, center_lat, center_lon, acc_gate, group_device_map)."""
+    (far_m, center_lat, center_lon, acc_gate, group_device_map, tele_far, tele_inner)."""
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT value FROM dashboard_settings WHERE key = 'geolocation'")
         row = cur.fetchone()
     val = (row or {}).get('value') or {}
     far_m = float(val.get('real_trip_min_far_m') or REAL_TRIP_MIN_FAR_M)
     acc_gate = float(val.get('phantom_accuracy_gate_m') or PHANTOM_ACCURACY_GATE_M)
+    tele_far = float(val.get('teleport_far_m') or TELEPORT_FAR_M)
+    tele_inner = float(val.get('teleport_inner_m') or TELEPORT_INNER_M)
     center = val.get('center') or {}
     clat = float(center['lat']) if center.get('lat') is not None else None
     clon = float(center['lon']) if center.get('lon') is not None else None
@@ -107,17 +128,18 @@ def read_cfg(conn):
         g, dev = d.get('group_id'), d.get('device_id')
         if g and dev:
             gmap.setdefault(g, []).append(dev)
-    return far_m, clat, clon, acc_gate, gmap
+    return far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner
 
 
-def clean_max_dist(conn, device_ids, start, end, clat, clon, acc_gate, fallback_m):
-    """Farthest distance from home reached on a GOOD-accuracy ping in the trip
-    window. Pings with accuracy_m > acc_gate are excluded (junk can't define
-    reach); pings with NULL accuracy are kept (treated as good). If there is no
-    good ping to measure, return fallback_m (the stored max) so we never delete
-    on empty evidence. Returns (clean_max_m, good_count, total_count)."""
+def trip_good_dists(conn, device_ids, start, end, clat, clon, acc_gate):
+    """Home-distances (m) for the GOOD-accuracy pings in the trip window, sorted
+    ascending. A ping is "good" if accuracy_m <= acc_gate (junk far readings
+    can't define reach) or NULL (treated as good). Returns (good_dists, total).
+    The caller derives both the clean-max reach (last element) and the
+    intermediate-band occupancy (for the teleport rule) from this one fetch, so
+    pings are queried once per trip. Empty good_dists → no good evidence."""
     if not device_ids or clat is None or clon is None:
-        return fallback_m, 0, 0  # cannot recompute → keep old (distance-only) behavior
+        return [], 0  # cannot recompute → caller falls back to stored max
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """SELECT lat::float AS lat, lon::float AS lon, accuracy_m
@@ -126,19 +148,14 @@ def clean_max_dist(conn, device_ids, start, end, clat, clon, acc_gate, fallback_
             (device_ids, start, end),
         )
         pings = cur.fetchall()
-    good = 0
-    cmax = 0.0
+    good = []
     for p in pings:
         acc = p['accuracy_m']
         if acc is not None and float(acc) > acc_gate:
             continue
-        good += 1
-        d = haversine_m(clat, clon, p['lat'], p['lon'])
-        if d > cmax:
-            cmax = d
-    if good == 0:
-        return fallback_m, 0, len(pings)  # no good evidence → keep old behavior
-    return cmax, good, len(pings)
+        good.append(haversine_m(clat, clon, p['lat'], p['lon']))
+    good.sort()
+    return good, len(pings)
 
 
 def main():
@@ -150,10 +167,15 @@ def main():
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
 
-    far_m, clat, clon, acc_gate, gmap = read_cfg(conn)
-    log.info('phantom rule: clean_max(acc<=%.0fm) <= %.0fm  %s',
-             acc_gate, far_m, '[DRY RUN]' if args.dry_run else '[LIVE]')
+    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner = read_cfg(conn)
+    log.info('close-phantom: clean_max(acc<=%.0fm) <= %.0fm (dur < %ds) | '
+             'teleport: reach > %.0fm with empty band [%.0fm .. reach-%.0fm] (any dur)  %s',
+             acc_gate, far_m, MAX_TRIP_SEC, tele_far, tele_inner, tele_inner,
+             '[DRY RUN]' if args.dry_run else '[LIVE]')
 
+    # All confirmed closed trips in the look-back — ANY duration. The close-
+    # phantom rule self-limits to < MAX_TRIP_SEC; the teleport rule needs to see
+    # long trips too (the 115 km fakes were 100-127 min, i.e. > 1 h).
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """SELECT id, group_id, started_at, returned_at, duration_sec, max_dist_m
@@ -161,27 +183,40 @@ def main():
                WHERE confirmed = TRUE
                  AND returned_at IS NOT NULL
                  AND returned_at > NOW() - make_interval(hours => %s)
-                 AND duration_sec < %s
                ORDER BY started_at DESC""",
-            (RECENT_TRIPS_HOURS, MAX_TRIP_SEC),
+            (RECENT_TRIPS_HOURS,),
         )
         trips = cur.fetchall()
 
-    log.info('examining %d recent short trip(s) (< %ds, last %dh)',
-             len(trips), MAX_TRIP_SEC, RECENT_TRIPS_HOURS)
+    log.info('examining %d recent trip(s) (last %dh, any duration)',
+             len(trips), RECENT_TRIPS_HOURS)
 
     to_delete = []
     for t in trips:
         stored = t['max_dist_m'] or 0
         dev_ids = gmap.get(t['group_id'], [])
-        cmax, good, total = clean_max_dist(
-            conn, dev_ids, t['started_at'], t['returned_at'],
-            clat, clon, acc_gate, stored)
-        is_phantom = cmax <= far_m
-        log.info('trip #%d  dur=%ds stored=%dm clean=%dm (good %d/%d pings) -> %s',
-                 t['id'], t['duration_sec'], stored, int(cmax), good, total,
-                 'DELETE' if is_phantom else 'keep(real)')
-        if is_phantom:
+        good_dists, total = trip_good_dists(
+            conn, dev_ids, t['started_at'], t['returned_at'], clat, clon, acc_gate)
+        # clean reach = farthest good-accuracy ping; fall back to stored max when
+        # there's no good evidence (never delete on empty evidence).
+        cmax = good_dists[-1] if good_dists else float(stored)
+
+        reason = None
+        # Rule 1 — close phantom: short trips that never credibly left ~250 m.
+        if t['duration_sec'] < MAX_TRIP_SEC and cmax <= far_m:
+            reason = 'close-phantom'
+        # Rule 2 — far teleport: reached far on good pings but with NO fixes in
+        # the intermediate band → no path was travelled (cache replay). Any dur.
+        elif good_dists and cmax > tele_far:
+            band_lo, band_hi = tele_inner, cmax - tele_inner
+            if band_hi > band_lo and not any(band_lo <= d <= band_hi for d in good_dists):
+                reason = 'teleport'
+
+        log.info('trip #%d dur=%ds stored=%dm clean=%dm (good %d/%d pings) -> %s',
+                 t['id'], t['duration_sec'], stored, int(cmax), len(good_dists), total,
+                 ('DELETE:' + reason) if reason else 'keep(real)')
+        if reason:
+            t['_reason'] = reason
             to_delete.append(t)
 
     if not to_delete:
