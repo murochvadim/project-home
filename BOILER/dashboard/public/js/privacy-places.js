@@ -6,6 +6,7 @@
 let _pvMap = null;          // Leaflet map (inited once, when the tab is first shown)
 let _pvMapLayer = null;     // layer group holding the saved-place markers
 let _pvPlaces = [];         // last loaded rows
+let _pvpFilter = '';        // list-only text filter (name / place / date / user / kind)
 let _pvPendingMarker = null; // the "where to add" pin (from Find pick or a map click)
 let _pvPendingLatLng = null; // {lat, lon} of the pending pin, or null
 let _pvPendingLabel = '';    // resolved address of the pending pin (for the address field)
@@ -74,9 +75,28 @@ async function pvPlacesLoad() {
   pvPlacesRender();
 }
 
+// List-only text filter. Matches across name / city / country / the formatted
+// date / each visitor / kind / notes / source — AND of space-separated terms,
+// so "maya greece" narrows to places Maya visited in Greece. The MAP is left
+// showing all pins (filtering it would zoom the view around on every keystroke).
+window.pvPlacesFilter = function (v) { _pvpFilter = (v || '').trim(); pvPlacesRender(); };
+function _pvpMatch(p) {
+  const q = _pvpFilter.toLowerCase();
+  if (!q) return true;
+  const when = p.visited_at ? new Date(p.visited_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+  const vs = Array.isArray(p.visitors) ? p.visitors : [];
+  const hay = [p.place_name, p.city, p.country, p.kind, p.notes, p.source, when,
+               (p.visit_count != null ? '×' + p.visit_count : ''), ...vs]
+    .filter(Boolean).join(' ').toLowerCase();
+  return q.split(/\s+/).every(t => hay.includes(t));
+}
+
 function pvPlacesRender() {
+  const shown = _pvpFilter ? _pvPlaces.filter(_pvpMatch) : _pvPlaces;
   const cnt = document.getElementById('pvp-count');
-  if (cnt) cnt.textContent = '(' + _pvPlaces.length + ')';
+  if (cnt) cnt.textContent = _pvpFilter
+    ? '(' + shown.length + ' of ' + _pvPlaces.length + ')'
+    : '(' + _pvPlaces.length + ')';
   // markers
   if (_pvMapLayer) {
     _pvMapLayer.clearLayers();
@@ -110,7 +130,8 @@ function pvPlacesRender() {
   const host = document.getElementById('pvp-list');
   if (host) {
     if (!_pvPlaces.length) { host.innerHTML = '<div style="color:#aaa;">No places yet — add one on the left.</div>'; return; }
-    host.innerHTML = _pvPlaces.map(p => {
+    if (!shown.length) { host.innerHTML = '<div style="color:#aaa;">No places match “' + _esc(_pvpFilter) + '”.</div>'; return; }
+    host.innerHTML = shown.map(p => {
       const when = p.visited_at ? new Date(p.visited_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
       const loc = [p.city, p.country].filter(Boolean).join(', ');
       const vs = Array.isArray(p.visitors) ? p.visitors : [];
