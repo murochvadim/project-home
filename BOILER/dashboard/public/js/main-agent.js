@@ -1922,13 +1922,13 @@
 (function () {
   let started    = false;
   let _pollTimer = null;
-  // _paused persists across page navigations via sessionStorage — without
-  // this, navigating away from Main Agent and back reset the flag to false
-  // and the feed would resume updating even though the user had explicitly
-  // stopped it. sessionStorage scopes to the browser tab, so closing the
-  // tab still clears the pause (correct: fresh tab, fresh state).
+  // _paused persists in localStorage so a Stop STAYS stopped — across page
+  // navigations, tab close/reopen, new tabs, and browser restarts. The ONLY
+  // thing that clears it is the user clicking Start. (Was sessionStorage, which
+  // cleared on tab close → the feed "started itself" on the next open; that is
+  // exactly the bug this fixes.) The init below is the sole auto-restore path.
   const PAUSE_KEY = 'corridorSim.paused';
-  let _paused    = sessionStorage.getItem(PAUSE_KEY) === '1';
+  let _paused    = localStorage.getItem(PAUSE_KEY) === '1';
   let _events    = [];                          // last poll's events (server is source of truth)
   const POLL_MS = 1000;
 
@@ -2239,14 +2239,14 @@
     const clearBtn = document.getElementById('cs-events-clear');
     stopBtn.onclick = () => {
       _paused = true;
-      sessionStorage.setItem(PAUSE_KEY, '1');
+      localStorage.setItem(PAUSE_KEY, '1');
       stopBtn.style.display  = 'none';
       startBtn.style.display = '';
       setStatus('⏸ paused', '#888');
     };
     startBtn.onclick = () => {
       _paused = false;
-      sessionStorage.removeItem(PAUSE_KEY);
+      localStorage.removeItem(PAUSE_KEY);
       startBtn.style.display = 'none';
       stopBtn.style.display  = '';
       setStatus('● live', '#3a7d44');
