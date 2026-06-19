@@ -43,8 +43,8 @@ function _pvpFillUserFilter() {
   const sel = document.getElementById('pvp-filter-user');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">👤 All users</option>' +
-    _pvpUsers.map(n => `<option value="${_esc(n)}">${_esc(n)}</option>`).join('');
+  sel.innerHTML = '<option value="">👤 All</option>' +
+    _pvpUsers.map(n => `<option value="${_esc(n)}">Only ${_esc(n)}</option>`).join('');
   if (cur && _pvpUsers.includes(cur)) sel.value = cur;   // keep selection across reload
 }
 function _pvpRenderVisitorChecks(containerId, selected) {
@@ -93,10 +93,12 @@ async function pvPlacesLoad() {
 window.pvPlacesFilter = function (v) { _pvpFilter = (v || '').trim(); pvPlacesRender(); };
 window.pvPlacesFilterUser = function (v) { _pvpFilterUser = v || ''; pvPlacesRender(); };
 function _pvpMatch(p) {
-  // "by user" dropdown — the place's visitors must include the selected user.
+  // "by user" dropdown — show only places where the selected user is the SOLE
+  // visitor (e.g. "Vadim" → places Vadim visited alone, NOT the ones you both
+  // did). "All users" ('') skips this. Places with no visitors never match.
   if (_pvpFilterUser) {
-    const vs = Array.isArray(p.visitors) ? p.visitors.map(x => String(x).toLowerCase()) : [];
-    if (!vs.includes(_pvpFilterUser.toLowerCase())) return false;
+    const vs = (Array.isArray(p.visitors) ? p.visitors : []).map(x => String(x).trim().toLowerCase()).filter(Boolean);
+    if (!(vs.length === 1 && vs[0] === _pvpFilterUser.toLowerCase())) return false;
   }
   const q = _pvpFilter.toLowerCase();
   if (!q) return true;
