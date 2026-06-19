@@ -189,9 +189,15 @@
         </div>
         <div class="card" style="margin-bottom:0;">
           <h2 style="margin-top:0;">List</h2>
-          <input id="pvp-filter" type="text" placeholder="🔍 filter by name, place, date, user, kind…"
-                 oninput="pvPlacesFilter(this.value)"
-                 style="width:100%; box-sizing:border-box; padding:6px 10px; margin-bottom:8px; border:1px solid #ccc; border-radius:6px; font-size:0.85rem;">
+          <div style="display:flex; gap:8px; margin-bottom:8px;">
+            <input id="pvp-filter" type="text" placeholder="🔍 filter by name, place, date, kind…"
+                   oninput="pvPlacesFilter(this.value)"
+                   style="flex:1; min-width:0; box-sizing:border-box; padding:6px 10px; border:1px solid #ccc; border-radius:6px; font-size:0.85rem;">
+            <select id="pvp-filter-user" onchange="pvPlacesFilterUser(this.value)"
+                    style="flex-shrink:0; padding:6px 8px; border:1px solid #ccc; border-radius:6px; font-size:0.85rem; background:#fff;">
+              <option value="">👤 All users</option>
+            </select>
+          </div>
           <div id="pvp-list" style="font-size:0.85rem;"><div style="color:#aaa;">—</div></div>
         </div>
       </div>
@@ -410,7 +416,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/privacy.js?v=67"></script>
-<script src="js/privacy-places.js?v=7"></script>
+<script src="js/privacy-places.js?v=8"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>

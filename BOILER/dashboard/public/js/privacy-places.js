@@ -6,7 +6,8 @@
 let _pvMap = null;          // Leaflet map (inited once, when the tab is first shown)
 let _pvMapLayer = null;     // layer group holding the saved-place markers
 let _pvPlaces = [];         // last loaded rows
-let _pvpFilter = '';        // list-only text filter (name / place / date / user / kind)
+let _pvpFilter = '';        // list-only text filter (name / place / date / kind)
+let _pvpFilterUser = '';    // list-only user dropdown filter (visitor name; '' = all)
 let _pvPendingMarker = null; // the "where to add" pin (from Find pick or a map click)
 let _pvPendingLatLng = null; // {lat, lon} of the pending pin, or null
 let _pvPendingLabel = '';    // resolved address of the pending pin (for the address field)
@@ -35,6 +36,16 @@ async function pvPlacesLoadUsers() {
     _pvpUsers = (Array.isArray(j && j.value) ? j.value : []).map(u => (u.name || '').trim()).filter(Boolean);
   } catch (e) { _pvpUsers = []; }
   _pvpRenderVisitorChecks('pvp-visitors', []);   // the add-form checkboxes
+  _pvpFillUserFilter();                          // the list filter dropdown
+}
+// Populate the list's "by user" dropdown from the registered users.
+function _pvpFillUserFilter() {
+  const sel = document.getElementById('pvp-filter-user');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">👤 All users</option>' +
+    _pvpUsers.map(n => `<option value="${_esc(n)}">${_esc(n)}</option>`).join('');
+  if (cur && _pvpUsers.includes(cur)) sel.value = cur;   // keep selection across reload
 }
 function _pvpRenderVisitorChecks(containerId, selected) {
   const host = document.getElementById(containerId);
@@ -80,7 +91,13 @@ async function pvPlacesLoad() {
 // so "maya greece" narrows to places Maya visited in Greece. The MAP is left
 // showing all pins (filtering it would zoom the view around on every keystroke).
 window.pvPlacesFilter = function (v) { _pvpFilter = (v || '').trim(); pvPlacesRender(); };
+window.pvPlacesFilterUser = function (v) { _pvpFilterUser = v || ''; pvPlacesRender(); };
 function _pvpMatch(p) {
+  // "by user" dropdown — the place's visitors must include the selected user.
+  if (_pvpFilterUser) {
+    const vs = Array.isArray(p.visitors) ? p.visitors.map(x => String(x).toLowerCase()) : [];
+    if (!vs.includes(_pvpFilterUser.toLowerCase())) return false;
+  }
   const q = _pvpFilter.toLowerCase();
   if (!q) return true;
   const when = p.visited_at ? new Date(p.visited_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
@@ -92,9 +109,10 @@ function _pvpMatch(p) {
 }
 
 function pvPlacesRender() {
-  const shown = _pvpFilter ? _pvPlaces.filter(_pvpMatch) : _pvPlaces;
+  const _filtering = _pvpFilter || _pvpFilterUser;
+  const shown = _filtering ? _pvPlaces.filter(_pvpMatch) : _pvPlaces;
   const cnt = document.getElementById('pvp-count');
-  if (cnt) cnt.textContent = _pvpFilter
+  if (cnt) cnt.textContent = _filtering
     ? '(' + shown.length + ' of ' + _pvPlaces.length + ')'
     : '(' + _pvPlaces.length + ')';
   // markers
@@ -130,7 +148,7 @@ function pvPlacesRender() {
   const host = document.getElementById('pvp-list');
   if (host) {
     if (!_pvPlaces.length) { host.innerHTML = '<div style="color:#aaa;">No places yet — add one on the left.</div>'; return; }
-    if (!shown.length) { host.innerHTML = '<div style="color:#aaa;">No places match “' + _esc(_pvpFilter) + '”.</div>'; return; }
+    if (!shown.length) { host.innerHTML = '<div style="color:#aaa;">No places match the filter.</div>'; return; }
     host.innerHTML = shown.map(p => {
       const when = p.visited_at ? new Date(p.visited_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
       const loc = [p.city, p.country].filter(Boolean).join(', ');
