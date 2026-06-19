@@ -71,6 +71,21 @@ function pvPlacesOnShow() {
       maxZoom: 19, attribution: '© OpenStreetMap',
     }).addTo(_pvMap);
     _pvMapLayer = L.layerGroup().addTo(_pvMap);
+    // Total-places badge — top-right of the map, framed (trim), big green number
+    // (matches the Network overview "135" style). Shows the GRAND total (all
+    // users), independent of the list filter; updated in pvPlacesRender().
+    const TotalCtl = L.Control.extend({
+      options: { position: 'topright' },
+      onAdd() {
+        const d = L.DomUtil.create('div');
+        d.id = 'pvp-map-total';
+        d.style.cssText = 'background:rgba(255,255,255,0.92); border:2px solid #2ecc71; border-radius:10px; padding:5px 14px; text-align:center; box-shadow:0 1px 5px rgba(0,0,0,0.25);';
+        d.innerHTML = '<div class="pvp-total-num" style="font-size:2.5rem; font-weight:700; color:#2ecc71; line-height:1;">—</div>'
+                    + '<div style="font-size:0.68rem; color:#888; text-transform:uppercase; letter-spacing:0.5px;">places</div>';
+        return d;
+      },
+    });
+    _pvMap.addControl(new TotalCtl());
     _pvMap.on('click', e => pvPlaceSetPending(e.latlng.lat, e.latlng.lng, ''));   // click map = drop a manual pin
     setTimeout(() => { if (_pvMap) _pvMap.invalidateSize(); }, 80);   // ensure correct size after first paint
     pvPlacesLoad();
@@ -111,6 +126,9 @@ function _pvpMatch(p) {
 }
 
 function pvPlacesRender() {
+  // Map badge — GRAND total (all users), independent of any list filter.
+  const totNum = document.querySelector('#pvp-map-total .pvp-total-num');
+  if (totNum) totNum.textContent = _pvPlaces.length;
   const _filtering = _pvpFilter || _pvpFilterUser;
   const shown = _filtering ? _pvPlaces.filter(_pvpMatch) : _pvPlaces;
   const cnt = document.getElementById('pvp-count');
