@@ -1163,6 +1163,66 @@ class RuleEngine:
             return
         log.warning("Rule '%s' awtrix: unsupported action '%s'", rule_name, action)
 
+    # Media agent (LXC 100, player_service.py :8766) dispatch.
+    #
+    # The "media" device is virtual (no devices-table row); rules emit
+    #   {protocol:'media', media_action:..., target:'tv55', ...}
+    # and this routes to the media agent's HTTP API — same urllib pattern as
+    # _dispatch_alexa. Used by the Balcony HASP panel media buttons (page 4
+    # control / page 5 selection). Runs on the background dispatch worker
+    # thread, so the (possibly slow) HTTP call never blocks rule firing.
+    # Failures are logged, never raised.
+    _MEDIA_BASE = 'http://192.168.1.138:8766'
+
+    def _dispatch_media(self, cmd, rule_name):
+        action = cmd.get('media_action', '')
+        target = cmd.get('target') or 'tv55'
+        base = self._MEDIA_BASE
+        if action == 'tv_on':
+            url, body = f'{base}/api/media/command', {'entity': target, 'command': 'turn_on'}
+        elif action == 'tv_off':
+            url, body = f'{base}/api/media/command', {'entity': target, 'command': 'turn_off'}
+        elif action == 'vol_up':
+            url, body = f'{base}/api/media/command', {'entity': target, 'command': 'volume_step', 'value': 10}
+        elif action == 'vol_down':
+            url, body = f'{base}/api/media/command', {'entity': target, 'command': 'volume_step', 'value': -10}
+        elif action == 'pause':
+            url, body = f'{base}/api/queue/pause', {}
+        elif action == 'stop':
+            url, body = f'{base}/api/queue/stop', {}
+        elif action == 'next':
+            url, body = f'{base}/api/queue/next', {}
+        elif action == 'prev':
+            url, body = f'{base}/api/queue/prev', {}
+        elif action == 'play_playlist':
+            pid = cmd.get('playlist_id')
+            if pid is None:
+                log.warning("Rule '%s' media: play_playlist missing playlist_id", rule_name)
+                return
+            url = f'{base}/api/playlists/{int(pid)}/play'
+            body = {'target': target,
+                    'shuffle': bool(cmd.get('shuffle', False)),
+                    'repeat':  bool(cmd.get('repeat', False))}
+        elif action == 'play_video':
+            rel = cmd.get('rel_path') or ''
+            if not rel:
+                log.warning("Rule '%s' media: play_video missing rel_path", rule_name)
+                return
+            url, body = f'{base}/api/media/play', {'relPath': rel, 'target': target}
+        else:
+            log.warning("Rule '%s' media: unknown media_action '%s'", rule_name, action)
+            return
+        try:
+            req = urllib.request.Request(
+                url, data=json.dumps(body).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(f'media agent returned {resp.status}')
+            log.info("Rule '%s' -> media %s (target=%s)", rule_name, action, target)
+        except Exception as e:
+            log.warning("Rule '%s' media %s failed: %s", rule_name, action, e)
+
     def _dispatch_alexa(self, cmd, device_id, rule_name):
         """Dispatch Alexa media_player commands via HA REST services.
 
@@ -1602,6 +1662,14 @@ class RuleEngine:
             pixoo_payload = {k: v for k, v in cmd.items() if k not in {'device_id', 'protocol', 'rule', '_skip_loop_guard'}}
             self.mqtt.publish_command('mur/home/pixoo/command', pixoo_payload)
             log.info("Rule '%s' -> pixoo %s", rule_name, action)
+            return
+
+        # Media agent (virtual 'media' device, no devices-table row) — route
+        # to player_service.py on LXC 100 over HTTP. Same cmd-level protocol
+        # check as pixoo (must run before the dev lookup below, which would
+        # find nothing for device_id='media').
+        if protocol == 'media':
+            self._dispatch_media(cmd, rule_name)
             return
 
         # Loop guard catches runaway automation feedback (rule → device →

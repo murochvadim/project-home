@@ -189,6 +189,11 @@
   let _buttons = [];
   let _controllable = [];
   let _bcActivePicker = null;  // {row_id, snapshot}
+  // Media Buttons card (page 4 control + page 5 selection → Balcony TV tv55)
+  const MEDIA_API   = 'http://192.168.1.138:8766';  // player service (browser → media agent directly, same as media.js)
+  let _mediaButtons = [];   // hasp_buttons rows with action_type='media'
+  let _playlists    = [];   // [{id, name, ...}] from media agent
+  let _videos       = [];   // [{rel, name}] under /Videos
   let _bcAlexaAnnouncements = [];   // [{name, message, ...}] — for Speak optgroup
   let _bcAlexaStations      = [];   // [{name, content_id, content_type}] — for Play optgroup
 
@@ -577,8 +582,13 @@
     await bcLoadControllableDevices();
     try {
       const r = await fetch(`/api/hasp/${BC_PANEL}/buttons`).then(r => r.json());
-      _buttons = (r.buttons || []).map(b => ({ ...b, bindings: b.bindings || [] }));
-    } catch (_) { _buttons = []; }
+      const all = (r.buttons || []).map(b => ({ ...b, bindings: b.bindings || [] }));
+      // Media buttons (page 4 control / page 5 selection) get their own card —
+      // keep them out of the device-only Button Bindings picker.
+      _mediaButtons = all.filter(b => b.action_type === 'media');
+      _buttons      = all.filter(b => b.action_type !== 'media');
+    } catch (_) { _buttons = []; _mediaButtons = []; }
+    bcLoadMediaButtons();
     const list = document.getElementById('bc-buttons-list');
     if (!list) return;
     if (!_buttons.length) {
@@ -597,6 +607,155 @@
     }
     list.innerHTML = cards.join('');
   }
+
+  // ─── Media Buttons card ────────────────────────────────────────────────────
+  // Page 4 = control (TV on/off, queue pause/stop/next — fixed bindings).
+  // Page 5 = selection (assign one playlist OR one video per button). Saving a
+  // selection PATCHes the row's bindings JSONB; the Balcony Buttons rule then
+  // routes the press to rule_engine._dispatch_media → media agent on LXC 100.
+  const _VID_EXT = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.ts', '.flv', '.wmv']);
+
+  async function bcLoadMediaButtons() {
+    try {
+      const [pr, wr] = await Promise.all([
+        fetch(`${MEDIA_API}/api/playlists`).then(r => r.json()).catch(() => []),
+        fetch(`${MEDIA_API}/api/media/walk?path=Videos`).then(r => r.json()).catch(() => ({ files: [] })),
+      ]);
+      _playlists = Array.isArray(pr) ? pr : (pr.playlists || []);
+      _videos = ((wr && wr.files) || [])
+        .filter(f => _VID_EXT.has((f.ext || '').toLowerCase()))
+        .map(f => ({ rel: (f.path || '').replace('/mnt/media/', ''), name: f.name }));
+    } catch (_) { /* keep whatever we had */ }
+    bcRenderMediaList();
+  }
+
+  function bcMediaRow(r, selectable) {
+    const b = (r.bindings || [])[0] || null;
+    const head = `<div style="min-width:118px;font-weight:600;">${escHtml(r.label || ('p' + r.page + 'b' + r.button_id))}`
+      + `<span style="font-weight:normal;color:#aaa;font-size:0.72rem;"> p${r.page}b${r.button_id}</span></div>`;
+    let mid;
+    if (!selectable) {
+      mid = `<span style="font-size:0.8rem;color:#777;flex:1;">control · <code>${escHtml(b ? b.media_action : '—')}</code> → tv55</span>`;
+    } else {
+      let cur = '';
+      if (b && b.media_action === 'play_playlist' && b.playlist_id != null) cur = 'pl:' + b.playlist_id;
+      else if (b && b.media_action === 'play_video' && b.rel_path) cur = 'vid:' + b.rel_path;
+      const plOpts = _playlists.map(p =>
+        `<option value="pl:${p.id}"${cur === 'pl:' + p.id ? ' selected' : ''}>${escHtml(p.name)}</option>`).join('');
+      const vidOpts = _videos.map(v =>
+        `<option value="vid:${escHtml(v.rel)}"${cur === 'vid:' + v.rel ? ' selected' : ''}>${escHtml(v.name)}</option>`).join('');
+      mid = `<select onchange="bcMediaSelectChange(${r.id}, this.value, this)" style="flex:1;max-width:360px;padding:4px 6px;font-size:0.82rem;border:1px solid #d0cbc4;border-radius:3px;">`
+        + `<option value=""${cur === '' ? ' selected' : ''}>— none —</option>`
+        + `<optgroup label="Playlists">${plOpts}</optgroup>`
+        + `<optgroup label="Videos">${vidOpts}</optgroup>`
+        + `</select>`;
+    }
+    return `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid #eee;">`
+      + head + mid
+      + `<button class="btn-test" onclick="bcTestMediaRow(${r.id}, this)">▶ Test</button></div>`;
+  }
+
+  function bcRenderMediaList() {
+    const list = document.getElementById('bc-media-list');
+    if (!list) return;
+    const ctrl = _mediaButtons.filter(b => b.page === 4).sort((a, b) => a.button_id - b.button_id);
+    const sel  = _mediaButtons.filter(b => b.page === 5).sort((a, b) => a.button_id - b.button_id);
+    const hdr = t => `<div style="font-size:0.8rem;color:#555;font-weight:600;margin:10px 0 4px;">${t}</div>`;
+    const none = '<div style="color:#888;font-size:0.8rem;padding:4px;">none — run Sync from panel after editing widgets</div>';
+    list.innerHTML =
+      hdr('Page 4 — Control (fixed)') + (ctrl.length ? ctrl.map(r => bcMediaRow(r, false)).join('') : none)
+      + hdr('Page 5 — Selection (pick a playlist or video)') + (sel.length ? sel.map(r => bcMediaRow(r, true)).join('') : none);
+  }
+
+  window.bcMediaSelectChange = async function (rowId, val, selEl) {
+    const row = _mediaButtons.find(r => r.id === rowId);
+    if (!row) return;
+    if (!val) {
+      row.bindings = [];
+    } else if (val.startsWith('pl:')) {
+      const pid = parseInt(val.slice(3), 10);
+      const pl = _playlists.find(p => p.id === pid);
+      row.bindings = [{ type: 'media', media_action: 'play_playlist', playlist_id: pid,
+                        target: 'tv55', shuffle: false, repeat: false,
+                        label: pl ? pl.name : ('Playlist ' + pid) }];
+    } else if (val.startsWith('vid:')) {
+      const rel = val.slice(4);
+      row.bindings = [{ type: 'media', media_action: 'play_video', rel_path: rel,
+                        target: 'tv55', label: rel.split('/').pop() }];
+    }
+    // Auto-save immediately — the panel button reads the SAVED binding, so a
+    // pick must persist without a separate Save click (the old trap). Save All
+    // stays as a bulk backup.
+    try {
+      const r = await fetch(`/api/hasp/${BC_PANEL}/buttons/${rowId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bindings: row.bindings || [] })
+      });
+      if (selEl) {
+        selEl.style.borderColor = r.ok ? '#3a7d44' : '#c0392b';
+        setTimeout(() => { selEl.style.borderColor = '#d0cbc4'; }, 1200);
+      }
+    } catch (_) {
+      if (selEl) { selEl.style.borderColor = '#c0392b'; setTimeout(() => { selEl.style.borderColor = '#d0cbc4'; }, 1200); }
+    }
+  };
+
+  window.bcSaveMediaButtons = async function () {
+    const btn = document.querySelector('#bc-media-card .btn-save');
+    if (!btn) return;
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    let ok = 0, fail = 0;
+    // Only page-5 selection rows are user-editable; page-4 control bindings are fixed.
+    for (const row of _mediaButtons.filter(r => r.page === 5)) {
+      try {
+        const r = await fetch(`/api/hasp/${BC_PANEL}/buttons/${row.id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bindings: row.bindings || [] })
+        });
+        if (r.ok) ok++; else fail++;
+      } catch (_) { fail++; }
+    }
+    btn.textContent = fail === 0 ? '✓ Saved' : `✗ ${fail} failed`;
+    btn.style.background = fail === 0 ? '#3a7d44' : '#c0392b';
+    setTimeout(() => { btn.textContent = original; btn.style.background = ''; btn.disabled = false; }, 2000);
+  };
+
+  window.bcTestMediaRow = async function (rowId, btnEl) {
+    const row = _mediaButtons.find(r => r.id === rowId);
+    if (!row) return;
+    const b = (row.bindings || [])[0];
+    const flash = (txt, okColor) => {
+      if (!btnEl) return;
+      const o = btnEl.textContent; btnEl.textContent = txt;
+      if (okColor) btnEl.style.color = okColor;
+      setTimeout(() => { btnEl.textContent = o; btnEl.style.color = ''; }, 1500);
+    };
+    if (!b || !b.media_action) { flash('— empty', '#c0392b'); return; }
+    const target = b.target || 'tv55';
+    let url, body = {};
+    switch (b.media_action) {
+      case 'tv_on':  url = `${MEDIA_API}/api/media/command`; body = { entity: target, command: 'turn_on' }; break;
+      case 'tv_off': url = `${MEDIA_API}/api/media/command`; body = { entity: target, command: 'turn_off' }; break;
+      case 'vol_up':   url = `${MEDIA_API}/api/media/command`; body = { entity: target, command: 'volume_step', value: 10 };   break;
+      case 'vol_down': url = `${MEDIA_API}/api/media/command`; body = { entity: target, command: 'volume_step', value: -10 }; break;
+      case 'pause':  url = `${MEDIA_API}/api/queue/pause`; break;
+      case 'stop':   url = `${MEDIA_API}/api/queue/stop`;  break;
+      case 'next':   url = `${MEDIA_API}/api/queue/next`;  break;
+      case 'prev':   url = `${MEDIA_API}/api/queue/prev`;  break;
+      case 'play_playlist':
+        url = `${MEDIA_API}/api/playlists/${b.playlist_id}/play`;
+        body = { target, shuffle: !!b.shuffle, repeat: !!b.repeat }; break;
+      case 'play_video':
+        url = `${MEDIA_API}/api/media/play`;
+        body = { relPath: b.rel_path, target }; break;
+      default: flash('— ?', '#c0392b'); return;
+    }
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      flash(r.ok ? '✓' : '✗ ' + r.status, r.ok ? '#3a7d44' : '#c0392b');
+    } catch (_) { flash('✗ net', '#c0392b'); }
+  };
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && _bcActivePicker) bcClosePicker(false);

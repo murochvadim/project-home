@@ -149,6 +149,22 @@ def _build_command(b, state):
             "_skip_loop_guard": True,
         }
 
+    if btype == "media":
+        # Media-agent action (TV power / queue control / play playlist|video).
+        # Routed by rule_engine._dispatch_media via the virtual 'media' device.
+        cmd = {
+            "device_id": "media",
+            "protocol": "media",
+            "media_action": b.get("media_action"),
+            "target": b.get("target") or "tv55",
+            "rule": "Balcony Buttons",
+            "_skip_loop_guard": True,
+        }
+        for k in ("playlist_id", "rel_path", "shuffle", "repeat"):
+            if b.get(k) is not None:
+                cmd[k] = b[k]
+        return cmd
+
     if btype == "pixoo_preset":
         cmd = {
             "device_id": "pixoo",

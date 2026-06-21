@@ -61,85 +61,65 @@
 
 // {"page":2,"id":1,"obj":"label","x":20,"y":5,"w":240,"h":40,"text":"Sensors", "text_font": 28}
 
-{"page":3,"id":2,"obj":"obj","x":5,"y":20,"w":225,"h":75,"radius":10,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":3,"obj":"label","x":23,"y":30,"w":65,"h":65, "text":"\uE58F","click":false,"text_font": 48, "text_color":"#6F6F6F"} 
-{"page":3,"id":1,"obj":"label","x":100,"y":30,"w":200,"h":40,"text":"Watering 1","click":false,"text_font": 24}
-{"page":3,"id":5,"obj":"label","x":100,"y":60,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":3,"id":6,"obj":"obj","x":245,"y":20,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":7,"obj":"label","x":270,"y":30,"w":65,"h":65,"text":"\uE58F","click":false,"text_font": 48, "text_color":"#6F6F6F"}
-{"page":3,"id":8,"obj":"label","x":330,"y":30,"w":200,"h":40,"text":"Watering 2","click":false,"text_font": 24}
-{"page":3,"id":9,"obj":"label","x":330,"y":60,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":3,"id":10,"obj":"obj","x":5,"y":110,"w":225,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":11,"obj":"label","x":23,"y":120,"w":65,"h":65,"text":"\uE6E8", "text_font": 48, "text_color":"#6F6F6F"}
-{"page":3,"id":12,"obj":"label","x":80,"y":120,"w":200,"h":40,"text":"RGB light","click":false,"text_font": 24}
-{"page":3,"id":13,"obj":"label","x":100,"y":152,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":3,"id":14,"obj":"obj","x":245,"y":110,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":15,"obj":"label","x":270,"y":120,"w":65,"h":65,"text":"\uE769", "text_font": 48, "text_color":"#6F6F6F"}
-{"page":3,"id":16,"obj":"label","x":320,"y":120,"w":200,"h":40,"text":"Mosquito", "text_font": 24}
-{"page":3,"id":17,"obj":"label","x":330,"y":152,"w":200,"h":40,"text":"Off", "text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":3,"id":18,"obj":"obj","x":5,"y":199,"w":225,"h":75,"radius":10,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":19,"obj":"label","x":23,"y":209,"w":65,"h":65, "text":"\uE210","click":false,"text_font": 48, "text_color":"#6F6F6F"} 
-{"page":3,"id":20,"obj":"label","x":100,"y":209,"w":200,"h":40,"text":"Fan High","click":false,"text_font": 24}
-{"page":3,"id":21,"obj":"label","x":100,"y":239,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":3,"id":22,"obj":"obj","x":245,"y":199,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":23,"obj":"label","x":270,"y":209,"w":65,"h":65,"text":"\uE210","click":false,"text_font": 48, "text_color":"#6F6F6F"}
-{"page":3,"id":24,"obj":"label","x":330,"y":209,"w":200,"h":40,"text":"Fan Low","click":false,"text_font": 24}
-{"page":3,"id":25,"obj":"label","x":330,"y":239,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":3,"id":26,"obj":"obj","x":5,"y":290,"w":225,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":27,"obj":"label","x":23,"y":300,"w":65,"h":65,"text":"\uE769", "text_font": 48, "text_color":"#6F6F6F"}
-{"page":3,"id":28,"obj":"label","x":90,"y":300,"w":200,"h":40,"text":"Mangal light","click":false,"text_font": 24}
-{"page":3,"id":29,"obj":"label","x":100,"y":330,"w":200,"h":40,"text":"Off","click":false,"text_font": 16, "text_color":"#9b9b9b"}
 
-{"page":3,"id":30,"obj":"obj","x":245,"y":290,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":3,"id":31,"obj":"label","x":270,"y":300,"w":65,"h":65,"text":"\uE769", "text_font": 48, "text_color":"#6F6F6F"}
-{"page":3,"id":32,"obj":"label","x":310,"y":300,"w":200,"h":40,"text":"Mangal smoke", "text_font": 24}
-{"page":3,"id":33,"obj":"label","x":330,"y":330,"w":200,"h":40,"text":"Off", "text_font": 16, "text_color":"#9b9b9b"}
 
 //..........................................  Page 4 .........................................................
 
-{"page":4,"id":1,"obj":"label","x":60,"y":65,"w":320,"h":350,"text":"0.0","text_font":120,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
-{"page":4,"id":2,"obj":"label","x":325,"y":75,"w":80,"h":85,"text":"°c", "text_font": 80, "text_color":"#6F6F6F"}
-
-{"page":4,"id":3,"obj":"label","x":15,"y":110,"w":60,"h":65,"text":"out", "text_font": 48, "text_color":"#6F6F6F"}
-
-
-{"page":4,"id":4,"obj":"label","x":65,"y":225,"w":320,"h":350,"text":"0.0 ","text_font":120,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
-{"page":4,"id":5,"obj":"label","x":325,"y":235,"w":80,"h":85,"text":"°c", "text_font": 80, "text_color":"#6F6F6F"}
-
-{"page":4,"id":6,"obj":"label","x":30,"y":270,"w":55,"h":65,"text":"in", "text_font": 48, "text_color":"#6F6F6F"}
-
-{"page":4,"id":7,"obj":"label","x":15,"y":15,"w":40,"h":60,"text":"\uE58E", "text_font": 32, "text_color":"#6F6F6F"} // humidity
-{"page":4,"id":8,"obj":"label","x":60,"y":20,"w":80,"h":60,"text":"------ %", "text_font": 28}
+{"page":4,"id":110,"obj":"btn","x":10,"y":15,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#1a7547","bg_grad_color":"#1a7547","text":"TV On","text_font":28,"text_color":"#ffffff"}
+{"page":4,"id":120,"obj":"btn","x":245,"y":15,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#751a1a","bg_grad_color":"#751a1a","text":"TV Off","text_font":28,"text_color":"#ffffff"}
+{"page":4,"id":170,"obj":"btn","x":10,"y":108,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#1a6b75","bg_grad_color":"#1a6b75","text":"Vol -","text_font":28,"text_color":"#ffffff"}
+{"page":4,"id":180,"obj":"btn","x":245,"y":108,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#1a6b75","bg_grad_color":"#1a6b75","text":"Vol +","text_font":28,"text_color":"#ffffff"}
+{"page":4,"id":130,"obj":"btn","x":10,"y":201,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#1a4775","bg_grad_color":"#1a4775","text":"Pause","text_font":28,"text_color":"#ffffff"}
+{"page":4,"id":140,"obj":"btn","x":245,"y":201,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#471a75","bg_grad_color":"#471a75","text":"Stop","text_font":28,"text_color":"#ffffff"}
+{"page":4,"id":150,"obj":"btn","x":10,"y":294,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#75471a","bg_grad_color":"#75471a","text":"Prev","text_font":28,"text_color":"#ffffff"}
+{"page":4,"id":160,"obj":"btn","x":245,"y":294,"w":225,"h":85,"radius":16,"border_width":0,"bg_color":"#75471a","bg_grad_color":"#75471a","text":"Next","text_font":28,"text_color":"#ffffff"}
 
 
-{"page":4,"id":9,"obj":"label","x":170,"y":15,"w":40,"h":60,"text":"\uE5A8", "text_font": 32, "text_color":"#6F6F6F"} // illumm
-{"page":4,"id":10,"obj":"label","x":215,"y":20,"w":80,"h":60,"text":"-------", "text_font": 28}
+{"page":3,"id":1,"obj":"label","x":60,"y":65,"w":320,"h":350,"text":"0.0","text_font":120,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+{"page":3,"id":2,"obj":"label","x":325,"y":75,"w":80,"h":85,"text":"°c", "text_font": 80, "text_color":"#6F6F6F"}
+
+{"page":3,"id":3,"obj":"label","x":15,"y":110,"w":60,"h":65,"text":"out", "text_font": 48, "text_color":"#6F6F6F"}
 
 
-{"page":4,"id":13,"obj":"label","x":325,"y":15,"w":40,"h":60,"text":"\uE59D", "text_font": 32, "text_color":"#6F6F6F"} // wind 
-{"page":4,"id":12,"obj":"label","x":370,"y":20,"w":90,"h":60,"text":"--------", "text_font": 28}
+{"page":3,"id":4,"obj":"label","x":65,"y":225,"w":320,"h":350,"text":"0.0 ","text_font":120,"align":1,"text_color":"#FFFFFF","bg_color":"#1c1c1c"}
+{"page":3,"id":5,"obj":"label","x":325,"y":235,"w":80,"h":85,"text":"°c", "text_font": 80, "text_color":"#6F6F6F"}
+
+{"page":3,"id":6,"obj":"label","x":30,"y":270,"w":55,"h":65,"text":"in", "text_font": 48, "text_color":"#6F6F6F"}
+
+{"page":3,"id":7,"obj":"label","x":15,"y":15,"w":40,"h":60,"text":"\uE58E", "text_font": 32, "text_color":"#6F6F6F"} // humidity
+{"page":3,"id":8,"obj":"label","x":60,"y":20,"w":80,"h":60,"text":"------ %", "text_font": 28}
+
+
+{"page":3,"id":9,"obj":"label","x":170,"y":15,"w":40,"h":60,"text":"\uE5A8", "text_font": 32, "text_color":"#6F6F6F"} // illumm
+{"page":3,"id":10,"obj":"label","x":215,"y":20,"w":80,"h":60,"text":"-------", "text_font": 28}
+
+
+{"page":3,"id":13,"obj":"label","x":325,"y":15,"w":40,"h":60,"text":"\uE59D", "text_font": 32, "text_color":"#6F6F6F"} // wind 
+{"page":3,"id":12,"obj":"label","x":370,"y":20,"w":90,"h":60,"text":"--------", "text_font": 28}
 
 
 //{"page":4,"id":7,"obj":"label","x":270,"y":20,"w":65,"h":65,"text":"\uE596", "text_font": 48, "text_color":"#6F6F6F"}
 
 //.......................................... Page 5  Alexa-------------------------------------------------------------
-{"page":5,"id":1,"obj":"slider","x":50,"y":220,"w":340,"h":30,"min":0,"max":10,"val":5}
-{"page":5,"id":11,"obj":"label","x":405,"y":216,"w":40,"h":30,"text":"5", "text_font": 28}
 
-{"page":5,"id":2,"obj":"obj","x":40,"y":290,"w":125,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":5,"id":3,"obj":"label","x":55,"y":300,"w":65,"h":65,"text":"\uE40A", "text_font": 48, "text_color":"#6F6F6F"}
+{"page":5,"id":110,"obj":"btn","x":10,"y":30,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#1a4775","bg_grad_color":"#1a4775","text":"Playlist 1","text_font":24,"text_color":"#ffffff"}
+{"page":5,"id":120,"obj":"btn","x":10,"y":120,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#1a4775","bg_grad_color":"#1a4775","text":"Playlist 2","text_font":24,"text_color":"#ffffff"}
+{"page":5,"id":130,"obj":"btn","x":10,"y":210,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#1a4775","bg_grad_color":"#1a4775","text":"Playlist 3","text_font":24,"text_color":"#ffffff"}
+{"page":5,"id":140,"obj":"btn","x":10,"y":300,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#1a4775","bg_grad_color":"#1a4775","text":"Playlist 4","text_font":24,"text_color":"#ffffff"}
+{"page":5,"id":150,"obj":"btn","x":245,"y":30,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#471a75","bg_grad_color":"#471a75","text":"Video 1","text_font":24,"text_color":"#ffffff"}
+{"page":5,"id":160,"obj":"btn","x":245,"y":120,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#471a75","bg_grad_color":"#471a75","text":"Video 2","text_font":24,"text_color":"#ffffff"}
+{"page":5,"id":170,"obj":"btn","x":245,"y":210,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#471a75","bg_grad_color":"#471a75","text":"Video 3","text_font":24,"text_color":"#ffffff"}
+{"page":5,"id":180,"obj":"btn","x":245,"y":300,"w":225,"h":80,"radius":15,"border_width":0,"bg_color":"#471a75","bg_grad_color":"#471a75","text":"Video 4","text_font":24,"text_color":"#ffffff"}
 
-{"page":5,"id":4,"obj":"obj","x":175,"y":290,"w":125,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
-{"page":5,"id":5,"obj":"label","x":190,"y":300,"w":65,"h":65,"text":"\uE3E4", "text_font": 48, "text_color":"#6F6F6F"}
 
-{"page":5,"id":6,"obj":"obj","x":310,"y":290,"w":125,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"} //record
-{"page":5,"id":7,"obj":"label","x":350,"y":310,"w":65,"h":65,"text":"rec", "text_font": 28, "text_color":"#FF0000"}
+
+
 
 //{"page":2,"id":18,"obj":"obj","x":5,"y":199,"w":225,"h":75,"radius":10,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
 //{"page":2,"id":19,"obj":"label","x":23,"y":209,"w":65,"h":65, "text":"\uE4AE","click":false,"text_font": 48, "text_color":"#6F6F6F"} 
@@ -147,13 +127,8 @@
 //{"page":2,"id":22,"obj":"obj","x":245,"y":199,"w":230,"h":75,"radius":15,"click":true,"border_side":0,"bg_color":"#1c1c1c"}
 //{"page":2,"id":23,"obj":"label","x":270,"y":209,"w":65,"h":65,"text":"\uE769","click":false,"text_font": 48, "text_color":"#6F6F6F"}
 
-{"page":5,"id":12,"obj":"obj","x":20,"y":7,"w":440,"h":100,"click":0,"bg_opa":0,"shadow_opa":140,"shadow_color":"black","shadow_width":30,"shadow_spread":0}
 
-{"page":5,"id":13,"obj":"dropdown","x":40,"y":20,"w":125,"h":75,"options":"Jazz\nPop\nRock\nRuss\nCntry","direction":0,"radius":15}
 
-{"page":5,"id":14,"obj":"label","x":320,"y":40,"w":100,"h":40,"text":"----", "text_font": 28}   // state - paused/ playing /standby
-{"page":5,"id":15,"obj":"label","x":50,"y":160,"w":340,"h":40,"text":"----", "text_font": 28}  //..Name of the station
-{"page":5,"id":16,"obj":"label","x":215,"y":40,"w":100,"h":40,"text":"----", "text_font": 28}  //..kind of sound
 
 
 //......................................................  PAGE 6 .......................................................

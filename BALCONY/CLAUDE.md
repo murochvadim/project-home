@@ -54,7 +54,35 @@ Each panel button's actions live in a single JSONB array. One press fires N acti
 ]
 ```
 
-Same shape as `dashboard_settings.living-room.wallmote_bindings` slot entries, plus rare non-device variants `{type:'hasp_command', target:'page 2'}` and `{type:'pixoo_preset', target:'<name>', vars:{...}}`. The legacy `action_type` / `action_target` / `action_payload` columns are retained but no longer read by code (preserved for rollback safety).
+Same shape as `dashboard_settings.living-room.wallmote_bindings` slot entries, plus rare non-device variants `{type:'hasp_command', target:'page 2'}`, `{type:'pixoo_preset', target:'<name>', vars:{...}}`, and `{type:'media', media_action:..., target:'tv55', playlist_id|rel_path}` (see "Media Buttons" below). The legacy `action_type` / `action_target` / `action_payload` columns are retained but no longer read by code (preserved for rollback safety).
+
+### Media Buttons (pages 4 + 5 → Balcony TV `tv55`, added 2026-06-21)
+
+Panel button presses on pages 4/5 drive the Balcony 55" TV via the media agent on LXC 100 (`player_service.py` :8766). The chain reuses the existing Balcony Buttons rule with a new `media` binding variant:
+
+```json
+{"type":"media","media_action":"tv_on","target":"tv55","label":"TV On"}            // page 4 control
+{"type":"media","media_action":"play_playlist","playlist_id":12,"target":"tv55","shuffle":false,"repeat":false,"label":"..."}  // page 5
+{"type":"media","media_action":"play_video","rel_path":"Videos/foo.mp4","target":"tv55","label":"foo.mp4"}                     // page 5
+```
+
+`media_action ∈ {tv_on, tv_off, vol_up, vol_down, pause, stop, prev, next, play_playlist, play_video}`.
+
+**Flow:** panel `up` event → `hasp:balcony:p<page>b<id>` synthetic event → Balcony Buttons rule → `balcony_buttons._build_command` `media` branch emits `{device_id:'media', protocol:'media', media_action, target, ...}` → `rule_engine._dispatch_command` routes `protocol=='media'` (a cmd-level check next to `pixoo`, since `media` is a virtual device with no `devices` row) → `rule_engine._dispatch_media` does a urllib POST to the media agent:
+
+| media_action | media-agent endpoint (`http://192.168.1.138:8766`) | body |
+|---|---|---|
+| `tv_on` / `tv_off` | `POST /api/media/command` | `{entity:'tv55', command:'turn_on'\|'turn_off'}` (proxied to tv_control :8765, `entity=='tv55'` branch) |
+| `vol_up` / `vol_down` | `POST /api/media/command` | `{entity:'tv55', command:'volume_step', value:+10\|-10}` — **relative ±10% step**. tv_control's `volume_step` branch reads the TV's current `volume_level`, adds the delta, clamps 0..1, and calls `media_player.volume_set` (HA's bare `volume_up`/`volume_down` step too small). |
+| `pause` / `stop` / `prev` / `next` | `POST /api/queue/{pause,stop,prev,next}` | `{}` |
+| `play_playlist` | `POST /api/playlists/<playlist_id>/play` | `{target:'tv55', shuffle, repeat}` |
+| `play_video` | `POST /api/media/play` | `{relPath, target:'tv55'}` |
+
+`tv55` is a key in `player_service.py`'s `TV_TARGETS` (av_url `192.168.1.217:9197`, audio_sink `dlna`) and a branch in `tv_control.py`'s `/media/command` (entity `media_player.55_neo_qled_qe55qn85dbtxsq_2`).
+
+**DB rows:** 13 `hasp_buttons` rows with `action_type='media'` — page 4 (110/120/130/140/150) carry fixed control bindings; page 5 (110–140 playlists, 150–180 videos) start with empty bindings. (`action_type='media'` is also the flag the dashboard uses to split these out of the device-only Button Bindings picker.)
+
+**Dashboard surface:** the **Media Buttons** card on the Panel tab (`bc-media-card` in `balcony.html`, `bcLoadMediaButtons`/`bcRenderMediaList`/`bcMediaSelectChange`/`bcSaveMediaButtons`/`bcTestMediaRow` in `balcony.js`). Page-4 control rows are read-only with a ▶ Test; page-5 rows get a playlist/video `<select>` (playlists from `GET /api/playlists`, videos from `GET /api/media/walk?path=Videos` filtered to video extensions) + ▶ Test. **Picking a playlist/video AUTO-SAVES** that row immediately (`PATCH /api/hasp/balcony/buttons/:id {bindings}`) — the panel button reads the *saved* binding, so a pick must persist without a separate Save click (▶ Test only previews the in-memory pick; the "Save Selection" button stays as a bulk backup). The browser calls the media agent directly via `MEDIA_API='http://192.168.1.138:8766'` (same pattern as `media.js`) — dashboard stays UI-only.
 
 ### How HASP button events reach the rule engine
 
@@ -257,9 +285,9 @@ The `hasp` MQTT user has `readwrite` on `hasp/#`, so the rule engine on LXC 105 
 | 0 (global) | Background `#111` + nav row at the bottom — appears on every page. The nav has `<` / 🏠 / `>` icons — the design's only constants. |
 | **1 (re-skinned 2026-05-01)** | **4 toggle buttons** in 2 × 2 grid: **GATES** (id 110, dim navy), **BARRIER** (id 120, dim purple), **LIGHT 1** (id 130, dim green), **LIGHT 2** (id 140, dim amber). Each button is a `btn` with overlaid `label` for the icon (font 48) and another `label` for the name (font 24). Both labels carry `click:false` so taps fall through to the underlying button — without that, clicks were being intercepted and toggling required several taps. The `@checked` bg flashes orange uniformly (theme `color2` driven; per-button `bg_color@checked` is overridden by the theme). |
 | 2 | Saloon Area / Balcony Area lights (original design) |
-| 3 | Watering 1 / Watering 2 / … (original) |
-| 4 | Temperatures: out / in / humidity (original) |
-| 5 | Music: slider + rec/play (original) |
+| **3 (media redesign 2026-06-21)** | **Temperatures** — out / in / humidity / illum / wind. **MOVED here from page 4** (its old Watering content was discarded). The two live temperature displays followed: `hasp_displays` id 62 → `p3b1` (out temp), id 65 → `p3b4` (in temp), `page` re-pointed 4→3 so they keep updating. |
+| **4 (media redesign 2026-06-21)** | **Media CONTROL** — 8 `btn` widgets (4 rows × 2) targeting the Balcony TV `tv55`: **TV On** (id 110) / **TV Off** (120) / **Vol −** (170) / **Vol +** (180) / **Pause** (130) / **Stop** (140) / **Prev** (150) / **Next** (160). Fixed `type:'media'` bindings (not user-editable). Vol −/+ step by **±10%** (see `volume_step` below), not HA's tiny default. |
+| **5 (media redesign 2026-06-21)** | **Media SELECTION** — 8 `btn` widgets in 2 columns: **Playlist 1–4** (ids 110/120/130/140, left) + **Video 1–4** (150/160/170/180, right). Bindings start empty; the user assigns one playlist OR one video per button via the dashboard **Media Buttons** card. |
 | 6 | Parking distance: Cal / Dist / Pos / Close (original) |
 | 7 | Glide ticker (original) |
 | 8 | Clock placeholder (`--:--`) (original — empty target for future content) |

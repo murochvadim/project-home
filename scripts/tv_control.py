@@ -283,6 +283,14 @@ async def media_command(req):
                 elif command == 'turn_off':   await ha_post(s, '/api/services/media_player/turn_off', {'entity_id': TV55_ENTITY})
                 elif command == 'volume_up':  await ha_post(s, '/api/services/media_player/volume_up',   {'entity_id': TV55_ENTITY})
                 elif command == 'volume_down':await ha_post(s, '/api/services/media_player/volume_down', {'entity_id': TV55_ENTITY})
+                elif command == 'volume_step':
+                    # Relative step by `value` percent (e.g. +10 / -10): read the
+                    # current volume_level, add the delta, clamp 0..1, set absolute.
+                    st  = await ha_get(s, f'/api/states/{TV55_ENTITY}')
+                    cur = ((st or {}).get('attributes', {}) or {}).get('volume_level')
+                    cur = float(cur) if cur is not None else 0.0
+                    new = max(0.0, min(1.0, cur + (value or 0) / 100.0))
+                    await ha_post(s, '/api/services/media_player/volume_set', {'entity_id': TV55_ENTITY, 'volume_level': new})
                 elif command == 'volume_set': await ha_post(s, '/api/services/media_player/volume_set',  {'entity_id': TV55_ENTITY, 'volume_level': max(0.0, min(1.0, (value or 0) / 100.0))})
                 elif command == 'mute':       await ha_post(s, '/api/services/media_player/volume_mute', {'entity_id': TV55_ENTITY, 'is_volume_muted': value})
                 elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': TV55_ENTITY, 'source': value})

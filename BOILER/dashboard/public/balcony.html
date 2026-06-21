@@ -158,6 +158,16 @@
       </div>
     </div>
 
+    <!-- Media Buttons — Balcony TV (tv55): page 4 control + page 5 selection -->
+    <div class="card" id="bc-media-card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+        <h2 style="margin:0;font-size:1.05rem;">Media Buttons</h2>
+        <span style="font-size:0.78rem;color:#888;">Balcony TV <code>tv55</code> · page 4 = control · page 5 = selection (assign a playlist or video per button)</span>
+        <button class="btn-save" style="margin-left:auto;" onclick="bcSaveMediaButtons()">Save Selection</button>
+      </div>
+      <div id="bc-media-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+    </div>
+
     <!-- Display Templates -->
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap;">
@@ -314,6 +324,6 @@
 
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/balcony.js?v=20260530a"></script>
+<script src="js/balcony.js?v=20260621d"></script>
 </body>
 </html>
