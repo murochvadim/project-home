@@ -171,7 +171,7 @@ The `hasp:balcony` device row carries `dps_config` declaring two controllable ch
 
 The `page` channel is special: it's a **parameterized** action, not a binary on/off. The rule engine's HASP branch reads `cmd['page_num']` when the alias resolves to `goto_page` and uses it as the publish payload.
 
-**Picker page-select** — when a controllable channel has `dps_config.<channel>.type='page_select'`, the dashboard pickers (Balcony Smart Switch, Wallmote bindings, rule-sentence `+Dev` chips) render a **page-number dropdown** (1..max) instead of the usual toggle/turn_on/turn_off action dropdown. Selecting a number stores `{action:'turn_on', page_num:N, channel:'page'}` on the binding (or for sentence chips, inserts token `@Balcony Panel Display Page N`). Three pickers wired:
+**Picker page-select** — when a controllable channel has `dps_config.<channel>.type='page_select'`, the dashboard pickers (Balcony Smart Switch, Wallmote bindings, rule-sentence `+Dev` chips) render a **page-number dropdown** (1..max) instead of the usual toggle/turn_on/turn_off action dropdown. Selecting a number stores `{action:'turn_on', page_num:N, channel:'page'}` on the binding (or for sentence chips, inserts token `@Balcony Control Panel Page N`). Three pickers wired:
 - `BOILER/dashboard/public/js/balcony.js` (Smart Switch)
 - `BOILER/dashboard/public/js/living-room.js` (Wallmote)
 - `BOILER/dashboard/public/js/device-picker.js` (Main Agent rule sentences) — version `?v=8`

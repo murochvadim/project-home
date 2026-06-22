@@ -260,7 +260,7 @@
         // Page-select channels (type='page_select' in dps_config) are
         // special — the action isn't on/off but "go to page N". Render
         // a number dropdown (min..max) per such channel; selecting a
-        // number inserts a token like "@Balcony Panel Display Page 5".
+        // number inserts a token like "@Balcony Control Panel Page 5".
         const cfg = d.dps_config || {};
         const single = actionable.length === 1;
         const buttons = actionable.flatMap(([key, label]) => {
