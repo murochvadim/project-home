@@ -153,6 +153,15 @@ function renderStatus(r) {
       ? `<span style="color:#888; font-size:0.85rem;">⬤ unknown</span>`
       : dot(voiceOk) + (!voiceOk ? `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">whisper-http down</div>` : '');
 
+  const plEl = document.getElementById('svc-phonelink');
+  if (plEl) {
+    const plOk = r.phonelink?.ok;
+    plEl.innerHTML =
+      plOk === null || plOk === undefined
+        ? `<span style="color:#888; font-size:0.85rem;">⬤ unknown</span>`
+        : dot(plOk) + (!plOk ? `<div style="font-size:0.7rem; color:#b55e5e; margin-top:3px;">offline / crash-loop — see alerts</div>` : '');
+  }
+
   const re = r.rule_engine;
   if (re) {
     const color = re.ok ? '#7a9f5a' : '#b55e5e';
@@ -275,7 +284,7 @@ async function loadStatus() {
     try { localStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(r)); } catch (e) {}
   } catch (e) {
     ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-lxc109','svc-vm101',
-     'svc-agent','svc-media-agents','svc-voice-agent','svc-auto-scan','svc-ha-to-pg','svc-pm2',
+     'svc-agent','svc-media-agents','svc-voice-agent','svc-phonelink','svc-auto-scan','svc-ha-to-pg','svc-pm2',
      'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs','svc-ups'
     ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });
   }

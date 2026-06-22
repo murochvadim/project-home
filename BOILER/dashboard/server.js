@@ -2025,6 +2025,7 @@ async function runHealthChecks() {
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result,
+    phonelinkResult,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
@@ -2082,6 +2083,10 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.189', 22),    // LXC 107 — MQTT
     tcpCheck('192.168.1.195', 22),    // LXC 108 — NetBird gateway
     tcpCheck('192.168.1.196', 22),    // LXC 109 — Privacy
+    // Link to Windows (Phone Link) health — derived from phonelink_watchdog
+    // alerts on LXC 104 (laptop-side: process up + not crash-looping).
+    db.query("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND alert_type LIKE 'phonelink:%'")
+      .then(r => ({ ok: parseInt(r.rows[0]?.n) === 0 })).catch(() => ({ ok: null })),
   ]);
 
   const r = {};
@@ -2105,6 +2110,7 @@ async function runHealthChecks() {
   r.boiler_agent  = { ok: boilerServiceAlerts.ok };
   r.media_agents  = mediaServiceAlerts;
   r.voice_agent   = { ok: voiceAgentResult.ok };
+  r.phonelink     = { ok: phonelinkResult.ok };
   r.auto_scan     = autoScanResult;
   // Backup jobs freshness
   r.backup_jobs = (Array.isArray(backupJobsResult) ? backupJobsResult : []).map(j => {

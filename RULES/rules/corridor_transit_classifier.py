@@ -29,6 +29,15 @@ Mode lock + cooldown semantics (revised 2026-05-27):
     `cooldown_sec` of continuously-closed door time. If the door
     re-opens during cooldown, the cooldown is paused (and the next
     door close restarts it from that new close timestamp).
+  • Safety net (added 2026-06-21): a max-lock timeout force-reverts
+    To_Home/From_Home to Clear_Home after `max_lock_sec` regardless of
+    door state, so a lock can never jam forever when the door event is
+    missed or the mode was falsely entered.
+  • From_Home entry guard (added 2026-06-21): From_Home is entered ONLY
+    when a real Main Door OPEN happened within `window_sec` before the
+    corridor presence — Entrance presence alone classifies as Visit, not
+    a leave. Stops a neighbor passing the corridor from suppressing the
+    apartment's corridor monitoring (Move in Corridor's when-home bucket).
   • Rationale: avoids mode flip-flopping during a transit moment.
     Once we decide "user is coming home" or "user is leaving", commit
     to that decision until the physical transit is complete (door shut).
@@ -54,6 +63,8 @@ state.shared keys owned by this rule:
   • corridor_transit.mode                          — current mode string
   • corridor_transit.mode_set_ts                   — epoch float when mode was entered
   • corridor_transit.last_inside_trigger_ts        — last door-open / Entrance-pres rising edge
+  • corridor_transit.last_door_open_ts             — last Main Door rising edge (closed → open);
+                                                     From_Home entry requires this within window_sec
   • corridor_transit.last_corridor_rising_ts       — last Corridor rising edge
   • corridor_transit.door_closed_after_mode_set_ts — epoch float of the most recent Main Door
                                                      falling edge (open → closed) while in
@@ -89,6 +100,12 @@ VIRTUAL_ID = 'virtual:corridor_transit'
 # Defaults — overridden by container `r_corridor_transit_init`.
 DEFAULTS_WINDOW_SEC   = 15
 DEFAULTS_COOLDOWN_SEC = 30
+# Safety net: force-revert a locked To_Home/From_Home back to Clear_Home after
+# this many seconds regardless of door state. Without it, a lock entered without
+# a real door event (presence coincidence) or whose door-close was missed never
+# releases — the 2026-06-21 stuck-From_Home incident (jammed ~2 h, suppressing
+# corridor monitoring the whole time).
+DEFAULTS_MAX_LOCK_SEC = 180
 
 # 30 s TTL on sentence-parse to avoid hitting DB on every event.
 _config_cache = {'data': None, 'ts': 0.0}
@@ -123,6 +140,7 @@ def _read_config(state):
     cfg = {
         'window_sec':   DEFAULTS_WINDOW_SEC,
         'cooldown_sec': DEFAULTS_COOLDOWN_SEC,
+        'max_lock_sec': DEFAULTS_MAX_LOCK_SEC,
     }
     try:
         rows = state.db_query(
@@ -151,6 +169,11 @@ def _read_config(state):
                 m = re.search(r'cooldown is\s+(\d+)\s*seconds?', full_text, re.I)
                 if m:
                     cfg['cooldown_sec'] = int(m.group(1))
+                    continue
+            if 'max lock is' in t:
+                m = re.search(r'max lock is\s+(\d+)\s*seconds?', full_text, re.I)
+                if m:
+                    cfg['max_lock_sec'] = int(m.group(1))
                     continue
 
     except Exception as e:
@@ -210,8 +233,21 @@ def _check_timeouts(state, cfg, now):
         if mode_age >= cfg['window_sec']:
             _set_mode(state, MODE_CLEAR, now)
         return
-    # TO_HOME / FROM_HOME — cooldown only counts when door has closed
-    # since mode entered AND is currently closed.
+    # TO_HOME / FROM_HOME — locked until the Main Door closes.
+    # Safety net FIRST: if we've been locked longer than max_lock_sec, force-
+    # revert regardless of door state. A lock entered without a real door event
+    # (presence coincidence) or whose door-close was missed otherwise never
+    # releases (no falling edge → no anchor → permanently stuck). See the
+    # 2026-06-21 incident where From_Home jammed for ~2 h and suppressed all
+    # corridor monitoring.
+    mode_age = now - float(state.shared.get('corridor_transit.mode_set_ts', 0) or 0)
+    if mode_age >= cfg['max_lock_sec']:
+        log.info("Corridor Transit: %s locked %ds >= max_lock %ds — force-revert to Clear_Home",
+                 mode, int(mode_age), cfg['max_lock_sec'])
+        _set_mode(state, MODE_CLEAR, now)
+        return
+    # Cooldown only counts when door has closed since mode entered AND is
+    # currently closed.
     door_closed_ts = float(state.shared.get('corridor_transit.door_closed_after_mode_set_ts', 0) or 0)
     door_is_open   = bool(state.shared.get('corridor_transit._prev_door', False))
     if door_closed_ts <= 0:
@@ -255,11 +291,18 @@ def evaluate(event, state):
                 log.debug("Corridor Transit: locked in %s — Corridor rising edge ignored",
                           current_mode)
                 return commands
-            # Classify based on whether an inside-trigger arrived within window_sec.
-            last_inside = float(state.shared.get('corridor_transit.last_inside_trigger_ts', 0) or 0)
-            if last_inside > 0 and (now - last_inside) <= cfg['window_sec']:
+            # Classify. A real LEAVE requires a recent Main Door OPEN just
+            # before the corridor presence — you physically opened the door to
+            # step out. Entrance presence ALONE is NOT enough: it fires when you
+            # merely walk near the entrance while a neighbor passes the building
+            # corridor, which used to be misread as From_Home and then jammed
+            # the lock forever (no door close → no release; 2026-06-21 incident).
+            last_door_open = float(state.shared.get('corridor_transit.last_door_open_ts', 0) or 0)
+            if last_door_open > 0 and (now - last_door_open) <= cfg['window_sec']:
                 _set_mode(state, MODE_FROM_HOME, now)
             else:
+                # No recent door open → corridor presence without a real exit
+                # → treat as a Visit (when-home monitoring still fires).
                 _set_mode(state, MODE_VISIT, now)
         return commands
 
@@ -271,6 +314,11 @@ def evaluate(event, state):
 
         if is_open and not prev:
             # Door rising edge (closed → open) counts as an inside trigger.
+            # Record the door-open time SEPARATELY so From_Home entry can
+            # require a REAL door open (not just Entrance presence) — a neighbor
+            # passing the building corridor must not be misread as us leaving
+            # (2026-06-21 fix).
+            state.shared['corridor_transit.last_door_open_ts'] = now
             _handle_inside_trigger(state, cfg, now)
         elif not is_open and prev:
             # Door falling edge (open → closed). If we're currently locked
@@ -300,7 +348,9 @@ def evaluate(event, state):
 
 def _handle_inside_trigger(state, cfg, now):
     """Door rising-edge OR Entrance Presence rising-edge.
-    1. Records the timestamp (so subsequent Corridor rise can classify as From_Home).
+    1. Records `last_inside_trigger_ts` (diagnostic only since 2026-06-21 —
+       From_Home classification now requires a real door open via
+       `last_door_open_ts`, NOT just any inside trigger).
     2. If currently in Visit_Home AND the visit started within window_sec,
        upgrades the mode to To_Home (the "visitor" was actually us coming home).
     3. Lock: if currently in TO_HOME or FROM_HOME, the mode is locked until
