@@ -1505,6 +1505,51 @@ class RuleEngine:
             log.warning("Rule '%s' vacuum.%s on %s failed: %s",
                         rule_name, service, device_id, e)
 
+    def _dispatch_curtain(self, cmd, rule_name):
+        """Dispatch a curtain/blind move via HA cover.* services.
+
+        The rule emits a SEMANTIC action — 'open' (toward 100%) / 'close'
+        (toward 0%) / 'stop'. dps_config.direction.{action_open,action_close,
+        action_stop} maps each to the actual HA cover service, and those
+        already encode the device's reversed wiring (e.g. action_open=
+        'close_cover'). Partial positions are achieved by the rule emitting
+        open/close + a separate 'stop' command carrying _delay_sec (timed
+        motion) — these SCS covers expose no set-position (supported_features
+        11 = open+close+stop only). Same urllib-to-HA pattern as
+        _dispatch_vacuum / _dispatch_alexa. Failures logged, never raised.
+        """
+        device_id = cmd.get('device_id')
+        action    = cmd.get('action', '')
+        dev = self.state.devices.get(device_id, {})
+        cfg = (dev.get('dps_config') or {}).get('direction', {}) or {}
+        entity = cfg.get('ha_entity')
+        if not entity:
+            log.warning("Rule '%s' curtain %s: no dps_config.direction.ha_entity", rule_name, device_id)
+            return
+        service = {'open':  cfg.get('action_open'),
+                   'close': cfg.get('action_close'),
+                   'stop':  cfg.get('action_stop')}.get(action)
+        if not service:
+            log.warning("Rule '%s' curtain %s: no HA service for action '%s'", rule_name, device_id, action)
+            return
+        if not HA_TOKEN:
+            log.warning("Rule '%s' curtain %s: HA_TOKEN not set", rule_name, device_id)
+            return
+        try:
+            req = urllib.request.Request(
+                f'{HA_URL}/api/services/cover/{service}',
+                data=json.dumps({'entity_id': entity}).encode('utf-8'),
+                headers={'Authorization': f'Bearer {HA_TOKEN}',
+                         'Content-Type':  'application/json'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(f'HA returned {resp.status}')
+            log.info("Rule '%s' -> curtain %s cover.%s", rule_name, dev.get('name', device_id), service)
+        except Exception as e:
+            log.warning("Rule '%s' curtain %s cover.%s failed: %s", rule_name, device_id, service, e)
+
     def _awtrix_push_preset(self, cmd, device_id, rule_name):
         preset_name = cmd.get('preset_name', '')
         if not preset_name:
@@ -1670,6 +1715,15 @@ class RuleEngine:
         # find nothing for device_id='media').
         if protocol == 'media':
             self._dispatch_media(cmd, rule_name)
+            return
+
+        # Curtain/blind move via HA cover.* services. Virtual at the cmd level
+        # (the device row is protocol='local' but control is HA-mediated, like
+        # the dashboard's /api/curtain). Partial positions = open/close + a
+        # separate 'stop' carrying _delay_sec (timed motion; SCS covers have no
+        # set-position). _dispatch_curtain fetches the device for its dps_config.
+        if protocol == 'curtain':
+            self._dispatch_curtain(cmd, rule_name)
             return
 
         # Loop guard catches runaway automation feedback (rule → device →
