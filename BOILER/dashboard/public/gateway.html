@@ -174,7 +174,10 @@
 
   <!-- Recent peer transitions card -->
   <div class="card" style="margin-top:16px;">
-    <h2>Recent peer transitions</h2>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <h2 style="margin:0;">Recent peer transitions</h2>
+      <button onclick="gwClearTransitions()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;" title="Delete logged peer transitions, keeping the most recent 10 as a safety window. (The table also has a DB retention policy.)">🗑 Clear (keep last 10)</button>
+    </div>
     <p style="color:#666; font-size:0.9rem; margin-top:0;">
       Every time a peer's <code>connected</code> field flips (caught at the dashboard's 30 s cache refresh).
       Empty = no flap since the dashboard started. If the page feels "flappy" but this stays empty for hours, the issue isn't real connectivity — it's UI rendering or browser cache.
@@ -202,6 +205,6 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/gateway.js?v=8"></script>
+<script src="js/gateway.js?v=9"></script>
 </body>
 </html>

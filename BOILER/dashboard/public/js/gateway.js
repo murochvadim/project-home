@@ -286,6 +286,17 @@
     } catch (e) { alert('Clear failed: ' + e.message); }
   };
 
+  // ─── Clear peer transitions (keep last 10 as a safety window) ─────
+  window.gwClearTransitions = async function () {
+    if (!confirm('Clear the peer-transitions log? This deletes all logged transitions except the most recent 10.')) return;
+    try {
+      const r = await fetch('/api/gateway/transitions/clear', { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { await loadTransitions(); }
+      else alert('Clear failed: ' + (d.error || r.statusText));
+    } catch (e) { alert('Clear failed: ' + e.message); }
+  };
+
   // ─── Transitions card ────────────────────────────────────────────
   async function loadTransitions() {
     const tbody = document.getElementById('gw-transitions-tbody');

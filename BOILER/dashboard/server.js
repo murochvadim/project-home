@@ -3236,6 +3236,24 @@ app.get('/api/gateway/transitions', async (req, res) => {
   }
 });
 
+// DELETE /api/gateway/transitions/clear — declutter the transitions log,
+// keeping the most recent 10 rows as a safety window (the table also has a
+// retention policy that ages rows out over time). Forensic-log housekeeping
+// only — no peer/route state is affected.
+app.delete('/api/gateway/transitions/clear', async (req, res) => {
+  try {
+    const r = await db.query(
+      `DELETE FROM gateway_peer_transitions
+       WHERE id NOT IN (
+         SELECT id FROM gateway_peer_transitions ORDER BY ts DESC LIMIT 10
+       )`
+    );
+    res.json({ ok: true, deleted: r.rowCount, kept: 10 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/gateway/settings — singleton row in netbird_tenant_settings
 app.get('/api/gateway/settings', async (req, res) => {
   try {
