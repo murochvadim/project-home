@@ -1,34 +1,27 @@
 """MyBathroom — presence/door motion lighting for My BathRoom, fully sentence-driven.
 
+The main light is the new **mybathroom-panel** plate's on-board relay (p1b20 =
+GPIO output2); the old "My Bathroom Switch" died and was removed 2026-06-22. The
+plate relay is driven via the documented `command/output<pin> {"state":...}`
+(see `_relay_cmd`); the under-cabinet light is a normal Z-Wave switch.
+
 Behaviour
 ---------
 1. **Motion light** — when the My Bathroom presence sensor detects someone OR
    the My Bathroom door changes:
      - inside the day window  → turn ON the *day lights*   (s_mbr1 chips)
      - outside the day window → turn ON the *night lights* (s_mbr2 chips)
-   Lights are only switched ON if currently off (no command spam on repeated
-   presence/amplitude events — the state-diff guard is the rule's debounce).
+   The plate relay is re-asserted ON every trigger (idempotent output command,
+   no harm); a 3 s burst debounce caps the mmWave's entry flurry. The
+   under-cabinet (real state feedback) is only switched ON when currently off.
 
 2. **Auto-off** — on each heartbeat tick, if the room has been continuously
    empty (presence sensor reads clear) AND no presence/door activity for
-   `timeout` (s_mbr4), turn OFF every light that's currently on. The countdown
-   starts the moment the room goes empty and is RESET by any presence/door
-   trigger (s_mbr4 grace timer). The "presence currently clear" gate means the
-   lights never switch off while someone is still detected, regardless of how
-   long they've been motionless.
-
-3. **Mirror** (one-way, s_mbr5) — operating the master light (My Bathroom
-   Light) drives the slave (Under-Cabinet): master ON → slave ON, master OFF →
-   slave OFF. Lets the main wall switch also control the under-cabinet strip.
-
-4. **OFF-cascade** (one-way, OFF-only, s_mbr6) — on a real FALLING EDGE of the
-   main light (was on, now off — manual or auto-off), also turn off the listed
-   lights (the Laundry Light, My Bathroom Switch ch 1), immediately. No occupancy
-   gate (the laundry-empty check was dropped 2026-06-12 — the adjacent laundry
-   sensor still read "presence" at the off-instant so it blocked nearly every
-   time). Edge-gated via `_mybathroom_master_was_on` so steady-state local-poll
-   snapshots showing ch2=false don't keep re-killing the laundry light (which
-   would fight the separate Laundry Light rule). Nothing happens on ON.
+   `timeout` (s_mbr4), turn OFF the lights ONCE this empty period (guarded by
+   `_mybathroom_autooff_done`, cleared on any presence/door activity). The plate
+   relays fire OFF UNCONDITIONALLY (no state feedback to skip on, so a manual
+   tap-on we never saw still gets cleared); the under-cabinet uses its real
+   state. The countdown starts when the room goes empty and resets on activity.
 
 Everything configurable lives in the dashboard container "My Bathroom Lights"
 (`r_mybathroom_init` in apartment.rule_sentences) — the rule parses it itself
@@ -38,15 +31,16 @@ Everything configurable lives in the dashboard container "My Bathroom Lights"
   s_mbr2: My Bathroom Lights: night lights are @<Light>, ...
   s_mbr3: My Bathroom Lights: day window is between 06:00 and 23:00
   s_mbr4: My Bathroom Lights: turn off after 10 minutes
-  s_mbr5: My Bathroom Lights: mirror @<Master> <Channel> to @<Slave>
-  s_mbr6: My Bathroom Lights: when main light off also turn off @<Light> <Channel>
   s_mbr7: My Bathroom Lights: only fires when home_mode is home   (gate — turn-on
-          only; AND-combined; mirror / off-cascade / auto-off ignore it)
+          only; AND-combined; auto-off ignores it)
 
-Trigger device IDs (presence / door / switch) are fixed in RULE['triggers']
-(triggers are bound at module load and can't be sentence-driven); they are the
-room's permanent sensors. heartbeat is a trigger so the auto-off timer ticks
-during quiet periods.
+(The old s_mbr5 *mirror* and s_mbr6 *off-cascade* were removed 2026-06-22 along
+with the dead switch — they reacted to the old switch's pushed state, which the
+plate doesn't provide. Presence already turns main + under-cabinet on together.)
+
+Trigger device IDs (presence / door) are fixed in RULE['triggers'] (bound at
+module load, can't be sentence-driven); they are the room's permanent sensors.
+heartbeat is a trigger so the auto-off timer ticks during quiet periods.
 
 Manual "Run" button (dashboard red Run → engine Force path): simulates a
 presence trigger NOW and turns on the time-appropriate light set, bumping the
@@ -70,10 +64,14 @@ log = logging.getLogger("rule.mybathroom")
 
 _TZ = ZoneInfo("Asia/Jerusalem")
 
-# Fixed room sensors / switch (triggers — bound at module load).
+# Fixed room sensors (triggers — bound at module load).
 _PRESENCE_ID = "bf23d6781f5f872648dd4n"               # My Bathroom Presence sens (dps "1")
 _DOOR_ID     = "66ac7365-7a9b-4706-bbd4-315a2793ecff"  # My Bathroom Door (dps "door")
-_SWITCH_ID   = "57317771ecfabcbd3d24"                  # My Bathroom Switch (mirror master, ch "2")
+# NOTE: the old "My Bathroom Switch" (57317771…) was REMOVED 2026-06-22 — it died,
+# was physically replaced by the mybathroom-panel plate, and the user deleted its
+# devices row. With it went the mirror + OFF-cascade: the plate gives no pushed
+# state to mirror, and presence already turns the main light + under-cabinet on
+# together (so the mirror was redundant for the automation path anyway).
 
 # Sentence regex anchors (case-insensitive).
 _DAY_RE     = re.compile(r"my\s+bathroom\s+lights:\s*day\s+lights\s+are", re.IGNORECASE)
@@ -86,12 +84,6 @@ _TIMEOUT_RE = re.compile(
     r"my\s+bathroom\s+lights:\s*turn\s+off\s+after\s+(\d+)\s*(hour|hr|minute|min|second|sec)",
     re.IGNORECASE,
 )
-_MIRROR_RE  = re.compile(r"my\s+bathroom\s+lights:\s*mirror\b", re.IGNORECASE)
-# s_mbr6 — OFF-only cascade: on a real falling edge of the main light (was on,
-# now off), also turn off these lights immediately. No occupancy gate (the
-# laundry-empty check was dropped 2026-06-12). Edge-gated in evaluate() via
-# _mybathroom_master_was_on so steady-state local-poll snapshots don't re-fire.
-_OFF_CASCADE_RE = re.compile(r"my\s+bathroom\s+lights:\s*when\s+main\s+light\s+off", re.IGNORECASE)
 # Gate sentence (s_mbr7) — "My Bathroom Lights: only fires when <key> is <value>".
 # AND-combined; gates the TURN-ON paths only (presence / door / Run). The mirror,
 # OFF-cascade, and auto-off all ignore it (they're manual-switch responses /
@@ -120,11 +112,56 @@ _ON_VALS   = (True, 1, "on", "ON", "true", "True", "1")
 _cfg_cache = {"data": None, "ts": 0.0}
 _CFG_TTL_SEC = 30
 
+# ── New plate (mybathroom-panel) on-board relays ────────────────────────────
+# The failed "My Bathroom Switch" was replaced by an OpenHASP plate whose page-1
+# buttons drive on-board relays: p1b20 = My Bathroom Light, p1b10 = Laundry.
+# Control = publish `hasp/mybathroom-panel/command/output<pin> {"state":"on"|"off"}`
+# (see _RELAY_OUTPUT / _relay_cmd below) — confirmed working 2026-06-22 (both
+# lights drive correctly). The rule does NOT track or read plate relay state: it
+# re-asserts the commanded output (idempotent) on each turn-on, and the heartbeat
+# auto-off fires UNCONDITIONALLY for plate relays when the room is empty — so a
+# manual tap that we never saw still gets cleared and the light can't be left on.
+# Dispatch goes through the engine's generic hasp
+# command path (action 'set' + path/value) since the device row is protocol='hasp'.
+_PLATE_PREFIX = "hasp:mybathroom-panel:"
+
+# Button object → GPIO output pin (plate gpio config: pin1/group1 = Laundry,
+# pin2/group2 = My Bathroom). Relay control is the documented OpenHASP
+# `command/output<pin>` with a JSON `{"state":"on"|"off"}` payload — STATE-based
+# (idempotent) and, because each pin shares a groupid with its page button, it
+# ALSO syncs the button's displayed state. Verified 2026-06-22 via state/output2
+# feedback (`command/output2 {"state":"on"}` → state/output2 {"state":"on"}).
+# NOT `.val` (only sets the button display, drives the relay flakily on a change)
+# and NOT a bare `1` payload (must be the JSON state object).
+_RELAY_OUTPUT = {"p1b10": "output1", "p1b20": "output2"}
+
+
+def _is_plate_relay(dev_id):
+    return isinstance(dev_id, str) and dev_id.startswith(_PLATE_PREFIX)
+
+
+def _plate_obj(dev_id):
+    return dev_id.split(":")[-1]   # 'hasp:mybathroom-panel:p1b20' -> 'p1b20'
+
+
+def _relay_cmd(dev_id, on):
+    """Direct GPIO relay command → publishes
+    `hasp/mybathroom-panel/command/output<pin>  {"state":"on"|"off"}`
+    (idempotent; group-syncs the button display). None if the relay isn't mapped."""
+    path = _RELAY_OUTPUT.get(_plate_obj(dev_id))
+    if not path:
+        return None
+    return {
+        "device_id": dev_id, "action": "set",
+        "path": path, "value": '{"state":"on"}' if on else '{"state":"off"}',
+        "rule": "My Bathroom Lights", "_skip_loop_guard": True,
+    }
+
 
 RULE = {
     "name":        "My Bathroom Lights",
     "description": "Presence/door motion lighting for My BathRoom: day/night light sets, auto-off when empty, and a one-way main→under-cabinet mirror. Fully sentence-driven.",
-    "triggers":    [_PRESENCE_ID, _DOOR_ID, _SWITCH_ID, "heartbeat"],
+    "triggers":    [_PRESENCE_ID, _DOOR_ID, "heartbeat"],
     "controls":    [],
     "category":    "control",
     "group":       "my-bathroom",   # room group (renders as "My BathRoom"). priority 10 keeps it
@@ -233,8 +270,6 @@ def _parse_config(state):
         "day": [], "night": [],
         "win_start": _DEF_WIN_START, "win_end": _DEF_WIN_END,
         "timeout": _DEF_TIMEOUT,
-        "mirror_master": None, "mirror_slave": None,
-        "off_cascade": [],
         "gates": [],
         "authored": container is not None,
     }
@@ -261,13 +296,6 @@ def _parse_config(state):
                 n, unit = int(m.group(1)), m.group(2).lower()
                 mult = 3600 if unit in ("hour", "hr") else 1 if unit in ("second", "sec") else 60
                 cfg["timeout"] = n * mult
-            elif _OFF_CASCADE_RE.search(text):
-                cfg["off_cascade"] = [p for p in (_parse_dev_chip(c, devs) for c in _iter_dev_chips(s)) if p]
-            elif _MIRROR_RE.search(text):
-                chips = _iter_dev_chips(s)
-                if len(chips) >= 2:
-                    cfg["mirror_master"] = _parse_dev_chip(chips[0], devs)
-                    cfg["mirror_slave"]  = _parse_dev_chip(chips[1], devs)
 
     _cfg_cache["data"] = cfg
     _cfg_cache["ts"] = now
@@ -313,37 +341,27 @@ def _turn_on_set(state, targets, now_ts):
     constant's note). Retries after the window if the lights still read off."""
     cmds = []
     for dev_id, ch in targets:
-        if _is_on(state, dev_id, ch):
-            continue
-        cmd = {"device_id": dev_id, "action": "turn_on", "rule": "My Bathroom Lights",
-               "_skip_loop_guard": True}
-        if ch is not None:
-            cmd["channel"] = ch
-        cmds.append(cmd)
+        if _is_plate_relay(dev_id):
+            # Idempotent GPIO output — always (re)assert ON. The plate gives no
+            # state feedback and a manual dashboard/tap change is invisible to
+            # us, so we can't safely "skip if already on"; re-asserting an
+            # already-on output is a harmless no-op. The 3 s burst debounce below
+            # caps repeats during the mmWave's entry flurry.
+            c = _relay_cmd(dev_id, True)
+            if c:
+                cmds.append(c)
+        elif not _is_on(state, dev_id, ch):
+            cmd = {"device_id": dev_id, "action": "turn_on", "rule": "My Bathroom Lights",
+                   "_skip_loop_guard": True}
+            if ch is not None:
+                cmd["channel"] = ch
+            cmds.append(cmd)
     if not cmds:
         return []
     last_emit = float(state.shared.get("_mybathroom_last_on_emit_ts", 0) or 0)
     if (now_ts - last_emit) < _ON_DEBOUNCE_SEC:
         return []   # burst repeat within the command round-trip window — suppress
     state.shared["_mybathroom_last_on_emit_ts"] = now_ts
-    return cmds
-
-
-def _turn_off_set(state, targets):
-    cmds = []
-    seen = set()
-    for dev_id, ch in targets:
-        key = (dev_id, ch)
-        if key in seen:
-            continue
-        seen.add(key)
-        if not _is_on(state, dev_id, ch):
-            continue
-        cmd = {"device_id": dev_id, "action": "turn_off", "rule": "My Bathroom Lights",
-               "_skip_loop_guard": True}
-        if ch is not None:
-            cmd["channel"] = ch
-        cmds.append(cmd)
     return cmds
 
 
@@ -387,6 +405,7 @@ def evaluate(event, state):
         state.shared["_mybathroom_prev_present"] = cur_present
         if cur_present:
             state.shared["_mybathroom_last_active_ts"] = now_ts
+            state.shared["_mybathroom_autooff_done"] = False   # activity → re-arm auto-off
             if not _gates_pass(state, cfg):
                 return []   # e.g. home_mode != home → track activity but don't turn on
             cmds = _turn_on_set(state, day_set, now_ts)
@@ -404,6 +423,7 @@ def evaluate(event, state):
         dps = event.get("dps", {}) or {}
         if "door" in dps:
             state.shared["_mybathroom_last_active_ts"] = now_ts
+            state.shared["_mybathroom_autooff_done"] = False   # activity → re-arm auto-off
             if not _gates_pass(state, cfg):
                 return []
             cmds = _turn_on_set(state, day_set, now_ts)
@@ -413,62 +433,39 @@ def evaluate(event, state):
             return cmds
         return []
 
-    # ── Mirror: master light change → slave follows; on OFF also kill off-cascade ──
-    if dev_id == _SWITCH_ID and cfg["mirror_master"]:
-        master_id, master_ch = cfg["mirror_master"]
-        if master_id != dev_id:
-            return []
-        dps = event.get("dps", {}) or {}
-        key = master_ch if master_ch is not None else "1"
-        if key not in dps:
-            return []   # this event didn't change the master channel
-        want_on = dps.get(key) in _ON_VALS
-        prev_master = state.shared.get("_mybathroom_master_was_on")
-        state.shared["_mybathroom_master_was_on"] = want_on
-        cmds = []
-        # Primary slave — bidirectional (on→on, off→off). Idempotent via the
-        # _is_on guard, so steady-state local-poll snapshots are no-ops.
-        if cfg["mirror_slave"]:
-            slave_id, slave_ch = cfg["mirror_slave"]
-            if _is_on(state, slave_id, slave_ch) != want_on:
-                c = {"device_id": slave_id,
-                     "action": "turn_on" if want_on else "turn_off",
-                     "rule": "My Bathroom Lights", "_skip_loop_guard": True}
-                if slave_ch is not None:
-                    c["channel"] = slave_ch
-                cmds.append(c)
-        # OFF-cascade (s_mbr6) — on a real FALLING EDGE of the main light (was on,
-        # now off), also turn off the listed lights. Fires immediately, NO
-        # occupancy gate (the laundry-empty check was dropped 2026-06-12 — the
-        # adjacent laundry sensor still read "presence" at the off-instant, so the
-        # gate blocked nearly every time). Edge-gated (not "ch2==false in this
-        # event") via _mybathroom_master_was_on so steady-state local-poll
-        # snapshots showing ch2=false don't keep turning the laundry light off and
-        # fight the Laundry Light rule (which turns it on for the laundry room).
-        if prev_master is True and not want_on and cfg["off_cascade"]:
-            for dev2, ch2 in cfg["off_cascade"]:
-                if not _is_on(state, dev2, ch2):
-                    continue
-                c = {"device_id": dev2, "action": "turn_off",
-                     "rule": "My Bathroom Lights", "_skip_loop_guard": True}
-                if ch2 is not None:
-                    c["channel"] = ch2
-                cmds.append(c)
-        if cmds:
-            log.info("mybathroom: mirror master=%s → %d cmd(s)",
-                     "on" if want_on else "off", len(cmds))
-        return cmds
-
     # ── Heartbeat: auto-off when empty + idle ──
     if dev_id == "heartbeat":
         clear = not _present_val(_dps_of(state, _PRESENCE_ID).get("1"))
         if not clear:
+            state.shared["_mybathroom_autooff_done"] = False   # occupied → re-arm
             return []
         last_active = float(state.shared.get("_mybathroom_last_active_ts", 0) or 0)
         if (now_ts - last_active) < cfg["timeout"]:
             return []
-        all_targets = list(cfg["day"]) + list(cfg["night"])
-        cmds = _turn_off_set(state, all_targets)
+        if state.shared.get("_mybathroom_autooff_done"):
+            return []   # lights already cleared once this empty period
+        # Empty + idle past the timeout → turn everything off ONCE this period.
+        # Plate relays fire UNCONDITIONALLY: we can't read their state and a
+        # manual tap-on is invisible to us, so always send OFF to be certain the
+        # light can't be left on. Non-plate targets (under-cabinet, which DOES
+        # report) honor _is_on to avoid redundant commands.
+        all_targets = []
+        for t in list(cfg["day"]) + list(cfg["night"]):
+            if t not in all_targets:
+                all_targets.append(t)
+        cmds = []
+        for dev2, ch2 in all_targets:
+            if _is_plate_relay(dev2):
+                c = _relay_cmd(dev2, False)   # idempotent GPIO output OFF
+                if c:
+                    cmds.append(c)
+            elif _is_on(state, dev2, ch2):
+                c = {"device_id": dev2, "action": "turn_off", "rule": "My Bathroom Lights",
+                     "_skip_loop_guard": True}
+                if ch2 is not None:
+                    c["channel"] = ch2
+                cmds.append(c)
+        state.shared["_mybathroom_autooff_done"] = True
         if cmds:
             log.info("mybathroom: auto-off → %d off-commands (idle %.0fs >= %ds, room clear)",
                      len(cmds), now_ts - last_active, cfg["timeout"])

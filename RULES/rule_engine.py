@@ -521,7 +521,15 @@ class RuleEngine:
                 # sensors / etc.). Without this, the Devices page shows a stale
                 # last_seen for HASP panels — rule engine had no other write
                 # path for these rows. Same pattern as ESP boards' _update_esp_device_dps.
-                self._update_hasp_panel_state(node, {obj: payload})
+                # GPIO relay outputs report {"state":"on"|"off"} — store a flat
+                # BOOLEAN under the output<n> key so the Devices grid renders a
+                # clean on/off (it tests last_state[k] === true/false). Other
+                # state sub-topics keep their raw payload.
+                if re.match(r'^output\d+$', obj) and isinstance(payload, dict) and 'state' in payload:
+                    _on = str(payload.get('state')).strip().lower() in ('on', 'true', '1')
+                    self._update_hasp_panel_state(node, {obj: _on})
+                else:
+                    self._update_hasp_panel_state(node, {obj: payload})
 
         # zigbee2mqtt/+ (skip "bridge")
         elif len(parts) == 2 and parts[0] == 'zigbee2mqtt':
@@ -1772,6 +1780,7 @@ class RuleEngine:
                         if req and cmd.get(req) is None:
                             continue   # skip alias that needs missing param
                         alias = cand
+                        cfg = ch_cfg   # capture so the relay alias can read cfg['output']
                         break
                 # Currently mapped aliases — add new ones here as future
                 # panel capabilities are surfaced.
@@ -1788,6 +1797,20 @@ class RuleEngine:
                                     rule_name, device_id)
                         return
                     path, value = 'page', str(int(pn))
+                elif alias in ('relay_on', 'relay_off'):
+                    # On-board GPIO relay (e.g. mybathroom-panel). Documented
+                    # OpenHASP control is `command/output<pin>` with a JSON
+                    # {"state":"on"|"off"} payload (idempotent; group-syncs the
+                    # page button). The pin is in the channel's dps_config
+                    # 'output' (e.g. 'output2'). Lets a scene / binding turn the
+                    # relay on/off generically — like the old Tuya switch did.
+                    out = cfg.get('output')
+                    if not out:
+                        log.warning("Rule '%s' hasp %s: relay alias missing 'output' pin",
+                                    rule_name, device_id)
+                        return
+                    path  = out
+                    value = '{"state":"on"}' if alias == 'relay_on' else '{"state":"off"}'
                 else:
                     log.warning("Rule '%s' hasp %s: no alias mapping for action '%s' channel '%s'",
                                 rule_name, device_id, action, cmd.get('channel'))

@@ -101,15 +101,16 @@
   </div>
 
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="showTab('panel', this)">Panel</button>
+    <button class="tab-btn active" onclick="showTab('panel', this)">Toilet Panel</button>
     <button class="tab-btn" onclick="showTab('smart-switch', this)">Smart Switch</button>
+    <button class="tab-btn" onclick="showTab('panel2', this)">Lights Panel</button>
   </div>
 
   <div class="tab-panel active" id="tab-panel">
 
     <!-- Static info — first card -->
     <div class="card" style="padding:14px;margin-bottom:16px;">
-      <h2 style="margin-top:0;font-size:1.05rem;">My BathRoom Panel Display</h2>
+      <h2 style="margin-top:0;font-size:1.05rem;">My BathRoom Toilet Panel</h2>
       <div style="font-size:0.85rem;color:#555;line-height:1.55;">
         Sunton ESP32-S3 4848S040 · 480×480 IPS · OpenHASP<br>
         IP <code>192.168.1.220</code> · MQTT prefix <code>hasp/my-bathroom/</code> · Plate name <code>my-bathroom</code><br>
@@ -119,7 +120,7 @@
 
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
-        <h2 style="margin:0;font-size:1.05rem;">HASP My BathRoom <span id="hp-online-dot" title="MQTT" style="font-size:0.85rem;color:#aaa;">●</span> <span id="hp-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">connecting…</span></h2>
+        <h2 style="margin:0;font-size:1.05rem;">HASP Toilet Panel <span id="hp-online-dot" title="MQTT" style="font-size:0.85rem;color:#aaa;">●</span> <span id="hp-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">connecting…</span></h2>
         <span id="hp-power-chip" style="font-size:0.78rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">power: —</span>
         <span style="font-size:0.82rem;color:#666;">Uptime: <b id="hp-uptime">—</b></span>
         <span style="font-size:0.82rem;color:#666;">Signal: <b id="hp-rssi">—</b> dBm</span>
@@ -212,6 +213,114 @@
     </div>
 
   </div>
+
+  <!-- ════════════════════════════════════════════════════ -->
+  <!-- TAB: Lights Panel — 2nd OpenHASP plate @ 192.168.1.206 (mybathroom-panel) -->
+  <!-- ════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-panel2">
+
+    <!-- Static info -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin-top:0;font-size:1.05rem;">My BathRoom Lights Panel</h2>
+      <div style="font-size:0.85rem;color:#555;line-height:1.55;">
+        Sunton ESP32-S3 4848S040 · 480×480 IPS · OpenHASP (built-in relays)<br>
+        IP <code>192.168.1.206</code> · MQTT prefix <code>hasp/mybathroom-panel/</code> · Plate name <code>mybathroom-panel</code><br>
+        <a href="http://192.168.1.206" target="_blank">Web UI ↗</a>
+      </div>
+    </div>
+
+    <!-- Status + power/page -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">HASP Lights Panel <span id="np-online-dot" title="MQTT" style="font-size:0.85rem;color:#aaa;">●</span> <span id="np-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">connecting…</span></h2>
+        <span id="np-power-chip" style="font-size:0.78rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">power: —</span>
+        <span style="font-size:0.82rem;color:#666;">Uptime: <b id="np-uptime">—</b></span>
+        <span style="font-size:0.82rem;color:#666;">Signal: <b id="np-rssi">—</b> dBm</span>
+        <span style="font-size:0.82rem;color:#666;">Current page: <b id="np-page">—</b></span>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+          <button id="np-btn-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="npPower(true)" title="backlight on + dim 100">On</button>
+          <button id="np-btn-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="npPower(false)" title="backlight off (hard cut)">Off</button>
+          <span style="font-size:0.78rem;color:#666;margin-left:10px;">Page</span>
+          <select id="np-page-select" onchange="npGotoPage(this.value)" style="padding:3px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;" title="Jump panel to this page">
+            <option value="">— go to —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- On-board relay lights -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin:0 0 12px;font-size:1.05rem;">Lights <span style="font-size:0.72rem;color:#888;font-weight:normal;">on-board relays</span></h2>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="font-weight:600;width:150px;">Laundry Light</span>
+          <span id="np-relay-p1b10" style="font-size:0.78rem;font-weight:600;padding:2px 12px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;min-width:42px;text-align:center;">—</span>
+          <button id="np-relay-p1b10-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="npRelay('p1b10', true)">On</button>
+          <button id="np-relay-p1b10-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="npRelay('p1b10', false)">Off</button>
+          <span style="color:#aaa;font-size:0.72rem;">p1b10 · GPIO 1 · grp 1</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="font-weight:600;width:150px;">My Bathroom Light</span>
+          <span id="np-relay-p1b20" style="font-size:0.78rem;font-weight:600;padding:2px 12px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;min-width:42px;text-align:center;">—</span>
+          <button id="np-relay-p1b20-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="npRelay('p1b20', true)">On</button>
+          <button id="np-relay-p1b20-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="npRelay('p1b20', false)">Off</button>
+          <span style="color:#aaa;font-size:0.72rem;">p1b20 · GPIO 2 · grp 2</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sync from panel -->
+    <div class="card" style="padding:10px 14px;margin-bottom:16px;background:#f8f5f1;">
+      <div style="display:flex;align-items:center;gap:14px;font-size:0.85rem;">
+        <b>Sync from panel</b>
+        <span style="color:#666;font-size:0.78rem;">After editing widgets / labels in the OpenHASP web UI, click here to pull pages.jsonl, upsert binding/display rows, and save the jsonl back to the repo.</span>
+        <button id="nb-sync-btn" class="btn-test" style="margin-left:auto;border-color:#7a9ab8;color:#7a9ab8;" onclick="nbSyncFromPanel()">↺ Sync from panel</button>
+        <span id="nb-sync-status" style="font-size:0.78rem;color:#888;"></span>
+      </div>
+    </div>
+
+    <!-- Button Bindings -->
+    <div class="card wallmote-card">
+      <div class="wallmote-header">
+        <h2>Button Bindings</h2>
+        <span class="wallmote-meta"><span>Click <b>— select devices —</b> to add one or more devices per button. Multi-device: one press fires all.</span></span>
+      </div>
+      <div id="nb-buttons-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      <div style="margin-top:12px;text-align:right;">
+        <button class="btn-save" onclick="nbSaveAllBindings()">Save Bindings</button>
+      </div>
+    </div>
+
+    <!-- Display Templates -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">Display Templates <span id="nb-displays-count" style="color:#888;font-size:0.78rem;font-weight:normal;"></span></h2>
+        <span style="font-size:0.78rem;color:#888;">Push live values to label / gauge widgets on the panel</span>
+        <span style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:0.78rem;color:#666;">
+          Show:
+          <select id="nb-displays-filter" onchange="nbRenderDisplaysList()" style="padding:2px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;">
+            <option value="active" selected>only configured</option>
+            <option value="all">all (incl. empty)</option>
+          </select>
+          <select id="nb-displays-limit" onchange="nbRenderDisplaysList()" style="padding:2px 6px;font-size:0.78rem;border:1px solid #d0cbc4;border-radius:3px;">
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+            <option value="all">all</option>
+          </select>
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="nbAddDisplay()">+ Add</button>
+          <button class="btn-test" style="border-color:#7a9ab8;color:#7a9ab8;" onclick="nbToggleDisplaysCard()" id="nb-displays-toggle" title="Collapse / expand">▾</button>
+        </span>
+      </div>
+      <div id="nb-displays-body">
+        <div style="font-size:0.78rem;color:#666;margin-bottom:10px;">
+          Use <code style="background:#eee;padding:1px 4px;border-radius:3px;">{{key}}</code> in the format string to embed live state — e.g. <code style="background:#eee;padding:1px 4px;border-radius:3px;">Boiler {{boiler_temp}}°C</code>. Available keys come from rule_engine state.
+        </div>
+        <div id="nb-displays-list"><div style="padding:8px;color:#888;font-size:0.85rem;">loading…</div></div>
+      </div>
+    </div>
+
+  </div>
 </main>
 
 <!-- Device picker popover (shared with bindings UI) -->
@@ -235,8 +344,30 @@
   </div>
 </div>
 
+<!-- Device picker popover for the Lights Panel tab (own instance) -->
+<div class="picker-overlay" id="nbk-overlay">
+  <div class="picker-popover">
+    <div class="picker-head">
+      <h3 id="nbk-title">Select devices</h3>
+      <span style="font-size:0.75rem;color:#888;" id="nbk-count">0 selected</span>
+    </div>
+    <div class="picker-search">
+      <input type="text" id="nbk-search-input" placeholder="Filter by name or room…" oninput="nbFilterPicker()">
+    </div>
+    <div class="picker-list" id="nbk-list"></div>
+    <div class="picker-foot">
+      <span style="color:#888;">Click a row to toggle</span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-picker-cancel" onclick="nbClosePicker(false)">Cancel</button>
+        <button class="btn-picker-done" onclick="nbClosePicker(true)">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/my-bathroom.js?v=13"></script>
+<script src="js/mybathroom-panel.js?v=2"></script>
 </body>
 </html>

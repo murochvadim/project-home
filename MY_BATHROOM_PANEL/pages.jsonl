@@ -1,0 +1,9 @@
+{"id":0,"bg_color":"#111"}
+{"page":0,"id":0,"bg_color":"#111"}
+{"page":1,"id":0,"bg_color":"#111"}
+{"page":1,"id":1,"obj":"label","x":0,"y":22,"w":480,"h":34,"text":"My Bathroom Panel","text_font":26,"align":1,"text_color":"#888888"}
+{"page":1,"id":10,"obj":"btn","x":30,"y":85,"w":195,"h":250,"groupid":1,"toggle":true,"radius":18,"border_width":0,"bg_color":"#1a4775","bg_grad_color":"#1a4775","text":"Laundry\nLight","text_font":32,"text_color":"#ffffff","align":1}
+{"page":1,"id":20,"obj":"btn","x":255,"y":85,"w":195,"h":250,"groupid":2,"toggle":true,"radius":18,"border_width":0,"bg_color":"#471a75","bg_grad_color":"#471a75","text":"My Bathroom\nLight","text_font":28,"text_color":"#ffffff","align":1}
+{"page":0,"id":10,"obj":"btn","action":"prev","x":75,"y":390,"w":107,"h":65,"bg_color":"#1c1c1c","text":"","text_color":"#FFFFFF","radius":0,"border_side":0,"text_font":32}
+{"page":0,"id":11,"obj":"btn","action":"back","x":184,"y":390,"w":107,"h":65,"bg_color":"#1c1c1c","text":"","text_color":"#FFFFFF","radius":0,"border_side":0,"text_font":32}
+{"page":0,"id":12,"obj":"btn","action":"next","x":293,"y":390,"w":107,"h":65,"bg_color":"#1c1c1c","text":"","text_color":"#FFFFFF","radius":0,"border_side":0,"text_font":32}

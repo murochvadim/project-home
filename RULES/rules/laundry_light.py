@@ -76,6 +76,46 @@ _ON_VALS   = (True, 1, "on", "ON", "true", "True", "1")
 _cfg_cache = {"data": None, "ts": 0.0}
 _CFG_TTL_SEC = 30
 
+# ── New plate (mybathroom-panel) on-board relay — Laundry Light = p1b10 ──────
+# The failed "My Bathroom Switch" (ch1 = Laundry) was replaced by the OpenHASP
+# plate. Control = publish `hasp/mybathroom-panel/command/output<pin>
+# {"state":"on"|"off"}` (see _RELAY_OUTPUT / _relay_cmd below) — confirmed working
+# 2026-06-22. The rule does NOT track or read plate relay state: it re-asserts the
+# commanded output (idempotent) on each turn-on, and the heartbeat auto-off fires
+# UNCONDITIONALLY for plate relays so a manual tap-on still gets cleared and the
+# light can't be left on. Dispatch goes through the
+# engine's generic hasp command path (device row protocol='hasp').
+_PLATE_PREFIX = "hasp:mybathroom-panel:"
+
+# Button object → GPIO output pin (plate gpio config: pin1/group1 = Laundry,
+# pin2/group2 = My Bathroom). Relay control is the documented OpenHASP
+# `command/output<pin>` with a JSON `{"state":"on"|"off"}` payload — STATE-based
+# (idempotent) and group-syncs the button display. Verified 2026-06-22. NOT
+# `.val` (only sets the button display) and NOT a bare `1` payload.
+_RELAY_OUTPUT = {"p1b10": "output1", "p1b20": "output2"}
+
+
+def _is_plate_relay(dev_id):
+    return isinstance(dev_id, str) and dev_id.startswith(_PLATE_PREFIX)
+
+
+def _plate_obj(dev_id):
+    return dev_id.split(":")[-1]   # 'hasp:mybathroom-panel:p1b10' -> 'p1b10'
+
+
+def _relay_cmd(dev_id, on):
+    """Direct GPIO relay command → publishes
+    `hasp/mybathroom-panel/command/output<pin>  {"state":"on"|"off"}`
+    (idempotent; group-syncs the button display). None if the relay isn't mapped."""
+    path = _RELAY_OUTPUT.get(_plate_obj(dev_id))
+    if not path:
+        return None
+    return {
+        "device_id": dev_id, "action": "set",
+        "path": path, "value": '{"state":"on"}' if on else '{"state":"off"}',
+        "rule": "Laundry Light", "_skip_loop_guard": True,
+    }
+
 
 RULE = {
     "name":        "Laundry Light",
@@ -228,37 +268,24 @@ def _turn_on_set(state, targets, now_ts):
     repeat on-bursts within _ON_DEBOUNCE_SEC of the last on-emit."""
     cmds = []
     for dev_id, ch in targets:
-        if _is_on(state, dev_id, ch):
-            continue
-        cmd = {"device_id": dev_id, "action": "turn_on", "rule": "Laundry Light",
-               "_skip_loop_guard": True}
-        if ch is not None:
-            cmd["channel"] = ch
-        cmds.append(cmd)
+        if _is_plate_relay(dev_id):
+            # Idempotent GPIO output — always (re)assert ON (no state feedback to
+            # skip on; re-asserting an already-on output is a harmless no-op).
+            c = _relay_cmd(dev_id, True)
+            if c:
+                cmds.append(c)
+        elif not _is_on(state, dev_id, ch):
+            cmd = {"device_id": dev_id, "action": "turn_on", "rule": "Laundry Light",
+                   "_skip_loop_guard": True}
+            if ch is not None:
+                cmd["channel"] = ch
+            cmds.append(cmd)
     if not cmds:
         return []
     last_emit = float(state.shared.get("_laundry_light_last_on_emit_ts", 0) or 0)
     if (now_ts - last_emit) < _ON_DEBOUNCE_SEC:
         return []   # burst repeat within the command round-trip window — suppress
     state.shared["_laundry_light_last_on_emit_ts"] = now_ts
-    return cmds
-
-
-def _turn_off_set(state, targets):
-    cmds = []
-    seen = set()
-    for dev_id, ch in targets:
-        key = (dev_id, ch)
-        if key in seen:
-            continue
-        seen.add(key)
-        if not _is_on(state, dev_id, ch):
-            continue
-        cmd = {"device_id": dev_id, "action": "turn_off", "rule": "Laundry Light",
-               "_skip_loop_guard": True}
-        if ch is not None:
-            cmd["channel"] = ch
-        cmds.append(cmd)
     return cmds
 
 
@@ -298,6 +325,7 @@ def evaluate(event, state):
         state.shared["_laundry_light_prev_present"] = cur_present
         if cur_present:
             state.shared["_laundry_light_last_active_ts"] = now_ts
+            state.shared["_laundry_autooff_done"] = False   # activity → re-arm auto-off
             if not _gates_pass(state, cfg):
                 return []   # e.g. home_mode != home → track activity but don't turn on
             cmds = _turn_on_set(state, targets, now_ts)
@@ -313,11 +341,29 @@ def evaluate(event, state):
     if dev_id == "heartbeat":
         clear = not _present_val(_dps_of(state, _PRESENCE_ID).get("1"))
         if not clear:
+            state.shared["_laundry_autooff_done"] = False   # occupied → re-arm
             return []
         last_active = float(state.shared.get("_laundry_light_last_active_ts", 0) or 0)
         if (now_ts - last_active) < cfg["timeout"]:
             return []
-        cmds = _turn_off_set(state, targets)
+        if state.shared.get("_laundry_autooff_done"):
+            return []   # light already cleared once this empty period
+        # Empty + idle past the timeout → turn off ONCE this period. Plate relays
+        # fire UNCONDITIONALLY (we can't read their state; a manual tap-on is
+        # invisible), so always send OFF to be sure the light can't be left on.
+        cmds = []
+        for dev2, ch2 in targets:
+            if _is_plate_relay(dev2):
+                c = _relay_cmd(dev2, False)   # idempotent GPIO output OFF
+                if c:
+                    cmds.append(c)
+            elif _is_on(state, dev2, ch2):
+                c = {"device_id": dev2, "action": "turn_off", "rule": "Laundry Light",
+                     "_skip_loop_guard": True}
+                if ch2 is not None:
+                    c["channel"] = ch2
+                cmds.append(c)
+        state.shared["_laundry_autooff_done"] = True
         if cmds:
             log.info("laundry_light: auto-off → %d off-commands (idle %.0fs >= %ds, room clear)",
                      len(cmds), now_ts - last_active, cfg["timeout"])
