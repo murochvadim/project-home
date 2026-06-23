@@ -358,7 +358,7 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
   - **pixoo** — Daily_Welcome
   - **living-room** — Wallmote Handler
   - **balcony** — Balcony Buttons, Balcony Button Mirror, Balcony Displays, Balcony Smart Switch Handler, Gates Button Progress
-  - **my-bathroom** — My BathRoom Buttons, My BathRoom Button Mirror, My BathRoom Displays, My BathRoom Smart Switch Handler, My Bathroom Lights, My Bathroom Color Panel, My Bathroom Alexa Panel
+  - **my-bathroom** — My BathRoom Buttons, My BathRoom Button Mirror, My BathRoom Displays, My BathRoom Smart Switch Handler, My Bathroom Lights, My Bathroom Color Panel, My Bathroom Alexa Panel, My BathRoom Lights Panel Buttons
   - **laundry** — Laundry Light
   - **dressroom** — Dressroom Lights
   - **bedroom** — Bedroom Balcony Blinds
