@@ -907,6 +907,9 @@
           'Daily_Welcome':           'Pixoo',
           'Wallmote Handler':        'Living Room',
           'My Bathroom Lights':      'My BathRoom',
+          // engine group is 'my-bathroom-bindings' (own group on purpose — additive
+          // bindings, see group-conflict note); shown under My BathRoom in the table.
+          'My BathRoom Lights Panel Buttons': 'My BathRoom',
           'Boiler Consumption Classify': 'Boiler',
         };
         const SECTION_ORDER = [
