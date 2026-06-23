@@ -10,11 +10,10 @@ Triggered by the synthetic events the engine makes from
 `hasp/mybathroom-panel/state/p<page>b<id>` (device_id `hasp:mybathroom-panel:p<page>b<id>`,
 dps `{event: short|long|down|up|double, …}`).
 
-⚠ `_RESERVED` guard: the plate's existing buttons (page-1 relays, page-2 colour,
-page-3 Alexa) are driven by DEDICATED rules (laundry_light / mybathroom /
-mybathroom_panel_color / mybathroom_panel_alexa) that trigger on the SAME object ids.
-This generic handler SKIPS those reserved ids so binding one in the dashboard card
-can't double-fire. Only SPARE / future buttons act on bindings.
+ADDITIVE (per user, 2026-06-23): a button fires its dedicated rule (relay / colour
+/ Alexa) AND — if it has a binding in the card — this handler fires that binding too.
+So a button can do BOTH at once (e.g. Media 1 plays its Alexa station AND turns on a
+light). Every button with a non-empty binding executes it; no buttons are reserved.
 """
 
 import logging
@@ -42,19 +41,14 @@ RULE = {
     "triggers": ["*"],   # wildcard with prefix early-return — see evaluate()
     "controls": [],
     "category": "control",
-    "group": "my-bathroom",
+    # OWN group (NOT 'my-bathroom') on purpose: the engine's group-conflict makes
+    # only ONE rule per group act per event. If this shared 'my-bathroom' with the
+    # dedicated colour/Alexa page rules, a button press would fire EITHER the
+    # binding OR the dedicated function, not both. A distinct group keeps them
+    # additive (button does its dedicated job AND its binding).
+    "group": "my-bathroom-bindings",
     "priority": 10,
     "depends_on": [],
-}
-
-# Buttons already driven by dedicated rules (relays / colour / Alexa). The generic
-# binding handler skips them so binding one in the card can't double-fire alongside
-# its dedicated rule. Add a button here if a future dedicated rule claims it.
-_RESERVED = {
-    "p1b10", "p1b20",                                        # page-1 relays
-    "p2b10", "p2b20", "p2b30", "p2b40", "p2b41",             # page-2 colour
-    "p3b10", "p3b11", "p3b12", "p3b13", "p3b14", "p3b15",    # page-3 Alexa media
-    "p3b20", "p3b21", "p3b22", "p3b30",                       # page-3 transport + volume
 }
 
 _COOLDOWN_SEC = 1.0
@@ -167,8 +161,6 @@ def evaluate(event, state):
 
     page = int(m.group(1))
     bid = int(m.group(2))
-    if f"p{page}b{bid}" in _RESERVED:
-        return []   # driven by a dedicated rule — never act on bindings here
 
     dps = event.get("dps", {}) or {}
     evt = dps.get("event") or "short"
