@@ -991,7 +991,7 @@
                   <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#c0392b;color:#fff;" title="Run the rule exactly as declared (gates + latch honored, only the trigger moment is simulated) and dispatch for real">Run</button>
                 ` : ``}
                 <button class="btn btn-secondary btn-sm" onclick="resetRuleRuns('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 6px;" title="Zero the Runs counter only (avg/max/last-fired stay) — engine applies within 60 s">↺</button>
-                <button class="btn btn-secondary btn-sm" data-rule="${escHtml(r.name)}" data-desc="${escHtml(r.description || 'No description yet.')}" onclick="showRuleDesc(this)" style="font-size:0.78rem;padding:2px 6px;margin-left:auto;" title="What this rule does">ℹ️</button>
+                <button class="btn btn-secondary btn-sm" data-rule="${escHtml(r.name)}" data-desc="${escHtml(r.description || 'No description yet.').replace(/"/g, '&quot;')}" onclick="showRuleDesc(this)" style="font-size:0.78rem;padding:2px 6px;margin-left:auto;" title="What this rule does">ℹ️</button>
               </div>
             </td>
           </tr>`;
