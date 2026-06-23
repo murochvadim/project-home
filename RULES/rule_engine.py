@@ -1558,6 +1558,40 @@ class RuleEngine:
         except Exception as e:
             log.warning("Rule '%s' curtain %s cover.%s failed: %s", rule_name, device_id, service, e)
 
+    def _dispatch_ha_light(self, cmd, rule_name):
+        """Dispatch a light control via HA light.* services. The device's local
+        Tuya link is unreliable (sleeps / flaky write listener), so control is
+        HA-mediated. Rule carries entity_id + service ('turn_on'|'turn_off') +
+        optional data (brightness_pct / hs_color / color_temp_kelvin). Same
+        urllib-to-HA pattern as _dispatch_curtain. Failures logged, never raised.
+        """
+        entity  = cmd.get('entity_id')
+        service = cmd.get('service', '')
+        data    = cmd.get('data') or {}
+        if not entity or service not in ('turn_on', 'turn_off'):
+            log.warning("Rule '%s' ha_light: bad entity/service (%s / %s)", rule_name, entity, service)
+            return
+        if not HA_TOKEN:
+            log.warning("Rule '%s' ha_light %s: HA_TOKEN not set", rule_name, entity)
+            return
+        body = {'entity_id': entity}
+        if service == 'turn_on':
+            body.update(data)
+        try:
+            req = urllib.request.Request(
+                f'{HA_URL}/api/services/light/{service}',
+                data=json.dumps(body).encode('utf-8'),
+                headers={'Authorization': f'Bearer {HA_TOKEN}',
+                         'Content-Type':  'application/json'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(f'HA returned {resp.status}')
+            log.info("Rule '%s' -> ha_light %s light.%s %s", rule_name, entity, service, data or '')
+        except Exception as e:
+            log.warning("Rule '%s' ha_light %s light.%s failed: %s", rule_name, entity, service, e)
+
     def _awtrix_push_preset(self, cmd, device_id, rule_name):
         preset_name = cmd.get('preset_name', '')
         if not preset_name:
@@ -1732,6 +1766,15 @@ class RuleEngine:
         # set-position). _dispatch_curtain fetches the device for its dps_config.
         if protocol == 'curtain':
             self._dispatch_curtain(cmd, rule_name)
+            return
+
+        # Light controlled via HA light.* services. cmd-level protocol (the
+        # device row is protocol='local' but its local Tuya link is unreliable —
+        # it sleeps and drops local writes, so control is HA-mediated, like the
+        # curtain). Rule carries entity_id + service ('turn_on'|'turn_off') +
+        # optional data (brightness_pct / hs_color / color_temp_kelvin).
+        if protocol == 'ha_light':
+            self._dispatch_ha_light(cmd, rule_name)
             return
 
         # Loop guard catches runaway automation feedback (rule → device →
