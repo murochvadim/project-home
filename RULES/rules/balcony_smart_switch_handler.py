@@ -46,7 +46,7 @@ SMART_SWITCH_ID = "0x8c65a3fffeb139ae"
 
 RULE = {
     "name":        "Balcony Smart Switch Handler",
-    "description": "Dispatch device commands based on Balcony Smart Switch button presses (single only — hold doesn't fire on this device, double causes flicker)",
+    "description": "When you press the Balcony wireless wall remote, this runs whatever each button is set to do. (Only a single press works on this remote.)",
     "triggers":    [SMART_SWITCH_ID],   # specific id — fires only on real presses
     "controls":    [],                  # dynamic — resolved per binding
     "category":    "control",

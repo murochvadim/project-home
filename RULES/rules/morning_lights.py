@@ -110,7 +110,7 @@ _LATE_ARRIVAL_RE = re.compile(
 
 RULE = {
     "name":        "Morning Lights",
-    "description": "Turn on declared lights once per day: at the s_ml2 sun anchor, OR (if s_ml4 is authored) on home arrival once the s_ml4 anchor has passed.",
+    "description": "Runs your morning routine once a day — switching on your morning devices — around sunrise, or when you arrive home after sunrise if set up that way.",
     "triggers":    ["heartbeat"],
     "controls":    [],
     "category":    "control",

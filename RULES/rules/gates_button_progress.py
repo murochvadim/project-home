@@ -45,7 +45,7 @@ _LAST = {}
 
 RULE = {
     "name":        "Gates Button Progress",
-    "description": "Mirror gates_01 progress + active state onto p1b110 (GATES) and p1b120 (BARRIER) buttons on the balcony panel",
+    "description": "Shows how far the gates and barrier have opened or closed, live on the Balcony panel's Gates and Barrier buttons, so you can watch them move.",
     "triggers":    [DEVICE_ID],
     "controls":    [],
     "category":    "display",

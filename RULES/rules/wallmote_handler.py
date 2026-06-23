@@ -31,7 +31,7 @@ log = logging.getLogger("rule.wallmote_handler")
 
 RULE = {
     "name": "Wallmote Handler",
-    "description": "Dispatch device commands based on Wallmote button presses (pushed/held)",
+    "description": "When you press a button on the Living Room Wallmote remote, this runs whatever each button is set to do — switching devices, running a scene, and so on.",
     "triggers": ["*"],
     "controls": [],  # dynamic — resolved per binding
     "category": "control",

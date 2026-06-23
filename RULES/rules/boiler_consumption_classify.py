@@ -29,7 +29,7 @@ PANEL_VALID_OFF = 10        # min valve must be OFF for boiler classification
 
 RULE = {
     "name": "Boiler Consumption Classify",
-    "description": "Label drop events as human / panel / thermal / boiler / unknown",
+    "description": "Whenever hot water is used, this works out why the water cooled (someone showering, the solar panel cycling, the house empty, or normal cooling) and labels each event.",
     "triggers": ["boiler"],
     "controls": [],
     "category": "info",

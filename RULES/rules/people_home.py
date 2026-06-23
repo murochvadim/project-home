@@ -63,7 +63,7 @@ from datetime import datetime, timezone
 
 RULE = {
     "name": "People Home",
-    "description": "People count (high-water since last Main Door close, zone-based)",
+    "description": "Estimates how many people are home, counting the areas that stay occupied and re-checking each time the front door closes.",
     "triggers": ["*"],
     "controls": [],
     "category": "info",

@@ -981,17 +981,31 @@
                 <span class="slider"></span>
               </label>
             </td>
-            <td style="white-space:nowrap;">
-              ${r.name === 'Mode Buttons' ? `
-                <button class="btn btn-secondary btn-sm" onclick="testModeButton('home')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('home')};color:#fff;" title="Press the HOME relay on 8 Gang Switch (real switch event → rule fires)">HOME</button>
-                <button class="btn btn-secondary btn-sm" onclick="testModeButton('away')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('away')};color:#fff;" title="Press the AWAY relay on 8 Gang Switch (real switch event → rule fires)">AWAY</button>
-                <button class="btn btn-secondary btn-sm" onclick="testModeButton('abroad')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('abroad')};color:#fff;" title="Press the ABROAD relay on 8 Gang Switch (real switch event → rule fires)">ABROAD</button>
-              ` : RULES_RUN_BUTTON.has(r.name) ? `
-                <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#c0392b;color:#fff;" title="Run the rule exactly as declared (gates + latch honored, only the trigger moment is simulated) and dispatch for real">Run</button>
-              ` : ``}
-              <button class="btn btn-secondary btn-sm" onclick="resetRuleRuns('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 6px;" title="Zero the Runs counter only (avg/max/last-fired stay) — engine applies within 60 s">↺</button>
+            <td>
+              <div style="display:flex;align-items:center;gap:4px;white-space:nowrap;">
+                ${r.name === 'Mode Buttons' ? `
+                  <button class="btn btn-secondary btn-sm" onclick="testModeButton('home')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('home')};color:#fff;" title="Press the HOME relay on 8 Gang Switch (real switch event → rule fires)">HOME</button>
+                  <button class="btn btn-secondary btn-sm" onclick="testModeButton('away')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('away')};color:#fff;" title="Press the AWAY relay on 8 Gang Switch (real switch event → rule fires)">AWAY</button>
+                  <button class="btn btn-secondary btn-sm" onclick="testModeButton('abroad')" style="font-size:0.68rem;padding:2px 6px;background:${modeColor('abroad')};color:#fff;" title="Press the ABROAD relay on 8 Gang Switch (real switch event → rule fires)">ABROAD</button>
+                ` : RULES_RUN_BUTTON.has(r.name) ? `
+                  <button class="btn btn-secondary btn-sm" onclick="testRule('${escHtml(r.name)}',true)" style="font-size:0.68rem;padding:2px 6px;background:#c0392b;color:#fff;" title="Run the rule exactly as declared (gates + latch honored, only the trigger moment is simulated) and dispatch for real">Run</button>
+                ` : ``}
+                <button class="btn btn-secondary btn-sm" onclick="resetRuleRuns('${escHtml(r.name)}')" style="font-size:0.68rem;padding:2px 6px;" title="Zero the Runs counter only (avg/max/last-fired stay) — engine applies within 60 s">↺</button>
+                <button class="btn btn-secondary btn-sm" data-rule="${escHtml(r.name)}" data-desc="${escHtml(r.description || 'No description yet.')}" onclick="showRuleDesc(this)" style="font-size:0.78rem;padding:2px 6px;margin-left:auto;" title="What this rule does">ℹ️</button>
+              </div>
             </td>
           </tr>`;
+        };
+
+        // ℹ️ → open the rule's plain-language explanation in a popup window
+        // (styled like Base Rule Settings). One window, replaces whatever was open.
+        window.showRuleDesc = function (btn) {
+          document.getElementById('rule-desc-title').textContent = btn.getAttribute('data-rule') || 'Rule';
+          document.getElementById('rule-desc-body').textContent = btn.getAttribute('data-desc') || 'No description yet.';
+          document.getElementById('rule-desc-overlay').style.display = 'flex';
+        };
+        window.closeRuleDesc = function () {
+          document.getElementById('rule-desc-overlay').style.display = 'none';
         };
 
         // Render sections — each gets a header row + its rules.

@@ -49,7 +49,7 @@ _REGISTRY_CACHE_TTL_SEC     = 30
 
 RULE = {
     "name":        "Power Phase Discovery",
-    "description": "Match Shelly per-phase deltas to auto-registered devices' expected/max ranges; flip power_devices.live",
+    "description": "Watches the Shelly meter for jumps in usage and matches them to your registered devices, to work out which device just turned on or off.",
     "triggers":    [SHELLY_ID],
     "controls":    [],
     "category":    "info",

@@ -23,7 +23,7 @@ log = logging.getLogger("rule.my_bathroom_displays")
 
 RULE = {
     "name": "My BathRoom Displays",
-    "description": "Render value templates onto HASP my-bathroom panel widgets",
+    "description": "Updates the text on the My BathRoom Toilet Panel (temperatures, status) so it stays current.",
     "triggers": ["heartbeat"],
     "controls": [],
     "category": "display",

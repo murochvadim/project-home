@@ -22,7 +22,7 @@ log = logging.getLogger("rule.balcony_button_mirror")
 
 RULE = {
     "name": "Balcony Button Mirror",
-    "description": "Sync HASP balcony panel button visuals to bound device state",
+    "description": "Keeps the Balcony panel's buttons looking right: when a device a button controls turns on or off, it lights that button up or dims it so the panel matches reality.",
     "triggers": ["*"],  # wildcard with prefix early-return — see evaluate()
     "controls": [],
     "category": "display",

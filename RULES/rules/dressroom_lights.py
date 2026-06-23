@@ -81,7 +81,7 @@ _CFG_TTL_SEC = 30
 
 RULE = {
     "name":        "Dressroom Lights",
-    "description": "Presence/door motion lighting for the DressRoom: turn the light on, auto-off when empty (resets on activity). Sentence-driven, single light.",
+    "description": "Turns the DressRoom light on when it senses you (movement or the door), and off a few minutes after the room is empty. Only when you're home.",
     "triggers":    [_PRESENCE_ID, _DOOR_ID, "heartbeat"],
     "controls":    [],
     "category":    "control",

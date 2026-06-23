@@ -99,7 +99,7 @@ _MODE_BUTTON_DEVICE_ID = 'bf85e819855d686918q6hz'
 
 RULE = {
     "name":        "Start Away Mode",
-    "description": "On entering the s_sa7 trigger mode: RUN the s_sa1 Scene's device on/off list, turn on the s_sa2 keep-on device for s_sa3 duration, dispatch s_sa4 preset (+countdown), dispatch s_sa5 preset after the countdown.",
+    "description": "When the house switches to Away mode, this runs your Away scene (turning off the lights, TVs and other devices you chose), then turns on one 'fake presence' device for a set time so the home still looks occupied, and shows a countdown on the display. When the time runs out it turns that device back off and shows the final display.",
     "triggers":    ["heartbeat", _MODE_BUTTON_DEVICE_ID],
     "controls":    [],
     "category":    "control",

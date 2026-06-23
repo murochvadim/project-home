@@ -201,6 +201,17 @@
         <div id="rule-trace-table" style="overflow:auto;flex:1;"></div>
       </div>
     </div>
+
+    <!-- Rule description popup (ℹ️) — styled like Base Rule Settings -->
+    <div id="rule-desc-overlay" onclick="if(event.target===this)closeRuleDesc()" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.3);z-index:1000;justify-content:center;align-items:center;">
+      <div style="background:#fff;border-radius:10px;width:90vw;max-width:560px;max-height:80vh;overflow:auto;box-shadow:0 8px 30px rgba(0,0,0,0.25);border-top:5px solid #6c4f9f;">
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid #ece6dc;">
+          <h3 style="margin:0;font-size:1.1rem;flex:1;color:#3b2766;" id="rule-desc-title">Rule</h3>
+          <button onclick="closeRuleDesc()" style="background:none;border:none;cursor:pointer;color:#888;font-size:1.4rem;line-height:1;">&times;</button>
+        </div>
+        <div id="rule-desc-body" style="padding:20px 22px;font-size:1.15rem;color:#000;line-height:1.5;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- TAB: Home Activity -->
@@ -474,6 +485,6 @@
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/device-picker.js?v=16"></script>
-<script src="js/main-agent.js?v=106"></script>
+<script src="js/main-agent.js?v=114"></script>
 </body>
 </html>

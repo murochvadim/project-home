@@ -48,7 +48,7 @@ DEFAULT_POST_LOCK_SEC       = 5
 
 RULE = {
     "name":        "Power Known State",
-    "description": "Flip power_devices.live for state_known rows when HA-reported device state changes ON/OFF",
+    "description": "Marks TVs and speakers as on or off in the power list based on what Home Assistant reports, so the 'devices on' count stays right.",
     "triggers":    ["*"],
     "controls":    [],
     "category":    "info",

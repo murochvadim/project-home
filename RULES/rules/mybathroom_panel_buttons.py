@@ -37,7 +37,7 @@ _RULE_NAME = "My BathRoom Lights Panel Buttons"
 
 RULE = {
     "name": _RULE_NAME,
-    "description": "Dispatch actions on hasp mybathroom-panel button presses (Button Bindings card)",
+    "description": "When you press a button on the My BathRoom Lights Panel, this also runs any extra action you assigned to it in the Button Bindings card, on top of the button's normal job.",
     "triggers": ["*"],   # wildcard with prefix early-return — see evaluate()
     "controls": [],
     "category": "control",

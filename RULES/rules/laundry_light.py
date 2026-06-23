@@ -119,7 +119,7 @@ def _relay_cmd(dev_id, on):
 
 RULE = {
     "name":        "Laundry Light",
-    "description": "Presence motion lighting for the Laundry room: turn the light on, auto-off when empty (resets on activity). Sentence-driven.",
+    "description": "Turns the Laundry room light on when it senses movement, and off a few minutes after the room is empty. Only when you're home.",
     "triggers":    [_PRESENCE_ID, "heartbeat"],
     "controls":    [],
     "category":    "control",

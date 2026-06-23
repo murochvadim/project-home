@@ -48,7 +48,7 @@ SMART_SWITCH_ID = "0xMYBATHROOM_TS0044_NOT_PAIRED_YET"
 
 RULE = {
     "name":        "My BathRoom Smart Switch Handler",
-    "description": "Dispatch device commands based on My BathRoom Smart Switch button presses (single only — hold doesn't fire on this device, double causes flicker)",
+    "description": "When you press the My BathRoom wireless wall remote, this runs whatever each button is set to do. (Only a single press works on this remote.)",
     "triggers":    [SMART_SWITCH_ID],   # specific id — fires only on real presses
     "controls":    [],                  # dynamic — resolved per binding
     "category":    "control",

@@ -77,7 +77,7 @@ _CONFIG_TTL_SEC = 30.0
 
 RULE = {
     "name": "Face Recognition Loop",
-    "description": "Retry start_recognition immediately on face_unknown; unlock door on face_identified — chips drive the unlock target",
+    "description": "Works with the door camera: if it sees an unknown face it tries again to recognise them, and when it recognises someone allowed, it unlocks the door.",
     "triggers": [FACE_01_ID],
     "controls": [],
     "category": "control",

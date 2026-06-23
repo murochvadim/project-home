@@ -23,7 +23,7 @@ log = logging.getLogger("rule.balcony_displays")
 
 RULE = {
     "name": "Balcony Displays",
-    "description": "Render value templates onto HASP balcony panel widgets",
+    "description": "Updates the text on the Balcony touch panel (temperatures, status) so the numbers on screen stay current.",
     "triggers": ["heartbeat"],
     "controls": [],
     "category": "display",

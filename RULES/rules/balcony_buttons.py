@@ -34,7 +34,7 @@ log = logging.getLogger("rule.balcony_buttons")
 
 RULE = {
     "name": "Balcony Buttons",
-    "description": "Dispatch actions on HASP balcony panel button presses",
+    "description": "When you press a button on the Balcony touch panel, this carries out what that button is set to do — opening the gates or barrier, switching the balcony lights, or controlling the TV.",
     "triggers": ["*"],
     "controls": [],
     "category": "control",

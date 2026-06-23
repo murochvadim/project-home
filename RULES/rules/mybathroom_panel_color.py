@@ -51,7 +51,7 @@ _RULE_NAME = "My Bathroom Color Panel"
 
 RULE = {
     "name": _RULE_NAME,
-    "description": "Drive My Bathroom Color light from mybathroom-panel page 2 "
+    "description": "Controls the My Bathroom Color light from page 2 of the My BathRoom Lights Panel — on/off, dim, white or colour, and pick a colour — and keeps the on/off button matching the light."
                    "(on/off, dim, mode, colour) + mirror power to the on/off button",
     "triggers": [f"hasp:{_PANEL}:{o}" for o in (_ONOFF, _DIM, _CPICK, *_MODE)] + [_LIGHT],
     "controls": [],

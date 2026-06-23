@@ -28,7 +28,7 @@ DEFAULT_INTERVAL_SEC = 10
 
 RULE = {
     "name": "Power Ingest",
-    "description": "Snapshot Shelly 3EM into power_consumption every N seconds",
+    "description": "Records the home's electricity use from the Shelly power meter every few seconds, so the Power page can show usage and history.",
     "triggers": [SHELLY_ID],
     "controls": [],
     "category": "info",

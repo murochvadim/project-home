@@ -54,7 +54,7 @@ _GATE_RE  = re.compile(r"only\s+fires\s+when\s+([a-z_][a-z0-9_]*)\s+is\s+([a-z0-
 
 RULE = {
     "name": "Bedroom Balcony Blinds",
-    "description": "Daily timed close-to-X% / open-to-Y% of the Bedroom Balcony blind (sentence-driven times + gate; home_mode only).",
+    "description": "Each day, automatically closes the Bedroom Balcony blind to a set level at one time and opens it back up at another — only while you're home.",
     "triggers": ["heartbeat"],
     "controls": [],
     "category": "control",

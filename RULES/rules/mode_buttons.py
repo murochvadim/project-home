@@ -64,7 +64,7 @@ _TRUTHY_BUTTON_VALUES = (True, 1, 'true', 'True', 'on', 'ON', '1')
 
 RULE = {
     "name":        "Mode Buttons",
-    "description": "Sentence-driven mode-button controller. Sole owner of state.shared['home_mode']. Mode names + default-mode target both come from sentences in r_modebuttons_init.",
+    "description": "Watches your Home / Away / Abroad buttons and decides which mode the house is in. Press one and that mode takes over while the others switch off. If no button is pressed for a while, the house returns to its default mode on its own.",
     "triggers":    ["*"],
     "controls":    [],
     "category":    "info",

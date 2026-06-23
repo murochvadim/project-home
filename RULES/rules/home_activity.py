@@ -27,7 +27,7 @@ Tuning knobs (optional, from state.shared — populated by the sentence parser):
 
 RULE = {
     "name": "Home Activity",
-    "description": "Active rooms + zones from presence/motion + switches + door sensors (spatial-aware)",
+    "description": "Tracks which rooms and areas have someone active in them right now, using the motion sensors, presence sensors, switches and door sensors around the home.",
     "triggers": ["*"],
     "controls": [],
     "category": "info",

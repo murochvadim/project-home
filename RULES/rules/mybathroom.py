@@ -160,7 +160,7 @@ def _relay_cmd(dev_id, on):
 
 RULE = {
     "name":        "My Bathroom Lights",
-    "description": "Presence/door motion lighting for My BathRoom: day/night light sets, auto-off when empty, and a one-way main→under-cabinet mirror. Fully sentence-driven.",
+    "description": "Turns the My BathRoom lights on when it senses you there, picks the right lights for day or night, turns them off after the room is empty, and keeps the under-cabinet light following the main light.",
     "triggers":    [_PRESENCE_ID, _DOOR_ID, "heartbeat"],
     "controls":    [],
     "category":    "control",

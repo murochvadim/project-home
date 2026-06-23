@@ -22,7 +22,7 @@ log = logging.getLogger("rule.my_bathroom_button_mirror")
 
 RULE = {
     "name": "My BathRoom Button Mirror",
-    "description": "Sync HASP my-bathroom panel button visuals to bound device state",
+    "description": "Keeps the My BathRoom Toilet Panel's buttons looking right — when a device that a button controls turns on or off, this lights that button up or dims it so the panel always matches what's really happening.",
     "triggers": ["*"],  # wildcard with prefix early-return — see evaluate()
     "controls": [],
     "category": "display",

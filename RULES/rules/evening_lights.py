@@ -108,7 +108,7 @@ _MODE_BUTTON_DEVICE_ID = 'bf85e819855d686918q6hz'
 
 RULE = {
     "name":        "Evening Lights",
-    "description": "Turn on declared lights on evening kick-in OR home arrival during active time modes (latched per home period).",
+    "description": "Turns on your chosen evening lights, either around sunset or when you get home during the evening. Only once each evening.",
     "triggers":    ["heartbeat", _MODE_BUTTON_DEVICE_ID],
     "controls":    [],
     "category":    "control",

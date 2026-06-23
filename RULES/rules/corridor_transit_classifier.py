@@ -114,7 +114,7 @@ _CONFIG_TTL_SEC = 30.0
 
 RULE = {
     "name": "Corridor Transit Classifier",
-    "description": "Classifies corridor ↔ apartment movement into 4 modes (Clear/Visit/To_Home/From_Home) by time-ordering of Corridor Presence, Main Door, and Entrance Presence events",
+    "description": "Figures out whether someone is just passing your door, coming home, or leaving — by watching the order of the building corridor sensor, your front door, and the entrance sensor.",
     # Three real device triggers + heartbeat so timeouts fire even in quiet
     # apartments (heartbeat is a synthetic 60 s tick — see CLAUDE.md).
     "triggers": [

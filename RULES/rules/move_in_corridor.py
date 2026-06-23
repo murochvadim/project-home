@@ -85,7 +85,7 @@ _CONFIG_TTL_SEC = 30.0
 
 RULE = {
     "name": "Move in Corridor",
-    "description": "Corridor presence chain — chips in r_move_in_corridor drive all output devices; delayed bucket uses engine deferred dispatch. Monitor/awtrix/FR/pixoo chain suppressed when Corridor Transit Classifier reports Corridor_From_Home (user leaving the apartment — no welcome / no recognition needed).",
+    "description": "When someone moves in the building corridor outside your door, this turns on the corridor light and — if you're home — wakes the entrance screen, shows a welcome on the Pixoo, and starts face recognition. It skips the welcome and recognition when you're on your way out.",
     "triggers": [CORRIDOR_PRESENCE_ID],
     "controls": [],
     "category": "control",

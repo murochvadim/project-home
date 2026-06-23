@@ -29,7 +29,7 @@ WIPE_COOLDOWN_SEC  = 60 * 60        # at most one wipe per hour (safety)
 
 RULE = {
     "name": "Daily_Welcome",
-    "description": "Push Daily_Welcome preset every 30 min during the window; wipe at window end",
+    "description": "Keeps the Pixoo display showing the Daily Welcome screen, refreshing it through the day and clearing it at night.",
     "triggers": ["heartbeat"],
     "controls": [],
     "category": "display",

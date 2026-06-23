@@ -58,7 +58,7 @@ _LONGITUDE_RE = re.compile(r'longitude\s+(-?\d+(?:\.\d+)?)', re.IGNORECASE)
 
 RULE = {
     "name":        "Home Time Periods",
-    "description": "Layer 0 — current time_mode + sun event times (dawn/sunrise/noon/sunset/dusk)",
+    "description": "Works out the time of day the home is in (morning, evening, night, and so on) and the sunrise/sunset times, so other rules can act at the right moments.",
     "triggers":    ["heartbeat"],
     "controls":    [],
     "category":    "info",

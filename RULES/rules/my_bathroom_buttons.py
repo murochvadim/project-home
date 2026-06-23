@@ -34,7 +34,7 @@ log = logging.getLogger("rule.my_bathroom_buttons")
 
 RULE = {
     "name": "My BathRoom Buttons",
-    "description": "Dispatch actions on HASP my-bathroom panel button presses",
+    "description": "When you press a button on the My BathRoom Toilet Panel, this runs whatever you assigned to that button in the Button Bindings card.",
     "triggers": ["*"],
     "controls": [],
     "category": "control",
