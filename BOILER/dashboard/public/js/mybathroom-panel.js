@@ -137,6 +137,11 @@
       _npMqtt.subscribe(`hasp/${NP_PLATE}/state/backlight`, { qos: 0 });
       _npMqtt.subscribe(`hasp/${NP_PLATE}/LWT`, { qos: 0 });
       NP_RELAYS.forEach(r => _npMqtt.subscribe(`hasp/${NP_PLATE}/state/${r.out}`, { qos: 0 }));
+      // Under Cabinet Light (Z-Wave) — live state via the device-agent's RETAINED
+      // mur/home/device/<id>/state topic (dashboard_browser has read on it). Retained
+      // → current value arrives immediately on subscribe AND on every later change
+      // (rule, HA, etc.), so the pill tracks rule-driven changes — not just dashboard presses.
+      _npMqtt.subscribe(`mur/home/device/${NP_UC_ID}/state`, { qos: 0 });
       // OpenHASP firmware doesn't auto-push statusupdate periodically — it
       // only responds when asked. Request once now + every 30 s after.
       const askForStatus = () => _npMqtt.publish(`hasp/${NP_PLATE}/command/statusupdate`, '');
@@ -159,6 +164,13 @@
           const v = (o && typeof o.state === 'string') ? o.state.toLowerCase() === 'on'
                   : (o && o.val != null) ? Number(o.val) > 0 : null;
           if (r && v !== null) npRenderRelay(r.key, v);
+        } catch (_) {}
+      } else if (topic === `mur/home/device/${NP_UC_ID}/state`) {
+        // {"dps":{"light":true,…},"source":…,"ts":…}
+        try {
+          const o = JSON.parse(payload.toString());
+          const v = (o && o.dps) ? o.dps.light : undefined;
+          if (v !== undefined) npRenderUC(v === true || v === 1 || v === 'on' || v === 'ON' || v === 'true');
         } catch (_) {}
       } else if (topic === `hasp/${NP_PLATE}/state/backlight`) {
         // Payload shape: {"state":"on"|"off","brightness":<0-255>}
@@ -957,6 +969,46 @@
     npRenderRelay(key, !!on);   // optimistic; corrected by the state/output<pin> push
   };
 
+  // ─── My Bathroom Under Cabinet Light (Z-Wave switch, DASHBOARD-ONLY) ─────────
+  // NOT a plate relay: toggled via the dashboard device-toggle (HA-mediated, same
+  // path as the Devices page on/off). No rule, no plate GPIO. State comes from the
+  // device's last_state.light (no MQTT echo), so we load it on init + after a press.
+  const NP_UC_ID = '85faa01c-d378-43f8-a5dd-020a528121e5';  // My Bathroom Under Cabinet Light
+  function npRenderUC(on) {
+    const chip = document.getElementById('np-uc-state');
+    if (chip) {
+      chip.textContent = (on == null) ? '—' : (on ? 'ON' : 'OFF');
+      chip.style.background  = (on == null) ? '#eee' : (on ? '#3a7d44' : '#c0392b');
+      chip.style.color       = (on == null) ? '#888' : '#fff';
+      chip.style.borderColor = (on == null) ? '#d0cbc4' : (on ? '#3a7d44' : '#c0392b');
+    }
+    const bOn  = document.getElementById('np-uc-on');
+    const bOff = document.getElementById('np-uc-off');
+    if (bOn)  { bOn.style.background  = on === true  ? '#3a7d44' : ''; bOn.style.color  = on === true  ? '#fff' : '#3a7d44'; }
+    if (bOff) { bOff.style.background = on === false ? '#c0392b' : ''; bOff.style.color = on === false ? '#fff' : '#c0392b'; }
+  }
+  window.npUnderCabinet = async function (on) {
+    npRenderUC(!!on);  // optimistic
+    try {
+      await fetch('/api/devices/' + NP_UC_ID + '/toggle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: !!on }),
+      });
+    } catch (e) { /* best-effort */ }
+    setTimeout(npLoadUC, 1500);  // re-sync from real device state after HA settles
+  };
+  async function npLoadUC() {
+    try {
+      const r = await fetch('/api/devices').then(x => x.json());
+      const list = Array.isArray(r) ? r : (r.devices || []);
+      const d = list.find(x => x.id === NP_UC_ID);
+      if (!d) return;
+      const ls = d.last_state || {};
+      const v = (ls.light !== undefined) ? ls.light : ls.state;
+      npRenderUC(v === true || v === 1 || v === 'on' || v === 'ON' || v === 'true');
+    } catch (e) { /* leave as — */ }
+  }
+
   // ─── Media Buttons card — assign an Alexa station to each page-3 button ─────
   // Page 3 of the plate has 6 Media buttons (p3b10..p3b15). The mybathroom_panel_alexa
   // rule plays the station assigned here (by name, resolved against alexa_quick_music)
@@ -1016,6 +1068,7 @@
       nbLoadButtons();
       nbLoadDisplays();
       nbLoadMediaButtons();
+      npLoadUC();
     }
   };
 })();
