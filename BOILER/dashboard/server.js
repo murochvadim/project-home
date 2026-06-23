@@ -5228,7 +5228,11 @@ app.patch('/api/hasp/:panel/displays/:id', async (req, res) => {
 // rows from every widget, save the jsonl back to BALCONY/pages.jsonl so
 // the repo stays in sync. Existing bindings (action_type/target/payload,
 // format_string/source) are preserved — only auto-derivable fields update.
-const _HASP_BUTTON_OBJS = new Set(['btn', 'switch', 'checkbox', 'slider']);
+// 'slider' intentionally excluded — a slider is not a press-button you bind a device
+// action to. Including it polluted hasp_buttons with mislabeled slider rows that showed
+// up in the Button Bindings card. Sliders are driven by dedicated rules via their object
+// events, not bindings.
+const _HASP_BUTTON_OBJS = new Set(['btn', 'switch', 'checkbox']);
 const _HASP_DISPLAY_OBJS = {
   label: { display_type: 'text',  target_property: 'text' },
   gauge: { display_type: 'gauge', target_property: 'val'  },

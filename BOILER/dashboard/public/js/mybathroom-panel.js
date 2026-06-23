@@ -577,17 +577,24 @@
       list.innerHTML = '<div style="padding:8px;color:#888;font-size:0.85rem;">No buttons. Run Sync from panel after adding widgets in the OpenHASP web UI.</div>';
       return;
     }
-    // Group by (page, button_id) — render one card per button with all its event-rows inside
+    // Group by page (header) → one card per button within that page.
+    _buttons.sort((a, b) => (a.page - b.page) || (a.button_id - b.button_id));
+    const PAGE_NAMES = { 1: 'Page 1 · Lights', 2: 'Page 2 · Colour', 3: 'Page 3 · Alexa' };
     const seen = new Set();
-    const cards = [];
+    const out = [];
+    let curPage = null;
     for (const r of _buttons) {
       const key = `${r.page}-${r.button_id}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      if (r.page !== curPage) {
+        curPage = r.page;
+        out.push(`<div style="margin:14px 0 6px;font-weight:600;font-size:0.82rem;color:#6c4f9f;border-bottom:1px solid #e8e2da;padding-bottom:3px;">${PAGE_NAMES[r.page] || ('Page ' + r.page)}</div>`);
+      }
       const allRows = _buttons.filter(b => b.page === r.page && b.button_id === r.button_id);
-      cards.push(nbRenderButtonCard(r, allRows));
+      out.push(nbRenderButtonCard(r, allRows));
     }
-    list.innerHTML = cards.join('');
+    list.innerHTML = out.join('');
   }
 
   document.addEventListener('keydown', (e) => {
@@ -950,6 +957,53 @@
     npRenderRelay(key, !!on);   // optimistic; corrected by the state/output<pin> push
   };
 
+  // ─── Media Buttons card — assign an Alexa station to each page-3 button ─────
+  // Page 3 of the plate has 6 Media buttons (p3b10..p3b15). The mybathroom_panel_alexa
+  // rule plays the station assigned here (by name, resolved against alexa_quick_music)
+  // when a button is pressed. Stored in dashboard_settings.my-bathroom.alexa_media_buttons.
+  const NB_MEDIA_KEY = 'my-bathroom.alexa_media_buttons';
+  const NB_MEDIA_IDS = ['p3b10', 'p3b11', 'p3b12', 'p3b13', 'p3b14', 'p3b15'];
+  let _nbMediaCfg = {};
+
+  async function nbLoadMediaButtons() {
+    const cont = document.getElementById('nb-media-buttons');
+    if (!cont) return;
+    try {
+      const [cfgR, stR] = await Promise.all([
+        fetch('/api/dashboard-settings/' + NB_MEDIA_KEY).then(r => r.json()).catch(() => ({ value: {} })),
+        fetch('/api/dashboard-settings/media-agents.alexa_quick_music').then(r => r.json()).catch(() => ({ value: [] })),
+      ]);
+      _nbMediaCfg = (cfgR && cfgR.value && typeof cfgR.value === 'object' && !Array.isArray(cfgR.value)) ? cfgR.value : {};
+      const stations = Array.isArray(stR && stR.value) ? stR.value : [];
+      if (!stations.length) {
+        cont.innerHTML = '<div style="font-size:0.82rem;color:#888;">No saved stations yet — add some on Media Agents → Alexa (Sound mode → 💾 Save), then they\'ll appear here.</div>';
+        return;
+      }
+      cont.innerHTML = NB_MEDIA_IDS.map((id, i) => {
+        const cur = _nbMediaCfg[id] || '';
+        const opts = ['<option value="">— none —</option>'].concat(
+          stations.map(s => `<option value="${escHtml(s.name)}"${s.name === cur ? ' selected' : ''}>${escHtml(s.name)}</option>`)
+        ).join('');
+        return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="width:72px;font-weight:600;font-size:0.88rem;">Media ${i + 1}</span>
+          <select onchange="nbSetMediaButton('${id}', this.value)" style="flex:1;padding:5px 8px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.85rem;">${opts}</select>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      cont.innerHTML = '<div style="color:#c0392b;font-size:0.82rem;">failed to load stations</div>';
+    }
+  }
+
+  window.nbSetMediaButton = async function (id, value) {
+    _nbMediaCfg[id] = value;
+    try {
+      await fetch('/api/dashboard-settings/' + NB_MEDIA_KEY, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: _nbMediaCfg }),
+      });
+    } catch (e) { /* best-effort */ }
+  };
+
   // ─── Lazy-init on first activation of the 'panel2' tab ──────────────────────
   const _npOrigShowTab = window.showTab;
   let _np2Inited = false;
@@ -961,6 +1015,7 @@
       npInit();
       nbLoadButtons();
       nbLoadDisplays();
+      nbLoadMediaButtons();
     }
   };
 })();

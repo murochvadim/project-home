@@ -10,6 +10,18 @@
 {"page": 2, "id": 40, "obj": "btn", "x": 20, "y": 236, "w": 180, "h": 72, "radius": 12, "bg_color": "#444444", "text": "White", "text_font": 22, "text_color": "#ffffff", "align": 1}
 {"page": 2, "id": 30, "obj": "cpicker", "x": 250, "y": 70, "w": 190, "h": 190}
 {"page": 2, "id": 20, "obj": "slider", "x": 20, "y": 336, "w": 440, "h": 24, "min": 1, "max": 100, "val": 50}
+{"page": 3, "id": 0, "bg_color": "#111"}
+{"page": 3, "id": 20, "obj": "btn", "x": 12, "y": 24, "w": 148, "h": 78, "radius": 11, "bg_color": "#2f6d3f", "text": "Play", "text_font": 22, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 21, "obj": "btn", "x": 166, "y": 24, "w": 148, "h": 78, "radius": 11, "bg_color": "#8a3a3a", "text": "Stop", "text_font": 22, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 22, "obj": "btn", "x": 320, "y": 24, "w": 148, "h": 78, "radius": 11, "bg_color": "#7a6a2f", "text": "Pause", "text_font": 22, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 10, "obj": "btn", "x": 12, "y": 144, "w": 148, "h": 78, "radius": 11, "bg_color": "#2a4a6a", "text": "Media 1", "text_font": 20, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 11, "obj": "btn", "x": 166, "y": 144, "w": 148, "h": 78, "radius": 11, "bg_color": "#2a4a6a", "text": "Media 2", "text_font": 20, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 12, "obj": "btn", "x": 320, "y": 144, "w": 148, "h": 78, "radius": 11, "bg_color": "#2a4a6a", "text": "Media 3", "text_font": 20, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 13, "obj": "btn", "x": 12, "y": 234, "w": 148, "h": 78, "radius": 11, "bg_color": "#2a4a6a", "text": "Media 4", "text_font": 20, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 14, "obj": "btn", "x": 166, "y": 234, "w": 148, "h": 78, "radius": 11, "bg_color": "#2a4a6a", "text": "Media 5", "text_font": 20, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 15, "obj": "btn", "x": 320, "y": 234, "w": 148, "h": 78, "radius": 11, "bg_color": "#2a4a6a", "text": "Media 6", "text_font": 20, "text_color": "#ffffff", "align": 1}
+{"page": 3, "id": 39, "obj": "label", "x": 12, "y": 322, "w": 200, "h": 15, "text": "Volume", "text_font": 15, "text_color": "#aaaaaa"}
+{"page": 3, "id": 30, "obj": "slider", "x": 12, "y": 342, "w": 456, "h": 22, "min": 0, "max": 100, "val": 20}
 {"page": 0, "id": 10, "obj": "btn", "action": "prev", "x": 75, "y": 390, "w": 107, "h": 65, "bg_color": "#1c1c1c", "text": "\uE141", "text_color": "#FFFFFF", "radius": 0, "border_side": 0, "text_font": 32}
 {"page": 0, "id": 11, "obj": "btn", "action": "back", "x": 184, "y": 390, "w": 107, "h": 65, "bg_color": "#1c1c1c", "text": "\uE2DC", "text_color": "#FFFFFF", "radius": 0, "border_side": 0, "text_font": 32}
 {"page": 0, "id": 12, "obj": "btn", "action": "next", "x": 293, "y": 390, "w": 107, "h": 65, "bg_color": "#1c1c1c", "text": "\uE142", "text_color": "#FFFFFF", "radius": 0, "border_side": 0, "text_font": 32}
