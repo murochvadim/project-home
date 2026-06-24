@@ -78,12 +78,22 @@ AGENT           = 'phonelink'
 # send). Must persist this long before alarming. Tracked via a timestamp file
 # because this process keeps NO memory between 5-min cron runs.
 DISCONNECT_MATURE_SEC = 600     # ~10 min (≈ 2-3 consecutive 5-min passes)
+POST_WAKE_GRACE_SEC   = 600     # EXTRA grace on top of maturity when the disconnect
+                                # began right after a wake. Phone Link is routinely
+                                # slow (5-15 min) to re-establish the relay after the
+                                # laptop wakes from sleep, and it self-heals — so a
+                                # post-wake disconnect only alarms if it persists past
+                                # MATURE+GRACE (~20 min). A genuine long outage still
+                                # fires; normal wake-up reconnects no longer do.
 SKIP_GAP_SEC          = 450     # if the previous bad pass was longer ago than
                                 # this, a pass was skipped (laptop asleep) → the
                                 # maturity timer restarts (counts only contiguous
                                 # awake-and-bad time, so sleep can't false-fire it)
 STATE_DIR             = '/var/lib/phonelink-watchdog'
 RELAY_DOWN_FILE       = os.path.join(STATE_DIR, 'relay_down_since')
+LAST_PASS_FILE        = os.path.join(STATE_DIR, 'last_pass')   # heartbeat — ts of the
+                                # last COMPLETED probe. A gap > SKIP_GAP_SEC since this
+                                # means a pass was skipped (laptop asleep) = we woke.
 
 # PowerShell probe — emits one line: "PLW alive=<0|1> relay=<0|1> crashes=<n>"
 PROBE_PS = r'''
@@ -127,22 +137,43 @@ def resolve_alert(cur, alert_type):
 
 # ─── disconnected-state tracking (timestamp file — no cross-run memory) ────
 def _read_disc_state():
-    """Returns (first_bad_ts, last_pass_ts) or (None, None)."""
+    """Returns (first_bad_ts, last_pass_ts, mature_sec). mature_sec carries this
+    episode's maturity threshold (incl. any post-wake grace). Legacy 2-field files
+    fall back to the default maturity."""
     try:
         with open(RELAY_DOWN_FILE) as f:
-            a, b = f.read().split()[:2]
-            return float(a), float(b)
-    except (OSError, ValueError):
-        return None, None
+            parts = f.read().split()
+            mature = float(parts[2]) if len(parts) >= 3 else float(DISCONNECT_MATURE_SEC)
+            return float(parts[0]), float(parts[1]), mature
+    except (OSError, ValueError, IndexError):
+        return None, None, float(DISCONNECT_MATURE_SEC)
 
 
-def _write_disc_state(first_bad, last_pass):
+def _write_disc_state(first_bad, last_pass, mature_sec):
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
         with open(RELAY_DOWN_FILE, 'w') as f:
-            f.write(f'{first_bad} {last_pass}')
+            f.write(f'{first_bad} {last_pass} {mature_sec}')
     except OSError as e:
         log.warning('could not write relay-down state file: %s', e)
+
+
+def _read_last_pass():
+    """Timestamp of the last COMPLETED probe pass, or None."""
+    try:
+        with open(LAST_PASS_FILE) as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_last_pass(ts):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(LAST_PASS_FILE, 'w') as f:
+            f.write(str(ts))
+    except OSError as e:
+        log.warning('could not write last-pass file: %s', e)
 
 
 def _clear_disc_state():
@@ -192,6 +223,12 @@ def run():
     cur = conn.cursor()
 
     relay_txt = 'connected to relay' if st['relay'] else 'NOT connected to relay'
+    now = time.time()
+    # Did we just wake? A gap > SKIP_GAP_SEC since the last completed pass means a
+    # pass was skipped in between (laptop asleep/unreachable) → Phone Link is in its
+    # slow post-wake relay-reconnect window. Read BEFORE we overwrite the heartbeat.
+    _prev_pass = _read_last_pass()
+    just_woke  = _prev_pass is not None and (now - _prev_pass) > SKIP_GAP_SEC
 
     # 1. offline — process not running
     if not st['alive']:
@@ -216,13 +253,20 @@ def run():
     #    file (this process has no cross-run memory). Skipped when offline
     #    (alive=0) — phonelink:offline already covers a fully-down app.
     if st['alive'] and not st['relay']:
-        now = time.time()
-        first_bad, last_pass = _read_disc_state()
+        first_bad, last_pass, mature = _read_disc_state()
         if first_bad is None or (last_pass and now - last_pass > SKIP_GAP_SEC):
-            first_bad = now            # first time bad, or restart after a skipped/asleep gap
-        _write_disc_state(first_bad, now)
+            first_bad = now            # new episode (or restart after a skipped/asleep gap)
+            # If this disconnect began right after a wake, give Phone Link extra time
+            # to re-establish the relay before alarming. Baked into the episode's
+            # maturity so the grace persists for the whole episode, not just this pass.
+            mature = float(DISCONNECT_MATURE_SEC + (POST_WAKE_GRACE_SEC if just_woke else 0))
+            if just_woke:
+                log.info('disconnect started right after a wake (gap %ds) — extending '
+                         'maturity to %ds (~%d min) for this episode',
+                         int(now - _prev_pass), int(mature), int(mature // 60))
+        _write_disc_state(first_bad, now, mature)
         down_for = now - first_bad
-        if down_for >= DISCONNECT_MATURE_SEC:
+        if down_for >= mature:
             mins = int(down_for // 60)
             upsert_alert(cur, 'phonelink:disconnected', 'warn',
                          f'Phone Link is running but NOT connected to the Microsoft relay for '
@@ -230,11 +274,17 @@ def run():
                          'open. Restart Phone Link (kill PhoneExperienceHost + relaunch); if that '
                          'does not restore it, reset + re-register the YourPhone / CrossDevice apps.')
         else:
-            log.info('relay down %ds (< %ds maturity) — not alarming yet',
-                     int(down_for), DISCONNECT_MATURE_SEC)
+            log.info('relay down %ds (< %ds maturity%s) — not alarming yet',
+                     int(down_for), int(mature),
+                     ' [post-wake grace]' if mature > DISCONNECT_MATURE_SEC else '')
     else:
         _clear_disc_state()
         resolve_alert(cur, 'phonelink:disconnected')
+
+    # Heartbeat — record this completed pass so the NEXT pass can detect a skipped
+    # pass (laptop asleep) in between. Written for every completed pass; only skips
+    # (probe None, early-return above) leave a gap.
+    _write_last_pass(now)
 
     conn.commit()
     cur.close()
