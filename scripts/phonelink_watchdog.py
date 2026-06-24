@@ -11,6 +11,15 @@ and probes the Phone Link app health, then writes alerts to system_alerts:
                            2026-06-18/19 Windows App Runtime update caused —
                            a managed crash on launch, exception 0xe0434352).
                            Fix is reset + re-register the app.
+  - phonelink:disconnected — PhoneExperienceHost is running but has NO
+                           established TCP:443 to the Microsoft relay for
+                           >= DISCONNECT_MATURE_SEC (app open but can't send —
+                           the 85-min SILENT outage on 2026-06-24 that the
+                           offline/crashloop checks both missed). Maturity is
+                           tracked via a timestamp file because this process has
+                           no memory between cron runs; the timer counts only
+                           contiguous awake-and-bad time (a skipped/asleep pass
+                           restarts it). Auto-resolves when the relay returns.
 
 Auto-resolves each alert when the condition clears — same pattern as
 group_health_watchdog.py / netbird_watchdog.py.
@@ -41,8 +50,10 @@ suspending Link to Windows) shows the laptop green and is NOT detectable here.
 
 import base64
 import logging
+import os
 import subprocess
 import sys
+import time
 
 import psycopg2
 
@@ -62,6 +73,17 @@ SSH_OPTS        = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
 CRASH_THRESHOLD = 3        # crashes in 15 min → crashloop
 SOURCE          = 'phonelink_watchdog'
 AGENT           = 'phonelink'
+
+# "disconnected" = app running but NOT connected to the Microsoft relay (can't
+# send). Must persist this long before alarming. Tracked via a timestamp file
+# because this process keeps NO memory between 5-min cron runs.
+DISCONNECT_MATURE_SEC = 600     # ~10 min (≈ 2-3 consecutive 5-min passes)
+SKIP_GAP_SEC          = 450     # if the previous bad pass was longer ago than
+                                # this, a pass was skipped (laptop asleep) → the
+                                # maturity timer restarts (counts only contiguous
+                                # awake-and-bad time, so sleep can't false-fire it)
+STATE_DIR             = '/var/lib/phonelink-watchdog'
+RELAY_DOWN_FILE       = os.path.join(STATE_DIR, 'relay_down_since')
 
 # PowerShell probe — emits one line: "PLW alive=<0|1> relay=<0|1> crashes=<n>"
 PROBE_PS = r'''
@@ -101,6 +123,33 @@ def resolve_alert(cur, alert_type):
         "UPDATE system_alerts SET resolved_at = NOW() WHERE alert_type = %s AND resolved_at IS NULL",
         (alert_type,),
     )
+
+
+# ─── disconnected-state tracking (timestamp file — no cross-run memory) ────
+def _read_disc_state():
+    """Returns (first_bad_ts, last_pass_ts) or (None, None)."""
+    try:
+        with open(RELAY_DOWN_FILE) as f:
+            a, b = f.read().split()[:2]
+            return float(a), float(b)
+    except (OSError, ValueError):
+        return None, None
+
+
+def _write_disc_state(first_bad, last_pass):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(RELAY_DOWN_FILE, 'w') as f:
+            f.write(f'{first_bad} {last_pass}')
+    except OSError as e:
+        log.warning('could not write relay-down state file: %s', e)
+
+
+def _clear_disc_state():
+    try:
+        os.remove(RELAY_DOWN_FILE)
+    except OSError:
+        pass
 
 
 # ─── Laptop probe ─────────────────────────────────────────────────
@@ -161,6 +210,31 @@ def run():
                      'as on 2026-06-19). Fix: reset + re-register the YourPhone app, or reinstall.')
     else:
         resolve_alert(cur, 'phonelink:crashloop')
+
+    # 3. disconnected — app running but NOT connected to the relay (can't send),
+    #    sustained >= DISCONNECT_MATURE_SEC. Maturity tracked via a timestamp
+    #    file (this process has no cross-run memory). Skipped when offline
+    #    (alive=0) — phonelink:offline already covers a fully-down app.
+    if st['alive'] and not st['relay']:
+        now = time.time()
+        first_bad, last_pass = _read_disc_state()
+        if first_bad is None or (last_pass and now - last_pass > SKIP_GAP_SEC):
+            first_bad = now            # first time bad, or restart after a skipped/asleep gap
+        _write_disc_state(first_bad, now)
+        down_for = now - first_bad
+        if down_for >= DISCONNECT_MATURE_SEC:
+            mins = int(down_for // 60)
+            upsert_alert(cur, 'phonelink:disconnected', 'warn',
+                         f'Phone Link is running but NOT connected to the Microsoft relay for '
+                         f'~{mins} min — messages/pictures cannot send even though the app looks '
+                         'open. Restart Phone Link (kill PhoneExperienceHost + relaunch); if that '
+                         'does not restore it, reset + re-register the YourPhone / CrossDevice apps.')
+        else:
+            log.info('relay down %ds (< %ds maturity) — not alarming yet',
+                     int(down_for), DISCONNECT_MATURE_SEC)
+    else:
+        _clear_disc_state()
+        resolve_alert(cur, 'phonelink:disconnected')
 
     conn.commit()
     cur.close()
