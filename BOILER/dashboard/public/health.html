@@ -726,10 +726,12 @@
       <div style="font-size:0.78rem;color:#666;margin-bottom:8px;">Run on demand. Output appears below each button.</div>
       <div style="display:flex;flex-direction:column;gap:8px;">
         <div>
+          <div style="font-size:0.74rem;color:#666;margin-bottom:4px;">Checks the UPS is reachable over USB — shows live status, battery %, and time-left.</div>
           <button class="btn btn-secondary btn-sm" onclick="upsRunTest('apcaccess', this)">Test apcaccess (PVE)</button>
           <pre id="ups-test-out-apcaccess" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto;"></pre>
         </div>
         <div>
+          <div style="font-size:0.74rem;color:#666;margin-bottom:4px;">Checks PVE can reach the QNAP — the path used to power it off during a shutdown.</div>
           <button class="btn btn-secondary btn-sm" onclick="upsRunTest('qnap_ssh', this)">Test SSH to QNAP</button>
           <pre id="ups-test-out-qnap_ssh" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:120px;overflow:auto;"></pre>
         </div>
