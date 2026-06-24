@@ -96,13 +96,23 @@ LAST_PASS_FILE        = os.path.join(STATE_DIR, 'last_pass')   # heartbeat — t
                                 # means a pass was skipped (laptop asleep) = we woke.
 
 # PowerShell probe — emits one line: "PLW alive=<0|1> relay=<0|1> crashes=<n>"
+#
+# alive  = PhoneExperienceHost running (the Phone Link app is open).
+# relay  = ANY of the Phone Link / CrossDevice process family holds an established
+#          TCP:443 to a non-LAN host. The relay/sync work is split across the family
+#          (PhoneExperienceHost + CrossDeviceService etc.) — PhoneExperienceHost's
+#          OWN socket is intermittent (drops when the app is idle), so checking only
+#          it produced false "disconnected" alerts while the app still worked. The
+#          persistent transfer connection lives on CrossDeviceService.
 PROBE_PS = r'''
 $ErrorActionPreference='SilentlyContinue'
-$p = Get-Process PhoneExperienceHost
-$alive = 0; if ($p) { $alive = 1 }
+$ph = Get-Process PhoneExperienceHost
+$alive = 0; if ($ph) { $alive = 1 }
 $relay = 0
-if ($p) {
-  $c = Get-NetTCPConnection | Where-Object { $_.OwningProcess -in $p.Id -and $_.State -eq 'Established' -and $_.RemotePort -eq 443 -and $_.RemoteAddress -notmatch '^(127\.|::1|192\.168\.|10\.|fe80)' }
+$fam = Get-Process PhoneExperienceHost,CrossDeviceService,CrossDeviceResume,YourPhoneAppProxy
+if ($fam) {
+  $pids = $fam.Id
+  $c = Get-NetTCPConnection | Where-Object { $_.OwningProcess -in $pids -and $_.State -eq 'Established' -and $_.RemotePort -eq 443 -and $_.RemoteAddress -notmatch '^(127\.|::1|192\.168\.|10\.|fe80)' }
   if ($c) { $relay = 1 }
 }
 $crashes = (Get-WinEvent -FilterHashtable @{LogName='Application';ProviderName='Application Error';StartTime=(Get-Date).AddMinutes(-15)} | Where-Object { $_.Message -match 'PhoneExperienceHost' } | Measure-Object).Count
