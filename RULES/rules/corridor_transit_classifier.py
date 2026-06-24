@@ -127,7 +127,10 @@ RULE = {
     "category": "info",
     "group": "corridor",
     "priority": 10,
-    "depends_on": [],
+    # Reads state.shared['home_mode'] (sole-written by Mode Buttons) for the
+    # coming-home gate + set-home action — depend on it so on shared ticks
+    # (heartbeat) Mode Buttons resolves home_mode first.
+    "depends_on": ["Mode Buttons"],
 }
 
 
@@ -141,6 +144,13 @@ def _read_config(state):
         'window_sec':   DEFAULTS_WINDOW_SEC,
         'cooldown_sec': DEFAULTS_COOLDOWN_SEC,
         'max_lock_sec': DEFAULTS_MAX_LOCK_SEC,
+        # Change 1 — gate: classify To_Home (coming home) only when home_mode is
+        # in this set (e.g. {'away','abroad'}). None = no gate (legacy behavior).
+        'coming_home_modes': None,
+        # Change 2 — set-home action: press this device/channel (the HOME button)
+        # on a door-confirmed arrival. None = no action authored.
+        'set_home_device':   None,
+        'set_home_channel':  None,
     }
     try:
         rows = state.db_query(
@@ -175,6 +185,23 @@ def _read_config(state):
                 if m:
                     cfg['max_lock_sec'] = int(m.group(1))
                     continue
+            # Change 1 — coming-home home-mode gate. Modes are taken from the
+            # words after "home mode" so the leading "coming home" isn't counted.
+            if 'coming home' in t and 'home mode' in t:
+                after = t.split('home mode', 1)[1]
+                modes = set(re.findall(r'\b(home|away|abroad)\b', after))
+                if modes:
+                    cfg['coming_home_modes'] = modes
+                continue
+            # Change 2 — set-home action: a device chip ("turn on @<Device> <Channel>").
+            if 'coming home' in t and 'turn on' in t:
+                for seg in sentence.get('segments', []):
+                    if (seg.get('t') or '').lower() == 'dev':
+                        resolved = _resolve_chip(state, seg.get('v', ''))
+                        if resolved:
+                            cfg['set_home_device'], cfg['set_home_channel'] = resolved
+                        break
+                continue
 
     except Exception as e:
         log.warning("Corridor Transit Classifier: config parse failed (%s) — using defaults", e)
@@ -182,6 +209,32 @@ def _read_config(state):
     _config_cache['data'] = cfg
     _config_cache['ts'] = now
     return cfg
+
+
+def _resolve_chip(state, chip_value):
+    """Resolve '@<Device Name> <Channel Label>' → (device_id, dps_key) or None.
+    Longest-name-prefix match against devices.name; the remainder is matched
+    against that device's dps_labels VALUES to find the channel's dps key.
+    Same chip shape Mode Buttons / the +Dev picker use (e.g. '@8 Gang Switch HOME')."""
+    if not chip_value or not chip_value.startswith('@'):
+        return None
+    text = chip_value[1:].strip()
+    if not text:
+        return None
+    items = [((dev.get('name') or '').strip(), dev_id, dev)
+             for dev_id, dev in (state.devices or {}).items()
+             if (dev.get('name') or '').strip()]
+    items.sort(key=lambda x: len(x[0]), reverse=True)   # longest name wins
+    for name, dev_id, dev in items:
+        if text == name:
+            return (dev_id, None)
+        if text.startswith(name + ' '):
+            label = text[len(name) + 1:].strip()
+            for k, v in (dev.get('dps_labels') or {}).items():
+                if v == label:
+                    return (dev_id, k)
+            return (dev_id, None)
+    return None
 
 
 def _set_mode(state, new_mode, now):
@@ -319,7 +372,7 @@ def evaluate(event, state):
             # passing the building corridor must not be misread as us leaving
             # (2026-06-21 fix).
             state.shared['corridor_transit.last_door_open_ts'] = now
-            _handle_inside_trigger(state, cfg, now)
+            commands += _handle_inside_trigger(state, cfg, now, 'door')
         elif not is_open and prev:
             # Door falling edge (open → closed). If we're currently locked
             # in TO_HOME or FROM_HOME, this is the cooldown anchor —
@@ -340,29 +393,73 @@ def evaluate(event, state):
         state.shared['corridor_transit._prev_entrance'] = 'presence' if is_presence else 'none'
 
         if is_presence and prev != 'presence':
-            _handle_inside_trigger(state, cfg, now)
+            commands += _handle_inside_trigger(state, cfg, now, 'entrance')
         return commands
 
     return commands
 
 
-def _handle_inside_trigger(state, cfg, now):
-    """Door rising-edge OR Entrance Presence rising-edge.
-    1. Records `last_inside_trigger_ts` (diagnostic only since 2026-06-21 —
-       From_Home classification now requires a real door open via
-       `last_door_open_ts`, NOT just any inside trigger).
-    2. If currently in Visit_Home AND the visit started within window_sec,
-       upgrades the mode to To_Home (the "visitor" was actually us coming home).
-    3. Lock: if currently in TO_HOME or FROM_HOME, the mode is locked until
-       the door closes (handled in _check_timeouts via cooldown). The
-       timestamp is still recorded for diagnostics, but no mode change.
+def _handle_inside_trigger(state, cfg, now, trigger):
+    """Door rising-edge OR Entrance Presence rising-edge. `trigger` is 'door' or
+    'entrance'. Returns a list of commands (the set-home button press, if any).
+
+    Upgrades Visit_Home → To_Home when the visit started within window_sec, with:
+
+    • Change 1 (coming-home gate): the upgrade only happens when home_mode is in
+      cfg['coming_home_modes'] (e.g. away/abroad). Opening the front door while
+      already HOME is therefore NOT misread as an arrival (it stays Visit).
+      No gate sentence → legacy behavior (upgrade in any mode).
+
+    • Change 2 (set home on arrival): when the upgrade is completed by a REAL
+      Main Door open (trigger=='door') that followed the corridor presence, and a
+      set-home device is configured, emit a turn_on on the HOME button so Mode
+      Buttons switches the house to home. Entrance-presence-only completions do
+      NOT set home (the door must have opened after the presence).
+
+    Lock: in TO_HOME / FROM_HOME the mode is held until the door closes
+    (cooldown in _check_timeouts) — timestamp logged, no mode change.
     """
     state.shared['corridor_transit.last_inside_trigger_ts'] = now
     mode = state.shared.get('corridor_transit.mode', MODE_CLEAR)
     if mode in (MODE_TO_HOME, MODE_FROM_HOME):
         log.debug("Corridor Transit: locked in %s — inside trigger logged but no mode change", mode)
-        return
-    if mode == MODE_VISIT:
-        mode_age = now - float(state.shared.get('corridor_transit.mode_set_ts', 0) or 0)
-        if mode_age <= cfg['window_sec']:
-            _set_mode(state, MODE_TO_HOME, now)
+        return []
+    if mode != MODE_VISIT:
+        return []
+    mode_age = now - float(state.shared.get('corridor_transit.mode_set_ts', 0) or 0)
+    if mode_age > cfg['window_sec']:
+        return []
+
+    # ── Change 1 — coming-home home-mode gate ──
+    home_mode = (state.shared.get('home_mode') or '').lower()
+    gate = cfg.get('coming_home_modes')
+    if gate is not None and home_mode not in gate:
+        log.info("Corridor Transit: corridor→inside trigger but home_mode=%s not in %s "
+                 "— staying Visit (not coming-home)", home_mode or '?', sorted(gate))
+        return []
+
+    _set_mode(state, MODE_TO_HOME, now)
+
+    # ── Change 2 — set home on a door-confirmed arrival ──
+    if trigger != 'door':
+        return []                               # entrance presence completed it → no set-home
+    dev = cfg.get('set_home_device')
+    if not dev:
+        return []                               # no set-home sentence authored
+    if home_mode not in (gate or {'away', 'abroad'}):
+        return []
+    last_door = float(state.shared.get('corridor_transit.last_door_open_ts', 0) or 0)
+    last_corr = float(state.shared.get('corridor_transit.last_corridor_rising_ts', 0) or 0)
+    if last_door < last_corr:
+        return []                               # door must have opened AFTER the corridor presence
+    cmd = {
+        'device_id': dev,
+        'action': 'turn_on',
+        'rule': 'Corridor Transit Classifier',
+        '_skip_loop_guard': True,               # intentional button press, not a runaway loop
+    }
+    if cfg.get('set_home_channel') is not None:
+        cmd['channel'] = cfg['set_home_channel']
+    log.info("Corridor Transit: door-confirmed arrival (home_mode=%s) → pressing HOME (dev=%s ch=%s)",
+             home_mode, dev, cfg.get('set_home_channel'))
+    return [cmd]
