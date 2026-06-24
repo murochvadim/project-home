@@ -1487,7 +1487,13 @@ async function upsLoadRecoverSettings() {
       return;
     }
     const fmt = (v, suf) => (Number.isFinite(v) ? `${v}${suf || ''}` : '—');
-    document.getElementById('ups-rec-auto').textContent      = ({yes:'Yes', no:'No'})[s.recover_auto] || s.recover_auto || '—';
+    const recAutoEl = document.getElementById('ups-rec-auto');
+    recAutoEl.textContent = ({yes:'Yes', no:'No'})[s.recover_auto] || s.recover_auto || '—';
+    // Color the value like the AUTO-RECOVER badge: amber when OFF, green when ON.
+    recAutoEl.style.display = 'inline-block';
+    recAutoEl.style.padding = '2px 14px';
+    recAutoEl.style.borderRadius = '8px';
+    recAutoEl.style.color = '#fff';
     document.getElementById('ups-rec-bcharge').textContent   = fmt(s.min_bcharge_pct, ' %');
     document.getElementById('ups-rec-online').textContent    = fmt(s.require_online_sec, ' s');
     document.getElementById('ups-rec-bootdelay').textContent = fmt(s.boot_delay_sec, ' s');
@@ -1496,9 +1502,11 @@ async function upsLoadRecoverSettings() {
     if (s.recover_auto === 'yes') {
       badge.textContent = 'AUTO-RECOVER ON';
       badge.style.background = '#2e7d32';
+      recAutoEl.style.background = '#2e7d32';
     } else {
       badge.textContent = 'AUTO-RECOVER OFF';
       badge.style.background = '#7a5a00';
+      recAutoEl.style.background = '#7a5a00';
     }
     _upsAttachEditHandlers();
   } catch (e) {
@@ -1524,6 +1532,8 @@ const _UPS_DEVICES = [
   { kind: 'lxc',  id: 105, label: 'Main Agent' },
   { kind: 'lxc',  id: 106, label: 'Voice' },
   { kind: 'lxc',  id: 107, label: 'MQTT' },
+  { kind: 'lxc',  id: 108, label: 'NetBird' },
+  { kind: 'lxc',  id: 109, label: 'Privacy' },
 ];
 
 // Per-action session: tracks when an action started + per-device transition

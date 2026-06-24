@@ -16,8 +16,8 @@ echo "================================================================"
 set +e
 
 # Phase classification — keep in sync with /etc/apcupsd/doshutdown.
-# Numerical order across mixed LXCs / VMs: 100, 101, 103, 104, 105, 106.
-PHASE_A_CLIENTS=(100:lxc 101:vm 103:lxc 104:lxc 105:lxc 106:lxc)
+# Numerical order across mixed LXCs / VMs: 100, 101, 103, 104, 105, 106, 108, 109.
+PHASE_A_CLIENTS=(100:lxc 101:vm 103:lxc 104:lxc 105:lxc 106:lxc 108:lxc 109:lxc)
 PHASE_B_SERVICES=(102:lxc 107:lxc)
 
 is_running_lxc() { pct status "$1" 2>/dev/null | grep -q running; }
