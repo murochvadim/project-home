@@ -87,7 +87,7 @@ async function loadAlerts() {
         </td>
         <td style="font-size:0.78rem;">${r.affected_agent ? escHtml(r.affected_agent) : '<span style="color:#aaa;">all</span>'}</td>
         <td style="font-size:0.75rem; color:#888;">${escHtml(r.alert_type)}</td>
-        <td style="font-size:0.8rem; color:${r.resolved_local ? '#888' : color};">${escHtml(r.message)}</td>
+        <td style="font-size:0.8rem; color:${r.resolved_local ? '#888' : color};">${escHtml(r.message)}${(!r.resolved_local && /^phonelink:/.test(r.alert_type || '')) ? plActionButtons(r.id) : ''}</td>
         <td style="font-size:0.75rem; color:#5a8a5a;">${r.resolved_local ? fmtTs(r.resolved_local) : ''}</td>
       </tr>`;
     }).join(''));
@@ -97,6 +97,40 @@ async function loadAlerts() {
       '<tr><td colspan="6" style="color:#b55e5e;">Failed to load</td></tr>';
   }
 }
+
+// Recovery buttons rendered on active phonelink:* alert rows. The dashboard runs
+// ON the laptop, so these hit host-action endpoints (routes-phonelink.js) that
+// run PowerShell locally. Light = restart (no re-pair); Hard = full reset (re-pair).
+function plActionButtons(id) {
+  return `<div data-pl-actions style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+    <button onclick="phonelinkFix(this,'restart',${id})" title="Restart Phone Link + re-register CrossDevice. No re-pair." style="font-size:0.72rem; padding:3px 8px; background:#b8860b; color:#fff; border:none; border-radius:4px; cursor:pointer;">&#128260; Restart Phone Link</button>
+    <button onclick="phonelinkFix(this,'reset',${id})" title="Full reset: signs you out, you re-scan the QR on the phone." style="font-size:0.72rem; padding:3px 8px; background:#7a2020; color:#fff; border:none; border-radius:4px; cursor:pointer;">&#128295; Full Reset (re-pair)</button>
+    <button onclick="phonelinkDismiss(this,${id})" title="Hide this alert. Returns in ~5 min if still broken." style="font-size:0.72rem; padding:3px 7px; background:#eee; color:#888; border:1px solid #ccc; border-radius:4px; cursor:pointer;">&#10005;</button>
+  </div>`;
+}
+
+window.phonelinkFix = async function (btn, kind, id) {
+  if (kind === 'reset' && !confirm('Full Reset signs you out of Phone Link — afterward you must sign in and re-scan the QR on your phone. Continue?')) return;
+  const wrap = btn.closest('[data-pl-actions]');
+  wrap.innerHTML = `<span style="font-size:0.72rem; color:#888;">${kind === 'reset' ? 'Resetting' : 'Restarting'} Phone Link… please wait (this can take up to ${kind === 'reset' ? '90' : '40'}s)</span>`;
+  try {
+    const r = await fetch('/api/phonelink/' + kind, { method: 'POST' }).then(x => x.json());
+    wrap.innerHTML = `<span style="font-size:0.74rem; color:${r.ok ? '#3a7d44' : '#b55e5e'};">${escHtml(r.message || (r.ok ? 'done' : 'failed'))}</span>`;
+  } catch (e) {
+    wrap.innerHTML = '<span style="font-size:0.72rem; color:#b55e5e;">request failed — try again</span>';
+  }
+};
+
+window.phonelinkDismiss = async function (btn, id) {
+  try {
+    await fetch('/api/phonelink/dismiss', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+  } catch (e) { /* best-effort */ }
+  const tr = btn.closest('tr');
+  if (tr) tr.style.display = 'none';
+};
 
 function toggleResolvedAlerts() {
   showResolvedAlerts = !showResolvedAlerts;

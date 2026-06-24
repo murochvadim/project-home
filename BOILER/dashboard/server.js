@@ -106,6 +106,10 @@ require('./routes-privacy')(app, db);
 // Cast laptop screen -> TV (Windows-host action; spawns PowerShell on this host).
 require('./routes-cast')(app);
 
+// Phone Link recovery (Windows-host action; spawns PowerShell on this host) +
+// single-alert dismiss. Buttons on Project Health -> System Alerts.
+require('./routes-phonelink')(app, db);
+
 // Travel map — visited_places CRUD (Privacy > Places tab).
 require('./routes-places')(app, db);
 
