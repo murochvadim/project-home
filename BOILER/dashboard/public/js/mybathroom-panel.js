@@ -950,13 +950,8 @@
     { key: 'p1b20', out: 'output2', label: 'My Bathroom Light' },
   ];
   function npRenderRelay(key, on) {
-    const chip = document.getElementById('np-relay-' + key);
-    if (chip) {
-      chip.textContent = (on == null) ? '—' : (on ? 'ON' : 'OFF');
-      chip.style.background  = (on == null) ? '#eee' : (on ? '#3a7d44' : '#c0392b');
-      chip.style.color       = (on == null) ? '#888' : '#fff';
-      chip.style.borderColor = (on == null) ? '#d0cbc4' : (on ? '#3a7d44' : '#c0392b');
-    }
+    // Pill collapsed into the buttons — the active On/Off button shows the state
+    // (filled green = on, filled red = off; both outline = unknown).
     const bOn  = document.getElementById('np-relay-' + key + '-on');
     const bOff = document.getElementById('np-relay-' + key + '-off');
     if (bOn)  { bOn.style.background  = on === true  ? '#3a7d44' : ''; bOn.style.color  = on === true  ? '#fff' : '#3a7d44'; }
@@ -975,13 +970,7 @@
   // device's last_state.light (no MQTT echo), so we load it on init + after a press.
   const NP_UC_ID = '85faa01c-d378-43f8-a5dd-020a528121e5';  // My Bathroom Under Cabinet Light
   function npRenderUC(on) {
-    const chip = document.getElementById('np-uc-state');
-    if (chip) {
-      chip.textContent = (on == null) ? '—' : (on ? 'ON' : 'OFF');
-      chip.style.background  = (on == null) ? '#eee' : (on ? '#3a7d44' : '#c0392b');
-      chip.style.color       = (on == null) ? '#888' : '#fff';
-      chip.style.borderColor = (on == null) ? '#d0cbc4' : (on ? '#3a7d44' : '#c0392b');
-    }
+    // Pill collapsed into the buttons (filled On/Off shows the live state).
     const bOn  = document.getElementById('np-uc-on');
     const bOff = document.getElementById('np-uc-off');
     if (bOn)  { bOn.style.background  = on === true  ? '#3a7d44' : ''; bOn.style.color  = on === true  ? '#fff' : '#3a7d44'; }

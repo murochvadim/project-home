@@ -254,21 +254,18 @@
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-weight:600;width:150px;">Laundry Light</span>
-          <span id="np-relay-p1b10" style="font-size:0.78rem;font-weight:600;padding:2px 12px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;min-width:42px;text-align:center;">—</span>
           <button id="np-relay-p1b10-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="npRelay('p1b10', true)">On</button>
           <button id="np-relay-p1b10-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="npRelay('p1b10', false)">Off</button>
           <span style="color:#aaa;font-size:0.72rem;">p1b10 · GPIO 1 · grp 1</span>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-weight:600;width:150px;">My Bathroom Light</span>
-          <span id="np-relay-p1b20" style="font-size:0.78rem;font-weight:600;padding:2px 12px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;min-width:42px;text-align:center;">—</span>
           <button id="np-relay-p1b20-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="npRelay('p1b20', true)">On</button>
           <button id="np-relay-p1b20-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="npRelay('p1b20', false)">Off</button>
           <span style="color:#aaa;font-size:0.72rem;">p1b20 · GPIO 2 · grp 2</span>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-weight:600;width:150px;">My Bathroom Under Cabinet Light</span>
-          <span id="np-uc-state" style="font-size:0.78rem;font-weight:600;padding:2px 12px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;min-width:42px;text-align:center;">—</span>
           <button id="np-uc-on"  class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="npUnderCabinet(true)">On</button>
           <button id="np-uc-off" class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="npUnderCabinet(false)">Off</button>
           <span style="color:#aaa;font-size:0.72rem;">Z-Wave · dashboard only</span>
@@ -384,6 +381,6 @@
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/my-bathroom.js?v=13"></script>
-<script src="js/mybathroom-panel.js?v=6"></script>
+<script src="js/mybathroom-panel.js?v=7"></script>
 </body>
 </html>
