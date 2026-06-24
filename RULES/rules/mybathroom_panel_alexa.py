@@ -47,7 +47,8 @@ _CFG_KEY = "my-bathroom.alexa_media_buttons"   # {p3b<id>: "<station name>"}
 
 RULE = {
     "name": _RULE_NAME,
-    "description": "Controls the Alexa speaker in My BathRoom from page 3 of the My BathRoom Lights Panel — play a saved station, play/stop/pause, and change the volume.",
+    "description": "Controls the Alexa speaker in My BathRoom from page 3 of the My BathRoom Lights Panel — play a saved station, play/stop/pause, and change the volume."
+                   "3 assignable station buttons + transport + volume.",
     "triggers": [f"hasp:{_PANEL}:{o}" for o in (*_MEDIA_BTNS, *_TRANSPORT, _VOL)],
     "controls": [],
     "category": "control",
