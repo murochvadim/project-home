@@ -109,6 +109,7 @@
     <button class="tab-btn active" onclick="showMedTab('contacts',  this)">Contacts</button>
     <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
     <button class="tab-btn"        onclick="showMedTab('tests',     this); medTestsInit();">Tests</button>
+    <button class="tab-btn"        onclick="showMedTab('personal-health', this); phInit();">Personal Health</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -336,6 +337,92 @@
 
   </div><!-- /tab-tests -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Personal Health (per-person profile + weight log → BMI) -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-personal-health">
+
+    <!-- Person selector + add/edit -->
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <h2 style="margin:0;">Personal Health</h2>
+        <select id="ph-person" onchange="phSelectPerson(this.value)" style="padding:5px 9px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.9rem;"></select>
+        <button class="btn btn-secondary btn-sm" id="ph-edit-btn" onclick="phEditDetails()" style="display:none;">Edit details</button>
+      </div>
+      <div id="ph-no-users" style="display:none;font-size:0.82rem;color:#888;margin-top:8px;">No household members yet — add them in <b>Privacy → Settings → Users</b>, then they appear here.</div>
+      <div id="ph-person-form" style="display:none;margin-top:12px;padding:12px;border:1px dashed #ccc;border-radius:8px;">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+          <label style="font-size:0.78rem;color:#555;">Sex<br>
+            <select id="ph-f-sex" style="padding:5px 8px;"><option value="">—</option><option value="male">Male</option><option value="female">Female</option></select></label>
+          <label style="font-size:0.78rem;color:#555;">Date of birth<br><input id="ph-f-dob" type="date" style="padding:5px 8px;"></label>
+          <label style="font-size:0.78rem;color:#555;">Height (cm)<br><input id="ph-f-height" type="number" step="0.1" style="padding:5px 8px;width:100px;"></label>
+          <label style="font-size:0.78rem;color:#a33;">Allergies<br><input id="ph-f-allergies" type="text" placeholder="e.g. sulfa, penicillin" style="padding:5px 8px;width:160px;"></label>
+          <label style="font-size:0.78rem;color:#a33;">Conditions<br><input id="ph-f-conditions" type="text" placeholder="e.g. gout, kidney disease" style="padding:5px 8px;width:180px;"></label>
+          <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phSaveDetails()">Save details</button>
+          <button class="btn btn-secondary btn-sm" onclick="phCancelForm()">Cancel</button>
+        </div>
+        <div id="ph-form-status" style="font-size:0.78rem;color:#888;margin-top:6px;"></div>
+      </div>
+    </div>
+
+    <div id="ph-detail" style="display:none;">
+      <!-- Summary (auto-calculated) -->
+      <div class="card">
+        <h3 style="margin:0 0 12px;">Summary <span id="ph-sum-name" style="font-weight:400;color:#888;"></span></h3>
+        <div id="ph-summary" style="display:flex;gap:24px;flex-wrap:wrap;"></div>
+      </div>
+      <!-- Medications (pills) -->
+      <div class="card" id="ph-medscard">
+        <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;">
+          <h3 style="margin:0;">💊 Medications</h3>
+          <button class="btn btn-success btn-sm" onclick="phAddMed()">+ Add medication</button>
+        </div>
+        <div id="ph-med-form" style="display:none;margin:12px 0;padding:12px;border:1px dashed #ccc;border-radius:8px;">
+          <!-- basics + schedule -->
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+            <label style="font-size:0.78rem;color:#555;">Name<br><input id="ph-m-name" type="text" style="padding:5px 8px;width:140px;"></label>
+            <label style="font-size:0.78rem;color:#555;">Dose<br><input id="ph-m-dose" type="text" placeholder="e.g. 100 mg" style="padding:5px 8px;width:100px;"></label>
+            <label style="font-size:0.78rem;color:#555;">How often<br>
+              <select id="ph-m-freq" onchange="phFreqChanged()" style="padding:5px 8px;">
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="every_n_months">Every N months</option>
+                <option value="every_n_days">Every N days</option>
+                <option value="once">One-time</option>
+                <option value="as_needed">As needed</option>
+              </select></label>
+            <label id="ph-m-interval-wrap" style="font-size:0.78rem;color:#555;display:none;">Every <span id="ph-m-interval-unit">N</span><br><input id="ph-m-interval" type="number" min="1" style="padding:5px 8px;width:70px;"></label>
+            <label id="ph-m-dow-wrap" style="font-size:0.78rem;color:#555;display:none;">Days of week<br><input id="ph-m-dow" type="text" placeholder="e.g. Mon,Thu" style="padding:5px 8px;width:120px;"></label>
+            <label id="ph-m-nextdue-wrap" style="font-size:0.78rem;color:#555;display:none;">Next due<br><input id="ph-m-nextdue" type="date" style="padding:5px 8px;"></label>
+            <label id="ph-m-times-wrap" style="font-size:0.78rem;color:#555;">Time(s)<br><input id="ph-m-times" type="text" placeholder="e.g. 08:00,20:00" style="padding:5px 8px;width:130px;"></label>
+            <label style="font-size:0.78rem;color:#555;">Notes<br><input id="ph-m-notes" type="text" style="padding:5px 8px;width:140px;"></label>
+            <label style="font-size:0.78rem;color:#555;display:flex;align-items:center;gap:4px;"><input id="ph-m-active" type="checkbox" checked> Active</label>
+            <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phSaveMed()">Save</button>
+            <button class="btn btn-secondary btn-sm" onclick="phCancelMed()">Cancel</button>
+          </div>
+          <div id="ph-med-status" style="font-size:0.78rem;color:#888;margin-top:6px;"></div>
+        </div>
+        <div id="ph-meds-list"><div style="color:#aaa;">—</div></div>
+      </div>
+      <!-- Log a weight -->
+      <div class="card" id="ph-logcard">
+        <h3 style="margin:0 0 10px;">Log weight</h3>
+        <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+          <label style="font-size:0.78rem;color:#555;">Date<br><input id="ph-w-date" type="date" style="padding:5px 8px;"></label>
+          <label style="font-size:0.78rem;color:#555;">Weight (kg)<br><input id="ph-w-kg" type="number" step="0.1" style="padding:5px 8px;width:110px;"></label>
+          <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogWeight()">Save weight</button>
+          <span id="ph-w-status" style="font-size:0.78rem;color:#888;"></span>
+        </div>
+      </div>
+      <!-- History -->
+      <div class="card" id="ph-histcard">
+        <h3 style="margin:0 0 10px;">History</h3>
+        <div id="ph-history"><div style="color:#aaa;">—</div></div>
+      </div>
+    </div>
+
+  </div><!-- /tab-personal-health -->
+
 </main>
 
 <!-- Eye test — full-screen centered runner (chart sits in the middle of the screen) -->
@@ -400,6 +487,39 @@
   </div>
 </div>
 
+<!-- Personal Health — medication Info window (all details for one pill) -->
+<div id="ph-med-info" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9000;align-items:flex-start;justify-content:center;overflow:auto;padding:30px 12px;">
+  <div style="background:#fff;border-radius:8px;max-width:640px;width:100%;box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #eee;">
+      <h3 id="ph-info-title" style="margin:0;">💊</h3>
+      <button class="btn btn-secondary btn-sm" onclick="phCloseInfo()">✕ Close</button>
+    </div>
+    <!-- read view -->
+    <div id="ph-info-body" style="padding:16px;font-size:0.88rem;line-height:1.55;"></div>
+    <!-- edit view (special / safety info only) -->
+    <div id="ph-info-form" style="display:none;padding:16px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+        <label style="font-size:0.78rem;color:#555;">Purpose / treats<br><input id="ph-i-purpose" type="text" placeholder="e.g. Blood pressure" style="padding:5px 8px;width:100%;box-sizing:border-box;"></label>
+        <label style="font-size:0.78rem;color:#555;">Ingredients<br><input id="ph-i-ingredients" type="text" style="padding:5px 8px;width:100%;box-sizing:border-box;"></label>
+        <label style="font-size:0.78rem;color:#555;">Drug class<br><input id="ph-i-class" type="text" placeholder="e.g. ARB + diuretic" style="padding:5px 8px;width:100%;box-sizing:border-box;"></label>
+        <label style="font-size:0.78rem;color:#555;">Prescriber<br><select id="ph-i-prescriber" style="padding:5px 8px;width:100%;box-sizing:border-box;"><option value="">—</option></select></label>
+        <label style="font-size:0.78rem;color:#555;">Started<br><input id="ph-i-started" type="date" style="padding:5px 8px;width:100%;box-sizing:border-box;"></label>
+        <label style="font-size:0.78rem;color:#a33;">⚠ Avoid with (drugs / foods)<br><textarea id="ph-i-avoid" rows="2" style="padding:5px 8px;width:100%;box-sizing:border-box;"></textarea></label>
+        <label style="font-size:0.78rem;color:#a33;">⚠ Contraindications (conditions / allergies)<br><textarea id="ph-i-contra" rows="2" style="padding:5px 8px;width:100%;box-sizing:border-box;"></textarea></label>
+        <label style="font-size:0.78rem;color:#555;">Side effects<br><textarea id="ph-i-side" rows="2" style="padding:5px 8px;width:100%;box-sizing:border-box;"></textarea></label>
+        <label style="font-size:0.78rem;color:#555;">Warnings (full notes)<br><textarea id="ph-i-warn" rows="3" style="padding:5px 8px;width:100%;box-sizing:border-box;"></textarea></label>
+      </div>
+      <div id="ph-i-status" style="font-size:0.78rem;color:#888;margin-top:6px;"></div>
+    </div>
+    <div style="padding:10px 16px;border-top:1px solid #eee;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" id="ph-info-editbtn" onclick="phInfoEdit()">✎ Edit info</button>
+      <button class="btn btn-sm" id="ph-info-savebtn" style="display:none;background:#2563eb;color:#fff;" onclick="phInfoSave()">Save</button>
+      <button class="btn btn-secondary btn-sm" id="ph-info-canceledit" style="display:none;" onclick="phInfoCancelEdit()">Cancel</button>
+      <span style="margin-left:auto;font-size:0.72rem;color:#999;">Record / reminder only — not medical advice.</span>
+    </div>
+  </div>
+</div>
+
 <script>
   function showMedTab(name, btnEl) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -414,6 +534,7 @@
 <script src="js/medical.js?v=35"></script>
 <script src="js/medical-hearing.js?v=5"></script>
 <script src="js/medical-vision.js?v=2"></script>
+<script src="js/personal-health.js?v=5"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

@@ -76,6 +76,8 @@ const db = new Pool({
 // module receives the express instance + the pg pool and registers its own
 // /api/medical/test-results endpoints.
 require('./routes-medical-tests')(app, db);
+// Personal Health — Medical → Personal Health tab (profiles + weight log → BMI).
+require('./routes-personal-health')(app, db);
 
 // Power Outage Log — read endpoint (/api/power/outages) for the Project Power
 // page card. Own module for the same architecture-guard reason as above.
