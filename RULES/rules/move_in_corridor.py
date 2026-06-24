@@ -71,10 +71,17 @@ from _chip_resolver import resolve_chip  # noqa: E402
 # Trigger device — must be hardcoded because RULE['triggers'] is fixed at
 # module load and the engine builds its event-routing index from that list.
 CORRIDOR_PRESENCE_ID = 'bfbdca138cb1c78c3dlbmc'
+# Main Door — second trigger: Awtrix fires on the door OPENING.
+MAIN_DOOR_ID = '8d853479-bb87-4d2e-9350-fb8fc5c486d5'
+# Entrance Presence (inside) — third trigger, used ONLY to timestamp when the
+# inside sensor last fired. If it fired within the leaving-window BEFORE a
+# corridor-presence event, you came from inside → LEAVING → suppress monitor/FR.
+ENTRANCE_PRESENCE_ID = 'bf4d5e650d32117f49ifvb'
 
 # Fallback knob defaults — overridden by container `r_move_in_corridor`.
-DEFAULTS_COOLDOWN_SEC    = 60
-DEFAULTS_AFTER_DELAY_SEC = 3
+DEFAULTS_COOLDOWN_SEC       = 60
+DEFAULTS_AFTER_DELAY_SEC    = 3
+DEFAULTS_LEAVING_WINDOW_SEC = 5   # entrance-before-corridor window → "leaving"
 
 # Cache parsed config for 30 s to avoid hitting the DB on every event.
 # Sentence edits land via dashboard save → 30 s max before the rule
@@ -86,10 +93,15 @@ _CONFIG_TTL_SEC = 30.0
 RULE = {
     "name": "Move in Corridor",
     "description": "When someone moves in the building corridor outside your door, this turns on the corridor light and — if you're home — wakes the entrance screen, shows a welcome on the Pixoo, and starts face recognition. It skips the welcome and recognition when you're on your way out.",
-    "triggers": [CORRIDOR_PRESENCE_ID],
+    "triggers": [CORRIDOR_PRESENCE_ID, MAIN_DOOR_ID, ENTRANCE_PRESENCE_ID],
     "controls": [],
     "category": "control",
-    "group": "corridor",
+    # OWN group (NOT 'corridor') on purpose: the Corridor Transit Classifier (also
+    # 'corridor') now RETURNS a command (press HOME) on a door-confirmed To_Home,
+    # which would claim the 'corridor' group and group-skip this rule on that door
+    # event (Awtrix would miss on a coming-home-from-away). A distinct group avoids
+    # the conflict; depends_on still orders the classifier first (global sort).
+    "group": "corridor-move",
     "priority": 10,
     # depends_on Corridor Transit Classifier so it runs FIRST on every corridor
     # presence event and `state.shared['corridor_transit.mode']` is up-to-date
@@ -115,6 +127,8 @@ def _classify_sentence(text):
     t = (text or '').lower()
     if 'cooldown is' in t:
         return 'knob_cooldown'
+    if 'leaving window is' in t:
+        return 'knob_leaving'
     if 'delay is' in t:
         return 'knob_delay'
     # 'when-home bucket fires when home_mode is X' must be checked BEFORE
@@ -126,8 +140,15 @@ def _classify_sentence(text):
         return 'cleanup'
     if 'after delay' in t:
         return 'delayed'
+    if 'on door open' in t:
+        return 'on_door_open'                 # Awtrix — fires on Main Door OPEN
+    # 'when home and arriving' must be checked BEFORE plain 'when home'.
+    if 'when home' in t and 'arriving' in t:
+        return 'when_home_arriving'           # Entrance Monitor — home + NOT leaving
+    if 'arriving' in t:
+        return 'when_arriving'                # FR screen on — NOT leaving (home or away)
     if 'when home' in t:
-        return 'when_home'
+        return 'when_home'                    # legacy bucket (back-compat)
     if 'on presence' in t:
         return 'always'
     return None
@@ -191,9 +212,13 @@ def _read_config(state):
     cfg = {
         'cooldown_sec':    DEFAULTS_COOLDOWN_SEC,
         'after_delay_sec': DEFAULTS_AFTER_DELAY_SEC,
+        'leaving_window_sec': DEFAULTS_LEAVING_WINDOW_SEC,
         'when_home_gate':  None,         # set from s_mic_gate; None → bucket disabled
         'always_cmds':     [],
-        'when_home_cmds':  [],
+        'when_home_cmds':  [],           # legacy 'when home' bucket (back-compat)
+        'when_home_arriving_cmds': [],   # Entrance Monitor — home + NOT leaving
+        'when_arriving_cmds':      [],   # FR screen on — NOT leaving (home or away)
+        'on_door_open_cmds':       [],   # Awtrix — on Main Door open
         'delayed_cmds':    [],
         'cleanup_cmds':    [],
     }
@@ -232,6 +257,11 @@ def _read_config(state):
                 if m:
                     cfg['after_delay_sec'] = int(m.group(1))
                 continue
+            if kind == 'knob_leaving':
+                m = re.search(r'leaving window is\s+(\d+)\s*seconds?', full_text, re.I)
+                if m:
+                    cfg['leaving_window_sec'] = int(m.group(1))
+                continue
             if kind == 'knob_gate':
                 m = _WHEN_HOME_GATE_RE.search(full_text)
                 if m:
@@ -251,6 +281,12 @@ def _read_config(state):
                 cfg['always_cmds'].extend(sentence_cmds)
             elif kind == 'when_home':
                 cfg['when_home_cmds'].extend(sentence_cmds)
+            elif kind == 'when_home_arriving':
+                cfg['when_home_arriving_cmds'].extend(sentence_cmds)
+            elif kind == 'when_arriving':
+                cfg['when_arriving_cmds'].extend(sentence_cmds)
+            elif kind == 'on_door_open':
+                cfg['on_door_open_cmds'].extend(sentence_cmds)
             elif kind == 'delayed':
                 cfg['delayed_cmds'].extend(sentence_cmds)
             elif kind == 'cleanup':
@@ -267,12 +303,45 @@ def _read_config(state):
 def evaluate(event, state):
     commands = []
     dev_id = event.get('device_id', '')
+    dps = event.get('dps', {}) or {}
 
-    # Only the Corridor Presence sensor itself triggers the chain entry.
+    # ── Main Door OPEN → Awtrix (move_on_main_door) ──
+    # Fires on the door's rising edge (closed → open), separate from the corridor
+    # chain (no cooldown gate). "Awtrix fires only on Main Door open."
+    if dev_id == MAIN_DOOR_ID:
+        if 'door' not in dps:
+            return commands
+        is_open = bool(dps.get('door'))
+        # Private (_-prefixed) so a door open/close that emits no command doesn't
+        # land in the engine's changed_keys diff and bump the Runs counter
+        # (rule_engine.py excludes _-keys). Matches the Entrance branch's _mic_* keys.
+        prev_door = state.shared.get('_mic_last_door', False)
+        state.shared['_mic_last_door'] = is_open
+        if is_open and not prev_door:
+            cfg = _read_config(state)
+            if cfg['on_door_open_cmds']:
+                commands.extend(cfg['on_door_open_cmds'])
+                log.info("Move in Corridor: Main Door opened → %d on-door-open command(s) (awtrix)",
+                         len(cfg['on_door_open_cmds']))
+        return commands
+
+    # ── Entrance Presence (inside) → just timestamp its rising edge ──
+    # Used to detect "leaving" (inside sensor fired just before the corridor
+    # sensor). Private (_-prefixed) keys so this never claims the group or
+    # bumps the Runs counter.
+    if dev_id == ENTRANCE_PRESENCE_ID:
+        if '1' in dps:
+            is_ent = dps.get('1') in ('presence', True, 'true', 1)
+            prev_ent = state.shared.get('_mic_prev_entrance', 'none')
+            state.shared['_mic_prev_entrance'] = 'presence' if is_ent else 'none'
+            if is_ent and prev_ent != 'presence':
+                state.shared['_mic_last_entrance_ts'] = time.time()
+        return commands
+
+    # Only the Corridor Presence sensor triggers the chain entry below.
     if dev_id != CORRIDOR_PRESENCE_ID:
         return commands
 
-    dps = event.get('dps', {}) or {}
     if '1' not in dps:
         # Event from this device but no presence-state field — ignore
         # (other DPS like motion_amplitude / target_distance updates).
@@ -321,30 +390,38 @@ def evaluate(event, state):
         away_countdown_active = float(_away_cd) > time.time()
     except (TypeError, ValueError):
         away_countdown_active = False
-    suppress_monitoring = (transit_mode == 'Corridor_From_Home') or away_countdown_active
+    # LEAVING — the inside (Entrance) sensor fired within leaving_window before this
+    # corridor event = you came from inside = on the way out. This is the RELIABLE
+    # leaving signal (the door lags the corridor sensor by ~0.7 s, and From_Home only
+    # catches the door-then-corridor order). OR'd with From_Home + away-countdown so
+    # the WHOLE chain (FR screen, Entrance Monitor, delayed Pixoo+recognition, cleanup)
+    # is suppressed when leaving — only the corridor light + Awtrix are exempt.
+    last_ent   = float(state.shared.get('_mic_last_entrance_ts', 0) or 0)
+    is_leaving = last_ent > 0 and (time.time() - last_ent) <= cfg['leaving_window_sec']
+    suppress_monitoring = (transit_mode == 'Corridor_From_Home') or away_countdown_active or is_leaving
 
-    log.info("Move in Corridor: rising edge — firing chain "
-             "(transit=%s, away_countdown=%s, always=%d, when_home=%d, delayed=%d, cooldown=%ds, after_delay=%ds, suppress_monitoring=%s)",
-             transit_mode, away_countdown_active, len(cfg['always_cmds']), len(cfg['when_home_cmds']),
-             len(cfg['delayed_cmds']), cfg['cooldown_sec'], cfg['after_delay_sec'],
-             suppress_monitoring)
-
-    # 1. ALWAYS bucket — fires regardless of transit mode (corridor light)
-    commands.extend(cfg['always_cmds'])
-
-    # 2. WHEN-HOME bucket — gated by sentence-driven home_mode value AND transit mode.
-    # The gate value comes from s_mic_gate (`when-home bucket fires when home_mode is <value>`).
-    # If s_mic_gate is absent → cfg['when_home_gate'] is None → bucket silently skipped.
     home_mode = state.shared.get('home_mode', '')
     gate      = cfg.get('when_home_gate')
-    if gate is None:
-        log.debug("Move in Corridor: no when-home gate sentence — skipping when-home bucket")
-    elif home_mode != gate:
-        log.info("Move in Corridor: home_mode='%s' (!= gate '%s') — skipping when-home bucket",
-                 home_mode, gate)
-    elif suppress_monitoring:
-        log.info("Move in Corridor: transit_mode='%s' — skipping when-home bucket (monitor/awtrix/FR)", transit_mode)
-    else:
+
+    log.info("Move in Corridor: rising edge — leaving=%s, suppress=%s, home_mode=%s, transit=%s "
+             "(always=%d, fr=%d, entrance=%d, delayed=%d, leaving_window=%ds)",
+             is_leaving, suppress_monitoring, home_mode, transit_mode,
+             len(cfg['always_cmds']), len(cfg['when_arriving_cmds']),
+             len(cfg['when_home_arriving_cmds']), len(cfg['delayed_cmds']), cfg['leaving_window_sec'])
+
+    # 1. ALWAYS — corridor light (every rising edge, even when leaving)
+    commands.extend(cfg['always_cmds'])
+
+    # 2. Face-Recognition screen ON — unless on the way out (leaving / From_Home / away).
+    if not suppress_monitoring and cfg['when_arriving_cmds']:
+        commands.extend(cfg['when_arriving_cmds'])
+
+    # 3. Entrance Monitor Ch.2 — when HOME and not on the way out.
+    if not suppress_monitoring and gate is not None and home_mode == gate and cfg['when_home_arriving_cmds']:
+        commands.extend(cfg['when_home_arriving_cmds'])
+
+    # Legacy plain 'when home' bucket — back-compat only.
+    if cfg['when_home_cmds'] and gate is not None and home_mode == gate and not suppress_monitoring:
         commands.extend(cfg['when_home_cmds'])
 
     # 3. Delayed bucket — emit each command with `_delay_sec` so the
