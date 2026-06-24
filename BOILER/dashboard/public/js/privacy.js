@@ -489,6 +489,9 @@ async function pvOpenDocs(siteId) {
   document.getElementById('pv-link-name').value = '';
   document.getElementById('pv-link-url').value = '';
   document.getElementById('pv-link-add-status').textContent = '';
+  document.getElementById('pv-path-name').value = '';
+  document.getElementById('pv-path-value').value = '';
+  document.getElementById('pv-path-add-status').textContent = '';
   document.getElementById('pv-docs-modal').style.display = 'flex';
   await pvLoadDocs();
 }
@@ -523,6 +526,23 @@ async function pvRenderDocs() {
           <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;" onclick="pvOpenLink(${d.id})">Open</button>
           <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;" onclick="pvEditLink(${d.id})">Edit</button>
           <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;color:#c0392b;" onclick="pvDeleteDoc(${d.id})">Del</button></div>
+      </div>`;
+    }
+    // Filesystem / network path — a pointer (no file). Open runs explorer.exe on
+    // the host (this laptop); Copy is the fallback (browsers can't open a file
+    // path from a page, and a remote viewer would paste it on their own machine).
+    if (d.kind === 'path') {
+      const nm = d.doc_name || d.url;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid #eee;padding:7px 2px;">
+        <div style="min-width:0;"><span title="path">📁</span>
+          <span style="font-size:0.88rem;">${_esc(nm)}</span>
+          <span style="font-size:0.74rem;color:#888;margin-left:6px;word-break:break-all;">${_esc(d.url)}</span>
+          <span style="font-size:0.72rem;color:#aaa;margin-left:6px;">path · ${_esc(d.created_at || '')}</span></div>
+        <div style="display:flex;gap:5px;flex-shrink:0;">
+          <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;box-sizing:border-box;" onclick="pvCopyPath(${d.id})" title="Copy the path, then paste into Windows Explorer">Copy</button>
+          <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;box-sizing:border-box;background:#3a7d44;color:#fff;" onclick="pvOpenPath(${d.id})" title="Open on this laptop (the dashboard host) in its default app / Explorer">Open</button>
+          <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;box-sizing:border-box;" onclick="pvEditPath(${d.id})">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="width:58px;flex-shrink:0;box-sizing:border-box;color:#c0392b;" onclick="pvDeleteDoc(${d.id})">Del</button></div>
       </div>`;
     }
     let name, locked = false;
@@ -610,6 +630,54 @@ async function pvEditLink(id) {
   if (!nn.trim() || !nu.trim()) { alert('Name and URL are both required'); return; }
   await fetch(`/api/privacy/docs/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ doc_name: nn.trim(), url: nu.trim() }) });
+  await pvLoadDocs();
+}
+
+// ── Paths (a filesystem / network path pointer — no file, no encryption) ──────
+async function pvAddPath() {
+  const name = document.getElementById('pv-path-name').value.trim();
+  const p    = document.getElementById('pv-path-value').value.trim();
+  const st = document.getElementById('pv-path-add-status');
+  if (!name || !p) { st.textContent = 'Name and path required'; return; }
+  st.textContent = 'Working…';
+  try {
+    const r = await fetch(`/api/privacy/sites/${_pvDocSite.id}/paths`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, path: p }) });
+    if (!r.ok) { st.textContent = 'Failed: ' + ((await r.json()).error || r.status); return; }
+    st.textContent = '✓ added';
+    document.getElementById('pv-path-name').value = '';
+    document.getElementById('pv-path-value').value = '';
+    await pvLoadDocs(); await pvLoadSites();
+  } catch (e) { st.textContent = 'Error: ' + e.message; }
+}
+async function pvCopyPath(id) {
+  const d = _pvDocs.find(x => x.id === id);
+  if (!d || !d.url) return;
+  try { await navigator.clipboard.writeText(d.url); document.getElementById('pv-path-add-status').textContent = '📋 copied: ' + d.url; }
+  catch (_) { window.prompt('Copy this path:', d.url); }
+}
+// Open on the Windows host (the laptop running this dashboard). Server runs
+// explorer.exe <path>; opens on the laptop, not on a remote viewer's device.
+async function pvOpenPath(id) {
+  const st = document.getElementById('pv-path-add-status');
+  st.textContent = 'Opening on the laptop…';
+  try {
+    const r = await fetch(`/api/privacy/docs/${id}/open`, { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { st.textContent = 'Open failed: ' + (j.error || r.status); return; }
+    st.textContent = '▶ opened on the laptop';
+  } catch (e) { st.textContent = 'Error: ' + e.message; }
+}
+async function pvEditPath(id) {
+  const d = _pvDocs.find(x => x.id === id);
+  const nn = prompt('Path name:', d.doc_name || '');
+  if (nn == null) return;
+  const np = prompt('Path:', d.url || '');
+  if (np == null) return;
+  if (!nn.trim() || !np.trim()) { alert('Name and path are both required'); return; }
+  await fetch(`/api/privacy/docs/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ doc_name: nn.trim(), url: np.trim() }) });
   await pvLoadDocs();
 }
 

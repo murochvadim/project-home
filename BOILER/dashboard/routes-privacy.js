@@ -25,6 +25,7 @@ const fs = require('fs');
 const os = require('os');
 const multer = require('multer');
 const { NodeSSH } = require('node-ssh');
+const { execFile } = require('child_process');
 
 const DOCS_ROOT  = '\\\\192.168.1.155\\Claude_Data\\Privacy_Site_Docs';
 const DOCS_LINUX = '/mnt/qnap-claude/Privacy_Site_Docs';   // LXC 104 view of same share
@@ -216,6 +217,24 @@ module.exports = function (app, db) {
     } catch (e) { _err(res, e); }
   });
 
+  // Add a PATH (e.g. \\192.168.1.155\share\contract.pdf) — a pointer to where a
+  // document physically lives, no upload. Stored as kind='path' in the same docs
+  // table; the path goes in the `url` column, file_path='' (no file → DELETE skips
+  // the QNAP rm, file-serve rejects it). Plaintext like a link — no encryption.
+  app.post('/api/privacy/sites/:id/paths', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const name = _trim(b.name);
+      const p = _trim(b.path);
+      if (!name || !p) return res.status(400).json({ error: 'name and path required' });
+      const ins = await db.query(
+        `INSERT INTO privacy_site_docs (site_id, encrypted, kind, doc_name, url, file_path)
+         VALUES ($1, false, 'path', $2, $3, '') RETURNING id`,
+        [parseInt(req.params.id), name, p]);
+      res.json({ ok: true, id: ins.rows[0].id });
+    } catch (e) { _err(res, e); }
+  });
+
   app.get('/api/privacy/docs/:id/file', async (req, res) => {
     try {
       const r = await db.query('SELECT encrypted, doc_name, file_path, mime_type FROM privacy_site_docs WHERE id = $1', [parseInt(req.params.id)]);
@@ -227,6 +246,22 @@ module.exports = function (app, db) {
       // Encrypted -> opaque octet-stream (browser decrypts). Plain -> its mime.
       res.setHeader('Content-Type', d.encrypted ? 'application/octet-stream' : (d.mime_type || 'application/octet-stream'));
       fs.createReadStream(abs).pipe(res);
+    } catch (e) { _err(res, e); }
+  });
+
+  // Open a PATH doc on the Windows HOST (this dashboard runs on the laptop).
+  // explorer.exe launches a file with its default app, or opens a folder — works
+  // for local + UNC (\\server\share) paths. The path is passed as a SINGLE arg
+  // (no shell) so it can't inject commands. explorer.exe returns exit 1 even on
+  // success, so the spawn error is ignored. Only kind='path' rows are openable.
+  app.post('/api/privacy/docs/:id/open', async (req, res) => {
+    try {
+      const r = await db.query('SELECT kind, url FROM privacy_site_docs WHERE id = $1', [parseInt(req.params.id)]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      const d = r.rows[0];
+      if (d.kind !== 'path' || !_trim(d.url)) return res.status(400).json({ error: 'not a path document' });
+      execFile('explorer.exe', [d.url], () => {});   // fire-and-forget (exit code is meaningless)
+      res.json({ ok: true });
     } catch (e) { _err(res, e); }
   });
 

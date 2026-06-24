@@ -338,6 +338,13 @@
         <button class="btn btn-sm" style="background:#3a7d44; color:#fff; width:110px; flex-shrink:0;" onclick="pvAddLink()" title="A plain link (e.g. a Google Drive folder). Not encrypted — it's just a URL.">🔗 Add link</button>
       </div>
       <div id="pv-link-add-status" style="font-size:0.78rem; color:#888; margin-top:6px;"></div>
+      <!-- add a PATH (a filesystem / network path to where the doc physically lives) — never encrypted -->
+      <div style="display:flex; gap:8px; flex-wrap:nowrap; align-items:center; margin-top:8px; padding-top:8px; border-top:1px dashed #e0e0e0;">
+        <input id="pv-path-name" type="text" placeholder="path name…" style="flex:1; min-width:50px; font-size:0.85rem; padding:5px 8px;">
+        <input id="pv-path-value" type="text" placeholder="\\192.168.1.155\share\contract.pdf" style="flex:2; min-width:60px; font-size:0.85rem; padding:5px 8px;">
+        <button class="btn btn-sm" style="background:#8a6d3b; color:#fff; width:110px; flex-shrink:0;" onclick="pvAddPath()" title="A filesystem / network path to where the document physically lives. Not uploaded — just a pointer. Use the row's Copy button, then paste into Explorer (browsers can't open file paths directly).">📁 Add path</button>
+      </div>
+      <div id="pv-path-add-status" style="font-size:0.78rem; color:#888; margin-top:6px;"></div>
     </div>
 
     <div id="pv-docs-list"><div style="color:#aaa;">—</div></div>
@@ -415,7 +422,7 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/privacy.js?v=67"></script>
+<script src="js/privacy.js?v=70"></script>
 <script src="js/privacy-places.js?v=10"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
