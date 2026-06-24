@@ -1309,7 +1309,13 @@ async function upsRunTest(name, btn) {
       clearBtn.onclick = () => { out.textContent = ''; clearBtn.remove(); };
       out.parentNode.insertBefore(clearBtn, out.nextSibling);
     }
-  } finally { btn.disabled = false; }
+  } finally {
+    btn.disabled = false;
+    // Toggling SAFETY_MODE flips the SHUTDOWN ON/OFF state — refresh the
+    // Shutdown Settings card right away (badge + Run-orchestrator button label
+    // + LIVE/dry-run warning) instead of waiting for the next 60 s poll.
+    if (name === 'safety_on' || name === 'safety_off') upsLoadSettings();
+  }
 }
 
 async function upsLoadSettings() {
@@ -1334,23 +1340,34 @@ async function upsLoadSettings() {
     // see at a glance whether clicking it does a real halt or a logged dry-run.
     const badge = document.getElementById('ups-settings-badge');
     const dryBtn = document.getElementById('ups-btn-dryrun');
+    const dryWarn = document.getElementById('ups-dryrun-warning');
     if (s.safety_mode === 'absent') {
       badge.textContent = 'SHUTDOWN ON';
-      badge.style.background = '#c0392b';        // red — orchestrator armed for real shutdown
+      badge.style.background = '#2e7d32';        // green — UPS protection ACTIVE (the good state)
       if (dryBtn) {
         dryBtn.textContent = 'Run orchestrator (LIVE — will halt EVERYTHING)';
         dryBtn.style.borderColor = '#c0392b';
         dryBtn.style.color = '#c0392b';
         dryBtn.dataset.armed = '1';
       }
+      if (dryWarn) {
+        // SAFETY_MODE off → this button is LIVE → warn in red.
+        dryWarn.style.color = '#c0392b';
+        dryWarn.innerHTML = '<b>⚠ LIVE — SAFETY_MODE is OFF.</b> Clicking this runs the real shutdown: it halts QNAP, stops every LXC + VM, and powers off the PVE mini-PC. You will need to physically power-cycle the mini-PC to bring it back.';
+      }
     } else if (s.safety_mode === 'present') {
       badge.textContent = 'SHUTDOWN OFF';
-      badge.style.background = '#7a9f5a';        // green — safe state, orchestrator log-only
+      badge.style.background = '#c0392b';        // red — protection DISABLED (no graceful halt on a real outage)
       if (dryBtn) {
         dryBtn.textContent = 'Run orchestrator (dry-run — SAFETY_MODE on, logs only)';
         dryBtn.style.borderColor = '';
         dryBtn.style.color = '';
         dryBtn.dataset.armed = '0';
+      }
+      if (dryWarn) {
+        // SAFETY_MODE on → dry-run only → neutral dark-grey text.
+        dryWarn.style.color = '#444';
+        dryWarn.innerHTML = 'Dry-run — SAFETY_MODE is ON, so this only writes to the log. Nothing shuts down.';
       }
     } else {
       badge.textContent = '—';

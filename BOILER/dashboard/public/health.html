@@ -603,8 +603,7 @@
     <div class="card">
       <div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
-          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Shutdown Settings</span><span id="ups-settings-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;min-width:130px;text-align:center;display:inline-block;">—</span></h3>
-          <span style="font-size:0.72rem;color:#888;">live on PVE: <code>/etc/apcupsd/apcupsd.conf</code> · click any value to edit</span>
+          <h3 style="margin:0;font-size:0.95rem;color:#444;display:inline-flex;align-items:center;gap:14px;"><span style="min-width:170px;">Shutdown Settings</span><span id="ups-settings-badge" style="font-size:0.72rem;font-weight:500;padding:3px 10px;border-radius:10px;background:#aaa;color:#fff;min-width:130px;text-align:center;display:inline-block;">—</span><span style="font-size:0.68rem;font-weight:400;color:#888;">Set by Remove / Restore SAFETY_MODE buttons</span></h3>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
         <div>
@@ -638,6 +637,18 @@
           <div style="font-size:0.7rem;color:#888;">when ON, the mini-PC keeps watching the UPS automatically after every reboot — no manual login needed</div>
         </div>
         </div>
+      </div>
+
+      <!-- Shutdown ON/OFF control — moved here from the Tests card so the SHUTDOWN ON/OFF badge above and its on/off buttons sit together -->
+      <div style="border-top:1px dashed #d4a017;padding-top:12px;margin-top:14px;">
+        <div style="font-size:0.78rem;color:#444;margin-bottom:10px;line-height:1.55;">
+          <span style="color:#2e7d32;">●</span> <b>Remove SAFETY_MODE → SHUTDOWN ON</b>: during a real power cut the system gracefully shuts everything down before the battery runs out. <i>This is the normal, protected setting — leave it here.</i><br>
+          <span style="color:#c0392b;">●</span> <b>Restore SAFETY_MODE → SHUTDOWN OFF</b>: test / safe mode — during a power cut <b>nothing</b> shuts down, it only writes to the log. <i>Use only while testing.</i>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="if(confirm('Remove SAFETY_MODE flag? After this, the orchestrator will fire for real on BATTERYLEVEL trigger.')) upsRunTest('safety_off', this)" style="border-color:#2e7d32;color:#2e7d32;">Remove SAFETY_MODE</button>
+        <button class="btn btn-secondary btn-sm" onclick="upsRunTest('safety_on', this)" style="border-color:#c0392b;color:#c0392b;">Restore SAFETY_MODE</button>
+        <pre id="ups-test-out-safety_off" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:80px;overflow:auto;"></pre>
+        <pre id="ups-test-out-safety_on" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:80px;overflow:auto;"></pre>
       </div>
 
     </div>
@@ -723,15 +734,9 @@
           <pre id="ups-test-out-qnap_ssh" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:120px;overflow:auto;"></pre>
         </div>
         <div>
+          <div id="ups-dryrun-warning" style="font-size:0.78rem;line-height:1.5;margin-bottom:6px;color:#444;"></div>
           <button id="ups-btn-dryrun" class="btn btn-secondary btn-sm" onclick="upsTriggerDryRun(this)">Run orchestrator</button>
           <pre id="ups-test-out-dryrun" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto;"></pre>
-        </div>
-        <div style="border-top:1px dashed #d4a017;padding-top:10px;margin-top:6px;">
-          <div style="font-size:0.78rem;color:#7a5a00;margin-bottom:6px;"><b>⚠ Going live</b> — only after pre-flight P1+P2 verified and PVE physically on UPS.</div>
-          <button class="btn btn-secondary btn-sm" onclick="if(confirm('Remove SAFETY_MODE flag? After this, the orchestrator will fire for real on BATTERYLEVEL trigger.')) upsRunTest('safety_off', this)" style="border-color:#c0392b;color:#c0392b;">Remove SAFETY_MODE</button>
-          <button class="btn btn-secondary btn-sm" onclick="upsRunTest('safety_on', this)">Restore SAFETY_MODE</button>
-          <pre id="ups-test-out-safety_off" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:80px;overflow:auto;"></pre>
-          <pre id="ups-test-out-safety_on" style="margin-top:6px;background:#f8f5f1;padding:8px;border-radius:4px;font-size:0.78rem;max-height:80px;overflow:auto;"></pre>
         </div>
       </div>
     </div>
@@ -849,6 +854,6 @@ async function deploy() {
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=43"></script>
+<script src="js/health.js?v=47"></script>
 </body>
 </html>
