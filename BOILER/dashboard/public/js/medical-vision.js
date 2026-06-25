@@ -168,7 +168,7 @@ async function vtSave() {
   try {
     const r = await fetch('/api/medical/test-results', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ test_type: 'vision', results, meta }),
+      body: JSON.stringify({ test_type: 'vision', results, meta, user_id: window._medTestUserId || null }),
     }).then(r => r.json());
     if (r.error) throw new Error(r.error);
     vtCancel();

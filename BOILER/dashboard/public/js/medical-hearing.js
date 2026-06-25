@@ -150,7 +150,7 @@ async function htSave() {
     notes:      (document.getElementById('ht-notes').value || '').trim(),
     band:       htState.band || 'standard',
   };
-  const payload = { test_type: 'hearing', results: htState.results, meta };
+  const payload = { test_type: 'hearing', results: htState.results, meta, user_id: window._medTestUserId || null };
   try {
     const r = await fetch('/api/medical/test-results', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -206,6 +206,33 @@ function renderAudiogram(results, caption) {
 // ─── Results list / persistence ─────────────────────────────────
 function medTestsInit() { medTestsLoad(); }
 
+// "Who is taking this test?" — pops on Start, picks the household member the result
+// is saved under, then runs the actual test. Choice persists across consecutive tests.
+window._medTestUserId = null;
+let _medPendingTest = null;   // 'hearing' | 'vision'
+async function medStartTest(type) {
+  _medPendingTest = type;
+  const sel = document.getElementById('med-person-pick');
+  let people = [];
+  try { people = await (await fetch('/api/household-users')).json(); } catch (e) { people = []; }
+  if (!Array.isArray(people)) people = [];
+  sel.innerHTML = '<option value="">— unassigned —</option>' +
+    people.map(u => `<option value="${u.id}">${htEsc(u.name)}</option>`).join('');
+  if (window._medTestUserId) sel.value = window._medTestUserId;   // remember last choice
+  document.getElementById('med-person-modal').style.display = 'flex';
+}
+function medPersonCancel() {
+  document.getElementById('med-person-modal').style.display = 'none';
+  _medPendingTest = null;
+}
+function medPersonConfirm() {
+  window._medTestUserId = document.getElementById('med-person-pick').value || null;
+  document.getElementById('med-person-modal').style.display = 'none';
+  const t = _medPendingTest; _medPendingTest = null;
+  if (t === 'hearing' && typeof htStart === 'function') htStart();
+  else if (t === 'vision' && typeof vtStart === 'function') vtStart();
+}
+
 async function medTestsLoad() {
   try {
     // ALL test types (hearing + vision + future) — unified Test Results list.
@@ -250,6 +277,7 @@ function htRenderResultsList() {
 function htRowHtml(t) {
   const d  = new Date(t.tested_at).toLocaleDateString('en-GB');   // DD/MM/YYYY, no time
   const nt = (t.meta && t.meta.notes) || '';
+  const who = t.member_name ? `<span class="med-chip" style="background:#e5e7eb; color:#374151;">🧑 ${htEsc(t.member_name)}</span>` : '';
   let chips, summary;
   if (t.test_type === 'vision') {
     const corr = (t.meta && t.meta.correction) || '';
@@ -265,6 +293,7 @@ function htRowHtml(t) {
   return `<div class="med-list-card">
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <b style="display:inline-block; min-width:92px; text-align:center;">${htEsc(d)}</b>
+      ${who}
       ${chips}
       <span style="flex:1;"></span>
       <button class="btn btn-secondary btn-sm" onclick="medTestView(${t.id})">View</button>

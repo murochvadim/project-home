@@ -78,6 +78,8 @@ const db = new Pool({
 require('./routes-medical-tests')(app, db);
 // Personal Health — Medical → Personal Health tab (profiles + weight log → BMI).
 require('./routes-personal-health')(app, db);
+// Household Users — canonical member identity (replaces the privacy.users JSON roster).
+require('./routes-household-users')(app, db);
 
 // Power Outage Log — read endpoint (/api/power/outages) for the Project Power
 // page card. Own module for the same architecture-guard reason as above.
@@ -2288,7 +2290,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'cellular_antennas',
       'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto',
       'visited_places',
-      'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp',
+      'household_users', 'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2311,7 +2313,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       manual_people_log: 'ts', ups_status: 'ts', ups_power_events: 'started_at',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
-      ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at',
+      household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at',
       power_consumption: 'ts',
       power_devices: 'updated_at',
       power_bills: 'uploaded_at',
@@ -2603,10 +2605,12 @@ app.get('/api/medical/documents', async (req, res) => {
              to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date,
              d.notes,
              to_char(d.uploaded_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS uploaded_at,
-             dr.name AS doctor_name, pr.name AS producer_name, pr.kind AS producer_kind
+             dr.name AS doctor_name, pr.name AS producer_name, pr.kind AS producer_kind,
+             d.user_id, hu.name AS member_name
         FROM medical_documents d
         LEFT JOIN medical_contacts dr ON dr.id = d.doctor_id
         LEFT JOIN medical_contacts pr ON pr.id = d.producer_id
+        LEFT JOIN household_users hu ON hu.id = d.user_id
         ${where}
         ORDER BY d.uploaded_at DESC
     `, params);
@@ -2630,6 +2634,7 @@ app.post('/api/medical/documents', medicalDocUpload.single('file'), async (req, 
     }
     const doctorId   = meta.doctor_id   != null && meta.doctor_id   !== '' ? parseInt(meta.doctor_id)   : null;
     const producerId = meta.producer_id != null && meta.producer_id !== '' ? parseInt(meta.producer_id) : null;
+    const userId     = meta.user_id     != null && meta.user_id     !== '' ? parseInt(meta.user_id)     : null;
     const docDate    = _medTrim(meta.doc_date);
     const notes      = _medTrim(meta.notes);
     const ext        = (req.file.originalname.match(/\.[a-zA-Z0-9]+$/) || [''])[0].toLowerCase();
@@ -2639,9 +2644,9 @@ app.post('/api/medical/documents', medicalDocUpload.single('file'), async (req, 
     // the final filename can include the id. Then UPDATE the file_path.
     const insR = await db.query(`
       INSERT INTO medical_documents
-        (name, doc_type, doctor_id, producer_id, file_path, file_size, mime_type, doc_date, notes)
-      VALUES ($1,$2,$3,$4,'',$5,$6,$7,$8) RETURNING id
-    `, [name, docType, doctorId, producerId, req.file.size, mimeType, docDate, notes]);
+        (name, doc_type, doctor_id, producer_id, file_path, file_size, mime_type, doc_date, notes, user_id)
+      VALUES ($1,$2,$3,$4,'',$5,$6,$7,$8,$9) RETURNING id
+    `, [name, docType, doctorId, producerId, req.file.size, mimeType, docDate, notes, userId]);
     const id = insR.rows[0].id;
     const filename = `${id}__${_sanitizeName(name)}${ext}`;
     const absPath  = path.join(MEDICAL_DOCS_ROOT, filename);
@@ -2669,6 +2674,7 @@ app.patch('/api/medical/documents/:id', async (req, res) => {
     }
     if (b.doctor_id !== undefined)   add('doctor_id',   b.doctor_id === '' || b.doctor_id === null ? null : parseInt(b.doctor_id));
     if (b.producer_id !== undefined) add('producer_id', b.producer_id === '' || b.producer_id === null ? null : parseInt(b.producer_id));
+    if (b.user_id !== undefined)     add('user_id',     b.user_id === '' || b.user_id === null ? null : parseInt(b.user_id));
     if (b.doc_date !== undefined)    add('doc_date',    _medTrim(b.doc_date));
     if (b.notes !== undefined)       add('notes',       _medTrim(b.notes));
     if (!sets.length) return res.status(400).json({ error: 'no updatable fields' });

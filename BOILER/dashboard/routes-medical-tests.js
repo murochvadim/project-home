@@ -21,9 +21,12 @@ module.exports = (app, db) => {
       let where = '';
       if (req.query.type) { params.push(String(req.query.type)); where = 'WHERE test_type = $1'; }
       const r = await db.query(
-        `SELECT id, test_type, tested_at, results, meta, created_at
-           FROM medical_test_results ${where}
-          ORDER BY tested_at DESC`,
+        `SELECT t.id, t.test_type, t.tested_at, t.results, t.meta, t.created_at,
+                t.user_id, h.name AS member_name
+           FROM medical_test_results t
+           LEFT JOIN household_users h ON h.id = t.user_id
+           ${where ? where.replace('test_type', 't.test_type') : ''}
+          ORDER BY t.tested_at DESC`,
         params,
       );
       res.json(r.rows);
@@ -39,11 +42,12 @@ module.exports = (app, db) => {
       return res.status(400).json({ error: 'results (object) is required' });
     }
     try {
+      const uid = (b.user_id === '' || b.user_id == null || isNaN(parseInt(b.user_id, 10))) ? null : parseInt(b.user_id, 10);
       const r = await db.query(
-        `INSERT INTO medical_test_results (test_type, results, meta)
-         VALUES ($1, $2::jsonb, $3::jsonb)
-         RETURNING id, test_type, tested_at, results, meta, created_at`,
-        [type, JSON.stringify(b.results), JSON.stringify(b.meta || {})],
+        `INSERT INTO medical_test_results (test_type, results, meta, user_id)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4)
+         RETURNING id, test_type, tested_at, results, meta, created_at, user_id`,
+        [type, JSON.stringify(b.results), JSON.stringify(b.meta || {}), uid],
       );
       res.json(r.rows[0]);
     } catch (e) { err(res, e); }

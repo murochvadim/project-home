@@ -11,6 +11,7 @@ const KIND_LABELS = { doctor: 'Doctor', clinic: 'Clinic', hospital: 'Hospital' }
 const HEALTH_FUNDS = ['Clalit', 'Maccabi', 'Meuhedet', 'Leumit'];
 
 let CONTACTS = [];
+let MED_USERS = [];   // household members (Privacy → Settings → Users) for the doc Person field
 
 window.medRefresh = async function () {
   try {
@@ -314,6 +315,9 @@ window.medLoadDocuments = async function () {
   if (CONTACTS.length === 0) {
     try { CONTACTS = await fetch('/api/medical/contacts').then(r => r.json()); } catch (_) {}
   }
+  // Household members for the doc Person dropdown (canonical household_users).
+  try { MED_USERS = await fetch('/api/household-users').then(r => r.json()); } catch (_) { MED_USERS = []; }
+  if (!Array.isArray(MED_USERS)) MED_USERS = [];
   await medFetchDocuments();
   _populateDoctorFilter();
   // Wire up the drop zone the first time we visit the Documents tab.
@@ -437,6 +441,7 @@ function renderDocCard(d) {
           <button class="btn btn-secondary btn-sm" onclick="medEditDoc(${d.id})">Edit</button>
           <button class="btn btn-secondary btn-sm" onclick="medDeleteDoc(${d.id})">✕</button>
         </div>
+        ${d.member_name   ? `<div class="med-meta">🧑 ${esc(d.member_name)}</div>`     : ''}
         ${d.doctor_name   ? `<div class="med-meta">👨‍⚕ ${esc(d.doctor_name)}</div>`   : ''}
         ${d.producer_name ? `<div class="med-meta">🏥 ${esc(d.producer_name)} (${esc(d.producer_kind)})</div>` : ''}
         ${d.doc_date      ? `<div class="med-meta">📅 ${esc(d.doc_date)}</div>` : ''}
@@ -742,6 +747,8 @@ function renderDocForm(d) {
     `<option value="${c.id}"${c.id === d.doctor_id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
   const optProducer = producers.map(c =>
     `<option value="${c.id}"${c.id === d.producer_id ? ' selected' : ''}>${esc(c.name)} (${esc(c.kind)})</option>`).join('');
+  const optPerson = (Array.isArray(MED_USERS) ? MED_USERS : []).map(u =>
+    `<option value="${u.id}"${u.id === d.user_id ? ' selected' : ''}>${esc(u.name)}</option>`).join('');
   const optType = Object.entries(DOC_TYPE_LABELS).map(([k, lbl]) =>
     `<option value="${k}"${k === d.doc_type ? ' selected' : ''}>${esc(lbl)}</option>`).join('');
   return `<div style="background:#fafaf6; padding:12px; border-radius:6px;">
@@ -757,6 +764,9 @@ function renderDocForm(d) {
     </div>
     <div class="med-form-row"><label>Producer</label>
       <select id="df-producer"><option value="">— none —</option>${optProducer}</select>
+    </div>
+    <div class="med-form-row"><label>Person</label>
+      <select id="df-person"><option value="">— none —</option>${optPerson}</select>
     </div>
     <div class="med-form-row"><label>Doc date</label><input type="date" id="df-doc-date" value="${v('doc_date')}"></div>
     <div class="med-form-row"><label>Notes</label><textarea id="df-notes">${v('notes')}</textarea></div>
@@ -1076,6 +1086,7 @@ window.medUploadDoc = async function () {
   const doc_type  = document.getElementById('df-type').value;
   const doctor_id = document.getElementById('df-doctor').value;
   const producer_id = document.getElementById('df-producer').value;
+  const user_id   = document.getElementById('df-person').value;
   const doc_date  = document.getElementById('df-doc-date').value;
   const notes     = document.getElementById('df-notes').value.trim();
 
@@ -1099,7 +1110,7 @@ window.medUploadDoc = async function () {
 
   const fd = new FormData();
   fd.append('file', file);
-  fd.append('meta', JSON.stringify({ name, doc_type, doctor_id, producer_id, doc_date, notes }));
+  fd.append('meta', JSON.stringify({ name, doc_type, doctor_id, producer_id, user_id, doc_date, notes }));
 
   const prog = document.getElementById('med-upload-progress');
   prog.style.display = 'block';
@@ -1128,6 +1139,7 @@ window.medSaveDocMeta = async function (id) {
     doc_type:    document.getElementById('df-type').value,
     doctor_id:   document.getElementById('df-doctor').value || null,
     producer_id: document.getElementById('df-producer').value || null,
+    user_id:     document.getElementById('df-person').value || null,
     doc_date:    document.getElementById('df-doc-date').value || null,
     notes:       document.getElementById('df-notes').value.trim(),
   };

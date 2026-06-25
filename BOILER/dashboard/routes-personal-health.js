@@ -25,7 +25,7 @@ module.exports = (app, db) => {
       const r = await db.query(
         // to_char so DATE returns as 'YYYY-MM-DD' (a bare pg DATE serializes as a
         // timezone-shifted Date → off-by-one day in the browser).
-        `SELECT p.id, p.name, p.sex, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
+        `SELECT p.id, p.name, p.user_id, p.sex, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
                 p.height_cm, p.allergies, p.conditions, p.created_at,
                 (SELECT m.weight_kg FROM ph_measurements m WHERE m.profile_id = p.id
                   ORDER BY m.measured_at DESC, m.id DESC LIMIT 1) AS latest_weight_kg
@@ -40,9 +40,12 @@ module.exports = (app, db) => {
       const name = trim(b.name);
       if (!name) return res.status(400).json({ error: 'name required' });
       const r = await db.query(
-        `INSERT INTO ph_profiles (name, sex, date_of_birth, height_cm, allergies, conditions)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-        [name, trim(b.sex), b.date_of_birth || null, num(b.height_cm), trim(b.allergies), trim(b.conditions)]);
+        // user_id stamped from the explicit body value, else resolved from the canonical
+        // household_users table by name — so a profile is always FK-linked to its member.
+        `INSERT INTO ph_profiles (name, sex, date_of_birth, height_cm, allergies, conditions, user_id)
+         VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::int, (SELECT id FROM household_users WHERE name = $1)))
+         RETURNING id`,
+        [name, trim(b.sex), b.date_of_birth || null, num(b.height_cm), trim(b.allergies), trim(b.conditions), num(b.user_id)]);
       res.json({ ok: true, id: r.rows[0].id });
     } catch (e) { err(res, e); }
   });

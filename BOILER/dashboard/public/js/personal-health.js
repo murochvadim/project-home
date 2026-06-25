@@ -1,11 +1,11 @@
 // Personal Health — Medical → Personal Health tab (minimum first step).
-// People come from the EXISTING household-users registry (Privacy → Settings →
-// Users, stored in dashboard_settings key 'privacy.users' as [{name, smartphone}]).
-// This tab attaches a body profile (sex / DOB / height) + a weight log to each
-// member by name, and computes BMI / age / ideal-weight. No people are created here.
+// People come from the canonical `household_users` table (Privacy → Settings →
+// Users) via GET /api/household-users. This tab attaches a body profile
+// (sex / DOB / height) + a weight log to each member, and computes BMI / age /
+// ideal-weight. No people are created here.
 (function () {
   const API = '/api/personal-health';
-  let _users = [];      // household member names (from privacy.users)
+  let _users = [];      // household member objects {id,name,…} (from /api/household-users)
   let _profiles = [];   // ph_profiles rows (body details, keyed by name)
   let _selName = null;  // currently-selected household member
   let _curProfileId = null; // resolved ph_profiles.id of the selected person (meds + weight)
@@ -16,7 +16,13 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const dpart = (s) => (s ? String(s).slice(0, 10) : '');
-  const profileFor = (name) => _profiles.find(p => p.name === name) || null;
+  const userByName = (name) => _users.find(u => u && u.name === name) || null;
+  // Resolve a member's health profile by the stable user_id (the canonical link, so a
+  // member rename can't orphan it); fall back to name during the transition window.
+  const profileFor = (name) => {
+    const u = userByName(name);
+    return _profiles.find(p => (u && p.user_id === u.id) || p.name === name) || null;
+  };
 
   function age(dob) {
     if (!dob) return null;
@@ -38,15 +44,15 @@
 
   async function phInit() {
     const [uRes, pRes] = await Promise.all([
-      fetch('/api/dashboard-settings/privacy.users').then(r => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch('/api/household-users').then(r => r.ok ? r.json() : []).catch(() => []),
       fetch(API + '/profiles').then(r => r.json()).catch(() => []),
     ]);
-    const uv = uRes && uRes.value;
-    _users = (Array.isArray(uv) ? uv : []).map(u => (u && u.name || '').trim()).filter(Boolean);
+    const uv = uRes;   // /api/household-users returns the member array directly
+    _users = (Array.isArray(uv) ? uv : []).filter(u => u && (u.name || '').trim());
     _profiles = Array.isArray(pRes) ? pRes : [];
     const sel = $('ph-person');
     sel.innerHTML = '<option value="">— select person —</option>' +
-      _users.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+      _users.map(u => `<option value="${esc(u.name)}">${esc(u.name)}</option>`).join('');
     $('ph-no-users').style.display = _users.length ? 'none' : '';
     // Prescriber dropdown ← your doctors (Medical → Contacts, kind='doctor').
     try {
@@ -56,7 +62,7 @@
     const ps = $('ph-i-prescriber');
     if (ps) ps.innerHTML = '<option value="">—</option>' +
       _doctors.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
-    if (_selName && _users.includes(_selName)) { sel.value = _selName; showEdit(true); renderDetail(); }
+    if (_selName && _users.some(u => u.name === _selName)) { sel.value = _selName; showEdit(true); renderDetail(); }
     else { _selName = null; showEdit(false); $('ph-detail').style.display = 'none'; }
   }
   window.phInit = phInit;
@@ -89,7 +95,7 @@
     const p = profileFor(_selName);
     const r = p
       ? await fetch(`${API}/profiles/${p.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      : await fetch(`${API}/profiles`,         { method: 'POST',  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: _selName, ...body }) });
+      : await fetch(`${API}/profiles`,         { method: 'POST',  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: _selName, user_id: (userByName(_selName) || {}).id, ...body }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { $('ph-form-status').textContent = 'Failed: ' + (j.error || r.status); return; }
     $('ph-person-form').style.display = 'none';

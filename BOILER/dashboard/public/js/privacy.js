@@ -91,16 +91,19 @@ async function pvSaveSettings() {
   } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
 }
 
-// ── Users (Settings tab) — household members + their smartphone, like the
-// Gateway peer→user overlay. Stored in dashboard_settings key 'privacy.users' as
-// [{name, smartphone}]. Editable rows auto-save on change.
+// ── Users (Settings tab) — household members, backed by the canonical
+// `household_users` TABLE (LXC 102) via /api/household-users — NOT the old
+// dashboard_settings 'privacy.users' JSON blob. Each row has a stable id: per-field
+// edits PATCH, a new row POSTs on its first named edit, ✕ DELETEs (cascades the
+// member's health profile). Fields: name, device_label (phone label = old
+// 'smartphone'), phone (number). See PRIVACY/CLAUDE.md.
 let _pvUsers = [];
-let _pvPhoneOpts = [];   // smartphone autocomplete suggestions (tracked + network)
+let _pvPhoneOpts = [];   // device-label autocomplete suggestions (tracked + network)
 async function pvLoadUsers() {
   try {
-    const r = await fetch('/api/dashboard-settings/privacy.users');
-    const j = r.ok ? await r.json() : {};
-    _pvUsers = Array.isArray(j && j.value) ? j.value : [];
+    const r = await fetch('/api/household-users');
+    _pvUsers = r.ok ? await r.json() : [];
+    if (!Array.isArray(_pvUsers)) _pvUsers = [];
   } catch (e) { _pvUsers = []; }
   pvLoadPhoneOptions();   // fill the datalist (async, independent of the user rows)
   pvRenderUsers();
@@ -137,29 +140,62 @@ function pvRenderUsers() {
   host.innerHTML = _pvUsers.map((u, i) => `
     <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
       <input value="${_esc(u.name || '')}" placeholder="real name" onchange="pvUserSet(${i},'name',this.value)" style="flex:1; ${inp}">
-      <span style="color:#bbb;">📱</span>
-      <input value="${_esc(u.smartphone || '')}" list="pv-phones-datalist" placeholder="pick a phone or type…" onchange="pvUserSet(${i},'smartphone',this.value)" style="flex:1.3; ${inp}">
+      <span style="color:#bbb;" title="phone device label">📱</span>
+      <input value="${_esc(u.device_label || '')}" list="pv-phones-datalist" placeholder="phone device…" onchange="pvUserSet(${i},'device_label',this.value)" style="flex:1.3; ${inp}">
+      <span style="color:#bbb;" title="phone number">☎</span>
+      <input value="${_esc(u.phone || '')}" type="tel" placeholder="phone number" onchange="pvUserSet(${i},'phone',this.value)" style="flex:1; ${inp}">
       <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvUserDelete(${i})">✕</button>
     </div>`).join('');
 }
-function pvUserSet(i, field, val) { if (_pvUsers[i]) { _pvUsers[i][field] = (val || '').trim(); pvSaveUsers(); } }
-function pvUserDelete(i) { _pvUsers.splice(i, 1); pvRenderUsers(); pvSaveUsers(); }
+function pvUsersStatus(msg, isErr) {
+  const st = document.getElementById('pv-users-status');
+  if (!st) return;
+  st.style.color = isErr ? '#c0392b' : '#2e7d32';
+  st.textContent = msg;
+  clearTimeout(st._t); st._t = setTimeout(() => { st.textContent = ''; }, 1500);
+}
+// Per-field persistence against the household_users table: a new (id-less) row is
+// CREATED on its first edit once it has a name; existing rows PATCH the changed field.
+async function pvUserSet(i, field, val) {
+  const u = _pvUsers[i]; if (!u) return;
+  u[field] = (val || '').trim();
+  try {
+    if (!u.id) {
+      if (!u.name) return;   // need a name before the row can be created
+      const r = await fetch('/api/household-users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: u.name, device_label: u.device_label || '', phone: u.phone || '' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      u.id = j.id;
+    } else {
+      const body = {}; body[field] = u[field];
+      const r = await fetch('/api/household-users/' + u.id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+    }
+    pvUsersStatus('✓ Saved');
+  } catch (e) { pvUsersStatus('Save failed: ' + e.message, true); }
+}
+async function pvUserDelete(i) {
+  const u = _pvUsers[i]; if (!u) return;
+  if (u.id && !confirm(`Delete "${u.name || 'this member'}"? This also removes their Personal Health profile, weight log, blood-pressure log and medications.`)) return;
+  try {
+    if (u.id) {
+      const r = await fetch('/api/household-users/' + u.id, { method: 'DELETE' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+    }
+    _pvUsers.splice(i, 1); pvRenderUsers(); pvUsersStatus('✓ Saved');
+  } catch (e) { pvUsersStatus('Delete failed: ' + e.message, true); }
+}
 function pvAddUser() {
-  _pvUsers.push({ name: '', smartphone: '' });
+  _pvUsers.push({ name: '', device_label: '', phone: '' });
   pvRenderUsers();
   const ins = document.querySelectorAll('#pv-users-list input');
-  if (ins.length) ins[ins.length - 2].focus();   // focus the new row's name input
-}
-async function pvSaveUsers() {
-  const st = document.getElementById('pv-users-status');
-  const clean = _pvUsers.filter(u => (u.name || '').trim() || (u.smartphone || '').trim());
-  try {
-    const r = await fetch('/api/dashboard-settings/privacy.users', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: clean }),
-    });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; clearTimeout(st._t); st._t = setTimeout(() => { st.textContent = ''; }, 1500); }
-  } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
+  if (ins.length) ins[ins.length - 3].focus();   // focus the new row's name input (3 inputs/row now)
 }
 window.addEventListener('DOMContentLoaded', pvRefresh);
 

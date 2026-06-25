@@ -239,6 +239,19 @@
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-tests">
 
+    <!-- "Who is taking this test?" modal — pops when Start is pressed, sets the
+         person the result is saved under (Privacy → Settings → Users). -->
+    <div id="med-person-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+      <div style="background:#fff; border-radius:10px; padding:20px 22px; min-width:300px; max-width:90vw; box-shadow:0 8px 30px rgba(0,0,0,0.3);">
+        <h3 style="margin:0 0 12px;">🧑 Who is taking this test?</h3>
+        <select id="med-person-pick" style="width:100%; padding:7px 9px; border:1px solid #d0cbc4; border-radius:5px; font-size:0.95rem;"></select>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+          <button class="btn btn-secondary btn-sm" onclick="medPersonCancel()">Cancel</button>
+          <button class="btn btn-success btn-sm" onclick="medPersonConfirm()">▶ Start</button>
+        </div>
+      </div>
+    </div>
+
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:16px; margin-bottom:16px; align-items:stretch;">
 
     <div class="card" style="margin-bottom:0;">
@@ -253,7 +266,7 @@
             <option value="extended">Extended · 250 Hz–16 kHz</option>
             <option value="highfreq">High-freq · 8–16 kHz</option>
           </select>
-          <button class="btn btn-success" onclick="htStart()">▶ Start test</button>
+          <button class="btn btn-success" onclick="medStartTest('hearing')">▶ Start test</button>
         </div>
       </div>
       <div id="ht-runner" style="display:none; margin-top:14px; text-align:center;">
@@ -304,7 +317,7 @@
               <option value="contacts">contacts</option>
             </select>
           </label>
-          <button class="btn btn-success" onclick="vtStart()">▶ Start eye test</button>
+          <button class="btn btn-success" onclick="medStartTest('vision')">▶ Start eye test</button>
         </div>
       </div>
       <!-- runner moved to the full-screen centered #vt-overlay (below) -->
@@ -534,10 +547,10 @@
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/medical.js?v=35"></script>
-<script src="js/medical-hearing.js?v=5"></script>
-<script src="js/medical-vision.js?v=2"></script>
-<script src="js/personal-health.js?v=9"></script>
+<script src="js/medical.js?v=36"></script>
+<script src="js/medical-hearing.js?v=7"></script>
+<script src="js/medical-vision.js?v=4"></script>
+<script src="js/personal-health.js?v=11"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

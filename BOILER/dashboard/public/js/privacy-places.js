@@ -32,8 +32,8 @@ function _pvpVal(id) { const e = document.getElementById(id); return e ? e.value
 // Visited-by checkboxes (one per registered user). Source = Settings > Users.
 async function pvPlacesLoadUsers() {
   try {
-    const j = await (await fetch('/api/dashboard-settings/privacy.users')).json();
-    _pvpUsers = (Array.isArray(j && j.value) ? j.value : []).map(u => (u.name || '').trim()).filter(Boolean);
+    const j = await (await fetch('/api/household-users')).json();
+    _pvpUsers = (Array.isArray(j) ? j : []).map(u => (u.name || '').trim()).filter(Boolean);
   } catch (e) { _pvpUsers = []; }
   _pvpRenderVisitorChecks('pvp-visitors', []);   // the add-form checkboxes
   _pvpFillUserFilter();                          // the list filter dropdown

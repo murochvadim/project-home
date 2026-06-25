@@ -5,7 +5,7 @@ A **Personal Health Record** — a per-person body-metrics tracker. **Not a stan
 ## Status (2026-06-25)
 **Shipped:** per-person **profile + weight log → BMI**, and a per-person **medications list** with a safety **ℹ️ Info window**.
 
-**People come from the existing household-users registry** — the person dropdown is populated from `dashboard_settings.privacy.users` (`[{name, smartphone}]`, the Privacy → Settings → Users list). No people are created here; each household member gets a body profile + logs attached **by name**. If that list is empty the tab points the user to Privacy → Settings → Users.
+**People come from the canonical `household_users` table** — the person dropdown is populated from `GET /api/household-users` (the Privacy → Settings → Users list, a real table since 2026-06-25 — REPLACED the old `dashboard_settings.privacy.users` JSON blob, which was deleted). No people are created here; each household member gets a body profile + logs. `ph_profiles.user_id` FKs to `household_users(id)` (resolution still also works by name during transition). If the list is empty the tab points the user to Privacy → Settings → Users.
 
 **Profile** (slow-changing, per person): name, sex, date-of-birth, height, **allergies**, **conditions** (the last two feed the future cross-check). **Weight log** (time-series). **BMI / age / BMI-category / ideal-weight** are computed in the front-end (never stored — can't go stale when height/DOB are corrected).
 
@@ -26,7 +26,7 @@ A **Personal Health Record** — a per-person body-metrics tracker. **Not a stan
 | Docs | this file + a note in `MEDICAL/CLAUDE.md` |
 
 ## Tables (LXC 102, `home_data`)
-- **`ph_profiles`** — one row per person: `id, name, sex ('male'|'female'), date_of_birth, height_cm, allergies, conditions, created_at`. `name` matches a `privacy.users` member. Retention: forever.
+- **`ph_profiles`** — one row per person: `id, name, sex ('male'|'female'), date_of_birth, height_cm, allergies, conditions, created_at, user_id`. **`user_id` FK → `household_users(id)` ON DELETE CASCADE** (the canonical member identity; backfilled by name 2026-06-25, `ph_profiles.name` kept for transition). Retention: forever.
 - **`ph_measurements`** — weight log: `id, profile_id (FK → ph_profiles ON DELETE CASCADE), measured_at (timestamptz, stamped server-side on Save — same style as BP, no manual date), weight_kg, created_at`. Indexed `(profile_id, measured_at DESC)`. Retention: forever (`auto_clean=false`).
 - **`ph_medications`** — pills: `id, profile_id (FK ON DELETE CASCADE), name, dose, freq, interval_n, times, dow, next_due, notes, purpose, ingredients, drug_class, avoid_with, contraindications, side_effects, warnings, prescriber_id (→ medical_contacts), started_at, active, created_at`. Indexed `(profile_id)`. Retention: forever.
 

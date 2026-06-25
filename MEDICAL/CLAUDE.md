@@ -259,9 +259,12 @@ user — the card stays clean.)
 | `results` | JSONB NOT NULL | hearing: `{"right":{"250":dB,…,"8000":dB},"left":{…}}` — dB = attenuation tolerated below reference, **higher = better** |
 | `meta` | JSONB | `{headphones, notes}` |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
+| `user_id` | INT FK → `household_users(id)` ON DELETE SET NULL | added 2026-06-25 — which household member the result belongs to (SET NULL preserves test history if the member is removed) |
 
-Index `(test_type, tested_at DESC)`. Retention=forever. Migration:
-`MEDICAL/migrations/007_test_results.sql`.
+Index `(test_type, tested_at DESC)` + `(user_id)`. Retention=forever. Migrations:
+`MEDICAL/migrations/007_test_results.sql` + `008_test_results_user.sql`.
+
+**Person attribution (2026-06-25):** pressing **▶ Start** on either test opens a **🧑 "Who is taking this test?" modal** (`#med-person-modal`, dropdown `#med-person-pick` populated from `/api/household-users`); the button onclicks are `medStartTest('hearing'|'vision')`, and `medPersonConfirm()` stores the choice in `window._medTestUserId` (persists across consecutive tests) before running the real `htStart()`/`vtStart()`. Both `htSave`/`vtSave` send that `user_id`; the POST stores it and the GET **LEFT JOINs `household_users`** to return `member_name`, rendered as a 🧑 chip on each result row.
 
 ### Endpoints — `BOILER/dashboard/routes-medical-tests.js`
 A **separate route module** (not inline in `server.js`) wired via one line —
@@ -273,7 +276,7 @@ Same `db` (pg Pool) query style as the contacts cluster.
 | Method | Path | Purpose |
 |---|---|---|
 | GET    | `/api/medical/test-results[?type=hearing]` | list, newest first |
-| POST   | `/api/medical/test-results` | `{test_type, results, meta?}` |
+| POST   | `/api/medical/test-results` | `{test_type, results, meta?, user_id?}` |
 | DELETE | `/api/medical/test-results/:id` | hard delete |
 
 ### Eye test (visual acuity, 2026-06-07)
@@ -310,4 +313,5 @@ The single **Test Results** card lists **all** test types (`medTestsLoad` fetche
 - 2026-06-03: Per-contact appointment slot + standalone reminder text — `next_appointment_at` + `next_appointment_note` + `reminder_text` on `medical_contacts`. Red + blue nested mini-cards rendered side-by-side on the contact row. Round-trip safe across timezones via UTC ISO wrap; 24h display forced via `hour12:false` + 3-input split form.
 - 2026-06-07: **Tests tab** added — Web Audio **hearing test** (descending-staircase pure-tone screening) + audiogram, stored in the generic `medical_test_results` table. Endpoints in `routes-medical-tests.js` (separate module to clear the server.js architecture hook). See "Tests tab" section above.
 - 2026-06-07: **Eye test** (visual acuity) added to the same tab — laptop-screen, credit-card+distance calibration, per-eye read-down letters/numbers chart, tap-smallest-line → logMAR/Snellen, `test_type='vision'` in the same table. Test Results card unified across both types (`js/medical-vision.js`).
-- 2026-06-25: **Personal Health tab** added (4th tab) — per-person body-metrics + medications record. **Owned by its own module, NOT documented in detail here** — see [PERSONAL_HEALTH/CLAUDE.md](../PERSONAL_HEALTH/CLAUDE.md). In brief: people come from the **household-users** list (`dashboard_settings.privacy.users`); each gets a profile (sex/DOB/height/allergies/conditions) + weight log → BMI/age/ideal-weight + a **medications list** (row = name·dose·schedule; an **ℹ️ Info window** holds the safety info — purpose/ingredients/avoid_with/contraindications/side_effects/warnings/prescriber — feeding a future med-safety cross-check). Backend `BOILER/dashboard/routes-personal-health.js` (one `require()` line, like `routes-medical-tests.js`); front-end `js/personal-health.js` + `#tab-personal-health` in `medical.html`; tables `ph_profiles`/`ph_measurements`/`ph_medications` on LXC 102 (migration `PERSONAL_HEALTH/migrations/setup.sql`).
+- 2026-06-25: **Household-member attribution** across Medical. Documents + Tests now record **who** they belong to via the canonical `household_users` table. **Documents:** a **Person** dropdown in the upload/edit form (`#df-person`, from `/api/household-users`), `medical_documents.user_id` FK (ON DELETE SET NULL, migration `009_documents_user.sql`), 🧑 chip in the list, GET LEFT JOINs `household_users` → `member_name`; **all 89 pre-existing docs backfilled to Vadim** per request. **Tests:** a 🧑 "Who is taking this test?" modal on ▶ Start (`medical_test_results.user_id`, migration `008`). Both surface the member name in their lists.
+- 2026-06-25: **Personal Health tab** added (4th tab) — per-person body-metrics + medications record. **Owned by its own module, NOT documented in detail here** — see [PERSONAL_HEALTH/CLAUDE.md](../PERSONAL_HEALTH/CLAUDE.md). In brief: people come from the canonical **`household_users` table** (`/api/household-users`); each gets a profile (sex/DOB/height/allergies/conditions) + weight log → BMI/age/ideal-weight + a **medications list** (row = name·dose·schedule; an **ℹ️ Info window** holds the safety info — purpose/ingredients/avoid_with/contraindications/side_effects/warnings/prescriber — feeding a future med-safety cross-check). Backend `BOILER/dashboard/routes-personal-health.js` (one `require()` line, like `routes-medical-tests.js`); front-end `js/personal-health.js` + `#tab-personal-health` in `medical.html`; tables `ph_profiles`/`ph_measurements`/`ph_medications` on LXC 102 (migration `PERSONAL_HEALTH/migrations/setup.sql`).

@@ -40,7 +40,7 @@ ph_medications (LXC 102)  ──read──►  pill watcher (LXC 104, cron)
 `(id, med_id FK → ph_medications, due_ts, sent_at)` — one row per fired slot so a minute-by-minute watcher never double-sends. Retention: keep ~90 d, auto_clean. Register in `retention_policies` + Health DB-Volumes.
 
 ### 3. Per-person topic
-Resolve `ph_profiles.name` → the person's ntfy topic via the registry defined in NETBIRD/MOBILE (a `privacy.users` field or derived `<name>_pills`). No phone number involved.
+Resolve the person → their **`household_users.ntfy_topic`** column (the canonical member table, built 2026-06-25; `ph_profiles.user_id` FKs to it). No phone number involved. (The earlier "derived `<name>_pills` string" idea is superseded — the topic is now a real column.)
 
 ## Open decisions (answer when ordering the build)
 1. **Cadence**: every **1 min** (on-time) vs every **5 min** (±5 min, matches the other LXC-104 watchdogs).
