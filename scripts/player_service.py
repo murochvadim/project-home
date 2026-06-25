@@ -55,7 +55,7 @@ TV_TARGETS = {
              'audio_sink': 'cast'},
     'tv55': {'name': 'Balcony 55" Neo QLED',
              # 2026-06-18: TV moved .194 → .217 (DLNA DMR verified up at the new IP)
-             'av_url': 'http://192.168.1.217:9197/upnp/control/AVTransport1',
+             'av_url': 'http://192.168.1.194:9197/upnp/control/AVTransport1',
              'wake_entity': 'tv55',
              'audio_sink': 'dlna'},
 }
@@ -258,16 +258,20 @@ def _wake_and_play(full_path, ext, title, dlna_id, stream_url=None, target='tv')
             log.info(f"_wake_and_play: TV became UPnP-ready after {_waited:.0f}s (cold wake) for {title!r}")
     else:
         log.warning(f"_wake_and_play: TV did not respond within 45s for {title!r} — sending commands anyway")
-    # UPnP AVTransport state machine: Samsung rejects SetAVTransportURI /
-    # Play when transport is PLAYING. Force STOPPED before loading a new
-    # URI. Fail-silent — fresh boots are already STOPPED and Stop returns
-    # an error in that case, which is fine.
+    # Was the renderer mid-playback? Switching tracks from an active session is
+    # what wedges the 2024 balcony unit (tv55): it accepts the new URI but stalls
+    # in TRANSITIONING and never starts it. Its path needs a longer teardown settle
+    # + a "quick play" reload, plus a recovery reload if the first attempt stalls.
+    # The 85" (target 'tv') stays on the ORIGINAL path (prev-TV behaviour) so it
+    # cannot regress — it switches fine on the first attempt and never hits the
+    # quick/recovery path. (Verified on tv55: 0/4 old path, 3/3 with this.)
+    prev_active  = _get_transport_state() not in ('STOPPED', 'NO_MEDIA_PRESENT', 'UNKNOWN')
+    fast_advance = prev_active and globals()['_active_video_target'] == 'tv55'
+    # Force STOPPED before loading a new URI. Fail-silent — fresh boots are STOPPED.
     dlna_soap('Stop',
         '<u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
         '<InstanceID>0</InstanceID></u:Stop>'
     )
-    # Actively wait for STOPPED. Samsung doesn't actually finish tearing
-    # down the previous track for ~2-3 s after Stop returns.
     for _ in range(20):
         if _aborted():
             log.info(f"_wake_and_play: aborted (newer play queued) — dropping {title!r}")
@@ -277,76 +281,88 @@ def _wake_and_play(full_path, ext, title, dlna_id, stream_url=None, target='tv')
         time.sleep(0.25)
     if _aborted():
         return
-    time.sleep(0.5)
+    # Switching from an active track on tv55 needs ~3 s for the DMR to fully
+    # release the previous session; a fresh start needs only ~0.5 s.
+    time.sleep(3.0 if fast_advance else 0.5)
     is_audio       = ('.' + ext.lower()) in AUDIO_EXTS
     if stream_url is None:
         stream_url = f'http://{MEDIA_LXC_IP}:8200/MediaItems/{dlna_id}.{ext}'
     stream_url_xml = xml_escape(stream_url)
     title_xml      = xml_escape(title)
     dlna_class     = 'object.item.audioItem.musicTrack' if is_audio else 'object.item.videoItem'
-    # Unique DIDL item id per call — Samsung dedups SetAVTransportURI when
-    # the metadata id matches the previous track's, causing mid-queue
-    # transitions to silently not refresh the stream URL on the TV side.
-    item_id = dlna_id or f"item-{int(time.time() * 1000)}"
-    ok_set, _ = dlna_soap('SetAVTransportURI',
-        f'<u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
-        f'<InstanceID>0</InstanceID><CurrentURI>{stream_url_xml}</CurrentURI>'
-        f'<CurrentURIMetaData>'
-        f'<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
-        f'xmlns:dc="http://purl.org/dc/elements/1.1/" '
-        f'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
-        f'<item id="{item_id}" parentID="0" restricted="1">'
-        f'<dc:title>{title_xml}</dc:title>'
-        f'<upnp:class>{dlna_class}</upnp:class>'
-        f'<res>{stream_url_xml}</res></item></DIDL-Lite>'
-        f'</CurrentURIMetaData></u:SetAVTransportURI>'
-    )
-    if not ok_set:
-        log.warning(f"_wake_and_play: SetAVTransportURI failed for {title!r}")
-    # Wait for the URI to settle before sending Play. SetAVTransportURI on
-    # Samsung TVs briefly bounces transport into TRANSITIONING while the new
-    # URI is parsed. Play during that window is the bug — TV accepts it but
-    # never actually starts streaming.
-    for _ in range(20):
-        if _aborted():
-            return
-        if _get_transport_state() in ('STOPPED', 'NO_MEDIA_PRESENT'):
-            break
-        time.sleep(0.25)
-    if _aborted():
-        return
     play_body = ('<u:Play xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
                  '<InstanceID>0</InstanceID><Speed>1</Speed></u:Play>')
-    ok_play = False
-    for attempt in range(3):
-        if _aborted():
-            return
-        ok_play, _ = dlna_soap('Play', play_body)
-        if ok_play:
-            break
-        time.sleep(1)
-        log.info(f"_wake_and_play: Play retry {attempt + 1}/3 for {title!r}")
-    if not ok_play:
-        log.warning(f"_wake_and_play: Play failed for {title!r} after 3 retries")
-    # SOAP 200 OK doesn't guarantee the TV actually started playing — it
-    # can accept the call and silently fail to fetch / decode the stream.
-    # Verify by polling transport state for up to 6 s; if we never reach
-    # PLAYING, log a loud warning so the failure mode is visible in journal.
-    confirmed = False
-    state = 'UNKNOWN'
-    for _ in range(6):
-        if _aborted():
-            return
-        time.sleep(1)
-        state = _get_transport_state()
-        if state == 'PLAYING':
-            confirmed = True
-            break
-        if state in ('STOPPED', 'NO_MEDIA_PRESENT'):
-            log.warning(f"_wake_and_play: TV settled in {state} (not PLAYING) for {title!r} — stream URL or codec likely rejected by TV")
-            break
+
+    # Load a fresh URI + Play + verify the TV actually reaches PLAYING (a SOAP 200
+    # does NOT mean it started streaming). Returns True only on confirmed PLAYING.
+    # A UNIQUE DIDL item id per call — Samsung dedups SetAVTransportURI on a
+    # matching id, which would silently no-op a reload.
+    def _load_and_play(verify_secs, quick_play):
+        item_id = f"{dlna_id or 'item'}-{int(time.time() * 1000)}"
+        ok_set, _ = dlna_soap('SetAVTransportURI',
+            f'<u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+            f'<InstanceID>0</InstanceID><CurrentURI>{stream_url_xml}</CurrentURI>'
+            f'<CurrentURIMetaData>'
+            f'<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+            f'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            f'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+            f'<item id="{item_id}" parentID="0" restricted="1">'
+            f'<dc:title>{title_xml}</dc:title>'
+            f'<upnp:class>{dlna_class}</upnp:class>'
+            f'<res>{stream_url_xml}</res></item></DIDL-Lite>'
+            f'</CurrentURIMetaData></u:SetAVTransportURI>'
+        )
+        if not ok_set:
+            log.warning(f"_wake_and_play: SetAVTransportURI failed for {title!r}")
+        # Original path waits for the renderer to return to STOPPED before Play
+        # (the 85" needs that). tv55 STAYS in TRANSITIONING after a reload, so its
+        # path just pauses briefly and Plays — measured 3/3 vs 0/4 for the wait path.
+        if quick_play:
+            if _aborted():
+                return False
+            time.sleep(0.8)
+        else:
+            for _ in range(20):
+                if _aborted():
+                    return False
+                if _get_transport_state() in ('STOPPED', 'NO_MEDIA_PRESENT'):
+                    break
+                time.sleep(0.25)
+        for attempt in range(3):
+            if _aborted():
+                return False
+            okp, _ = dlna_soap('Play', play_body)
+            if okp:
+                break
+            time.sleep(1)
+            log.info(f"_wake_and_play: Play retry {attempt + 1}/3 for {title!r}")
+        for _ in range(verify_secs):
+            if _aborted():
+                return False
+            time.sleep(1)
+            if _get_transport_state() == 'PLAYING':
+                return True
+        return False
+
+    confirmed = _load_and_play(verify_secs=6, quick_play=fast_advance)
+    # On tv55, the first SetAVTransportURI after a playing track can still stall in
+    # TRANSITIONING. One clean re-teardown + quick reload fixes it. The 85" never
+    # reaches here (its first attempt confirms PLAYING).
     if not confirmed and not _aborted():
-        log.warning(f"_wake_and_play: never observed PLAYING for {title!r} (last state={state!r})")
+        log.info(f"_wake_and_play: stalled in TRANSITIONING — recovery reload for {title!r}")
+        dlna_soap('Stop',
+            '<u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+            '<InstanceID>0</InstanceID></u:Stop>')
+        for _ in range(24):
+            if _aborted():
+                return
+            if _get_transport_state() in ('STOPPED', 'NO_MEDIA_PRESENT'):
+                break
+            time.sleep(0.25)
+        time.sleep(2.5)
+        confirmed = _load_and_play(verify_secs=8, quick_play=True)
+    if not confirmed and not _aborted():
+        log.warning(f"_wake_and_play: never observed PLAYING for {title!r} after recovery reload")
 
 
 # ── Health ────────────────────────────────────────────────────────

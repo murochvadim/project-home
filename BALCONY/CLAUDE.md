@@ -78,7 +78,7 @@ Panel button presses on pages 4/5 drive the Balcony 55" TV via the media agent o
 | `play_playlist` | `POST /api/playlists/<playlist_id>/play` | `{target:'tv55', shuffle, repeat}` |
 | `play_video` | `POST /api/media/play` | `{relPath, target:'tv55'}` |
 
-`tv55` is a key in `player_service.py`'s `TV_TARGETS` (av_url `192.168.1.217:9197`, audio_sink `dlna`) and a branch in `tv_control.py`'s `/media/command` (entity `media_player.55_neo_qled_qe55qn85dbtxsq_2`).
+`tv55` is a key in `player_service.py`'s `TV_TARGETS` (av_url `192.168.1.194:9197`, audio_sink `dlna`) and a branch in `tv_control.py`'s `/media/command` (entity `media_player.balcony_55_neo_qled_qe55qn85dbtxsq`). *(TV replaced 2026-06-25: `.217`→`.194`, new HA entity — see [MEDIA/CLAUDE.md](../MEDIA/CLAUDE.md) "TV-55 Balcony".)*
 
 **DB rows:** 13 `hasp_buttons` rows with `action_type='media'` — page 4 (110/120/130/140/150) carry fixed control bindings; page 5 (110–140 playlists, 150–180 videos) start with empty bindings. (`action_type='media'` is also the flag the dashboard uses to split these out of the device-only Button Bindings picker.)
 
