@@ -11,7 +11,7 @@
 //   PATCH  /api/personal-health/profiles/:id             any of the above
 //   DELETE /api/personal-health/profiles/:id             cascades measurements
 //   GET    /api/personal-health/measurements?profile_id= weight log, newest first
-//   POST   /api/personal-health/measurements             {profile_id, measured_at?, weight_kg}
+//   POST   /api/personal-health/measurements             {profile_id, weight_kg}  (measured_at stamped server-side)
 //   DELETE /api/personal-health/measurements/:id
 
 module.exports = (app, db) => {
@@ -78,7 +78,7 @@ module.exports = (app, db) => {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const r = await db.query(
-        `SELECT id, profile_id, to_char(measured_at, 'YYYY-MM-DD') AS measured_at,
+        `SELECT id, profile_id, to_char(measured_at, 'YYYY-MM-DD HH24:MI') AS measured_at,
                 weight_kg, created_at
            FROM ph_measurements WHERE profile_id = $1
           ORDER BY measured_at DESC, id DESC`, [pid]);
@@ -92,11 +92,13 @@ module.exports = (app, db) => {
       const pid = parseInt(b.profile_id);
       const w = num(b.weight_kg);
       if (!pid || w == null) return res.status(400).json({ error: 'profile_id and weight_kg required' });
+      // measured_at is stamped server-side on Save (TIMESTAMPTZ DEFAULT NOW()) — same
+      // style as the blood-pressure card; the user no longer picks a date.
       const r = await db.query(
-        `INSERT INTO ph_measurements (profile_id, measured_at, weight_kg)
-         VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3) RETURNING id`,
-        [pid, b.measured_at || null, w]);
-      res.json({ ok: true, id: r.rows[0].id });
+        `INSERT INTO ph_measurements (profile_id, weight_kg)
+         VALUES ($1, $2) RETURNING id, to_char(measured_at, 'YYYY-MM-DD HH24:MI') AS measured_at`,
+        [pid, w]);
+      res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }
   });
 
@@ -180,6 +182,23 @@ module.exports = (app, db) => {
     try {
       await db.query('DELETE FROM ph_medications WHERE id = $1', [parseInt(req.params.id)]);
       res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+
+  // ── Blood pressure — recorded with a server timestamp on Save. No history UI;
+  // each Save just appends a row (kept for the record / a possible future view).
+  app.post('/api/personal-health/bp', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const pid = parseInt(b.profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const sys = num(b.systolic), dia = num(b.diastolic), pulse = num(b.pulse);
+      if (sys == null && dia == null && pulse == null) return res.status(400).json({ error: 'enter a reading' });
+      const r = await db.query(
+        `INSERT INTO ph_bp (profile_id, systolic, diastolic, pulse)
+         VALUES ($1,$2,$3,$4) RETURNING id, to_char(measured_at, 'YYYY-MM-DD HH24:MI') AS measured_at`,
+        [pid, sys, dia, pulse]);
+      res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }
   });
 };

@@ -2288,7 +2288,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       'cellular_antennas',
       'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto',
       'visited_places',
-      'ph_profiles', 'ph_measurements', 'ph_medications',
+      'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp',
     ];
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
@@ -2311,7 +2311,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       manual_people_log: 'ts', ups_status: 'ts', ups_power_events: 'started_at',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
-      ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at',
+      ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at',
       power_consumption: 'ts',
       power_devices: 'updated_at',
       power_bills: 'uploaded_at',

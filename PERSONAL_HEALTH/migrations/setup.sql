@@ -22,11 +22,15 @@ CREATE TABLE IF NOT EXISTS ph_profiles (
 CREATE TABLE IF NOT EXISTS ph_measurements (
   id          SERIAL PRIMARY KEY,
   profile_id  INTEGER NOT NULL REFERENCES ph_profiles(id) ON DELETE CASCADE,
-  measured_at DATE NOT NULL DEFAULT CURRENT_DATE,
+  measured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   weight_kg   NUMERIC NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_ph_meas_profile ON ph_measurements (profile_id, measured_at DESC);
+-- measured_at: DATE -> TIMESTAMPTZ (weight is now stamped on Save, same as BP).
+-- Idempotent: re-running the timestamptz->timestamptz cast is a harmless no-op.
+ALTER TABLE ph_measurements ALTER COLUMN measured_at TYPE TIMESTAMPTZ USING measured_at::timestamptz;
+ALTER TABLE ph_measurements ALTER COLUMN measured_at SET DEFAULT NOW();
 
 -- 3) Medications — structured pills list per person (its own card on the tab).
 -- Schedule model carries enough to drive future reminders (step 2):
@@ -75,9 +79,22 @@ ALTER TABLE ph_medications ADD COLUMN IF NOT EXISTS warnings         TEXT;
 ALTER TABLE ph_medications ADD COLUMN IF NOT EXISTS prescriber_id    INTEGER;
 ALTER TABLE ph_medications ADD COLUMN IF NOT EXISTS started_at       DATE;
 
--- 4) Retention — keep everything forever (personal record)
+-- 5) Blood-pressure log (per person, timestamped on save). No history UI — records only.
+CREATE TABLE IF NOT EXISTS ph_bp (
+  id          SERIAL PRIMARY KEY,
+  profile_id  INTEGER NOT NULL REFERENCES ph_profiles(id) ON DELETE CASCADE,
+  measured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),   -- stamped when Save is pressed
+  systolic    INTEGER,
+  diastolic   INTEGER,
+  pulse       INTEGER,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ph_bp_profile ON ph_bp (profile_id, measured_at DESC);
+
+-- 6) Retention — keep everything forever (personal record)
 INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
 VALUES ('ph_profiles',     NULL, false, 24, 'Personal Health profiles (forever)'),
        ('ph_measurements', NULL, false, 24, 'Personal Health weight log (forever)'),
-       ('ph_medications',  NULL, false, 24, 'Personal Health medications list (forever)')
+       ('ph_medications',  NULL, false, 24, 'Personal Health medications list (forever)'),
+       ('ph_bp',           NULL, false, 24, 'Personal Health blood-pressure log (forever)')
 ON CONFLICT (table_name) DO NOTHING;

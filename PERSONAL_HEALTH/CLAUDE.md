@@ -27,14 +27,14 @@ A **Personal Health Record** — a per-person body-metrics tracker. **Not a stan
 
 ## Tables (LXC 102, `home_data`)
 - **`ph_profiles`** — one row per person: `id, name, sex ('male'|'female'), date_of_birth, height_cm, allergies, conditions, created_at`. `name` matches a `privacy.users` member. Retention: forever.
-- **`ph_measurements`** — weight log: `id, profile_id (FK → ph_profiles ON DELETE CASCADE), measured_at (date), weight_kg, created_at`. Indexed `(profile_id, measured_at DESC)`. Retention: forever (`auto_clean=false`).
+- **`ph_measurements`** — weight log: `id, profile_id (FK → ph_profiles ON DELETE CASCADE), measured_at (timestamptz, stamped server-side on Save — same style as BP, no manual date), weight_kg, created_at`. Indexed `(profile_id, measured_at DESC)`. Retention: forever (`auto_clean=false`).
 - **`ph_medications`** — pills: `id, profile_id (FK ON DELETE CASCADE), name, dose, freq, interval_n, times, dow, next_due, notes, purpose, ingredients, drug_class, avoid_with, contraindications, side_effects, warnings, prescriber_id (→ medical_contacts), started_at, active, created_at`. Indexed `(profile_id)`. Retention: forever.
 
 All 3 registered in `retention_policies` **and** in the Health → DB-Volumes view. DATE columns are returned as `YYYY-MM-DD` strings (`to_char`) to dodge the pg DATE timezone off-by-one.
 
 ## Endpoints (`routes-personal-health.js`, all under `/api/personal-health/`)
 - **Profiles**: `GET /profiles` (+ each person's latest weight) · `POST /profiles` · `PATCH /profiles/:id` · `DELETE /profiles/:id` (cascades) — fields `{name, sex, date_of_birth, height_cm, allergies, conditions}`.
-- **Measurements**: `GET /measurements?profile_id=` (newest first) · `POST /measurements` `{profile_id, measured_at?, weight_kg}` · `DELETE /measurements/:id`.
+- **Measurements**: `GET /measurements?profile_id=` (newest first) · `POST /measurements` `{profile_id, weight_kg}` (measured_at stamped server-side on Save) · `DELETE /measurements/:id`.
 - **Medications**: `GET /medications?profile_id=` · `POST /medications` · `PATCH /medications/:id` · `DELETE /medications/:id` — all `ph_medications` fields. The basic Add/Edit form sets name/dose/schedule/notes; the Info window's `✎ Edit info` PATCHes only the safety fields.
 
 ## Computed metrics (front-end, `personal-health.js`)

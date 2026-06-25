@@ -348,6 +348,8 @@
         <h2 style="margin:0;">Personal Health</h2>
         <select id="ph-person" onchange="phSelectPerson(this.value)" style="padding:5px 9px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.9rem;"></select>
         <button class="btn btn-secondary btn-sm" id="ph-edit-btn" onclick="phEditDetails()" style="display:none;">Edit details</button>
+        <!-- trimmed summary chips, pushed to the right of Edit details (filled by renderDetail per selected person) -->
+        <div id="ph-summary" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-left:auto;"></div>
       </div>
       <div id="ph-no-users" style="display:none;font-size:0.82rem;color:#888;margin-top:8px;">No household members yet — add them in <b>Privacy → Settings → Users</b>, then they appear here.</div>
       <div id="ph-person-form" style="display:none;margin-top:12px;padding:12px;border:1px dashed #ccc;border-radius:8px;">
@@ -366,11 +368,6 @@
     </div>
 
     <div id="ph-detail" style="display:none;">
-      <!-- Summary (auto-calculated) -->
-      <div class="card">
-        <h3 style="margin:0 0 12px;">Summary <span id="ph-sum-name" style="font-weight:400;color:#888;"></span></h3>
-        <div id="ph-summary" style="display:flex;gap:24px;flex-wrap:wrap;"></div>
-      </div>
       <!-- Medications (pills) -->
       <div class="card" id="ph-medscard">
         <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;">
@@ -404,20 +401,26 @@
         </div>
         <div id="ph-meds-list"><div style="color:#aaa;">—</div></div>
       </div>
-      <!-- Log a weight -->
-      <div class="card" id="ph-logcard">
-        <h3 style="margin:0 0 10px;">Log weight</h3>
-        <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
-          <label style="font-size:0.78rem;color:#555;">Date<br><input id="ph-w-date" type="date" style="padding:5px 8px;"></label>
-          <label style="font-size:0.78rem;color:#555;">Weight (kg)<br><input id="ph-w-kg" type="number" step="0.1" style="padding:5px 8px;width:110px;"></label>
-          <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogWeight()">Save weight</button>
-          <span id="ph-w-status" style="font-size:0.78rem;color:#888;"></span>
+      <!-- Log weight + Log blood pressure — side by side -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
+        <div class="card" id="ph-logcard" style="margin-bottom:0;">
+          <h3 style="margin:0 0 10px;">Log weight</h3>
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+            <label style="font-size:0.78rem;color:#555;">Weight (kg)<br><input id="ph-w-kg" type="number" step="0.1" min="0" placeholder="70" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
+            <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogWeight()">Save</button>
+            <span id="ph-w-status" style="font-size:0.78rem;color:#888;"></span>
+          </div>
         </div>
-      </div>
-      <!-- History -->
-      <div class="card" id="ph-histcard">
-        <h3 style="margin:0 0 10px;">History</h3>
-        <div id="ph-history"><div style="color:#aaa;">—</div></div>
+        <div class="card" id="ph-bpcard" style="margin-bottom:0;">
+          <h3 style="margin:0 0 10px;">Log blood pressure</h3>
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+            <label style="font-size:0.78rem;color:#555;">Systolic<br><input id="ph-bp-sys" type="number" min="0" placeholder="120" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
+            <label style="font-size:0.78rem;color:#555;">Diastolic<br><input id="ph-bp-dia" type="number" min="0" placeholder="80" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
+            <label style="font-size:0.78rem;color:#555;">Pulse<br><input id="ph-bp-pulse" type="number" min="0" placeholder="—" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
+            <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogBP()">Save</button>
+            <span id="ph-bp-status" style="font-size:0.78rem;color:#888;"></span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -534,7 +537,7 @@
 <script src="js/medical.js?v=35"></script>
 <script src="js/medical-hearing.js?v=5"></script>
 <script src="js/medical-vision.js?v=2"></script>
-<script src="js/personal-health.js?v=5"></script>
+<script src="js/personal-health.js?v=9"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

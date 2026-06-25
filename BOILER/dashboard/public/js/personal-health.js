@@ -99,19 +99,17 @@
   // ── detail (summary + log + history) ──
   async function renderDetail() {
     $('ph-detail').style.display = '';
-    $('ph-sum-name').textContent = '· ' + _selName;
     const p = profileFor(_selName);
     if (!p) {
-      $('ph-summary').innerHTML = '<div style="color:#888;">No health details for <b>' + esc(_selName) +
-        '</b> yet — click <b>Edit details</b> to add height / date of birth / sex (needed for BMI).</div>';
+      $('ph-summary').innerHTML = '<span style="font-size:0.72rem;color:#888;">No details yet — click <b>Edit details</b></span>';
       $('ph-logcard').style.display = 'none';
-      $('ph-histcard').style.display = 'none';
+      $('ph-bpcard').style.display = 'none';
       $('ph-medscard').style.display = 'none';
       _curProfileId = null;
       return;
     }
     $('ph-logcard').style.display = '';
-    $('ph-histcard').style.display = '';
+    $('ph-bpcard').style.display = '';
     $('ph-medscard').style.display = '';
     _curProfileId = p.id;
     phLoadMeds(p.id);
@@ -121,43 +119,46 @@
       : (p.latest_weight_kg != null ? Number(p.latest_weight_kg) : null);
     const b = bmi(latestW, h), cat = bmiCat(b), ir = idealRange(h), a = age(p.date_of_birth);
 
+    // trimmed/compact chips — sit inline to the right of the Edit details button
     const chip = (label, val) =>
-      `<div><div style="font-size:0.72rem;color:#888;text-transform:uppercase;">${label}</div>
-        <div style="font-size:1.3rem;font-weight:700;">${val}</div></div>`;
+      `<div style="text-align:center;line-height:1.15;">
+        <div style="font-size:0.58rem;color:#888;text-transform:uppercase;letter-spacing:.3px;">${label}</div>
+        <div style="font-size:0.92rem;font-weight:700;">${val}</div></div>`;
     $('ph-summary').innerHTML =
       chip('Age', a == null ? '—' : a) +
       chip('Sex', p.sex ? esc(p.sex) : '—') +
       chip('Height', h != null ? h + ' cm' : '—') +
-      chip('Latest weight', latestW != null ? latestW + ' kg' : '—') +
-      `<div><div style="font-size:0.72rem;color:#888;text-transform:uppercase;">BMI</div>
-        <div style="font-size:1.3rem;font-weight:700;color:${cat.color};">${b == null ? '—' : b.toFixed(1)}
-        <span style="font-size:0.78rem;font-weight:600;">${cat.label}</span></div></div>` +
-      chip('Ideal weight', ir ? `${ir.lo.toFixed(0)}–${ir.hi.toFixed(0)} kg` : '—');
-
-    if (!$('ph-w-date').value) $('ph-w-date').value = new Date().toISOString().slice(0, 10);
-
-    $('ph-history').innerHTML = meas.length ? `
-      <table class="data-table"><thead><tr><th>Date</th><th>Weight</th><th>BMI</th><th></th></tr></thead>
-      <tbody>${meas.map(m => {
-        const mb = bmi(Number(m.weight_kg), h), mc = bmiCat(mb);
-        return `<tr><td>${esc(dpart(m.measured_at))}</td><td>${Number(m.weight_kg)} kg</td>
-          <td style="color:${mc.color};font-weight:600;">${mb == null ? '—' : mb.toFixed(1)}</td>
-          <td><button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="phDelMeas(${m.id})">Del</button></td></tr>`;
-      }).join('')}</tbody></table>`
-      : '<div style="color:#aaa;">No measurements yet — log a weight above.</div>';
+      chip('Weight', latestW != null ? latestW + ' kg' : '—') +
+      `<div style="text-align:center;line-height:1.15;">
+        <div style="font-size:0.58rem;color:#888;text-transform:uppercase;letter-spacing:.3px;">BMI</div>
+        <div style="font-size:0.92rem;font-weight:700;color:${cat.color};">${b == null ? '—' : b.toFixed(1)}
+        <span style="font-size:0.62rem;font-weight:600;">${cat.label}</span></div></div>` +
+      chip('Ideal', ir ? `${ir.lo.toFixed(0)}–${ir.hi.toFixed(0)} kg` : '—');
   }
 
-  // ── log / delete weight ──
+  // ── log weight — stamped with a server timestamp on Save (same style as BP) ──
   window.phLogWeight = async function () {
     const p = profileFor(_selName); if (!p) return;
     const w = $('ph-w-kg').value;
     if (!w) { $('ph-w-status').textContent = 'Enter a weight'; return; }
     const r = await fetch(`${API}/measurements`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile_id: p.id, measured_at: $('ph-w-date').value || null, weight_kg: w }) });
+      body: JSON.stringify({ profile_id: p.id, weight_kg: w }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { $('ph-w-status').textContent = 'Failed: ' + (j.error || r.status); return; }
-    $('ph-w-kg').value = ''; $('ph-w-status').textContent = '✓ saved';
+    $('ph-w-kg').value = ''; $('ph-w-status').textContent = '✓ saved ' + (j.measured_at || '');
     await phInit(); await renderDetail();
+  };
+  // Blood pressure — saved with a server timestamp; no history shown.
+  window.phLogBP = async function () {
+    const p = profileFor(_selName); if (!p) return;
+    const sys = $('ph-bp-sys').value, dia = $('ph-bp-dia').value, pulse = $('ph-bp-pulse').value;
+    if (!sys && !dia && !pulse) { $('ph-bp-status').textContent = 'Enter a reading'; return; }
+    const r = await fetch(`${API}/bp`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: p.id, systolic: sys || null, diastolic: dia || null, pulse: pulse || null }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('ph-bp-status').textContent = 'Failed: ' + (j.error || r.status); return; }
+    $('ph-bp-sys').value = ''; $('ph-bp-dia').value = ''; $('ph-bp-pulse').value = '';
+    $('ph-bp-status').textContent = '✓ saved ' + (j.measured_at || '');
   };
   window.phDelMeas = async function (id) {
     if (!confirm('Delete this measurement?')) return;
