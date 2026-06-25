@@ -410,6 +410,38 @@ GPS through Owntracks unlocks:
 - **iOS PWA quirk**: "Add to home screen" on iOS uses Safari only. Chrome on iOS does NOT support PWAs — users get a normal bookmark, not a fullscreen app.
 - **Push notifications on iOS PWA**: Only since iOS 16.4 (March 2023). Requires HTTPS (i.e. would need a TLS cert on mobile-api OR push from a different server). For simplicity, use the Telegram bot path instead.
 
+## Push Notifications — ntfy channel (PLANNED, decided 2026-06-25 — NOT BUILT)
+
+The "reliable push notifications" goal above finally has a chosen mechanism: **self-hosted `ntfy`**. This is the generic **notification CHANNEL** — a reusable "send a message to a person's phone over NetBird" transport. Consumers (pill reminders, laundry-done, door-left-open, FR-unknown-face, system alerts) just publish to a topic; they do NOT each reinvent phone delivery. First consumer = **pill reminders** (see `PERSONAL_HEALTH/PILL_REMINDERS_PLAN.md`).
+
+**Why ntfy (supersedes the old "use Telegram" caveat below):** self-hosted, no Google FCM, no SMS, no phone number, no third-party account. Publish = one `curl`. Private via tokens/topic-ACLs.
+
+### Verified feasibility (read-only checks, 2026-06-25)
+| Piece | Finding |
+|---|---|
+| **Host** | **LXC 109** (Privacy) already runs Docker + Caddy (vaultwarden/caddy/privnet) — **~1.9 GB RAM free, ~15 GB disk free**, ntfy ports free. ntfy (~30–50 MB) = clean 4th compose service in `/opt/privacy/docker-compose.yml`. |
+| **Phone reachability** | **Fold 5 (Android 16) is a live, connected NetBird peer.** NetBird network `home-lan` advertises **`192.168.1.0/24`** via LXC 108 → the phone reaches LXC 109 (`192.168.1.196`) over NetBird from anywhere. |
+| **No-FCM fact** | For a **self-hosted** server the ntfy Android app uses its own **persistent instant-delivery connection — NOT Google FCM**. (FCM only applies to ntfy.sh-hosted topics.) Delivers over NetBird even when away. |
+| **People** | `privacy.users` = **Vadim (Fold 5)** + **Maya (S 21)**. Each person → one topic (`vadim_pills` etc.); only the Fold 5 is set up today, S 21 needs the app. |
+
+### Channel design (this folder owns it)
+- **Server**: `binwiederhier/ntfy` container on LXC 109 (`serve`), `server.yml`, data volume, a port (`:8080` plain over the private net — recommended — or a Caddy HTTPS route).
+- **Auth**: `auth-default-access: deny-all` + a publish token for senders + per-topic read for phones → private topics.
+- **Per-person topic registry**: map each `privacy.users` person → an ntfy topic (a field on the user, or derived `<name>_pills` / future `<name>_alerts`). The sender resolves person → topic.
+- **Send API (what consumers use)**: `curl -H "Authorization: Bearer <token>" -d "<message>" http://192.168.1.196:8080/<topic>`.
+- **Phone (manual, per phone)**: install ntfy app → add server URL → subscribe to the topic → grant battery-optimization exemption (instant delivery holds a foreground connection; resumes on NetBird reconnect after sleep).
+
+### Open decisions (answer when ordering the build)
+1. **Exposure**: plain `http :8080` over the private net (simplest) vs Caddy HTTPS (phone must trust the internal CA).
+2. **Topic privacy**: token auth (recommended) vs open topics on the private mesh.
+3. **Actionable**: ntfy supports native action buttons (view/http/broadcast) → a self-hosted **[Taken]/[Snooze]** is doable later via an http-action → small log endpoint, **no HA automation needed**.
+
+### Build phases (NOT built — for the order)
+1. ntfy container on LXC 109 (compose + server.yml + token) → verify a `curl` publish pops on the Fold 5.
+2. Per-person topic registry (privacy.users field or derived).
+3. Phones: install app + subscribe (your manual step, per phone).
+4. Consumers publish to topics (first = pill reminders, in PERSONAL_HEALTH).
+
 ## Where to pick up
 
 1. Read this file
