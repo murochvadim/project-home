@@ -43,6 +43,7 @@
   function idealRange(h) { if (!h) return null; const m = h / 100; return { lo: 18.5 * m * m, hi: 24.9 * m * m }; }
 
   async function phInit() {
+    _phLoadApptColors();   // shared Schedule & appointment color bands (Privacy → Settings)
     const [uRes, pRes] = await Promise.all([
       fetch('/api/household-users').then(r => r.ok ? r.json() : []).catch(() => []),
       fetch(API + '/profiles').then(r => r.json()).catch(() => []),
@@ -75,6 +76,37 @@
     else { showEdit(false); $('ph-detail').style.display = 'none'; }
   };
 
+  // ── allergies / conditions — stored as newline-joined text, edited as add-as-many-
+  // as-needed input rows, shown read-only as chips. Each line = one item (so the
+  // future med cross-check can match them individually). ──
+  const _phSplit = (s) => (s ? String(s).split(/\n+/).map(x => x.trim()).filter(Boolean) : []);
+  function _phListRowHtml(kind, value) {
+    const ph = kind === 'allergies' ? 'e.g. penicillin' : 'e.g. hypertension';
+    return `<div style="display:flex;gap:4px;margin-bottom:4px;">
+      <input type="text" class="ph-f-${kind}-item" value="${esc(value)}" placeholder="${ph}" style="padding:5px 8px;width:200px;">
+      <button type="button" onclick="this.parentNode.remove()" title="Remove" style="border:none;background:#f3e0e0;color:#c0392b;border-radius:4px;cursor:pointer;padding:0 9px;font-size:1rem;line-height:1.4;">×</button>
+    </div>`;
+  }
+  function phRenderList(kind, items) {
+    const arr = (items && items.length) ? items : [''];   // always show one blank row
+    $('ph-f-' + kind + '-list').innerHTML = arr.map(v => _phListRowHtml(kind, v)).join('');
+  }
+  window.phAddListItem = function (kind) {
+    $('ph-f-' + kind + '-list').insertAdjacentHTML('beforeend', _phListRowHtml(kind, ''));
+  };
+  function _phCollectList(kind) {
+    return Array.from(document.querySelectorAll('.ph-f-' + kind + '-item'))
+      .map(i => i.value.trim()).filter(Boolean).join('\n');
+  }
+  function _phRenderAcDisplay(p) {
+    const host = $('ph-ac-display'); if (!host) return;
+    const block = (label, items) => items.length
+      ? `<div style="font-size:0.8rem;"><span style="color:#a33;font-weight:600;">${label}:</span> ` +
+        items.map(v => `<span style="display:inline-block;background:#fbeaea;color:#a33;border-radius:10px;padding:1px 8px;margin:2px 2px 0 0;">${esc(v)}</span>`).join('') + '</div>'
+      : '';
+    host.innerHTML = block('⚠ Allergies', _phSplit(p && p.allergies)) + block('🩺 Conditions', _phSplit(p && p.conditions));
+  }
+
   // ── body-details form (sex / DOB / height) — name = the selected household user ──
   window.phEditDetails = function () {
     if (!_selName) return;
@@ -82,8 +114,8 @@
     $('ph-f-sex').value        = p.sex || '';
     $('ph-f-dob').value        = dpart(p.date_of_birth);
     $('ph-f-height').value     = p.height_cm != null ? p.height_cm : '';
-    $('ph-f-allergies').value  = p.allergies || '';
-    $('ph-f-conditions').value = p.conditions || '';
+    phRenderList('allergies', _phSplit(p.allergies));
+    phRenderList('conditions', _phSplit(p.conditions));
     $('ph-form-status').textContent = '';
     $('ph-person-form').style.display = '';
   };
@@ -91,7 +123,7 @@
   window.phSaveDetails = async function () {
     if (!_selName) return;
     const body = { sex: $('ph-f-sex').value, date_of_birth: $('ph-f-dob').value || null, height_cm: $('ph-f-height').value || null,
-                   allergies: $('ph-f-allergies').value.trim(), conditions: $('ph-f-conditions').value.trim() };
+                   allergies: _phCollectList('allergies'), conditions: _phCollectList('conditions') };
     const p = profileFor(_selName);
     const r = p
       ? await fetch(`${API}/profiles/${p.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -108,6 +140,7 @@
     const p = profileFor(_selName);
     if (!p) {
       $('ph-summary').innerHTML = '<span style="font-size:0.72rem;color:#888;">No details yet — click <b>Edit details</b></span>';
+      $('ph-ac-display').innerHTML = '';
       $('ph-logcard').style.display = 'none';
       $('ph-bpcard').style.display = 'none';
       $('ph-stepscard').style.display = 'none';
@@ -145,6 +178,7 @@
         <div style="font-size:0.92rem;font-weight:700;color:${cat.color};">${b == null ? '—' : b.toFixed(1)}
         <span style="font-size:0.62rem;font-weight:600;">${cat.label}</span></div></div>` +
       chip('Ideal', ir ? `${ir.lo.toFixed(0)}–${ir.hi.toFixed(0)} kg` : '—');
+    _phRenderAcDisplay(p);
   }
 
   // ── log weight — stamped with a server timestamp on Save (same style as BP) ──
@@ -369,6 +403,36 @@
   }
 
   // ── Medications (pills) ──────────────────────────────────────────────────────
+  // ── Special Schedule color band — uses the SHARED project-wide "Schedule &
+  // appointment colors" (dashboard_settings.privacy.settings, edited in Privacy →
+  // Settings). Same logic as privacy.js _pvApptBand, copied here because
+  // medical.html doesn't load privacy.js. ──
+  let _phApptColors = { red_days: 3, yellow_days: 7, grey_days: 7 };
+  async function _phLoadApptColors() {
+    try {
+      const v = (await (await fetch('/api/dashboard-settings/privacy.settings')).json() || {}).value || {};
+      ['red_days', 'yellow_days', 'grey_days'].forEach(k => { const n = parseInt(v[k], 10); if (Number.isFinite(n) && n >= 0) _phApptColors[k] = n; });
+    } catch (e) { /* keep defaults */ }
+  }
+  function _phApptBand(d) {
+    if (isNaN(d)) return { bg: '#f9fafb', past: false };
+    const k = _phApptColors, RED = '#fecaca';
+    const days = (d.getTime() - Date.now()) / 86400000;
+    if (days < 0) return (-days <= k.grey_days) ? { bg: RED, past: true } : { bg: '#f3f4f6', past: true };
+    if (days <= k.red_days) return { bg: RED, past: false };
+    if (days <= k.red_days + k.yellow_days) return { bg: '#fef9c3', past: false };
+    return { bg: '#f0fdf4', past: false };
+  }
+  function _phSpecialCell(m) {
+    if (!m.special_date) return '<td style="color:#ccc;">—</td>';
+    const d = new Date(m.special_date + 'T00:00:00');
+    const band = _phApptBand(d);
+    const when = isNaN(d) ? esc(m.special_date) : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const note = m.special_note ? ` · ${esc(m.special_note)}` : '';
+    const past = band.past ? ' <span style="font-size:0.66rem;color:#777;">(past)</span>' : '';
+    return `<td style="background:${band.bg};color:#000;border-radius:4px;">${when}${note}${past}</td>`;
+  }
+
   function medSchedText(m) {
     const t  = m.times ? ' · ' + m.times : '';
     const nd = m.next_due ? ' · next ' + m.next_due : '';
@@ -386,12 +450,14 @@
     _meds = await (await fetch(`${API}/medications?profile_id=${profileId}`)).json();
     // Row shows the basic med info (name · dose · schedule) + actions. The ℹ️ Info
     // button opens the extra/safety info (purpose, avoid-with, contraindications…).
+    const hasSpecial = _meds.some(m => m.special_date);
     $('ph-meds-list').innerHTML = _meds.length ? `
-      <table class="data-table"><thead><tr><th>Medication</th><th>Dose</th><th>Schedule</th><th></th></tr></thead>
+      <table class="data-table"><thead><tr><th>Medication</th><th>Dose</th><th>Schedule</th>${hasSpecial ? '<th>Special Schedule</th>' : ''}<th></th></tr></thead>
       <tbody>${_meds.map(m => `<tr style="${m.active ? '' : 'opacity:0.5;'}">
         <td>💊 ${esc(m.name)}${m.active ? '' : ' <span style="font-size:0.7rem;color:#888;">(stopped)</span>'}</td>
         <td>${esc(m.dose || '—')}</td>
         <td>${esc(medSchedText(m))}</td>
+        ${hasSpecial ? _phSpecialCell(m) : ''}
         <td style="white-space:nowrap;text-align:right;">
           <button class="btn btn-secondary btn-sm" onclick="phMedInfo(${m.id})">ℹ️ Info</button>
           <button class="btn btn-secondary btn-sm" onclick="phEditMed(${m.id})">Edit</button>
@@ -417,6 +483,8 @@
     $('ph-m-nextdue').value  = dpart(m.next_due);
     $('ph-m-times').value    = m.times || '';
     $('ph-m-notes').value    = m.notes || '';
+    $('ph-m-special-date').value = dpart(m.special_date);
+    $('ph-m-special-note').value = m.special_note || '';
     $('ph-m-active').checked = m.active !== false;
     $('ph-med-status').textContent = '';
     phFreqChanged();
@@ -434,6 +502,7 @@
       freq: $('ph-m-freq').value, interval_n: $('ph-m-interval').value || null,
       times: $('ph-m-times').value.trim(), dow: $('ph-m-dow').value.trim(),
       next_due: $('ph-m-nextdue').value || null, notes: $('ph-m-notes').value.trim(),
+      special_date: $('ph-m-special-date').value || null, special_note: $('ph-m-special-note').value.trim(),
       active: $('ph-m-active').checked,
     };
     const r = _editMedId

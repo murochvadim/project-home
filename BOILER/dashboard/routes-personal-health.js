@@ -142,6 +142,7 @@ module.exports = (app, db) => {
                 purpose, ingredients, drug_class, avoid_with, contraindications,
                 side_effects, warnings, prescriber_id,
                 to_char(started_at, 'YYYY-MM-DD') AS started_at,
+                to_char(special_date, 'YYYY-MM-DD') AS special_date, special_note,
                 active, created_at
            FROM ph_medications WHERE profile_id = $1
           ORDER BY active DESC, name`, [pid]);
@@ -158,13 +159,14 @@ module.exports = (app, db) => {
       const r = await db.query(
         `INSERT INTO ph_medications (profile_id, name, dose, freq, interval_n, times, dow, next_due, notes,
            purpose, ingredients, drug_class, avoid_with, contraindications, side_effects, warnings,
-           prescriber_id, started_at, active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::date,$19) RETURNING id`,
+           prescriber_id, started_at, active, special_date, special_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::date,$19,$20::date,$21) RETURNING id`,
         [pid, name, trim(b.dose), trim(b.freq), num(b.interval_n), trim(b.times),
          trim(b.dow), b.next_due || null, trim(b.notes),
          trim(b.purpose), trim(b.ingredients), trim(b.drug_class), trim(b.avoid_with),
          trim(b.contraindications), trim(b.side_effects), trim(b.warnings),
-         num(b.prescriber_id), b.started_at || null, b.active !== false]);
+         num(b.prescriber_id), b.started_at || null, b.active !== false,
+         b.special_date || null, trim(b.special_note)]);
       res.json({ ok: true, id: r.rows[0].id });
     } catch (e) { err(res, e); }
   });
@@ -191,6 +193,8 @@ module.exports = (app, db) => {
       if (b.warnings          !== undefined) add('warnings', trim(b.warnings));
       if (b.prescriber_id     !== undefined) add('prescriber_id', num(b.prescriber_id));
       if (b.started_at        !== undefined) add('started_at', b.started_at || null);
+      if (b.special_date      !== undefined) add('special_date', b.special_date || null);
+      if (b.special_note      !== undefined) add('special_note', trim(b.special_note));
       if (b.active            !== undefined) add('active', !!b.active);
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       params.push(parseInt(req.params.id));

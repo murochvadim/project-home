@@ -365,6 +365,7 @@
         <!-- trimmed summary chips, pushed to the right of Edit details (filled by renderDetail per selected person) -->
         <div id="ph-summary" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-left:auto;"></div>
       </div>
+      <div id="ph-ac-display" style="margin-top:8px;display:flex;gap:18px;flex-wrap:wrap;"></div>
       <div id="ph-no-users" style="display:none;font-size:0.82rem;color:#888;margin-top:8px;">No household members yet — add them in <b>Privacy → Settings → Users</b>, then they appear here.</div>
       <div id="ph-person-form" style="display:none;margin-top:12px;padding:12px;border:1px dashed #ccc;border-radius:8px;">
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
@@ -372,10 +373,20 @@
             <select id="ph-f-sex" style="padding:5px 8px;"><option value="">—</option><option value="male">Male</option><option value="female">Female</option></select></label>
           <label style="font-size:0.78rem;color:#555;">Date of birth<br><input id="ph-f-dob" type="date" style="padding:5px 8px;"></label>
           <label style="font-size:0.78rem;color:#555;">Height (cm)<br><input id="ph-f-height" type="number" step="0.1" style="padding:5px 8px;width:100px;"></label>
-          <label style="font-size:0.78rem;color:#a33;">Allergies<br><input id="ph-f-allergies" type="text" placeholder="e.g. sulfa, penicillin" style="padding:5px 8px;width:160px;"></label>
-          <label style="font-size:0.78rem;color:#a33;">Conditions<br><input id="ph-f-conditions" type="text" placeholder="e.g. gout, kidney disease" style="padding:5px 8px;width:180px;"></label>
           <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phSaveDetails()">Save details</button>
           <button class="btn btn-secondary btn-sm" onclick="phCancelForm()">Cancel</button>
+        </div>
+        <div style="display:flex;gap:28px;flex-wrap:wrap;margin-top:12px;">
+          <div>
+            <div style="font-size:0.78rem;color:#a33;font-weight:600;margin-bottom:4px;">Allergies <span style="font-weight:400;color:#999;">(add as many as needed)</span></div>
+            <div id="ph-f-allergies-list"></div>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="phAddListItem('allergies')" style="margin-top:2px;">+ Add allergy</button>
+          </div>
+          <div>
+            <div style="font-size:0.78rem;color:#a33;font-weight:600;margin-bottom:4px;">Conditions <span style="font-weight:400;color:#999;">(add as many as needed)</span></div>
+            <div id="ph-f-conditions-list"></div>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="phAddListItem('conditions')" style="margin-top:2px;">+ Add condition</button>
+          </div>
         </div>
         <div id="ph-form-status" style="font-size:0.78rem;color:#888;margin-top:6px;"></div>
       </div>
@@ -407,6 +418,8 @@
             <label id="ph-m-nextdue-wrap" style="font-size:0.78rem;color:#555;display:none;">Next due<br><input id="ph-m-nextdue" type="date" style="padding:5px 8px;"></label>
             <label id="ph-m-times-wrap" style="font-size:0.78rem;color:#555;">Time(s)<br><input id="ph-m-times" type="text" placeholder="e.g. 08:00,20:00" style="padding:5px 8px;width:130px;"></label>
             <label style="font-size:0.78rem;color:#555;">Notes<br><input id="ph-m-notes" type="text" style="padding:5px 8px;width:140px;"></label>
+            <label style="font-size:0.78rem;color:#7c3aed;">📅 Special schedule<br><input id="ph-m-special-date" type="date" style="padding:5px 8px;"></label>
+            <label style="font-size:0.78rem;color:#7c3aed;">Special note<br><input id="ph-m-special-note" type="text" placeholder="e.g. order refill / pre-injection doc" style="padding:5px 8px;width:190px;"></label>
             <label style="font-size:0.78rem;color:#555;display:flex;align-items:center;gap:4px;"><input id="ph-m-active" type="checkbox" checked> Active</label>
             <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phSaveMed()">Save</button>
             <button class="btn btn-secondary btn-sm" onclick="phCancelMed()">Cancel</button>
@@ -627,7 +640,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=14"></script>
+<script src="js/personal-health.js?v=16"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>
