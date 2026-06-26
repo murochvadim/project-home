@@ -338,10 +338,53 @@ async function loadStatus() {
 }
 
 // ── DB Volumes ───────────────────────────────────────────────
+// Collapsible theme grouping — shared by the DB Volumes + Retention cards. State =
+// a localStorage set of EXPANDED group names; absent → collapsed (default). The
+// `group` field comes from the backend (server.js DBV_GROUPS, single source).
+// Toggling a group flips it in BOTH cards at once + persists.
+const DBV_EXP_KEY = 'health.dbGroupsExpanded';
+function _dbExpanded() { try { return new Set(JSON.parse(localStorage.getItem(DBV_EXP_KEY) || '[]')); } catch (e) { return new Set(); } }
+function _dbGroupRows(rows) {
+  const order = [], byGroup = {};
+  for (const r of rows) { const g = r.group || 'Other'; if (!byGroup[g]) { byGroup[g] = []; order.push(g); } byGroup[g].push(r); }
+  return { order, byGroup };
+}
+function _dbPrettyBytes(n) { if (!n) return '0 B'; const u = ['B', 'KB', 'MB', 'GB']; let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i]; }
+function _dbGroupHeader(group, ncols, parts, collapsed) {
+  // parts = right-aligned, fixed-width columns (e.g. ['6 tables','12 MB']) so the
+  // count + size line up vertically down the list, trimmed off the theme name.
+  const meta = (parts || []).map(p => `<span style="min-width:78px; text-align:right;">${p}</span>`).join('');
+  return `<tr class="dbgrp-head" data-dbgrp-h="${escHtml(group)}" onclick="toggleDbGroup(this.getAttribute('data-dbgrp-h'))" style="cursor:pointer; background:#efe9df;">
+    <td colspan="${ncols}" style="padding:6px 9px;">
+      <div style="display:flex; align-items:baseline; gap:10px;">
+        <span style="font-weight:700; font-size:0.85rem;"><span class="dbgrp-caret">${collapsed ? '▸' : '▾'}</span> ${escHtml(group)}</span>
+        <span style="margin-left:auto; font-weight:400; color:#999; font-size:0.78rem; display:inline-flex; gap:18px;">${meta}</span>
+      </div>
+    </td></tr>`;
+}
+window.toggleDbGroup = function (group) {
+  const exp = _dbExpanded();
+  if (exp.has(group)) exp.delete(group); else exp.add(group);
+  try { localStorage.setItem(DBV_EXP_KEY, JSON.stringify([...exp])); } catch (e) {}
+  const collapsed = !exp.has(group);
+  document.querySelectorAll('tr[data-dbgrp="' + group.replace(/"/g, '\\"') + '"]').forEach(tr => { tr.style.display = collapsed ? 'none' : ''; });
+  document.querySelectorAll('tr[data-dbgrp-h]').forEach(h => {
+    if (h.getAttribute('data-dbgrp-h') === group) { const c = h.querySelector('.dbgrp-caret'); if (c) c.textContent = collapsed ? '▸' : '▾'; }
+  });
+};
+
 async function loadMiniDlna() {
   const tbody = document.getElementById('volumes-body');
-  // remove previous minidlna row if exists
   document.getElementById('minidlna-row')?.remove();
+  // Place the SQLite row inside its "External (MiniDLNA)" group (header is rendered
+  // by loadVolumes); fall back to appending if that header isn't there yet.
+  const _place = (tr) => {
+    tr.id = 'minidlna-row';
+    tr.setAttribute('data-dbgrp', 'External (MiniDLNA)');
+    if (!_dbExpanded().has('External (MiniDLNA)')) tr.style.display = 'none';
+    const head = document.querySelector('tr[data-dbgrp-h="External (MiniDLNA)"]');
+    if (head) head.insertAdjacentElement('afterend', tr); else tbody.appendChild(tr);
+  };
   try {
     const d = await fetch('/api/health/minidlna').then(r => r.json());
     if (d.error) throw new Error(d.error);
@@ -350,7 +393,6 @@ async function loadMiniDlna() {
       ? new Date(d.last_updated).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })
       : '— never';
     const tr = document.createElement('tr');
-    tr.id = 'minidlna-row';
     tr.style.background = '#f5f0e8';
     tr.innerHTML = `
       <td><code>minidlna · files.db</code> <span style="font-size:0.7rem;color:#888;margin-left:4px;">SQLite · LXC 100</span></td>
@@ -363,26 +405,22 @@ async function loadMiniDlna() {
       <td style="font-size:0.78rem;color:#888;">${updated}</td>
       <td></td>
     `;
-    tbody.appendChild(tr);
+    _place(tr);
   } catch (e) {
     const tr = document.createElement('tr');
-    tr.id = 'minidlna-row';
     tr.innerHTML = `<td colspan="9" style="color:#c0392b;font-size:0.82rem;">MiniDLNA: ${escHtml(e.message)}</td>`;
-    tbody.appendChild(tr);
+    _place(tr);
   }
 }
 
 async function loadVolumes() {
   try {
     const rows = await fetch('/api/health/db-volumes').then(r => r.json());
-    // Sort small → large so the most-trafficked tables sink to the bottom and
-    // the small/idle tables surface at the top. Same order is mirrored in the
-    // Retention Policies card below for at-a-glance correlation.
-    rows.sort((a, b) => a.row_count - b.row_count);
-    const tbody = document.getElementById('volumes-body');
-    setHTML(tbody, rows.map(r => {
+    const { order, byGroup } = _dbGroupRows(rows);
+    const exp = _dbExpanded();
+    const volRow = (r, collapsed) => {
       const fragColor = r.frag_pct >= 20 ? '#c0392b' : r.frag_pct >= 5 ? '#e67e22' : '#2ecc71';
-      return `<tr id="vol-row-${r.table_name}">
+      return `<tr id="vol-row-${r.table_name}" data-dbgrp="${escHtml(r.group || 'Other')}" style="${collapsed ? 'display:none;' : ''}">
         <td><code>${r.table_name}</code></td>
         <td style="text-align:right;">${r.row_count.toLocaleString()}</td>
         <td style="text-align:right;">${r.total_size}</td>
@@ -395,7 +433,21 @@ async function loadVolumes() {
           <button class="btn btn-secondary btn-sm" style="font-size:0.72rem;" onclick="vacuumTable('${r.table_name}', this)">Vacuum</button>
         </td>
       </tr>`;
-    }).join(''));
+    };
+    let html = '';
+    for (const g of order) {
+      // within-group order unchanged: small → large by row count
+      const grp = byGroup[g].slice().sort((a, b) => a.row_count - b.row_count);
+      const bytes = grp.reduce((s, r) => s + (r.size_bytes || 0), 0);
+      const collapsed = !exp.has(g);
+      html += _dbGroupHeader(g, 9, [`${grp.length} table${grp.length > 1 ? 's' : ''}`, _dbPrettyBytes(bytes)], collapsed);
+      html += grp.map(r => volRow(r, collapsed)).join('');
+    }
+    // External (MiniDLNA) group — SQLite DB on LXC 100, row filled by loadMiniDlna.
+    html += _dbGroupHeader('External (MiniDLNA)', 9, ['SQLite · LXC 100'], !exp.has('External (MiniDLNA)'));
+    setHTML(document.getElementById('volumes-body'), html);
+    const totEl = document.getElementById('dbvol-total');
+    if (totEl) totEl.textContent = `${rows.length} tables · ${_dbPrettyBytes(rows.reduce((s, r) => s + (r.size_bytes || 0), 0))}`;
   } catch (e) {
     document.getElementById('volumes-body').innerHTML =
       '<tr><td colspan="9" style="color:#b55e5e;">Failed to load</td></tr>';
@@ -440,13 +492,11 @@ async function loadRetention() {
       fetch('/api/health/retention').then(r => r.json()),
       fetch('/api/health/db-volumes').then(r => r.json()).catch(() => []),
     ]);
-    const rowCountByName = Object.fromEntries(vols.map(v => [v.table_name, v.row_count]));
-    rows.sort((a, b) =>
-      (rowCountByName[a.table_name] ?? Infinity) - (rowCountByName[b.table_name] ?? Infinity)
-    );
-    const tbody = document.getElementById('retention-body');
-    setHTML(tbody, rows.map(p => `
-      <tr id="row-${p.table_name}">
+    const rc = Object.fromEntries(vols.map(v => [v.table_name, v.row_count]));
+    const { order, byGroup } = _dbGroupRows(rows);
+    const exp = _dbExpanded();
+    const retRow = (p, collapsed) => `
+      <tr id="row-${p.table_name}" data-dbgrp="${escHtml(p.group || 'Other')}" style="${collapsed ? 'display:none;' : ''}">
         <td><code>${p.table_name}</code></td>
         <td style="font-size:0.78rem; color:#666;">${p.description || '—'}</td>
         <td style="text-align:center;">
@@ -469,7 +519,15 @@ async function loadRetention() {
           <button class="btn btn-secondary btn-sm" style="font-size:0.72rem; padding:3px 8px;"
             onclick="cleanTable('${p.table_name}')" ${p.keep_days ? '' : 'disabled title="No retention limit set"'}>Clean</button>
         </td>
-      </tr>`).join(''));
+      </tr>`;
+    let html = '';
+    for (const g of order) {
+      const grp = byGroup[g].slice().sort((a, b) => (rc[a.table_name] ?? Infinity) - (rc[b.table_name] ?? Infinity));
+      const collapsed = !exp.has(g);
+      html += _dbGroupHeader(g, 7, [`${grp.length} table${grp.length > 1 ? 's' : ''}`], collapsed);
+      html += grp.map(p => retRow(p, collapsed)).join('');
+    }
+    setHTML(document.getElementById('retention-body'), html);
   } catch (e) {
     document.getElementById('retention-body').innerHTML =
       '<tr><td colspan="7" style="color:#b55e5e;">Failed to load</td></tr>';
@@ -600,7 +658,7 @@ async function refreshAll() {
   const winBackupTabActive = document.getElementById('tab-win-backup')?.classList.contains('active');
   const tasks = [loadAlerts(), loadStatus()];
   if (orchLogActive)      { tasks.push(loadOrchLog()); }
-  if (dbTabActive)        { tasks.push(loadVolumes(), loadMiniDlna(), loadRetention()); }
+  if (dbTabActive)        { tasks.push(loadVolumes().then(loadMiniDlna), loadRetention()); }
   if (backupsTabActive)   { tasks.push(loadBackups()); }
   if (winBackupTabActive) { tasks.push(loadWinStorages(), loadWinJobs(), loadWinLog()); }
   await Promise.all(tasks);

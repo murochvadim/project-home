@@ -2267,35 +2267,34 @@ app.get('/api/health/dashboard-stats', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Project Health — DB table → theme groups ───────────────
+// Single source for the collapsible grouping shared by the DB-Volumes + Retention
+// cards. New table → add it to the right group (else it falls into "Other").
+const DBV_GROUPS = [
+  ['Boiler & Weather',      ['raw_data','agent_boiler_data','raw_weather','raw_weather_daily','boiler_consumptions','sync_signals']],
+  ['Orchestrator & System', ['orchestrator_log','system_alerts','agents','agent_settings','manual_requests','retention_policies','dashboard_settings']],
+  ['Voice',                 ['voice_token_log','voice_devices','voice_device_settings','voice_intent_phrases','voice_device_entities']],
+  ['Media & Faces',         ['media_library','media_playlists','face_registry','face_crops','person_embeddings','documents','pixoo_presets','pixoo_log','analyzer_settings','analyzer_log']],
+  ['Devices & Rooms',       ['devices','device_events','device_agent_log','device_blocklist','rooms','room_device_placements','manual_people_log']],
+  ['Network',               ['net_devices','net_ports','net_scans','cellular_antennas']],
+  ['Rule Engine',           ['rule_events','rule_engine_state','rule_engine_log']],
+  ['Panels & Boards',       ['hasp_panels','hasp_buttons','hasp_displays','esp_boards']],
+  ['Backup',                ['backup_storages','backup_jobs','backup_log']],
+  ['Power & UPS',           ['power_consumption','power_devices','power_bills','water_bills','ups_status','ups_power_events']],
+  ['Gateway / NetBird',     ['netbird_peers_local','netbird_tenant_settings','gateway_peer_transitions']],
+  ['Geolocation',           ['device_locations','phone_trips']],
+  ['Medical',               ['medical_contacts','medical_documents','medical_test_results']],
+  ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_steps','ph_steps_excluded_trips']],
+  ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_doc_crypto','visited_places']],
+  ['Reminders',             ['reminder_state']],
+];
+const DBV_TABLES = DBV_GROUPS.flatMap(g => g[1]);
+const DBV_TABLE_GROUP = Object.fromEntries(DBV_GROUPS.flatMap(g => g[1].map(t => [t, g[0]])));
+
 // ─── Project Health — DB Volumes ─────────────────────────────
 app.get('/api/health/db-volumes', async (req, res) => {
   try {
-    const tables = [
-      'raw_data', 'agent_boiler_data', 'raw_weather', 'raw_weather_daily',
-      'boiler_consumptions', 'orchestrator_log', 'sync_signals', 'system_alerts',
-      'voice_token_log', 'manual_requests', 'voice_devices', 'voice_device_settings',
-      'voice_intent_phrases', 'voice_device_entities', 'agents', 'agent_settings',
-      'media_library', 'media_playlists',
-      'face_registry', 'face_crops', 'person_embeddings', 'documents',
-      'backup_storages', 'backup_jobs', 'backup_log',
-      'devices', 'device_events', 'device_agent_log', 'device_blocklist',
-      'rooms', 'net_devices', 'net_ports', 'net_scans',
-      'rule_events', 'rule_engine_state', 'rule_engine_log',
-      'pixoo_presets', 'pixoo_log', 'analyzer_settings', 'analyzer_log',
-      'retention_policies', 'dashboard_settings', 'room_device_placements',
-      'manual_people_log', 'ups_status', 'ups_power_events',
-      'hasp_panels', 'hasp_buttons', 'hasp_displays',
-      'esp_boards',
-      'power_consumption', 'power_devices', 'power_bills', 'water_bills',
-      'netbird_peers_local', 'netbird_tenant_settings', 'gateway_peer_transitions',
-      'device_locations', 'phone_trips',
-      'medical_contacts', 'medical_documents', 'medical_test_results',
-      'cellular_antennas',
-      'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto',
-      'visited_places',
-      'household_users', 'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp', 'ph_steps',
-      'ph_steps_excluded_trips', 'reminder_state',
-    ];
+    const tables = DBV_TABLES;
     const tsCol = {
       raw_data: 'ts', agent_boiler_data: 'ts', raw_weather: 'ts', raw_weather_daily: 'ts',
       boiler_consumptions: 'start_ts', orchestrator_log: 'ts', sync_signals: 'ts',
@@ -2359,7 +2358,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
     const rangeMap = Object.fromEntries(ranges.map(r => [r.table_name, r]));
     const result = tables.map(t => {
       const s = sizes.rows.find(r => r.table_name === t) || { row_count: 0, dead_tup: 0, frag_pct: 0, total_size: '—', size_bytes: 0 };
-      return { table_name: t, row_count: parseInt(s.row_count) || 0,
+      return { table_name: t, group: DBV_TABLE_GROUP[t] || 'Other', row_count: parseInt(s.row_count) || 0,
                dead_tup: parseInt(s.dead_tup) || 0, frag_pct: parseFloat(s.frag_pct) || 0,
                total_size: s.total_size, size_bytes: parseInt(s.size_bytes) || 0,
                oldest: rangeMap[t]?.oldest || null, newest: rangeMap[t]?.newest || null,
@@ -2404,7 +2403,7 @@ app.get('/api/health/minidlna', async (req, res) => {
 app.get('/api/health/retention', async (req, res) => {
   try {
     const r = await db.query('SELECT * FROM retention_policies ORDER BY table_name');
-    res.json(r.rows);
+    res.json(r.rows.map(p => ({ ...p, group: DBV_TABLE_GROUP[p.table_name] || 'Other' })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
