@@ -104,8 +104,19 @@
       ? `<div style="font-size:0.8rem;"><span style="color:#a33;font-weight:600;">${label}:</span> ` +
         items.map(v => `<span style="display:inline-block;background:#fbeaea;color:#a33;border-radius:10px;padding:1px 8px;margin:2px 2px 0 0;">${esc(v)}</span>`).join('') + '</div>'
       : '';
-    host.innerHTML = block('⚠ Allergies', _phSplit(p && p.allergies)) + block('🩺 Conditions', _phSplit(p && p.conditions));
+    const html = block('⚠ Allergies', _phSplit(p && p.allergies)) + block('🩺 Conditions', _phSplit(p && p.conditions));
+    host.innerHTML = html;
+    host.style.display = 'none';                 // default CLOSED, not persisted — reset on every render
+    const tog = $('ph-ac-toggle');
+    if (tog) { tog.style.display = html ? '' : 'none'; tog.textContent = '👁'; tog.title = 'Show allergies & conditions'; }
   }
+  // toggle the read-only allergies/conditions chips (transient — not remembered)
+  window.phToggleAc = function () {
+    const host = $('ph-ac-display'), tog = $('ph-ac-toggle');
+    const show = host.style.display === 'none';
+    host.style.display = show ? 'flex' : 'none';
+    if (tog) { tog.textContent = show ? '🙈' : '👁'; tog.title = (show ? 'Hide' : 'Show') + ' allergies & conditions'; }
+  };
 
   // ── body-details form (sex / DOB / height) — name = the selected household user ──
   window.phEditDetails = function () {
@@ -140,7 +151,8 @@
     const p = profileFor(_selName);
     if (!p) {
       $('ph-summary').innerHTML = '<span style="font-size:0.72rem;color:#888;">No details yet — click <b>Edit details</b></span>';
-      $('ph-ac-display').innerHTML = '';
+      $('ph-ac-display').innerHTML = ''; $('ph-ac-display').style.display = 'none';
+      { const t = $('ph-ac-toggle'); if (t) t.style.display = 'none'; }
       $('ph-logcard').style.display = 'none';
       $('ph-bpcard').style.display = 'none';
       $('ph-stepscard').style.display = 'none';
