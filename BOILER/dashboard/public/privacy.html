@@ -241,9 +241,15 @@
       <label style="display:flex; align-items:center; gap:8px; font-size:0.92rem; margin-bottom:12px;">
         <input id="pv-rem-enabled" type="checkbox"> Enable reminder badge
       </label>
-      <label style="font-size:0.92rem;">Delay (snooze) minutes
-        <input id="pv-rem-snooze" type="number" min="1" max="1440" step="1" style="width:80px; padding:5px 8px; border:1px solid #ccc; border-radius:4px; text-align:center; margin-left:8px;">
+      <label style="font-size:0.92rem; display:flex; align-items:center; margin-bottom:8px;">
+        <span style="min-width:240px;">Delay (snooze) minutes</span>
+        <input id="pv-rem-snooze" type="number" min="1" max="1440" step="1" style="width:80px; padding:5px 8px; border:1px solid #ccc; border-radius:4px; text-align:center;">
       </label>
+      <label style="font-size:0.92rem; display:flex; align-items:center;">
+        <span style="min-width:240px;">💊 Late-dose carry-over (hours)</span>
+        <input id="pv-rem-medwin" type="number" min="0" max="24" step="1" style="width:80px; padding:5px 8px; border:1px solid #ccc; border-radius:4px; text-align:center;">
+      </label>
+      <div style="font-size:0.78rem; color:#888; margin:3px 0 0;">A med stays on the badge this many hours after its dose time, carrying past midnight (so a 23:30 dose doesn't vanish at 00:00). Daytime doses still show until end of day. 0 = old behavior (clears at midnight).</div>
       <div style="font-size:0.86rem; color:#555; margin:14px 0 6px;">Show the badge on these pages:</div>
       <div id="pv-rem-pages" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:4px 12px; font-size:0.82rem;"></div>
       <div style="display:flex; align-items:center; gap:10px; margin-top:16px;">
@@ -446,7 +452,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=1"></script>
-<script src="js/privacy.js?v=71"></script>
+<script src="js/privacy.js?v=72"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>

@@ -16,7 +16,11 @@
 //   POST /api/reminders/snooze   {rkey} -> snooze until now + snooze_min
 //   POST /api/reminders/clear    {rkey} -> clear this occurrence (next one re-appears)
 const SETTINGS_KEY = 'reminders';
-const DEFAULTS = { enabled: true, snooze_min: 30, pages: [] };
+// med_window_hours: how long a dose stays on the badge after its time, carrying
+// PAST MIDNIGHT (so a 23:30 dose doesn't vanish at 00:00). Daytime doses still
+// show until end of day via the same-day rule; this only adds the overnight
+// carry-over for late doses. 0 = legacy behavior (clears at midnight).
+const DEFAULTS = { enabled: true, snooze_min: 30, med_window_hours: 8, pages: [] };
 
 module.exports = (app, db) => {
   const err = (res, e) => res.status(500).json({ error: (e && e.message) || String(e) });
@@ -30,15 +34,19 @@ module.exports = (app, db) => {
     } catch (e) { return Object.assign({}, DEFAULTS); }
   }
 
-  // current Asia/Jerusalem date / HH:MM / dow + epoch, straight from the DB clock
+  // current Asia/Jerusalem date / HH:MM / dow + epoch, straight from the DB clock.
+  // Also yesterday's date + dow, for the overnight med carry-over.
   async function localNow() {
     const r = await db.query(
-      `SELECT (now() AT TIME ZONE 'Asia/Jerusalem')::date::text         AS ldate,
-              to_char(now() AT TIME ZONE 'Asia/Jerusalem','HH24:MI')    AS lhm,
-              lower(to_char(now() AT TIME ZONE 'Asia/Jerusalem','Dy'))  AS ldow,
-              extract(epoch from now())::bigint                          AS epoch`);
+      `SELECT (now() AT TIME ZONE 'Asia/Jerusalem')::date::text                          AS ldate,
+              to_char(now() AT TIME ZONE 'Asia/Jerusalem','HH24:MI')                     AS lhm,
+              lower(to_char(now() AT TIME ZONE 'Asia/Jerusalem','Dy'))                   AS ldow,
+              ((now() AT TIME ZONE 'Asia/Jerusalem')::date - 1)::text                    AS ydate,
+              lower(to_char((now() AT TIME ZONE 'Asia/Jerusalem') - interval '1 day','Dy')) AS ydow,
+              extract(epoch from now())::bigint                                          AS epoch`);
     return r.rows[0];
   }
+  const hm2min = (hm) => { const [h, m] = (hm || '0:0').split(':').map(Number); return h * 60 + m; };
 
   // is today a dose day for this med?
   function medDoseDay(m, ldate, ldow) {
@@ -80,11 +88,13 @@ module.exports = (app, db) => {
     return 1; // daily
   }
 
-  async function evaluate() {
+  async function evaluate(s) {
     const t = await localNow();
     const items = [];
 
     // ── medications ──
+    const winMin = Math.max(0, Math.round((Number(s.med_window_hours) || 0) * 60));
+    const nowMin = hm2min(t.lhm);
     const meds = (await db.query(
       `SELECT m.id, m.name, m.dose, m.freq, m.interval_n, m.times, m.dow,
               to_char(m.next_due,'YYYY-MM-DD') AS next_due, hu.name AS user_name
@@ -92,18 +102,30 @@ module.exports = (app, db) => {
          JOIN ph_profiles pr ON pr.id = m.profile_id
          LEFT JOIN household_users hu ON hu.id = pr.user_id
         WHERE m.active = true`)).rows;
+    const pushMed = (m, doseDate, slot) => items.push({
+      rkey: `med:${m.id}:${doseDate}:${slot || '-'}`,
+      user_name: m.user_name || '—',
+      label: '💊 ' + m.name + (m.dose ? ' · ' + m.dose : '') + (slot ? ' · ' + slot : ''),
+      kind: 'med',
+    });
     for (const m of meds) {
-      if (!medDoseDay(m, t.ldate, t.ldow)) continue;
-      let slots = (m.times || '').split(',').map(s => s.trim()).filter(Boolean);
-      if (!slots.length) slots = ['']; // no time → due all day
+      const slots = (m.times || '').split(',').map(x => x.trim()).filter(Boolean);
+      if (!slots.length) {
+        // no specific time → due all day today (no overnight carry)
+        if (medDoseDay(m, t.ldate, t.ldow)) pushMed(m, t.ldate, '');
+        continue;
+      }
       for (const slot of slots) {
-        if (slot && slot > t.lhm) continue; // dose time not reached yet (HH:MM string compare)
-        items.push({
-          rkey: `med:${m.id}:${t.ldate}:${slot || '-'}`,
-          user_name: m.user_name || '—',
-          label: '💊 ' + m.name + (m.dose ? ' · ' + m.dose : '') + (slot ? ' · ' + slot : ''),
-          kind: 'med',
-        });
+        const doseMin = hm2min(slot);
+        if (medDoseDay(m, t.ldate, t.ldow) && nowMin >= doseMin) {
+          // (1) today's dose: visible from its time until end of local day (unchanged)
+          pushMed(m, t.ldate, slot);
+        } else if (winMin > 0 && medDoseDay(m, t.ydate, t.ydow)
+                   && ((1440 - doseMin) + nowMin) < winMin) {
+          // (2) yesterday's late dose carried past midnight, up to winMin after its time.
+          //     Same rkey (dose date = yesterday) so a pre-midnight Clear still sticks.
+          pushMed(m, t.ydate, slot);
+        }
       }
     }
 
@@ -150,7 +172,7 @@ module.exports = (app, db) => {
     try {
       const s = await getSettings();
       if (!s.enabled) return res.json({ enabled: false, snooze_min: s.snooze_min, pages: s.pages || [], items: [] });
-      const items = await evaluate();
+      const items = await evaluate(s);
       res.json({ enabled: true, snooze_min: s.snooze_min, pages: s.pages || [], items });
     } catch (e) { err(res, e); }
   });

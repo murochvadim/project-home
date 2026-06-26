@@ -109,6 +109,7 @@ async function pvLoadReminders() {
   const pages = Array.isArray(cfg.pages) ? cfg.pages : [];
   const en = document.getElementById('pv-rem-enabled'); if (en) en.checked = cfg.enabled !== false;
   const sn = document.getElementById('pv-rem-snooze'); if (sn) sn.value = cfg.snooze_min || 30;
+  const mw = document.getElementById('pv-rem-medwin'); if (mw) mw.value = (cfg.med_window_hours != null ? cfg.med_window_hours : 8);
   const host = document.getElementById('pv-rem-pages');
   if (host) host.innerHTML = _PV_REM_PAGES.map(([slug, label]) =>
     `<label style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="pv-rem-page" value="${slug}" ${pages.indexOf(slug) !== -1 ? 'checked' : ''}> ${label}</label>`).join('');
@@ -117,9 +118,12 @@ async function pvLoadReminders() {
 async function pvSaveReminders() {
   const st = document.getElementById('pv-rem-status');
   const pages = Array.from(document.querySelectorAll('.pv-rem-page:checked')).map(c => c.value);
+  // med_window_hours allows a literal 0 (= old clear-at-midnight behavior).
+  const mwRaw = parseInt(document.getElementById('pv-rem-medwin').value, 10);
   const value = {
     enabled: document.getElementById('pv-rem-enabled').checked,
     snooze_min: Math.max(1, parseInt(document.getElementById('pv-rem-snooze').value, 10) || 30),
+    med_window_hours: Number.isFinite(mwRaw) ? Math.min(24, Math.max(0, mwRaw)) : 8,
     pages,
   };
   try {
