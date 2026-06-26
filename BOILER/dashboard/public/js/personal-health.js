@@ -110,15 +110,20 @@
       $('ph-summary').innerHTML = '<span style="font-size:0.72rem;color:#888;">No details yet — click <b>Edit details</b></span>';
       $('ph-logcard').style.display = 'none';
       $('ph-bpcard').style.display = 'none';
+      $('ph-stepscard').style.display = 'none';
       $('ph-medscard').style.display = 'none';
       _curProfileId = null;
       return;
     }
     $('ph-logcard').style.display = '';
     $('ph-bpcard').style.display = '';
+    $('ph-stepscard').style.display = '';
     $('ph-medscard').style.display = '';
     _curProfileId = p.id;
     phLoadMeds(p.id);
+    phLoadSteps();
+    phSchedRender('weight', p.weight_sched);
+    phSchedRender('bp', p.bp_sched);
     const h = p.height_cm != null ? Number(p.height_cm) : null;
     const meas = await (await fetch(`${API}/measurements?profile_id=${p.id}`)).json();
     const latestW = meas.length ? Number(meas[0].weight_kg)
@@ -171,6 +176,197 @@
     await fetch(`${API}/measurements/${id}`, { method: 'DELETE' });
     await phInit(); await renderDetail();
   };
+
+  // ── steps (daily counter) — keyed by the household_users id of the selected
+  // person, so manual entries and the LXC-104 walking-trip imports share a key. ──
+  const curUserId = () => (userByName(_selName) || {}).id || null;
+  async function phLoadSteps() {
+    const uid = curUserId();
+    if (!uid) { $('ph-st-today').innerHTML = 'Today: <b>—</b>'; return; }
+    try {
+      const s = await (await fetch(`${API}/steps?user_id=${uid}`)).json();
+      const tot = Number(s.today_total || 0), trip = Number(s.today_trip || 0), tc = Number(s.today_trip_count || 0);
+      $('ph-st-today').innerHTML = `Today: <b>${tot.toLocaleString()}</b> steps` +
+        (trip > 0 ? ` <span style="color:#888;">(${trip.toLocaleString()} from ${tc} walking trip${tc === 1 ? '' : 's'})</span>` : '');
+    } catch (e) { $('ph-st-today').innerHTML = 'Today: <b>—</b>'; }
+  }
+  window.phLogSteps = async function () {
+    const uid = curUserId(); if (!uid) return;
+    const n = $('ph-st-num').value;
+    if (!n) { $('ph-st-status').textContent = 'Enter steps'; return; }
+    const r = await fetch(`${API}/steps`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: uid, steps: n }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('ph-st-status').textContent = 'Failed: ' + (j.error || r.status); return; }
+    $('ph-st-num').value = ''; $('ph-st-status').textContent = '✓ saved ' + (j.measured_at || '');
+    await phLoadSteps();
+  };
+
+  // ── Measure schedule (Weight / BP) — {freq, interval_n} on the profile, drives
+  // a FUTURE reminder watcher. Same options as meds minus weekday / day / time. ──
+  const _schedPre = (kind) => (kind === 'weight' ? 'ph-w' : 'ph-bp');
+  function _schedToggleN(pre, freq) {
+    const showN = freq === 'every_n_days' || freq === 'every_n_months';
+    $(pre + '-interval').style.display = showN ? '' : 'none';
+    $(pre + '-interval-unit').style.display = showN ? '' : 'none';
+    $(pre + '-interval-unit').textContent = freq === 'every_n_months' ? 'months' : freq === 'every_n_days' ? 'days' : '';
+    return showN;
+  }
+  function phSchedRender(kind, sched) {
+    const pre = _schedPre(kind); sched = sched || {};
+    $(pre + '-freq').value = sched.freq || '';
+    const showN = _schedToggleN(pre, sched.freq);
+    $(pre + '-interval').value = showN && sched.interval_n != null ? sched.interval_n : '';
+    $(pre + '-sched-status').textContent = '';
+  }
+  window.phSchedChange = async function (kind) {
+    const p = profileFor(_selName); if (!p) return;
+    const pre = _schedPre(kind), col = kind === 'weight' ? 'weight_sched' : 'bp_sched';
+    const freq = $(pre + '-freq').value;
+    const showN = _schedToggleN(pre, freq);
+    let sched = null;
+    if (freq) { sched = { freq }; if (showN) sched.interval_n = Number($(pre + '-interval').value) || 1; }
+    const r = await fetch(`${API}/profiles/${p.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [col]: sched }) });
+    const st = $(pre + '-sched-status');
+    if (r.ok) { p[col] = sched; st.style.color = '#3a7d44'; st.textContent = '✓'; setTimeout(() => { st.textContent = ''; }, 1500); }
+    else { st.style.color = '#c0392b'; st.textContent = 'failed'; }
+  };
+
+  // ── Settings tab: step-counting config (dashboard_settings.medical.steps),
+  // read by the LXC-104 walking-trip → steps watcher. ──
+  const STEP_DEFAULTS = { steps_per_km: 1300, walk_min_kmh: 2, walk_max_kmh: 9, walk_max_km: 30, history_limit: 10 };
+  window.medSettingsInit = async function () {
+    let cfg = {};
+    try { const j = await (await fetch('/api/dashboard-settings/medical.steps')).json(); cfg = (j && j.value) || {}; } catch (e) {}
+    cfg = Object.assign({}, STEP_DEFAULTS, cfg);
+    $('set-steps-per-km').value = cfg.steps_per_km;
+    $('set-walk-min').value     = cfg.walk_min_kmh;
+    $('set-walk-max').value     = cfg.walk_max_kmh;
+    $('set-walk-maxkm').value   = cfg.walk_max_km;
+    $('set-history-limit').value = cfg.history_limit;
+    $('set-status').textContent = '';
+  };
+  window.medSettingsSave = async function () {
+    const value = {
+      steps_per_km: Number($('set-steps-per-km').value) || STEP_DEFAULTS.steps_per_km,
+      walk_min_kmh: Number($('set-walk-min').value)     || STEP_DEFAULTS.walk_min_kmh,
+      walk_max_kmh: Number($('set-walk-max').value)     || STEP_DEFAULTS.walk_max_kmh,
+      walk_max_km:  Number($('set-walk-maxkm').value)   || STEP_DEFAULTS.walk_max_km,
+      history_limit: Number($('set-history-limit').value) || STEP_DEFAULTS.history_limit,
+    };
+    try {
+      const r = await fetch('/api/dashboard-settings/medical.steps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      $('set-status').style.color = '#2e7d32'; $('set-status').textContent = '✓ Saved';
+    } catch (e) { $('set-status').style.color = '#c0392b'; $('set-status').textContent = 'Failed: ' + e.message; }
+  };
+
+  // ── History modal (Log weight / Log BP / Daily steps): last-N list (limit from
+  // Settings) + per-row edit + remove, and a "+ Add" with a chosen timestamp. ──
+  const HIST = {
+    weight: {
+      title: 'Weight history', base: () => `${API}/measurements`, ok: () => !!_curProfileId,
+      listUrl: (n) => `${API}/measurements?profile_id=${_curProfileId}&limit=${n}`,
+      fields: [{ k: 'weight_kg', ph: 'kg', step: '0.1', w: 80 }],
+      rowVal: (r) => `${esc(r.weight_kg)} kg`,
+      addBody: (v, ts) => ({ profile_id: _curProfileId, weight_kg: v.weight_kg, measured_at: ts }),
+      patchBody: (v, ts) => ({ weight_kg: v.weight_kg, measured_at: ts }),
+    },
+    bp: {
+      title: 'Blood pressure history', base: () => `${API}/bp`, ok: () => !!_curProfileId,
+      listUrl: (n) => `${API}/bp?profile_id=${_curProfileId}&limit=${n}`,
+      fields: [{ k: 'systolic', ph: 'sys', w: 60 }, { k: 'diastolic', ph: 'dia', w: 60 }, { k: 'pulse', ph: 'pulse', w: 60 }],
+      rowVal: (r) => `${r.systolic == null ? '—' : r.systolic}/${r.diastolic == null ? '—' : r.diastolic}${r.pulse != null ? ' · ♥ ' + r.pulse : ''}`,
+      addBody: (v, ts) => ({ profile_id: _curProfileId, systolic: v.systolic || null, diastolic: v.diastolic || null, pulse: v.pulse || null, measured_at: ts }),
+      patchBody: (v, ts) => ({ systolic: v.systolic || null, diastolic: v.diastolic || null, pulse: v.pulse || null, measured_at: ts }),
+    },
+    steps: {
+      title: 'Steps history', base: () => `${API}/steps`, ok: () => !!curUserId(),
+      listUrl: (n) => `${API}/steps/list?user_id=${curUserId()}&limit=${n}`,
+      fields: [{ k: 'steps', ph: 'steps', w: 90 }],
+      rowVal: (r) => `${Number(r.steps).toLocaleString()} steps` + (r.source === 'trip' ? ' <span style="font-size:0.66rem;background:#e0f2fe;color:#075985;padding:1px 6px;border-radius:8px;">trip</span>' : ''),
+      addBody: (v, ts) => ({ user_id: curUserId(), steps: v.steps, measured_at: ts }),
+      patchBody: (v, ts) => ({ steps: v.steps, measured_at: ts }),
+    },
+  };
+  let _histKind = null, _histRows = [], _histLimit = 10;
+  const _histTs = (d, t) => { if (!d) return null; try { return new Date(d + 'T' + (t || '00:00')).toISOString(); } catch (e) { return null; } };
+
+  window.phHistory = async function (kind) {
+    const c = HIST[kind]; if (!c || !c.ok()) return;
+    _histKind = kind;
+    try { const j = await (await fetch('/api/dashboard-settings/medical.steps')).json(); _histLimit = (j && j.value && Number(j.value.history_limit)) || 10; } catch (e) { _histLimit = 10; }
+    $('ph-hist-title').textContent = c.title;
+    _histBuildAdd();
+    await _histList();
+    $('ph-hist-modal').style.display = 'flex';
+  };
+  window.phHistClose = function () { $('ph-hist-modal').style.display = 'none'; };
+  window.phHistReload = async function () { await _histList(); };
+
+  function _histBuildAdd() {
+    const c = HIST[_histKind];
+    const now = new Date();
+    const d = now.toISOString().slice(0, 10), t = now.toTimeString().slice(0, 5);
+    const flds = c.fields.map(f => `<label style="font-size:0.72rem;color:#555;">${f.ph}<br><input id="pha-${f.k}" type="number" ${f.step ? `step="${f.step}"` : ''} min="0" style="width:${f.w}px;padding:5px;box-sizing:border-box;"></label>`).join('');
+    $('ph-hist-add').innerHTML =
+      `<label style="font-size:0.72rem;color:#555;">Date<br><input id="pha-date" type="date" value="${d}" style="padding:5px;"></label>` +
+      `<label style="font-size:0.72rem;color:#555;">Time<br><input id="pha-time" type="time" value="${t}" style="padding:5px;"></label>` + flds +
+      `<button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phHistAdd()">+ Add</button>`;
+  }
+  async function _histList() {
+    const c = HIST[_histKind];
+    try { _histRows = await (await fetch(c.listUrl(_histLimit))).json(); } catch (e) { _histRows = []; }
+    if (!Array.isArray(_histRows)) _histRows = [];
+    const host = $('ph-hist-list');
+    host.innerHTML = _histRows.length ? _histRows.map(_histRowHtml).join('')
+      : '<div style="color:#aaa;padding:10px;">No entries yet.</div>';
+  }
+  function _histRowHtml(r) {
+    return `<div id="ph-hr-${r.id}" style="display:flex;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid #eee;font-size:0.85rem;">
+      <span style="color:#888;min-width:120px;">${esc(r.measured_at || '')}</span>
+      <span style="flex:1;">${HIST[_histKind].rowVal(r)}</span>
+      <button class="btn btn-secondary btn-sm" onclick="phHistEdit(${r.id})">Edit</button>
+      <button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="phHistDel(${r.id})">✕</button>
+    </div>`;
+  }
+  window.phHistEdit = function (id) {
+    const r = _histRows.find(x => x.id === id); if (!r) return;
+    const c = HIST[_histKind];
+    const parts = (r.measured_at || '').split(' '), d = parts[0] || '', t = parts[1] || '';
+    const flds = c.fields.map(f => `<input id="phe-${id}-${f.k}" type="number" ${f.step ? `step="${f.step}"` : ''} min="0" value="${r[f.k] != null ? r[f.k] : ''}" placeholder="${f.ph}" style="width:${f.w}px;padding:4px 6px;">`).join(' ');
+    $('ph-hr-' + id).innerHTML =
+      `<input id="phe-${id}-date" type="date" value="${d}" style="padding:4px;"> ` +
+      `<input id="phe-${id}-time" type="time" value="${t}" style="padding:4px;"> ` + flds +
+      ` <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phHistSave(${id})">Save</button>` +
+      ` <button class="btn btn-secondary btn-sm" onclick="phHistReload()">Cancel</button>`;
+  };
+  window.phHistSave = async function (id) {
+    const c = HIST[_histKind];
+    const v = {}; c.fields.forEach(f => v[f.k] = $('phe-' + id + '-' + f.k).value);
+    const ts = _histTs($('phe-' + id + '-date').value, $('phe-' + id + '-time').value);
+    const r = await fetch(`${c.base()}/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c.patchBody(v, ts)) });
+    if (!r.ok) { alert('Save failed'); return; }
+    await _histList(); await _histRefreshCard();
+  };
+  window.phHistDel = async function (id) {
+    if (!confirm('Remove this entry?')) return;
+    await fetch(`${HIST[_histKind].base()}/${id}`, { method: 'DELETE' });
+    await _histList(); await _histRefreshCard();
+  };
+  window.phHistAdd = async function () {
+    const c = HIST[_histKind];
+    const v = {}; c.fields.forEach(f => v[f.k] = $('pha-' + f.k).value);
+    if (c.fields.every(f => !v[f.k])) return;
+    const ts = _histTs($('pha-date').value, $('pha-time').value);
+    const r = await fetch(c.base(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c.addBody(v, ts)) });
+    if (!r.ok) { alert('Add failed'); return; }
+    c.fields.forEach(f => $('pha-' + f.k).value = '');
+    await _histList(); await _histRefreshCard();
+  };
+  async function _histRefreshCard() {
+    if (_histKind === 'steps') await phLoadSteps(); else await renderDetail();
+  }
 
   // ── Medications (pills) ──────────────────────────────────────────────────────
   function medSchedText(m) {

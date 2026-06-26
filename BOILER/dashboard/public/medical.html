@@ -110,6 +110,7 @@
     <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
     <button class="tab-btn"        onclick="showMedTab('tests',     this); medTestsInit();">Tests</button>
     <button class="tab-btn"        onclick="showMedTab('personal-health', this); phInit();">Personal Health</button>
+    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit();">Settings</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -417,15 +418,25 @@
       <!-- Log weight + Log blood pressure — side by side -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
         <div class="card" id="ph-logcard" style="margin-bottom:0;">
-          <h3 style="margin:0 0 10px;">Log weight</h3>
+          <h3 style="margin:0 0 10px;display:flex;align-items:center;">Log weight<button onclick="phHistory('weight')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
           <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
             <label style="font-size:0.78rem;color:#555;">Weight (kg)<br><input id="ph-w-kg" type="number" step="0.1" min="0" placeholder="70" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
             <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogWeight()">Save</button>
             <span id="ph-w-status" style="font-size:0.78rem;color:#888;"></span>
           </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:10px;font-size:0.76rem;color:#555;">
+            <span title="Reminder schedule — for a future notification">🔔 Measure:</span>
+            <select id="ph-w-freq" onchange="phSchedChange('weight')" style="padding:4px 6px;font-size:0.76rem;">
+              <option value="">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+              <option value="every_n_days">Every N days</option><option value="every_n_months">Every N months</option>
+            </select>
+            <input id="ph-w-interval" type="number" min="1" placeholder="N" onchange="phSchedChange('weight')" style="width:48px;padding:4px;display:none;font-size:0.76rem;">
+            <span id="ph-w-interval-unit" style="display:none;color:#888;"></span>
+            <span id="ph-w-sched-status" style="color:#3a7d44;"></span>
+          </div>
         </div>
         <div class="card" id="ph-bpcard" style="margin-bottom:0;">
-          <h3 style="margin:0 0 10px;">Log blood pressure</h3>
+          <h3 style="margin:0 0 10px;display:flex;align-items:center;">Log blood pressure<button onclick="phHistory('bp')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
           <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
             <label style="font-size:0.78rem;color:#555;">Systolic<br><input id="ph-bp-sys" type="number" min="0" placeholder="120" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
             <label style="font-size:0.78rem;color:#555;">Diastolic<br><input id="ph-bp-dia" type="number" min="0" placeholder="80" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
@@ -433,11 +444,76 @@
             <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogBP()">Save</button>
             <span id="ph-bp-status" style="font-size:0.78rem;color:#888;"></span>
           </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:10px;font-size:0.76rem;color:#555;">
+            <span title="Reminder schedule — for a future notification">🔔 Measure:</span>
+            <select id="ph-bp-freq" onchange="phSchedChange('bp')" style="padding:4px 6px;font-size:0.76rem;">
+              <option value="">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+              <option value="every_n_days">Every N days</option><option value="every_n_months">Every N months</option>
+            </select>
+            <input id="ph-bp-interval" type="number" min="1" placeholder="N" onchange="phSchedChange('bp')" style="width:48px;padding:4px;display:none;font-size:0.76rem;">
+            <span id="ph-bp-interval-unit" style="display:none;color:#888;"></span>
+            <span id="ph-bp-sched-status" style="color:#3a7d44;"></span>
+          </div>
+        </div>
+        <div class="card" id="ph-stepscard" style="margin-bottom:0;">
+          <h3 style="margin:0 0 10px;display:flex;align-items:center;">👟 Daily steps<button onclick="phHistory('steps')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+            <label style="font-size:0.78rem;color:#555;">Add steps<br><input id="ph-st-num" type="number" min="0" placeholder="2000" style="padding:5px 8px;width:90px;box-sizing:border-box;height:32px;"></label>
+            <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogSteps()">Save</button>
+            <span id="ph-st-status" style="font-size:0.78rem;color:#888;"></span>
+          </div>
+          <div id="ph-st-today" style="font-size:0.82rem;color:#555;margin-top:8px;">Today: <b>—</b></div>
         </div>
       </div>
     </div>
 
   </div><!-- /tab-personal-health -->
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Settings (step counting + walking detection)          -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-settings">
+    <div class="card" style="max-width:640px;">
+      <h2 style="margin-top:0;">👟 Step counting</h2>
+      <p style="font-size:0.84rem;color:#666;margin:0 0 14px;">
+        Walking trips from <b>Project General → Recent trips</b> are auto-converted to steps (per person, by phone) by a watcher on LXC 104.
+        A trip counts as <b>walking</b> by its <b>average speed</b> (not distance — you can drive a short way or walk a long way); distance is only a sanity cap.
+      </p>
+      <div style="display:grid;grid-template-columns:max-content 1fr;gap:10px 14px;align-items:center;max-width:460px;">
+        <label style="font-size:0.85rem;color:#555;">Steps per km</label>
+        <input id="set-steps-per-km" type="number" min="1" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Walking speed — min (km/h)</label>
+        <input id="set-walk-min" type="number" min="0" step="0.1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Walking speed — max (km/h)</label>
+        <input id="set-walk-max" type="number" min="0" step="0.1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Max walking distance (km, cap)</label>
+        <input id="set-walk-maxkm" type="number" min="0" step="0.5" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">History — show last N entries</label>
+        <input id="set-history-limit" type="number" min="1" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+      </div>
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center;">
+        <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="medSettingsSave()">💾 Save</button>
+        <span id="set-status" style="font-size:0.82rem;color:#888;"></span>
+      </div>
+      <div style="font-size:0.78rem;color:#999;margin-top:12px;">
+        Defaults: 1300 steps/km · walking 2–9 km/h · cap 30 km. A trip with avg speed in the window (and ≤ cap) is imported once; both manual entries and trip-steps add to the daily total.
+      </div>
+    </div>
+  </div><!-- /tab-settings -->
+
+  <!-- Shared history modal for Log weight / Log blood pressure / Daily steps:
+       last-N list (limit from Settings) with per-row edit + remove, and a "+ Add"
+       form that accepts a chosen timestamp (backdate / re-add). -->
+  <div id="ph-hist-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:10px;padding:18px 20px;min-width:360px;max-width:94vw;max-height:86vh;overflow:auto;box-shadow:0 8px 30px rgba(0,0,0,0.3);">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <h3 id="ph-hist-title" style="margin:0;">History</h3>
+        <button onclick="phHistClose()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1.2rem;">✕</button>
+      </div>
+      <div id="ph-hist-add" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px;background:#fafaf6;border-radius:6px;margin-bottom:12px;"></div>
+      <div id="ph-hist-list"></div>
+    </div>
+  </div>
 
 </main>
 
@@ -550,7 +626,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=11"></script>
+<script src="js/personal-health.js?v=14"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>
