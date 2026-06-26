@@ -294,7 +294,7 @@
 
   // ── Settings tab: step-counting config (dashboard_settings.medical.steps),
   // read by the LXC-104 walking-trip → steps watcher. ──
-  const STEP_DEFAULTS = { steps_per_km: 1300, walk_min_kmh: 2, walk_max_kmh: 9, walk_max_km: 30, history_limit: 10 };
+  const STEP_DEFAULTS = { steps_per_km: 1300, walk_min_kmh: 2, walk_max_kmh: 9, walk_max_km: 30, jitter_pct: 25, history_limit: 10 };
   window.medSettingsInit = async function () {
     let cfg = {};
     try { const j = await (await fetch('/api/dashboard-settings/medical.steps')).json(); cfg = (j && j.value) || {}; } catch (e) {}
@@ -303,15 +303,20 @@
     $('set-walk-min').value     = cfg.walk_min_kmh;
     $('set-walk-max').value     = cfg.walk_max_kmh;
     $('set-walk-maxkm').value   = cfg.walk_max_km;
+    $('set-jitter-pct').value   = cfg.jitter_pct;
     $('set-history-limit').value = cfg.history_limit;
     $('set-status').textContent = '';
   };
   window.medSettingsSave = async function () {
+    // jitter_pct allows a literal 0 (no discount), so don't use `|| default`.
+    const jpRaw = Number($('set-jitter-pct').value);
+    const jp = Number.isFinite(jpRaw) ? Math.min(60, Math.max(0, jpRaw)) : STEP_DEFAULTS.jitter_pct;
     const value = {
       steps_per_km: Number($('set-steps-per-km').value) || STEP_DEFAULTS.steps_per_km,
       walk_min_kmh: Number($('set-walk-min').value)     || STEP_DEFAULTS.walk_min_kmh,
       walk_max_kmh: Number($('set-walk-max').value)     || STEP_DEFAULTS.walk_max_kmh,
       walk_max_km:  Number($('set-walk-maxkm').value)   || STEP_DEFAULTS.walk_max_km,
+      jitter_pct:   jp,
       history_limit: Number($('set-history-limit').value) || STEP_DEFAULTS.history_limit,
     };
     try {

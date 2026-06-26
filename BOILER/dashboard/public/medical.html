@@ -502,6 +502,8 @@
         <input id="set-walk-max" type="number" min="0" step="0.1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
         <label style="font-size:0.85rem;color:#555;">Max walking distance (km, cap)</label>
         <input id="set-walk-maxkm" type="number" min="0" step="0.5" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">GPS jitter discount (%)<br><span style="font-size:0.72rem;color:#999;">trims noisy GPS path before speed + steps</span></label>
+        <input id="set-jitter-pct" type="number" min="0" max="60" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
         <label style="font-size:0.85rem;color:#555;">History — show last N entries</label>
         <input id="set-history-limit" type="number" min="1" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
       </div>
@@ -641,7 +643,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=23"></script>
+<script src="js/personal-health.js?v=24"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

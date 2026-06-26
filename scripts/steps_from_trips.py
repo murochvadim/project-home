@@ -21,8 +21,13 @@ DB = dict(host='192.168.1.219', dbname='home_data', user='postgres')
 # min_trip_dist_m: a trip whose stored max distance-from-home is below this is treated
 # as GPS noise / a phantom (same 250 m line the geo janitor + Recent-trips view use)
 # and NOT counted as steps.
+# jitter_pct: GPS path_length_m is the sum of every ping-to-ping hop, so GPS noise
+# (a phone logging tiny zig-zags while you walk/pause) inflates it — typically ~25-30%
+# vs the real walked distance. We trim that % off the logged path BEFORE judging speed
+# AND counting steps, so a normal walk isn't misread as "too fast" and steps aren't
+# overcounted. One coherent idea: "assume jitter_pct of the logged path is noise."
 DEFAULTS = {'steps_per_km': 1300, 'walk_min_kmh': 2.0, 'walk_max_kmh': 9.0,
-            'walk_max_km': 30.0, 'min_trip_dist_m': 250.0}
+            'walk_max_km': 30.0, 'min_trip_dist_m': 250.0, 'jitter_pct': 25.0}
 
 
 def main():
@@ -47,6 +52,7 @@ def main():
     vmax = float(cfg['walk_max_kmh'])
     maxkm = float(cfg['walk_max_km'])
     min_dist = float(cfg['min_trip_dist_m'])
+    jfac = max(0.0, min(0.6, float(cfg['jitter_pct']) / 100.0))  # fraction of logged path treated as GPS noise
 
     # --- reconcile: drop trip-derived step rows whose trip no longer exists ---
     # The geo janitor (LXC 104, */5) DELETEs GPS-phantom trips from phone_trips
@@ -74,8 +80,9 @@ def main():
 
     imported = skipped_speed = skipped_user = 0
     for (tid, dl, plen, dur, ret) in rows:
-        avg_kmh = (plen / dur) * 3.6
-        km = plen / 1000.0
+        eff_m = plen * (1.0 - jfac)          # de-noised walked distance
+        avg_kmh = (eff_m / dur) * 3.6        # speed judged on the de-noised distance
+        km = eff_m / 1000.0
         if not (vmin <= avg_kmh <= vmax) or km > maxkm:
             skipped_speed += 1
             continue
@@ -83,7 +90,7 @@ def main():
         if not uid:
             skipped_user += 1
             continue
-        steps = round(km * spk)
+        steps = round(km * spk)              # steps also from the de-noised distance
         try:
             cur.execute(
                 "INSERT INTO ph_steps (user_id, measured_at, steps, source, trip_id) "
@@ -94,7 +101,7 @@ def main():
 
     print(f'steps_from_trips: reconciled_orphans={reconciled} imported={imported} '
           f'skipped_speed={skipped_speed} skipped_no_user={skipped_user} candidates={len(rows)} '
-          f'cfg(spk={spk} {vmin}-{vmax}km/h dist>{min_dist}m cap={maxkm}km)')
+          f'cfg(spk={spk} {vmin}-{vmax}km/h dist>{min_dist}m cap={maxkm}km jitter={jfac*100:.0f}%)')
 
 
 if __name__ == '__main__':
