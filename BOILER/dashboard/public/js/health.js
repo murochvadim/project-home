@@ -495,31 +495,38 @@ async function loadRetention() {
     const rc = Object.fromEntries(vols.map(v => [v.table_name, v.row_count]));
     const { order, byGroup } = _dbGroupRows(rows);
     const exp = _dbExpanded();
-    const retRow = (p, collapsed) => `
+    const retRow = (p, collapsed) => {
+      const prot = !!p.protected, dis = prot ? 'disabled' : '', bg = prot ? '#ececec' : '#faf8f5';
+      return `
       <tr id="row-${p.table_name}" data-dbgrp="${escHtml(p.group || 'Other')}" style="${collapsed ? 'display:none;' : ''}">
         <td><code>${p.table_name}</code></td>
         <td style="font-size:0.78rem; color:#666;">${p.description || '—'}</td>
         <td style="text-align:center;">
-          <input type="number" min="1" value="${p.keep_days ?? ''}" placeholder="∞"
-            style="width:60px; text-align:center; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:#faf8f5;"
+          <input type="number" min="1" value="${p.keep_days ?? ''}" placeholder="∞" ${dis}
+            style="width:60px; text-align:center; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:${bg};"
             id="keep-${p.table_name}">
         </td>
         <td style="text-align:center;">
-          <input type="checkbox" ${p.auto_clean ? 'checked' : ''} id="auto-${p.table_name}">
+          <input type="checkbox" ${p.auto_clean ? 'checked' : ''} ${dis} id="auto-${p.table_name}">
         </td>
         <td style="text-align:center;">
-          <input type="number" min="1" value="${p.clean_interval_hours}"
-            style="width:55px; text-align:center; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:#faf8f5;"
+          <input type="number" min="1" value="${p.clean_interval_hours}" ${dis}
+            style="width:55px; text-align:center; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:3px; padding:2px 4px; background:${bg};"
             id="interval-${p.table_name}">
         </td>
         <td style="font-size:0.78rem; color:#666;">${fmtTs(p.last_cleaned_at)}</td>
-        <td style="text-align:center; white-space:nowrap;">
-          <button class="btn btn-secondary btn-sm" style="font-size:0.72rem; padding:3px 8px; margin-right:4px;"
-            onclick="savePolicy('${p.table_name}')">Save</button>
-          <button class="btn btn-secondary btn-sm" style="font-size:0.72rem; padding:3px 8px;"
-            onclick="cleanTable('${p.table_name}')" ${p.keep_days ? '' : 'disabled title="No retention limit set"'}>Clean</button>
+        <td style="white-space:nowrap;">
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button class="btn btn-secondary btn-sm" style="font-size:0.72rem; padding:3px 8px;"
+              onclick="savePolicy('${p.table_name}')" ${dis}>Save</button>
+            <button class="btn btn-secondary btn-sm" style="font-size:0.72rem; padding:3px 8px;"
+              onclick="cleanTable('${p.table_name}')" ${(p.keep_days && !prot) ? '' : `disabled title="${prot ? 'Protected' : 'No retention limit set'}"`}>Clean</button>
+            <span onclick="protectTable('${p.table_name}', ${!prot})" title="${prot ? 'Protected from cleaning — click to unprotect' : 'Click to protect from cleaning'}"
+              style="margin-left:auto; width:1.4em; text-align:center; cursor:pointer; user-select:none; font-size:0.95rem; opacity:${prot ? '1' : '0.25'};">${prot ? '🔒' : '🔓'}</span>
+          </div>
         </td>
       </tr>`;
+    };
     let html = '';
     for (const g of order) {
       const grp = byGroup[g].slice().sort((a, b) => (rc[a.table_name] ?? Infinity) - (rc[b.table_name] ?? Infinity));
@@ -576,7 +583,7 @@ async function cleanTable(tableName) {
 }
 
 async function cleanAll() {
-  if (!confirm('Run cleanup on ALL tables with a retention limit set?\n\nThis will permanently delete old rows and cannot be undone.')) return;
+  if (!confirm('Run cleanup on all tables with a retention limit set?\n\n🔒 Protected tables (medical / privacy / health) are skipped.\nThis permanently deletes old rows and cannot be undone.')) return;
   showCleanupResult('Running full cleanup…');
   try {
     const r = await fetch('/api/health/cleanup', {
@@ -592,6 +599,20 @@ async function cleanAll() {
   } catch (e) {
     showCleanupResult(`✗ Failed: ${escHtml(e.message)}`, true);
   }
+}
+
+// Toggle a table's "protected" flag (locks it from keep-days/auto-clean/Clean +
+// the server refuses to clean it). Confirm only when REMOVING the protection.
+async function protectTable(name, prot) {
+  if (!prot && !confirm(`Unprotect "${name}"?\n\nThis re-enables retention limits + cleaning for it. Only do this if you're sure. Continue?`)) return;
+  try {
+    const r = await fetch('/api/health/retention', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ table_name: name, protected: prot }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    await loadRetention();
+  } catch (e) { showCleanupResult('✗ Protect failed: ' + escHtml(e.message), true); }
 }
 
 function showCleanupResult(msg, isError = false) {

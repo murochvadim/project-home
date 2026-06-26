@@ -359,10 +359,15 @@ def check_backup_freshness(cur):
 
 # ── Retention cleanup ────────────────────────────────────────────────────────
 def run_retention(cur):
+    # `protected` tables (medical / privacy / personal-health, lockable from the
+    # Project Health UI) are NEVER auto-cleaned — the flag must be authoritative
+    # here, not just on the dashboard's manual cleanup endpoint. COALESCE guards
+    # older DBs where the column predates this clause.
     cur.execute("""
         SELECT table_name, keep_days, clean_interval_hours, last_cleaned_at
         FROM retention_policies
         WHERE auto_clean = true AND keep_days IS NOT NULL
+          AND COALESCE(protected, false) = false
     """)
     policies = cur.fetchall()
     results = []

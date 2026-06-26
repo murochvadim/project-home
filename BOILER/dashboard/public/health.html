@@ -336,7 +336,7 @@
       </table>
       <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
         <button class="btn btn-secondary btn-sm" onclick="cleanAll()">🧹 Clean All Now</button>
-        <span style="font-size:0.78rem; color:#9b2335;">Deletes old rows from every table according to retention limit.</span>
+        <span style="font-size:0.78rem; color:#9b2335;">Deletes old rows per retention limit. 🔒 Protected tables are skipped.</span>
         <span id="cleanup-result" style="font-size:0.8rem; color:#666;"></span>
       </div>
     </div>
@@ -857,6 +857,6 @@ async function deploy() {
 <script src="js/reminders-badge.js?v=1"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=50"></script>
+<script src="js/health.js?v=56"></script>
 </body>
 </html>

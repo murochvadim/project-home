@@ -196,6 +196,8 @@ Every agent in the `agents` table must follow:
 
 Retention uses the `ts` or `detected_at` column (whichever exists). Table and column names validated with regex before use in dynamic SQL.
 
+**Protected tables are never auto-cleaned (2026-06-26):** `run_retention()`'s policy SELECT has `AND COALESCE(protected, false) = false`, so any `retention_policies` row with `protected = true` (the medical / privacy / personal-health lock set from the Project Health UI's 🔒 toggle) is skipped here too — not just on the dashboard's manual cleanup endpoint. This matters because some protected tables have an aging-candidate column (`ph_medications.started_at`) that would otherwise be deleted on if `auto_clean`/`keep_days` were ever set.
+
 ---
 
 ## Deploy

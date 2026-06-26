@@ -2408,13 +2408,20 @@ app.get('/api/health/retention', async (req, res) => {
 });
 
 app.post('/api/health/retention', async (req, res) => {
-  const { table_name, keep_days, auto_clean, clean_interval_hours } = req.body;
+  const { table_name, keep_days, auto_clean, clean_interval_hours, protected: prot } = req.body;
+  if (!table_name) return res.status(400).json({ error: 'table_name required' });
+  // Partial update: only fields present in the body change — so the protect toggle
+  // can send {table_name, protected} without wiping keep_days/auto_clean.
+  const sets = [], params = [];
+  const add = (c, v) => { params.push(v); sets.push(`${c} = $${params.length}`); };
+  if (keep_days            !== undefined) add('keep_days', keep_days ?? null);
+  if (auto_clean           !== undefined) add('auto_clean', !!auto_clean);
+  if (clean_interval_hours !== undefined) add('clean_interval_hours', clean_interval_hours ?? 24);
+  if (prot                 !== undefined) add('protected', !!prot);
+  if (!sets.length) return res.json({ ok: true });
+  params.push(table_name);
   try {
-    await db.query(`
-      UPDATE retention_policies
-      SET keep_days = $1, auto_clean = $2, clean_interval_hours = $3
-      WHERE table_name = $4
-    `, [keep_days ?? null, !!auto_clean, clean_interval_hours ?? 24, table_name]);
+    await db.query(`UPDATE retention_policies SET ${sets.join(', ')} WHERE table_name = $${params.length}`, params);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2426,8 +2433,8 @@ app.post('/api/health/cleanup', async (req, res) => {
   try {
     const policies = await db.query(
       table_name
-        ? 'SELECT * FROM retention_policies WHERE table_name = $1 AND keep_days IS NOT NULL'
-        : 'SELECT * FROM retention_policies WHERE keep_days IS NOT NULL',
+        ? 'SELECT * FROM retention_policies WHERE table_name = $1 AND keep_days IS NOT NULL AND protected = false'
+        : 'SELECT * FROM retention_policies WHERE keep_days IS NOT NULL AND protected = false',
       table_name ? [table_name] : []
     );
 
@@ -5726,9 +5733,14 @@ async function ensureSchema() {
       auto_clean           BOOLEAN NOT NULL DEFAULT false,
       clean_interval_hours INTEGER NOT NULL DEFAULT 24,
       last_cleaned_at      TIMESTAMPTZ,
-      description          TEXT
+      description          TEXT,
+      protected            BOOLEAN NOT NULL DEFAULT false
     )
   `);
+  // Self-migrate existing DBs: add `protected` if the column is missing (idempotent).
+  await db.query(`ALTER TABLE retention_policies ADD COLUMN IF NOT EXISTS protected BOOLEAN NOT NULL DEFAULT false`);
+  // NOTE: the one-time protect-seed for medical / privacy / personal-health tables
+  // lives AFTER the dashboard_settings CREATE below (it uses a sentinel key there).
   // Seed default policies if table is empty
   await db.query(`
     INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description)
@@ -5761,6 +5773,28 @@ async function ensureSchema() {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  // One-time protect-seed: lock medical / privacy / personal-health tables from
+  // cleaning. Gated on a sentinel key so it runs EXACTLY ONCE ever — even if the
+  // user later unprotects every table. (The previous "NOT EXISTS protected=true"
+  // guard would re-lock them all on the next restart once nothing was protected.)
+  {
+    const seeded = await db.query(`SELECT 1 FROM dashboard_settings WHERE key = 'health.protected_seeded'`);
+    if (!seeded.rows.length) {
+      await db.query(`
+        UPDATE retention_policies SET protected = true WHERE table_name = ANY($1)
+      `, [[
+        'medical_contacts', 'medical_documents', 'medical_test_results',
+        'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto', 'visited_places',
+        'household_users', 'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp', 'ph_steps', 'ph_steps_excluded_trips',
+      ]]);
+      await db.query(`
+        INSERT INTO dashboard_settings (key, value, updated_at)
+        VALUES ('health.protected_seeded', 'true'::jsonb, NOW())
+        ON CONFLICT (key) DO NOTHING
+      `);
+    }
+  }
 
   // V5 — device placements inside rooms. Each row = one physical device placed
   // at (x, y) in a room's local meters, with type-specific params JSON.
