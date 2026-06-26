@@ -54,8 +54,10 @@ TV_TARGETS = {
              'wake_entity': 'tv',
              'audio_sink': 'cast'},
     'tv55': {'name': 'Balcony 55" Neo QLED',
-             # 2026-06-18: TV moved .194 → .217 (DLNA DMR verified up at the new IP)
-             'av_url': 'http://192.168.1.194:9197/upnp/control/AVTransport1',
+             # DLNA cast target. TV is DHCP-RESERVED at .199 (2026-06-26) — WiFi DHCP
+             # had drifted .194→.199, silently breaking casts (power still worked via
+             # SmartThings cloud, but DLNA needs the live local IP). Keep the reservation.
+             'av_url': 'http://192.168.1.199:9197/upnp/control/AVTransport1',
              'wake_entity': 'tv55',
              'audio_sink': 'dlna'},
 }

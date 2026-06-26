@@ -23,11 +23,14 @@ PORT       = 8765
 # (IP/MAC kept for reference only — control is HA-mediated.)
 # 2026-06-25: Balcony TV 55 PHYSICALLY REPLACED (new unit, same model QE55QN85DBTXSQ
 # but new UUID 0798bd17-… — confirmed via Samsung WS info API). New TV at
-# 192.168.1.194 / MAC 2c:99:75:44:20:fb; re-added to HA as the entity below.
+# 192.168.1.199 (DHCP-reserved 2026-06-26) / MAC 2c:99:75:44:20:fb; re-added to HA as the entity below.
 # (The old TV at .217 / e8:aa:cb:71:1f:b0 / entity …dbtxsq_2 is gone — orphan in HA.)
-TV55_IP     = '192.168.1.194'
+TV55_IP     = '192.168.1.199'   # DHCP-reserved (was .194; WiFi DHCP drift broke DLNA casting 2026-06-26)
 TV55_MAC    = '2c:99:75:44:20:fb'
-TV55_ENTITY = 'media_player.balcony_55_neo_qled_qe55qn85dbtxsq'  # new TV added to HA 2026-06-25
+# Power/volume/source via the SmartThings (cloud) media_player — reliable on/off
+# (2026-06-26). The local Tizen entity ...qe55qn85dbtxsq only powered on via WoL,
+# which is flaky over WiFi; SmartThings powers via Samsung's cloud, like the 85".
+TV55_ENTITY = 'media_player.balcony_55_neo_qled'
 
 # ── Secrets from environment ──────────────────────────────────────────────────
 HA_URL   = os.environ.get('HA_URL',   'http://192.168.1.110:8123')
@@ -270,17 +273,10 @@ async def media_command(req):
                 elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': TV_BED_ENTITY, 'source': value})
 
             elif entity == 'tv55':
-                # Balcony 55" Neo QLED — HA media_player (same path as TV-Guy).
-                if   command == 'turn_on':
-                    # Wake-on-LAN first so it powers on even from a FULLY-off
-                    # state (wired TV; doesn't depend on HA knowing the MAC),
-                    # then HA turn_on. Mirrors the reliable 85" power-on.
-                    try:
-                        wakeonlan.send_magic_packet(TV55_MAC, ip_address='192.168.1.255', port=9)
-                        wakeonlan.send_magic_packet(TV55_MAC, ip_address=TV55_IP, port=9)
-                    except Exception as e:
-                        log.warning(f'tv55 WoL failed: {e}')
-                    await ha_post(s, '/api/services/media_player/turn_on',  {'entity_id': TV55_ENTITY})
+                # Balcony 55" Neo QLED — SmartThings (cloud) media_player. Power on/off
+                # is cloud-driven (reliable), so no Wake-on-LAN needed (WoL was flaky
+                # over WiFi). Same approach that makes the 85" reliable.
+                if   command == 'turn_on':    await ha_post(s, '/api/services/media_player/turn_on',  {'entity_id': TV55_ENTITY})
                 elif command == 'turn_off':   await ha_post(s, '/api/services/media_player/turn_off', {'entity_id': TV55_ENTITY})
                 elif command == 'volume_up':  await ha_post(s, '/api/services/media_player/volume_up',   {'entity_id': TV55_ENTITY})
                 elif command == 'volume_down':await ha_post(s, '/api/services/media_player/volume_down', {'entity_id': TV55_ENTITY})
