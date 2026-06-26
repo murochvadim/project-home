@@ -131,12 +131,13 @@ module.exports = (app, db) => {
 
     // ── measure schedules (weight / BP) ──
     const profs = (await db.query(
-      `SELECT pr.id, hu.name AS user_name, pr.weight_sched, pr.bp_sched
+      `SELECT pr.id, hu.name AS user_name, pr.weight_sched, pr.bp_sched, pr.body_sched
          FROM ph_profiles pr LEFT JOIN household_users hu ON hu.id = pr.user_id`)).rows;
     for (const pr of profs) {
       const checks = [
         ['weight', pr.weight_sched, 'ph_measurements', '⚖ Weight'],
         ['bp',     pr.bp_sched,     'ph_bp',           '🩺 Blood pressure'],
+        ['body',   pr.body_sched,   'ph_body',         '📏 Waist & hip'],
       ];
       for (const [kind, sched, table, label] of checks) {
         if (!sched || !sched.freq) continue;

@@ -431,15 +431,15 @@
       </div>
       <!-- Log weight + Log blood pressure — side by side -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
-        <div class="card" id="ph-logcard" style="margin-bottom:0;">
+        <div class="card" id="ph-logcard" style="margin-bottom:0;display:flex;flex-direction:column;">
           <h3 style="margin:0 0 10px;display:flex;align-items:center;">Log weight<button onclick="phHistory('weight')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
-          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <label style="font-size:0.78rem;color:#555;">Weight (kg)<br><input id="ph-w-kg" type="number" step="0.1" min="0" placeholder="70" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
             <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogWeight()">Save</button>
             <span id="ph-w-status" style="font-size:0.78rem;color:#888;"></span>
           </div>
-          <div style="display:flex;gap:6px;align-items:center;margin-top:10px;font-size:0.76rem;color:#555;">
-            <span title="Reminder schedule — for a future notification">🔔 Measure:</span>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:12px;font-size:0.76rem;color:#555;">
+            <span title="Reminder schedule — drives the reminders badge">🔔 Measure:</span>
             <select id="ph-w-freq" onchange="phSchedChange('weight')" style="padding:4px 6px;font-size:0.76rem;">
               <option value="">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
               <option value="every_n_days">Every N days</option><option value="every_n_months">Every N months</option>
@@ -449,17 +449,17 @@
             <span id="ph-w-sched-status" style="color:#3a7d44;"></span>
           </div>
         </div>
-        <div class="card" id="ph-bpcard" style="margin-bottom:0;">
+        <div class="card" id="ph-bpcard" style="margin-bottom:0;display:flex;flex-direction:column;">
           <h3 style="margin:0 0 10px;display:flex;align-items:center;">Log blood pressure<button onclick="phHistory('bp')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
-          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
-            <label style="font-size:0.78rem;color:#555;">Systolic<br><input id="ph-bp-sys" type="number" min="0" placeholder="120" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
-            <label style="font-size:0.78rem;color:#555;">Diastolic<br><input id="ph-bp-dia" type="number" min="0" placeholder="80" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
-            <label style="font-size:0.78rem;color:#555;">Pulse<br><input id="ph-bp-pulse" type="number" min="0" placeholder="—" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;"></label>
+          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+            <label style="font-size:0.78rem;color:#555;">Systolic<br><input id="ph-bp-sys" type="number" min="0" placeholder="120" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
+            <label style="font-size:0.78rem;color:#555;">Diastolic<br><input id="ph-bp-dia" type="number" min="0" placeholder="80" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
+            <label style="font-size:0.78rem;color:#555;">Pulse<br><input id="ph-bp-pulse" type="number" min="0" placeholder="—" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
             <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogBP()">Save</button>
             <span id="ph-bp-status" style="font-size:0.78rem;color:#888;"></span>
           </div>
-          <div style="display:flex;gap:6px;align-items:center;margin-top:10px;font-size:0.76rem;color:#555;">
-            <span title="Reminder schedule — for a future notification">🔔 Measure:</span>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:12px;font-size:0.76rem;color:#555;">
+            <span title="Reminder schedule — drives the reminders badge">🔔 Measure:</span>
             <select id="ph-bp-freq" onchange="phSchedChange('bp')" style="padding:4px 6px;font-size:0.76rem;">
               <option value="">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
               <option value="every_n_days">Every N days</option><option value="every_n_months">Every N months</option>
@@ -469,14 +469,35 @@
             <span id="ph-bp-sched-status" style="color:#3a7d44;"></span>
           </div>
         </div>
-        <div class="card" id="ph-stepscard" style="margin-bottom:0;">
+        <div class="card" id="ph-bodycard" style="margin-bottom:0;display:flex;flex-direction:column;">
+          <h3 style="margin:0 0 10px;display:flex;align-items:center;gap:6px;">📏 Waist &amp; hip
+            <button onclick="phBodyDiagram()" title="Where to measure each one" style="background:none;border:none;cursor:pointer;font-size:0.95rem;padding:0;">ℹ️</button>
+            <button onclick="phHistory('body')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <label style="font-size:0.78rem;color:#0d9488;font-weight:600;">Waist (cm)<br><input id="ph-body-waist" type="number" step="0.1" min="0" placeholder="84" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;border:1px solid #0d9488;"></label>
+            <label style="font-size:0.78rem;color:#7c3aed;font-weight:600;">Hip (cm)<br><input id="ph-body-hip" type="number" step="0.1" min="0" placeholder="98" style="padding:5px 8px;width:80px;box-sizing:border-box;height:32px;border:1px solid #7c3aed;"></label>
+            <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogBody()">Save</button>
+            <span id="ph-body-status" style="font-size:0.78rem;color:#888;"></span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:12px;font-size:0.76rem;color:#555;">
+            <span title="Reminder schedule — drives the reminders badge">🔔 Measure:</span>
+            <select id="ph-body-freq" onchange="phSchedChange('body')" style="padding:4px 6px;font-size:0.76rem;">
+              <option value="">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+              <option value="every_n_days">Every N days</option><option value="every_n_months">Every N months</option>
+            </select>
+            <input id="ph-body-interval" type="number" min="1" placeholder="N" onchange="phSchedChange('body')" style="width:48px;padding:4px;display:none;font-size:0.76rem;">
+            <span id="ph-body-interval-unit" style="display:none;color:#888;"></span>
+            <span id="ph-body-sched-status" style="color:#3a7d44;"></span>
+          </div>
+        </div>
+        <div class="card" id="ph-stepscard" style="margin-bottom:0;display:flex;flex-direction:column;">
           <h3 style="margin:0 0 10px;display:flex;align-items:center;">👟 Daily steps<button onclick="phHistory('steps')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
-          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <label style="font-size:0.78rem;color:#555;">Add steps<br><input id="ph-st-num" type="number" min="0" placeholder="2000" style="padding:5px 8px;width:90px;box-sizing:border-box;height:32px;"></label>
             <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogSteps()">Save</button>
             <span id="ph-st-status" style="font-size:0.78rem;color:#888;"></span>
           </div>
-          <div id="ph-st-today" style="font-size:0.82rem;color:#555;margin-top:8px;">Today: <b>—</b></div>
+          <div id="ph-st-today" style="margin-top:auto;padding-top:12px;font-size:0.82rem;color:#555;">Today: <b>—</b></div>
         </div>
       </div>
     </div>
@@ -528,6 +549,38 @@
       </div>
       <div id="ph-hist-add" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px;background:#fafaf6;border-radius:6px;margin-bottom:12px;"></div>
       <div id="ph-hist-list"></div>
+    </div>
+  </div>
+
+  <!-- ℹ️ "Where to measure" body diagram (waist = teal, hip = purple) -->
+  <div id="ph-body-diagram" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:10px;padding:18px 22px;max-width:94vw;box-shadow:0 8px 30px rgba(0,0,0,0.3);">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <h3 style="margin:0;">📏 Where to measure</h3>
+        <button onclick="phBodyDiagramClose()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1.2rem;">✕</button>
+      </div>
+      <div style="display:flex;gap:20px;align-items:center;">
+        <svg width="160" height="240" viewBox="0 0 160 240" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="70" cy="24" r="14" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1.5"/>
+          <rect x="64" y="37" width="12" height="8" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1.5"/>
+          <path d="M48,48 C46,72 50,98 54,114 C48,130 44,146 48,160 L92,160 C96,146 92,130 86,114 C90,98 94,72 92,48 Z" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1.5"/>
+          <path d="M49,52 C36,72 34,98 39,118" fill="none" stroke="#9ca3af" stroke-width="1.5"/>
+          <path d="M91,52 C104,72 106,98 101,118" fill="none" stroke="#9ca3af" stroke-width="1.5"/>
+          <path d="M50,158 L46,234 L62,234 L70,162 Z" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1.5"/>
+          <path d="M90,158 L94,234 L78,234 L70,162 Z" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1.5"/>
+          <line x1="40" y1="113" x2="100" y2="113" stroke="#0d9488" stroke-width="2.2" stroke-dasharray="5 3"/>
+          <text x="104" y="117" font-size="12" fill="#0d9488" font-weight="700">Waist</text>
+          <line x1="38" y1="152" x2="102" y2="152" stroke="#7c3aed" stroke-width="2.2" stroke-dasharray="5 3"/>
+          <text x="106" y="156" font-size="12" fill="#7c3aed" font-weight="700">Hip</text>
+        </svg>
+        <div style="font-size:0.85rem;line-height:1.5;max-width:240px;">
+          <div style="color:#0d9488;font-weight:700;">● Waist</div>
+          <div style="color:#555;margin:0 0 10px;">The narrowest part of your middle, roughly at the navel. Keep the tape snug and level; breathe out normally.</div>
+          <div style="color:#7c3aed;font-weight:700;">● Hip</div>
+          <div style="color:#555;">The widest part around the hips/buttocks. Keep the tape level all the way round.</div>
+          <div style="color:#888;margin-top:10px;font-size:0.8rem;">WHR = Waist ÷ Hip.</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -643,7 +696,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=24"></script>
+<script src="js/personal-health.js?v=26"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

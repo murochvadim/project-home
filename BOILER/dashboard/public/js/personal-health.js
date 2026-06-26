@@ -41,6 +41,16 @@
     return           { label: 'Obese',          color: '#c0392b' };
   }
   function idealRange(h) { if (!h) return null; const m = h / 100; return { lo: 18.5 * m * m, hi: 24.9 * m * m }; }
+  // Waist-to-Hip Ratio = waist ÷ hip. WHO health bands differ by sex.
+  function whr(waist, hip) { return (!waist || !hip) ? null : waist / hip; }
+  function whrCat(r, sex) {
+    if (r == null) return { label: '', color: '#888' };
+    const male = (sex || '').toLowerCase().startsWith('m');
+    const mod = male ? 0.90 : 0.80, high = male ? 1.00 : 0.85; // men / women cut-points
+    if (r < mod)  return { label: 'Low',      color: '#2e7d32' };
+    if (r < high) return { label: 'Moderate', color: '#e67e22' };
+    return            { label: 'High',     color: '#c0392b' };
+  }
 
   async function phInit() {
     _phLoadApptColors();   // shared Schedule & appointment color bands (Privacy → Settings)
@@ -169,6 +179,7 @@
       { const t = $('ph-ac-toggle'); if (t) t.style.display = 'none'; }
       $('ph-logcard').style.display = 'none';
       $('ph-bpcard').style.display = 'none';
+      $('ph-bodycard').style.display = 'none';
       $('ph-stepscard').style.display = 'none';
       $('ph-medscard').style.display = 'none';
       _curProfileId = null;
@@ -176,6 +187,7 @@
     }
     $('ph-logcard').style.display = '';
     $('ph-bpcard').style.display = '';
+    $('ph-bodycard').style.display = '';
     $('ph-stepscard').style.display = '';
     $('ph-medscard').style.display = '';
     _curProfileId = p.id;
@@ -183,11 +195,15 @@
     phLoadSteps();
     phSchedRender('weight', p.weight_sched);
     phSchedRender('bp', p.bp_sched);
+    phSchedRender('body', p.body_sched);
     const h = p.height_cm != null ? Number(p.height_cm) : null;
     const meas = await (await fetch(`${API}/measurements?profile_id=${p.id}`)).json();
     const latestW = meas.length ? Number(meas[0].weight_kg)
       : (p.latest_weight_kg != null ? Number(p.latest_weight_kg) : null);
     const b = bmi(latestW, h), cat = bmiCat(b), ir = idealRange(h), a = age(p.date_of_birth);
+    const waistL = p.latest_waist_cm != null ? Number(p.latest_waist_cm) : null;
+    const hipL   = p.latest_hip_cm   != null ? Number(p.latest_hip_cm)   : null;
+    const wr = whr(waistL, hipL), wcat = whrCat(wr, p.sex);
 
     // trimmed/compact chips — sit inline to the right of the Edit details button
     const chip = (label, val) =>
@@ -203,7 +219,13 @@
         <div style="font-size:0.58rem;color:#888;text-transform:uppercase;letter-spacing:.3px;">BMI</div>
         <div style="font-size:0.92rem;font-weight:700;color:${cat.color};">${b == null ? '—' : b.toFixed(1)}
         <span style="font-size:0.62rem;font-weight:600;">${cat.label}</span></div></div>` +
-      chip('Ideal', ir ? `${ir.lo.toFixed(0)}–${ir.hi.toFixed(0)} kg` : '—');
+      chip('Ideal', ir ? `${ir.lo.toFixed(0)}–${ir.hi.toFixed(0)} kg` : '—') +
+      chip('Waist', waistL != null ? waistL + ' cm' : '—') +
+      chip('Hip', hipL != null ? hipL + ' cm' : '—') +
+      `<div style="text-align:center;line-height:1.15;">
+        <div style="font-size:0.58rem;color:#888;text-transform:uppercase;letter-spacing:.3px;">WHR</div>
+        <div style="font-size:0.92rem;font-weight:700;color:${wcat.color};">${wr == null ? '—' : wr.toFixed(2)}
+        <span style="font-size:0.62rem;font-weight:600;">${wcat.label}</span></div></div>`;
     _phRenderAcDisplay(p);
   }
 
@@ -236,6 +258,22 @@
     await fetch(`${API}/measurements/${id}`, { method: 'DELETE' });
     await phInit(); await renderDetail();
   };
+  // Waist & hip — saved with a server timestamp (history modal = 'body').
+  window.phLogBody = async function () {
+    const p = profileFor(_selName); if (!p) return;
+    const waist = $('ph-body-waist').value, hip = $('ph-body-hip').value;
+    if (!waist && !hip) { $('ph-body-status').textContent = 'Enter waist or hip'; return; }
+    const r = await fetch(`${API}/body`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: p.id, waist_cm: waist || null, hip_cm: hip || null }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('ph-body-status').textContent = 'Failed: ' + (j.error || r.status); return; }
+    $('ph-body-waist').value = ''; $('ph-body-hip').value = '';
+    $('ph-body-status').textContent = '✓ saved ' + (j.measured_at || '');
+    await phInit(); await renderDetail();
+  };
+  // ℹ️ "where to measure" body diagram (popup) — static SVG in medical.html.
+  window.phBodyDiagram = function () { $('ph-body-diagram').style.display = 'flex'; };
+  window.phBodyDiagramClose = function () { $('ph-body-diagram').style.display = 'none'; };
 
   // ── steps (daily counter) — keyed by the household_users id of the selected
   // person, so manual entries and the LXC-104 walking-trip imports share a key. ──
@@ -264,7 +302,7 @@
 
   // ── Measure schedule (Weight / BP) — {freq, interval_n} on the profile, drives
   // a FUTURE reminder watcher. Same options as meds minus weekday / day / time. ──
-  const _schedPre = (kind) => (kind === 'weight' ? 'ph-w' : 'ph-bp');
+  const _schedPre = (kind) => ({ weight: 'ph-w', bp: 'ph-bp', body: 'ph-body' }[kind]);
   function _schedToggleN(pre, freq) {
     const showN = freq === 'every_n_days' || freq === 'every_n_months';
     $(pre + '-interval').style.display = showN ? '' : 'none';
@@ -281,7 +319,7 @@
   }
   window.phSchedChange = async function (kind) {
     const p = profileFor(_selName); if (!p) return;
-    const pre = _schedPre(kind), col = kind === 'weight' ? 'weight_sched' : 'bp_sched';
+    const pre = _schedPre(kind), col = { weight: 'weight_sched', bp: 'bp_sched', body: 'body_sched' }[kind];
     const freq = $(pre + '-freq').value;
     const showN = _schedToggleN(pre, freq);
     let sched = null;
@@ -344,6 +382,15 @@
       rowVal: (r) => `${r.systolic == null ? '—' : r.systolic}/${r.diastolic == null ? '—' : r.diastolic}${r.pulse != null ? ' · ♥ ' + r.pulse : ''}`,
       addBody: (v, ts) => ({ profile_id: _curProfileId, systolic: v.systolic || null, diastolic: v.diastolic || null, pulse: v.pulse || null, measured_at: ts }),
       patchBody: (v, ts) => ({ systolic: v.systolic || null, diastolic: v.diastolic || null, pulse: v.pulse || null, measured_at: ts }),
+    },
+    body: {
+      title: 'Waist & hip history', base: () => `${API}/body`, ok: () => !!_curProfileId,
+      listUrl: (n) => `${API}/body?profile_id=${_curProfileId}&limit=${n}`,
+      fields: [{ k: 'waist_cm', ph: 'waist cm', step: '0.1', w: 80 }, { k: 'hip_cm', ph: 'hip cm', step: '0.1', w: 80 }],
+      rowVal: (r) => `W ${r.waist_cm == null ? '—' : r.waist_cm} · H ${r.hip_cm == null ? '—' : r.hip_cm}` +
+        (r.whr != null ? ` · WHR <b>${Number(r.whr).toFixed(2)}</b>` : ''),
+      addBody: (v, ts) => ({ profile_id: _curProfileId, waist_cm: v.waist_cm || null, hip_cm: v.hip_cm || null, measured_at: ts }),
+      patchBody: (v, ts) => ({ waist_cm: v.waist_cm || null, hip_cm: v.hip_cm || null, measured_at: ts }),
     },
     steps: {
       title: 'Steps history', base: () => `${API}/steps`, ok: () => !!curUserId(),
@@ -430,7 +477,12 @@
     await _histList(); await _histRefreshCard();
   };
   async function _histRefreshCard() {
-    if (_histKind === 'steps') await phLoadSteps(); else await renderDetail();
+    // body: reload profiles so the latest Waist/Hip/WHR summary chips refresh after a
+    // history edit (renderDetail reads the cached profile's latest_*; weight refetches
+    // measurements itself so it doesn't need this).
+    if (_histKind === 'steps') await phLoadSteps();
+    else if (_histKind === 'body') { await phInit(); await renderDetail(); }
+    else await renderDetail();
   }
 
   // ── Medications (pills) ──────────────────────────────────────────────────────

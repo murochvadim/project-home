@@ -26,9 +26,13 @@ module.exports = (app, db) => {
         // to_char so DATE returns as 'YYYY-MM-DD' (a bare pg DATE serializes as a
         // timezone-shifted Date → off-by-one day in the browser).
         `SELECT p.id, p.name, p.user_id, p.sex, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
-                p.height_cm, p.allergies, p.conditions, p.weight_sched, p.bp_sched, p.created_at,
+                p.height_cm, p.allergies, p.conditions, p.weight_sched, p.bp_sched, p.body_sched, p.created_at,
                 (SELECT m.weight_kg FROM ph_measurements m WHERE m.profile_id = p.id
-                  ORDER BY m.measured_at DESC, m.id DESC LIMIT 1) AS latest_weight_kg
+                  ORDER BY m.measured_at DESC, m.id DESC LIMIT 1) AS latest_weight_kg,
+                (SELECT b.waist_cm FROM ph_body b WHERE b.profile_id = p.id
+                  ORDER BY b.measured_at DESC, b.id DESC LIMIT 1) AS latest_waist_cm,
+                (SELECT b.hip_cm FROM ph_body b WHERE b.profile_id = p.id
+                  ORDER BY b.measured_at DESC, b.id DESC LIMIT 1) AS latest_hip_cm
            FROM ph_profiles p ORDER BY p.name`);
       res.json(r.rows);
     } catch (e) { err(res, e); }
@@ -65,6 +69,7 @@ module.exports = (app, db) => {
       // node-pg JSON.stringifies the object; null clears it.
       if (b.weight_sched  !== undefined) add('weight_sched', b.weight_sched);
       if (b.bp_sched      !== undefined) add('bp_sched', b.bp_sched);
+      if (b.body_sched    !== undefined) add('body_sched', b.body_sched);
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       params.push(parseInt(req.params.id));
       await db.query(`UPDATE ph_profiles SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
@@ -255,6 +260,56 @@ module.exports = (app, db) => {
   app.delete('/api/personal-health/bp/:id', async (req, res) => {
     try {
       await db.query('DELETE FROM ph_bp WHERE id = $1', [parseInt(req.params.id)]);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+
+  // ── Body (waist & hip circumference, cm) — time-series like weight/BP. WHR
+  // (waist ÷ hip) is COMPUTED here (2 dp), never stored. Server-stamped on Save
+  // (timestamp overridable via the history "+ Add"); backs the history modal.
+  app.get('/api/personal-health/body', async (req, res) => {
+    try {
+      const pid = parseInt(req.query.profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const r = await db.query(
+        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+                waist_cm, hip_cm, round(waist_cm / NULLIF(hip_cm, 0), 2) AS whr
+           FROM ph_body WHERE profile_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
+      res.json(r.rows);
+    } catch (e) { err(res, e); }
+  });
+  app.post('/api/personal-health/body', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const pid = parseInt(b.profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const waist = num(b.waist_cm), hip = num(b.hip_cm);
+      if (waist == null && hip == null) return res.status(400).json({ error: 'enter waist or hip' });
+      const r = await db.query(
+        `INSERT INTO ph_body (profile_id, waist_cm, hip_cm, measured_at)
+         VALUES ($1,$2,$3, COALESCE($4::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at`,
+        [pid, waist, hip, b.measured_at || null]);
+      res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
+    } catch (e) { err(res, e); }
+  });
+  app.patch('/api/personal-health/body/:id', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const sets = [], params = [];
+      const add = (c, v) => { params.push(v); sets.push(`${c} = $${params.length}`); };
+      if (b.waist_cm    !== undefined) add('waist_cm', num(b.waist_cm));
+      if (b.hip_cm      !== undefined) add('hip_cm', num(b.hip_cm));
+      if (b.measured_at !== undefined) add('measured_at', b.measured_at || null);
+      if (!sets.length) return res.status(400).json({ error: 'no fields' });
+      params.push(parseInt(req.params.id));
+      await db.query(`UPDATE ph_body SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+  app.delete('/api/personal-health/body/:id', async (req, res) => {
+    try {
+      await db.query('DELETE FROM ph_body WHERE id = $1', [parseInt(req.params.id)]);
       res.json({ ok: true });
     } catch (e) { err(res, e); }
   });
