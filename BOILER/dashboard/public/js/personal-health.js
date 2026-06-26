@@ -459,12 +459,24 @@
     return `<td style="background:${band.bg};color:#000;border-radius:4px;">${when}${note}${past}</td>`;
   }
 
-  function medSchedText(m) {
-    const t  = m.times ? ' · ' + m.times : '';
-    const nd = m.next_due ? ' · next ' + m.next_due : '';
+  // "2026-11-15" → "15 Nov 2026"
+  const _phFmtDate = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso + 'T00:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+  // html=true → the next-due date is a bigger green span (for the table); html
+  // falsy → plain text (for the Info window). Dynamic parts esc'd in html mode.
+  function medSchedText(m, html) {
+    const t  = m.times ? ' · ' + (html ? esc(m.times) : m.times) : '';
+    const ds = _phFmtDate(m.next_due);
+    const nd = m.next_due
+      ? ' · next' + (html ? `<span style="color:#1a7f37;font-size:0.92rem;font-weight:600;margin-left:8px;">${ds}</span>` : ' ' + ds)
+      : '';
+    const dow = m.dow ? ' · ' + (html ? esc(m.dow) : m.dow) : '';
     switch (m.freq) {
       case 'daily':          return 'Daily' + t;
-      case 'weekly':         return 'Weekly' + (m.dow ? ' · ' + m.dow : '') + t;
+      case 'weekly':         return 'Weekly' + dow + t;
       case 'every_n_months': return `Every ${m.interval_n || '?'} month(s)` + nd + t;
       case 'every_n_days':   return `Every ${m.interval_n || '?'} day(s)` + nd + t;
       case 'once':           return 'One-time' + nd + t;
@@ -482,7 +494,7 @@
       <tbody>${_meds.map(m => `<tr style="${m.active ? '' : 'opacity:0.5;'}">
         <td>💊 ${esc(m.name)}${m.active ? '' : ' <span style="font-size:0.7rem;color:#888;">(stopped)</span>'}</td>
         <td>${esc(m.dose || '—')}</td>
-        <td>${esc(medSchedText(m))}</td>
+        <td>${medSchedText(m, true)}</td>
         ${hasSpecial ? _phSpecialCell(m) : ''}
         <td style="white-space:nowrap;text-align:right;">
           <button class="btn btn-secondary btn-sm" onclick="phMedInfo(${m.id})">ℹ️ Info</button>
