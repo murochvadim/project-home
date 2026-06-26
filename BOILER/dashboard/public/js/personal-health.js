@@ -80,19 +80,32 @@
   // as-needed input rows, shown read-only as chips. Each line = one item (so the
   // future med cross-check can match them individually). ──
   const _phSplit = (s) => (s ? String(s).split(/\n+/).map(x => x.trim()).filter(Boolean) : []);
-  function _phListRowHtml(kind, value) {
+  function _phListRowHtml(kind, value, idx) {
     const ph = kind === 'allergies' ? 'e.g. penicillin' : 'e.g. hypertension';
-    return `<div style="display:flex;gap:4px;margin-bottom:4px;">
+    return `<div style="display:flex;gap:6px;margin-bottom:4px;align-items:center;">
+      <span style="font-size:0.74rem;color:#999;min-width:18px;text-align:right;">${idx + 1}.</span>
       <input type="text" class="ph-f-${kind}-item" value="${esc(value)}" placeholder="${ph}" style="padding:5px 8px;width:200px;">
-      <button type="button" onclick="this.parentNode.remove()" title="Remove" style="border:none;background:#f3e0e0;color:#c0392b;border-radius:4px;cursor:pointer;padding:0 9px;font-size:1rem;line-height:1.4;">×</button>
+      <button type="button" onclick="phRemoveListItem('${kind}', this)" title="Remove" style="border:none;background:#f3e0e0;color:#c0392b;border-radius:4px;cursor:pointer;padding:0 9px;font-size:1rem;line-height:1.4;">×</button>
     </div>`;
   }
   function phRenderList(kind, items) {
     const arr = (items && items.length) ? items : [''];   // always show one blank row
-    $('ph-f-' + kind + '-list').innerHTML = arr.map(v => _phListRowHtml(kind, v)).join('');
+    $('ph-f-' + kind + '-list').innerHTML = arr.map((v, i) => _phListRowHtml(kind, v, i)).join('');
   }
+  // read ALL current inputs (incl. empties) so add/remove re-renders keep typed values
+  const _phReadList = (kind) => Array.from(document.querySelectorAll('.ph-f-' + kind + '-item')).map(i => i.value);
   window.phAddListItem = function (kind) {
-    $('ph-f-' + kind + '-list').insertAdjacentHTML('beforeend', _phListRowHtml(kind, ''));
+    const vals = _phReadList(kind); vals.push('');
+    phRenderList(kind, vals);   // re-render → numbers stay 1…N
+    const items = document.querySelectorAll('.ph-f-' + kind + '-item');
+    if (items.length) items[items.length - 1].focus();
+  };
+  window.phRemoveListItem = function (kind, btn) {
+    const list = $('ph-f-' + kind + '-list');
+    const idx = Array.from(list.children).indexOf(btn.parentNode);
+    const vals = _phReadList(kind);
+    if (idx > -1) vals.splice(idx, 1);
+    phRenderList(kind, vals.length ? vals : ['']);   // re-render → auto-renumber
   };
   function _phCollectList(kind) {
     return Array.from(document.querySelectorAll('.ph-f-' + kind + '-item'))
@@ -100,11 +113,12 @@
   }
   function _phRenderAcDisplay(p) {
     const host = $('ph-ac-display'); if (!host) return;
-    const block = (label, items) => items.length
-      ? `<div style="font-size:0.8rem;"><span style="color:#a33;font-weight:600;">${label}:</span> ` +
-        items.map(v => `<span style="display:inline-block;background:#fbeaea;color:#a33;border-radius:10px;padding:1px 8px;margin:2px 2px 0 0;">${esc(v)}</span>`).join('') + '</div>'
+    const block = (label, items, txt, num) => items.length
+      ? `<div style="font-size:0.8rem;"><span style="color:${txt};font-weight:600;">${label}:</span> ` +
+        items.map((v, i) => `<span style="display:inline-block;background:#fbeaea;color:${txt};border-radius:10px;padding:1px 8px;margin:2px 2px 0 0;"><b style="color:${num};">${i + 1}.</b> ${esc(v)}</span>`).join('') + '</div>'
       : '';
-    const html = block('⚠ Allergies', _phSplit(p && p.allergies)) + block('🩺 Conditions', _phSplit(p && p.conditions));
+    const html = block('⚠ Allergies', _phSplit(p && p.allergies), '#a33', '#a33') +
+                 block('🩺 Conditions', _phSplit(p && p.conditions), '#000', '#1a7f37');
     host.innerHTML = html;
     host.style.display = 'none';                 // default CLOSED, not persisted — reset on every render
     const tog = $('ph-ac-toggle');
