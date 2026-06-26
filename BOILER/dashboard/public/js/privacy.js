@@ -53,7 +53,7 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
   if (name === 'doccreate' && typeof pvdcOnShow === 'function') pvdcOnShow();
-  if (name === 'settings') { _pvFillSettingsForm(); pvLoadUsers(); }
+  if (name === 'settings') { _pvFillSettingsForm(); pvLoadUsers(); pvLoadReminders(); }
   if (name === 'places' && typeof pvPlacesOnShow === 'function') pvPlacesOnShow();
 }
 async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); }
@@ -88,6 +88,46 @@ async function pvSaveSettings() {
     _pvApptColors = out;
     if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; }
     pvRenderSites();   // re-color appointment cards with the new bands
+  } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
+}
+
+// ── Reminders badge config (dashboard_settings key 'reminders') — which pages
+// show the badge + snooze minutes + on/off. Consumed by the shared
+// reminders-badge.js on every page. ──
+const _PV_REM_PAGES = [
+  ['index', 'Boiler Agent'], ['main-agent', 'Main Agent'], ['devices', 'Device Agent'],
+  ['media', 'Media Agents'], ['corridor', 'Corridor Agents'], ['rooms', 'Project Rooms'],
+  ['living-room', 'Living Room'], ['balcony', 'Balcony'], ['my-bathroom', 'My BathRoom'],
+  ['bedroom', 'Bedroom'], ['voice', 'Voice'], ['health', 'Project Health'],
+  ['network', 'Project Network'], ['power', 'Project Power'], ['gateway', 'Project Gateway'],
+  ['esp-boards', 'Project Boards'], ['project-general', 'Project General'],
+  ['privacy', 'Privacy'], ['medical', 'Medical'],
+];
+async function pvLoadReminders() {
+  let cfg = {};
+  try { const j = await (await fetch('/api/dashboard-settings/reminders')).json(); cfg = (j && j.value) || {}; } catch (e) { /* defaults */ }
+  const pages = Array.isArray(cfg.pages) ? cfg.pages : [];
+  const en = document.getElementById('pv-rem-enabled'); if (en) en.checked = cfg.enabled !== false;
+  const sn = document.getElementById('pv-rem-snooze'); if (sn) sn.value = cfg.snooze_min || 30;
+  const host = document.getElementById('pv-rem-pages');
+  if (host) host.innerHTML = _PV_REM_PAGES.map(([slug, label]) =>
+    `<label style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="pv-rem-page" value="${slug}" ${pages.indexOf(slug) !== -1 ? 'checked' : ''}> ${label}</label>`).join('');
+  const st = document.getElementById('pv-rem-status'); if (st) st.textContent = '';
+}
+async function pvSaveReminders() {
+  const st = document.getElementById('pv-rem-status');
+  const pages = Array.from(document.querySelectorAll('.pv-rem-page:checked')).map(c => c.value);
+  const value = {
+    enabled: document.getElementById('pv-rem-enabled').checked,
+    snooze_min: Math.max(1, parseInt(document.getElementById('pv-rem-snooze').value, 10) || 30),
+    pages,
+  };
+  try {
+    const r = await fetch('/api/dashboard-settings/reminders', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; }
   } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
 }
 

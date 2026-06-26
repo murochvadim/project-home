@@ -1,0 +1,184 @@
+// Project-wide reminders — evaluates "due" reminders and serves them to the shared
+// reminders-badge.js (red badge, top-right, on the pages chosen in Privacy →
+// Settings). Own module (wired into server.js via one require line) so server.js
+// stays past the architecture-guard hook.
+//
+// Sources today (pluggable — add a function, no UI/engine change):
+//   • medications     — active ph_medications whose schedule is due today/now
+//   • measure schedules — ph_profiles.weight_sched / bp_sched overdue (nothing
+//                         logged within the window)
+//
+// Per-instance snooze/clear lives in reminder_state, keyed by a deterministic
+// rkey, so Clear / Delay persist across pages, tabs and reloads. All time logic
+// is Asia/Jerusalem (the DB session is UTC).
+//
+//   GET  /api/reminders          -> {enabled, snooze_min, pages, items:[{rkey,user_name,label,kind}]}
+//   POST /api/reminders/snooze   {rkey} -> snooze until now + snooze_min
+//   POST /api/reminders/clear    {rkey} -> clear this occurrence (next one re-appears)
+const SETTINGS_KEY = 'reminders';
+const DEFAULTS = { enabled: true, snooze_min: 30, pages: [] };
+
+module.exports = (app, db) => {
+  const err = (res, e) => res.status(500).json({ error: (e && e.message) || String(e) });
+
+  async function getSettings() {
+    try {
+      const r = await db.query('SELECT value FROM dashboard_settings WHERE key=$1', [SETTINGS_KEY]);
+      const v = r.rows[0] && r.rows[0].value;
+      const val = (v && typeof v === 'object') ? v : (v ? JSON.parse(v) : {});
+      return Object.assign({}, DEFAULTS, val);
+    } catch (e) { return Object.assign({}, DEFAULTS); }
+  }
+
+  // current Asia/Jerusalem date / HH:MM / dow + epoch, straight from the DB clock
+  async function localNow() {
+    const r = await db.query(
+      `SELECT (now() AT TIME ZONE 'Asia/Jerusalem')::date::text         AS ldate,
+              to_char(now() AT TIME ZONE 'Asia/Jerusalem','HH24:MI')    AS lhm,
+              lower(to_char(now() AT TIME ZONE 'Asia/Jerusalem','Dy'))  AS ldow,
+              extract(epoch from now())::bigint                          AS epoch`);
+    return r.rows[0];
+  }
+
+  // is today a dose day for this med?
+  function medDoseDay(m, ldate, ldow) {
+    switch (m.freq) {
+      case 'daily': return true;
+      case 'weekly': return m.dow ? m.dow.toLowerCase().includes(ldow) : false;
+      case 'every_n_days':
+      case 'every_n_months':
+      case 'once': return m.next_due ? (m.next_due <= ldate) : false;
+      default: return false; // as_needed / unknown — no auto reminder
+    }
+  }
+
+  function isoWeek(ldate) {
+    const d = new Date(ldate + 'T00:00:00Z');
+    const day = (d.getUTCDay() + 6) % 7;
+    d.setUTCDate(d.getUTCDate() - day + 3);
+    const firstThu = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+    const w = 1 + Math.round(((d - firstThu) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+    return d.getUTCFullYear() + '-' + w;
+  }
+  // a key that changes only when the measure window rolls over (so a Clear sticks
+  // for the whole window, and the next window re-raises a fresh reminder)
+  function windowKey(sched, ldate, epoch) {
+    const f = sched.freq, n = Math.max(1, Number(sched.interval_n) || 1);
+    if (f === 'weekly') return 'w' + isoWeek(ldate);
+    if (f === 'every_n_days') return 'nd' + Math.floor(Math.floor(epoch / 86400) / n);
+    if (f === 'every_n_months') {
+      const d = new Date(ldate + 'T00:00:00Z');
+      return 'nm' + Math.floor((d.getUTCFullYear() * 12 + d.getUTCMonth()) / n);
+    }
+    return ldate; // daily / fallback
+  }
+  function windowDays(sched) {
+    const f = sched.freq, n = Math.max(1, Number(sched.interval_n) || 1);
+    if (f === 'weekly') return 7;
+    if (f === 'every_n_days') return n;
+    if (f === 'every_n_months') return n * 30;
+    return 1; // daily
+  }
+
+  async function evaluate() {
+    const t = await localNow();
+    const items = [];
+
+    // ── medications ──
+    const meds = (await db.query(
+      `SELECT m.id, m.name, m.dose, m.freq, m.interval_n, m.times, m.dow,
+              to_char(m.next_due,'YYYY-MM-DD') AS next_due, hu.name AS user_name
+         FROM ph_medications m
+         JOIN ph_profiles pr ON pr.id = m.profile_id
+         LEFT JOIN household_users hu ON hu.id = pr.user_id
+        WHERE m.active = true`)).rows;
+    for (const m of meds) {
+      if (!medDoseDay(m, t.ldate, t.ldow)) continue;
+      let slots = (m.times || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (!slots.length) slots = ['']; // no time → due all day
+      for (const slot of slots) {
+        if (slot && slot > t.lhm) continue; // dose time not reached yet (HH:MM string compare)
+        items.push({
+          rkey: `med:${m.id}:${t.ldate}:${slot || '-'}`,
+          user_name: m.user_name || '—',
+          label: '💊 ' + m.name + (m.dose ? ' · ' + m.dose : '') + (slot ? ' · ' + slot : ''),
+          kind: 'med',
+        });
+      }
+    }
+
+    // ── measure schedules (weight / BP) ──
+    const profs = (await db.query(
+      `SELECT pr.id, hu.name AS user_name, pr.weight_sched, pr.bp_sched
+         FROM ph_profiles pr LEFT JOIN household_users hu ON hu.id = pr.user_id`)).rows;
+    for (const pr of profs) {
+      const checks = [
+        ['weight', pr.weight_sched, 'ph_measurements', '⚖ Weight'],
+        ['bp',     pr.bp_sched,     'ph_bp',           '🩺 Blood pressure'],
+      ];
+      for (const [kind, sched, table, label] of checks) {
+        if (!sched || !sched.freq) continue;
+        const last = (await db.query(`SELECT max(measured_at) AS m FROM ${table} WHERE profile_id=$1`, [pr.id])).rows[0].m;
+        const overdue = !last || (Date.now() - new Date(last).getTime()) / 86400000 >= windowDays(sched);
+        if (!overdue) continue;
+        items.push({
+          rkey: `${kind}:${pr.id}:${windowKey(sched, t.ldate, Number(t.epoch))}`,
+          user_name: pr.user_name || '—',
+          label: label,
+          kind,
+        });
+      }
+    }
+
+    // ── filter out snoozed / cleared instances ──
+    if (!items.length) return [];
+    const states = (await db.query(
+      'SELECT rkey, snoozed_until, cleared_at FROM reminder_state WHERE rkey = ANY($1)',
+      [items.map(i => i.rkey)])).rows;
+    const st = {}; states.forEach(s => { st[s.rkey] = s; });
+    const now = Date.now();
+    return items.filter(i => {
+      const s = st[i.rkey];
+      if (!s) return true;
+      if (s.cleared_at) return false;
+      if (s.snoozed_until && new Date(s.snoozed_until).getTime() > now) return false;
+      return true;
+    });
+  }
+
+  app.get('/api/reminders', async (req, res) => {
+    try {
+      const s = await getSettings();
+      if (!s.enabled) return res.json({ enabled: false, snooze_min: s.snooze_min, pages: s.pages || [], items: [] });
+      const items = await evaluate();
+      res.json({ enabled: true, snooze_min: s.snooze_min, pages: s.pages || [], items });
+    } catch (e) { err(res, e); }
+  });
+
+  app.post('/api/reminders/snooze', async (req, res) => {
+    try {
+      const rkey = (req.body || {}).rkey;
+      if (!rkey) return res.status(400).json({ error: 'rkey required' });
+      const s = await getSettings();
+      const mins = Math.max(1, Number(s.snooze_min) || 30);
+      await db.query(
+        `INSERT INTO reminder_state (rkey, snoozed_until, cleared_at, updated_at)
+         VALUES ($1, now() + make_interval(mins => $2), NULL, now())
+         ON CONFLICT (rkey) DO UPDATE SET snoozed_until = EXCLUDED.snoozed_until, cleared_at = NULL, updated_at = now()`,
+        [rkey, mins]);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+
+  app.post('/api/reminders/clear', async (req, res) => {
+    try {
+      const rkey = (req.body || {}).rkey;
+      if (!rkey) return res.status(400).json({ error: 'rkey required' });
+      await db.query(
+        `INSERT INTO reminder_state (rkey, cleared_at, updated_at) VALUES ($1, now(), now())
+         ON CONFLICT (rkey) DO UPDATE SET cleared_at = now(), updated_at = now()`,
+        [rkey]);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+};
