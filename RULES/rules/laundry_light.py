@@ -10,6 +10,13 @@ Behaviour
    OFF every configured light that's on. The countdown starts the moment the
    room goes empty and is RESET by any presence trigger. The presence-clear gate
    means the light never switches off while someone is still detected.
+3. **Manual override** — tapping the OpenHASP Laundry button (p1b10) OFF blocks
+   motion from re-lighting the room WHILE you're still in it (the mmWave keeps
+   firing, but turn-on is suppressed). The block clears only when you actually
+   leave — the room must be clear for `_LEFT_CLEAR_SEC` (so a brief sensor blink
+   doesn't count as leaving) — so walking back in lights the room normally with
+   no wait. Tapping the button ON clears the block immediately. The button's
+   "up" event carries the new state in `val` (val=0 off / val=1 on).
 
 Everything configurable lives in the dashboard container "Laundry Light"
 (`r_laundry_light_init` in apartment.rule_sentences) — the rule parses it itself
@@ -47,6 +54,7 @@ log = logging.getLogger("rule.laundry_light")
 
 # Fixed room sensor (trigger — bound at module load).
 _PRESENCE_ID = "bfc3dedf528a255313cd0v"   # Laundry Room Presence sens (dps "1")
+_PANEL_BTN_ID = "hasp:mybathroom-panel:p1b10"   # OpenHASP Laundry toggle button (p1b10)
 
 # Sentence regex anchors (case-insensitive).
 _LIGHTS_RE  = re.compile(r"laundry\s+light:\s*lights\s+are", re.IGNORECASE)
@@ -68,7 +76,14 @@ _DEF_TIMEOUT = 300        # 5 min — used only if s_ll2 is missing/unparsable
 # mmWave's flurry of presence/amplitude events on entry would each re-emit
 # turn_on. Suppress repeat on-bursts within this window; retries after it if the
 # light still reads off (e.g. the first command was lost).
-_ON_DEBOUNCE_SEC = 3.0
+_ON_DEBOUNCE_SEC = 7.0
+
+# After a manual OFF on the panel button, motion must NOT re-light the room while
+# the user is still standing there. Only a real departure clears that block: the
+# room has to be continuously clear for this long before a returning presence
+# counts as a fresh entry (the Laundry mmWave can blink to "none" for ~30-60 s
+# while you stand still, so this sits above that — a blink never counts as leaving).
+_LEFT_CLEAR_SEC = 10
 
 _CLEAR_STR = {"none", "no", "clear", "off", "false", "0", ""}
 _ON_VALS   = (True, 1, "on", "ON", "true", "True", "1")
@@ -120,7 +135,7 @@ def _relay_cmd(dev_id, on):
 RULE = {
     "name":        "Laundry Light",
     "description": "Turns the Laundry room light on when it senses movement, and off a few minutes after the room is empty. Only when you're home.",
-    "triggers":    [_PRESENCE_ID, "heartbeat"],
+    "triggers":    [_PRESENCE_ID, "heartbeat", _PANEL_BTN_ID],
     "controls":    [],
     "category":    "control",
     "group":       "laundry",   # dedicated single-rule group → never skipped by same-group competition
@@ -305,6 +320,26 @@ def evaluate(event, state):
     now_ts = time.time()
     targets = cfg["lights"]
 
+    # ── Panel button (p1b10): physical tap on the OpenHASP Laundry button ──
+    # The toggle button's "up" event carries the RESULTING state in `val`
+    # (confirmed live: val=0 → user turned it OFF, val=1 → user turned it ON).
+    # Act only on "up" (the settled result); "down" is ignored.
+    if dev_id == _PANEL_BTN_ID:
+        dps = event.get("dps", {}) or {}
+        if dps.get("event") == "up":
+            val = dps.get("val")
+            if val in (0, "0", False):
+                # Manual OFF → block motion from re-lighting until the user leaves.
+                state.shared["_laundry_user_off"] = True
+                log.info("laundry_light: manual OFF on panel → motion re-light blocked until room empties")
+            elif val in (1, "1", True):
+                # Manual ON → clear the block, count as fresh activity.
+                state.shared["_laundry_user_off"] = False
+                state.shared["_laundry_light_last_active_ts"] = now_ts
+                state.shared["_laundry_autooff_done"] = False
+                log.info("laundry_light: manual ON on panel → block cleared")
+        return []
+
     # ── Manual Run (Force path) — simulate a presence trigger NOW ──
     if event.get("source") == "force_run":
         state.shared["_laundry_light_last_active_ts"] = now_ts
@@ -324,8 +359,22 @@ def evaluate(event, state):
         prev_present = bool(state.shared.get("_laundry_light_prev_present", False))
         state.shared["_laundry_light_prev_present"] = cur_present
         if cur_present:
+            # How long was the room clear right before this presence? A genuine
+            # re-entry follows a long gap; a sensor blink follows a short one.
+            _prev_active = float(state.shared.get("_laundry_light_last_active_ts", 0) or 0)
+            clear_gap = (now_ts - _prev_active) if _prev_active else 1e9
             state.shared["_laundry_light_last_active_ts"] = now_ts
             state.shared["_laundry_autooff_done"] = False   # activity → re-arm auto-off
+            # Manual-off block: the user tapped the light off on the panel. Don't let
+            # motion re-light it while they're still here. Only a real absence
+            # (clear ≥ _LEFT_CLEAR_SEC = they left and came back) clears the block,
+            # so walking back in lights the room normally with no wait.
+            if state.shared.get("_laundry_user_off"):
+                if clear_gap >= _LEFT_CLEAR_SEC:
+                    state.shared["_laundry_user_off"] = False
+                    log.info("laundry_light: re-entry after %.0fs away → manual-off block cleared", clear_gap)
+                else:
+                    return []   # short sensor blink while still present → stay off
             if not _gates_pass(state, cfg):
                 return []   # e.g. home_mode != home → track activity but don't turn on
             cmds = _turn_on_set(state, targets, now_ts)
