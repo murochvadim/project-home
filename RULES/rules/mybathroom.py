@@ -23,6 +23,15 @@ Behaviour
    tap-on we never saw still gets cleared); the under-cabinet uses its real
    state. The countdown starts when the room goes empty and resets on activity.
 
+3. **Manual override + Laundry off-cascade** — tapping the main light's plate
+   button (p1b20) OFF blocks motion from re-lighting the MAIN while you're still
+   in the room (the under-cabinet keeps its normal behaviour), AND turns the
+   Laundry light (p1b10) OFF — restoring the old "bathroom off → laundry off"
+   cascade, now driven by the plate button's `up`+`val` event instead of the dead
+   switch. The block clears on a real departure (room clear ≥ `_LEFT_CLEAR_SEC`,
+   so a brief mmWave dropout doesn't count); tapping the button ON clears it
+   immediately. If someone is IN the Laundry, its own motion re-lights it.
+
 Everything configurable lives in the dashboard container "My Bathroom Lights"
 (`r_mybathroom_init` in apartment.rule_sentences) — the rule parses it itself
 (30 s TTL cache), so edits + Reload take effect without an engine restart:
@@ -35,8 +44,10 @@ Everything configurable lives in the dashboard container "My Bathroom Lights"
           only; AND-combined; auto-off ignores it)
 
 (The old s_mbr5 *mirror* and s_mbr6 *off-cascade* were removed 2026-06-22 along
-with the dead switch — they reacted to the old switch's pushed state, which the
-plate doesn't provide. Presence already turns main + under-cabinet on together.)
+with the dead switch — they reacted to the old switch's pushed state. The
+off-cascade to the Laundry was RESTORED 2026-06-27 via the plate button p1b20 —
+see behaviour 3 — driven in code, not a sentence. The mirror stays gone:
+presence turns main + under-cabinet on together.)
 
 Trigger device IDs (presence / door) are fixed in RULE['triggers'] (bound at
 module load, can't be sentence-driven); they are the room's permanent sensors.
@@ -106,6 +117,12 @@ _DEF_TIMEOUT   = 600        # 10 min
 # still read off (e.g. the first command was lost).
 _ON_DEBOUNCE_SEC = 3.0
 
+# After a MANUAL off of the main light (plate button), motion won't re-light the
+# main while you're still in the room. The block clears only on a real departure:
+# the room must be clear for this long before a returning presence counts as a
+# fresh entry (above the mmWave's brief dropouts so a flicker doesn't count).
+_LEFT_CLEAR_SEC = 10
+
 _CLEAR_STR = {"none", "no", "clear", "off", "false", "0", ""}
 _ON_VALS   = (True, 1, "on", "ON", "true", "True", "1")
 
@@ -135,6 +152,17 @@ _PLATE_PREFIX = "hasp:mybathroom-panel:"
 # and NOT a bare `1` payload (must be the JSON state object).
 _RELAY_OUTPUT = {"p1b10": "output1", "p1b20": "output2"}
 
+# Manual-off block + off-cascade (2026-06-27). The user turns the MAIN light OFF
+# via the plate's page-1 button p1b20; its toggle "up" event carries the new state
+# in `val` (val=0 off / val=1 on — same shape the Laundry p1b10 probe confirmed).
+# On a manual OFF the rule (1) blocks motion from re-lighting the MAIN while you're
+# still in the room, and (2) cascades OFF to the Laundry light (p1b10) — restoring
+# the old "bathroom off → laundry off" behaviour lost when the dead switch was
+# replaced by the plate. The under-cabinet (Z-Wave) is unaffected — the user only
+# controls the main by hand — so it keeps its normal motion behaviour.
+_PLATE_MAIN_BTN_ID = "hasp:mybathroom-panel:p1b20"   # My Bathroom main light button
+_LAUNDRY_RELAY_ID  = "hasp:mybathroom-panel:p1b10"   # Laundry relay (cascade-off target)
+
 
 def _is_plate_relay(dev_id):
     return isinstance(dev_id, str) and dev_id.startswith(_PLATE_PREFIX)
@@ -161,7 +189,7 @@ def _relay_cmd(dev_id, on):
 RULE = {
     "name":        "My Bathroom Lights",
     "description": "Turns the My BathRoom lights on when it senses you there, picks the right lights for day or night, turns them off after the room is empty, and keeps the under-cabinet light following the main light.",
-    "triggers":    [_PRESENCE_ID, _DOOR_ID, "heartbeat"],
+    "triggers":    [_PRESENCE_ID, _DOOR_ID, "heartbeat", _PLATE_MAIN_BTN_ID],
     "controls":    [],
     "category":    "control",
     "group":       "my-bathroom",   # room group (renders as "My BathRoom"). priority 10 keeps it
@@ -334,14 +362,19 @@ def _in_day(cfg, now_min):
     return now_min >= a or now_min < b   # wrap past midnight
 
 
-def _turn_on_set(state, targets, now_ts):
+def _turn_on_set(state, targets, now_ts, skip_plate=False):
     """turn_on each target that's currently OFF, with a two-layer debounce:
     (1) state-diff — skip targets already on; (2) burst debounce — suppress
     repeat on-bursts within _ON_DEBOUNCE_SEC of the last on-emit (see the
-    constant's note). Retries after the window if the lights still read off."""
+    constant's note). Retries after the window if the lights still read off.
+    skip_plate=True omits plate-relay targets (used while the user has the MAIN
+    light blocked by a manual off — don't re-assert it, but the non-plate
+    under-cabinet still turns on)."""
     cmds = []
     for dev_id, ch in targets:
         if _is_plate_relay(dev_id):
+            if skip_plate:
+                continue   # main blocked by a manual off — don't re-assert it
             # Idempotent GPIO output — always (re)assert ON. The plate gives no
             # state feedback and a manual dashboard/tap change is invisible to
             # us, so we can't safely "skip if already on"; re-asserting an
@@ -374,6 +407,29 @@ def _gates_pass(state, cfg):
 
 # ─────────────────────────── Rule ───────────────────────────
 
+def _activity_turn_on(state, cfg, active_set, now_ts, src, in_day):
+    """Shared turn-on for presence + door. Honors the MAIN-light manual-off block:
+    while the user has tapped the main off, motion won't re-light the main (the
+    under-cabinet still turns on) UNTIL they leave (room clear ≥ _LEFT_CLEAR_SEC);
+    a real re-entry then clears the block and lights normally. Returns commands."""
+    prev_active = float(state.shared.get("_mybathroom_last_active_ts", 0) or 0)
+    clear_gap = (now_ts - prev_active) if prev_active else 1e9
+    state.shared["_mybathroom_last_active_ts"] = now_ts
+    state.shared["_mybathroom_autooff_done"] = False   # activity → re-arm auto-off
+    blocked = bool(state.shared.get("_mybathroom_user_off"))
+    if blocked and clear_gap >= _LEFT_CLEAR_SEC:
+        state.shared["_mybathroom_user_off"] = False
+        blocked = False
+        log.info("mybathroom: re-entry after %.0fs away → main manual-off block cleared", clear_gap)
+    if not _gates_pass(state, cfg):
+        return []
+    cmds = _turn_on_set(state, active_set, now_ts, skip_plate=blocked)
+    if cmds:
+        log.info("mybathroom: %s → %d on-commands (in_day=%s, main_blocked=%s)",
+                 src, len(cmds), in_day, blocked)
+    return cmds
+
+
 def evaluate(event, state):
     dev_id = event.get("device_id", "")
     cfg = _parse_config(state)
@@ -383,7 +439,29 @@ def evaluate(event, state):
     now = datetime.now(_TZ)
     now_min = now.hour * 60 + now.minute
     now_ts = time.time()
-    day_set = cfg["day"] if _in_day(cfg, now_min) else cfg["night"]
+    in_day = _in_day(cfg, now_min)
+    day_set = cfg["day"] if in_day else cfg["night"]
+
+    # ── Main-light panel button (p1b20): detect a MANUAL flip ──
+    # The toggle button's "up" event carries the resulting state in `val`
+    # (val=0 off / val=1 on). On a manual OFF: block motion re-light of the MAIN
+    # until you leave, AND cascade OFF to the Laundry light (p1b10). On a manual
+    # ON: clear the block. Act only on "up" (the settled result).
+    if dev_id == _PLATE_MAIN_BTN_ID:
+        dps = event.get("dps", {}) or {}
+        if dps.get("event") == "up":
+            val = dps.get("val")
+            if val in (0, "0", False):
+                state.shared["_mybathroom_user_off"] = True
+                log.info("mybathroom: manual OFF on panel (main) → block main + cascade Laundry off")
+                c = _relay_cmd(_LAUNDRY_RELAY_ID, False)   # one-shot Laundry off
+                return [c] if c else []
+            if val in (1, "1", True):
+                state.shared["_mybathroom_user_off"] = False
+                state.shared["_mybathroom_last_active_ts"] = now_ts
+                state.shared["_mybathroom_autooff_done"] = False
+                log.info("mybathroom: manual ON on panel (main) → block cleared")
+        return []
 
     # ── Manual Run (Force path) — simulate a presence trigger NOW ──
     if event.get("source") == "force_run":
@@ -404,15 +482,7 @@ def evaluate(event, state):
         prev_present = bool(state.shared.get("_mybathroom_prev_present", False))
         state.shared["_mybathroom_prev_present"] = cur_present
         if cur_present:
-            state.shared["_mybathroom_last_active_ts"] = now_ts
-            state.shared["_mybathroom_autooff_done"] = False   # activity → re-arm auto-off
-            if not _gates_pass(state, cfg):
-                return []   # e.g. home_mode != home → track activity but don't turn on
-            cmds = _turn_on_set(state, day_set, now_ts)
-            if cmds:
-                log.info("mybathroom: presence → %d on-commands (in_day=%s)",
-                         len(cmds), _in_day(cfg, now_min))
-            return cmds
+            return _activity_turn_on(state, cfg, day_set, now_ts, "presence", in_day)
         # present → clear transition starts the empty-room grace countdown
         if prev_present:
             state.shared["_mybathroom_last_active_ts"] = now_ts
@@ -422,15 +492,7 @@ def evaluate(event, state):
     if dev_id == _DOOR_ID:
         dps = event.get("dps", {}) or {}
         if "door" in dps:
-            state.shared["_mybathroom_last_active_ts"] = now_ts
-            state.shared["_mybathroom_autooff_done"] = False   # activity → re-arm auto-off
-            if not _gates_pass(state, cfg):
-                return []
-            cmds = _turn_on_set(state, day_set, now_ts)
-            if cmds:
-                log.info("mybathroom: door → %d on-commands (in_day=%s)",
-                         len(cmds), _in_day(cfg, now_min))
-            return cmds
+            return _activity_turn_on(state, cfg, day_set, now_ts, "door", in_day)
         return []
 
     # ── Heartbeat: auto-off when empty + idle ──
