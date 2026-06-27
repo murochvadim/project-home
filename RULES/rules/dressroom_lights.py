@@ -1,7 +1,8 @@
 """Dressroom Lights — presence/door motion lighting for the DressRoom, sentence-driven.
 
-Same pattern as My Bathroom Lights, trimmed to a single light (the DressRoom has
-only one — the Ambient light Switch), so NO day/night split and NO mirror.
+Same pattern as My Bathroom Lights, trimmed (NO day/night split, NO mirror). Drives
+TWO lights together — the Dressroom Ambient light Switch (dps "1") and the Bedroom
+Bookshelf Switch ch2 (dps "2", cross-room "DressRoom Light").
 
 Behaviour
 ---------
@@ -14,6 +15,16 @@ Behaviour
    turn OFF every configured light that's on. Countdown starts when the room
    goes empty and RESETS on every presence/door trigger; the presence-clear gate
    means the light never switches off while someone is still detected.
+3. **Manual override (wall switch)** — flipping the physical wall switch OFF
+   blocks motion from re-lighting the room WHILE you're still in it. The two
+   relays (Ambient dps "1" + Bookshelf dps "2") are triggers; a flip arrives as a
+   clean `{'1'/'2': bool}` event, told apart from the rule's OWN commands by a
+   `_CMD_ECHO_SEC` echo window. A manual OFF sets `_dressroom_user_off`; the block
+   clears only on a real departure (room clear ≥ `_LEFT_CLEAR_SEC`, so a brief
+   mmWave dropout doesn't count as leaving) — so walking back in lights the room
+   with no wait. A manual ON clears the block immediately. Same shape as the
+   Laundry plate-button block, but driven by the relay state event (the Tuya
+   relays report changes promptly via tcp_push) instead of a panel button.
 
 Everything configurable lives in the dashboard container "Dressroom Lights"
 (`r_dressroom_lights_init` in apartment.rule_sentences) — the rule parses it
@@ -48,6 +59,11 @@ log = logging.getLogger("rule.dressroom_lights")
 # Fixed room sensors (triggers — bound at module load).
 _PRESENCE_ID = "bf13844ff697409de91u3d"               # DressRoom Presence sensor (dps "1")
 _DOOR_ID     = "d3d26b00-b4c2-4c8d-924e-df5b6290cf54"  # Dressroom Door (dps "door")
+# The two Dressroom light relays. A physical wall-switch flip arrives as a clean
+# device event on these (confirmed live: {'1': False}/{'2': False} on off). The rule
+# triggers on them to detect a MANUAL off and block motion re-light until you leave.
+_LIGHT_AMBIENT_ID   = "bfb4e402c19353e352br9j"   # Dressroom Ambient light Switch (dps "1")
+_LIGHT_BOOKSHELF_ID = "57317771ecfabcbd3f85"     # Bedroom Bookshelf Switch (dps "2" = DressRoom Light)
 
 # Sentence regex anchors (case-insensitive).
 _LIGHTS_RE  = re.compile(r"dressroom\s+lights:\s*lights\s+are", re.IGNORECASE)
@@ -72,6 +88,16 @@ _DEF_TIMEOUT = 300        # 5 min — used only if s_drl2 is missing/unparsable
 # light still reads off (e.g. the first command was lost).
 _ON_DEBOUNCE_SEC = 3.0
 
+# After a MANUAL off (wall switch), motion won't re-light the room while you're
+# still in it. The block clears only when you actually leave: the room must be
+# clear for this long before a returning presence counts as a fresh entry (above
+# the mmWave's brief dropouts so a flicker never counts as "left").
+_LEFT_CLEAR_SEC = 10
+# A light state-change event arriving within this long after the rule's OWN
+# turn_on/turn_off command is that command echoing back from the relay — ignore
+# it, so the rule never mistakes its own action for a manual wall-switch flip.
+_CMD_ECHO_SEC = 5
+
 _CLEAR_STR = {"none", "no", "clear", "off", "false", "0", ""}
 _ON_VALS   = (True, 1, "on", "ON", "true", "True", "1")
 
@@ -82,7 +108,7 @@ _CFG_TTL_SEC = 30
 RULE = {
     "name":        "Dressroom Lights",
     "description": "Turns the DressRoom light on when it senses you (movement or the door), and off a few minutes after the room is empty. Only when you're home.",
-    "triggers":    [_PRESENCE_ID, _DOOR_ID, "heartbeat"],
+    "triggers":    [_PRESENCE_ID, _DOOR_ID, "heartbeat", _LIGHT_AMBIENT_ID, _LIGHT_BOOKSHELF_ID],
     "controls":    [],
     "category":    "control",
     "group":       "dressroom",   # dedicated single-rule group → never skipped by same-group competition
@@ -272,6 +298,29 @@ def _gates_pass(state, cfg):
 
 # ─────────────────────────── Rule ───────────────────────────
 
+def _activity_turn_on(state, cfg, targets, now_ts, src):
+    """Shared turn-on for presence + door. Honors the manual-off block: while the
+    user has turned the lights off by hand, motion won't re-light them UNTIL they
+    leave (room clear ≥ _LEFT_CLEAR_SEC); a real re-entry then lights with no wait.
+    Returns the on-commands (gated)."""
+    prev_active = float(state.shared.get("_dressroom_last_active_ts", 0) or 0)
+    clear_gap = (now_ts - prev_active) if prev_active else 1e9
+    state.shared["_dressroom_last_active_ts"] = now_ts
+    if state.shared.get("_dressroom_user_off"):
+        if clear_gap >= _LEFT_CLEAR_SEC:
+            state.shared["_dressroom_user_off"] = False
+            log.info("dressroom_lights: re-entry after %.0fs away → manual-off block cleared", clear_gap)
+        else:
+            return []   # turned off by hand, still here → stay off
+    if not _gates_pass(state, cfg):
+        return []
+    cmds = _turn_on_set(state, targets, now_ts)
+    if cmds:
+        state.shared["_dressroom_cmd_on_ts"] = now_ts
+        log.info("dressroom_lights: %s → %d on-commands", src, len(cmds))
+    return cmds
+
+
 def evaluate(event, state):
     dev_id = event.get("device_id", "")
     cfg = _parse_config(state)
@@ -279,6 +328,29 @@ def evaluate(event, state):
         return []
     now_ts = time.time()
     targets = cfg["lights"]
+
+    # ── Light relay events: detect a MANUAL wall-switch flip ──
+    # A physical flip arrives as a clean {'1'/'2': bool} event. Tell it apart from
+    # the rule's own commands by timing: an event within _CMD_ECHO_SEC of our own
+    # turn_on/turn_off is just that command echoing back from the relay — ignore it.
+    if dev_id in (_LIGHT_AMBIENT_ID, _LIGHT_BOOKSHELF_ID):
+        dps = event.get("dps", {}) or {}
+        key = "1" if dev_id == _LIGHT_AMBIENT_ID else "2"
+        if key not in dps:
+            return []
+        if dps.get(key) not in _ON_VALS:                              # light went OFF
+            if (now_ts - float(state.shared.get("_dressroom_cmd_off_ts", 0) or 0)) < _CMD_ECHO_SEC:
+                return []   # our own auto-off echo
+            state.shared["_dressroom_user_off"] = True
+            log.info("dressroom_lights: manual OFF (wall switch) → motion re-light blocked until room empties")
+        else:                                                          # light went ON
+            if (now_ts - float(state.shared.get("_dressroom_cmd_on_ts", 0) or 0)) < _CMD_ECHO_SEC:
+                return []   # our own turn-on echo
+            if state.shared.get("_dressroom_user_off"):
+                state.shared["_dressroom_user_off"] = False
+                state.shared["_dressroom_last_active_ts"] = now_ts
+                log.info("dressroom_lights: manual ON (wall switch) → block cleared")
+        return []
 
     # ── Manual Run (Force path) — simulate a presence trigger NOW ──
     if event.get("source") == "force_run":
@@ -288,6 +360,8 @@ def evaluate(event, state):
             log.info("dressroom_lights: Run gated off (gates=%s)", cfg["gates"])
             return []
         cmds = _turn_on_set(state, targets, now_ts)
+        if cmds:
+            state.shared["_dressroom_cmd_on_ts"] = now_ts
         log.info("dressroom_lights: Run → %d on-commands", len(cmds))
         return cmds
 
@@ -299,13 +373,7 @@ def evaluate(event, state):
         prev_present = bool(state.shared.get("_dressroom_prev_present", False))
         state.shared["_dressroom_prev_present"] = cur_present
         if cur_present:
-            state.shared["_dressroom_last_active_ts"] = now_ts
-            if not _gates_pass(state, cfg):
-                return []   # e.g. home_mode != home → track activity but don't turn on
-            cmds = _turn_on_set(state, targets, now_ts)
-            if cmds:
-                log.info("dressroom_lights: presence → %d on-commands", len(cmds))
-            return cmds
+            return _activity_turn_on(state, cfg, targets, now_ts, "presence")
         # present → clear transition starts the empty-room grace countdown
         if prev_present:
             state.shared["_dressroom_last_active_ts"] = now_ts
@@ -315,13 +383,7 @@ def evaluate(event, state):
     if dev_id == _DOOR_ID:
         dps = event.get("dps", {}) or {}
         if "door" in dps:
-            state.shared["_dressroom_last_active_ts"] = now_ts
-            if not _gates_pass(state, cfg):
-                return []
-            cmds = _turn_on_set(state, targets, now_ts)
-            if cmds:
-                log.info("dressroom_lights: door → %d on-commands", len(cmds))
-            return cmds
+            return _activity_turn_on(state, cfg, targets, now_ts, "door")
         return []
 
     # ── Heartbeat: auto-off when empty + idle ──
@@ -334,6 +396,7 @@ def evaluate(event, state):
             return []
         cmds = _turn_off_set(state, targets)
         if cmds:
+            state.shared["_dressroom_cmd_off_ts"] = now_ts
             log.info("dressroom_lights: auto-off → %d off-commands (idle %.0fs >= %ds, room clear)",
                      len(cmds), now_ts - last_active, cfg["timeout"])
         return cmds
