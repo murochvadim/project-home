@@ -7,15 +7,18 @@ Two firing scenarios (both gated by s_ml3, both share the daily latch):
      Covers: home at sunrise+90 → fires at 07:08; home all morning →
      fires once when the anchor crosses.
 
-  B) Arrival (sentence-driven via s_ml4): if home_mode transitioned
-     INTO the gated value AND current time is past the sun-anchor
-     declared in s_ml4 → fire. Covers: away at 07:08, walked in at
-     07:30 — fires immediately on the heartbeat after arrival.
-     If s_ml4 is absent, Scenario B is disabled; only Scenario A fires.
+  B) Come-home (sentence-driven via s_ml4): runs a SEPARATE "come home"
+     scene on EVERY away/abroad→home arrival, at ANY hour, every time —
+     no sunrise threshold, no once-a-day latch. Edge-triggered on the
+     home_mode transition (fires once per arrival). Fires ~instantly via
+     the 8-Gang-Switch trigger (or the next heartbeat). If s_ml4 is
+     absent, Scenario B is disabled; only Scenario A fires.
 
-Daily latch ensures the rule fires at MOST once per calendar day, no
-matter which scenario triggers. No per-home-period latch reset (a brief
-AWAY+return shouldn't re-fire morning lights mid-morning).
+Scenario A's daily latch ensures the DAWN morning scene fires at most once
+per calendar day. Scenario B (come-home) is deliberately UNLATCHED — it
+runs every time you arrive home. They use DIFFERENT scenes (s_ml1 dawn
+scene vs s_ml4 come-home scene) and can both fire on the same morning
+arrival (you missed the dawn fire while away → arrival runs both).
 
 Sentences (authored in the dashboard "Morning Lights" container):
 
@@ -36,12 +39,11 @@ Sentences (authored in the dashboard "Morning Lights" container):
          (mode names are fully sentence-driven — no `'home'`/`'away'`/
          `'abroad'` literals in code).
 
-  s_ml4: Morning Lights: also turn on when arriving home after sunrise+90
-         (optional) Enables the arrival trigger. Threshold is an
-         explicit sun-event anchor: <event>[±N] where event is
-         dawn|sunrise|noon|sunset|dusk and ±N is minutes. Examples:
-         `... after sunrise`, `... after sunrise+90`, `... after dawn-15`.
-         If absent, the arrival trigger is disabled.
+  s_ml4: Morning Lights: on arriving home run @scene <Come Home Lights>
+         (optional) Enables the come-home path and names the scene to run
+         on EVERY away/abroad→home arrival (any hour, every time). A
+         DIFFERENT scene from s_ml1's dawn scene. If absent, the come-home
+         path is disabled.
 
 If s_ml1 is empty (no chips) or s_ml2 yields no anchors, the rule is a
 safe no-op.
@@ -99,19 +101,35 @@ _GATE_RE = re.compile(
     r'morning\s+lights:\s*only\s+fires\s+when\s+(\w+)\s+is\s+([\w-]+)',
     re.IGNORECASE,
 )
-# Arrival-trigger sentence (s_ml4, optional) —
-#   "Morning Lights: also turn on when arriving home after <event>[±N]"
-# `<event>[±N]` is e.g. `sunrise`, `sunrise+90`, `dawn-15`.
-_LATE_ARRIVAL_RE = re.compile(
-    r'morning\s+lights:\s*also\s+turn\s+on\s+when\s+arriving\s+home\s+after\s+(.+)',
+# Come-home scene sentence (s_ml4) —
+#   "Morning Lights: on arriving home run @scene <Name>"
+# Declares a SEPARATE scene that runs on EVERY away/abroad→home arrival, at ANY
+# hour, every time (no sunrise threshold, no once-a-day latch). Distinct from the
+# dawn Scenario-A "scene is" scene. Absent → the arrival path is disabled.
+_COMEHOME_RE = re.compile(
+    r'morning\s+lights:\s*on\s+arriving\s+home\s+run',
     re.IGNORECASE,
 )
 
 
+# Mode-button device (8 Gang Switch). Added to triggers so the come-home arrival
+# path fires in the SAME event cycle as the HOME button press (~1 s) instead of
+# waiting up to 60 s for the heartbeat — same pattern as Evening Lights. Mode
+# Buttons (depends_on) runs first and sets home_mode.
+_MODE_BUTTON_DEVICE_ID = 'bf85e819855d686918q6hz'
+
+# Scenario A (dawn morning routine) upper time bound. The engine time-window
+# override is now all-day so come-home fires any hour — so the rule must self-
+# enforce that the DAWN routine only runs in the morning, else "away all morning,
+# home at 14:00" would fire the morning routine in the afternoon. Run bypasses it.
+# (Minutes-of-day; 600 = 10:00, matches the old 04:01–10:00 window top.)
+_MORNING_END_MIN = 10 * 60
+
+
 RULE = {
     "name":        "Morning Lights",
-    "description": "Runs your morning routine once a day — switching on your morning devices — around sunrise, or when you arrive home after sunrise if set up that way.",
-    "triggers":    ["heartbeat"],
+    "description": "Runs your morning routine once a day around sunrise. Also runs your Come Home Lights scene every time you arrive home (any hour) after being away.",
+    "triggers":    ["heartbeat", _MODE_BUTTON_DEVICE_ID],
     "controls":    [],
     "category":    "control",
     "group":       "lighting",
@@ -257,20 +275,41 @@ def _load_morning_light_targets(state, container):
 
 
 def _load_scene_name(container):
-    """If s_ml1 declares a scene ('Morning Lights: scene is @scene <Name>'),
-    return the scene name; else None → fall back to the legacy device list."""
+    """s_ml1: 'Morning Lights: scene is @scene <Name>' → the dawn Scenario-A scene.
+    Scoped to the 'scene is' sentence so it never picks up the come-home scene
+    (which also has an @scene chip)."""
     if not container:
         return None
     for s in (container.get('sentences') or []):
         if not s.get('active'):
             continue
+        text = _sentence_text(s)
+        if not _SCENE_RE.search(text):           # only the "scene is" sentence
+            continue
         for chip in _iter_dev_chips(s):
             if chip.lower().startswith('@scene '):
                 return chip[len('@scene '):].strip()
-        m = _SCENE_RE.search(_sentence_text(s))
+        m = _SCENE_RE.search(text)
         if m:  # plain-text "scene is <Name>" with no chip
             name = m.group(1).strip()
             return name[len('@scene '):].strip() if name.lower().startswith('@scene ') else name
+    return None
+
+
+def _load_comehome_scene(container):
+    """s_ml4: 'Morning Lights: on arriving home run @scene <Name>' → the scene to
+    run on EVERY away/abroad→home arrival (any hour, every time). None if absent
+    (arrival path disabled)."""
+    if not container:
+        return None
+    for s in (container.get('sentences') or []):
+        if not s.get('active'):
+            continue
+        if not _COMEHOME_RE.search(_sentence_text(s)):
+            continue
+        for chip in _iter_dev_chips(s):
+            if chip.lower().startswith('@scene '):
+                return chip[len('@scene '):].strip()
     return None
 
 
@@ -340,59 +379,23 @@ def _anchor_minutes(sun_anchors, state):
     return out
 
 
-def _load_late_arrival_threshold(container, state):
-    """Parse s_ml4. Returns the minute-of-day threshold for Scenario B,
-    or None if no s_ml4 sentence is authored (Scenario B disabled).
-
-    Sentence: "Morning Lights: also turn on when arriving home after <event>[±N]"
-    e.g. `... after sunrise`, `... after sunrise+90`, `... after dawn-15`.
-    """
-    if not container:
-        return None
-    for s in (container.get('sentences') or []):
-        if not s.get('active'):
-            continue
-        text = _sentence_text(s)
-        m = _LATE_ARRIVAL_RE.search(text)
-        if not m:
-            continue
-        spec = m.group(1).strip().lower().rstrip('.,;')
-        token = spec.split()[0] if spec else ''
-        ma = _SUN_ANCHOR_RE.match(token)
-        if ma:
-            base = ma.group(1).lower()
-            offset = int(ma.group(2)) if ma.group(2) else 0
-            iso = state.shared.get(base)
-            if not iso:
-                return None
-            try:
-                dt = datetime.fromisoformat(iso).astimezone(_TZ)
-            except (ValueError, TypeError):
-                return None
-            return (dt.hour * 60 + dt.minute + offset) % 1440
-        log.warning("morning_lights: s_ml4 threshold %r not a sun anchor — Scenario B disabled", spec)
-        return None
-    return None
-
-
 # ─────────────────────────── Rule ───────────────────────────
 
 def evaluate(event, state):
-    # Belt-and-braces — engine already filters by trigger.
-    if event.get('device_id') != 'heartbeat':
+    # Heartbeat drives Scenario A (dawn anchor) + is the fallback; a mode-button
+    # event drives the instant come-home arrival (Scenario B). Others ignored.
+    if event.get('device_id') not in ('heartbeat', _MODE_BUTTON_DEVICE_ID):
         return []
+    is_heartbeat = event.get('device_id') == 'heartbeat'
 
     container = _read_morning_lights_container(state)
     if container is None:
         # Container not authored yet — no-op.
         return []
 
+    # Sun anchors gate Scenario A only; the come-home arrival path does NOT need
+    # them, so an empty s_ml2 just disables Scenario A (no early return).
     sun_anchors = _load_sun_anchors(container)
-    if not sun_anchors:
-        # s_ml2 missing or no sun-event anchors — rule has no time threshold,
-        # no-op. Plain time-mode words alone don't drive anything.
-        log.debug("morning_lights: no sun anchors in s_ml2 — skipping")
-        return []
 
     home_mode = state.shared.get('home_mode', '')
     time_mode = state.shared.get('time_mode', '')
@@ -427,76 +430,74 @@ def evaluate(event, state):
     gates_pass = all(state.shared.get(k) == v for k, v in gates)
     home_gate_value = next((v for k, v in gates if k == 'home_mode'), None)
 
-    # Scenario B — late arrival. Enabled by the optional s_ml4 sentence.
-    # `prev_home` non-empty guard prevents a false-arrival at first heartbeat
-    # post-restart, where the persisted state hasn't re-seeded yet.
-    late_arrival_threshold = _load_late_arrival_threshold(container, state)
+    # ── Scenario B — come-home: run the Come Home Lights scene (s_ml4) on EVERY
+    # away/abroad→home arrival, at ANY hour, every time. No sunrise threshold, no
+    # daily latch — it's edge-triggered on the home_mode transition, so it fires
+    # exactly once per arrival. `prev_home` non-empty guard avoids a false-arrival
+    # at the first heartbeat post-restart (persisted state not re-seeded yet).
+    comehome_scene = _load_comehome_scene(container)
     home_just_arrived = (home_gate_value is not None
                          and prev_home
                          and prev_home != home_gate_value
                          and home_mode == home_gate_value)
-    late_arrival_hit = (late_arrival_threshold is not None
-                        and home_just_arrived
-                        and now_min >= late_arrival_threshold)
+    fire_comehome = comehome_scene is not None and home_just_arrived
 
-    # Manual Run (dashboard red "Run" button → engine Force path). Simulate the
-    # trigger MOMENT so the rule fires on demand:
-    #   - anchor_passed=True → ignore the s_ml2 sun-anchor / time_mode timing
-    #   - fired=False        → clear the per-day latch (at a real trigger moment
-    #                          the latch is always clear — it's SET by the fire,
-    #                          not a precondition)
-    # The s_ml3 home_mode gate (gates_pass) + the resolved s_ml1 device list
-    # STILL apply, so Run dispatches exactly the same commands a real morning
-    # fire would. The Force harness deep-copies + restores state.shared, so the
-    # latch write during a Run is reverted and the real morning fire is never
-    # suppressed.
-    if event.get('source') == 'force_run':
+    # Manual Run (dashboard red "Run" → engine Force path) simulates the dawn
+    # trigger MOMENT (Scenario A): anchor_passed=True (ignore sun-anchor timing) +
+    # fired=False (clear the latch). The s_ml3 gate + s_ml1 scene still apply.
+    forced = event.get('source') == 'force_run'
+    if forced:
         anchor_passed = True
         fired = False
 
-    # Fire when Scenario A OR Scenario B trigger AND gates pass AND latch unset.
-    fire = (not fired) and gates_pass and (anchor_passed or late_arrival_hit)
+    # Scenario A — dawn sun anchor, gated + latched once/day (the Morning scene).
+    # HEARTBEAT-ONLY: a mode event must not fire the morning routine (the next
+    # heartbeat does, within 60 s); the mode event is purely for the come-home path.
+    # MORNING-ONLY: also require now_min < _MORNING_END_MIN so the dawn routine can't
+    # leak into the afternoon now that the engine window is all-day. Run bypasses it.
+    fire_anchor = (is_heartbeat and (not fired) and gates_pass and anchor_passed
+                   and (forced or now_min < _MORNING_END_MIN))
 
-    # Persist transitions + latch state (always — even when not firing).
+    # Persist transitions + latch (always). ONLY Scenario A sets the daily latch —
+    # come-home arrivals are intentionally unlatched (repeatable, any hour).
     state.shared['_morning_lights_prev_home_mode']    = home_mode
-    state.shared['_morning_lights_fired_this_period'] = fired or fire
-    if fire:
+    state.shared['_morning_lights_fired_this_period'] = fired or fire_anchor
+    if fire_anchor:
         state.shared['_morning_lights_fired_date'] = today_iso
 
-    if not fire:
+    if not (fire_anchor or fire_comehome):
         return []
 
-    # Resolve what to fire — fresh each fire. Prefer a Scene (s_ml1 = "scene is
-    # @scene <Name>") → emit ONE run_scene command (engine runs it async), exactly
-    # like Evening Lights; fall back to the legacy device-list path when no scene
-    # chip is present.
-    scene_name = _load_scene_name(container)
-    if scene_name:
-        commands = [{'action': 'run_scene', 'scene': scene_name, 'rule': 'Morning Lights'}]
-        src = f'run_scene:{scene_name}'
-    else:
-        targets = _load_morning_light_targets(state, container)
-        if not targets:
-            log.info("morning_lights: trigger met but no targets parsed — skipping")
-            return []
-        commands = []
-        for t in targets:
-            if isinstance(t, dict):
-                # Display / panel chip (already a complete command dict)
-                commands.append({**t, 'rule': 'Morning Lights'})
-            else:
-                dev_id, dps_key = t
-                cmd = {'device_id': dev_id, 'action': 'turn_on', 'rule': 'Morning Lights'}
-                if dps_key is not None:
-                    cmd['channel'] = dps_key
-                commands.append(cmd)
-        src = 'devlist'
+    commands = []
+    srcs = []
 
-    scenario = 'B:late_arrival' if late_arrival_hit else 'A:anchor_passed'
+    # Scenario A → the dawn "scene is" scene (s_ml1), or the legacy device list.
+    if fire_anchor:
+        scene_name = _load_scene_name(container)
+        if scene_name:
+            commands.append({'action': 'run_scene', 'scene': scene_name, 'rule': 'Morning Lights'})
+            srcs.append(f'anchor:run_scene:{scene_name}')
+        else:
+            for t in _load_morning_light_targets(state, container):
+                if isinstance(t, dict):
+                    commands.append({**t, 'rule': 'Morning Lights'})
+                else:
+                    dev_id, dps_key = t
+                    cmd = {'device_id': dev_id, 'action': 'turn_on', 'rule': 'Morning Lights'}
+                    if dps_key is not None:
+                        cmd['channel'] = dps_key
+                    commands.append(cmd)
+            srcs.append('anchor:devlist')
+
+    # Scenario B → the come-home scene (s_ml4), any hour, every arrival.
+    if fire_comehome:
+        commands.append({'action': 'run_scene', 'scene': comehome_scene, 'rule': 'Morning Lights'})
+        srcs.append(f'comehome:run_scene:{comehome_scene}')
+
     log.info(
-        "morning_lights: fired %d commands via %s (scenario=%s time_mode=%s "
-        "home_mode=%s now_min=%d earliest_anchor=%s late_threshold=%s gates=%s)",
-        len(commands), src, scenario, time_mode, home_mode, now_min,
-        earliest_anchor, late_arrival_threshold, gates,
+        "morning_lights: fired %d commands via [%s] (time_mode=%s home_mode=%s "
+        "prev_home=%s now_min=%d earliest_anchor=%s gates=%s)",
+        len(commands), ', '.join(srcs), time_mode, home_mode, prev_home, now_min,
+        earliest_anchor, gates,
     )
     return commands
