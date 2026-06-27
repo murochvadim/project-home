@@ -235,6 +235,12 @@ module.exports = (app, db) => {
     try {
       const rkey = (req.body || {}).rkey;
       if (!rkey) return res.status(400).json({ error: 'rkey required' });
+      // Water reminders: Clear means "I drank it" → also LOG +1 cup (ph_water) for
+      // that profile, so the cup count keeps up with the pace. rkey = water:<pid>:…
+      if (rkey.startsWith('water:')) {
+        const pid = parseInt(rkey.split(':')[1], 10);
+        if (pid) await db.query('INSERT INTO ph_water (profile_id, cups) VALUES ($1, 1)', [pid]);
+      }
       await db.query(
         `INSERT INTO reminder_state (rkey, cleared_at, updated_at) VALUES ($1, now(), now())
          ON CONFLICT (rkey) DO UPDATE SET cleared_at = now(), updated_at = now()`,
