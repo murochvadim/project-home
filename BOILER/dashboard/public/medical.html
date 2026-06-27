@@ -110,7 +110,7 @@
     <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
     <button class="tab-btn"        onclick="showMedTab('tests',     this); medTestsInit();">Tests</button>
     <button class="tab-btn"        onclick="showMedTab('personal-health', this); phInit();">Personal Health</button>
-    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit();">Settings</button>
+    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit(); medWaterSettingsInit();">Settings</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -499,6 +499,15 @@
           </div>
           <div id="ph-st-today" style="margin-top:auto;padding-top:12px;font-size:0.82rem;color:#555;">Today: <b>—</b></div>
         </div>
+        <div class="card" id="ph-watercard" style="margin-bottom:0;display:flex;flex-direction:column;">
+          <h3 style="margin:0 0 10px;display:flex;align-items:center;">💧 Water<button onclick="phHistory('water')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phLogWater(1)">+1 cup</button>
+            <span id="ph-wt-today" style="font-size:0.9rem;">Today: <b>—</b></span>
+            <span id="ph-wt-status" style="font-size:0.78rem;color:#888;"></span>
+          </div>
+          <div id="ph-wt-goal" style="margin-top:auto;padding-top:12px;font-size:0.74rem;color:#888;">🎯 —</div>
+        </div>
       </div>
     </div>
 
@@ -512,19 +521,19 @@
       <h2 style="margin-top:0;">👟 Step counting</h2>
       <p style="font-size:0.84rem;color:#666;margin:0 0 14px;">
         Walking trips from <b>Project General → Recent trips</b> are auto-converted to steps (per person, by phone) by a watcher on LXC 104.
-        A trip counts as <b>walking</b> by its <b>average speed</b> (not distance — you can drive a short way or walk a long way); distance is only a sanity cap.
+        It reads each trip's <b>actual GPS points</b> and decides <b>walk / drive / phantom</b> from the point-to-point speeds — a drive (or a drive→park→drive) and GPS-ghost trips are skipped; steps come from the clean (good-accuracy) walked distance.
       </p>
-      <div style="display:grid;grid-template-columns:max-content 1fr;gap:10px 14px;align-items:center;max-width:460px;">
+      <div style="display:grid;grid-template-columns:max-content 1fr;gap:10px 14px;align-items:center;max-width:480px;">
         <label style="font-size:0.85rem;color:#555;">Steps per km</label>
         <input id="set-steps-per-km" type="number" min="1" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
-        <label style="font-size:0.85rem;color:#555;">Walking speed — min (km/h)</label>
-        <input id="set-walk-min" type="number" min="0" step="0.1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
-        <label style="font-size:0.85rem;color:#555;">Walking speed — max (km/h)</label>
-        <input id="set-walk-max" type="number" min="0" step="0.1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
-        <label style="font-size:0.85rem;color:#555;">Max walking distance (km, cap)</label>
+        <label style="font-size:0.85rem;color:#555;">GPS accuracy gate (m)<br><span style="font-size:0.72rem;color:#999;">only points this accurate are measured</span></label>
+        <input id="set-acc-gate" type="number" min="5" max="100" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Phantom floor (m)<br><span style="font-size:0.72rem;color:#999;">below this clean distance = GPS ghost, skip</span></label>
+        <input id="set-phantom-min" type="number" min="0" step="10" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Driving speed (km/h)<br><span style="font-size:0.72rem;color:#999;">faster than this = vehicle, skip</span></label>
+        <input id="set-drive-kmh" type="number" min="5" max="60" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Max distance (km, cap)</label>
         <input id="set-walk-maxkm" type="number" min="0" step="0.5" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
-        <label style="font-size:0.85rem;color:#555;">GPS jitter discount (%)<br><span style="font-size:0.72rem;color:#999;">trims noisy GPS path before speed + steps</span></label>
-        <input id="set-jitter-pct" type="number" min="0" max="60" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
         <label style="font-size:0.85rem;color:#555;">History — show last N entries</label>
         <input id="set-history-limit" type="number" min="1" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
       </div>
@@ -533,7 +542,30 @@
         <span id="set-status" style="font-size:0.82rem;color:#888;"></span>
       </div>
       <div style="font-size:0.78rem;color:#999;margin-top:12px;">
-        Defaults: 1300 steps/km · walking 2–9 km/h · cap 30 km. A trip with avg speed in the window (and ≤ cap) is imported once; both manual entries and trip-steps add to the daily total.
+        Defaults: 1300 steps/km · accuracy gate 35 m · phantom floor 150 m · driving 15 km/h · cap 30 km. Trips with no stored GPS points (aged out) are skipped, not guessed. Manual entries + trip-steps both add to the daily total.
+      </div>
+    </div>
+
+    <div class="card" style="max-width:640px;">
+      <h2 style="margin-top:0;">💧 Water reminders</h2>
+      <p style="font-size:0.84rem;color:#666;margin:0 0 14px;">
+        Spreads a daily cup target across your waking window and nudges you on the reminders badge every interval until you catch up. Each person logs their own cups on <b>Personal Health → 💧 Water</b>. <i>Phone push (ntfy) comes later — for now the nudge shows on the dashboard badge.</i>
+      </p>
+      <div style="display:grid;grid-template-columns:max-content 1fr;gap:10px 14px;align-items:center;max-width:480px;">
+        <label style="font-size:0.85rem;color:#555;">Enable water reminders</label>
+        <input type="checkbox" id="setw-enabled" style="justify-self:start;transform:scale(1.2);">
+        <label style="font-size:0.85rem;color:#555;">Daily target (cups)</label>
+        <input id="setw-target" type="number" min="1" max="30" style="padding:6px 9px;border:1px solid #2563eb;border-radius:4px;color:#2563eb;font-weight:600;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Active window — start</label>
+        <input id="setw-start" type="time" style="padding:6px 9px;border:1px solid #2e7d32;border-radius:4px;color:#2e7d32;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Active window — end</label>
+        <input id="setw-end" type="time" style="padding:6px 9px;border:1px solid #c0392b;border-radius:4px;color:#c0392b;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Remind every (minutes)<br><span style="font-size:0.72rem;color:#999;">blank = auto-spread (window ÷ target)</span></label>
+        <input id="setw-interval" type="number" min="1" max="600" placeholder="auto" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+      </div>
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center;">
+        <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="medWaterSettingsSave()">💾 Save</button>
+        <span id="setw-status" style="font-size:0.82rem;color:#888;"></span>
       </div>
     </div>
   </div><!-- /tab-settings -->
@@ -696,7 +728,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=26"></script>
+<script src="js/personal-health.js?v=29"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

@@ -2284,7 +2284,7 @@ const DBV_GROUPS = [
   ['Gateway / NetBird',     ['netbird_peers_local','netbird_tenant_settings','gateway_peer_transitions']],
   ['Geolocation',           ['device_locations','phone_trips']],
   ['Medical',               ['medical_contacts','medical_documents','medical_test_results']],
-  ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_steps','ph_steps_excluded_trips']],
+  ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_water','ph_steps','ph_steps_excluded_trips']],
   ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_doc_crypto','visited_places']],
   ['Reminders',             ['reminder_state']],
 ];
@@ -2316,7 +2316,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       manual_people_log: 'ts', ups_status: 'ts', ups_power_events: 'started_at',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
-      household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at', ph_body: 'measured_at', ph_steps: 'measured_at', ph_steps_excluded_trips: 'excluded_at', reminder_state: 'updated_at',
+      household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at', ph_body: 'measured_at', ph_water: 'measured_at', ph_steps: 'measured_at', ph_steps_excluded_trips: 'excluded_at', reminder_state: 'updated_at',
       power_consumption: 'ts',
       power_devices: 'updated_at',
       power_bills: 'uploaded_at',
@@ -5786,7 +5786,7 @@ async function ensureSchema() {
       `, [[
         'medical_contacts', 'medical_documents', 'medical_test_results',
         'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto', 'visited_places',
-        'household_users', 'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp', 'ph_body', 'ph_steps', 'ph_steps_excluded_trips',
+        'household_users', 'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp', 'ph_body', 'ph_water', 'ph_steps', 'ph_steps_excluded_trips',
       ]]);
       await db.query(`
         INSERT INTO dashboard_settings (key, value, updated_at)

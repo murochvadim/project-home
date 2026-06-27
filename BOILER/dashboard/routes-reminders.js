@@ -153,6 +153,44 @@ module.exports = (app, db) => {
       }
     }
 
+    // ── water: nudge every interval (cups so far < what you should have by now).
+    // Config is GLOBAL (Medical → Settings) in dashboard_settings.medical.water:
+    // {enabled, target, start_hm, end_hm, interval_min}. interval_min blank/0 = auto
+    // (window ÷ target). Applies to every profile, each with its own ph_water count. ──
+    let waterCfg = null;
+    try {
+      const wr = await db.query("SELECT value FROM dashboard_settings WHERE key='medical.water'");
+      const v = wr.rows[0] && wr.rows[0].value;
+      waterCfg = (v && typeof v === 'object') ? v : (v ? JSON.parse(v) : null);
+    } catch (e) { /* no config → no water reminders */ }
+    if (waterCfg && waterCfg.enabled && Number(waterCfg.target) > 0) {
+      const target = Number(waterCfg.target);
+      const startMin = hm2min(waterCfg.start_hm || '08:00'), endMin = hm2min(waterCfg.end_hm || '22:00');
+      const interval = Number(waterCfg.interval_min) > 0
+        ? Number(waterCfg.interval_min)
+        : Math.floor((endMin - startMin) / target);
+      if (nowMin >= startMin && endMin > startMin && interval > 0) {
+        const expected = Math.min(target, Math.floor((nowMin - startMin) / interval));
+        if (expected > 0) {
+          for (const pr of profs) {
+            const cups = Number((await db.query(
+              `SELECT COALESCE(SUM(cups),0) AS c FROM ph_water
+                WHERE profile_id=$1 AND (measured_at AT TIME ZONE 'Asia/Jerusalem')::date = $2::date`,
+              [pr.id, t.ldate])).rows[0].c) || 0;
+            if (cups >= expected) continue;                            // caught up to this interval
+            items.push({
+              // rkey keyed to the interval slot you've fallen behind on → Delay/Clear
+              // stick for that slot; a fresh nudge raises at the next interval.
+              rkey: `water:${pr.id}:${t.ldate}:${expected}`,
+              user_name: pr.user_name || '—',
+              label: `💧 Drink water (${cups}/${target})`,
+              kind: 'water',
+            });
+          }
+        }
+      }
+    }
+
     // ── filter out snoozed / cleared instances ──
     if (!items.length) return [];
     const states = (await db.query(

@@ -1,107 +1,174 @@
 #!/usr/bin/env python3
-"""Walking-trip -> Personal Health steps importer (LXC 104 cron).
+"""Walking-trip -> Personal Health steps importer (LXC 104 cron, */15).
 
-For each confirmed, closed `phone_trips` row that looks like WALKING (average
-speed within the configured window, distance within the cap), map it to a
-household member by `device_label` and insert a `ph_steps` row
-(source='trip', measured_at = the trip's returned_at, deduped by trip_id via the
-partial unique index + a NOT EXISTS guard).
+SEGMENT-BASED classifier (2026-06-27). For each confirmed, closed phone_trips row
+not yet imported, pull its GPS points from device_locations and decide
+walk / drive / phantom from PER-POINT segment speeds — instead of trusting the
+GPS-jitter-inflated path_length_m (which can't tell a steady walk from
+drive->park->drive, and reads a normal walk as "too fast"). Steps come from the
+CLEAN (good-accuracy) path distance.
 
-Thresholds come from `dashboard_settings.medical.steps` (edited in the Medical ->
-Settings tab); falls back to defaults. Idempotent — safe on a */15 cron. First
-run backfills all qualifying past trips; later runs are incremental.
+  walking  -> insert ph_steps (steps = clean_km * steps_per_km, measured_at = returned_at)
+  driving  -> skip (a sustained fast run, or a fast 85th-percentile)
+  phantom  -> skip (clean movement below a floor = GPS ghost / drove-nowhere)
+  no points (aged out / wiped, or trip's group not mapped) -> skip (don't guess)
+
+Mapped to a member by device_label -> household_users; deduped by trip_id
+(partial-unique index + NOT EXISTS). Reconciles trip-steps whose trip the geo
+janitor later deleted. Idempotent on a */15 cron.
 
 Deploy: scp scripts/steps_from_trips.py root@192.168.1.227:/opt/steps_from_trips.py
 Cron:   */15 * * * * /usr/bin/python3 /opt/steps_from_trips.py >> /var/log/steps-from-trips.log 2>&1
 """
 import json
+import math
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
 DB = dict(host='192.168.1.219', dbname='home_data', user='postgres')
-# min_trip_dist_m: a trip whose stored max distance-from-home is below this is treated
-# as GPS noise / a phantom (same 250 m line the geo janitor + Recent-trips view use)
-# and NOT counted as steps.
-# jitter_pct: GPS path_length_m is the sum of every ping-to-ping hop, so GPS noise
-# (a phone logging tiny zig-zags while you walk/pause) inflates it — typically ~25-30%
-# vs the real walked distance. We trim that % off the logged path BEFORE judging speed
-# AND counting steps, so a normal walk isn't misread as "too fast" and steps aren't
-# overcounted. One coherent idea: "assume jitter_pct of the logged path is noise."
-DEFAULTS = {'steps_per_km': 1300, 'walk_min_kmh': 2.0, 'walk_max_kmh': 9.0,
-            'walk_max_km': 30.0, 'min_trip_dist_m': 250.0, 'jitter_pct': 25.0}
+# Knobs (overridable from dashboard_settings.medical.steps):
+DEFAULTS = {
+    'steps_per_km':    1300,
+    'walk_max_km':     30.0,    # hard distance cap (above this = not a walk)
+    'accuracy_gate_m': 35.0,    # a segment counts only if BOTH endpoints are this accurate
+    'phantom_min_m':   150.0,   # clean distance below this = GPS phantom / no real trip
+    'drive_kmh':       15.0,    # vehicle-like: drives if p85 segment speed > this, OR
+    'drive_run_segs':  3,       # >= this many CONSECUTIVE segments faster than drive_kmh
+}
+
+
+def haversine(a_lat, a_lon, b_lat, b_lon):
+    R = 6371000.0
+    p1, p2 = math.radians(a_lat), math.radians(b_lat)
+    dp = math.radians(b_lat - a_lat)
+    dl = math.radians(b_lon - a_lon)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(h))
+
+
+def pctile(xs, q):
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    return s[min(len(s) - 1, int(q * len(s)))]
 
 
 def main():
     conn = psycopg2.connect(**DB)
     conn.autocommit = True
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # --- config (Medical -> Settings) ---
     cfg = dict(DEFAULTS)
     try:
         cur.execute("SELECT value FROM dashboard_settings WHERE key = 'medical.steps'")
         row = cur.fetchone()
-        if row and row[0]:
-            v = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        if row and row['value']:
+            v = row['value'] if isinstance(row['value'], dict) else json.loads(row['value'])
             for k in DEFAULTS:
                 if v.get(k) is not None:
                     cfg[k] = v[k]
     except Exception as e:
         print('config read failed, using defaults:', e)
-    spk = float(cfg['steps_per_km'])
-    vmin = float(cfg['walk_min_kmh'])
-    vmax = float(cfg['walk_max_kmh'])
-    maxkm = float(cfg['walk_max_km'])
-    min_dist = float(cfg['min_trip_dist_m'])
-    jfac = max(0.0, min(0.6, float(cfg['jitter_pct']) / 100.0))  # fraction of logged path treated as GPS noise
+    spk        = float(cfg['steps_per_km'])
+    maxkm      = float(cfg['walk_max_km'])
+    acc_gate   = float(cfg['accuracy_gate_m'])
+    phantom_min = float(cfg['phantom_min_m'])
+    drive_kmh  = float(cfg['drive_kmh'])
+    drive_run  = int(cfg['drive_run_segs'])
 
-    # --- reconcile: drop trip-derived step rows whose trip no longer exists ---
-    # The geo janitor (LXC 104, */5) DELETEs GPS-phantom trips from phone_trips
-    # AFTER we may have imported them. Sync each run so steps never reference a
-    # trip that the geolocation system has since judged fake.
+    # reconcile: drop trip-steps whose trip the geo janitor has since deleted
     cur.execute("DELETE FROM ph_steps WHERE source = 'trip' "
                 "AND NOT EXISTS (SELECT 1 FROM phone_trips t WHERE t.id = ph_steps.trip_id)")
     reconciled = cur.rowcount
 
-    # --- device_label -> household_users.id ---
+    # device_label -> household_users.id
     cur.execute("SELECT id, device_label FROM household_users WHERE device_label IS NOT NULL")
-    dev2user = {dl.strip(): uid for (uid, dl) in cur.fetchall() if dl and dl.strip()}
+    dev2user = {r['device_label'].strip(): r['id'] for r in cur.fetchall()
+                if r['device_label'] and r['device_label'].strip()}
 
-    # --- candidate trips not yet imported ---
+    # group_id -> [device_id] from the geolocation settings (so we can fetch a trip's pings)
+    group_devices = {}
+    try:
+        cur.execute("SELECT value FROM dashboard_settings WHERE key = 'geolocation'")
+        gr = cur.fetchone()
+        geo = (gr['value'] if gr and isinstance(gr['value'], dict)
+               else (json.loads(gr['value']) if gr and gr['value'] else {}))
+        for d in geo.get('tracked_devices', []):
+            if d.get('group_id') and d.get('device_id'):
+                group_devices.setdefault(d['group_id'], []).append(d['device_id'])
+    except Exception as e:
+        print('geolocation settings read failed:', e)
+
+    # candidate trips: confirmed, closed, not yet imported, not excluded
     cur.execute("""
-        SELECT t.id, t.device_label, t.path_length_m, t.duration_sec, t.returned_at
+        SELECT t.id, t.group_id, t.device_label, t.started_at, t.returned_at
           FROM phone_trips t
-         WHERE t.confirmed = true AND t.returned_at IS NOT NULL
-           AND t.duration_sec > 0 AND t.path_length_m > 0
-           AND COALESCE(t.max_dist_m, 0) > %s
+         WHERE t.confirmed = true AND t.returned_at IS NOT NULL AND t.duration_sec > 0
            AND NOT EXISTS (SELECT 1 FROM ph_steps s WHERE s.trip_id = t.id)
            AND t.id NOT IN (SELECT trip_id FROM ph_steps_excluded_trips)
-    """, (min_dist,))
-    rows = cur.fetchall()
+    """)
+    trips = cur.fetchall()
 
-    imported = skipped_speed = skipped_user = 0
-    for (tid, dl, plen, dur, ret) in rows:
-        eff_m = plen * (1.0 - jfac)          # de-noised walked distance
-        avg_kmh = (eff_m / dur) * 3.6        # speed judged on the de-noised distance
-        km = eff_m / 1000.0
-        if not (vmin <= avg_kmh <= vmax) or km > maxkm:
-            skipped_speed += 1
+    imported = sk_nopts = sk_phantom = sk_drive = sk_far = sk_user = 0
+    for tr in trips:
+        dev_ids = group_devices.get(tr['group_id'], [])
+        if not dev_ids:
+            sk_nopts += 1
             continue
-        uid = dev2user.get((dl or '').strip())
+        cur.execute("""SELECT lat::float AS lat, lon::float AS lon, accuracy_m, ts
+                         FROM device_locations
+                        WHERE device_id = ANY(%s) AND ts BETWEEN %s AND %s
+                        ORDER BY ts ASC""", (dev_ids, tr['started_at'], tr['returned_at']))
+        pts = cur.fetchall()
+        if len(pts) < 3:
+            sk_nopts += 1                       # no evidence -> don't guess
+            continue
+
+        clean_m = 0.0
+        speeds = []
+        run = max_run = 0
+        prev = None
+        for pt in pts:
+            if prev is not None:
+                dt = (pt['ts'] - prev['ts']).total_seconds()
+                am = max(pt['accuracy_m'] if pt['accuracy_m'] is not None else 9999,
+                         prev['accuracy_m'] if prev['accuracy_m'] is not None else 9999)
+                if dt > 0 and am <= acc_gate:
+                    kmh = haversine(prev['lat'], prev['lon'], pt['lat'], pt['lon']) / dt * 3.6
+                    clean_m += kmh / 3.6 * dt
+                    speeds.append(kmh)
+                    if kmh > drive_kmh:
+                        run += 1
+                        max_run = max(max_run, run)
+                    else:
+                        run = 0
+            prev = pt
+
+        if clean_m < phantom_min:
+            sk_phantom += 1
+            continue
+        if clean_m / 1000.0 > maxkm:
+            sk_far += 1
+            continue
+        if pctile(speeds, 0.85) > drive_kmh or max_run >= drive_run:
+            sk_drive += 1
+            continue
+        uid = dev2user.get((tr['device_label'] or '').strip())
         if not uid:
-            skipped_user += 1
+            sk_user += 1
             continue
-        steps = round(km * spk)              # steps also from the de-noised distance
+        steps = round(clean_m / 1000.0 * spk)
         try:
-            cur.execute(
-                "INSERT INTO ph_steps (user_id, measured_at, steps, source, trip_id) "
-                "VALUES (%s, %s, %s, 'trip', %s)", (uid, ret, steps, tid))
+            cur.execute("INSERT INTO ph_steps (user_id, measured_at, steps, source, trip_id) "
+                        "VALUES (%s, %s, %s, 'trip', %s)", (uid, tr['returned_at'], steps, tr['id']))
             imported += 1
         except psycopg2.Error as e:
-            print(f'insert trip {tid} failed:', e)
+            print(f'insert trip {tr["id"]} failed:', e)
 
-    print(f'steps_from_trips: reconciled_orphans={reconciled} imported={imported} '
-          f'skipped_speed={skipped_speed} skipped_no_user={skipped_user} candidates={len(rows)} '
-          f'cfg(spk={spk} {vmin}-{vmax}km/h dist>{min_dist}m cap={maxkm}km jitter={jfac*100:.0f}%)')
+    print(f"steps_from_trips: reconciled={reconciled} imported={imported} "
+          f"skipped(nopts={sk_nopts} phantom={sk_phantom} drive={sk_drive} far={sk_far} nouser={sk_user}) "
+          f"candidates={len(trips)} "
+          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|run>={drive_run}) cap={maxkm}km)")
 
 
 if __name__ == '__main__':

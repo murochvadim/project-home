@@ -26,7 +26,7 @@ module.exports = (app, db) => {
         // to_char so DATE returns as 'YYYY-MM-DD' (a bare pg DATE serializes as a
         // timezone-shifted Date → off-by-one day in the browser).
         `SELECT p.id, p.name, p.user_id, p.sex, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
-                p.height_cm, p.allergies, p.conditions, p.weight_sched, p.bp_sched, p.body_sched, p.created_at,
+                p.height_cm, p.allergies, p.conditions, p.weight_sched, p.bp_sched, p.body_sched, p.water_sched, p.created_at,
                 (SELECT m.weight_kg FROM ph_measurements m WHERE m.profile_id = p.id
                   ORDER BY m.measured_at DESC, m.id DESC LIMIT 1) AS latest_weight_kg,
                 (SELECT b.waist_cm FROM ph_body b WHERE b.profile_id = p.id
@@ -70,6 +70,7 @@ module.exports = (app, db) => {
       if (b.weight_sched  !== undefined) add('weight_sched', b.weight_sched);
       if (b.bp_sched      !== undefined) add('bp_sched', b.bp_sched);
       if (b.body_sched    !== undefined) add('body_sched', b.body_sched);
+      if (b.water_sched   !== undefined) add('water_sched', b.water_sched);
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       params.push(parseInt(req.params.id));
       await db.query(`UPDATE ph_profiles SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
@@ -310,6 +311,63 @@ module.exports = (app, db) => {
   app.delete('/api/personal-health/body/:id', async (req, res) => {
     try {
       await db.query('DELETE FROM ph_body WHERE id = $1', [parseInt(req.params.id)]);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+
+  // ── Water (daily cups) — per-profile count tracker (like steps). Today total
+  // for the card + history list/edit. The "behind pace" reminder lives in
+  // routes-reminders.js. "Today" computed in Asia/Jerusalem.
+  const _waterToday = "(measured_at AT TIME ZONE 'Asia/Jerusalem')::date = (now() AT TIME ZONE 'Asia/Jerusalem')::date";
+  app.get('/api/personal-health/water', async (req, res) => {
+    try {
+      const pid = parseInt(req.query.profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const r = await db.query(
+        `SELECT COALESCE(SUM(cups),0) AS today_total FROM ph_water WHERE profile_id=$1 AND ${_waterToday}`, [pid]);
+      res.json(r.rows[0]);
+    } catch (e) { err(res, e); }
+  });
+  app.get('/api/personal-health/water/list', async (req, res) => {
+    try {
+      const pid = parseInt(req.query.profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const r = await db.query(
+        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at, cups
+           FROM ph_water WHERE profile_id=$1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
+      res.json(r.rows);
+    } catch (e) { err(res, e); }
+  });
+  app.post('/api/personal-health/water', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const pid = parseInt(b.profile_id);
+      const cups = num(b.cups);
+      if (!pid || cups == null) return res.status(400).json({ error: 'profile_id and cups required' });
+      const r = await db.query(
+        `INSERT INTO ph_water (profile_id, cups, measured_at) VALUES ($1,$2, COALESCE($3::timestamptz, now()))
+         RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at`,
+        [pid, cups, b.measured_at || null]);
+      res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
+    } catch (e) { err(res, e); }
+  });
+  app.patch('/api/personal-health/water/:id', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const sets = [], params = [];
+      const add = (c, v) => { params.push(v); sets.push(`${c} = $${params.length}`); };
+      if (b.cups        !== undefined) add('cups', num(b.cups));
+      if (b.measured_at !== undefined) add('measured_at', b.measured_at || null);
+      if (!sets.length) return res.status(400).json({ error: 'no fields' });
+      params.push(parseInt(req.params.id));
+      await db.query(`UPDATE ph_water SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+  app.delete('/api/personal-health/water/:id', async (req, res) => {
+    try {
+      await db.query('DELETE FROM ph_water WHERE id = $1', [parseInt(req.params.id)]);
       res.json({ ok: true });
     } catch (e) { err(res, e); }
   });

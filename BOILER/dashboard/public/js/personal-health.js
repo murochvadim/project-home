@@ -16,6 +16,12 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const dpart = (s) => (s ? String(s).slice(0, 10) : '');
+  const _hm2min = (hm) => { const [h, m] = (hm || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  let _waterCfg = {};   // global water goal/window (Medical → Settings → 💧 Water)
+  async function _loadWaterCfg() {
+    try { const j = await (await fetch('/api/dashboard-settings/medical.water')).json(); _waterCfg = (j && j.value) || {}; }
+    catch (e) { _waterCfg = {}; }
+  }
   const userByName = (name) => _users.find(u => u && u.name === name) || null;
   // Resolve a member's health profile by the stable user_id (the canonical link, so a
   // member rename can't orphan it); fall back to name during the transition window.
@@ -57,6 +63,7 @@
     const [uRes, pRes] = await Promise.all([
       fetch('/api/household-users').then(r => r.ok ? r.json() : []).catch(() => []),
       fetch(API + '/profiles').then(r => r.json()).catch(() => []),
+      _loadWaterCfg(),   // sets _waterCfg (global goal/window) before renderDetail
     ]);
     const uv = uRes;   // /api/household-users returns the member array directly
     _users = (Array.isArray(uv) ? uv : []).filter(u => u && (u.name || '').trim());
@@ -180,6 +187,7 @@
       $('ph-logcard').style.display = 'none';
       $('ph-bpcard').style.display = 'none';
       $('ph-bodycard').style.display = 'none';
+      $('ph-watercard').style.display = 'none';
       $('ph-stepscard').style.display = 'none';
       $('ph-medscard').style.display = 'none';
       _curProfileId = null;
@@ -188,11 +196,13 @@
     $('ph-logcard').style.display = '';
     $('ph-bpcard').style.display = '';
     $('ph-bodycard').style.display = '';
+    $('ph-watercard').style.display = '';
     $('ph-stepscard').style.display = '';
     $('ph-medscard').style.display = '';
     _curProfileId = p.id;
     phLoadMeds(p.id);
     phLoadSteps();
+    phLoadWater();
     phSchedRender('weight', p.weight_sched);
     phSchedRender('bp', p.bp_sched);
     phSchedRender('body', p.body_sched);
@@ -300,6 +310,71 @@
     await phLoadSteps();
   };
 
+  // ── water (daily cups) — per-profile count + a goal/window that drives the
+  // 💧 "behind pace" reminder. Mirrors the steps tracker. ──
+  async function phLoadWater() {
+    const p = profileFor(_selName);
+    const g = $('ph-wt-goal');
+    const tgt = Number(_waterCfg.target) || 0;
+    const on = _waterCfg.enabled !== false && tgt > 0;
+    if (g) {
+      if (on) {
+        const sh = _waterCfg.start_hm || '08:00', eh = _waterCfg.end_hm || '22:00';
+        let iv = Number(_waterCfg.interval_min) || 0;
+        if (!iv) { const dur = _hm2min(eh) - _hm2min(sh); iv = dur > 0 ? Math.round(dur / tgt) : 0; }
+        g.innerHTML = `🎯 ${tgt} cups · ${esc(sh)}–${esc(eh)}` + (iv > 0 ? ` · every ~${iv} min` : '') +
+          ` · <span style="color:#2563eb;">edit in Settings</span>`;
+      } else {
+        g.innerHTML = '🎯 No goal yet — set it in <span style="color:#2563eb;">Settings → 💧 Water</span>';
+      }
+    }
+    if (!p) { $('ph-wt-today').innerHTML = 'Today: <b>—</b>'; return; }
+    try {
+      const w = await (await fetch(`${API}/water?profile_id=${p.id}`)).json();
+      const tot = Number(w.today_total || 0);
+      const done = tgt && tot >= tgt;
+      $('ph-wt-today').innerHTML = `Today: <b style="color:${done ? '#2e7d32' : '#2563eb'};">${tot}</b> / ${tgt || '—'} cups` + (done ? ' ✓' : '');
+    } catch (e) { $('ph-wt-today').innerHTML = 'Today: <b>—</b>'; }
+  }
+  window.phLogWater = async function (cups) {
+    const p = profileFor(_selName); if (!p) return;
+    const r = await fetch(`${API}/water`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: p.id, cups: cups || 1 }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('ph-wt-status').textContent = 'Failed: ' + (j.error || r.status); return; }
+    $('ph-wt-status').textContent = '✓'; setTimeout(() => { $('ph-wt-status').textContent = ''; }, 1200);
+    await phLoadWater();
+  };
+  // ── Settings tab: global 💧 water config (dashboard_settings.medical.water),
+  // read by the reminders evaluator + the per-person card's goal line. ──
+  const WATER_DEFAULTS = { enabled: true, target: 8, start_hm: '08:00', end_hm: '22:00', interval_min: 0 };
+  window.medWaterSettingsInit = async function () {
+    await _loadWaterCfg();
+    const cfg = Object.assign({}, WATER_DEFAULTS, _waterCfg);
+    $('setw-enabled').checked  = cfg.enabled !== false;
+    $('setw-target').value     = cfg.target;
+    $('setw-start').value      = cfg.start_hm;
+    $('setw-end').value        = cfg.end_hm;
+    $('setw-interval').value   = cfg.interval_min || '';
+    $('setw-status').textContent = '';
+  };
+  window.medWaterSettingsSave = async function () {
+    const value = {
+      enabled:      $('setw-enabled').checked,
+      target:       Number($('setw-target').value) || WATER_DEFAULTS.target,
+      start_hm:     $('setw-start').value || WATER_DEFAULTS.start_hm,
+      end_hm:       $('setw-end').value || WATER_DEFAULTS.end_hm,
+      interval_min: Number($('setw-interval').value) || 0,   // 0 = auto (window ÷ target)
+    };
+    try {
+      const r = await fetch('/api/dashboard-settings/medical.water', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      _waterCfg = value;
+      $('setw-status').style.color = '#2e7d32'; $('setw-status').textContent = '✓ Saved';
+      if (_selName) await phLoadWater();
+    } catch (e) { $('setw-status').style.color = '#c0392b'; $('setw-status').textContent = 'Failed: ' + e.message; }
+  };
+
   // ── Measure schedule (Weight / BP) — {freq, interval_n} on the profile, drives
   // a FUTURE reminder watcher. Same options as meds minus weekday / day / time. ──
   const _schedPre = (kind) => ({ weight: 'ph-w', bp: 'ph-bp', body: 'ph-body' }[kind]);
@@ -332,30 +407,28 @@
 
   // ── Settings tab: step-counting config (dashboard_settings.medical.steps),
   // read by the LXC-104 walking-trip → steps watcher. ──
-  const STEP_DEFAULTS = { steps_per_km: 1300, walk_min_kmh: 2, walk_max_kmh: 9, walk_max_km: 30, jitter_pct: 25, history_limit: 10 };
+  const STEP_DEFAULTS = { steps_per_km: 1300, accuracy_gate_m: 35, phantom_min_m: 150, drive_kmh: 15, walk_max_km: 30, history_limit: 10 };
   window.medSettingsInit = async function () {
     let cfg = {};
     try { const j = await (await fetch('/api/dashboard-settings/medical.steps')).json(); cfg = (j && j.value) || {}; } catch (e) {}
     cfg = Object.assign({}, STEP_DEFAULTS, cfg);
-    $('set-steps-per-km').value = cfg.steps_per_km;
-    $('set-walk-min').value     = cfg.walk_min_kmh;
-    $('set-walk-max').value     = cfg.walk_max_kmh;
-    $('set-walk-maxkm').value   = cfg.walk_max_km;
-    $('set-jitter-pct').value   = cfg.jitter_pct;
+    $('set-steps-per-km').value  = cfg.steps_per_km;
+    $('set-acc-gate').value      = cfg.accuracy_gate_m;
+    $('set-phantom-min').value   = cfg.phantom_min_m;
+    $('set-drive-kmh').value     = cfg.drive_kmh;
+    $('set-walk-maxkm').value    = cfg.walk_max_km;
     $('set-history-limit').value = cfg.history_limit;
     $('set-status').textContent = '';
   };
   window.medSettingsSave = async function () {
-    // jitter_pct allows a literal 0 (no discount), so don't use `|| default`.
-    const jpRaw = Number($('set-jitter-pct').value);
-    const jp = Number.isFinite(jpRaw) ? Math.min(60, Math.max(0, jpRaw)) : STEP_DEFAULTS.jitter_pct;
+    const pmRaw = Number($('set-phantom-min').value);   // 0 allowed (disables the phantom floor)
     const value = {
-      steps_per_km: Number($('set-steps-per-km').value) || STEP_DEFAULTS.steps_per_km,
-      walk_min_kmh: Number($('set-walk-min').value)     || STEP_DEFAULTS.walk_min_kmh,
-      walk_max_kmh: Number($('set-walk-max').value)     || STEP_DEFAULTS.walk_max_kmh,
-      walk_max_km:  Number($('set-walk-maxkm').value)   || STEP_DEFAULTS.walk_max_km,
-      jitter_pct:   jp,
-      history_limit: Number($('set-history-limit').value) || STEP_DEFAULTS.history_limit,
+      steps_per_km:    Number($('set-steps-per-km').value)  || STEP_DEFAULTS.steps_per_km,
+      accuracy_gate_m: Number($('set-acc-gate').value)      || STEP_DEFAULTS.accuracy_gate_m,
+      phantom_min_m:   Number.isFinite(pmRaw) ? Math.max(0, pmRaw) : STEP_DEFAULTS.phantom_min_m,
+      drive_kmh:       Number($('set-drive-kmh').value)     || STEP_DEFAULTS.drive_kmh,
+      walk_max_km:     Number($('set-walk-maxkm').value)    || STEP_DEFAULTS.walk_max_km,
+      history_limit:   Number($('set-history-limit').value) || STEP_DEFAULTS.history_limit,
     };
     try {
       const r = await fetch('/api/dashboard-settings/medical.steps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) });
@@ -391,6 +464,14 @@
         (r.whr != null ? ` · WHR <b>${Number(r.whr).toFixed(2)}</b>` : ''),
       addBody: (v, ts) => ({ profile_id: _curProfileId, waist_cm: v.waist_cm || null, hip_cm: v.hip_cm || null, measured_at: ts }),
       patchBody: (v, ts) => ({ waist_cm: v.waist_cm || null, hip_cm: v.hip_cm || null, measured_at: ts }),
+    },
+    water: {
+      title: 'Water history', base: () => `${API}/water`, ok: () => !!_curProfileId,
+      listUrl: (n) => `${API}/water/list?profile_id=${_curProfileId}&limit=${n}`,
+      fields: [{ k: 'cups', ph: 'cups', step: '0.5', w: 70 }],
+      rowVal: (r) => `${r.cups} cup${Number(r.cups) === 1 ? '' : 's'}`,
+      addBody: (v, ts) => ({ profile_id: _curProfileId, cups: v.cups || 1, measured_at: ts }),
+      patchBody: (v, ts) => ({ cups: v.cups, measured_at: ts }),
     },
     steps: {
       title: 'Steps history', base: () => `${API}/steps`, ok: () => !!curUserId(),
@@ -481,6 +562,7 @@
     // history edit (renderDetail reads the cached profile's latest_*; weight refetches
     // measurements itself so it doesn't need this).
     if (_histKind === 'steps') await phLoadSteps();
+    else if (_histKind === 'water') await phLoadWater();
     else if (_histKind === 'body') { await phInit(); await renderDetail(); }
     else await renderDetail();
   }
