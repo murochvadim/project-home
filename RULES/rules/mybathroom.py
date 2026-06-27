@@ -60,16 +60,10 @@ Runs counter like a real fire. See the force_run block in evaluate().
 
 import json
 import logging
-import os
 import re
-import sys
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
-_RULES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _RULES_DIR not in sys.path:
-    sys.path.insert(0, _RULES_DIR)
 
 log = logging.getLogger("rule.mybathroom")
 
@@ -467,6 +461,7 @@ def evaluate(event, state):
     if event.get("source") == "force_run":
         state.shared["_mybathroom_last_active_ts"] = now_ts
         state.shared["_mybathroom_prev_present"] = True
+        state.shared["_mybathroom_user_off"] = False   # Run is an explicit override → clear any manual-off block
         if not _gates_pass(state, cfg):
             log.info("mybathroom: Run gated off (gates=%s)", cfg["gates"])
             return []
