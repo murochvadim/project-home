@@ -14,6 +14,8 @@
 //   POST   /api/personal-health/measurements             {profile_id, weight_kg}  (measured_at stamped server-side)
 //   DELETE /api/personal-health/measurements/:id
 
+const { logExerciseRoutine } = require('./lib-exercise-log');
+
 module.exports = (app, db) => {
   const err  = (res, e) => res.status(500).json({ error: (e && e.message) || String(e) });
   const trim = (s) => (s == null ? null : String(s).trim() || null);
@@ -438,6 +440,87 @@ module.exports = (app, db) => {
       const tripId = t.rows[0] && t.rows[0].trip_id;
       if (tripId) await db.query('INSERT INTO ph_steps_excluded_trips (trip_id) VALUES ($1) ON CONFLICT DO NOTHING', [tripId]);
       await db.query('DELETE FROM ph_steps WHERE id = $1', [id]);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+
+  // ── Morning exercises (daily routine) — per-profile log. Each row records the
+  // routine's TOTAL calories + distinct muscles (written by lib-exercise-log from
+  // the global dashboard_settings.medical.exercises definitions, via "Done" here
+  // or the reminder "Clear"). "Today" is computed in Asia/Jerusalem.
+  const _exToday = "(measured_at AT TIME ZONE 'Asia/Jerusalem')::date = (now() AT TIME ZONE 'Asia/Jerusalem')::date";
+  // Today's totals: summed calories + the UNION of distinct muscles over today's rows.
+  app.get('/api/personal-health/exercise', async (req, res) => {
+    try {
+      const pid = parseInt(req.query.profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const r = await db.query(
+        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+                total_calories, muscles
+           FROM ph_exercise_log WHERE profile_id=$1 AND ${_exToday}
+          ORDER BY measured_at DESC, id DESC`, [pid]);
+      let cal = 0; const mset = new Set();
+      for (const row of r.rows) {
+        cal += Number(row.total_calories) || 0;
+        (Array.isArray(row.muscles) ? row.muscles : []).forEach(m => mset.add(String(m)));
+      }
+      res.json({ today_calories: Math.round(cal * 100) / 100, today_muscles: Array.from(mset),
+                 today_count: r.rows.length, rows: r.rows });
+    } catch (e) { err(res, e); }
+  });
+  app.get('/api/personal-health/exercise/list', async (req, res) => {
+    try {
+      const pid = parseInt(req.query.profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const r = await db.query(
+        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+                total_calories, muscles, exercises
+           FROM ph_exercise_log WHERE profile_id=$1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
+      res.json(r.rows);
+    } catch (e) { err(res, e); }
+  });
+  // "✓ Done / Log routine" — compute + insert from the global definitions (shared
+  // with the reminder Clear path).
+  app.post('/api/personal-health/exercise/log', async (req, res) => {
+    try {
+      const pid = parseInt((req.body || {}).profile_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const row = await logExerciseRoutine(db, pid);
+      res.json({ ok: true, ...row });
+    } catch (e) { err(res, e); }
+  });
+  // Manual / backdated entry (history "+ Add") — a plain calories row.
+  app.post('/api/personal-health/exercise', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const pid = parseInt(b.profile_id);
+      const cal = num(b.total_calories);
+      if (!pid || cal == null) return res.status(400).json({ error: 'profile_id and total_calories required' });
+      const r = await db.query(
+        `INSERT INTO ph_exercise_log (profile_id, total_calories, muscles, measured_at)
+         VALUES ($1, $2, $3::jsonb, COALESCE($4::timestamptz, now()))
+         RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at`,
+        [pid, cal, JSON.stringify(Array.isArray(b.muscles) ? b.muscles : []), b.measured_at || null]);
+      res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
+    } catch (e) { err(res, e); }
+  });
+  app.patch('/api/personal-health/exercise/:id', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const sets = [], params = [];
+      const add = (c, v) => { params.push(v); sets.push(`${c} = $${params.length}`); };
+      if (b.total_calories !== undefined) add('total_calories', num(b.total_calories));
+      if (b.measured_at    !== undefined) add('measured_at', b.measured_at || null);
+      if (!sets.length) return res.status(400).json({ error: 'no fields' });
+      params.push(parseInt(req.params.id));
+      await db.query(`UPDATE ph_exercise_log SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+  app.delete('/api/personal-health/exercise/:id', async (req, res) => {
+    try {
+      await db.query('DELETE FROM ph_exercise_log WHERE id = $1', [parseInt(req.params.id)]);
       res.json({ ok: true });
     } catch (e) { err(res, e); }
   });

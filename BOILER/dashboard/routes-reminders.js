@@ -21,6 +21,7 @@ const SETTINGS_KEY = 'reminders';
 // show until end of day via the same-day rule; this only adds the overnight
 // carry-over for late doses. 0 = legacy behavior (clears at midnight).
 const DEFAULTS = { enabled: true, snooze_min: 30, med_window_hours: 8, pages: [] };
+const { logExerciseRoutine } = require('./lib-exercise-log');
 
 module.exports = (app, db) => {
   const err = (res, e) => res.status(500).json({ error: (e && e.message) || String(e) });
@@ -191,6 +192,36 @@ module.exports = (app, db) => {
       }
     }
 
+    // ── morning exercises: due once per day after the scheduled time, until the
+    // routine is logged (the card's ✓ Done OR this reminder's Clear). Config is
+    // GLOBAL in dashboard_settings.medical.exercises {enabled, schedule:{time_hm},
+    // items[]}; per-profile log in ph_exercise_log. ──
+    let exCfg = null;
+    try {
+      const er = await db.query("SELECT value FROM dashboard_settings WHERE key='medical.exercises'");
+      const v = er.rows[0] && er.rows[0].value;
+      exCfg = (v && typeof v === 'object') ? v : (v ? JSON.parse(v) : null);
+    } catch (e) { /* no config → no exercise reminders */ }
+    const exIncluded = (exCfg && Array.isArray(exCfg.items) ? exCfg.items : []).filter(it => it && it.include !== false).length;
+    if (exCfg && exCfg.enabled && exIncluded > 0) {
+      const timeHm = (exCfg.schedule && exCfg.schedule.time_hm) || '07:00';
+      if (nowMin >= hm2min(timeHm)) {
+        for (const pr of profs) {
+          const doneToday = Number((await db.query(
+            `SELECT count(*) AS c FROM ph_exercise_log
+              WHERE profile_id=$1 AND (measured_at AT TIME ZONE 'Asia/Jerusalem')::date = $2::date`,
+            [pr.id, t.ldate])).rows[0].c) || 0;
+          if (doneToday) continue;
+          items.push({
+            rkey: `exercise:${pr.id}:${t.ldate}`,    // daily → Clear/Delay stick for the day
+            user_name: pr.user_name || '—',
+            label: '🏋️ Morning exercises',
+            kind: 'exercise',
+          });
+        }
+      }
+    }
+
     // ── filter out snoozed / cleared instances ──
     if (!items.length) return [];
     const states = (await db.query(
@@ -240,6 +271,12 @@ module.exports = (app, db) => {
       if (rkey.startsWith('water:')) {
         const pid = parseInt(rkey.split(':')[1], 10);
         if (pid) await db.query('INSERT INTO ph_water (profile_id, cups) VALUES ($1, 1)', [pid]);
+      }
+      // Exercise reminders: Clear means "I did my routine" → LOG it (total calories
+      // + muscles, computed from the global definitions). rkey = exercise:<pid>:…
+      if (rkey.startsWith('exercise:')) {
+        const pid = parseInt(rkey.split(':')[1], 10);
+        if (pid) await logExerciseRoutine(db, pid);
       }
       await db.query(
         `INSERT INTO reminder_state (rkey, cleared_at, updated_at) VALUES ($1, now(), now())

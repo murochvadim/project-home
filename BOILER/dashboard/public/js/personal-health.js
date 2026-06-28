@@ -64,6 +64,7 @@
       fetch('/api/household-users').then(r => r.ok ? r.json() : []).catch(() => []),
       fetch(API + '/profiles').then(r => r.json()).catch(() => []),
       _loadWaterCfg(),   // sets _waterCfg (global goal/window) before renderDetail
+      _loadExCfg(),      // sets _exCfg (global exercise definitions) before renderDetail
     ]);
     const uv = uRes;   // /api/household-users returns the member array directly
     _users = (Array.isArray(uv) ? uv : []).filter(u => u && (u.name || '').trim());
@@ -188,6 +189,7 @@
       $('ph-bpcard').style.display = 'none';
       $('ph-bodycard').style.display = 'none';
       $('ph-watercard').style.display = 'none';
+      $('ph-exercisecard').style.display = 'none';
       $('ph-stepscard').style.display = 'none';
       $('ph-medscard').style.display = 'none';
       _curProfileId = null;
@@ -197,12 +199,14 @@
     $('ph-bpcard').style.display = '';
     $('ph-bodycard').style.display = '';
     $('ph-watercard').style.display = '';
+    $('ph-exercisecard').style.display = '';
     $('ph-stepscard').style.display = '';
     $('ph-medscard').style.display = '';
     _curProfileId = p.id;
     phLoadMeds(p.id);
     phLoadSteps();
     phLoadWater();
+    phLoadExercise();
     phSchedRender('weight', p.weight_sched);
     phSchedRender('bp', p.bp_sched);
     phSchedRender('body', p.body_sched);
@@ -375,6 +379,244 @@
     } catch (e) { $('setw-status').style.color = '#c0392b'; $('setw-status').textContent = 'Failed: ' + e.message; }
   };
 
+  // ── Morning exercises (daily routine) ────────────────────────────────────────
+  // Definitions live GLOBALLY in dashboard_settings.medical.exercises
+  // {enabled, schedule:{time_hm}, items:[{id,name,reps,cal_per_rep,muscles[],other,include}]}.
+  // Each person logs the routine (✓ Done here / reminder Clear) → ph_exercise_log,
+  // which records total calories + distinct muscles (computed in lib-exercise-log.js).
+  const MUSCLE_LIST = [
+    { key: 'chest', label: 'Chest' }, { key: 'shoulders', label: 'Shoulders' }, { key: 'biceps', label: 'Biceps' },
+    { key: 'forearms', label: 'Forearms' }, { key: 'abs', label: 'Rectus Abdominis' }, { key: 'obliques', label: 'External Obliques' },
+    { key: 'obliques_int', label: 'Internal Obliques' }, { key: 'transverse', label: 'Transverse Abdominis' },
+    { key: 'quads', label: 'Quads' }, { key: 'hipflexors', label: 'Hip flexors' },
+    { key: 'upperback', label: 'Upper back' }, { key: 'lowerback', label: 'Lower back' }, { key: 'triceps', label: 'Triceps' },
+    { key: 'glutes', label: 'Glutes' }, { key: 'hamstrings', label: 'Hamstrings' }, { key: 'calves', label: 'Calves' },
+    { key: 'fullbody', label: 'Full body / Cardio' },
+  ];
+  const MUSCLE_LABEL = Object.fromEntries(MUSCLE_LIST.map(m => [m.key, m.label]));
+  // ── Detailed vector anatomy: front + back muscular figure. Each muscle group is
+  // its own shape so an exercise's selected muscles highlight EXACTLY. FRONT body
+  // centred ≈x100, BACK body ≈x300 (back shapes are the front coords + 200). The
+  // base skin silhouette gives the human form; muscle shapes sit on top. ──
+  const _SKIN = '#f1d7c4', _SKINLINE = '#c7a890', _MUS = '#d79784', _MUSLINE = '#a9624e', _HI = '#2563eb', _HILINE = '#1d4ed8';
+  function _phBody(ox) {
+    const x = (v) => v + ox;
+    return `<g fill="${_SKIN}" stroke="${_SKINLINE}" stroke-width="1.2">` +
+      `<ellipse cx="${x(100)}" cy="26" rx="15" ry="17"/>` +                       // head
+      `<rect x="${x(93)}" y="40" width="14" height="12" rx="4"/>` +              // neck
+      `<rect x="${x(73)}" y="50" width="54" height="82" rx="17"/>` +             // chest/torso
+      `<rect x="${x(78)}" y="120" width="44" height="60" rx="13"/>` +            // abdomen/pelvis
+      `<rect x="${x(55)}" y="54" width="16" height="106" rx="8"/>` +             // left arm
+      `<rect x="${x(129)}" y="54" width="16" height="106" rx="8"/>` +           // right arm
+      `<ellipse cx="${x(63)}" cy="168" rx="8" ry="10"/>` +                       // left hand
+      `<ellipse cx="${x(137)}" cy="168" rx="8" ry="10"/>` +                     // right hand
+      `<rect x="${x(79)}" y="174" width="19" height="160" rx="9"/>` +            // left leg
+      `<rect x="${x(102)}" y="174" width="19" height="160" rx="9"/>` +          // right leg
+      `<ellipse cx="${x(86)}" cy="340" rx="10" ry="6"/>` +                       // left foot
+      `<ellipse cx="${x(114)}" cy="340" rx="10" ry="6"/>` +                     // right foot
+      `</g>`;
+  }
+  // Each muscle group → its shape(s) (front and/or back, absolute coords).
+  const PH_MUSCLES = [
+    { key: 'shoulders',  svg: '<ellipse cx="68" cy="60" rx="11" ry="12"/><ellipse cx="132" cy="60" rx="11" ry="12"/><ellipse cx="268" cy="60" rx="11" ry="12"/><ellipse cx="332" cy="60" rx="11" ry="12"/>' },
+    { key: 'chest',      svg: '<path d="M99,58 Q80,55 80,74 Q82,85 98,82 Z"/><path d="M101,58 Q120,55 120,74 Q118,85 102,82 Z"/>' },
+    { key: 'biceps',     svg: '<ellipse cx="62" cy="86" rx="7" ry="16"/><ellipse cx="138" cy="86" rx="7" ry="16"/>' },
+    { key: 'forearms',   svg: '<ellipse cx="62" cy="124" rx="6" ry="18"/><ellipse cx="138" cy="124" rx="6" ry="18"/><ellipse cx="262" cy="124" rx="6" ry="18"/><ellipse cx="338" cy="124" rx="6" ry="18"/>' },
+    { key: 'abs',        svg: '<rect x="90" y="100" width="20" height="74" rx="7"/>' },
+    { key: 'obliques',     svg: '<path d="M89,110 Q82,142 89,170 L94,170 L94,110 Z"/><path d="M111,110 Q118,142 111,170 L106,170 L106,110 Z"/>' },
+    { key: 'obliques_int', svg: '<path d="M94,128 Q89,150 94,166 L98,166 L98,128 Z"/><path d="M106,128 Q111,150 106,166 L102,166 L102,128 Z"/>' },
+    { key: 'transverse',   svg: '<rect x="89" y="150" width="22" height="13" rx="6"/>' },
+    { key: 'hipflexors',   svg: '<ellipse cx="94" cy="176" rx="6" ry="10"/><ellipse cx="106" cy="176" rx="6" ry="10"/>' },
+    { key: 'quads',      svg: '<ellipse cx="88" cy="212" rx="11" ry="36"/><ellipse cx="112" cy="212" rx="11" ry="36"/>' },
+    { key: 'upperback',  svg: '<path d="M300,52 L320,72 L300,108 L280,72 Z"/><path d="M280,82 Q274,104 288,118 L292,114 L286,84 Z"/><path d="M320,82 Q326,104 312,118 L308,114 L314,84 Z"/>' },
+    { key: 'triceps',    svg: '<ellipse cx="262" cy="86" rx="7" ry="16"/><ellipse cx="338" cy="86" rx="7" ry="16"/>' },
+    { key: 'lowerback',  svg: '<rect x="288" y="118" width="9" height="30" rx="3"/><rect x="303" y="118" width="9" height="30" rx="3"/>' },
+    { key: 'glutes',     svg: '<path d="M299,150 Q283,150 282,166 Q285,179 299,176 Z"/><path d="M301,150 Q317,150 318,166 Q315,179 301,176 Z"/>' },
+    { key: 'hamstrings', svg: '<ellipse cx="289" cy="214" rx="11" ry="34"/><ellipse cx="311" cy="214" rx="11" ry="34"/>' },
+    { key: 'calves',     svg: '<ellipse cx="289" cy="294" rx="9" ry="30"/><ellipse cx="311" cy="294" rx="9" ry="30"/>' },
+  ];
+  // Render the figure. `sel` = highlighted muscle keys (or ['fullbody'] = all).
+  window.phMuscleSvg = function (sel, width) {
+    width = width || 160;
+    const S = Array.isArray(sel) ? sel : [], full = S.includes('fullbody');
+    const mus = PH_MUSCLES.map((m) => {
+      const on = full || S.includes(m.key);
+      return `<g fill="${on ? _HI : _MUS}" fill-opacity="${on ? 0.95 : 0.8}" stroke="${on ? _HILINE : _MUSLINE}" stroke-width="0.7">${m.svg}</g>`;
+    }).join('');
+    // scale(1.3,1) widens BOTH bodies horizontally without making them taller.
+    // viewBox left-offset 40 so the two bodies sit balanced around the centre line.
+    return `<svg viewBox="40 0 440 360" width="${width}" xmlns="http://www.w3.org/2000/svg" style="display:block;max-width:100%;height:auto;">` +
+      `<g transform="scale(1.3,1)">` + _phBody(0) + _phBody(200) + mus + `</g>` +
+      '<line x1="260" y1="12" x2="260" y2="346" stroke="#9a9a9a" stroke-width="1.2"/>' +
+      '<text x="130" y="358" font-size="12" fill="#9ca3af" text-anchor="middle">Front</text>' +
+      '<text x="390" y="358" font-size="12" fill="#9ca3af" text-anchor="middle">Back</text>' +
+      '</svg>';
+  };
+  // Reference "Muscle Map" card (Settings tab, right of the Morning Exercises card)
+  // — the big figure + tappable muscle chips that highlight each group.
+  let _mapSel = [];
+  window.phMapToggle = function (k) {
+    const i = _mapSel.indexOf(k);
+    if (i >= 0) _mapSel.splice(i, 1); else _mapSel.push(k);
+    phRenderMuscleMap();
+  };
+  function phRenderMuscleMap() {
+    const host = $('setx-musclemap'); if (!host) return;
+    const chips = MUSCLE_LIST.map((m) => {
+      const on = _mapSel.includes(m.key);
+      return `<span onclick="phMapToggle('${m.key}')" style="cursor:pointer;user-select:none;font-size:0.72rem;padding:3px 8px;border-radius:11px;border:1px solid ${on ? '#1d4ed8' : '#cbd5e1'};background:${on ? '#dbeafe' : '#fff'};color:${on ? '#1d4ed8' : '#555'};">${esc(m.label)}</span>`;
+    }).join('');
+    // Figure: FIXED size, vertically centred (flex:1 wrapper centres it; SVG width is
+    // fixed so it stays constant even as the card grows). Chips below.
+    host.innerHTML = `<div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:0;">${phMuscleSvg(_mapSel, 290)}</div>` +
+      `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px;">${chips}</div>`;
+  }
+  window.phRenderMuscleMap = phRenderMuscleMap;
+
+  // Hover popup — shows an exercise's short Hebrew summary (desc_he) on mouse-over.
+  function _exTipPos(ev) {
+    const tip = $('ex-hover-tip'); if (!tip) return;
+    tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - 330) + 'px';
+    tip.style.top = Math.min(ev.clientY + 16, window.innerHeight - 130) + 'px';
+  }
+  window.exTip = function (ev, id) {
+    const it = (_exCfg.items || []).find(x => x.id === id); if (!it) return;
+    const t = (it.desc_he == null ? '' : String(it.desc_he)).trim(); if (!t) return;
+    const tip = $('ex-hover-tip'); if (!tip) return;
+    tip.innerHTML = `<div style="direction:ltr;text-align:left;font-weight:700;margin-bottom:4px;">${esc(it.name || '')}</div>` +
+      `<div style="direction:rtl;text-align:right;">${esc(t)}</div>`;
+    tip.style.display = 'block'; _exTipPos(ev);
+  };
+  window.exTipMove = function (ev) { const tip = $('ex-hover-tip'); if (tip && tip.style.display === 'block') _exTipPos(ev); };
+  window.exTipHide = function () { const tip = $('ex-hover-tip'); if (tip) tip.style.display = 'none'; };
+
+  function _muscleNames(it) {
+    const out = (it.muscles || []).map(k => MUSCLE_LABEL[k] || k);
+    const o = (it.other == null ? '' : String(it.other)).trim();
+    if (o) out.push(o);
+    return out;
+  }
+  function _muscleNames(it) {
+    const out = (it.muscles || []).map(k => MUSCLE_LABEL[k] || k);
+    const o = (it.other == null ? '' : String(it.other)).trim();
+    if (o) out.push(o);
+    return out;
+  }
+
+  let _exCfg = { enabled: true, schedule: { time_hm: '07:00' }, items: [] };
+  async function _loadExCfg() {
+    try {
+      const j = await (await fetch('/api/dashboard-settings/medical.exercises')).json();
+      const v = (j && j.value) || {};
+      _exCfg = { enabled: v.enabled !== false, schedule: (v.schedule && v.schedule.time_hm) ? v.schedule : { time_hm: '07:00' },
+                 items: Array.isArray(v.items) ? v.items : [] };
+    } catch (e) { _exCfg = { enabled: true, schedule: { time_hm: '07:00' }, items: [] }; }
+  }
+
+  // Personal Health card: today's totals only (the routine is managed in Settings).
+  async function phLoadExercise() {
+    const p = profileFor(_selName);
+    if (!p) { $('ph-ex-today').innerHTML = 'Today: <b>—</b>'; return; }
+    try {
+      const x = await (await fetch(`${API}/exercise?profile_id=${p.id}`)).json();
+      const cal = Math.round(Number(x.today_calories || 0)), nm = (x.today_muscles || []).length, cnt = Number(x.today_count || 0);
+      $('ph-ex-today').innerHTML = `Today: <b style="color:${cnt ? '#2e7d32' : '#2563eb'};">${cal}</b> cal · <b>${nm}</b> muscle${nm === 1 ? '' : 's'}` +
+        (cnt ? ` <span style="color:#888;font-size:0.78rem;">(${cnt}×)</span>` : '');
+    } catch (e) { $('ph-ex-today').innerHTML = 'Today: <b>—</b>'; }
+  }
+  window.phLogExercise = async function () {
+    const p = profileFor(_selName); if (!p) return;
+    if (!_exCfg.items.filter(it => it.include !== false).length) { $('ph-ex-status').textContent = 'No exercises set'; return; }
+    const r = await fetch(`${API}/exercise/log`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: p.id }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('ph-ex-status').textContent = 'Failed: ' + (j.error || r.status); return; }
+    $('ph-ex-status').textContent = '✓ logged'; setTimeout(() => { $('ph-ex-status').textContent = ''; }, 1500);
+    await phLoadExercise();
+  };
+  window.phMuscleLegend = function () {
+    const host = $('ph-ex-legend-body');
+    if (host) host.innerHTML = phMuscleSvg([], 300) +
+      '<div style="font-size:0.78rem;color:#666;margin-top:8px;max-width:320px;">Each exercise highlights the muscle group(s) it works. Pick them from the preset list when you add an exercise in Settings; “Other” muscles are counted but shown as text. The <b>🧍 Muscle Map</b> card lets you tap any muscle to see where it is.</div>';
+    $('ph-ex-legend').style.display = 'flex';
+  };
+  window.phMuscleLegendClose = function () { $('ph-ex-legend').style.display = 'none'; };
+
+  // ── Settings tab: global 🏋️ exercise definitions (dashboard_settings.medical.exercises) ──
+  // The exercise's muscles are chosen on the 🧍 Muscle Map card (its tappable chips
+  // drive `_mapSel`); the form here holds only name / reps / cal / include.
+  let _exEditId = null;
+  window.medExSettingsInit = async function () {
+    await _loadExCfg();
+    if ($('setx-enabled')) $('setx-enabled').checked = _exCfg.enabled !== false;
+    if ($('setx-time')) $('setx-time').value = (_exCfg.schedule && _exCfg.schedule.time_hm) || '07:00';
+    _exResetForm(); _exRenderList();
+    if ($('setx-status')) $('setx-status').textContent = '';
+  };
+  function _exResetForm() {
+    _exEditId = null; _mapSel = [];
+    ['setx-name', 'setx-suggested', 'setx-reps', 'setx-cpr'].forEach(id => { if ($(id)) $(id).value = ''; });
+    if ($('setx-include')) $('setx-include').checked = true;
+    if ($('setx-addbtn')) $('setx-addbtn').textContent = '+ Add exercise';
+    phRenderMuscleMap();
+  }
+  function _exRenderList() {
+    const host = $('setx-list'); if (!host) return;
+    host.innerHTML = _exCfg.items.length ? _exCfg.items.map((it, i) => {
+      const cal = (Number(it.reps) || 0) * (Number(it.cal_per_rep) || 0);
+      const ms = _muscleNames(it);
+      // 2-up grid: right-column items (odd index) get a vertical divider on the left.
+      const div = (i % 2 === 1) ? 'border-left:1px solid #9a9a9a;padding-left:16px;margin-left:2px;' : 'padding-right:16px;';
+      return `<div onmouseenter="exTip(event,'${it.id}')" onmousemove="exTipMove(event)" onmouseleave="exTipHide()" style="display:flex;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid #eee;${div}">
+        <input type="checkbox" ${it.include !== false ? 'checked' : ''} onchange="phExToggleInclude('${it.id}')" title="Include in the routine total" style="transform:scale(1.1);">
+        <span style="flex:1;font-size:0.85rem;"><b>${esc(it.name || '')}</b> <span style="color:#888;">· sug ${Number(it.suggested) || '—'} · ${Number(it.reps) || 0}×${Number(it.cal_per_rep) || 0} = ${Math.round(cal)} cal</span>` +
+        `<br><span style="font-size:0.7rem;color:#777;">${esc(ms.join(', ')) || '—'}</span></span>` +
+        `<span>${phMuscleSvg(it.muscles || [], 44)}</span>` +
+        `<button class="btn btn-secondary btn-sm" onclick="phExEdit('${it.id}')">Edit</button>` +
+        `<button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="phExDel('${it.id}')">✕</button></div>`;
+    }).join('') : '<div style="color:#aaa;padding:8px;">No exercises yet.</div>';
+  }
+  window.phExToggleInclude = async function (id) {
+    const it = _exCfg.items.find(x => x.id === id); if (!it) return;
+    it.include = !(it.include !== false);
+    await _exPersist(); _exRenderList(); if (_selName) phLoadExercise();
+  };
+  window.phExEdit = function (id) {
+    const it = _exCfg.items.find(x => x.id === id); if (!it) return;
+    _exEditId = id;
+    $('setx-name').value = it.name || ''; $('setx-suggested').value = it.suggested || ''; $('setx-reps').value = it.reps || ''; $('setx-cpr').value = it.cal_per_rep || '';
+    $('setx-include').checked = it.include !== false;
+    $('setx-addbtn').textContent = '✓ Update';
+    _mapSel = (it.muscles || []).slice(); phRenderMuscleMap();
+  };
+  window.phExDel = async function (id) {
+    if (!confirm('Remove this exercise?')) return;
+    _exCfg.items = _exCfg.items.filter(x => x.id !== id);
+    await _exPersist(); _exResetForm(); _exRenderList(); if (_selName) phLoadExercise();
+  };
+  window.phExFormSave = async function () {
+    const name = ($('setx-name').value || '').trim();
+    if (!name) { if ($('setx-status')) $('setx-status').textContent = 'Enter a name'; return; }
+    const prev = _exEditId ? _exCfg.items.find(x => x.id === _exEditId) : null;
+    const item = { id: _exEditId || ('ex_' + Math.random().toString(36).slice(2, 9)),
+      name, suggested: Number($('setx-suggested').value) || 0, reps: Number($('setx-reps').value) || 0,
+      cal_per_rep: Number($('setx-cpr').value) || 0, muscles: _mapSel.slice(), other: '',
+      include: $('setx-include').checked, desc_he: (prev && prev.desc_he) || '' };
+    if (_exEditId) { const i = _exCfg.items.findIndex(x => x.id === _exEditId); if (i >= 0) _exCfg.items[i] = item; }
+    else _exCfg.items.push(item);
+    await _exPersist(); _exResetForm(); _exRenderList(); if (_selName) phLoadExercise();
+  };
+  async function _exPersist() {
+    if ($('setx-enabled')) _exCfg.enabled = $('setx-enabled').checked;
+    if ($('setx-time')) _exCfg.schedule = { time_hm: $('setx-time').value || '07:00' };
+    const value = { enabled: _exCfg.enabled, schedule: _exCfg.schedule, items: _exCfg.items };
+    try {
+      const r = await fetch('/api/dashboard-settings/medical.exercises', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if ($('setx-status')) { $('setx-status').style.color = '#2e7d32'; $('setx-status').textContent = '✓ Saved'; setTimeout(() => { if ($('setx-status')) $('setx-status').textContent = ''; }, 1200); }
+    } catch (e) { if ($('setx-status')) { $('setx-status').style.color = '#c0392b'; $('setx-status').textContent = 'Failed: ' + e.message; } }
+  }
+  window.medExSettingsSave = async function () { await _exPersist(); };
+
   // ── Measure schedule (Weight / BP) — {freq, interval_n} on the profile, drives
   // a FUTURE reminder watcher. Same options as meds minus weekday / day / time. ──
   const _schedPre = (kind) => ({ weight: 'ph-w', bp: 'ph-bp', body: 'ph-body' }[kind]);
@@ -473,6 +715,14 @@
       addBody: (v, ts) => ({ profile_id: _curProfileId, cups: v.cups || 1, measured_at: ts }),
       patchBody: (v, ts) => ({ cups: v.cups, measured_at: ts }),
     },
+    exercise: {
+      title: 'Exercise history', base: () => `${API}/exercise`, ok: () => !!_curProfileId,
+      listUrl: (n) => `${API}/exercise/list?profile_id=${_curProfileId}&limit=${n}`,
+      fields: [{ k: 'total_calories', ph: 'cal', step: '1', w: 80 }],
+      rowVal: (r) => `${Math.round(Number(r.total_calories) || 0)} cal · ${(Array.isArray(r.muscles) ? r.muscles.length : 0)} muscle${(Array.isArray(r.muscles) && r.muscles.length === 1) ? '' : 's'}`,
+      addBody: (v, ts) => ({ profile_id: _curProfileId, total_calories: v.total_calories, measured_at: ts }),
+      patchBody: (v, ts) => ({ total_calories: v.total_calories, measured_at: ts }),
+    },
     steps: {
       title: 'Steps history', base: () => `${API}/steps`, ok: () => !!curUserId(),
       listUrl: (n) => `${API}/steps/list?user_id=${curUserId()}&limit=${n}`,
@@ -563,6 +813,7 @@
     // measurements itself so it doesn't need this).
     if (_histKind === 'steps') await phLoadSteps();
     else if (_histKind === 'water') await phLoadWater();
+    else if (_histKind === 'exercise') await phLoadExercise();
     else if (_histKind === 'body') { await phInit(); await renderDetail(); }
     else await renderDetail();
   }

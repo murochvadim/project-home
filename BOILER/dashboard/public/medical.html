@@ -110,7 +110,7 @@
     <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
     <button class="tab-btn"        onclick="showMedTab('tests',     this); medTestsInit();">Tests</button>
     <button class="tab-btn"        onclick="showMedTab('personal-health', this); phInit();">Personal Health</button>
-    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit(); medWaterSettingsInit();">Settings</button>
+    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit(); medWaterSettingsInit(); medExSettingsInit();">Settings</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -508,6 +508,16 @@
           </div>
           <div id="ph-wt-goal" style="margin-top:auto;padding-top:12px;font-size:0.74rem;color:#888;">🎯 —</div>
         </div>
+        <div class="card" id="ph-exercisecard" style="margin-bottom:0;display:flex;flex-direction:column;">
+          <h3 style="margin:0 0 10px;display:flex;align-items:center;gap:6px;">🏋️ Morning Exercises
+            <button onclick="phMuscleLegend()" title="Muscle map" style="background:none;border:none;cursor:pointer;font-size:0.95rem;padding:0;">ℹ️</button>
+            <button onclick="phHistory('exercise')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phLogExercise()">✓ Done</button>
+            <span id="ph-ex-today" style="font-size:0.9rem;">Today: <b>—</b></span>
+            <span id="ph-ex-status" style="font-size:0.78rem;color:#888;"></span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -517,7 +527,8 @@
   <!-- TAB: Settings (step counting + walking detection)          -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-settings">
-    <div class="card" style="max-width:640px;">
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch;">
+    <div class="card" style="margin-bottom:0;">
       <h2 style="margin-top:0;">👟 Step counting</h2>
       <p style="font-size:0.84rem;color:#666;margin:0 0 14px;">
         Walking trips from <b>Project General → Recent trips</b> are auto-converted to steps (per person, by phone) by a watcher on LXC 104.
@@ -546,7 +557,7 @@
       </div>
     </div>
 
-    <div class="card" style="max-width:640px;">
+    <div class="card" style="margin-bottom:0;">
       <h2 style="margin-top:0;">💧 Water reminders</h2>
       <p style="font-size:0.84rem;color:#666;margin:0 0 14px;">
         Spreads a daily cup target across your waking window and nudges you on the reminders badge every interval until you catch up. Each person logs their own cups on <b>Personal Health → 💧 Water</b>. <i>Phone push (ntfy) comes later — for now the nudge shows on the dashboard badge.</i>
@@ -568,6 +579,28 @@
         <span id="setw-status" style="font-size:0.82rem;color:#888;"></span>
       </div>
     </div>
+      <div class="card" style="margin-bottom:0;">
+      <h2 style="margin-top:0;">🏋️ Morning Exercises</h2>
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="display:flex;flex-direction:column;gap:6px;align-self:center;">
+          <label style="font-size:0.82rem;color:#555;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="setx-enabled" onchange="medExSettingsSave()" style="transform:scale(1.2);"> Enable reminder</label>
+          <label style="font-size:0.8rem;color:#555;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="setx-include" checked style="transform:scale(1.1);"> Include in routine</label>
+        </div>
+        <label style="font-size:0.78rem;color:#555;">Reminder time<br><input id="setx-time" type="time" onchange="medExSettingsSave()" style="padding:5px 8px;border:1px solid #2563eb;border-radius:4px;color:#2563eb;height:32px;box-sizing:border-box;"></label>
+        <label style="font-size:0.78rem;color:#555;">Exercise name<br><input id="setx-name" type="text" placeholder="Push-ups" style="padding:5px 8px;width:150px;box-sizing:border-box;height:32px;"></label>
+        <label style="font-size:0.78rem;color:#555;" title="Recommended for your age &amp; weight">Suggested<br><input id="setx-suggested" type="number" min="0" placeholder="12" style="padding:5px 8px;width:78px;box-sizing:border-box;height:32px;"></label>
+        <label style="font-size:0.78rem;color:#555;" title="How many you actually do">Reps<br><input id="setx-reps" type="number" min="0" placeholder="20" style="padding:5px 8px;width:70px;box-sizing:border-box;height:32px;"></label>
+        <label style="font-size:0.78rem;color:#555;">Calories / rep<br><input id="setx-cpr" type="number" min="0" step="0.1" placeholder="0.5" style="padding:5px 8px;width:84px;box-sizing:border-box;height:32px;"></label>
+        <button class="btn btn-sm" id="setx-addbtn" style="background:#2563eb;color:#fff;height:32px;" onclick="phExFormSave()">+ Add exercise</button>
+        <span id="setx-status" style="font-size:0.82rem;color:#888;align-self:center;"></span>
+      </div>
+      <div id="setx-list" style="display:grid;grid-template-columns:1fr 1fr;gap:10px 0;margin-top:28px;"></div>
+      </div>
+      <div class="card" id="setx-musclemapcard" style="margin-bottom:0;display:flex;flex-direction:column;">
+        <h2 style="margin-top:0;">🧍 Muscle Map</h2>
+        <div id="setx-musclemap" style="flex:1;display:flex;flex-direction:column;"></div>
+      </div>
+    </div>
   </div><!-- /tab-settings -->
 
   <!-- Shared history modal for Log weight / Log blood pressure / Daily steps:
@@ -581,6 +614,20 @@
       </div>
       <div id="ph-hist-add" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:10px;background:#fafaf6;border-radius:6px;margin-bottom:12px;"></div>
       <div id="ph-hist-list"></div>
+    </div>
+  </div>
+
+  <!-- Hover popup: exercise's short Hebrew summary (Settings → exercises list) -->
+  <div id="ex-hover-tip" style="display:none;position:fixed;z-index:1100;max-width:300px;background:#1f2937;color:#fff;padding:10px 12px;border-radius:8px;font-size:0.84rem;line-height:1.5;box-shadow:0 6px 22px rgba(0,0,0,0.35);pointer-events:none;"></div>
+
+  <!-- 🏋️ Muscle map legend (front + back silhouette) -->
+  <div id="ph-ex-legend" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:10px;padding:18px 22px;max-width:94vw;box-shadow:0 8px 30px rgba(0,0,0,0.3);">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <h3 style="margin:0;">🏋️ Muscle map</h3>
+        <button onclick="phMuscleLegendClose()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1.2rem;">✕</button>
+      </div>
+      <div id="ph-ex-legend-body" style="text-align:center;"></div>
     </div>
   </div>
 
@@ -728,7 +775,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=29"></script>
+<script src="js/personal-health.js?v=49"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>
