@@ -554,25 +554,50 @@
   };
   function _exResetForm() {
     _exEditId = null; _mapSel = [];
-    ['setx-name', 'setx-suggested', 'setx-reps', 'setx-cpr'].forEach(id => { if ($(id)) $(id).value = ''; });
+    ['setx-name', 'setx-suggested', 'setx-sets', 'setx-reps', 'setx-cpr', 'setx-hold', 'setx-calsec'].forEach(id => { if ($(id)) $(id).value = ''; });
+    if ($('setx-kind')) $('setx-kind').value = 'reps';
     if ($('setx-include')) $('setx-include').checked = true;
     if ($('setx-addbtn')) $('setx-addbtn').textContent = '+ Add exercise';
-    phRenderMuscleMap();
+    phExKindChange(); phRenderMuscleMap();
+  }
+  // Show reps-fields or hold-fields depending on the Type selector.
+  // Calories/rep sits UNDER Type (same width); Reps sits to its right (or sec/Hold for holds).
+  window.phExKindChange = function () {
+    const hold = $('setx-kind') && $('setx-kind').value === 'hold';
+    if ($('setx-cpr-lbl')) $('setx-cpr-lbl').style.display = hold ? 'none' : '';
+    if ($('setx-reps-lbl')) $('setx-reps-lbl').style.display = hold ? 'none' : '';
+    if ($('setx-calsec-lbl')) $('setx-calsec-lbl').style.display = hold ? '' : 'none';
+    if ($('setx-hold-lbl')) $('setx-hold-lbl').style.display = hold ? '' : 'none';
+  };
+  // Calories + a "sug · sets×reps/hold" detail string for one item (kind/sets aware).
+  function _exItemCal(it) {
+    const sets = Number(it.sets) || 1;
+    if (it.kind === 'hold') return Math.round((Number(it.hold_sec) || 0) * sets * (Number(it.cal_per_sec) || 0) * 10) / 10;
+    return Math.round((Number(it.reps) || 0) * sets * (Number(it.cal_per_rep) || 0) * 10) / 10;
+  }
+  function _exItemDetail(it, cal) {
+    const sets = Number(it.sets) || 1, s = sets > 1 ? sets + '×' : '';
+    const sug = Number(it.suggested) || 0;
+    const u = (it.kind === 'hold') ? 's' : '';
+    const real = (it.kind === 'hold') ? (Number(it.hold_sec) || 0) : (Number(it.reps) || 0);
+    // Whole "real … = X cal" turns red when changed from the suggestion (unsuggested), else green.
+    const col = (sug > 0 && real !== sug) ? '#c0392b' : '#1a7f37';
+    return `suggested ${sug || '—'}${u} · <span style="color:${col};">real ${s}${real}${u} = ${cal} cal</span>`;
   }
   function _exRenderList() {
     const host = $('setx-list'); if (!host) return;
-    host.innerHTML = _exCfg.items.length ? _exCfg.items.map((it, i) => {
-      const cal = (Number(it.reps) || 0) * (Number(it.cal_per_rep) || 0);
+    host.innerHTML = _exCfg.items.length ? _exCfg.items.map((it) => {
+      const cal = _exItemCal(it);
       const ms = _muscleNames(it);
-      // 2-up grid: right-column items (odd index) get a vertical divider on the left.
-      const div = (i % 2 === 1) ? 'border-left:1px solid #9a9a9a;padding-left:16px;margin-left:2px;' : 'padding-right:16px;';
-      return `<div onmouseenter="exTip(event,'${it.id}')" onmousemove="exTipMove(event)" onmouseleave="exTipHide()" style="display:flex;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid #eee;${div}">
-        <input type="checkbox" ${it.include !== false ? 'checked' : ''} onchange="phExToggleInclude('${it.id}')" title="Include in the routine total" style="transform:scale(1.1);">
-        <span style="flex:1;font-size:0.85rem;"><b>${esc(it.name || '')}</b> <span style="color:#888;">· sug ${Number(it.suggested) || '—'} · ${Number(it.reps) || 0}×${Number(it.cal_per_rep) || 0} = ${Math.round(cal)} cal</span>` +
+      return `<div draggable="true" data-ex-id="${it.id}" ondragstart="phExDragStart(event,'${it.id}')" ondragover="phExDragOver(event,'${it.id}')" ondrop="phExDrop(event,'${it.id}')" ondragend="phExDragEnd(event)" onmouseenter="exTip(event,'${it.id}')" onmousemove="exTipMove(event)" onmouseleave="exTipHide()" style="display:flex;gap:8px;align-items:center;padding:9px 4px;border-bottom:1px solid #cfd4da;">
+        <span style="cursor:grab;color:#aaa;font-size:1rem;line-height:1;flex:0 0 auto;user-select:none;" title="Drag to reorder">⋮⋮</span>` +
+        `<input type="checkbox" ${it.include !== false ? 'checked' : ''} onchange="phExToggleInclude('${it.id}')" title="Include in the routine total" style="transform:scale(1.1);margin:0;flex:0 0 auto;">` +
+        `<span style="flex:1;min-width:0;font-size:0.85rem;"><b>${esc(it.name || '')}</b> ` +
+        `<span style="color:#1a7f37;font-weight:600;white-space:nowrap;">· ${_exItemDetail(it, cal)}</span>` +
         `<br><span style="font-size:0.7rem;color:#777;">${esc(ms.join(', ')) || '—'}</span></span>` +
         `<span>${phMuscleSvg(it.muscles || [], 44)}</span>` +
-        `<button class="btn btn-secondary btn-sm" onclick="phExEdit('${it.id}')">Edit</button>` +
-        `<button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="phExDel('${it.id}')">✕</button></div>`;
+        `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;flex:0 0 auto;" onclick="phExEdit('${it.id}')">Edit</button>` +
+        `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;color:#c0392b;flex:0 0 auto;" onclick="phExDel('${it.id}')" title="Delete">✕</button></div>`;
     }).join('') : '<div style="color:#aaa;padding:8px;">No exercises yet.</div>';
   }
   window.phExToggleInclude = async function (id) {
@@ -580,12 +605,46 @@
     it.include = !(it.include !== false);
     await _exPersist(); _exRenderList(); if (_selName) phLoadExercise();
   };
+  // --- Drag-to-reorder the exercise list (same pattern as playlists / rules) ---
+  let _exDragId = null;
+  window.phExDragStart = function (ev, id) {
+    _exDragId = id; exTipHide();
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', id); } catch (e) {}
+    const row = ev.currentTarget; if (row) row.style.opacity = '0.45';
+  };
+  window.phExDragOver = function (ev, id) {
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+    const row = ev.currentTarget;
+    if (row && _exDragId && id !== _exDragId) row.style.boxShadow = 'inset 0 2px 0 #2563eb';
+  };
+  window.phExDragEnd = function (ev) {
+    _exDragId = null;
+    const host = $('setx-list'); if (host) Array.from(host.children).forEach(c => { c.style.opacity = ''; c.style.boxShadow = ''; });
+  };
+  window.phExDrop = async function (ev, targetId) {
+    ev.preventDefault();
+    const from = _exDragId; _exDragId = null;
+    const host = $('setx-list'); if (host) Array.from(host.children).forEach(c => { c.style.opacity = ''; c.style.boxShadow = ''; });
+    if (!from || from === targetId) return;
+    const items = _exCfg.items;
+    const fi = items.findIndex(x => x.id === from); if (fi < 0) return;
+    const [moved] = items.splice(fi, 1);
+    const ti = items.findIndex(x => x.id === targetId);
+    items.splice(ti < 0 ? items.length : ti, 0, moved);   // drop BEFORE the target row
+    await _exPersist(); _exRenderList(); if (_selName) phLoadExercise();
+  };
   window.phExEdit = function (id) {
     const it = _exCfg.items.find(x => x.id === id); if (!it) return;
     _exEditId = id;
-    $('setx-name').value = it.name || ''; $('setx-suggested').value = it.suggested || ''; $('setx-reps').value = it.reps || ''; $('setx-cpr').value = it.cal_per_rep || '';
+    $('setx-name').value = it.name || ''; $('setx-suggested').value = it.suggested || '';
+    $('setx-kind').value = it.kind === 'hold' ? 'hold' : 'reps';
+    $('setx-sets').value = it.sets || '';
+    $('setx-reps').value = it.reps || ''; $('setx-cpr').value = it.cal_per_rep || '';
+    $('setx-hold').value = it.hold_sec || ''; $('setx-calsec').value = it.cal_per_sec || '';
     $('setx-include').checked = it.include !== false;
     $('setx-addbtn').textContent = '✓ Update';
+    phExKindChange();
     _mapSel = (it.muscles || []).slice(); phRenderMuscleMap();
   };
   window.phExDel = async function (id) {
@@ -595,12 +654,14 @@
   };
   window.phExFormSave = async function () {
     const name = ($('setx-name').value || '').trim();
-    if (!name) { if ($('setx-status')) $('setx-status').textContent = 'Enter a name'; return; }
+    if (!name) { if ($('setx-status')) $('setx-status').textContent = ''; $('setx-name').focus(); return; }
     const prev = _exEditId ? _exCfg.items.find(x => x.id === _exEditId) : null;
+    const kind = ($('setx-kind').value === 'hold') ? 'hold' : 'reps';
     const item = { id: _exEditId || ('ex_' + Math.random().toString(36).slice(2, 9)),
-      name, suggested: Number($('setx-suggested').value) || 0, reps: Number($('setx-reps').value) || 0,
-      cal_per_rep: Number($('setx-cpr').value) || 0, muscles: _mapSel.slice(), other: '',
-      include: $('setx-include').checked, desc_he: (prev && prev.desc_he) || '' };
+      name, kind, suggested: Number($('setx-suggested').value) || 0, sets: Number($('setx-sets').value) || 1,
+      muscles: _mapSel.slice(), other: '', include: $('setx-include').checked, desc_he: (prev && prev.desc_he) || '' };
+    if (kind === 'hold') { item.hold_sec = Number($('setx-hold').value) || 0; item.cal_per_sec = Number($('setx-calsec').value) || 0; }
+    else { item.reps = Number($('setx-reps').value) || 0; item.cal_per_rep = Number($('setx-cpr').value) || 0; }
     if (_exEditId) { const i = _exCfg.items.findIndex(x => x.id === _exEditId); if (i >= 0) _exCfg.items[i] = item; }
     else _exCfg.items.push(item);
     await _exPersist(); _exResetForm(); _exRenderList(); if (_selName) phLoadExercise();

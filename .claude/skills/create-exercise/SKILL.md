@@ -35,10 +35,14 @@ Use WebSearch if unsure. Determine:
 - **Muscles worked** → map each to a preset key in `MUSCLE_LIST`:
   chest · shoulders · biceps · forearms · abs · obliques · quads · hipflexors ·
   upperback · lowerback · triceps · glutes · hamstrings · calves · fullbody.
-- **Calories per rep**: find the per-rep burn for a ~70 kg adult, then **scale to the person's weight**:
-  `cal_per_rep = round(base70 × weight_kg / 70, 2)`.
-- **Suggested reps**: pick a sensible daily count for the person's **age** (use age-band norms; older →
-  fewer). This is a reference, not medical advice.
+- **Type** (`kind`): `reps` (rep-based) or `hold` (isometric timed hold — plank, hollow hold, wall-sit).
+- **Sets** (`sets`): a sensible number (often 1 for a simple rep set; 3 for holds / strength sets).
+- **For `reps`**: `cal_per_rep = round(base70_per_rep × weight_kg / 70, 2)`; `suggested` = suggested reps.
+  Calories logged = `reps × sets × cal_per_rep`.
+- **For `hold`**: `cal_per_sec ≈ round(MET × weight_kg / 70 / 600, 2)` (isometric core ≈ 3.5–4 MET →
+  ~0.08–0.1); `suggested` = suggested hold **seconds**; also set `hold_sec`. Logged = `hold_sec × sets × cal_per_sec`.
+- **Suggested**: pick for the person's **age** (age-band norms; older → fewer reps / shorter holds).
+  Reference, not medical advice.
 - **Hebrew summary** (`desc_he`): a short 1-2 sentence description in **Hebrew** of what the exercise does +
   which muscles it works (shown as a hover popup on the exercise row).
 
@@ -63,8 +67,10 @@ curl -s http://127.0.0.1:3000/api/dashboard-settings/medical.exercises    # read
 curl -s -X POST http://127.0.0.1:3000/api/dashboard-settings/medical.exercises \
   -H 'Content-Type: application/json' -d '{"value":{ ...full object with appended item... }}'
 ```
-Item shape: `{"id":"ex_<slug>","name":"<Name>","suggested":N,"reps":N,"cal_per_rep":N,"muscles":["..."],"other":"","include":true,"desc_he":"<short Hebrew summary>"}`.
-Use a unique id (e.g. `ex_<name-slug>`).
+Item shape (reps): `{"id":"ex_<slug>","name":"<Name>","kind":"reps","suggested":N,"sets":N,"reps":N,"cal_per_rep":N,"muscles":["..."],"other":"","include":true,"desc_he":"..."}`.
+Item shape (hold): `{"id":"ex_<slug>","name":"<Name>","kind":"hold","suggested":Nsec,"sets":N,"hold_sec":N,"cal_per_sec":N,"muscles":["..."],"other":"","include":true,"desc_he":"..."}`.
+Use a unique id (e.g. `ex_<name-slug>`). (Adding/editing exercises via the API needs NO restart;
+only changing `lib-exercise-log.js` itself requires `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`.)
 
 ## Step 7 — Finish
 Tell the user to **hard-refresh** the Medical page; they can adjust **Reps** (their real count) and the

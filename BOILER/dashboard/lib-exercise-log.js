@@ -26,16 +26,23 @@ function computeRoutine(cfg) {
   const muscleSet = new Set();
   const snapshot = [];
   for (const it of included) {
-    const reps = Number(it.reps) || 0;
-    const cpr  = Number(it.cal_per_rep) || 0;
-    const cal  = Math.round(reps * cpr * 100) / 100;   // 2dp, avoid float noise
+    const sets = Number(it.sets) || 1;
+    let cal, detail;
+    if (it.kind === 'hold') {                          // timed hold: hold_sec × sets × cal_per_sec
+      const hold = Number(it.hold_sec) || 0, cps = Number(it.cal_per_sec) || 0;
+      cal = Math.round(hold * sets * cps * 100) / 100;
+      detail = { kind: 'hold', hold_sec: hold, sets, cal_per_sec: cps };
+    } else {                                           // reps: reps × sets × cal_per_rep (sets default 1)
+      const reps = Number(it.reps) || 0, cpr = Number(it.cal_per_rep) || 0;
+      cal = Math.round(reps * sets * cpr * 100) / 100;
+      detail = { kind: 'reps', reps, sets, cal_per_rep: cpr };
+    }
     total += cal;
     const muscles = Array.isArray(it.muscles) ? it.muscles.filter(Boolean) : [];
     muscles.forEach(m => muscleSet.add(String(m)));
     const other = (it.other == null ? '' : String(it.other)).trim();
     if (other) muscleSet.add(other);
-    snapshot.push({ name: it.name || '', reps, cal_per_rep: cpr, calories: cal,
-                    muscles, other });
+    snapshot.push(Object.assign({ name: it.name || '', calories: cal, muscles, other }, detail));
   }
   return {
     total_calories: Math.round(total * 100) / 100,
