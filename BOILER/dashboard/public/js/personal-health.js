@@ -617,12 +617,16 @@
     abs: 'core', obliques: 'core', obliques_int: 'core', transverse: 'core', lowerback: 'core', hipflexors: 'core',
     quads: 'legs', hamstrings: 'legs', glutes: 'legs', calves: 'legs', fullbody: 'cardio',
   };
+  // Fitness-flow order: warm-up/cardio → legs → upper → core → cool-down (head/neck).
   const _AREA_META = [
-    ['head', '🧠 Head & Neck'], ['upper', '💪 Upper Body'], ['core', '🎯 Core'],
-    ['legs', '🦵 Legs'], ['cardio', '🏃 Cardio / Full body'], ['other', 'Other'],
+    ['cardio', '🏃 Warm-up / Cardio'], ['legs', '🦵 Legs'], ['upper', '💪 Upper Body'],
+    ['core', '🎯 Core'], ['head', '🧠 Cool-down (Head & Neck)'], ['other', 'Other'],
   ];
-  // Section = the area holding the MAJORITY of the exercise's muscles (tie → first muscle's area).
+  const _AREA_KEYS = new Set(_AREA_META.map(m => m[0]));
+  // Section = an explicit `section` override (e.g. a warm-up move kept with its real muscles),
+  // else the area holding the MAJORITY of the exercise's muscles (tie → first muscle's area).
   function _exAreaOf(it) {
+    if (it && it.section && _AREA_KEYS.has(it.section)) return it.section;
     const ms = (it && it.muscles) || []; if (!ms.length) return 'other';
     const counts = {}; ms.forEach(m => { const a = _AREA_OF[m] || 'other'; counts[a] = (counts[a] || 0) + 1; });
     let best = 'other', n = -1;
@@ -655,15 +659,19 @@
     const host = $('setx-list'); if (!host) return;
     if (!_exCfg.items.length) { host.innerHTML = '<div style="color:#aaa;padding:8px;">No exercises yet.</div>'; return; }
     const exp = _exSectionsState();
-    let html = '';
+    let html = '', n = 0;
     for (const [area, label] of _AREA_META) {
       const items = _exCfg.items.filter(it => _exAreaOf(it) === area);
-      if (!items.length) continue;
+      if (!items.length && area !== 'cardio') continue;   // Warm-up/Cardio always shown (placeholder for future)
+      n++;                                // workout-order number (consecutive over the visible sections)
       const open = exp[area] !== false;   // default expanded
+      const body = items.length ? items.map(_exRowHtml).join('')
+        : `<div style="color:#aaa;font-size:0.78rem;padding:9px 6px;">No exercises yet — add one with the <b>Full body / Cardio</b> muscle to place it here.</div>`;
       html += `<div data-ex-section="${area}">` +
-        `<div onclick="phExToggleSection('${area}')" title="Show / hide section" style="cursor:pointer;display:flex;align-items:center;gap:7px;font-weight:600;font-size:0.82rem;padding:8px 6px;margin-top:6px;border-bottom:2px solid #b8bdc4;background:#eef1f4;border-radius:4px 4px 0 0;">` +
+        `<div onclick="phExToggleSection('${area}')" title="Show / hide section" style="cursor:pointer;display:flex;align-items:center;gap:8px;font-weight:600;font-size:0.82rem;padding:8px 6px;margin-top:6px;border-bottom:2px solid #b8bdc4;background:#eef1f4;border-radius:4px 4px 0 0;">` +
+          `<span title="workout order" style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#2563eb;color:#fff;font-size:0.72rem;font-weight:700;flex:0 0 auto;">${n}</span>` +
           `<span style="color:#555;width:10px;">${open ? '▾' : '▸'}</span><span>${label}</span><span style="color:#888;font-weight:400;">(${items.length})</span></div>` +
-        (open ? items.map(_exRowHtml).join('') : '') +
+        (open ? body : '') +
         `</div>`;
     }
     host.innerHTML = html;
