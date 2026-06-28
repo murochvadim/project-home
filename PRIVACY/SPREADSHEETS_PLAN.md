@@ -19,23 +19,13 @@ by entering the **same Vaultwarden "Documents" password** used for Privacy → D
    **PostgreSQL LXC 102** (like the other `privacy_*` tables); password stays in **Vaultwarden LXC 109**.
 6. **`.xlsx` import/export left out** for now (an export would be a plaintext Excel download — conflicts
    with server-blind). Optional later.
-7. **ON-DEMAND calculation (key requirement):** formulas evaluate **only when the user clicks a 🧮 Calculate
-   button — NOT live/continuous recalc.** So we do NOT depend on a live formula engine: the grid just holds
-   data + formula *text*, and Calculate runs the math once and fills results. This lets us use **`formulajs`
-   (MIT)** for the calc on click and a lightweight grid just for the Excel *look* — **sidesteps the
-   jspreadsheet license question** (jspreadsheet, if used at all, is only for the visual grid, not its engine).
-8. **Optional add-on (decide at build):** a 📊 **Chart** button — turn a selected range into a Chart.js
-   bar/line/pie. Renders **only when unlocked** (needs real values), **client-side only** (the picture is
-   never sent to / stored on the server). The chart *definition* (range + type) can be saved in the plaintext
-   structure so it auto-rebuilds on each unlock. No live/always-on chart (would break server-blind).
 
 ## Build steps
 
-**Step 0 — Grid look + on-click calc engine.** Calculation is **on-demand only** (🧮 Calculate button), so
-the formula engine = **`formulajs` (MIT)** evaluated once per click — no live engine needed. For the Excel
-*look* (A/B/C cols, 1/2/3 rows, cell editing): prefer a **lightweight MIT grid** (or a styled HTML grid);
-**jspreadsheet CE** is optional and only for visuals — if used, verify its license first. Vendor locally to
-`BOILER/dashboard/public/vendor/sheets/`. Do NOT ship anything license-unsafe.
+**Step 0 — Grid library (license check FIRST).** Primary: **jspreadsheet CE (jExcel)** — Excel-like grid
++ formula engine, vendored locally to `BOILER/dashboard/public/vendor/sheets/` (`jspreadsheet.js/.css` +
+dep `jsuites.js/.css`). Verify its license permits our use; if too restrictive, fall back to a minimal
+custom grid + **`formulajs` (MIT)** for the `=SUM()`-style functions. Do NOT ship anything license-unsafe.
 
 **Step 1 — Migration `PRIVACY/migrations/0XX_sheets.sql`** (LXC 102). Singleton table:
 ```
