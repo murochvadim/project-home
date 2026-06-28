@@ -363,7 +363,9 @@
         <select id="ph-person" onchange="phSelectPerson(this.value)" style="padding:5px 9px;border:1px solid #d0cbc4;border-radius:4px;font-size:0.9rem;"></select>
         <button class="btn btn-secondary btn-sm" id="ph-edit-btn" onclick="phEditDetails()" style="display:none;">Edit details</button>
         <button id="ph-ac-toggle" onclick="phToggleAc()" title="Show allergies &amp; conditions" style="display:none;border:none;background:none;cursor:pointer;font-size:1.05rem;padding:2px 4px;line-height:1;">👁</button>
-        <!-- trimmed summary chips, pushed to the right of Edit details (filled by renderDetail per selected person) -->
+        <!-- today's exercise totals (big green numbers) — centered between the controls and the summary chips -->
+        <div id="ph-ex-stats" style="display:flex;gap:34px;align-items:center;margin-left:auto;"></div>
+        <!-- trimmed summary chips, pushed to the right (filled by renderDetail per selected person) -->
         <div id="ph-summary" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-left:auto;"></div>
       </div>
       <div id="ph-ac-display" style="margin-top:8px;display:none;gap:18px;flex-wrap:wrap;"></div>
@@ -779,7 +781,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=65"></script>
+<script src="js/personal-health.js?v=69"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

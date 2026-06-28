@@ -456,16 +456,25 @@ module.exports = (app, db) => {
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const r = await db.query(
         `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
-                total_calories, muscles
+                total_calories, muscles, exercises
            FROM ph_exercise_log WHERE profile_id=$1 AND ${_exToday}
           ORDER BY measured_at DESC, id DESC`, [pid]);
-      let cal = 0; const mset = new Set();
+      const SEC_PER_REP = 3;                     // rough time estimate for rep-based exercises
+      let cal = 0, exCount = 0, seconds = 0; const mset = new Set();
       for (const row of r.rows) {
         cal += Number(row.total_calories) || 0;
         (Array.isArray(row.muscles) ? row.muscles : []).forEach(m => mset.add(String(m)));
+        const exs = Array.isArray(row.exercises) ? row.exercises : [];
+        exCount += exs.length;
+        for (const e of exs) {
+          const sets = Number(e.sets) || 1;
+          seconds += (e.kind === 'hold') ? (Number(e.hold_sec) || 0) * sets
+                                         : (Number(e.reps) || 0) * sets * SEC_PER_REP;
+        }
       }
       res.json({ today_calories: Math.round(cal * 100) / 100, today_muscles: Array.from(mset),
-                 today_count: r.rows.length, rows: r.rows });
+                 today_count: r.rows.length, today_ex_count: exCount, today_seconds: Math.round(seconds),
+                 rows: r.rows });
     } catch (e) { err(res, e); }
   });
   app.get('/api/personal-health/exercise/list', async (req, res) => {

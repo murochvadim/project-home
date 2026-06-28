@@ -479,7 +479,7 @@
     }).join('');
     // Figure: FIXED size, vertically centred (flex:1 wrapper centres it; SVG width is
     // fixed so it stays constant even as the card grows). Chips below.
-    host.innerHTML = `<div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:0;">${phMuscleSvg(_mapSel, 290)}</div>` +
+    host.innerHTML = `<div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:240px;">${phMuscleSvg(_mapSel, 290)}</div>` +
       `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px;">${chips}</div>`;
   }
   window.phRenderMuscleMap = phRenderMuscleMap;
@@ -524,16 +524,28 @@
     } catch (e) { _exCfg = { enabled: true, schedule: { time_hm: '07:00' }, items: [] }; }
   }
 
-  // Personal Health card: today's totals only (the routine is managed in Settings).
+  // Personal Health card: 3 big green "today" stats for the selected person.
+  function _exStat(big, label) {
+    return `<div style="text-align:center;min-width:78px;">` +
+      `<div style="font-size:2.1rem;font-weight:800;color:#1a7f37;line-height:1;">${big}</div>` +
+      `<div style="font-size:0.74rem;color:#888;margin-top:5px;">${label}</div></div>`;
+  }
+  function _exFmtDur(s) {
+    s = Math.round(Number(s) || 0); if (!s) return '0s';
+    const m = Math.floor(s / 60), r = s % 60;
+    return m ? (m + 'm' + (r ? ' ' + r + 's' : '')) : (r + 's');
+  }
   async function phLoadExercise() {
+    const stats = $('ph-ex-stats'), today = $('ph-ex-today');
+    const setStats = (a, b, c) => { if (stats) stats.innerHTML = _exStat(a, 'exercises') + _exStat(b, 'time') + _exStat(c, 'calories'); };
     const p = profileFor(_selName);
-    if (!p) { $('ph-ex-today').innerHTML = 'Today: <b>—</b>'; return; }
+    if (!p) { if (today) today.innerHTML = 'Today: <b>—</b>'; setStats('—', '—', '—'); return; }
     try {
       const x = await (await fetch(`${API}/exercise?profile_id=${p.id}`)).json();
       const cal = Math.round(Number(x.today_calories || 0)), nm = (x.today_muscles || []).length, cnt = Number(x.today_count || 0);
-      $('ph-ex-today').innerHTML = `Today: <b style="color:${cnt ? '#2e7d32' : '#2563eb'};">${cal}</b> cal · <b>${nm}</b> muscle${nm === 1 ? '' : 's'}` +
-        (cnt ? ` <span style="color:#888;font-size:0.78rem;">(${cnt}×)</span>` : '');
-    } catch (e) { $('ph-ex-today').innerHTML = 'Today: <b>—</b>'; }
+      if (today) today.innerHTML = `Today: <b style="color:${cnt ? '#2e7d32' : '#2563eb'};">${cal}</b> cal · <b>${nm}</b> muscle${nm === 1 ? '' : 's'}` + (cnt ? ` <span style="color:#888;font-size:0.78rem;">(${cnt}×)</span>` : '');
+      setStats(Number(x.today_ex_count || 0), _exFmtDur(x.today_seconds), cal);
+    } catch (e) { if (today) today.innerHTML = 'Today: <b>—</b>'; setStats('—', '—', '—'); }
   }
   window.phLogExercise = async function () {
     const p = profileFor(_selName); if (!p) return;
@@ -598,21 +610,63 @@
     const col = changed ? '#c0392b' : '#1a7f37';
     return `suggested ${sugStr} · <span style="color:${col};">real ${realStr} = ${cal} cal</span>`;
   }
+  // ── Body-area sections (auto-derived from each exercise's muscles) ──
+  const _AREA_OF = {
+    trapezius: 'head', suboccipital: 'head', scm: 'head', scalp: 'head', platysma: 'head', ear: 'head', nose: 'head',
+    chest: 'upper', shoulders: 'upper', biceps: 'upper', triceps: 'upper', forearms: 'upper', upperback: 'upper',
+    abs: 'core', obliques: 'core', obliques_int: 'core', transverse: 'core', lowerback: 'core', hipflexors: 'core',
+    quads: 'legs', hamstrings: 'legs', glutes: 'legs', calves: 'legs', fullbody: 'cardio',
+  };
+  const _AREA_META = [
+    ['head', '🧠 Head & Neck'], ['upper', '💪 Upper Body'], ['core', '🎯 Core'],
+    ['legs', '🦵 Legs'], ['cardio', '🏃 Cardio / Full body'], ['other', 'Other'],
+  ];
+  // Section = the area holding the MAJORITY of the exercise's muscles (tie → first muscle's area).
+  function _exAreaOf(it) {
+    const ms = (it && it.muscles) || []; if (!ms.length) return 'other';
+    const counts = {}; ms.forEach(m => { const a = _AREA_OF[m] || 'other'; counts[a] = (counts[a] || 0) + 1; });
+    let best = 'other', n = -1;
+    for (const m of ms) { const a = _AREA_OF[m] || 'other'; if (counts[a] > n) { n = counts[a]; best = a; } }
+    return best;
+  }
+  function _sameArea(idA, idB) {
+    const a = _exCfg.items.find(x => x.id === idA), b = _exCfg.items.find(x => x.id === idB);
+    return !!(a && b && _exAreaOf(a) === _exAreaOf(b));
+  }
+  function _exSectionsState() { try { return JSON.parse(localStorage.getItem('phExSections') || '{}'); } catch (e) { return {}; } }
+  window.phExToggleSection = function (area) {
+    const s = _exSectionsState(); s[area] = !(s[area] !== false);   // default expanded → first click collapses
+    localStorage.setItem('phExSections', JSON.stringify(s)); _exRenderList();
+  };
+  function _exRowHtml(it) {
+    const cal = _exItemCal(it);
+    const ms = _muscleNames(it);
+    return `<div draggable="true" data-ex-id="${it.id}" ondragstart="phExDragStart(event,'${it.id}')" ondragover="phExDragOver(event,'${it.id}')" ondrop="phExDrop(event,'${it.id}')" ondragend="phExDragEnd(event)" onmouseenter="exTip(event,'${it.id}')" onmousemove="exTipMove(event)" onmouseleave="exTipHide()" style="display:flex;gap:8px;align-items:center;padding:9px 4px;border-bottom:1px solid #cfd4da;">
+      <span style="cursor:grab;color:#aaa;font-size:1rem;line-height:1;flex:0 0 auto;user-select:none;" title="Drag to reorder (within section)">⋮⋮</span>` +
+      `<input type="checkbox" ${it.include !== false ? 'checked' : ''} onchange="phExToggleInclude('${it.id}')" title="Include in the routine total" style="transform:scale(1.1);margin:0;flex:0 0 auto;">` +
+      `<span style="flex:1;min-width:0;font-size:0.85rem;"><b>${esc(it.name || '')}</b> ` +
+      `<span style="color:#1a7f37;font-weight:600;white-space:nowrap;">· ${_exItemDetail(it, cal)}</span>` +
+      `<br><span style="font-size:0.7rem;color:#777;">${esc(ms.join(', ')) || '—'}</span></span>` +
+      `<span>${phMuscleSvg(it.muscles || [], 44)}</span>` +
+      `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;flex:0 0 auto;" onclick="phExEdit('${it.id}')">Edit</button>` +
+      `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;color:#c0392b;flex:0 0 auto;" onclick="phExDel('${it.id}')" title="Delete">✕</button></div>`;
+  }
   function _exRenderList() {
     const host = $('setx-list'); if (!host) return;
-    host.innerHTML = _exCfg.items.length ? _exCfg.items.map((it) => {
-      const cal = _exItemCal(it);
-      const ms = _muscleNames(it);
-      return `<div draggable="true" data-ex-id="${it.id}" ondragstart="phExDragStart(event,'${it.id}')" ondragover="phExDragOver(event,'${it.id}')" ondrop="phExDrop(event,'${it.id}')" ondragend="phExDragEnd(event)" onmouseenter="exTip(event,'${it.id}')" onmousemove="exTipMove(event)" onmouseleave="exTipHide()" style="display:flex;gap:8px;align-items:center;padding:9px 4px;border-bottom:1px solid #cfd4da;">
-        <span style="cursor:grab;color:#aaa;font-size:1rem;line-height:1;flex:0 0 auto;user-select:none;" title="Drag to reorder">⋮⋮</span>` +
-        `<input type="checkbox" ${it.include !== false ? 'checked' : ''} onchange="phExToggleInclude('${it.id}')" title="Include in the routine total" style="transform:scale(1.1);margin:0;flex:0 0 auto;">` +
-        `<span style="flex:1;min-width:0;font-size:0.85rem;"><b>${esc(it.name || '')}</b> ` +
-        `<span style="color:#1a7f37;font-weight:600;white-space:nowrap;">· ${_exItemDetail(it, cal)}</span>` +
-        `<br><span style="font-size:0.7rem;color:#777;">${esc(ms.join(', ')) || '—'}</span></span>` +
-        `<span>${phMuscleSvg(it.muscles || [], 44)}</span>` +
-        `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;flex:0 0 auto;" onclick="phExEdit('${it.id}')">Edit</button>` +
-        `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;color:#c0392b;flex:0 0 auto;" onclick="phExDel('${it.id}')" title="Delete">✕</button></div>`;
-    }).join('') : '<div style="color:#aaa;padding:8px;">No exercises yet.</div>';
+    if (!_exCfg.items.length) { host.innerHTML = '<div style="color:#aaa;padding:8px;">No exercises yet.</div>'; return; }
+    const exp = _exSectionsState();
+    let html = '';
+    for (const [area, label] of _AREA_META) {
+      const items = _exCfg.items.filter(it => _exAreaOf(it) === area);
+      if (!items.length) continue;
+      const open = exp[area] !== false;   // default expanded
+      html += `<div data-ex-section="${area}">` +
+        `<div onclick="phExToggleSection('${area}')" title="Show / hide section" style="cursor:pointer;display:flex;align-items:center;gap:7px;font-weight:600;font-size:0.82rem;padding:8px 6px;margin-top:6px;border-bottom:2px solid #b8bdc4;background:#eef1f4;border-radius:4px 4px 0 0;">` +
+          `<span style="color:#555;width:10px;">${open ? '▾' : '▸'}</span><span>${label}</span><span style="color:#888;font-weight:400;">(${items.length})</span></div>` +
+        (open ? items.map(_exRowHtml).join('') : '') +
+        `</div>`;
+    }
+    host.innerHTML = html;
   }
   window.phExToggleInclude = async function (id) {
     const it = _exCfg.items.find(x => x.id === id); if (!it) return;
@@ -626,26 +680,27 @@
     try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', id); } catch (e) {}
     const row = ev.currentTarget; if (row) row.style.opacity = '0.45';
   };
+  function _clearDragMarks() {
+    const host = $('setx-list'); if (host) host.querySelectorAll('[data-ex-id]').forEach(c => { c.style.opacity = ''; c.style.boxShadow = ''; });
+  }
   window.phExDragOver = function (ev, id) {
     ev.preventDefault();
-    try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+    const ok = _exDragId && id !== _exDragId && _sameArea(_exDragId, id);   // only within the same section
+    try { ev.dataTransfer.dropEffect = ok ? 'move' : 'none'; } catch (e) {}
     const row = ev.currentTarget;
-    if (row && _exDragId && id !== _exDragId) row.style.boxShadow = 'inset 0 2px 0 #2563eb';
+    if (row && ok) row.style.boxShadow = 'inset 0 2px 0 #2563eb';
   };
-  window.phExDragEnd = function (ev) {
-    _exDragId = null;
-    const host = $('setx-list'); if (host) Array.from(host.children).forEach(c => { c.style.opacity = ''; c.style.boxShadow = ''; });
-  };
+  window.phExDragEnd = function (ev) { _exDragId = null; _clearDragMarks(); };
   window.phExDrop = async function (ev, targetId) {
     ev.preventDefault();
-    const from = _exDragId; _exDragId = null;
-    const host = $('setx-list'); if (host) Array.from(host.children).forEach(c => { c.style.opacity = ''; c.style.boxShadow = ''; });
+    const from = _exDragId; _exDragId = null; _clearDragMarks();
     if (!from || from === targetId) return;
     const items = _exCfg.items;
-    const fi = items.findIndex(x => x.id === from); if (fi < 0) return;
+    const fi = items.findIndex(x => x.id === from), tIdx = items.findIndex(x => x.id === targetId);
+    if (fi < 0 || tIdx < 0 || _exAreaOf(items[fi]) !== _exAreaOf(items[tIdx])) return;   // reorder only within a section
     const [moved] = items.splice(fi, 1);
     const ti = items.findIndex(x => x.id === targetId);
-    items.splice(ti < 0 ? items.length : ti, 0, moved);   // drop BEFORE the target row
+    items.splice(ti, 0, moved);   // drop BEFORE the target row
     await _exPersist(); _exRenderList(); if (_selName) phLoadExercise();
   };
   window.phExEdit = function (id) {
