@@ -655,8 +655,22 @@
       `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;flex:0 0 auto;" onclick="phExEdit('${it.id}')">Edit</button>` +
       `<button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:0.72rem;color:#c0392b;flex:0 0 auto;" onclick="phExDel('${it.id}')" title="Delete">✕</button></div>`;
   }
+  // Routine totals from the included exercises' REAL values (black, top-right of the Settings card).
+  function _exRenderTotals() {
+    const host = $('setx-totals'); if (!host) return;
+    const inc = (_exCfg.items || []).filter(it => it.include !== false);
+    let cal = 0, sec = 0;
+    for (const it of inc) {
+      cal += _exItemCal(it);
+      const sets = Number(it.sets) || 1;
+      sec += (it.kind === 'hold') ? (Number(it.hold_sec) || 0) * sets : (Number(it.reps) || 0) * sets * 3;
+    }
+    const blk = (big, label) => `<div style="text-align:center;min-width:52px;"><div style="font-size:1.35rem;font-weight:700;color:#222;line-height:1;">${big}</div><div style="font-size:0.66rem;color:#777;margin-top:3px;">${label}</div></div>`;
+    host.innerHTML = blk(inc.length, 'exercises') + blk(_exFmtDur(sec), 'time') + blk(Math.round(cal), 'calories');
+  }
   function _exRenderList() {
     const host = $('setx-list'); if (!host) return;
+    _exRenderTotals();
     if (!_exCfg.items.length) { host.innerHTML = '<div style="color:#aaa;padding:8px;">No exercises yet.</div>'; return; }
     const exp = _exSectionsState();
     let html = '', n = 0;
