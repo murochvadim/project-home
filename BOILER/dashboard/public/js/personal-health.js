@@ -391,6 +391,8 @@
     { key: 'quads', label: 'Quads' }, { key: 'hipflexors', label: 'Hip flexors' },
     { key: 'upperback', label: 'Upper back' }, { key: 'lowerback', label: 'Lower back' }, { key: 'triceps', label: 'Triceps' },
     { key: 'glutes', label: 'Glutes' }, { key: 'hamstrings', label: 'Hamstrings' }, { key: 'calves', label: 'Calves' },
+    { key: 'trapezius', label: 'Trapezius' }, { key: 'suboccipital', label: 'Suboccipital' },
+    { key: 'scm', label: 'Sternocleidomastoid' }, { key: 'scalp', label: 'Scalp' },
     { key: 'fullbody', label: 'Full body / Cardio' },
   ];
   const MUSCLE_LABEL = Object.fromEntries(MUSCLE_LIST.map(m => [m.key, m.label]));
@@ -434,6 +436,11 @@
     { key: 'glutes',     svg: '<path d="M299,150 Q283,150 282,166 Q285,179 299,176 Z"/><path d="M301,150 Q317,150 318,166 Q315,179 301,176 Z"/>' },
     { key: 'hamstrings', svg: '<ellipse cx="289" cy="214" rx="11" ry="34"/><ellipse cx="311" cy="214" rx="11" ry="34"/>' },
     { key: 'calves',     svg: '<ellipse cx="289" cy="294" rx="9" ry="30"/><ellipse cx="311" cy="294" rx="9" ry="30"/>' },
+    // ── head / neck muscles (front head ≈cx100, back head ≈cx300; neck y40-52) ──
+    { key: 'trapezius',    svg: '<path d="M300,40 L326,60 L300,80 L274,60 Z"/><path d="M94,46 L72,60 L80,63 L98,50 Z"/><path d="M106,46 L128,60 L120,63 L102,50 Z"/>' },
+    { key: 'suboccipital', svg: '<ellipse cx="300" cy="41" rx="7" ry="4"/>' },
+    { key: 'scm',          svg: '<path d="M93,40 L98,52 L100,52 L96,40 Z"/><path d="M107,40 L102,52 L100,52 L104,40 Z"/>' },
+    { key: 'scalp',        svg: '<path d="M86,24 Q100,4 114,24 Q100,15 86,24 Z"/><path d="M286,24 Q300,4 314,24 Q300,15 286,24 Z"/>' },
   ];
   // Render the figure. `sel` = highlighted muscle keys (or ['fullbody'] = all).
   window.phMuscleSvg = function (sel, width) {
