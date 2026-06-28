@@ -58,8 +58,15 @@ Sentence-driven knobs (container `r_corridor_transit_init`):
                       (the N for rising-edge correlation + Visit_Home timeout)
   • s_ct2_cooldown  — "Corridor Transit: cooldown is N seconds"
                       (after From_Home / To_Home before returning to Clear_Home)
+  • s_ct6_dwell     — "Corridor Transit: ignore coming home for N seconds after
+                      going away" — the "just-left" guard: suppresses the set-home
+                      HOME-press when home_mode went away/abroad < N s ago (you
+                      pressed Away and walked out → leaving, not arriving).
 
 state.shared keys owned by this rule:
+  • corridor_transit.away_since_ts                 — epoch float when home_mode last
+                                                     ENTERED away/abroad (just-left guard)
+  • corridor_transit._prev_home_mode               — internal: previous home_mode value
   • corridor_transit.mode                          — current mode string
   • corridor_transit.mode_set_ts                   — epoch float when mode was entered
   • corridor_transit.last_inside_trigger_ts        — last door-open / Entrance-pres rising edge
@@ -106,6 +113,12 @@ DEFAULTS_COOLDOWN_SEC = 30
 # releases — the 2026-06-21 stuck-From_Home incident (jammed ~2 h, suppressing
 # corridor monitoring the whole time).
 DEFAULTS_MAX_LOCK_SEC = 180
+# "Just-left" guard: a real arrival means you were actually gone a while. If
+# home_mode entered away/abroad LESS than this many seconds ago, a corridor+door
+# pattern is you LEAVING (you pressed Away then walked out), NOT coming home — so
+# the set-home HOME-press is suppressed. Fixes Away being cancelled ~3 s after you
+# press it (2026-06-28 "Evening Lights fired while away" incident). 0 = disabled.
+DEFAULTS_MIN_AWAY_DWELL_SEC = 90
 
 # 30 s TTL on sentence-parse to avoid hitting DB on every event.
 _config_cache = {'data': None, 'ts': 0.0}
@@ -151,6 +164,8 @@ def _read_config(state):
         # on a door-confirmed arrival. None = no action authored.
         'set_home_device':   None,
         'set_home_channel':  None,
+        # "Just-left" dwell guard (see DEFAULTS_MIN_AWAY_DWELL_SEC).
+        'min_away_dwell_sec': DEFAULTS_MIN_AWAY_DWELL_SEC,
     }
     try:
         rows = state.db_query(
@@ -184,6 +199,12 @@ def _read_config(state):
                 m = re.search(r'max lock is\s+(\d+)\s*seconds?', full_text, re.I)
                 if m:
                     cfg['max_lock_sec'] = int(m.group(1))
+                    continue
+            # "Just-left" guard — "ignore coming home for N seconds after going away".
+            if 'after going away' in t:
+                m = re.search(r'(\d+)\s*seconds?', full_text, re.I)
+                if m:
+                    cfg['min_away_dwell_sec'] = int(m.group(1))
                     continue
             # Change 1 — coming-home home-mode gate. Modes are taken from the
             # words after "home mode" so the leading "coming home" isn't counted.
@@ -315,6 +336,15 @@ def evaluate(event, state):
     commands = []
     now = time.time()
     cfg = _read_config(state)
+
+    # Track when home_mode ENTERED away/abroad (rising edge only — must stay stable
+    # while away so a 20-min-later arrival still measures the full dwell). The
+    # "just-left" guard in _handle_inside_trigger reads corridor_transit.away_since_ts.
+    _hm = (state.shared.get('home_mode') or '').lower()
+    _prev_hm = state.shared.get('corridor_transit._prev_home_mode', '')
+    if _hm in ('away', 'abroad') and _prev_hm not in ('away', 'abroad'):
+        state.shared['corridor_transit.away_since_ts'] = now
+    state.shared['corridor_transit._prev_home_mode'] = _hm
 
     # Always check timeouts first — fixes mode transitions even on unrelated
     # events arriving at this rule (and on heartbeat).
@@ -452,6 +482,20 @@ def _handle_inside_trigger(state, cfg, now, trigger):
     last_corr = float(state.shared.get('corridor_transit.last_corridor_rising_ts', 0) or 0)
     if last_door < last_corr:
         return []                               # door must have opened AFTER the corridor presence
+
+    # ── "Just-left" guard ──
+    # Pressing AWAY then walking out produces the SAME corridor-presence + door-open
+    # pattern as coming home. A real arrival means you were actually gone a while,
+    # so if home_mode entered away/abroad only moments ago, this is you LEAVING —
+    # do NOT press HOME (which would cancel the Away you just set).
+    dwell = cfg.get('min_away_dwell_sec') or 0
+    if dwell > 0:
+        away_since = float(state.shared.get('corridor_transit.away_since_ts', 0) or 0)
+        if away_since > 0 and (now - away_since) < dwell:
+            log.info("Corridor Transit: 'arrival' only %.0fs after going away (< %ds dwell) "
+                     "— treating as LEAVING, NOT pressing HOME", now - away_since, dwell)
+            return []
+
     cmd = {
         'device_id': dev,
         'action': 'turn_on',
