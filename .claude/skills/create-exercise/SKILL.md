@@ -7,8 +7,9 @@ user-invocable: true
 
 You are adding one exercise to the **Medical → Personal Health → Morning Exercises** routine.
 The routine definitions live GLOBALLY in `dashboard_settings.medical.exercises`:
-`{enabled, schedule:{time_hm}, items:[{id,name,suggested,reps,cal_per_rep,muscles[],other,include}]}`.
-Calories logged = `reps × cal_per_rep`; `suggested` is a reference; `reps` is what the user really does.
+`{enabled, schedule:{time_hm}, items:[{id,name,kind,suggested_sets,suggested,sets,reps|hold_sec,cal_per_rep|cal_per_sec,muscles[],other,include}]}`.
+Both **Suggested** (`suggested_sets`×`suggested`) and **Real** (`sets`×`reps`/`hold_sec`) are a full **sets × count**.
+Calories logged come from the **Real** side: `reps×sets×cal_per_rep` (or `hold_sec×sets×cal_per_sec`); `suggested*` are reference-only.
 
 The dashboard runs on the Windows host at `http://127.0.0.1:3000`. The muscle preset list +
 front/back body map live in `BOILER/dashboard/public/js/personal-health.js`
@@ -32,17 +33,20 @@ ssh root@192.168.1.227 "PGPASSWORD='' psql -h 192.168.1.219 -U postgres -d home_
 
 ## Step 3 — Research the exercise
 Use WebSearch if unsure. Determine:
-- **Muscles worked** → map each to a preset key in `MUSCLE_LIST`:
-  chest · shoulders · biceps · forearms · abs · obliques · quads · hipflexors ·
-  upperback · lowerback · triceps · glutes · hamstrings · calves · fullbody.
-- **Type** (`kind`): `reps` (rep-based) or `hold` (isometric timed hold — plank, hollow hold, wall-sit).
-- **Sets** (`sets`): a sensible number (often 1 for a simple rep set; 3 for holds / strength sets).
-- **For `reps`**: `cal_per_rep = round(base70_per_rep × weight_kg / 70, 2)`; `suggested` = suggested reps.
-  Calories logged = `reps × sets × cal_per_rep`.
-- **For `hold`**: `cal_per_sec ≈ round(MET × weight_kg / 70 / 600, 2)` (isometric core ≈ 3.5–4 MET →
-  ~0.08–0.1); `suggested` = suggested hold **seconds**; also set `hold_sec`. Logged = `hold_sec × sets × cal_per_sec`.
-- **Suggested**: pick for the person's **age** (age-band norms; older → fewer reps / shorter holds).
-  Reference, not medical advice.
+- **Muscles worked** → map each to a preset key in `MUSCLE_LIST` (canonical list lives in personal-health.js):
+  chest · shoulders · biceps · forearms · abs · obliques · obliques_int · transverse · quads · hipflexors ·
+  upperback · lowerback · triceps · glutes · hamstrings · calves · trapezius · suboccipital · scm · scalp · fullbody.
+- **Type** (`kind`): `reps` (rep-based) or `hold` (TIMED — isometric holds like plank/hollow AND duration
+  activities like running-in-place or a massage; the "count" is **seconds**).
+- **Suggested = `suggested_sets` × `suggested`** (the recommendation, shown green): pick BOTH for the person's
+  **age** (older → fewer / shorter). `suggested` = reps (or hold seconds) per set. Reference, not medical advice.
+- **Real = `sets` × `reps`/`hold_sec`** (what the user actually does — ASK; default to the suggested values).
+  Calories come from this side.
+- **Calories**:
+  - `reps`: `cal_per_rep = round(base70_per_rep × weight_kg / 70, 2)`; logged = `reps × sets × cal_per_rep`.
+  - `hold`: `cal_per_sec = round(MET × 3.5 × weight_kg / 200 / 60, 2)` (cal/min = MET×3.5×weight/200, ÷60 → per-sec).
+    MET guide: ~3.5–4 isometric core (≈0.09 @90 kg) · ~8 vigorous cardio (≈0.21) · ~2 light / massage (≈0.05).
+    Logged = `hold_sec × sets × cal_per_sec`.
 - **Hebrew summary** (`desc_he`): a short 1-2 sentence description in **Hebrew** of what the exercise does +
   which muscles it works (shown as a hover popup on the exercise row).
 
@@ -56,8 +60,8 @@ If a worked muscle is NOT already a key in `MUSCLE_LIST`:
 Most common exercises only use existing muscles — skip this step if so.
 
 ## Step 5 — Confirm
-Show the user a table: name · suggested · reps · cal_per_rep · muscles. Ask to proceed.
-For `reps`, ask "how many do you actually do?" — default to `suggested` if they don't say.
+Show the user a table: name · Type · **Suggested (`sets×count`)** · cal/rep-or-sec · muscles. Ask to proceed.
+Ask the **Real** = how many sets × how much you actually do — default to the suggested `sets × count` if not given.
 
 ## Step 6 — Write it (append, never overwrite)
 Read current config, append the new item, POST it back (preserves existing items):
@@ -67,13 +71,14 @@ curl -s http://127.0.0.1:3000/api/dashboard-settings/medical.exercises    # read
 curl -s -X POST http://127.0.0.1:3000/api/dashboard-settings/medical.exercises \
   -H 'Content-Type: application/json' -d '{"value":{ ...full object with appended item... }}'
 ```
-Item shape (reps): `{"id":"ex_<slug>","name":"<Name>","kind":"reps","suggested":N,"sets":N,"reps":N,"cal_per_rep":N,"muscles":["..."],"other":"","include":true,"desc_he":"..."}`.
-Item shape (hold): `{"id":"ex_<slug>","name":"<Name>","kind":"hold","suggested":Nsec,"sets":N,"hold_sec":N,"cal_per_sec":N,"muscles":["..."],"other":"","include":true,"desc_he":"..."}`.
+Item shape (reps): `{"id":"ex_<slug>","name":"<Name>","kind":"reps","suggested_sets":N,"suggested":N,"sets":N,"reps":N,"cal_per_rep":N,"muscles":["..."],"other":"","include":true,"desc_he":"..."}`.
+Item shape (hold): `{"id":"ex_<slug>","name":"<Name>","kind":"hold","suggested_sets":N,"suggested":Nsec,"sets":N,"hold_sec":N,"cal_per_sec":N,"muscles":["..."],"other":"","include":true,"desc_he":"..."}`.
+(`suggested_sets`×`suggested` = the recommendation [renders green]; `sets`×`reps`/`hold_sec` = real [drives calories]; the list flags the **Real red** when it deviates from the suggestion in count OR sets.)
 Use a unique id (e.g. `ex_<name-slug>`). (Adding/editing exercises via the API needs NO restart;
 only changing `lib-exercise-log.js` itself requires `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`.)
 
 ## Step 7 — Finish
-Tell the user to **hard-refresh** the Medical page; they can adjust **Reps** (their real count) and the
+Tell the user to **hard-refresh** the Medical page; they can adjust **Real** (their actual sets × count) and the
 muscles on **Settings → 🏋️ Morning Exercises** / the Muscle Map. If muscles were added (Step 4), the
 cache-bust bump means the hard-refresh is required.
 
