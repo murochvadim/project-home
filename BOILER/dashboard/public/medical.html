@@ -581,23 +581,21 @@
     </div>
       <div class="card" style="margin-bottom:0;">
       <h2 style="margin-top:0;">🏋️ Morning Exercises</h2>
-      <!-- Row 1: reminder settings -->
-      <div style="display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
+      <!-- Row 1: reminder settings + Add button (left of Reminder time) -->
+      <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
         <label style="font-size:0.82rem;color:#222;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="setx-enabled" onchange="medExSettingsSave()" style="transform:scale(1.2);"> Enable reminder</label>
         <label style="font-size:0.8rem;color:#222;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="setx-include" checked style="transform:scale(1.1);"> Include in routine</label>
         <label style="font-size:0.78rem;color:#555;">Reminder time<br><input id="setx-time" type="time" onchange="medExSettingsSave()" style="padding:5px 8px;border:1px solid #2563eb;border-radius:4px;color:#2563eb;height:32px;box-sizing:border-box;"></label>
       </div>
-      <!-- Row 2: exercise definition (+ Add on the left) -->
-      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
+      <!-- Row 2: exercise definition (single row) — Suggested & Real are each sets × count -->
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
         <button class="btn btn-sm" id="setx-addbtn" style="background:#2563eb;color:#fff;height:32px;padding:0 8px;" onclick="phExFormSave()">+ Add exercise</button>
         <label style="font-size:0.78rem;color:#555;">Exercise name<br><input id="setx-name" type="text" placeholder="--" style="padding:5px 8px;width:96px;box-sizing:border-box;height:32px;"></label>
-        <label style="font-size:0.78rem;color:#555;" title="Recommended for your age &amp; weight">Suggested<br><input id="setx-suggested" type="number" min="0" placeholder="--" style="padding:5px 6px;width:46px;box-sizing:border-box;height:32px;"></label>
-        <label style="font-size:0.78rem;color:#555;" title="Number of sets">Sets<br><input id="setx-sets" type="number" min="1" placeholder="--" style="padding:5px 6px;width:40px;box-sizing:border-box;height:32px;"></label>
-        <label style="font-size:0.78rem;color:#555;">Type<br><select id="setx-kind" onchange="phExKindChange()" style="padding:5px 4px;height:32px;width:96px;box-sizing:border-box;"><option value="reps">Reps</option><option value="hold">Hold sec</option></select></label>
-        <label id="setx-cpr-lbl" style="font-size:0.78rem;color:#555;">Calories / rep<br><input id="setx-cpr" type="number" min="0" step="0.1" placeholder="--" style="padding:5px 6px;width:60px;box-sizing:border-box;height:32px;"></label>
-        <label id="setx-calsec-lbl" style="font-size:0.78rem;color:#555;display:none;">Calories / sec<br><input id="setx-calsec" type="number" min="0" step="0.01" placeholder="--" style="padding:5px 6px;width:60px;box-sizing:border-box;height:32px;"></label>
-        <label id="setx-reps-lbl" style="font-size:0.78rem;color:#555;" title="Real — how many you actually do">Real<br><input id="setx-reps" type="number" min="0" placeholder="--" style="padding:5px 6px;width:52px;box-sizing:border-box;height:32px;"></label>
-        <label id="setx-hold-lbl" style="font-size:0.78rem;color:#555;display:none;" title="Seconds you hold per set">Hold sec<br><input id="setx-hold" type="number" min="0" placeholder="--" style="padding:5px 6px;width:60px;box-sizing:border-box;height:32px;"></label>
+        <label style="font-size:0.78rem;color:#555;">Type<br><select id="setx-kind" onchange="phExKindChange()" style="padding:5px 4px;height:32px;width:92px;box-sizing:border-box;"><option value="reps">Reps</option><option value="hold">Hold sec</option></select></label>
+        <label style="font-size:0.78rem;color:#1a7f37;font-weight:600;text-align:center;" title="Recommended sets × count for your age &amp; weight">Suggested<br><span style="display:inline-flex;align-items:center;gap:3px;"><input id="setx-sug-sets" type="number" min="1" placeholder="--" title="suggested sets" style="padding:5px 4px;width:42px;box-sizing:border-box;height:32px;color:#1a7f37;">×<input id="setx-suggested" type="number" min="0" placeholder="--" title="suggested per set" style="padding:5px 4px;width:42px;box-sizing:border-box;height:32px;color:#1a7f37;"></span></label>
+        <label style="font-size:0.78rem;color:#555;" title="What you actually do: sets × count">Real<br><span style="display:inline-flex;align-items:center;gap:3px;"><input id="setx-sets" type="number" min="1" placeholder="--" title="real sets" style="padding:5px 4px;width:30px;box-sizing:border-box;height:32px;">×<span id="setx-real-reps-wrap"><input id="setx-reps" type="number" min="0" placeholder="--" title="real reps per set" style="padding:5px 4px;width:42px;box-sizing:border-box;height:32px;"></span><span id="setx-real-hold-wrap" style="display:none;"><input id="setx-hold" type="number" min="0" placeholder="--" title="real seconds per set" style="padding:5px 4px;width:42px;box-sizing:border-box;height:32px;"></span></span></label>
+        <label id="setx-cpr-lbl" style="font-size:0.78rem;color:#555;">Calories / rep<br><input id="setx-cpr" type="number" min="0" step="0.1" placeholder="--" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
+        <label id="setx-calsec-lbl" style="font-size:0.78rem;color:#555;display:none;">Calories / sec<br><input id="setx-calsec" type="number" min="0" step="0.01" placeholder="--" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
         <span id="setx-status" style="font-size:0.82rem;color:#888;align-self:center;"></span>
       </div>
       <div id="setx-list" style="display:flex;flex-direction:column;margin-top:28px;"></div>
@@ -781,7 +779,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
-<script src="js/personal-health.js?v=62"></script>
+<script src="js/personal-health.js?v=63"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

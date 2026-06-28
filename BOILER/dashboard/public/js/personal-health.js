@@ -554,20 +554,19 @@
   };
   function _exResetForm() {
     _exEditId = null; _mapSel = [];
-    ['setx-name', 'setx-suggested', 'setx-sets', 'setx-reps', 'setx-cpr', 'setx-hold', 'setx-calsec'].forEach(id => { if ($(id)) $(id).value = ''; });
+    ['setx-name', 'setx-sug-sets', 'setx-suggested', 'setx-sets', 'setx-reps', 'setx-cpr', 'setx-hold', 'setx-calsec'].forEach(id => { if ($(id)) $(id).value = ''; });
     if ($('setx-kind')) $('setx-kind').value = 'reps';
     if ($('setx-include')) $('setx-include').checked = true;
     if ($('setx-addbtn')) $('setx-addbtn').textContent = '+ Add exercise';
     phExKindChange(); phRenderMuscleMap();
   }
-  // Show reps-fields or hold-fields depending on the Type selector.
-  // Calories/rep sits UNDER Type (same width); Reps sits to its right (or sec/Hold for holds).
+  // Swap the Real-count input (reps↔hold) inside the Real group + the Calories label.
   window.phExKindChange = function () {
     const hold = $('setx-kind') && $('setx-kind').value === 'hold';
+    if ($('setx-real-reps-wrap')) $('setx-real-reps-wrap').style.display = hold ? 'none' : '';
+    if ($('setx-real-hold-wrap')) $('setx-real-hold-wrap').style.display = hold ? '' : 'none';
     if ($('setx-cpr-lbl')) $('setx-cpr-lbl').style.display = hold ? 'none' : '';
-    if ($('setx-reps-lbl')) $('setx-reps-lbl').style.display = hold ? 'none' : '';
     if ($('setx-calsec-lbl')) $('setx-calsec-lbl').style.display = hold ? '' : 'none';
-    if ($('setx-hold-lbl')) $('setx-hold-lbl').style.display = hold ? '' : 'none';
   };
   // Calories + a "sug · sets×reps/hold" detail string for one item (kind/sets aware).
   function _exItemCal(it) {
@@ -576,13 +575,17 @@
     return Math.round((Number(it.reps) || 0) * sets * (Number(it.cal_per_rep) || 0) * 10) / 10;
   }
   function _exItemDetail(it, cal) {
-    const sets = Number(it.sets) || 1, s = sets > 1 ? sets + '×' : '';
-    const sug = Number(it.suggested) || 0;
     const u = (it.kind === 'hold') ? 's' : '';
-    const real = (it.kind === 'hold') ? (Number(it.hold_sec) || 0) : (Number(it.reps) || 0);
-    // Whole "real … = X cal" turns red when changed from the suggestion (unsuggested), else green.
-    const col = (sug > 0 && real !== sug) ? '#c0392b' : '#1a7f37';
-    return `suggested ${sug || '—'}${u} · <span style="color:${col};">real ${s}${real}${u} = ${cal} cal</span>`;
+    const ss = Number(it.suggested_sets) || 0;     // suggested sets (0 = not specified)
+    const sc = Number(it.suggested) || 0;          // suggested count per set
+    const rs = Number(it.sets) || 1;               // real sets
+    const rc = (it.kind === 'hold') ? (Number(it.hold_sec) || 0) : (Number(it.reps) || 0);  // real count per set
+    const sugStr = (ss > 1 ? ss + '×' : '') + (sc || '—') + u;
+    const realStr = (rs > 1 ? rs + '×' : '') + rc + u;
+    // "real …" turns red when it deviates from the suggestion — in count OR sets (each judged only when suggested).
+    const changed = (sc > 0 && rc !== sc) || (ss > 0 && rs !== ss);
+    const col = changed ? '#c0392b' : '#1a7f37';
+    return `suggested ${sugStr} · <span style="color:${col};">real ${realStr} = ${cal} cal</span>`;
   }
   function _exRenderList() {
     const host = $('setx-list'); if (!host) return;
@@ -638,6 +641,7 @@
     const it = _exCfg.items.find(x => x.id === id); if (!it) return;
     _exEditId = id;
     $('setx-name').value = it.name || ''; $('setx-suggested').value = it.suggested || '';
+    $('setx-sug-sets').value = it.suggested_sets || '';
     $('setx-kind').value = it.kind === 'hold' ? 'hold' : 'reps';
     $('setx-sets').value = it.sets || '';
     $('setx-reps').value = it.reps || ''; $('setx-cpr').value = it.cal_per_rep || '';
@@ -658,7 +662,8 @@
     const prev = _exEditId ? _exCfg.items.find(x => x.id === _exEditId) : null;
     const kind = ($('setx-kind').value === 'hold') ? 'hold' : 'reps';
     const item = { id: _exEditId || ('ex_' + Math.random().toString(36).slice(2, 9)),
-      name, kind, suggested: Number($('setx-suggested').value) || 0, sets: Number($('setx-sets').value) || 1,
+      name, kind, suggested_sets: Number($('setx-sug-sets').value) || 0,
+      suggested: Number($('setx-suggested').value) || 0, sets: Number($('setx-sets').value) || 1,
       muscles: _mapSel.slice(), other: '', include: $('setx-include').checked, desc_he: (prev && prev.desc_he) || '' };
     if (kind === 'hold') { item.hold_sec = Number($('setx-hold').value) || 0; item.cal_per_sec = Number($('setx-calsec').value) || 0; }
     else { item.reps = Number($('setx-reps').value) || 0; item.cal_per_rep = Number($('setx-cpr').value) || 0; }
