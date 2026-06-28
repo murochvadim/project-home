@@ -393,6 +393,7 @@
     { key: 'glutes', label: 'Glutes' }, { key: 'hamstrings', label: 'Hamstrings' }, { key: 'calves', label: 'Calves' },
     { key: 'trapezius', label: 'Trapezius' }, { key: 'suboccipital', label: 'Suboccipital' },
     { key: 'scm', label: 'Sternocleidomastoid' }, { key: 'scalp', label: 'Scalp' },
+    { key: 'platysma', label: 'Platysma' }, { key: 'ear', label: 'Ear' }, { key: 'nose', label: 'Nose' },
     { key: 'fullbody', label: 'Full body / Cardio' },
   ];
   const MUSCLE_LABEL = Object.fromEntries(MUSCLE_LIST.map(m => [m.key, m.label]));
@@ -441,6 +442,9 @@
     { key: 'suboccipital', svg: '<ellipse cx="300" cy="41" rx="7" ry="4"/>' },
     { key: 'scm',          svg: '<path d="M93,40 L98,52 L100,52 L96,40 Z"/><path d="M107,40 L102,52 L100,52 L104,40 Z"/>' },
     { key: 'scalp',        svg: '<path d="M86,24 Q100,4 114,24 Q100,15 86,24 Z"/><path d="M286,24 Q300,4 314,24 Q300,15 286,24 Z"/>' },
+    { key: 'platysma',     svg: '<path d="M91,42 Q100,48 109,42 L113,54 Q100,62 87,54 Z"/>' },
+    { key: 'ear',          svg: '<ellipse cx="84" cy="27" rx="3.5" ry="6"/><ellipse cx="116" cy="27" rx="3.5" ry="6"/><ellipse cx="284" cy="27" rx="3.5" ry="6"/><ellipse cx="316" cy="27" rx="3.5" ry="6"/>' },
+    { key: 'nose',         svg: '<path d="M100,25 L97.5,34 L102.5,34 Z"/>' },
   ];
   // Render the figure. `sel` = highlighted muscle keys (or ['fullbody'] = all).
   window.phMuscleSvg = function (sel, width) {
