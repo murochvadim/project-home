@@ -28,6 +28,7 @@ async function ssh(cmd) {
 const TS_RE = /^\d{4}-\d{2}-\d{2}_\d{6}$/;                       // QNAP snapshot dir
 const PROJ_FILE_RE = /^project_home_(\d{4}-\d{2}-\d{2}|latest)\.tar\.gz\.gpg$/;
 const BUD_FILE_RE = /^privacy_budget_(\d{4}-\d{2}-\d{2}|latest)\.json$/;
+const DB_FILE_RE = /^home_data_(\d{4}-\d{2}-\d{2}|latest)\.dump\.gpg$/;
 
 function lines(s) { return (s || '').split('\n').map(x => x.trim()).filter(Boolean); }
 
@@ -35,11 +36,13 @@ module.exports = function (app, db) {
   // List available backups for both the project folder and the Budget.
   app.get('/api/restore/sources', async (_req, res) => {
     try {
-      const [pq, pd, bq, bd] = await Promise.all([
+      const [pq, pd, bq, bd, dbd, gst] = await Promise.all([
         ssh(`ls -1 '/mnt/qnap-claude/Claude Project' 2>/dev/null`),
         ssh(`rclone lsf gdrive_sheets:Claude_Project_Enc/ 2>/dev/null`),
         ssh(`ls -1 /mnt/qnap-claude/Privacy_Budget 2>/dev/null`),
         ssh(`rclone lsf gdrive_sheets:Privacy_Budget/ 2>/dev/null`),
+        ssh(`rclone lsf gdrive_sheets:DB_Backups/ 2>/dev/null`),
+        ssh(`rclone lsf -R --format "ps" --separator "|" gdrive_sheets:Guest_Images/ 2>/dev/null`),
       ]);
       const projQnap = lines(pq.stdout).filter(x => TS_RE.test(x)).reverse()
         .map(ts => ({ ref: ts, label: ts.replace('_', ' ') }));
@@ -49,7 +52,24 @@ module.exports = function (app, db) {
         .map(ts => ({ ref: ts, label: ts.replace('_', ' ') }));
       const budDrive = lines(bd.stdout).filter(x => BUD_FILE_RE.test(x))
         .map(f => ({ ref: f, label: f.replace('privacy_budget_', '').replace('.json', '') }));
-      res.json({ project: { qnap: projQnap, drive: projDrive }, budget: { qnap: budQnap, drive: budDrive } });
+      // Database dumps (Drive only — the QNAP copy of LXC 102 is a vzdump, restored via Proxmox)
+      const dbDrive = lines(dbd.stdout).filter(x => DB_FILE_RE.test(x))
+        .map(f => ({ ref: f, label: f.replace('home_data_', '').replace('.dump.gpg', '') }));
+      // Guest images — VISIBILITY ONLY (restore via Proxmox from QNAP). Latest .gpg per guest id.
+      const gmap = {};
+      for (const ln of lines(gst.stdout)) {
+        const [path, size] = ln.split('|');
+        const m = (path || '').match(/^(\d+)\/vzdump-.*\.gpg$/);
+        if (!m) continue;
+        const id = m[1];
+        const d = ((path.match(/(\d{4}_\d{2}_\d{2})/) || [])[1] || '').replace(/_/g, '-');
+        if (!gmap[id] || d > gmap[id].date) gmap[id] = { id, date: d, size: parseInt(size, 10) || 0 };
+      }
+      const guests = Object.values(gmap).sort((a, b) => a.id - b.id);
+      res.json({
+        project: { qnap: projQnap, drive: projDrive }, budget: { qnap: budQnap, drive: budDrive },
+        database: { drive: dbDrive }, guests,
+      });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -59,7 +79,7 @@ module.exports = function (app, db) {
       const b = req.body || {};
       const type = b.type, source = b.source, ref = b.ref;
       let dest = b.dest;
-      if (!['project', 'budget'].includes(type)) return res.status(400).json({ error: 'bad type' });
+      if (!['project', 'budget', 'db'].includes(type)) return res.status(400).json({ error: 'bad type' });
       if (!['qnap', 'drive'].includes(source)) return res.status(400).json({ error: 'bad source' });
 
       // Validate ref + build the full source path server-side (no raw client paths).
@@ -73,19 +93,23 @@ module.exports = function (app, db) {
       } else if (type === 'budget' && source === 'qnap') {
         if (!TS_RE.test(ref)) return res.status(400).json({ error: 'bad ref' });
         fullRef = `/mnt/qnap-claude/Privacy_Budget/${ref}/PrivacyBackup/privacy_budget.json`;
-      } else { // budget drive
+      } else if (type === 'budget') { // budget drive
         if (!BUD_FILE_RE.test(ref)) return res.status(400).json({ error: 'bad ref' });
+        fullRef = ref;
+      } else { // db — Drive only, always restores into the scratch DB home_data_restore
+        if (source !== 'drive' || !DB_FILE_RE.test(ref)) return res.status(400).json({ error: 'bad ref' });
         fullRef = ref;
       }
 
       if (type === 'budget') dest = 'db';
+      else if (type === 'db') dest = 'newdb';
       else if (!['qnap', 'laptop'].includes(dest)) return res.status(400).json({ error: 'bad dest' });
 
       const cmd = `/opt/restore-backup.sh ${type} ${source} '${fullRef.replace(/'/g, "")}' ${dest}`;
       const r = await ssh(cmd);
       const out = ((r.stdout || '') + '\n' + (r.stderr || '')).trim();
-      const ok = r.code === 0 && /RESTORED_(TO|BUDGET):/.test(r.stdout || '');
-      const m = (r.stdout || '').match(/RESTORED_TO:\s*(.+)/);
+      const ok = r.code === 0 && /RESTORED_(TO|BUDGET|DB):/.test(r.stdout || '');
+      const m = (r.stdout || '').match(/RESTORED_(?:TO|DB):\s*(.+)/);
       res.json({ ok, target: m ? m[1].trim() : null, output: out });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

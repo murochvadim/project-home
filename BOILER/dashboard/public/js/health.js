@@ -834,6 +834,26 @@ async function loadRestoreSources() {
       <td style="text-align:center;"><button class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
         onclick="doRestore('budget','${r.src}','${escHtml(r.ref)}', this)">Restore ▸</button></td>
     </tr>`).join('') : '<tr><td colspan="3" style="color:#aaa;">No backups found</td></tr>';
+
+    // Database (Drive dumps → safe restore into a NEW scratch DB)
+    const dbRows = (s.database && s.database.drive) || [];
+    const dbb = document.getElementById('rst-db-body');
+    if (dbb) dbb.innerHTML = dbRows.length ? dbRows.map(r => `<tr>
+      <td style="font-size:0.82rem;">☁️ Drive</td>
+      <td style="font-size:0.82rem; color:#555;">${escHtml(r.label)}</td>
+      <td style="font-size:0.8rem;"><code>home_data_restore</code></td>
+      <td style="text-align:center;"><button class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+        onclick="doRestore('db','drive','${escHtml(r.ref)}', this)">Restore ▸</button></td>
+    </tr>`).join('') : '<tr><td colspan="4" style="color:#aaa;">No DB backups yet</td></tr>';
+
+    // Guest images — visibility only (restore via Proxmox)
+    const guests = s.guests || [];
+    const gb = document.getElementById('rst-guests-body');
+    if (gb) gb.innerHTML = guests.length ? guests.map(x => `<tr>
+      <td style="font-size:0.82rem;">${x.id == 101 ? 'VM ' : 'LXC '}${escHtml(String(x.id))}</td>
+      <td style="font-size:0.82rem; color:#555;">${escHtml(x.date || '—')}</td>
+      <td style="font-size:0.82rem; color:#555;">${Math.round((x.size || 0) / 1024 / 1024)} MB</td>
+    </tr>`).join('') : '<tr><td colspan="3" style="color:#aaa;">No guest images yet (first full run: Sunday 04:00)</td></tr>';
   } catch (e) {
     pb.innerHTML = `<tr><td colspan="4" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
   }
@@ -844,6 +864,8 @@ async function doRestore(type, source, ref, btn) {
   if (type === 'project') {
     dest = document.querySelector('input[name="rst-dest"]:checked')?.value || 'qnap';
     if (!confirm(`Restore the project folder from this ${source === 'qnap' ? 'QNAP snapshot' : 'encrypted Drive backup'} into a NEW folder on ${dest === 'qnap' ? 'QNAP (Restores\\)' : 'the laptop (Restore\\)'}?\n\nYour live project folder is NOT touched.`)) return;
+  } else if (type === 'db') {
+    if (!confirm('Restore this database backup into a NEW database "home_data_restore"?\n\nYour LIVE database is NOT touched. This can take a few minutes.')) return;
   } else {
     if (!confirm(`Restore the Budget from this ${source === 'qnap' ? 'QNAP' : 'Drive'} backup?\n\nThis REPLACES your current Budget data — your current one is auto-saved as a rollback first. You'll unlock it in the Budget tab to view.`)) return;
   }
@@ -861,6 +883,8 @@ async function doRestore(type, source, ref, btn) {
       result.style.background = '#e8f6ee'; result.style.color = '#1d6f42';
       result.innerHTML = type === 'project'
         ? `✅ Restored to <b>${escHtml(r.target || '(new folder)')}</b>`
+        : type === 'db'
+        ? `✅ Restored into <b>home_data_restore</b> — your live database is untouched. Inspect it, copy out what you need, then drop it when done.`
         : `✅ Budget restored (current saved as rollback). Open the <b>Budget</b> tab on the Privacy page and unlock to view.`;
     } else {
       result.style.background = '#fdecea'; result.style.color = '#b03a2e';

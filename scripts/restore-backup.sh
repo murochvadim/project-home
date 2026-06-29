@@ -90,4 +90,20 @@ if [ "$TYPE" = "budget" ]; then
   exit 0
 fi
 
+# ───────────── DATABASE (restore into a NEW scratch DB — NEVER the live one) ─────────────
+if [ "$TYPE" = "db" ]; then
+  TARGET_DB="home_data_restore"
+  BIN="/usr/lib/postgresql/16/bin"
+  [ "$TARGET_DB" = "$DB_NAME" ] && { echo "ERROR: refusing to overwrite the live DB"; exit 1; }
+  # fresh scratch DB (drop the previous restore if any — only ever touches *_restore)
+  "$BIN/dropdb" -h "$DB_HOST" -U "$DB_USER" --if-exists "$TARGET_DB"
+  "$BIN/createdb" -h "$DB_HOST" -U "$DB_USER" "$TARGET_DB"
+  # download → decrypt → restore (streamed, no temp file)
+  rclone cat "gdrive_sheets:DB_Backups/$REF" \
+    | gpg --batch --yes --decrypt --passphrase-file "$PASSFILE" \
+    | "$BIN/pg_restore" -h "$DB_HOST" -U "$DB_USER" -d "$TARGET_DB" --no-owner --no-privileges 2>/dev/null
+  echo "RESTORED_DB: $TARGET_DB"
+  exit 0
+fi
+
 echo "ERROR: unknown type '$TYPE'"; exit 1
