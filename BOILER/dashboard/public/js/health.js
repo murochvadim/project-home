@@ -769,6 +769,74 @@ function fmtDuration(startedAt, finishedAt) {
   return m + 'm ' + s + 's';
 }
 
+// ─ Restore tab ───────────────────────────────────────────────
+async function loadRestoreSources() {
+  const pb = document.getElementById('rst-project-body');
+  const bb = document.getElementById('rst-budget-body');
+  try {
+    const s = await fetch('/api/restore/sources').then(r => r.json());
+    const projRows = [
+      ...s.project.qnap.map(x => ({ src: 'qnap', ref: x.ref, label: x.label, contents: 'full (+deps)' })),
+      ...s.project.drive.map(x => ({ src: 'drive', ref: x.ref, label: x.label, contents: 'code (no deps)' })),
+    ];
+    pb.innerHTML = projRows.length ? projRows.map(r => `<tr>
+      <td style="font-size:0.82rem;">${r.src === 'qnap' ? '🏠 QNAP' : '☁️ Drive (encrypted)'}</td>
+      <td style="font-size:0.82rem; color:#555;">${escHtml(r.label)}</td>
+      <td style="font-size:0.78rem; color:#888;">${r.contents}</td>
+      <td style="text-align:center;"><button class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+        onclick="doRestore('project','${r.src}','${escHtml(r.ref)}', this)">Restore ▸</button></td>
+    </tr>`).join('') : '<tr><td colspan="4" style="color:#aaa;">No backups found</td></tr>';
+
+    const budRows = [
+      ...s.budget.qnap.map(x => ({ src: 'qnap', ref: x.ref, label: x.label })),
+      ...s.budget.drive.map(x => ({ src: 'drive', ref: x.ref, label: x.label })),
+    ];
+    bb.innerHTML = budRows.length ? budRows.map(r => `<tr>
+      <td style="font-size:0.82rem;">${r.src === 'qnap' ? '🏠 QNAP' : '☁️ Drive'}</td>
+      <td style="font-size:0.82rem; color:#555;">${escHtml(r.label)}</td>
+      <td style="text-align:center;"><button class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+        onclick="doRestore('budget','${r.src}','${escHtml(r.ref)}', this)">Restore ▸</button></td>
+    </tr>`).join('') : '<tr><td colspan="3" style="color:#aaa;">No backups found</td></tr>';
+  } catch (e) {
+    pb.innerHTML = `<tr><td colspan="4" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function doRestore(type, source, ref, btn) {
+  let dest = 'db';
+  if (type === 'project') {
+    dest = document.querySelector('input[name="rst-dest"]:checked')?.value || 'qnap';
+    if (!confirm(`Restore the project folder from this ${source === 'qnap' ? 'QNAP snapshot' : 'encrypted Drive backup'} into a NEW folder on ${dest === 'qnap' ? 'QNAP (Restores\\)' : 'the laptop (Restore\\)'}?\n\nYour live project folder is NOT touched.`)) return;
+  } else {
+    if (!confirm(`Restore the Budget from this ${source === 'qnap' ? 'QNAP' : 'Drive'} backup?\n\nThis REPLACES your current Budget data — your current one is auto-saved as a rollback first. You'll unlock it in the Budget tab to view.`)) return;
+  }
+  const result = document.getElementById('rst-result');
+  const old = btn.textContent; btn.textContent = 'Restoring…'; btn.disabled = true;
+  result.style.display = 'block';
+  result.style.background = '#eef4fb'; result.style.color = '#2c5777';
+  result.textContent = 'Running restore…';
+  try {
+    const r = await fetch('/api/restore/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, source, ref, dest }),
+    }).then(r => r.json());
+    if (r.ok) {
+      result.style.background = '#e8f6ee'; result.style.color = '#1d6f42';
+      result.innerHTML = type === 'project'
+        ? `✅ Restored to <b>${escHtml(r.target || '(new folder)')}</b>`
+        : `✅ Budget restored (current saved as rollback). Open the <b>Budget</b> tab on the Privacy page and unlock to view.`;
+    } else {
+      result.style.background = '#fdecea'; result.style.color = '#b03a2e';
+      result.textContent = '❌ Restore failed: ' + (r.error || r.output || 'unknown');
+    }
+  } catch (e) {
+    result.style.background = '#fdecea'; result.style.color = '#b03a2e';
+    result.textContent = '❌ ' + e.message;
+  } finally {
+    btn.textContent = old; btn.disabled = false;
+  }
+}
+
 // ─ Storages ──────────────────────────────────────────────────
 let _winStorages = [];
 

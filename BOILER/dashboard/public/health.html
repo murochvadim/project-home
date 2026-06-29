@@ -63,6 +63,7 @@
     <button class="tab-btn" onclick="showHealthTab('database', this)">Database</button>
     <button class="tab-btn" onclick="showHealthTab('backups', this)">Proxmox Backup</button>
     <button class="tab-btn" onclick="showHealthTab('win-backup', this)">Windows Backup</button>
+    <button class="tab-btn" onclick="showHealthTab('restore', this)">Restore</button>
     <button class="tab-btn" onclick="showHealthTab('ups', this)">UPS</button>
     <button class="tab-btn" onclick="showHealthTab('settings', this)">Settings</button>
   </div>
@@ -759,6 +760,44 @@
 
   </div><!-- /tab-ups -->
 
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Restore                                                  -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-restore">
+    <div style="background:#fef9e7; border:1px solid #f7dc6f; border-radius:6px; padding:10px 12px; margin-bottom:14px; font-size:0.82rem; color:#7d6608;">
+      🛟 <b>Safe restore.</b> Every restore creates a <b>new copy</b> — your live project folder is never overwritten.
+      The Budget restore replaces the live Budget data but <b>auto-saves the current one as a rollback</b> first.
+    </div>
+
+    <!-- Project Folder -->
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px; flex-wrap:wrap;">
+        <h2 style="margin:0;">📁 Project Folder</h2>
+        <span style="font-size:0.8rem; color:#666;">Restore to:</span>
+        <label style="font-size:0.82rem; cursor:pointer;"><input type="radio" name="rst-dest" value="qnap" checked> QNAP <span style="color:#999;">(\\192.168.1.155\Claude_Data\Restores\)</span></label>
+        <label style="font-size:0.82rem; cursor:pointer;"><input type="radio" name="rst-dest" value="laptop"> Laptop <span style="color:#999;">(C:\Users\muroc\Restore\)</span></label>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Source</th><th>When</th><th style="width:120px;">Contents</th><th style="width:90px; text-align:center;"></th></tr></thead>
+        <tbody id="rst-project-body"><tr><td colspan="4" style="color:#aaa;">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Budget -->
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px; flex-wrap:wrap;">
+        <h2 style="margin:0;">📊 Privacy Budget</h2>
+        <span style="font-size:0.8rem; color:#b9770e;">⚠ Replaces the live Budget (current saved as rollback) — unlock in the Budget tab afterward to view.</span>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Source</th><th>When</th><th style="width:90px; text-align:center;"></th></tr></thead>
+        <tbody id="rst-budget-body"><tr><td colspan="3" style="color:#aaa;">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div id="rst-result" style="display:none; margin-top:4px; padding:10px 12px; border-radius:6px; font-size:0.84rem;"></div>
+  </div><!-- /tab-restore -->
+
 </main>
 
 <script>
@@ -790,6 +829,11 @@ function showHealthTab(name, btn) {
     loadWinStorages();
     loadWinJobs();
     loadWinLog();
+  }
+  // Load restore tab lazily on first visit
+  if (name === 'restore' && !window._restoreTabLoaded) {
+    window._restoreTabLoaded = true;
+    loadRestoreSources();
   }
   // Load UPS tab lazily on first visit + always re-pull inventory on revisit
   if (name === 'ups') {
@@ -864,6 +908,6 @@ async function deploy() {
 <script src="js/reminders-badge.js?v=1"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=57"></script>
+<script src="js/health.js?v=58"></script>
 </body>
 </html>

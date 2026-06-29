@@ -109,6 +109,7 @@ require('./routes-media-cd')(app, callHA);
 // Privacy page — Sites CRM + per-site documents (client-side encrypted or
 // plain). Own module; file bytes on QNAP, server stays blind to plaintext.
 require('./routes-privacy')(app, db);
+require('./routes-restore')(app, db);
 
 // Cast laptop screen -> TV (Windows-host action; spawns PowerShell on this host).
 require('./routes-cast')(app);
