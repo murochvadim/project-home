@@ -1,74 +1,70 @@
-# Privacy → Spreadsheets — build plan (APPROVED, not yet built)
+# Privacy → Spreadsheets ("Offers" tab) — build plan (x-spreadsheet, phased)
 
-Status: **planning complete, awaiting build.** No code written yet. Pick up from Step 0.
+Status: **prototype confirmed the approach; flushing it and starting fresh on x-spreadsheet.**
+The earlier hand-built grid (commit edf9f35) proved the idea; it is being replaced by the
+x-spreadsheet library wrapped with our encryption.
 
 ## Goal
-An **encrypted, formula-capable spreadsheet** on the **Privacy page**. You always see the grid
-layout + the **formulas**, but the **real cell values are encrypted (server-blind)** — reveal them
-by entering the **same Vaultwarden "Documents" password** used for Privacy → Documents.
+A real, Excel-like spreadsheet on the **Privacy → Offers** tab. Full editing via the
+**x-spreadsheet** library; the **real cell values are encrypted (server-blind)** and unlocked
+with the **same Vaultwarden "Documents" password** used by Privacy → Documents. Backed up to
+Google Drive as ciphertext.
 
-## Decisions locked in
-1. **One** persistent sheet (singleton — not multiple).
-2. **3 modes:** 🔒 Locked (`•••`) · 🧪 Sandbox (type throwaway test numbers, **never saved**, formulas
-   compute live, for learning how a formula behaves) · 🔓 Unlocked (real values via password).
-3. **All visible except data**; optionally some **headers also lockable** (revealed only on unlock).
-4. **Same password as Privacy → Documents** (Vaultwarden), reuse the existing `privacy_doc_crypto`
-   salt + verifier + the AES-256-GCM / PBKDF2-SHA256-600k helpers already in `privacy.js`.
-5. **No new LXC.** Data is encrypted *in the browser* before saving (server-blind), so the storage
-   host never sees plaintext — a new LXC adds zero privacy, just maintenance. Encrypted blob →
-   **PostgreSQL LXC 102** (like the other `privacy_*` tables); password stays in **Vaultwarden LXC 109**.
-6. **`.xlsx` import/export left out** for now (an export would be a plaintext Excel download — conflicts
-   with server-blind). Optional later.
+## Library: x-spreadsheet (MIT, FREE) — vendored locally
+- Full toolbar: **formulas** (SUM/AVERAGE/MIN/MAX/COUNT + cell refs), **cell fill + text colour**,
+  **merge/split**, **number/text formats**, alignment, borders, **freeze panes**, copy/paste,
+  **undo/redo**, insert/delete rows & cols, **multiple sheets** (bottom tabs).
+- NOT included: **conditional formatting** (auto-colour by value) — accepted gap; **charts** — not needed.
+- Pure **front-end**, no DB of its own — gives/takes data as JSON (`getData()`/`loadData()`).
+  Vendored to `BOILER/dashboard/public/vendor/sheets/` (no CDN; MIT).
 
-## Build steps
+## Decisions
+1. **One x-spreadsheet workbook** in the Offers tab, using the library's **own bottom sheet-tabs**
+   (multi-sheet = Option A) → one encrypted unit, one unlock for all sheets. Inactive sheets are
+   just JSON in memory (cheap) — multi-sheet costs almost no extra memory.
+2. **Same Vaultwarden "Documents" password** — reuse `privacy_doc_crypto` (salt + verifier) + the
+   AES-256-GCM / PBKDF2-SHA256-600k helpers already in `privacy.js`. Server-blind.
+3. **No new LXC** — the encrypted **workbook JSON blob** → PostgreSQL **LXC 102** (`privacy_sheets`).
+   Password stays in **Vaultwarden LXC 109**.
+4. **No .xlsx import/export** (an export would be a plaintext download — conflicts with server-blind).
+5. **⚠ Library trade-off:** with a 3rd-party grid, the original "structure + formulas visible /
+   values hidden / 🧪 sandbox" granularity is NOT practical (we don't control x-spreadsheet's
+   rendering). The realistic model is **whole-workbook lock/unlock**: 🔒 locked = workbook not
+   loaded (blank "unlock to view"), 🔓 unlock = load decrypted. Decide at Phase 2 whether that's OK
+   (it's the simple, robust path) or whether the per-cell hiding is worth dropping x-spreadsheet.
 
-**Step 0 — Grid library (license check FIRST).** Primary: **jspreadsheet CE (jExcel)** — Excel-like grid
-+ formula engine, vendored locally to `BOILER/dashboard/public/vendor/sheets/` (`jspreadsheet.js/.css` +
-dep `jsuites.js/.css`). Verify its license permits our use; if too restrictive, fall back to a minimal
-custom grid + **`formulajs` (MIT)** for the `=SUM()`-style functions. Do NOT ship anything license-unsafe.
+## Phased build
 
-**Step 1 — Migration `PRIVACY/migrations/0XX_sheets.sql`** (LXC 102). Singleton table:
-```
-privacy_sheets(
-  id        INT PRIMARY KEY DEFAULT 1,   -- only row id=1
-  name      TEXT DEFAULT 'My Sheet',
-  structure JSONB,   -- PLAINTEXT: grid size, columns, data-vs-formula per cell, formula text,
-                     --            per-column "locked header" flags
-  enc_data  TEXT,    -- CIPHERTEXT (base64): real cell VALUES + locked header names (AES-256-GCM)
-  enc_iv    TEXT,    -- base64 IV
-  updated_at TIMESTAMPTZ DEFAULT now()
-)
-```
-+ `retention_policies` row → **protected, forever**. No QNAP files (all in PG).
+**PHASE 1 — flush + working x-spreadsheet (PLAINTEXT, to confirm it's right)**
+1. **Flush** the prototype: remove the custom toolbar + `#tab-offers .pvof-table` CSS from
+   `privacy.html`, empty `js/privacy-offers.js`, clear the (empty) `dashboard_settings.privacy.offers`.
+   Keep the Offers **tab button** + the panel **card shell** + the script tag.
+2. **Vendor x-spreadsheet** → `public/vendor/sheets/xspreadsheet.css` + `.js`.
+3. **Rewrite `privacy-offers.js`** — init x-spreadsheet in the Offers container (one workbook, its
+   own bottom sheet-tabs); load/save its native JSON to `dashboard_settings.privacy.offers`; **💾 Save**.
+   **Plaintext** for now so it can be tested freely.
+4. **Verify:** full toolbar + multi-sheet works, fits the page (contained, internal scroll),
+   save → reload persists.
 
-**Step 2 — Backend (`BOILER/dashboard/routes-privacy.js`, existing module).** Server-blind endpoints:
-- `GET  /api/privacy/sheet` → `{name, structure, enc_data, enc_iv}`
-- `POST /api/privacy/sheet` → upsert same
-- No new crypto endpoint — browser fetches the existing `privacy_doc_crypto` to derive/verify the key.
+**PHASE 2 — encryption (server-blind)**
+- `privacy_sheets` table on LXC 102: `id` singleton, `enc_data` + `enc_iv` (ciphertext), `updated_at`
+  — **protected/forever**; register in server.js `DBV_GROUPS` + retention.
+- `routes-privacy.js`: `GET/POST /api/privacy/sheet` (server only ever handles ciphertext).
+- `privacy-offers.js`: **🔒 Locked** default → **🔓 Unlock** (Vaultwarden password → derive/verify vs
+  `privacy_doc_crypto` → decrypt → `loadData`) → **💾 Save** (`getData` → encrypt → POST). Re-lock wipes
+  the decrypted workbook from memory. (Whole-workbook lock per the trade-off above.)
 
-**Step 3 — HTML (`BOILER/dashboard/public/privacy.html`).** New **"Spreadsheets" tab**: toolbar (sheet
-name · 🔒 Locked / 🧪 Sandbox / 🔓 Unlock · 💾 Save [unlocked only]) + jspreadsheet grid container +
-reuse the Documents-unlock password modal.
-
-**Step 4 — JS (`BOILER/dashboard/public/js/privacy-sheets.js`, new).**
-- Load → `GET /sheet` → render structure + formula text; data + locked headers = `•••` (Locked, default).
-- 🧪 Sandbox → editable data cells, formulas compute live on typed numbers; in-memory only, never POSTed;
-  exit → discard, reload Locked.
-- 🔓 Unlock → password modal → reuse `privacy.js` AES-GCM/PBKDF2 → verify vs `privacy_doc_crypto` →
-  decrypt `enc_data` → fill real values + reveal locked headers + compute formulas.
-- 💾 Save (unlocked) → read values + structure → encrypt values → POST. Re-lock wipes decrypted values.
-
-**Step 5 — `server.js` registration** (past the architecture hook): add `privacy_sheets` to `DBV_GROUPS`
-(Privacy group) + `tsCol` (`updated_at`) + the protected-seed list.
-
-**Step 6 — Docs (after it works):** `PRIVACY/CLAUDE.md` + root `CLAUDE.md` (Privacy Spreadsheets tab) + memory.
-
-**Step 7 — Deploy:** migration on LXC 102 → vendor libs (cache-bust) → `pm2 delete boiler-dashboard &&
-pm2 start ecosystem.config.js` (routes-privacy.js changed) → hard-refresh.
-
-**Step 8 — Verify:** create sheet (`Qty`, `Price`, `=A2*B2`, `=SUM(...)`) → Sandbox test → Unlock (real
-numbers) → Save → reload (back to `•••`) → Unlock again (data + totals persist).
+**PHASE 3 — encrypted Google-Drive backup**
+- LXC 104 cron (same family as `scripts/privacy-vault-backup.sh`): export the `privacy_sheets`
+  encrypted blob → `rclone` to **Google Drive** (+ QNAP). **Full** backup, **ciphertext only** —
+  Google never sees plaintext; restore = pull file → unlock with the password. Optional **⬇ Backup now** button.
 
 ## Guarantees
-Structure + formulas plaintext/visible; **real values never leave the browser unencrypted**; same
-Vaultwarden password as Documents; sandbox numbers throwaway; no new LXC.
+Full Excel-like editing; real values never leave the browser unencrypted; same Vaultwarden password
+as Documents; whole workbook backed up to Drive as ciphertext; **no new LXC** (data on LXC 102).
+
+## Footprint to flush in Phase 1 (audited, commit edf9f35)
+- `js/privacy-offers.js` (174 lines) → rewrite. `privacy.html`: the `#tab-offers` toolbar (`pvof-*`
+  controls) + `.pvof-table` CSS → remove; keep the tab button + card shell + script tag.
+  `dashboard_settings.privacy.offers` → clear (empty test grid, 0 cells). `privacy_sheets` table not
+  created yet (prototype used `dashboard_settings`).
