@@ -36,6 +36,14 @@ const SSH_KEY  = process.env.SSH_KEY_PATH || os.homedir() + '/.ssh/id_ed25519';
 try { fs.mkdirSync(DOCS_ROOT, { recursive: true }); }
 catch (e) { console.error('[privacy] docs storage root unreachable:', e.message); }
 
+// Local encrypted mirror of the Budget workbook — written on every save, picked
+// up by the "Privacy Budget" Windows backup job (Project Health → LXC 104) and
+// copied to QNAP. CIPHERTEXT ONLY (same blob stored in privacy_sheets).
+const BUDGET_MIRROR_DIR  = process.env.BUDGET_MIRROR_DIR || 'C:\\Users\\muroc\\PrivacyBackup';
+const BUDGET_MIRROR_FILE = path.join(BUDGET_MIRROR_DIR, 'privacy_budget.json');
+try { fs.mkdirSync(BUDGET_MIRROR_DIR, { recursive: true }); }
+catch (e) { console.error('[privacy] budget mirror dir unreachable:', e.message); }
+
 // 30 MB cap (25 MB user files + AES-GCM/header overhead headroom).
 const docUpload = multer({
   dest: path.join(os.tmpdir(), 'privacy-doc-uploads'),
@@ -182,7 +190,28 @@ module.exports = function (app, db) {
          VALUES (1, $1, $2, now())
          ON CONFLICT (id) DO UPDATE SET enc_data = EXCLUDED.enc_data, enc_iv = EXCLUDED.enc_iv, updated_at = now()`,
         [b.enc_data, b.enc_iv]);
+      // best-effort encrypted mirror to disk for the Windows backup (ciphertext only)
+      try {
+        fs.writeFileSync(BUDGET_MIRROR_FILE, JSON.stringify({ enc_data: b.enc_data, enc_iv: b.enc_iv, updated_at: new Date().toISOString() }));
+      } catch (e) { console.error('[privacy] budget mirror write failed:', e.message); }
       res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+
+  // Budget backup status — last home (QNAP via Windows backup) + cloud (Drive) times.
+  app.get('/api/privacy/budget-backup-status', async (_req, res) => {
+    try {
+      const home = await db.query(
+        `SELECT to_char(MAX(started_at) AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS last_ok
+           FROM backup_log
+          WHERE status='ok' AND job_id = (SELECT id FROM backup_jobs WHERE name='Privacy Budget' LIMIT 1)`);
+      const cloud = await db.query(`SELECT value FROM dashboard_settings WHERE key='privacy.cloud_backup'`);
+      const cloudLast = cloud.rows.length && cloud.rows[0].value ? (cloud.rows[0].value.last_ok || null) : null;
+      res.json({
+        home_last_ok: (home.rows[0] && home.rows[0].last_ok) || null,
+        cloud_last_ok: cloudLast,
+        drive_folder_url: 'https://drive.google.com/drive/folders/1qNvSXmwv8iNg7FlOmNUvDcATrvbGDWZT',
+      });
     } catch (e) { _err(res, e); }
   });
 

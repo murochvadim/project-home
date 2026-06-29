@@ -57,8 +57,27 @@ function _pvofEnsureGrid() {
   return true;
 }
 
+// Backups status strip (home QNAP time + cloud Drive time + folder link).
+// Not sensitive (times + a link) → loaded regardless of lock state.
+async function pvofLoadBackupStatus() {
+  try {
+    const r = await fetch('/api/privacy/budget-backup-status');
+    const j = await r.json();
+    const home = document.getElementById('pvof-bk-home');
+    const cloud = document.getElementById('pvof-bk-cloud');
+    const link = document.getElementById('pvof-bk-link');
+    if (home) home.textContent = '🏠 Home: ' + (j.home_last_ok || 'never');
+    if (cloud) cloud.textContent = '☁️ Cloud: ' + (j.cloud_last_ok || 'never');
+    if (link && j.drive_folder_url) link.href = j.drive_folder_url;
+  } catch (_) {
+    const home = document.getElementById('pvof-bk-home');
+    if (home) home.textContent = '🏠 Home: —';
+  }
+}
+
 // Called by the Budget tab button (after showTab makes the panel visible).
 function pvofOnTabShow() {
+  pvofLoadBackupStatus();
   if (!_pvofEnsureGrid()) { _pvofStatus('x-spreadsheet failed to load', false); return; }
   // Stay/return to locked unless we're already unlocked AND the page key is live.
   if (_pvofShown && typeof _pvKey !== 'undefined' && _pvKey) {
