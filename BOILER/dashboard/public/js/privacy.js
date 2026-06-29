@@ -519,6 +519,10 @@ function pvPromptPassword(mode) {
   document.getElementById('pv-pw-input2').value = '';
   document.getElementById('pv-pw-input2').style.display = mode === 'setup' ? 'block' : 'none';
   document.getElementById('pv-pw-err').textContent = '';
+  // reset the 👁 show-password toggle each open so a password never leaks visibly
+  document.getElementById('pv-pw-input').type = 'password';
+  document.getElementById('pv-pw-input2').type = 'password';
+  { const sc = document.getElementById('pv-pw-show'); if (sc) sc.checked = false; }
   document.getElementById('pv-pw-modal').style.display = 'flex';
   setTimeout(() => document.getElementById('pv-pw-input').focus(), 50);
   return new Promise(res => { _pvPwResolve = res; });

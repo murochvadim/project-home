@@ -159,6 +159,33 @@ module.exports = function (app, db) {
     } catch (e) { _err(res, e); }
   });
 
+  // ── Budget spreadsheet (server-blind, singleton) ────────────────────────────
+  // Stores only ciphertext + IV. Browser encrypts/decrypts with the Documents
+  // password (same privacy_doc_crypto salt/verifier the docs use).
+  app.get('/api/privacy/sheet', async (_req, res) => {
+    try {
+      const r = await db.query(
+        `SELECT enc_data, enc_iv,
+                to_char(updated_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS updated_at
+           FROM privacy_sheets WHERE id = 1`);
+      if (!r.rows.length) return res.json({ enc_data: null, enc_iv: null, updated_at: null });
+      res.json(r.rows[0]);
+    } catch (e) { _err(res, e); }
+  });
+
+  app.post('/api/privacy/sheet', async (req, res) => {
+    try {
+      const b = req.body || {};
+      if (!b.enc_data || !b.enc_iv) return res.status(400).json({ error: 'enc_data, enc_iv required' });
+      await db.query(
+        `INSERT INTO privacy_sheets (id, enc_data, enc_iv, updated_at)
+         VALUES (1, $1, $2, now())
+         ON CONFLICT (id) DO UPDATE SET enc_data = EXCLUDED.enc_data, enc_iv = EXCLUDED.enc_iv, updated_at = now()`,
+        [b.enc_data, b.enc_iv]);
+      res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+
   // ── Documents ──────────────────────────────────────────────────────────────
   app.get('/api/privacy/sites/:id/docs', async (req, res) => {
     try {

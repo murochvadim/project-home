@@ -286,10 +286,25 @@
     <div class="card" style="margin-bottom:0;">
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
         <h2 style="margin:0;">📊 Budget</h2>
-        <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvofSave()">💾 Save</button>
+        <button id="pvof-unlock-btn" class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvofUnlock()">🔓 Unlock</button>
+        <button id="pvof-save-btn" class="btn btn-sm" style="background:#2563eb; color:#fff; display:none;" onclick="pvofSave()">💾 Save</button>
+        <button id="pvof-lock-btn" class="btn btn-secondary btn-sm" style="display:none;" onclick="pvofLockTab()">🔒 Lock</button>
+        <span id="pvof-size-ctl" style="display:none; align-items:center; gap:6px; font-size:0.8rem; color:#555;">
+          <span>Rows <input id="pvof-rows" type="number" min="1" max="5000" style="width:62px; padding:3px 5px; font-size:0.8rem;"></span>
+          <span>Cols <input id="pvof-cols" type="number" min="1" max="100" style="width:54px; padding:3px 5px; font-size:0.8rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="pvofApplySize()">Apply size</button>
+        </span>
         <span id="pvof-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
       </div>
-      <div id="pvof-xs"></div>
+      <div style="position:relative;">
+        <div id="pvof-xs"></div>
+        <div id="pvof-lock" style="position:absolute; inset:0; min-height:420px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; background:#f6f7f9; border:1px solid #d0d0d0; border-radius:6px; color:#555;">
+          <div style="font-size:2.4rem;">🔒</div>
+          <div style="font-size:1.05rem; font-weight:600;">Locked</div>
+          <div style="font-size:0.85rem; color:#888;">Unlock with your Documents password to view the Budget.</div>
+          <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvofUnlock()">🔓 Unlock to view</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -406,6 +421,9 @@
     <p id="pv-pw-help" style="font-size:0.82rem; color:#666; margin:0 0 10px;"></p>
     <input id="pv-pw-input" type="password" style="width:100%; font-size:0.95rem; padding:7px 9px;" placeholder="password" onkeydown="if(event.key==='Enter')pvPwSubmit()">
     <input id="pv-pw-input2" type="password" style="width:100%; font-size:0.95rem; padding:7px 9px; margin-top:8px; display:none;" placeholder="confirm password" onkeydown="if(event.key==='Enter')pvPwSubmit()">
+    <label style="display:flex; align-items:center; gap:5px; font-size:0.8rem; color:#666; margin-top:6px; cursor:pointer;">
+      <input type="checkbox" id="pv-pw-show" onchange="var t=this.checked?'text':'password';document.getElementById('pv-pw-input').type=t;document.getElementById('pv-pw-input2').type=t;"> 👁 Show password
+    </label>
     <div id="pv-pw-err" style="font-size:0.8rem; color:#c0392b; min-height:1.1em; margin-top:6px;"></div>
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
       <button class="btn btn-secondary btn-sm" onclick="pvPwCancel()">Cancel</button>
@@ -473,12 +491,12 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=1"></script>
-<script src="js/privacy.js?v=72"></script>
+<script src="js/privacy.js?v=73"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>
 <script src="vendor/sheets/xspreadsheet.js"></script>
-<script src="js/privacy-offers.js?v=7"></script>
+<script src="js/privacy-offers.js?v=9"></script>
 </body>
 </html>
