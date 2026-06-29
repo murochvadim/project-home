@@ -769,6 +769,43 @@ function fmtDuration(startedAt, finishedAt) {
   return m + 'm ' + s + 's';
 }
 
+// ─ Cloud Backup Retention (Settings tab) ─────────────────────
+async function loadCloudRetention() {
+  try {
+    const j = await fetch('/api/dashboard-settings/privacy.cloud_retention').then(r => r.json());
+    const v = (j && j.value) || {};
+    document.getElementById('cr-project').value = v.project_days ?? 14;
+    document.getElementById('cr-budget').value = v.budget_days ?? 30;
+    document.getElementById('cr-db').value = v.db_days ?? 30;
+    document.getElementById('cr-guests').value = v.guests_weeks ?? 4;
+  } catch (_) {}
+}
+async function saveCloudRetention() {
+  const clamp = (id, def, max) => {
+    let n = parseInt(document.getElementById(id).value, 10);
+    if (!Number.isFinite(n) || n < 1) n = def;
+    if (n > max) n = max;
+    document.getElementById(id).value = n;
+    return n;
+  };
+  const value = {
+    project_days: clamp('cr-project', 14, 3650),
+    budget_days: clamp('cr-budget', 30, 3650),
+    db_days: clamp('cr-db', 30, 3650),
+    guests_weeks: clamp('cr-guests', 4, 520),
+  };
+  const st = document.getElementById('cr-status');
+  try {
+    const r = await fetch('/api/dashboard-settings/privacy.cloud_retention', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    }).then(r => r.json());
+    st.style.color = r && r.ok ? '#2e7d32' : '#b03a2e';
+    st.textContent = r && r.ok ? 'Saved ✓ (applies on the next backup run)' : 'Save failed';
+  } catch (e) { st.style.color = '#b03a2e'; st.textContent = 'Error: ' + e.message; }
+  setTimeout(() => { st.textContent = ''; }, 4000);
+}
+
 // ─ Restore tab ───────────────────────────────────────────────
 async function loadRestoreSources() {
   const pb = document.getElementById('rst-project-body');

@@ -51,7 +51,10 @@ tar czf - --exclude=node_modules --exclude=.git -C "$NEWEST" project_home \
 rclone copyto "$TMP" "$REMOTE/project_home_${STAMP}.tar.gz.gpg"
 rclone copyto "$TMP" "$REMOTE/project_home_latest.tar.gz.gpg"
 
-# prune dated copies older than RETAIN_DAYS (never touches '_latest')
+# prune dated copies older than RETAIN_DAYS (from settings; never touches '_latest')
+RETAIN_DAYS=$($PSQL -c "SELECT value->>'project_days' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
+case "$RETAIN_DAYS" in ''|*[!0-9]*) RETAIN_DAYS=14 ;; esac
+[ "$RETAIN_DAYS" -lt 1 ] && RETAIN_DAYS=1
 rclone delete "$REMOTE" --min-age ${RETAIN_DAYS}d --include "project_home_2*.tar.gz.gpg" 2>/dev/null || true
 
 # record success time for the dashboard status

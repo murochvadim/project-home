@@ -47,7 +47,10 @@ rclone copyto "$TMP" "$REMOTE/privacy_budget_${STAMP}.json"
 rclone copyto "$TMP" "$REMOTE/privacy_budget_latest.json"
 
 # 3. Prune dated copies older than 30 days (never touches '_latest')
-rclone delete "$REMOTE" --min-age 30d --include "privacy_budget_2*.json" 2>/dev/null || true
+BKEEP=$($PSQL -c "SELECT value->>'budget_days' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
+case "$BKEEP" in ''|*[!0-9]*) BKEEP=30 ;; esac
+[ "$BKEEP" -lt 1 ] && BKEEP=1
+rclone delete "$REMOTE" --min-age ${BKEEP}d --include "privacy_budget_2*.json" 2>/dev/null || true
 
 # 4. Record the success time for the dashboard's Backups status (fast DB read).
 psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -q -c \
