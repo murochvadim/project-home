@@ -215,6 +215,24 @@ module.exports = function (app, db) {
     } catch (e) { _err(res, e); }
   });
 
+  // Project-folder backup status — last home (QNAP "Claude Project Folder") +
+  // cloud (encrypted Drive) times. Surfaced on Project Health → Backup Storages.
+  app.get('/api/privacy/project-backup-status', async (_req, res) => {
+    try {
+      const home = await db.query(
+        `SELECT to_char(MAX(started_at) AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS last_ok
+           FROM backup_log
+          WHERE status='ok' AND job_id = (SELECT id FROM backup_jobs WHERE name='Claude Project Folder' LIMIT 1)`);
+      const cloud = await db.query(`SELECT value FROM dashboard_settings WHERE key='privacy.project_backup'`);
+      const cloudLast = cloud.rows.length && cloud.rows[0].value ? (cloud.rows[0].value.last_ok || null) : null;
+      res.json({
+        home_last_ok: (home.rows[0] && home.rows[0].last_ok) || null,
+        cloud_last_ok: cloudLast,
+        drive_folder_url: 'https://drive.google.com/drive/folders/1mBtDGPyJV1VhWMwlNpcYVx-7apKQevie',
+      });
+    } catch (e) { _err(res, e); }
+  });
+
   // ── Documents ──────────────────────────────────────────────────────────────
   app.get('/api/privacy/sites/:id/docs', async (req, res) => {
     try {

@@ -402,8 +402,15 @@
 
     <!-- Storages -->
     <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
         <h2 style="margin:0;">Backup Storages</h2>
+        <div id="bk-storage-cloud" style="font-size:0.78rem; color:#666; display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-left:auto;">
+          <span>☁️ <b>Backups</b></span>
+          <span id="bk-st-home">🏠 Home: …</span>
+          <span id="bk-st-cloud">☁️ Cloud: …</span>
+          <a id="bk-st-link" href="#" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none;">📁 Open in Drive</a>
+          <span style="color:#999;">(encrypted recovery copies — not directly readable)</span>
+        </div>
         <button class="btn btn-secondary btn-sm" onclick="showAddWinStorageForm()">+ Add</button>
       </div>
       <div id="win-add-storage-form" style="display:none; background:#f5f3f0; border-radius:6px; padding:12px; margin-bottom:12px;">
@@ -857,6 +864,6 @@ async function deploy() {
 <script src="js/reminders-badge.js?v=1"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=56"></script>
+<script src="js/health.js?v=57"></script>
 </body>
 </html>

@@ -772,7 +772,25 @@ function fmtDuration(startedAt, finishedAt) {
 // ─ Storages ──────────────────────────────────────────────────
 let _winStorages = [];
 
+// Backups status strip in the Backup Storages header (project: home QNAP time +
+// cloud Drive time + folder link). Not sensitive (times + a link).
+async function loadStorageCloudStatus() {
+  try {
+    const j = await fetch('/api/privacy/project-backup-status').then(r => r.json());
+    const home = document.getElementById('bk-st-home');
+    const cloud = document.getElementById('bk-st-cloud');
+    const link = document.getElementById('bk-st-link');
+    if (home) home.textContent = '🏠 Home: ' + (j.home_last_ok || 'never');
+    if (cloud) cloud.textContent = '☁️ Cloud: ' + (j.cloud_last_ok || 'never');
+    if (link && j.drive_folder_url) link.href = j.drive_folder_url;
+  } catch (_) {
+    const home = document.getElementById('bk-st-home');
+    if (home) home.textContent = '🏠 Home: —';
+  }
+}
+
 async function loadWinStorages() {
+  loadStorageCloudStatus();
   try {
     const rows = await fetch('/api/backup/storages').then(r => r.json());
     _winStorages = rows;
