@@ -75,6 +75,44 @@ def _audio_sink(target=None):
     t = target or _active_video_target
     return TV_TARGETS.get(t, TV_TARGETS['tv']).get('audio_sink', 'cast')
 
+# ── Balcony TV (tv55) volume via UPnP RenderingControl ──────────────────────────
+# The SmartThings/HA media_player for tv55 REPORTS volume but its volume_set /
+# volume_down are silent NO-OPs (dead path — verified live). The TV's OWN UPnP
+# RenderingControl works for BOTH GetVolume and SetVolume (0..100), so the panel
+# Vol±10 buttons route here instead. RenderingControl1 lives next to AVTransport1
+# on the same renderer.
+def _tv55_rc_url():
+    return TV_TARGETS['tv55']['av_url'].replace('AVTransport1', 'RenderingControl1')
+
+def _rc_soap(action, inner, timeout=6):
+    import urllib.request
+    env = ('<?xml version="1.0"?>'
+           '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+           's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
+           + inner + '</s:Body></s:Envelope>').encode('utf-8')
+    req = urllib.request.Request(
+        _tv55_rc_url(), data=env,
+        headers={'Content-Type': 'text/xml; charset="utf-8"',
+                 'SOAPACTION': '"urn:schemas-upnp-org:service:RenderingControl:1#%s"' % action},
+        method='POST')
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode('utf-8', 'replace')
+
+def _tv55_get_volume():
+    xml = _rc_soap('GetVolume',
+        '<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
+        '<InstanceID>0</InstanceID><Channel>Master</Channel></u:GetVolume>')
+    m = re.search(r'<CurrentVolume>(\d+)</CurrentVolume>', xml)
+    return int(m.group(1)) if m else None
+
+def _tv55_set_volume(v):
+    v = max(0, min(100, int(v)))
+    _rc_soap('SetVolume',
+        '<u:SetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
+        '<InstanceID>0</InstanceID><Channel>Master</Channel>'
+        '<DesiredVolume>%d</DesiredVolume></u:SetVolume>' % v)
+    return v
+
 # Samsung 990C Soundbar — Chromecast-capable (Google Cast protocol on
 # port 8009). Used for audio playback to bypass the TV's broken UPnP music
 # app. Video still goes to the TV via UPnP (which works).
@@ -393,6 +431,38 @@ def media_command():
     import urllib.request, urllib.error
     if not request.json:
         return jsonify({'error': 'JSON body required'}), 400
+    # Balcony TV (tv55) OFF → cleanly stop ITS playback first, wait 2 s, THEN power
+    # off, so the TV isn't cut mid-stream. ONLY acts when the Balcony TV is the
+    # ACTIVE player (_active_video_target == 'tv55') — so the 85"/soundbar and a
+    # Living-Room queue are NEVER touched. CLEARING _play_queue is essential: it
+    # makes the dlna-watch thread EXIT instead of treating the Stop as "track
+    # ended" and advancing to the next song (the bug a raw DLNA Stop caused).
+    j = request.json
+    if j.get('entity') == 'tv55' and j.get('command') == 'turn_off' and _active_video_target == 'tv55':
+        try:
+            with _queue_lock:
+                globals()['_play_queue'] = None          # stop the watcher from advancing
+            dlna_soap('Stop',
+                      '<u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+                      '<InstanceID>0</InstanceID></u:Stop>',
+                      tv_url=_av_url('tv55'))
+            log.info('tv55 OFF: stopped Balcony TV playlist, waiting 2 s before power-off')
+        except Exception:
+            log.exception('tv55 OFF pre-stop failed (continuing to power off)')
+        time.sleep(2)
+    # Balcony TV (tv55) volume: HA's volume_set/down are DEAD for this TV, so do it
+    # via UPnP RenderingControl (GetVolume → ±value → SetVolume — verified working).
+    # Handled here directly; never proxied to the dead tv_control HA path.
+    if j.get('entity') == 'tv55' and j.get('command') == 'volume_step':
+        try:
+            cur = _tv55_get_volume()
+            cur = 50 if cur is None else cur
+            new = _tv55_set_volume(cur + int(j.get('value') or 0))
+            log.info('tv55 volume_step %+d -> %d (UPnP)', int(j.get('value') or 0), new)
+            return jsonify({'ok': True, 'volume': new})
+        except Exception as e:
+            log.exception('tv55 volume_step failed')
+            return jsonify({'error': str(e)}), 500
     try:
         data = json.dumps(request.json).encode()
         req  = urllib.request.Request(
