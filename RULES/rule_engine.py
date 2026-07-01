@@ -480,6 +480,21 @@ class RuleEngine:
             self._handle_esp_message(parts[3], parts[4], msg.payload, payload)
             return
 
+        # mur/home/email/message — Email Agent (LXC 110): incoming mail → rule
+        # triggers. Fire a synthetic event with device_id 'email' so a rule can
+        # declare triggers=['email'] and inspect dps {from, subject, snippet,
+        # labels, thread_id, ts}. Mirrors the ESP synthetic-event pattern; no
+        # 'email' devices row needed (state is not persisted for it).
+        if (len(parts) == 4 and parts[:3] == ['mur', 'home', 'email']
+                and parts[3] == 'message'):
+            self._fire_rules_for_event({
+                'device_id': 'email',
+                'dps': payload if isinstance(payload, dict) else {},
+                'source': 'email',
+                'ts': datetime.now(tz=TZ).isoformat(),
+            })
+            return
+
         # ---- Event topics (update state AND trigger rules) ----
 
         device_id = None
@@ -2574,6 +2589,7 @@ class RuleEngine:
             ('mur/home/rule-engine/reload', 0),
             ('mur/home/rule-engine/test', 0),
             ('mur/home/esp/+/+', 0),  # ESP boards ingest (Phase 5, 2026-05-02)
+            ('mur/home/email/message', 1),  # Email Agent ingest (2026-07-01) → device_id 'email'
             ('hasp/+/state', 0),
             ('hasp/+/state/+', 0),
             ('awtrix/+/stats', 0),

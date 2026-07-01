@@ -1,0 +1,71 @@
+# Email Agent
+
+## Purpose
+Two-way Gmail client on the dashboard (read / send / reply / archive / label) **plus**
+incoming-mail automation: new mail is published to MQTT so the rule engine can trigger on it.
+
+## System Overview
+A dedicated **LXC 110 "Email"** (192.168.1.162, unprivileged, `onboot=0`) runs a single Python
+service, `email-agent`, with two threads:
+- **Poller** — walks Gmail's History API from a stored `historyId` watermark, caches new-message
+  **metadata + snippet only** into `email_messages`, publishes `mur/home/email/message` per new mail,
+  and advances the watermark in `email_state`.
+- **Flask API (:8780)** — `list / read / send / reply / archive / label / labels` endpoints the
+  dashboard calls **directly** (dashboard stays UI-only per the architecture rule). Full bodies are
+  fetched on-demand from Gmail and **HTML-sanitized (bleach)** before returning — never stored.
+
+Chosen as its OWN LXC (not co-located on the Privacy box 109) because email is internet-facing and
+ingests untrusted content — it must not share a kernel / daemon / filesystem with the password vault.
+
+## Data Source / App LXC
+- Proxmox LXC ID: **110** — IP **192.168.1.162** — hostname `Email`
+- Service: `email-agent.service` — entry `/opt/email-agent/agent.py` (venv `/opt/email-agent/venv`)
+- Env: `/etc/email-agent.env` (root 600) — DB (trust auth, empty pass), MQTT creds, `GMAIL_TOKEN`
+- Postgres: LXC 102 (192.168.1.219) — MQTT: LXC 107 (192.168.1.189), user `email_agent`
+
+## Tables (LXC 102, migration `EMAIL/migrations/001_email.sql`)
+- `email_messages` — gmail_id PK, thread_id, from/to, subject, snippet, labels jsonb, msg_ts, seen.
+  **Metadata + snippet only — no bodies.** Retention 180 d auto_clean.
+- `email_labels` — Gmail label cache (id → name/type) for the UI. Forever.
+- `email_state` — singleton: `history_id` watermark + `last_poll_ts` + settings. Forever.
+
+## Gmail OAuth (Phase 1 — one-time)
+- Google Cloud project → enable Gmail API → OAuth **Desktop** client → download `credentials.json`.
+- Scopes (minimal): `gmail.modify` + `gmail.send`. Consent screen in *Testing*, self as test user.
+- `EMAIL/agent/oauth_setup.py` (run on a machine WITH a browser — the Windows host) mints
+  `token.json` from `credentials.json`; copy it to `LXC 110:/opt/email-agent/token.json`.
+- The service auto-refreshes the access token from the stored refresh token. Until the token exists,
+  the service stays up and logs `waiting for OAuth`; the dashboard shows a "not connected" banner.
+
+## Rule engine integration (group `email`)
+- `rule_engine.on_mqtt_event` subscribes to `mur/home/email/message` and fires a synthetic event
+  `device_id='email'` with `dps = {from, subject, snippet, labels, thread_id, ts}`. A rule declares
+  `triggers=['email']` to react (e.g. "mail from the bank → notify"). Rules authored via `/create-rule`
+  with `"group": "email"`. No `email` devices row is needed (state is not persisted for it).
+
+## Dashboard
+- Page `BOILER/dashboard/public/email.html` + `js/email.js` — two-pane client (inbox list + read pane),
+  compose/reply modal, archive / mark-read. **Calls `http://192.168.1.162:8780/api/email/*` directly**
+  (the Flask API sends permissive CORS for the LAN-only dashboard). Sidebar: **Personal** group, under
+  Privacy. Auto-refreshes the list every 30 s.
+
+## Deploy
+- Service code: `scp EMAIL/agent/agent.py root@192.168.1.162:/opt/email-agent/agent.py && \
+  ssh root@192.168.1.162 systemctl restart email-agent`
+- Rule-engine ingest lives in `RULES/rule_engine.py` (engine-core — needs `systemctl restart rule-engine`
+  on LXC 105, already deployed).
+- Dashboard files: static — hard-refresh (cache-bust `js/email.js?v=N`).
+
+## Files
+| Artifact | Path |
+|----------|------|
+| Service | `EMAIL/agent/agent.py`, `EMAIL/agent/email-agent.service` |
+| OAuth helper | `EMAIL/agent/oauth_setup.py` |
+| Migrations | `EMAIL/migrations/001_email.sql` (tables), `002_agent_row.sql` (agents row) |
+| Dashboard | `BOILER/dashboard/public/email.html`, `js/email.js` |
+| Rule ingest | `RULES/rule_engine.py` (`mur/home/email/message` → `device_id='email'`) |
+| Memory | `memory/project_agent_email.md` |
+
+## Planned / future
+- Rich HTML rendering + attachments + server-side search (currently metadata + sanitized body).
+- Email-group rules (bill/medical arrivals → notify/tag/file) via `/create-rule`.

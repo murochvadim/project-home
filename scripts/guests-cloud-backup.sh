@@ -1,5 +1,5 @@
 #!/bin/bash
-# Guest images OFF-SITE backup (LXC 104, weekly cron). For each guest 100-109, take
+# Guest images OFF-SITE backup (LXC 104, weekly cron). For each guest 100-110, take
 # the NEWEST vzdump from the READ-ONLY /mnt/pbs mount (LXCs = .tar.zst, the HA VM =
 # .vma.zst), gpg AES256 → rclone rcat (STREAMED, no temp file) → drive.file remote
 # gdrive_sheets:Guest_Images/<id>/. Ciphertext only; passphrase
@@ -7,7 +7,7 @@
 # dashboard_settings.privacy.cloud_retention (min 1, default 4). Logs to Recent
 # Backup Log via the disabled "Guest Images (Drive)" job.
 #
-# Usage: guests-cloud-backup.sh [guest_id]   (no arg = all 100-109; arg = just that one)
+# Usage: guests-cloud-backup.sh [guest_id]   (no arg = all 100-110; arg = just that one)
 set -eo pipefail
 
 DB_HOST="192.168.1.219"; DB_NAME="home_data"; DB_USER="postgres"
@@ -16,7 +16,7 @@ PASSFILE="/etc/privacy-project-backup.pass"
 PBS="/mnt/pbs"
 REMOTE="gdrive_sheets:Guest_Images"
 JOB_NAME="Guest Images (Drive)"
-GUESTS="100 101 102 103 104 105 106 107 108 109"
+GUESTS="100 101 102 103 104 105 106 107 108 109 110"
 [ -n "$1" ] && GUESTS="$1"
 
 [ -r "$PASSFILE" ] || { echo "$(date '+%F %T') passphrase missing — abort"; exit 1; }

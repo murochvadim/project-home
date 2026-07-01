@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Email</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    #email-layout { display:grid; grid-template-columns: 380px 1fr; gap:14px; align-items:start; }
+    #email-list-card { max-height: calc(100vh - 220px); overflow-y:auto; }
+    .em-row { padding:10px 12px; border-bottom:1px solid var(--border,#e5e7eb); cursor:pointer; }
+    .em-row:hover { background:#f4f7fa; }
+    .em-row.active { background:#eaf1fb; }
+    .em-row.unread .em-from, .em-row.unread .em-subj { font-weight:700; }
+    .em-top { display:flex; justify-content:space-between; gap:8px; }
+    .em-from { font-size:0.9rem; color:#1f2a44; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .em-time { font-size:0.72rem; color:#8a93a6; white-space:nowrap; flex:0 0 auto; }
+    .em-subj { font-size:0.86rem; color:#2b3550; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .em-snip { font-size:0.78rem; color:#8a93a6; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #email-read-card { min-height:300px; }
+    #em-read-body { margin-top:14px; font-size:0.9rem; line-height:1.5; word-break:break-word; }
+    #em-read-body img { max-width:100%; height:auto; }
+    #em-read-head { border-bottom:1px solid var(--border,#e5e7eb); padding-bottom:10px; }
+    .em-hint { color:#8a93a6; padding:40px 12px; text-align:center; }
+    .em-modal-back { position:fixed; inset:0; background:rgba(0,0,0,0.45); display:none; align-items:center; justify-content:center; z-index:1000; }
+    .em-modal { background:#fff; border-radius:10px; width:min(680px,92vw); max-height:88vh; overflow:auto; padding:18px 20px; }
+    .em-modal input, .em-modal textarea { width:100%; box-sizing:border-box; padding:8px 10px; margin:6px 0 12px; border:1px solid #cbd5e1; border-radius:6px; font-family:inherit; font-size:0.9rem; }
+    .em-modal textarea { min-height:220px; resize:vertical; }
+    #email-auth-banner { display:none; background:#fff8e1; border:1px solid #f0d27a; color:#7a5c00; border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:0.88rem; }
+    .em-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  </style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a><a href="network.html" id="network-indicator"></a><a href="gateway.html" id="netbird-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="gateway.html">Project Gateway</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html">Project Boards</a>
+  <a href="power.html">Project Power</a>
+  <a href="project-general.html">Project General</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+  <a href="my-bathroom.html">My BathRoom Agent</a>
+  <a href="bedroom.html">Bedroom Agent</a>
+
+  <div class="section-label">Personal</div>
+  <a href="privacy.html">Privacy</a>
+  <a href="email.html" class="active">Email</a>
+  <a href="medical.html">Medical</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Email</h1>
+    <div class="refresh-bar">
+      <select id="email-label-filter" class="btn btn-secondary btn-sm" onchange="emReload()" style="padding:4px 8px;">
+        <option value="INBOX">Inbox</option>
+        <option value="">All mail</option>
+        <option value="UNREAD">Unread</option>
+        <option value="STARRED">Starred</option>
+        <option value="SENT">Sent</option>
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="emCompose()">✉ Compose</button>
+      <button class="btn btn-secondary btn-sm" onclick="emReload()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <div id="email-auth-banner">
+    ⚠ Gmail is not connected yet. Finish the one-time OAuth setup
+    (drop <code>credentials.json</code> into <code>EMAIL/</code> and run <code>oauth_setup.py</code>),
+    then the inbox will populate automatically.
+  </div>
+
+  <div id="email-layout">
+    <div class="card" id="email-list-card">
+      <div id="email-list"><div class="em-hint">Loading…</div></div>
+    </div>
+    <div class="card" id="email-read-card">
+      <div id="email-read"><div class="em-hint">Select a message to read.</div></div>
+    </div>
+  </div>
+</main>
+
+<!-- Compose / Reply modal -->
+<div class="em-modal-back" id="em-compose-back">
+  <div class="em-modal">
+    <h3 id="em-compose-title" style="margin:0 0 10px;">New message</h3>
+    <label style="font-size:0.8rem;color:#64748b;">To</label>
+    <input id="em-compose-to" type="text" placeholder="recipient@example.com">
+    <label style="font-size:0.8rem;color:#64748b;">Subject</label>
+    <input id="em-compose-subject" type="text" placeholder="Subject">
+    <label style="font-size:0.8rem;color:#64748b;">Message</label>
+    <textarea id="em-compose-body" placeholder="Write your message…"></textarea>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn btn-secondary btn-sm" onclick="emCloseCompose()">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="em-compose-send" onclick="emSend()">Send</button>
+    </div>
+    <div id="em-compose-status" style="font-size:0.82rem; margin-top:8px;"></div>
+  </div>
+</div>
+
+<script src="js/alerts-monitor.js"></script>
+<script src="js/email.js?v=1"></script>
+</body>
+</html>

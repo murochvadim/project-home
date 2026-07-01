@@ -2036,7 +2036,7 @@ async function runHealthChecks() {
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
-    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result,
+    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result, lxc110Result,
     phonelinkResult,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
@@ -2095,6 +2095,7 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.189', 22),    // LXC 107 — MQTT
     tcpCheck('192.168.1.195', 22),    // LXC 108 — NetBird gateway
     tcpCheck('192.168.1.196', 22),    // LXC 109 — Privacy
+    tcpCheck('192.168.1.162', 22),    // LXC 110 — Email
     // Link to Windows (Phone Link) health — derived from phonelink_watchdog
     // alerts on LXC 104 (laptop-side: process up + not crash-looping).
     db.query("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND alert_type LIKE 'phonelink:%'")
@@ -2116,6 +2117,7 @@ async function runHealthChecks() {
   r.lxc107 = { ok: lxc107Result.ok };
   r.lxc108 = { ok: lxc108Result.ok };
   r.lxc109 = { ok: lxc109Result.ok };
+  r.lxc110 = { ok: lxc110Result.ok };
   // Server
   r.pm2 = pm2Result;
   // Services — boiler_agent status from orchestrator's system_alerts
@@ -2288,6 +2290,7 @@ const DBV_GROUPS = [
   ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_water','ph_steps','ph_steps_excluded_trips','ph_exercise_log']],
   ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_doc_crypto','privacy_sheets','visited_places']],
   ['Reminders',             ['reminder_state']],
+  ['Email',                 ['email_messages','email_labels','email_state']],
 ];
 const DBV_TABLES = DBV_GROUPS.flatMap(g => g[1]);
 const DBV_TABLE_GROUP = Object.fromEntries(DBV_GROUPS.flatMap(g => g[1].map(t => [t, g[0]])));
@@ -2318,6 +2321,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
       household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at', ph_body: 'measured_at', ph_water: 'measured_at', ph_steps: 'measured_at', ph_steps_excluded_trips: 'excluded_at', ph_exercise_log: 'measured_at', reminder_state: 'updated_at',
+      email_messages: 'msg_ts', email_labels: 'updated_at', email_state: 'updated_at',
       power_consumption: 'ts',
       power_devices: 'updated_at',
       power_bills: 'uploaded_at',

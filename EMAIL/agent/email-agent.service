@@ -1,0 +1,16 @@
+[Unit]
+Description=Email Agent (Gmail poller + HTTP API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/email-agent.env
+ExecStart=/opt/email-agent/venv/bin/python3 /opt/email-agent/agent.py
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/opt/email-agent
+
+[Install]
+WantedBy=multi-user.target

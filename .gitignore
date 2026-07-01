@@ -8,3 +8,5 @@ ecosystem.config.js
 
 # Claude scheduled-tasks runtime lock (transient: sessionId + pid)
 .claude/scheduled_tasks.lock
+EMAIL/credentials.json
+EMAIL/token.json
