@@ -245,6 +245,15 @@ Options (may pick multiple):
 - **Data table** — universal columns `ts, decision, error, next_ts` + agent-specific data
 - **Settings table** — universal columns `agent_enabled, run_interval_min` + agent-specific settings
 
+> ⚠ **`agents.data_table` / `agents.settings_table` are ONLY for decision-loop agents.** The orchestrator
+> runs a schedule check `SELECT next_ts FROM <data_table> ORDER BY ts DESC` on any agent that declares a
+> `data_table`, and a settings check on `settings_table`. So point those columns at a table ONLY if it has
+> the decision-loop shape (`ts`/`decision`/`next_ts`, and `agent_enabled`/`run_interval_min`). A **service
+> agent whose tables are a cache/log/timeseries** (no `next_ts`/`agent_enabled`) must leave BOTH **NULL** —
+> otherwise you get `agent_schedule_check_failed` on every orchestrator run. Precedent: `email` (Gmail cache),
+> `ingest`, `player`, `whisper-http`, `device-agent` all leave one or both NULL. The tables still get tracked
+> in the Health DB-Volumes card via `server.js` `DBV_GROUPS` — that's independent of the `agents` row.
+
 For each selected option, collect specifics:
 
 ### Data table (if chosen)
@@ -392,6 +401,20 @@ ssh root@<LXC_IP> 'chmod +x /opt/<slug>-agent/kill-orphans.sh'
 # 4) Enable service
 ssh root@<LXC_IP> 'systemctl daemon-reload && systemctl enable --now <slug>-agent[.timer]'
 
+# 4b) NEW LXC only — authorize the orchestrator's SSH key. The orchestrator (LXC 105)
+#     SSHes to every registered agent's lxc_ip for its per-agent service check; if its
+#     key isn't in the new box's authorized_keys you get `service_ssh_failed` alerts.
+ORCH_KEY=$(ssh root@192.168.1.187 'cat /root/.ssh/id_ed25519.pub')
+ssh root@<LXC_IP> "grep -qF '$ORCH_KEY' /root/.ssh/authorized_keys || echo '$ORCH_KEY' >> /root/.ssh/authorized_keys"
+
+# 4c) NEW LXC only — wire it into monitoring/backup/recovery (NOT auto-done by this skill):
+#   - server.js /api/health/status: add tcpCheck + destructure + r.lxc<N> (3 spots)
+#   - health.html + js/health.js: svc-lxc<N> grid cell + render + error-fallback list
+#   - scripts/guests-cloud-backup.sh: add <N> to GUESTS (weekly Drive backup)
+#   - /etc/apcupsd/doshutdown_recover (PVE host): add "<N>:<Name>" to the right start phase
+#     (QNAP-independent unless the LXC mounts a QNAP share) — else it won't auto-recover
+#     after a UPS shutdown (all guests are onboot=0; the recovery script is the sole start path)
+
 # 5) (If MQTT) on LXC 107:
 ssh root@192.168.1.189 'mosquitto_passwd /etc/mosquitto/passwd <mqtt_user>'
 # Add ACL lines to /etc/mosquitto/acl:
@@ -479,6 +502,10 @@ Copy `BOILER/dashboard/public/corridor.html` as the base (simplest agent page). 
 -- Idempotent: safe to re-run.
 
 -- 1) Register in agents table
+-- data_table/settings_table: set ONLY if the agent is a decision loop (data table has
+-- ts/decision/next_ts, settings has agent_enabled/run_interval_min). A service agent
+-- whose tables are a cache/log/timeseries must leave BOTH NULL, or the orchestrator's
+-- `SELECT next_ts FROM <data_table>` schedule check raises agent_schedule_check_failed.
 INSERT INTO agents (
   name, description, lxc_id, lxc_ip, service_name,
   data_table, settings_table,

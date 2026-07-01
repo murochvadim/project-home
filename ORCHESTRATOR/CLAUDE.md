@@ -58,10 +58,13 @@ For each registered agent:
 | `main-agent` | 105 | 192.168.1.187 | `main-agent` | none | none | true |
 | `whisper-http` | 106 | 192.168.1.188 | `whisper-http` | none | none | false |
 | `privacy` | 109 | 192.168.1.196 | `docker` | none | none | false |
+| `email` | 110 | 192.168.1.162 | `email-agent` | none | none | false |
 
 > The canonical agent list is the **`agents` table on LXC 102** (`SELECT * FROM agents WHERE enabled=true`); the orchestrator reads it every run, so adding an agent = INSERT a row (no code deploy). The table above shows the service-monitored agents; several dashboard-only agents (balcony, bedroom, living-room, medical, my-bathroom, device-agent, pixoo, rule-engine) also have rows.
 >
 > **`privacy` (LXC 109, added 2026-06-15):** Vaultwarden + Caddy run via Docker with `restart=unless-stopped`, so the monitored unit is **`docker`** itself — if it's down the orchestrator restarts it and the containers recover; persistent failure raises `service_down:privacy`. No data/settings table (service-check only). **Prereq done:** LXC 105's `/root/.ssh/id_ed25519.pub` was added to LXC 109's `/root/.ssh/authorized_keys` (the orchestrator SSHes as root) — without it the check would raise `service_ssh_failed`. Any new service-monitored LXC needs the same key-trust step.
+>
+> **`email` (LXC 110, added 2026-07-01):** Gmail poller + Flask API `email-agent`. `data_table`/`settings_table` = **none** on purpose — it's a service agent, NOT a decision loop; pointing them at the Gmail-cache tables (`email_messages`/`email_state`, which have no `next_ts`/`agent_enabled`) raised `agent_schedule_check_failed` on every run. LXC 105's key was added to LXC 110's `authorized_keys` per the key-trust step above (had been missed → `service_ssh_failed` until fixed). Both lessons now baked into `/create-agent`.
 
 > **Not registered:** `media-agent.service` on LXC 100 — wrapper service; individual sub-agents (analyzer, player, ingest) are registered instead. `media-agent.service` itself is not monitored by the orchestrator.
 
