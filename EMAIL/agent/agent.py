@@ -13,7 +13,7 @@ Two threads share one process:
 All config comes from /etc/email-agent.env. Until an OAuth token exists the service
 stays up and logs "waiting for OAuth" so it can be deployed before Phase 1 is done.
 """
-import os, time, json, base64, threading, logging, datetime
+import os, time, json, base64, threading, logging, datetime, re
 from email.mime.text import MIMEText
 from email.utils import parsedate_to_datetime
 
@@ -182,7 +182,9 @@ def _poll_once():
                     break
             for mid in new_ids:
                 try:
-                    _upsert_message(_get_meta(svc, mid), emit=True)
+                    meta = _get_meta(svc, mid)
+                    _upsert_message(meta, emit=True)
+                    _apply_automation(svc, mid, meta)   # sender-rule automation (under _gmail_lock)
                 except HttpError as e:
                     log.warning("meta fetch skip %s: %s", mid, e)
             _set_state(newest)
@@ -273,6 +275,180 @@ _ALLOWED_TAGS = list(bleach.sanitizer.ALLOWED_TAGS) + [
 _ALLOWED_ATTRS = {"a": ["href", "title"], "img": ["src", "alt", "width", "height"],
                   "*": ["style"]}
 
+
+# ─────────────────────────── automation (phase 1: sender rules) ───────────────────────────
+# Rules live in dashboard_settings.email.rules (edited on the Email→Automation tab).
+# Each: {id,name,active,mode:dryrun|live, match:{from:[...]}, disposition:spam|trash|keep|archive,
+#        extract:[{field,pattern,source:body|subject}]}. First matching ACTIVE rule wins.
+_rules_cache = {"data": None, "ts": 0.0}
+_RULES_TTL = 30
+# disposition → (addLabelIds, removeLabelIds). 'keep' = no Gmail change. No permanent
+# delete: the token's gmail.modify scope can't; Trash (30-day recoverable) is the ceiling.
+_DISP_MODIFY = {"spam": (["SPAM"], ["INBOX"]), "trash": (["TRASH"], ["INBOX"]),
+                "archive": ([], ["INBOX"])}
+
+
+def _modify_raw(svc, mid, add=None, remove=None):
+    """Label modify WITHOUT taking _gmail_lock — for callers that already hold it
+    (the poller/automation). The public _modify() wraps this with the lock."""
+    svc.users().messages().modify(
+        userId="me", id=mid,
+        body={"addLabelIds": add or [], "removeLabelIds": remove or []}).execute()
+
+
+def _load_rules():
+    now = time.time()
+    if _rules_cache["data"] is not None and (now - _rules_cache["ts"]) < _RULES_TTL:
+        return _rules_cache["data"]
+    rules = []
+    try:
+        with db() as c, c.cursor() as cur:
+            cur.execute("SELECT value FROM dashboard_settings WHERE key='email.rules'")
+            row = cur.fetchone()
+        if row and row[0]:
+            v = row[0]
+            rules = v if isinstance(v, list) else json.loads(v)
+    except Exception:
+        log.exception("load email.rules failed")
+        rules = _rules_cache["data"] or []
+    _rules_cache["data"] = rules
+    _rules_cache["ts"] = now
+    return rules
+
+
+def _sender_match(from_addr, patterns):
+    fa = (from_addr or "").lower()
+    return any(p and str(p).lower() in fa for p in (patterns or []))
+
+
+def _any_in(needles, hay_lower):
+    """True if any needle (case-insensitive) is a substring of the already-lowercased hay.
+    Used for the optional match.contains text condition (subject/snippet/body)."""
+    return any(n and str(n).lower() in hay_lower for n in (needles or []))
+
+
+def _plain_body(svc, mid):
+    """Fetch the message body and strip HTML → plain text for regex matching.
+    Caller holds _gmail_lock."""
+    full = svc.users().messages().get(userId="me", id=mid, format="full").execute()
+    raw, is_html = _extract_body(full["payload"])
+    if is_html:
+        raw = bleach.clean(raw, tags=[], strip=True)
+    return raw
+
+
+def _run_extract(fields, subject, body):
+    out = {}
+    for f in fields or []:
+        pat, fld = f.get("pattern"), f.get("field")
+        if not pat or not fld:
+            continue
+        src = body if (f.get("source") or "body") == "body" else subject
+        try:
+            m = re.search(pat, src or "", re.IGNORECASE | re.DOTALL)
+        except re.error:
+            continue
+        if m:
+            out[fld] = m.group(1) if m.groups() else m.group(0)
+    return out
+
+
+def _log_auto(rule, from_addr, subject, gmail_id, disp, mode, applied, extracted, note=""):
+    try:
+        with db() as c, c.cursor() as cur:
+            cur.execute(
+                """INSERT INTO email_automation_log
+                     (rule_id,rule_name,gmail_id,from_addr,subject,disposition,mode,applied,extracted,note)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (rule.get("id"), rule.get("name"), gmail_id, from_addr, subject,
+                 disp, mode, applied, json.dumps(extracted) if extracted else None, note))
+    except Exception:
+        log.exception("automation log write failed")
+
+
+def _apply_rules(svc, mid, from_addr, subject, snippet):
+    """Core rule application, shared by the poller (_apply_automation) and Run-now
+    (_run_now). First matching active rule acts: dry-run logs the would-be action; live
+    extracts→stores→disposes. Caller holds _gmail_lock. Returns 'applied'|'logged'|None."""
+    try:
+        rules = _load_rules()
+        if not rules:
+            return None
+        for rule in rules:
+            if not rule.get("active"):
+                continue
+            match = rule.get("match") or {}
+            if not _sender_match(from_addr, match.get("from")):
+                continue
+            contains = match.get("contains") or []
+            fields = rule.get("extract") or []
+            # Fetch the body only when needed — for extraction, or for a text condition
+            # not already satisfied by subject+preview (so a sender-only rule never fetches).
+            subjsnip = ((subject or "") + " " + (snippet or "")).lower()
+            need_body = bool(fields) or (bool(contains) and not _any_in(contains, subjsnip))
+            body = _plain_body(svc, mid) if need_body else ""
+            if contains and not _any_in(contains, subjsnip + " " + body.lower()):
+                continue   # sender matched but the required text isn't present → skip rule
+            disp = rule.get("disposition") or "keep"
+            extracted = _run_extract(fields, subject or "", body) if fields else {}
+            live = (rule.get("mode") or "dryrun") == "live"
+            if not live:
+                _log_auto(rule, from_addr, subject, mid, disp, "dryrun", False, extracted, "would apply")
+                log.info("automation DRY-RUN rule=%s disp=%s from=%s", rule.get("name"), disp, from_addr)
+                return "logged"
+            if extracted:
+                try:
+                    with db() as c, c.cursor() as cur:
+                        cur.execute(
+                            """INSERT INTO email_extractions
+                                 (rule_id,rule_name,gmail_id,from_addr,subject,data)
+                               VALUES (%s,%s,%s,%s,%s,%s)""",
+                            (rule.get("id"), rule.get("name"), mid, from_addr, subject,
+                             json.dumps(extracted)))
+                except Exception:
+                    log.exception("extraction store failed")
+            if disp in _DISP_MODIFY:
+                add, remove = _DISP_MODIFY[disp]
+                _modify_raw(svc, mid, add, remove)
+            _log_auto(rule, from_addr, subject, mid, disp, "live", True, extracted, "applied")
+            log.info("automation LIVE rule=%s disp=%s from=%s", rule.get("name"), disp, from_addr)
+            return "applied"
+        return None
+    except Exception:
+        log.exception("automation error for %s", mid)
+        return None
+
+
+def _apply_automation(svc, mid, meta):
+    """Called per NEW message from _poll_once (already under _gmail_lock)."""
+    headers = meta.get("payload", {}).get("headers", [])
+    _apply_rules(svc, mid, _hdr(headers, "From"), _hdr(headers, "Subject"), meta.get("snippet") or "")
+
+
+def _run_now(limit=200):
+    """Retroactive: apply the current rules to the last N cached messages. Skips
+    messages already actioned by a prior live run/poll (dedupe on applied=true logs) so
+    repeat clicks don't re-process. Live rules act; dry-run rules just log."""
+    with db() as c, c.cursor() as cur:
+        cur.execute("SELECT gmail_id,from_addr,subject,snippet FROM email_messages "
+                    "ORDER BY msg_ts DESC NULLS LAST LIMIT %s", (limit,))
+        msgs = cur.fetchall()
+        cur.execute("SELECT DISTINCT gmail_id FROM email_automation_log WHERE applied = true")
+        done = {r[0] for r in cur.fetchall()}
+    applied = logged = 0
+    with _gmail_lock:
+        svc = gmail()
+        for gmail_id, from_addr, subject, snippet in msgs:
+            if gmail_id in done:
+                continue
+            res = _apply_rules(svc, gmail_id, from_addr or "", subject or "", snippet or "")
+            if res == "applied":
+                applied += 1
+            elif res == "logged":
+                logged += 1
+    log.info("run-now: scanned=%d applied=%d logged=%d", len(msgs), applied, logged)
+    return {"scanned": len(msgs), "applied": applied, "logged": logged}
+
 @app.get("/api/email/message/<mid>")
 def api_message(mid):
     with _gmail_lock:
@@ -329,8 +505,7 @@ def api_reply():
 
 def _modify(mid, add=None, remove=None):
     with _gmail_lock:
-        gmail().users().messages().modify(userId="me", id=mid,
-            body={"addLabelIds": add or [], "removeLabelIds": remove or []}).execute()
+        _modify_raw(gmail(), mid, add, remove)
 
 @app.post("/api/email/<mid>/archive")
 def api_archive(mid):
@@ -363,6 +538,73 @@ def api_labels():
                              type=EXCLUDED.type, updated_at=now()""",
                         (l["id"], l.get("name"), l.get("type")))
     return jsonify(labels=labels)
+
+# ─────────────────────────── automation read/test endpoints ───────────────────────────
+@app.get("/api/email/extractions")
+def api_extractions():
+    limit = min(int(request.args.get("limit", "100")), 500)
+    with db() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT id,rule_name,gmail_id,from_addr,subject,data,extracted_at "
+                    "FROM email_extractions ORDER BY extracted_at DESC LIMIT %s", (limit,))
+        rows = cur.fetchall()
+    for r in rows:
+        if r.get("extracted_at"):
+            r["extracted_at"] = r["extracted_at"].isoformat()
+    return jsonify(rows=rows)
+
+@app.get("/api/email/automation-log")
+def api_automation_log():
+    limit = min(int(request.args.get("limit", "100")), 500)
+    with db() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT id,ts,rule_name,gmail_id,from_addr,subject,disposition,mode,"
+                    "applied,extracted,note FROM email_automation_log ORDER BY ts DESC LIMIT %s", (limit,))
+        rows = cur.fetchall()
+    for r in rows:
+        if r.get("ts"):
+            r["ts"] = r["ts"].isoformat()
+    return jsonify(rows=rows)
+
+@app.post("/api/email/automation/test")
+def api_automation_test():
+    """Dry-run a single rule against the last ~80 cached messages — returns would-be
+    matches + extractions WITHOUT touching Gmail or the DB (validate a rule before saving)."""
+    rule = (request.get_json(force=True) or {}).get("rule") or {}
+    match = rule.get("match") or {}
+    pats, contains = match.get("from"), (match.get("contains") or [])
+    fields = rule.get("extract") or []
+    with db() as c, c.cursor() as cur:
+        cur.execute("SELECT gmail_id,from_addr,subject,snippet FROM email_messages "
+                    "ORDER BY msg_ts DESC NULLS LAST LIMIT 80")
+        msgs = cur.fetchall()
+    out = []
+    with _gmail_lock:
+        svc = gmail()
+        for gmail_id, from_addr, subject, snippet in msgs:
+            if not _sender_match(from_addr, pats):
+                continue
+            subjsnip = ((subject or "") + " " + (snippet or "")).lower()
+            need_body = bool(fields) or (bool(contains) and not _any_in(contains, subjsnip))
+            body = ""
+            if need_body:
+                try:
+                    body = _plain_body(svc, gmail_id)
+                except Exception:
+                    body = ""
+            if contains and not _any_in(contains, subjsnip + " " + body.lower()):
+                continue
+            extracted = _run_extract(fields, subject or "", body) if fields else {}
+            out.append({"gmail_id": gmail_id, "from": from_addr, "subject": subject,
+                        "extracted": extracted})
+            if len(out) >= 20:
+                break
+    return jsonify(matches=out, disposition=rule.get("disposition"), count=len(out))
+
+@app.post("/api/email/automation/run-now")
+def api_run_now():
+    """Retroactively apply the current rules to recent cached mail (live rules ACT;
+    dry-run rules log). Dedupes against already-applied messages."""
+    limit = min(int((request.get_json(silent=True) or {}).get("limit", 200)), 500)
+    return jsonify(ok=True, **_run_now(limit))
 
 # ─────────────────────────── main ───────────────────────────
 def _mqtt_connect():

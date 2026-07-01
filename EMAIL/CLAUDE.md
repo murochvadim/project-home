@@ -29,14 +29,47 @@ ingests untrusted content — it must not share a kernel / daemon / filesystem w
   **Metadata + snippet only — no bodies.** Retention 180 d auto_clean.
 - `email_labels` — Gmail label cache (id → name/type) for the UI. Forever.
 - `email_state` — singleton: `history_id` watermark + `last_poll_ts` + settings. Forever.
+- `email_extractions` — automation-extracted data that's KEPT (buckets 2 & 3): rule, gmail_id, from,
+  subject, `data` jsonb. Forever. (migration `003_automation.sql`)
+- `email_automation_log` — automation audit trail incl. dry-run (what a rule would/did do): rule, disposition,
+  mode, applied, extracted. 90 d auto_clean. (migration `003_automation.sql`)
 
 ## Gmail OAuth (Phase 1 — one-time)
 - Google Cloud project → enable Gmail API → OAuth **Desktop** client → download `credentials.json`.
-- Scopes (minimal): `gmail.modify` + `gmail.send`. Consent screen in *Testing*, self as test user.
+- Scopes (minimal): `gmail.modify` + `gmail.send`.
+- **Publishing status = In production** (not Testing). ⚠ A Testing-mode app **expires refresh tokens after
+  7 days**; publishing (unverified is fine for a single self-user — 1/100 cap) makes them non-expiring. If
+  you re-mint, do it AFTER publishing. `oauth_setup.py` passes `prompt='consent'` so a re-run returns a
+  fresh refresh token.
 - `EMAIL/agent/oauth_setup.py` (run on a machine WITH a browser — the Windows host) mints
   `token.json` from `credentials.json`; copy it to `LXC 110:/opt/email-agent/token.json`.
 - The service auto-refreshes the access token from the stored refresh token. Until the token exists,
   the service stays up and logs `waiting for OAuth`; the dashboard shows a "not connected" banner.
+
+## Automation (phase 1 — sender rules → extract + dispose, dry-run first)
+User-defined rules act on **new incoming mail** in the poller (`_apply_automation`, called from
+`_poll_once` right after `_upsert_message`, under `_gmail_lock`). Phase-1 scope: **match by sender,
+extract via regex, dispose = Trash/Spam/keep/archive** (no permanent delete — `gmail.modify` can't;
+Trash is the ceiling), **dry-run first**.
+- **Rules** live in `dashboard_settings.email.rules` (edited on the Email → **Automation** tab; agent
+  reads the key with a 30 s TTL cache via `_load_rules`). Shape:
+  `{id,name,active,mode:dryrun|live, match:{from:[substrings]}, disposition:spam|trash|keep|archive,
+  extract:[{field,pattern,source:body|subject}]}`. Evaluated top-to-bottom; **first matching active rule
+  wins**.
+- **Dry-run** (`mode=dryrun`, default for new rules): logs the would-be action + extraction to
+  `email_automation_log` (`applied=false`); **no Gmail change, nothing stored**. Flip to `live` after
+  reviewing the log.
+- **Live**: stores extraction → `email_extractions` (if any), applies disposition via `_modify_raw`
+  (`spam`→+SPAM/−INBOX, `trash`→+TRASH/−INBOX, `archive`→−INBOX, `keep`→no-op), logs `applied=true`.
+  ⚠ `_modify_raw` is the **lock-free** variant — automation already holds `_gmail_lock`; calling the
+  locking `_modify` would deadlock (non-reentrant lock).
+- **Tables** (migration `003_automation.sql`): `email_extractions` (kept data — forever) +
+  `email_automation_log` (audit incl. dry-run — 90 d).
+- **Endpoints** (LXC 110): `GET /api/email/extractions`, `GET /api/email/automation-log`,
+  `POST /api/email/automation/test {rule}` (dry-run a rule against the last ~80 cached messages, returns
+  would-be matches+extractions without touching Gmail/DB — powers the ▶ Test button).
+- **Future (phase 2):** AI extraction (Claude), match on subject/body/category, permanent delete (needs the
+  full `https://mail.google.com/` scope + re-consent), retroactive runs.
 
 ## Rule engine integration (group `email`)
 - `rule_engine.on_mqtt_event` subscribes to `mur/home/email/message` and fires a synthetic event

@@ -168,6 +168,166 @@
 
   function emReload() { loadHealth(); loadMessages(); }
 
+  // ==================== automation ====================
+  // Rules stored in dashboard_settings.email.rules via the DASHBOARD (same-origin)
+  // endpoint; the agent reads the same key. Extractions + log come from the LXC API.
+  let _rules = [], _rulesDirty = false, _autoLoaded = false;
+
+  function fmtDT(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('he-IL',
+      { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
+  }
+  function erDirty(on) { _rulesDirty = on; document.getElementById('er-dirty').style.display = on ? 'inline' : 'none'; }
+
+  function emShowTab(name, btn) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    btn.classList.add('active');
+    if (name === 'automation' && !_autoLoaded) { _autoLoaded = true; erLoad(); erLoadExtractions(); erLoadLog(); }
+  }
+
+  async function erLoad() {
+    try {
+      const d = await (await fetch('/api/dashboard-settings/email.rules')).json();
+      _rules = Array.isArray(d.value) ? d.value : [];
+    } catch (e) { _rules = []; }
+    erDirty(false); erRender();
+  }
+  function erNew() {
+    _rules.push({ id: 'erule_' + Date.now(), name: 'New rule', active: true, mode: 'dryrun',
+      match: { from: [] }, disposition: 'trash', extract: [] });
+    erDirty(true); erRender();
+  }
+  function erDelete(i) { if (confirm('Delete this rule?')) { _rules.splice(i, 1); erDirty(true); erRender(); } }
+  function erSet(i, k, v) {
+    const r = _rules[i];
+    if (k === 'from' || k === 'contains') {
+      r.match = r.match || {};
+      r.match[k] = String(v).split(',').map(s => s.trim()).filter(Boolean);
+    } else r[k] = v;
+    erDirty(true);
+  }
+  function erAddField(i) { (_rules[i].extract = _rules[i].extract || []).push({ field: '', pattern: '', source: 'body' }); erDirty(true); erRender(); }
+  function erDelField(i, j) { _rules[i].extract.splice(j, 1); erDirty(true); erRender(); }
+  function erSetField(i, j, k, v) { _rules[i].extract[j][k] = v; erDirty(true); }
+
+  function erRender() {
+    const el = document.getElementById('er-list');
+    if (!_rules.length) { el.innerHTML = '<div class="em-hint">No rules yet — click <b>+ Rule</b>.</div>'; return; }
+    el.innerHTML = _rules.map((r, i) => {
+      const live = r.mode === 'live';
+      const froms = ((r.match || {}).from || []).join(', ');
+      const contains = ((r.match || {}).contains || []).join(', ');
+      const fields = (r.extract || []).map((f, j) => `
+        <div class="er-xf">
+          <input type="text" placeholder="field name" value="${esc(f.field)}" style="width:110px" onchange="erSetField(${i},${j},'field',this.value)">
+          <input type="text" placeholder="regex (1st group = value)" value="${esc(f.pattern)}" style="width:250px" onchange="erSetField(${i},${j},'pattern',this.value)">
+          <select onchange="erSetField(${i},${j},'source',this.value)">
+            <option value="body"${f.source !== 'subject' ? ' selected' : ''}>body</option>
+            <option value="subject"${f.source === 'subject' ? ' selected' : ''}>subject</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="erDelField(${i},${j})">×</button>
+        </div>`).join('');
+      return `<div class="er-rule ${live ? 'live' : 'dryrun'}">
+        <div class="er-head">
+          <input type="text" value="${esc(r.name)}" style="width:170px;font-weight:600" onchange="erSet(${i},'name',this.value)">
+          <label style="font-size:0.8rem"><input type="checkbox" ${r.active ? 'checked' : ''} onchange="erSet(${i},'active',this.checked)"> active</label>
+          <select onchange="erSet(${i},'mode',this.value)" title="dry-run only logs; LIVE acts">
+            <option value="dryrun"${!live ? ' selected' : ''}>dry-run</option>
+            <option value="live"${live ? ' selected' : ''}>LIVE</option>
+          </select>
+          <span class="er-pill ${live ? 'live' : 'dryrun'}">${live ? 'live' : 'dry-run'}</span>
+          <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="erTest(${i})">▶ Test</button>
+          <button class="btn btn-secondary btn-sm" onclick="erDelete(${i})">× Delete</button>
+        </div>
+        <div class="er-row"><span class="er-lbl">From has</span>
+          <input type="text" style="flex:1;min-width:200px" placeholder="sender substrings, comma-separated (e.g. @promo.x.com, newsletter@)" value="${esc(froms)}" onchange="erSet(${i},'from',this.value)"></div>
+        <div class="er-row"><span class="er-lbl">Text has</span>
+          <input type="text" style="flex:1;min-width:200px" placeholder="optional — email must ALSO contain this text (subject / preview / body); comma = OR" value="${esc(contains)}" onchange="erSet(${i},'contains',this.value)"></div>
+        <div class="er-row"><span class="er-lbl">Then</span>
+          <select onchange="erSet(${i},'disposition',this.value)">
+            <option value="trash"${r.disposition === 'trash' ? ' selected' : ''}>Trash the email (recoverable)</option>
+            <option value="spam"${r.disposition === 'spam' ? ' selected' : ''}>Mark as Spam</option>
+            <option value="archive"${r.disposition === 'archive' ? ' selected' : ''}>Archive (keep, out of inbox)</option>
+            <option value="keep"${r.disposition === 'keep' ? ' selected' : ''}>Keep in inbox</option>
+          </select></div>
+        <div class="er-row" style="align-items:flex-start"><span class="er-lbl">Extract</span>
+          <div style="flex:1">${fields || '<span style="font-size:0.78rem;color:#8a93a6">none (optional)</span>'}
+            <div><button class="btn btn-secondary btn-sm" style="margin-top:5px" onclick="erAddField(${i})">+ field</button></div></div></div>
+        <div id="er-test-${i}" style="font-size:0.8rem;color:#64748b;margin-top:6px"></div>
+      </div>`;
+    }).join('');
+  }
+
+  async function erSave() {
+    try {
+      const r = await fetch('/api/dashboard-settings/email.rules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: _rules }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      erDirty(false);
+    } catch (e) { alert('Save failed: ' + e.message); }
+  }
+  function erDiscard() { erLoad(); }
+
+  async function erRunNow() {
+    if (_rulesDirty && !confirm('You have unsaved rule changes — Run now uses the SAVED rules. Save first, or continue with saved?')) return;
+    if (!confirm('Apply your LIVE rules to recent inbox mail now?\nMatching mail will be moved (Spam/Trash/Archive — recoverable); dry-run rules only log. Already-actioned mail is skipped.')) return;
+    try {
+      const d = await jpost('/api/email/automation/run-now', {});
+      alert('Run complete — scanned ' + d.scanned + ' recent emails:\n  ' + d.applied + ' acted (live rules)\n  ' + d.logged + ' logged (dry-run).');
+      erLoadExtractions(); erLoadLog();
+    } catch (e) { alert('Run failed: ' + e.message); }
+  }
+
+  async function erTest(i) {
+    const box = document.getElementById('er-test-' + i);
+    box.textContent = 'Testing against recent inbox…';
+    try {
+      const d = await jpost('/api/email/automation/test', { rule: _rules[i] });
+      if (!d.matches || !d.matches.length) { box.textContent = 'No matches in the last ~80 messages.'; return; }
+      box.innerHTML = `<b>${d.count}</b> match(es) — would <b>${esc(d.disposition || 'keep')}</b>:<br>` +
+        d.matches.slice(0, 6).map(m => '• ' + esc((m.from || '').slice(0, 42)) + ' — ' + esc((m.subject || '').slice(0, 50)) +
+          (Object.keys(m.extracted || {}).length ? ' → <span style="color:#166534">' + esc(JSON.stringify(m.extracted)) + '</span>' : '')).join('<br>');
+    } catch (e) { box.textContent = 'Test failed: ' + e.message; }
+  }
+
+  async function erLoadExtractions() {
+    const el = document.getElementById('er-extractions');
+    try {
+      const d = await jget('/api/email/extractions?limit=100');
+      const rows = d.rows || [];
+      if (!rows.length) { el.innerHTML = '<div class="em-hint">No extracted data yet.</div>'; return; }
+      el.innerHTML = '<table class="er-table"><tr><th>When</th><th>Rule</th><th>From</th><th>Subject</th><th>Data</th></tr>' +
+        rows.map(r => `<tr><td>${fmtDT(r.extracted_at)}</td><td>${esc(r.rule_name || '')}</td>
+          <td>${esc(shortFrom(r.from_addr))}</td><td>${esc((r.subject || '').slice(0, 48))}</td>
+          <td><code>${esc(JSON.stringify(r.data))}</code></td></tr>`).join('') + '</table>';
+    } catch (e) { el.innerHTML = '<div class="em-hint">Could not load.</div>'; }
+  }
+  async function erLoadLog() {
+    const el = document.getElementById('er-log');
+    try {
+      const d = await jget('/api/email/automation-log?limit=100');
+      const rows = d.rows || [];
+      if (!rows.length) { el.innerHTML = '<div class="em-hint">No activity yet.</div>'; return; }
+      el.innerHTML = '<table class="er-table"><tr><th>When</th><th>Rule</th><th>From</th><th>Do</th><th>Mode</th><th>Applied</th><th>Extracted</th></tr>' +
+        rows.map(r => `<tr><td>${fmtDT(r.ts)}</td><td>${esc(r.rule_name || '')}</td>
+          <td>${esc(shortFrom(r.from_addr))}</td><td>${esc(r.disposition || '')}</td>
+          <td><span class="er-pill ${r.mode === 'live' ? 'live' : 'dryrun'}">${esc(r.mode || '')}</span></td>
+          <td>${r.applied ? '✓' : '—'}</td>
+          <td>${r.extracted ? '<code>' + esc(JSON.stringify(r.extracted)) + '</code>' : ''}</td></tr>`).join('') + '</table>';
+    } catch (e) { el.innerHTML = '<div class="em-hint">Could not load.</div>'; }
+  }
+
+  window.addEventListener('beforeunload', (e) => { if (_rulesDirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  window.emShowTab = emShowTab;
+  window.erNew = erNew; window.erDelete = erDelete; window.erSet = erSet;
+  window.erAddField = erAddField; window.erDelField = erDelField; window.erSetField = erSetField;
+  window.erSave = erSave; window.erDiscard = erDiscard; window.erTest = erTest; window.erRunNow = erRunNow;
+  window.erLoadExtractions = erLoadExtractions; window.erLoadLog = erLoadLog;
+
   window.emOpen = emOpen; window.emArchive = emArchive; window.emMarkRead = emMarkRead;
   window.emCompose = emCompose; window.emReply = emReply; window.emCloseCompose = emCloseCompose;
   window.emSend = emSend; window.emReload = emReload;

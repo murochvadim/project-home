@@ -28,6 +28,19 @@
     .em-modal textarea { min-height:220px; resize:vertical; }
     #email-auth-banner { display:none; background:#fff8e1; border:1px solid #f0d27a; color:#7a5c00; border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:0.88rem; }
     .em-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .tab-panel { display:none; } .tab-panel.active { display:block; }
+    .er-rule { border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; margin-bottom:10px; }
+    .er-rule.dryrun { border-left:4px solid #f0b429; } .er-rule.live { border-left:4px solid #2e7d32; }
+    .er-rule .er-head { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .er-rule input[type=text], .er-rule select { padding:4px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; font-family:inherit; }
+    .er-rule .er-row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+    .er-rule .er-lbl { font-size:0.76rem; color:#64748b; min-width:70px; }
+    .er-xf { display:flex; gap:6px; align-items:center; margin-top:5px; flex-wrap:wrap; }
+    .er-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+    .er-table th, .er-table td { text-align:left; padding:5px 8px; border-bottom:1px solid #eef2f7; vertical-align:top; }
+    .er-table th { color:#64748b; font-weight:600; }
+    .er-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:0.72rem; }
+    .er-pill.dryrun { background:#fef3c7; color:#92640a; } .er-pill.live { background:#dcfce7; color:#166534; }
   </style>
 </head>
 <body>
@@ -83,6 +96,12 @@
     </div>
   </div>
 
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="emShowTab('inbox', this)">📬 Inbox</button>
+    <button class="tab-btn" onclick="emShowTab('automation', this)">⚙ Automation</button>
+  </div>
+
+  <div id="tab-inbox" class="tab-panel active">
   <div id="email-auth-banner">
     ⚠ Gmail is not connected yet. Finish the one-time OAuth setup
     (drop <code>credentials.json</code> into <code>EMAIL/</code> and run <code>oauth_setup.py</code>),
@@ -95,6 +114,41 @@
     </div>
     <div class="card" id="email-read-card">
       <div id="email-read"><div class="em-hint">Select a message to read.</div></div>
+    </div>
+  </div>
+  </div><!-- /tab-inbox -->
+
+  <div id="tab-automation" class="tab-panel">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <h3 style="margin:0;">Automation Rules
+          <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— match by sender → extract (regex) + dispose. New rules start in dry-run (log only).</span></h3>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span id="er-dirty" style="display:none;color:#c0392b;font-size:0.82rem;">● Unsaved</span>
+          <button class="btn btn-primary btn-sm" onclick="erNew()">+ Rule</button>
+          <button class="btn btn-primary btn-sm" onclick="erSave()">Save All</button>
+          <button class="btn btn-secondary btn-sm" onclick="erDiscard()">Discard</button>
+          <button class="btn btn-secondary btn-sm" onclick="erRunNow()" title="Apply LIVE rules to recent inbox now (retroactive)">▶ Run now</button>
+        </div>
+      </div>
+      <div id="er-list" style="margin-top:12px;"><div class="em-hint">Loading…</div></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 style="margin:0;">Extracted Data</h3>
+        <button class="btn btn-secondary btn-sm" onclick="erLoadExtractions()">↺ Refresh</button>
+      </div>
+      <div id="er-extractions" style="margin-top:10px;overflow-x:auto;"><div class="em-hint">—</div></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 style="margin:0;">Activity Log
+          <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— includes dry-run (what a rule WOULD do)</span></h3>
+        <button class="btn btn-secondary btn-sm" onclick="erLoadLog()">↺ Refresh</button>
+      </div>
+      <div id="er-log" style="margin-top:10px;overflow-x:auto;"><div class="em-hint">—</div></div>
     </div>
   </div>
 </main>
@@ -118,6 +172,6 @@
 </div>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/email.js?v=1"></script>
+<script src="js/email.js?v=4"></script>
 </body>
 </html>
