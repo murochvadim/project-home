@@ -84,21 +84,32 @@
   <div class="page-header">
     <h1>Email</h1>
     <div class="refresh-bar">
-      <select id="email-label-filter" class="btn btn-secondary btn-sm" onchange="emReload()" style="padding:4px 8px;">
+      <button class="btn btn-secondary btn-sm" onclick="emReload()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="emShowTab('inbox', this)" style="background:#3a3a3a;color:#fff;">📬 Inbox</button>
+    <button class="tab-btn" onclick="emShowTab('automation', this)">⚙ Automation</button>
+  </div>
+
+  <div id="er-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+    <span style="font-size:0.82rem;color:#64748b;font-weight:600;">⚙ Rules:</span>
+    <button class="btn btn-primary btn-sm" onclick="erNew()">+ Rule</button>
+    <button class="btn btn-primary btn-sm" onclick="erSave()">Save All</button>
+    <button class="btn btn-secondary btn-sm" onclick="erDiscard()">Discard</button>
+    <button class="btn btn-secondary btn-sm" onclick="erRunNow()" title="Apply LIVE rules to recent inbox now (retroactive)">▶ Run now</button>
+    <span id="er-dirty" style="display:none;color:#c0392b;font-size:0.82rem;">● Unsaved</span>
+    <span style="display:flex;gap:8px;align-items:center;padding-left:16px;border-left:1px solid var(--border-light,#d0cbc4);">
+      <select id="email-label-filter" class="btn btn-sm" onchange="emReload()" style="padding:4px 8px;background:#3a3a3a;color:#fff;border-color:#3a3a3a;">
         <option value="INBOX">Inbox</option>
         <option value="">All mail</option>
         <option value="UNREAD">Unread</option>
         <option value="STARRED">Starred</option>
         <option value="SENT">Sent</option>
       </select>
-      <button class="btn btn-primary btn-sm" onclick="emCompose()">✉ Compose</button>
-      <button class="btn btn-secondary btn-sm" onclick="emReload()">↺ Refresh</button>
-    </div>
-  </div>
-
-  <div class="tab-bar">
-    <button class="tab-btn active" onclick="emShowTab('inbox', this)">📬 Inbox</button>
-    <button class="tab-btn" onclick="emShowTab('automation', this)">⚙ Automation</button>
+      <button class="btn btn-success btn-sm" onclick="emCompose()">✉ Compose</button>
+    </span>
   </div>
 
   <div id="tab-inbox" class="tab-panel active">
@@ -120,17 +131,8 @@
 
   <div id="tab-automation" class="tab-panel">
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <h3 style="margin:0;">Automation Rules
-          <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— match by sender → extract (regex) + dispose. New rules start in dry-run (log only).</span></h3>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <span id="er-dirty" style="display:none;color:#c0392b;font-size:0.82rem;">● Unsaved</span>
-          <button class="btn btn-primary btn-sm" onclick="erNew()">+ Rule</button>
-          <button class="btn btn-primary btn-sm" onclick="erSave()">Save All</button>
-          <button class="btn btn-secondary btn-sm" onclick="erDiscard()">Discard</button>
-          <button class="btn btn-secondary btn-sm" onclick="erRunNow()" title="Apply LIVE rules to recent inbox now (retroactive)">▶ Run now</button>
-        </div>
-      </div>
+      <h3 style="margin:0 0 4px;">Automation Rules
+        <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— match by sender/text → extract (regex) + dispose. New rules start in dry-run (log only).</span></h3>
       <div id="er-list" style="margin-top:12px;"><div class="em-hint">Loading…</div></div>
     </div>
 
@@ -172,6 +174,6 @@
 </div>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/email.js?v=4"></script>
+<script src="js/email.js?v=5"></script>
 </body>
 </html>

@@ -185,7 +185,7 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-' + name).classList.add('active');
     btn.classList.add('active');
-    if (name === 'automation' && !_autoLoaded) { _autoLoaded = true; erLoad(); erLoadExtractions(); erLoadLog(); }
+    if (name === 'automation' && !_autoLoaded) { _autoLoaded = true; erLoadExtractions(); erLoadLog(); }
   }
 
   async function erLoad() {
@@ -334,6 +334,7 @@
 
   window.addEventListener('DOMContentLoaded', () => {
     emReload();
+    erLoad();                            // rules for the always-visible top toolbar
     setInterval(loadMessages, 30000);   // light auto-refresh
   });
 })();
