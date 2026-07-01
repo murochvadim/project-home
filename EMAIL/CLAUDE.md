@@ -22,6 +22,7 @@ ingests untrusted content — it must not share a kernel / daemon / filesystem w
 - Service: `email-agent.service` — entry `/opt/email-agent/agent.py` (venv `/opt/email-agent/venv`)
 - Env: `/etc/email-agent.env` (root 600) — DB (trust auth, empty pass), MQTT creds, `GMAIL_TOKEN`
 - Postgres: LXC 102 (192.168.1.219) — MQTT: LXC 107 (192.168.1.189), user `email_agent`
+- **Orchestrator note:** the `agents` row has `data_table`/`settings_table` = **NULL** — email is a service agent, NOT a boiler-style decision loop, so it must not get the schedule/next_ts check (else `agent_schedule_check_failed`). LXC 110's `/root/.ssh/authorized_keys` must also include the orchestrator's key (LXC 105 `root@MainAgent`) so its per-agent service check can SSH in (else `service_ssh_failed`).
 
 ## Tables (LXC 102, migration `EMAIL/migrations/001_email.sql`)
 - `email_messages` — gmail_id PK, thread_id, from/to, subject, snippet, labels jsonb, msg_ts, seen.
