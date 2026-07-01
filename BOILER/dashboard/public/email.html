@@ -91,6 +91,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="emShowTab('inbox', this)" style="background:#3a3a3a;color:#fff;">📬 Inbox</button>
     <button class="tab-btn" onclick="emShowTab('automation', this)">⚙ Automation</button>
+    <button class="tab-btn" onclick="emShowTab('settings', this)">🔧 Settings</button>
   </div>
 
   <div id="er-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
@@ -148,9 +149,33 @@
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <h3 style="margin:0;">Activity Log
           <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— includes dry-run (what a rule WOULD do)</span></h3>
-        <button class="btn btn-secondary btn-sm" onclick="erLoadLog()">↺ Refresh</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="er-log-limit" class="btn btn-secondary btn-sm" onchange="erLoadLog()" style="padding:4px 8px;">
+            <option value="10">10 rows</option>
+            <option value="20" selected>20 rows</option>
+            <option value="50">50 rows</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="erLoadLog()">↺ Refresh</button>
+        </div>
       </div>
       <div id="er-log" style="margin-top:10px;overflow-x:auto;"><div class="em-hint">—</div></div>
+    </div>
+  </div>
+
+  <div id="tab-settings" class="tab-panel">
+    <div class="card">
+      <h3 style="margin:0 0 12px;">Email Settings</h3>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:0.9rem;">Move automation-spammed emails to Trash after
+          <input id="es-trash-days" type="number" min="0" max="60" value="0" style="width:64px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;font-family:inherit;"> days</label>
+        <button class="btn btn-primary btn-sm" onclick="esSave()">Save</button>
+        <span id="es-status" style="font-size:0.82rem;color:#64748b;"></span>
+      </div>
+      <div style="font-size:0.78rem;color:#8a93a6;margin-top:10px;max-width:680px;">
+        Emails your rules moved to <b>Spam</b> get moved to <b>Trash</b> this many days later — still
+        recoverable (Gmail purges Trash ~30 days after that). <b>0 = off</b> (leave them in Spam; Gmail
+        auto-purges Spam in ~30 days). No permanent delete — that would need a broader Gmail permission.
+      </div>
     </div>
   </div>
 </main>
@@ -174,6 +199,6 @@
 </div>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/email.js?v=5"></script>
+<script src="js/email.js?v=6"></script>
 </body>
 </html>

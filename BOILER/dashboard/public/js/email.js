@@ -171,7 +171,7 @@
   // ==================== automation ====================
   // Rules stored in dashboard_settings.email.rules via the DASHBOARD (same-origin)
   // endpoint; the agent reads the same key. Extractions + log come from the LXC API.
-  let _rules = [], _rulesDirty = false, _autoLoaded = false;
+  let _rules = [], _rulesDirty = false, _autoLoaded = false, _setLoaded = false;
 
   function fmtDT(iso) {
     if (!iso) return '';
@@ -186,6 +186,28 @@
     document.getElementById('tab-' + name).classList.add('active');
     btn.classList.add('active');
     if (name === 'automation' && !_autoLoaded) { _autoLoaded = true; erLoadExtractions(); erLoadLog(); }
+    if (name === 'settings' && !_setLoaded) { _setLoaded = true; esLoad(); }
+  }
+
+  async function esLoad() {
+    try {
+      const d = await (await fetch('/api/dashboard-settings/email.settings')).json();
+      const s = (d && d.value) || {};
+      document.getElementById('es-trash-days').value = s.trash_spam_after_days || 0;
+    } catch (e) {}
+  }
+  async function esSave() {
+    const days = Math.max(0, Math.min(60, parseInt(document.getElementById('es-trash-days').value) || 0));
+    const st = document.getElementById('es-status');
+    st.style.color = '#64748b'; st.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/dashboard-settings/email.settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: { trash_spam_after_days: days } }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      st.style.color = '#1e7e34';
+      st.textContent = days > 0 ? ('✓ Saved — spam → Trash after ' + days + ' days') : '✓ Saved — off';
+    } catch (e) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; }
   }
 
   async function erLoad() {
@@ -307,8 +329,10 @@
   }
   async function erLoadLog() {
     const el = document.getElementById('er-log');
+    const sel = document.getElementById('er-log-limit');
+    const limit = sel ? sel.value : '20';
     try {
-      const d = await jget('/api/email/automation-log?limit=100');
+      const d = await jget('/api/email/automation-log?limit=' + limit);
       const rows = d.rows || [];
       if (!rows.length) { el.innerHTML = '<div class="em-hint">No activity yet.</div>'; return; }
       el.innerHTML = '<table class="er-table"><tr><th>When</th><th>Rule</th><th>From</th><th>Do</th><th>Mode</th><th>Applied</th><th>Extracted</th></tr>' +
@@ -327,6 +351,7 @@
   window.erAddField = erAddField; window.erDelField = erDelField; window.erSetField = erSetField;
   window.erSave = erSave; window.erDiscard = erDiscard; window.erTest = erTest; window.erRunNow = erRunNow;
   window.erLoadExtractions = erLoadExtractions; window.erLoadLog = erLoadLog;
+  window.esLoad = esLoad; window.esSave = esSave;
 
   window.emOpen = emOpen; window.emArchive = emArchive; window.emMarkRead = emMarkRead;
   window.emCompose = emCompose; window.emReply = emReply; window.emCloseCompose = emCloseCompose;

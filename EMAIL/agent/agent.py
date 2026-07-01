@@ -199,6 +199,7 @@ def poller_loop():
     while True:
         try:
             _poll_once()
+            _maybe_cleanup_spam()          # hourly-throttled spam→Trash sweep
         except RuntimeError as e:
             if str(e) == "no_oauth_token":
                 log.info("waiting for OAuth (no %s yet)", TOKEN_FILE)
@@ -314,6 +315,30 @@ def _load_rules():
     _rules_cache["data"] = rules
     _rules_cache["ts"] = now
     return rules
+
+
+_settings_cache = {"data": None, "ts": 0.0}
+
+def _load_settings():
+    """Email agent settings from dashboard_settings.email.settings (30 s TTL).
+    Currently: {trash_spam_after_days:N}."""
+    now = time.time()
+    if _settings_cache["data"] is not None and (now - _settings_cache["ts"]) < _RULES_TTL:
+        return _settings_cache["data"]
+    s = {}
+    try:
+        with db() as c, c.cursor() as cur:
+            cur.execute("SELECT value FROM dashboard_settings WHERE key='email.settings'")
+            row = cur.fetchone()
+        if row and row[0]:
+            v = row[0]
+            s = v if isinstance(v, dict) else json.loads(v)
+    except Exception:
+        log.exception("load email.settings failed")
+        s = _settings_cache["data"] or {}
+    _settings_cache["data"] = s
+    _settings_cache["ts"] = now
+    return s
 
 
 def _sender_match(from_addr, patterns):
@@ -448,6 +473,57 @@ def _run_now(limit=200):
                 logged += 1
     log.info("run-now: scanned=%d applied=%d logged=%d", len(msgs), applied, logged)
     return {"scanned": len(msgs), "applied": applied, "logged": logged}
+
+
+_last_spam_cleanup = 0.0
+
+def _trash_old_spam():
+    """Move automation-spammed emails to Trash once they're older than
+    email.settings.trash_spam_after_days (0/absent = disabled). Recoverable — Gmail
+    purges Trash ~30 d later; uses gmail.modify (NO permanent delete). trashed_at marks
+    swept rows so the sweep never re-touches a message."""
+    try:
+        days = int(_load_settings().get("trash_spam_after_days", 0) or 0)
+    except (TypeError, ValueError):
+        days = 0
+    if days <= 0:
+        return
+    with db() as c, c.cursor() as cur:
+        cur.execute("""SELECT id, gmail_id FROM email_automation_log
+                       WHERE disposition = 'spam' AND applied AND trashed_at IS NULL
+                         AND ts < now() - (%s * interval '1 day')
+                       ORDER BY ts LIMIT 200""", (days,))
+        rows = cur.fetchall()
+    if not rows:
+        return
+    n = 0
+    with _gmail_lock:
+        svc = gmail()
+        for log_id, gmail_id in rows:
+            try:
+                _modify_raw(svc, gmail_id, add=["TRASH"], remove=["SPAM"])
+                with db() as c, c.cursor() as cur:
+                    cur.execute("UPDATE email_automation_log SET trashed_at = now() WHERE id = %s", (log_id,))
+                n += 1
+            except Exception:
+                log.exception("trash-old-spam failed for %s", gmail_id)
+    if n:
+        log.info("trash-old-spam: moved %d spam email(s) to Trash (>%dd old)", n, days)
+
+def _maybe_cleanup_spam():
+    """Hourly throttle for the spam→Trash sweep (called from the poller loop)."""
+    global _last_spam_cleanup
+    now = time.time()
+    if now - _last_spam_cleanup < 3600:
+        return
+    _last_spam_cleanup = now
+    try:
+        _trash_old_spam()
+    except RuntimeError as e:
+        if str(e) != "no_oauth_token":
+            log.exception("spam cleanup error")
+    except Exception:
+        log.exception("spam cleanup error")
 
 @app.get("/api/email/message/<mid>")
 def api_message(mid):

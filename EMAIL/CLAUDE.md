@@ -63,13 +63,27 @@ Trash is the ceiling), **dry-run first**.
   (`spam`→+SPAM/−INBOX, `trash`→+TRASH/−INBOX, `archive`→−INBOX, `keep`→no-op), logs `applied=true`.
   ⚠ `_modify_raw` is the **lock-free** variant — automation already holds `_gmail_lock`; calling the
   locking `_modify` would deadlock (non-reentrant lock).
-- **Tables** (migration `003_automation.sql`): `email_extractions` (kept data — forever) +
-  `email_automation_log` (audit incl. dry-run — 90 d).
-- **Endpoints** (LXC 110): `GET /api/email/extractions`, `GET /api/email/automation-log`,
-  `POST /api/email/automation/test {rule}` (dry-run a rule against the last ~80 cached messages, returns
-  would-be matches+extractions without touching Gmail/DB — powers the ▶ Test button).
-- **Future (phase 2):** AI extraction (Claude), match on subject/body/category, permanent delete (needs the
-  full `https://mail.google.com/` scope + re-consent), retroactive runs.
+- **Match on TEXT too (`match.contains`, added same day):** besides `from`, a rule may require the email to
+  contain any of a list of substrings (searched in subject + Gmail snippet + body; body fetched only when
+  needed). AND-combined with the sender match. Drove the first real rules (AliExpress / EL AL ads → spam via
+  the `Advertisement |` / `פרסומת |` ad-prefix text). UI field: "Text has" (comma = OR).
+- **Run now (retroactive):** `POST /api/email/automation/run-now` (button on the Automation toolbar) applies
+  the current rules to the last ~200 cached messages — live rules ACT, dry-run rules log; dedupes on
+  `applied=true` so repeat clicks/poll overlaps never re-process. Shared core `_apply_rules` (poller + run-now).
+- **Spam → Trash cleanup (Settings tab):** `dashboard_settings.email.settings.trash_spam_after_days` (0 = off).
+  A poller-driven **hourly** sweep (`_trash_old_spam`, throttled) moves automation-spammed emails from Spam to
+  **Trash** once older than N days — recoverable (Gmail purges Trash ~30 d later), uses `gmail.modify` (**no
+  permanent delete**). `email_automation_log.trashed_at` (migration `004_spam_trash.sql`) marks swept rows so
+  it never re-touches a message.
+- **Tables**: `email_extractions` (kept data — forever, `003_automation.sql`) + `email_automation_log` (audit
+  incl. dry-run — 90 d, `003`; `trashed_at` added by `004_spam_trash.sql`).
+- **Endpoints** (LXC 110): `GET /api/email/extractions`, `GET /api/email/automation-log?limit=` (the Activity
+  Log card's 10/20/50-rows selector), `POST /api/email/automation/test {rule}` (dry-run a rule vs the last ~80
+  cached messages — powers ▶ Test), `POST /api/email/automation/run-now` (retroactive sweep).
+- **Dashboard tabs:** 📬 Inbox · ⚙ Automation (Rules + Extracted data + Activity log) · 🔧 Settings
+  (trash-after-N-days). Rules in `dashboard_settings.email.rules`, settings in `dashboard_settings.email.settings`.
+- **Future (phase 2):** AI extraction (Claude), match on Gmail category, **permanent** delete (needs the
+  full `https://mail.google.com/` scope + re-consent — current cleanup only Trashes).
 
 ## Rule engine integration (group `email`)
 - `rule_engine.on_mqtt_event` subscribes to `mur/home/email/message` and fires a synthetic event
