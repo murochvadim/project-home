@@ -26,7 +26,10 @@ def main():
     creds_file = sys.argv[1] if len(sys.argv) > 1 else "credentials.json"
     out = sys.argv[2] if len(sys.argv) > 2 else "token.json"
     flow = InstalledAppFlow.from_client_secrets_file(creds_file, SCOPES)
-    creds = flow.run_local_server(port=0)   # opens the browser; loopback redirect
+    # prompt='consent' forces Google to return a FRESH refresh_token even if this
+    # account already granted before (needed when re-minting — e.g. after moving the
+    # app from Testing to In production so the new token doesn't carry the 7-day expiry).
+    creds = flow.run_local_server(port=0, prompt="consent")   # opens the browser; loopback redirect
     with open(out, "w") as f:
         f.write(creds.to_json())
     print("Wrote", out, "— copy it to LXC 110:/opt/email-agent/token.json")
