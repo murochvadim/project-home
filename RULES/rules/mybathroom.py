@@ -447,7 +447,16 @@ def evaluate(event, state):
             val = dps.get("val")
             if val in (0, "0", False):
                 state.shared["_mybathroom_user_off"] = True
-                log.info("mybathroom: manual OFF on panel (main) → block main + cascade Laundry off")
+                # Cascade OFF to the Laundry AND set the Laundry rule's manual-off
+                # block + reset its activity clock, so the Laundry presence sensor
+                # doesn't immediately re-light it (without this the cascade turned the
+                # relay off but the Laundry rule re-lit it ~1 s later — its block was
+                # only ever set by a DIRECT p1b10 tap). The block clears the same way a
+                # direct Laundry-off would: when the Laundry room is genuinely empty
+                # for _LEFT_CLEAR_SEC, so walking into the Laundry later lights it fine.
+                state.shared["_laundry_user_off"] = True
+                state.shared["_laundry_light_last_active_ts"] = now_ts
+                log.info("mybathroom: manual OFF on panel (main) → block main + cascade Laundry off + block Laundry re-light")
                 c = _relay_cmd(_LAUNDRY_RELAY_ID, False)   # one-shot Laundry off
                 return [c] if c else []
             if val in (1, "1", True):
