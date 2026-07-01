@@ -235,14 +235,12 @@
   function erDelField(i, j) { _rules[i].extract.splice(j, 1); erDirty(true); erRender(); }
   function erSetField(i, j, k, v) { _rules[i].extract[j][k] = v; erDirty(true); }
 
-  function erRender() {
-    const el = document.getElementById('er-list');
-    if (!_rules.length) { el.innerHTML = '<div class="em-hint">No rules yet — click <b>+ Rule</b>.</div>'; return; }
-    el.innerHTML = _rules.map((r, i) => {
-      const live = r.mode === 'live';
-      const froms = ((r.match || {}).from || []).join(', ');
-      const contains = ((r.match || {}).contains || []).join(', ');
-      const fields = (r.extract || []).map((f, j) => `
+  function renderRule(i) {
+    const r = _rules[i];
+    const live = r.mode === 'live';
+    const froms = ((r.match || {}).from || []).join(', ');
+    const contains = ((r.match || {}).contains || []).join(', ');
+    const fields = (r.extract || []).map((f, j) => `
         <div class="er-xf">
           <input type="text" placeholder="field name" value="${esc(f.field)}" style="width:110px" onchange="erSetField(${i},${j},'field',this.value)">
           <input type="text" placeholder="regex (1st group = value)" value="${esc(f.pattern)}" style="width:250px" onchange="erSetField(${i},${j},'pattern',this.value)">
@@ -252,9 +250,10 @@
           </select>
           <button class="btn btn-secondary btn-sm" onclick="erDelField(${i},${j})">×</button>
         </div>`).join('');
-      return `<div class="er-rule ${live ? 'live' : 'dryrun'}">
+    return `<div class="er-rule ${live ? 'live' : 'dryrun'}">
         <div class="er-head">
-          <input type="text" value="${esc(r.name)}" style="width:170px;font-weight:600" onchange="erSet(${i},'name',this.value)">
+          <input type="text" value="${esc(r.name)}" style="width:150px;font-weight:600" onchange="erSet(${i},'name',this.value)">
+          <input type="text" value="${esc(r.group || '')}" placeholder="group…" title="Group name — rules sharing a group collapse together" style="width:95px" onchange="erSet(${i},'group',this.value);erRender()">
           <label style="font-size:0.8rem"><input type="checkbox" ${r.active ? 'checked' : ''} onchange="erSet(${i},'active',this.checked)"> active</label>
           <select onchange="erSet(${i},'mode',this.value)" title="dry-run only logs; LIVE acts">
             <option value="dryrun"${!live ? ' selected' : ''}>dry-run</option>
@@ -279,6 +278,39 @@
           <div style="flex:1">${fields || '<span style="font-size:0.78rem;color:#8a93a6">none (optional)</span>'}
             <div><button class="btn btn-secondary btn-sm" style="margin-top:5px" onclick="erAddField(${i})">+ field</button></div></div></div>
         <div id="er-test-${i}" style="font-size:0.8rem;color:#64748b;margin-top:6px"></div>
+      </div>`;
+  }
+
+  function erToggleGroup(enc) {
+    const g = decodeURIComponent(enc), key = 'email.rg.' + g;
+    localStorage.setItem(key, localStorage.getItem(key) === '1' ? '0' : '1');
+    erRender();
+  }
+
+  function erRender() {
+    const el = document.getElementById('er-list');
+    if (!_rules.length) { el.innerHTML = '<div class="em-hint">No rules yet — click <b>+ Rule</b>.</div>'; return; }
+    // group rules by their .group field (first-seen order); rules with no group → "Ungrouped"
+    const groups = {}, order = [];
+    _rules.forEach((r, i) => {
+      const g = ((r.group || '').trim()) || 'Ungrouped';
+      if (!groups[g]) { groups[g] = []; order.push(g); }
+      groups[g].push(i);
+    });
+    // no groups assigned anywhere → flat list (no collapsible headers)
+    if (order.length === 1 && order[0] === 'Ungrouped') {
+      el.innerHTML = groups['Ungrouped'].map(renderRule).join('');
+      return;
+    }
+    el.innerHTML = order.map(g => {
+      const collapsed = localStorage.getItem('email.rg.' + g) === '1';
+      const body = groups[g].map(renderRule).join('');
+      return `<div class="er-group">
+        <div class="er-group-head" onclick="erToggleGroup('${encodeURIComponent(g)}')">
+          <span class="er-caret">${collapsed ? '▸' : '▾'}</span> ${esc(g)}
+          <span style="color:#8a93a6;font-weight:400;font-size:0.8rem;"> (${groups[g].length})</span>
+        </div>
+        <div style="${collapsed ? 'display:none' : 'padding:8px 10px'}">${body}</div>
       </div>`;
     }).join('');
   }
@@ -349,7 +381,7 @@
   window.emShowTab = emShowTab;
   window.erNew = erNew; window.erDelete = erDelete; window.erSet = erSet;
   window.erAddField = erAddField; window.erDelField = erDelField; window.erSetField = erSetField;
-  window.erSave = erSave; window.erDiscard = erDiscard; window.erTest = erTest; window.erRunNow = erRunNow;
+  window.erSave = erSave; window.erDiscard = erDiscard; window.erTest = erTest; window.erRunNow = erRunNow; window.erToggleGroup = erToggleGroup;
   window.erLoadExtractions = erLoadExtractions; window.erLoadLog = erLoadLog;
   window.esLoad = esLoad; window.esSave = esSave;
 
