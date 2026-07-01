@@ -9,7 +9,14 @@ A dedicated **LXC 110 "Email"** (192.168.1.162, unprivileged, `onboot=0`) runs a
 service, `email-agent`, with two threads:
 - **Poller** — walks Gmail's History API from a stored `historyId` watermark, caches new-message
   **metadata + snippet only** into `email_messages`, publishes `mur/home/email/message` per new mail,
-  and advances the watermark in `email_state`.
+  and advances the watermark in `email_state`. **Full-mirror sync (2026-07-01):** it processes ALL history
+  types (messagesAdded / **labelsAdded / labelsRemoved** / messagesDeleted), re-fetching each touched
+  message's current labels and deleting removed ones — so **label changes (spam/trash/archive/read) and
+  deletions stay in sync**, not just new mail. Automation also refreshes a message's cached labels the
+  instant it acts. Initial/re-sync uses `q="in:inbox OR newer_than:7d"` so the dashboard Inbox reflects
+  Gmail's real inbox. **`POST /api/email/resync`** re-fetches every cached message's labels by id (fixes
+  drift; a search-based backfill can't, since Gmail search hides Spam/Trash). The message **list hides
+  Spam/Trash** (`api_messages`) like Gmail's Inbox/All-Mail.
 - **Flask API (:8780)** — `list / read / send / reply / archive / label / labels` endpoints the
   dashboard calls **directly** (dashboard stays UI-only per the architecture rule). Full bodies are
   fetched on-demand from Gmail and **HTML-sanitized (bleach)** before returning — never stored.

@@ -149,9 +149,11 @@ def _get_state_history():
 def _initial_sync(svc):
     """First run / stale watermark: backfill recent metadata WITHOUT emitting MQTT
     (we don't want a burst of events for old mail), then set the watermark to now."""
-    log.info("initial sync: backfilling last 7 days (no MQTT emit)")
+    log.info("initial sync: backfilling inbox + last 7 days (no MQTT emit)")
     prof = svc.users().getProfile(userId="me").execute()
-    resp = svc.users().messages().list(userId="me", q="newer_than:7d", maxResults=100).execute()
+    # "in:inbox" ensures CURRENT inbox messages are cached even if older than 7 days
+    # (so the dashboard Inbox reflects Gmail); newer_than:7d adds recent archived/read mail.
+    resp = svc.users().messages().list(userId="me", q="in:inbox OR newer_than:7d", maxResults=150).execute()
     for m in resp.get("messages", []):
         try:
             _upsert_message(_get_meta(svc, m["id"]), emit=False)
@@ -168,23 +170,33 @@ def _poll_once():
             _initial_sync(svc)
             return
         try:
-            new_ids, page, newest = set(), None, hist
+            # Process ALL history types so the local cache MIRRORS Gmail — not just new
+            # mail, but label changes (spam/trash/archive/read) and deletions. Without
+            # this the cache goes stale (a spammed email lingers in the list).
+            new_ids, touched, deleted, page, newest = set(), set(), set(), None, hist
             while True:
                 resp = svc.users().history().list(
-                    userId="me", startHistoryId=hist,
-                    historyTypes=["messageAdded"], pageToken=page).execute()
+                    userId="me", startHistoryId=hist, pageToken=page).execute()
                 for h in resp.get("history", []):
                     newest = h.get("id", newest)
                     for ma in h.get("messagesAdded", []):
-                        new_ids.add(ma["message"]["id"])
+                        new_ids.add(ma["message"]["id"]); touched.add(ma["message"]["id"])
+                    for md in h.get("messagesDeleted", []):
+                        deleted.add(md["message"]["id"])
+                    for lc in h.get("labelsAdded", []) + h.get("labelsRemoved", []):
+                        touched.add(lc["message"]["id"])
                 page = resp.get("nextPageToken")
                 if not page:
                     break
-            for mid in new_ids:
+            if deleted:
+                with db() as c, c.cursor() as cur:
+                    cur.execute("DELETE FROM email_messages WHERE gmail_id = ANY(%s)", (list(deleted),))
+            for mid in (touched - deleted):
                 try:
                     meta = _get_meta(svc, mid)
-                    _upsert_message(meta, emit=True)
-                    _apply_automation(svc, mid, meta)   # sender-rule automation (under _gmail_lock)
+                    _upsert_message(meta, emit=(mid in new_ids))   # refresh cached labels; emit only for new
+                    if mid in new_ids:
+                        _apply_automation(svc, mid, meta)          # sender-rule automation (under _gmail_lock)
                 except HttpError as e:
                     log.warning("meta fetch skip %s: %s", mid, e)
             _set_state(newest)
@@ -232,10 +244,16 @@ def api_messages():
     limit = min(int(request.args.get("limit", "50")), 200)
     q = "SELECT gmail_id,thread_id,from_addr,to_addr,subject,snippet,labels,msg_ts,seen " \
         "FROM email_messages"
-    args = []
+    where, args = [], []
     if label:
-        q += " WHERE labels ? %s"
+        where.append("labels ? %s")
         args.append(label)
+    # Hide Spam/Trash from normal views (matches Gmail — Inbox & All Mail exclude them),
+    # unless the user explicitly asks for that folder.
+    if label not in ("SPAM", "TRASH"):
+        where.append("NOT (labels ? 'SPAM') AND NOT (labels ? 'TRASH')")
+    if where:
+        q += " WHERE " + " AND ".join(where)
     q += " ORDER BY msg_ts DESC NULLS LAST LIMIT %s"
     args.append(limit)
     with db() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -435,6 +453,10 @@ def _apply_rules(svc, mid, from_addr, subject, snippet):
             if disp in _DISP_MODIFY:
                 add, remove = _DISP_MODIFY[disp]
                 _modify_raw(svc, mid, add, remove)
+                try:                       # refresh cached labels NOW so the dashboard reflects the move
+                    _upsert_message(_get_meta(svc, mid), emit=False)
+                except Exception:
+                    log.exception("cache refresh after %s failed for %s", disp, mid)
             _log_auto(rule, from_addr, subject, mid, disp, "live", True, extracted, "applied")
             log.info("automation LIVE rule=%s disp=%s from=%s", rule.get("name"), disp, from_addr)
             return "applied"
@@ -502,6 +524,10 @@ def _trash_old_spam():
         for log_id, gmail_id in rows:
             try:
                 _modify_raw(svc, gmail_id, add=["TRASH"], remove=["SPAM"])
+                try:
+                    _upsert_message(_get_meta(svc, gmail_id), emit=False)
+                except Exception:
+                    pass
                 with db() as c, c.cursor() as cur:
                     cur.execute("UPDATE email_automation_log SET trashed_at = now() WHERE id = %s", (log_id,))
                 n += 1
@@ -681,6 +707,32 @@ def api_run_now():
     dry-run rules log). Dedupes against already-applied messages."""
     limit = min(int((request.get_json(silent=True) or {}).get("limit", 200)), 500)
     return jsonify(ok=True, **_run_now(limit))
+
+@app.post("/api/email/resync")
+def api_resync():
+    """Re-fetch CURRENT Gmail labels for every cached message by id (fixes stale labels
+    from before label-sync — e.g. spam moves that a search-based backfill misses since
+    Gmail search excludes Spam/Trash; also drops messages deleted in Gmail)."""
+    with db() as c, c.cursor() as cur:
+        cur.execute("SELECT gmail_id FROM email_messages")
+        ids = [r[0] for r in cur.fetchall()]
+    updated = removed = 0
+    with _gmail_lock:
+        svc = gmail()
+        for mid in ids:
+            try:
+                m = svc.users().messages().get(userId="me", id=mid, format="minimal").execute()
+                with db() as c, c.cursor() as cur:
+                    cur.execute("UPDATE email_messages SET labels = %s::jsonb WHERE gmail_id = %s",
+                                (json.dumps(m.get("labelIds", [])), mid))
+                updated += 1
+            except HttpError as e:
+                if e.resp.status == 404:
+                    with db() as c, c.cursor() as cur:
+                        cur.execute("DELETE FROM email_messages WHERE gmail_id = %s", (mid,))
+                    removed += 1
+    log.info("resync: updated=%d removed=%d", updated, removed)
+    return jsonify(ok=True, updated=updated, removed=removed)
 
 # ─────────────────────────── main ───────────────────────────
 def _mqtt_connect():
