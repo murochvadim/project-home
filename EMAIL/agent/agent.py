@@ -609,9 +609,26 @@ def _modify(mid, add=None, remove=None):
     with _gmail_lock:
         _modify_raw(gmail(), mid, add, remove)
 
+def _refresh_cache(mid):
+    """Re-fetch a message's current labels into the cache so a label change shows on the
+    dashboard immediately (the poller would also catch it within a poll)."""
+    try:
+        with _gmail_lock:
+            _upsert_message(_get_meta(gmail(), mid), emit=False)
+    except Exception:
+        log.exception("cache refresh failed for %s", mid)
+
 @app.post("/api/email/<mid>/archive")
 def api_archive(mid):
     _modify(mid, remove=["INBOX"])
+    _refresh_cache(mid)
+    return jsonify(ok=True)
+
+@app.post("/api/email/<mid>/trash")
+def api_trash(mid):
+    # "Delete" = move to Trash (recoverable ~30 d; gmail.modify can't permanently delete).
+    _modify(mid, add=["TRASH"], remove=["INBOX"])
+    _refresh_cache(mid)
     return jsonify(ok=True)
 
 @app.post("/api/email/<mid>/read")

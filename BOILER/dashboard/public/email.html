@@ -6,8 +6,8 @@
   <title>Email</title>
   <link rel="stylesheet" href="css/style.css">
   <style>
-    #email-layout { display:grid; grid-template-columns: 380px 1fr; gap:14px; align-items:start; }
-    #email-list-card { max-height: calc(100vh - 220px); overflow-y:auto; }
+    #email-layout { display:grid; grid-template-columns: 380px 1fr; gap:14px; align-items:stretch; }
+    #email-list-card { max-height: calc(100vh - 220px); min-height:300px; overflow-y:auto; }
     .em-row { padding:10px 12px; border-bottom:1px solid var(--border,#e5e7eb); cursor:pointer; }
     .em-row:hover { background:#f4f7fa; }
     .em-row.active { background:#eaf1fb; }
@@ -203,6 +203,6 @@
 </div>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/email.js?v=7"></script>
+<script src="js/email.js?v=8"></script>
 </body>
 </html>

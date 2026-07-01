@@ -98,6 +98,7 @@
             <button class="btn btn-primary btn-sm" onclick="emReply()">↩ Reply</button>
             <button class="btn btn-secondary btn-sm" onclick="emArchive('${id}')">🗄 Archive</button>
             <button class="btn btn-secondary btn-sm" onclick="emMarkRead('${id}')">✓ Mark read</button>
+            <button class="btn btn-secondary btn-sm" onclick="emTrash('${id}')">🗑 Delete</button>
           </div>
         </div>
         <div id="em-read-body">${bodyHtml}</div>`;
@@ -112,6 +113,14 @@
   async function emArchive(id) {
     try { await jpost('/api/email/' + encodeURIComponent(id) + '/archive'); } catch (e) {}
     document.getElementById('email-read').innerHTML = '<div class="em-hint">Archived. Select a message to read.</div>';
+    _openId = null;
+    loadMessages();
+  }
+
+  async function emTrash(id) {
+    if (!confirm('Move this email to Trash? (recoverable in Gmail for ~30 days)')) return;
+    try { await jpost('/api/email/' + encodeURIComponent(id) + '/trash'); } catch (e) {}
+    document.getElementById('email-read').innerHTML = '<div class="em-hint">Moved to Trash. Select a message to read.</div>';
     _openId = null;
     loadMessages();
   }
@@ -385,7 +394,7 @@
   window.erLoadExtractions = erLoadExtractions; window.erLoadLog = erLoadLog;
   window.esLoad = esLoad; window.esSave = esSave;
 
-  window.emOpen = emOpen; window.emArchive = emArchive; window.emMarkRead = emMarkRead;
+  window.emOpen = emOpen; window.emArchive = emArchive; window.emTrash = emTrash; window.emMarkRead = emMarkRead;
   window.emCompose = emCompose; window.emReply = emReply; window.emCloseCompose = emCloseCompose;
   window.emSend = emSend; window.emReload = emReload;
 
