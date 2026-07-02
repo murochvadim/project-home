@@ -27,7 +27,7 @@
   }
 
   async function jget(path) {
-    const r = await fetch(API + path);
+    const r = await fetch(API + path, { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }
@@ -200,7 +200,7 @@
 
   async function esLoad() {
     try {
-      const d = await (await fetch('/api/dashboard-settings/email.settings')).json();
+      const d = await (await fetch('/api/dashboard-settings/email.settings', { cache: 'no-store' })).json();
       const s = (d && d.value) || {};
       document.getElementById('es-trash-days').value = s.trash_spam_after_days || 0;
     } catch (e) {}
@@ -221,7 +221,7 @@
 
   async function erLoad() {
     try {
-      const d = await (await fetch('/api/dashboard-settings/email.rules')).json();
+      const d = await (await fetch('/api/dashboard-settings/email.rules', { cache: 'no-store' })).json();
       _rules = Array.isArray(d.value) ? d.value : [];
     } catch (e) { _rules = []; }
     erDirty(false); erRender();
