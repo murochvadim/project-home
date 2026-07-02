@@ -422,6 +422,20 @@
   </div>
 </div>
 
+<div id="pv-receipts-modal" class="pv-modal" style="display:none;">
+  <div class="pv-modal-box" style="max-width:760px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <h2 id="pv-receipts-title" style="margin:0;">🧾 Receipts</h2>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm" style="background:#1e7e34; color:#fff;" onclick="pvExportReceiptsCsv()" title="Download all receipts for this site as a CSV (opens in Excel)">⬇ Export CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="pvCloseReceipts()">✕ Close</button>
+      </div>
+    </div>
+    <div id="pv-receipts-total" style="font-size:0.9rem; color:#333; margin-bottom:10px;"></div>
+    <div id="pv-receipts-list"><div style="color:#aaa;">—</div></div>
+  </div>
+</div>
+
 <!-- ── Password prompt modal ──────────────────────────────────── -->
 <div id="pv-pw-modal" class="pv-modal" style="display:none;">
   <div class="pv-modal-box" style="max-width:420px;">
@@ -499,7 +513,7 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=1"></script>
-<script src="js/privacy.js?v=73"></script>
+<script src="js/privacy.js?v=74"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>

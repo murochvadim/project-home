@@ -301,6 +301,7 @@ function pvRenderSites() {
         </div>
         <div style="display:flex; flex-direction:column; gap:5px; flex-shrink:0; width:132px;">
           <button class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box;" onclick="pvOpenDocs(${s.id})">📄 Docs (${s.doc_count})</button>
+          <button class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box;" onclick="pvOpenReceipts(${s.id})" title="Receipts extracted from email (total ${(s.receipt_total||0).toLocaleString()} ₪)">🧾 Receipts (${s.receipt_count||0})</button>
           ${s.vault_item ? `<a class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box; text-align:center;" href="https://192.168.1.196" target="_blank" title="Open Vaultwarden (item: ${_esc(s.vault_item)})">🔑 Vaultwarden</a>` : ''}
           <div style="display:flex; gap:5px;">
             <button class="btn btn-secondary btn-sm" style="flex:1;" onclick="pvEditSite(${s.id})">Edit</button>
@@ -580,6 +581,69 @@ async function pvOpenDocs(siteId) {
   await pvLoadDocs();
 }
 function pvCloseDocs() { document.getElementById('pv-docs-modal').style.display = 'none'; _pvDocSite = null; }
+
+// ── Receipts (per site) — structured data + link to the filed PDF ─────────────
+let _pvRcSite = null, _pvReceipts = [];
+async function pvOpenReceipts(siteId) {
+  _pvRcSite = _pvSites.find(s => s.id === siteId);
+  document.getElementById('pv-receipts-title').textContent = '🧾 ' + _pvRcSite.name;
+  document.getElementById('pv-receipts-list').innerHTML = '<div style="color:#aaa;">Loading…</div>';
+  document.getElementById('pv-receipts-total').textContent = '';
+  document.getElementById('pv-receipts-modal').style.display = 'flex';
+  await pvLoadReceipts();
+}
+function pvCloseReceipts() { document.getElementById('pv-receipts-modal').style.display = 'none'; _pvRcSite = null; }
+async function pvLoadReceipts() {
+  try {
+    const d = await (await fetch(`/api/privacy/sites/${_pvRcSite.id}/receipts`, { cache: 'no-store' })).json();
+    _pvReceipts = d.rows || [];
+    const cur = (_pvReceipts[0] && _pvReceipts[0].currency) || 'ILS';
+    document.getElementById('pv-receipts-total').innerHTML =
+      `<b>${_pvReceipts.length}</b> receipt(s) · total <b>${(d.total || 0).toLocaleString()} ${cur === 'ILS' ? '₪' : _esc(cur)}</b>`;
+  } catch (e) { _pvReceipts = []; }
+  pvRenderReceipts();
+}
+function pvRenderReceipts() {
+  const host = document.getElementById('pv-receipts-list');
+  if (!_pvReceipts.length) { host.innerHTML = '<div style="color:#aaa;">No receipts yet. They appear here after an email-rule extracts them.</div>'; return; }
+  host.innerHTML = '<table style="width:100%; border-collapse:collapse; font-size:0.86rem;">' +
+    '<tr style="text-align:left; color:#666; border-bottom:2px solid #eee;">' +
+    '<th style="padding:5px 6px;">Date</th><th>Vendor</th><th style="text-align:right;">Amount</th>' +
+    '<th style="padding-left:12px;">Invoice&nbsp;#</th><th>PDF</th><th></th></tr>' +
+    _pvReceipts.map(r => {
+      const amt = (r.amount != null ? Number(r.amount).toLocaleString() : '—');
+      const cur = (r.currency === 'ILS' ? '₪' : (r.currency || ''));
+      const pdf = r.doc_id
+        ? `<a href="/api/privacy/docs/${r.doc_id}/file" target="_blank" rel="noopener">📄 view</a>`
+        : '<span style="color:#bbb;" title="PDF files when you next open this window">—</span>';
+      return `<tr style="border-bottom:1px solid #f0f0f0;">
+        <td style="padding:5px 6px;">${_esc(r.invoice_date || '')}</td>
+        <td>${_esc(r.vendor || '')}</td>
+        <td style="text-align:right; font-weight:600;">${amt} ${cur}</td>
+        <td style="padding-left:12px;">${_esc(r.invoice_no || '')}</td>
+        <td>${pdf}</td>
+        <td style="text-align:right;"><button class="btn btn-secondary btn-sm" style="color:#c0392b;" onclick="pvDeleteReceipt(${r.id})">Del</button></td>
+      </tr>`;
+    }).join('') + '</table>';
+}
+async function pvDeleteReceipt(id) {
+  if (!confirm('Delete this receipt (and its filed PDF)?')) return;
+  await fetch(`/api/privacy/receipts/${id}`, { method: 'DELETE' });
+  await pvLoadReceipts();
+  await pvLoadSites();   // refresh the site cards' receipt counts
+}
+function pvExportReceiptsCsv() {
+  if (!_pvReceipts.length) { alert('No receipts to export.'); return; }
+  const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const lines = [['Invoice date', 'Vendor', 'Amount', 'Currency', 'Invoice no'].map(esc).join(',')]
+    .concat(_pvReceipts.map(r => [r.invoice_date, r.vendor, r.amount, r.currency, r.invoice_no].map(esc).join(',')));
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `receipts_${((_pvRcSite && _pvRcSite.name) || 'site').replace(/[^a-z0-9]+/gi, '_')}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 let _pvDocs = [];
 async function pvLoadDocs() {
   _pvDocs = await (await fetch(`/api/privacy/sites/${_pvDocSite.id}/docs`)).json();

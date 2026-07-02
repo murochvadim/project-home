@@ -21,12 +21,17 @@ import psycopg2
 import psycopg2.extras
 import paho.mqtt.client as mqtt
 import bleach
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+try:
+    import fitz  # PyMuPDF — receipt PDF text extraction (keeps logical Hebrew/RTL order)
+except Exception:  # pragma: no cover
+    fitz = None
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  email_agent  %(levelname)s  %(message)s")
@@ -380,13 +385,96 @@ def _plain_body(svc, mid):
     return raw
 
 
-def _run_extract(fields, subject, body):
+# ─────────────────────── PDF attachments (receipts) ───────────────────────
+def _pdf_parts(payload):
+    """Return [(filename, attachment_id), …] for every application/pdf part."""
+    out = []
+    def walk(p):
+        fn, mt = (p.get("filename") or ""), (p.get("mimeType") or "")
+        if fn and ("pdf" in fn.lower() or "pdf" in mt.lower()):
+            aid = (p.get("body") or {}).get("attachmentId")
+            if aid:
+                out.append((fn, aid))
+        for sp in (p.get("parts") or []):
+            walk(sp)
+    walk(payload or {})
+    return out
+
+
+def _pdf_bytes(svc, mid, full=None):
+    """Raw bytes of the first PDF attachment, or None. Caller holds _gmail_lock."""
+    if full is None:
+        full = svc.users().messages().get(userId="me", id=mid, format="full").execute()
+    parts = _pdf_parts(full.get("payload") or {})
+    if not parts:
+        return None
+    att = svc.users().messages().attachments().get(
+        userId="me", messageId=mid, id=parts[0][1]).execute()
+    return base64.urlsafe_b64decode(att["data"])
+
+
+def _pdf_text(svc, mid, full=None):
+    """Text of the first PDF attachment via PyMuPDF (logical RTL order). '' if none."""
+    if fitz is None:
+        return ""
+    try:
+        data = _pdf_bytes(svc, mid, full)
+        if not data:
+            return ""
+        with fitz.open(stream=data, filetype="pdf") as d:
+            return "\n".join(p.get_text() for p in d)
+    except Exception:
+        log.exception("pdf text extract failed for %s", mid)
+        return ""
+
+
+# ─────────────────────── receipt field helpers ───────────────────────
+_DATE_FMTS_DEFAULT = ["%d/%m/%y", "%d/%m/%Y", "%Y-%m-%d", "%d.%m.%y", "%d.%m.%Y", "%d-%m-%Y"]
+
+def _parse_date(s, fmt=None):
+    s = (str(s) or "").strip()
+    if not s:
+        return None
+    fmts = []
+    if fmt:  # friendly tokens → strptime (e.g. DD/MM/YY → %d/%m/%y)
+        fmts.append(fmt.replace("DD", "%d").replace("MM", "%m")
+                       .replace("YYYY", "%Y").replace("YY", "%y"))
+    fmts += _DATE_FMTS_DEFAULT
+    for f in fmts:
+        try:
+            return datetime.datetime.strptime(s, f).date()
+        except Exception:
+            pass
+    return None
+
+
+def _to_num(s):
+    try:
+        return float(str(s).replace(",", "").replace("\u200F", "").strip())
+    except Exception:
+        return None
+
+
+def _derive_vendor(from_addr):
+    """Best-effort vendor name from the sender domain (aviem-evm.co.il → Aviem)."""
+    m = re.search(r"@([\w.-]+)", from_addr or "")
+    if not m:
+        return None
+    host = m.group(1).lower()
+    parts = [p for p in host.split(".") if p not in
+             ("com", "co", "il", "net", "org", "www", "mail", "email", "noreply", "no-reply")]
+    core = (parts[0] if parts else host).split("-")[0]
+    return core.capitalize() or None
+
+
+def _run_extract(fields, subject, body, pdf_text=""):
     out = {}
     for f in fields or []:
         pat, fld = f.get("pattern"), f.get("field")
         if not pat or not fld:
             continue
-        src = body if (f.get("source") or "body") == "body" else subject
+        src_kind = (f.get("source") or "body")
+        src = pdf_text if src_kind == "pdf" else (subject if src_kind == "subject" else body)
         try:
             m = re.search(pat, src or "", re.IGNORECASE | re.DOTALL)
         except re.error:
@@ -425,19 +513,49 @@ def _apply_rules(svc, mid, from_addr, subject, snippet):
                 continue
             contains = match.get("contains") or []
             fields = rule.get("extract") or []
-            # Fetch the body only when needed — for extraction, or for a text condition
-            # not already satisfied by subject+preview (so a sender-only rule never fetches).
+            store = rule.get("store") or "row"          # 'receipt' | 'row'
+            site_id = rule.get("site_id")
+            need_pdf = any((f.get("source") == "pdf") for f in fields)
+            need_body_fields = any((f.get("source") or "body") != "pdf" for f in fields)
+            # Fetch body/PDF only when needed — a text condition not already satisfied by
+            # subject+preview, body/subject extract fields, or PDF extract fields (receipts).
             subjsnip = ((subject or "") + " " + (snippet or "")).lower()
-            need_body = bool(fields) or (bool(contains) and not _any_in(contains, subjsnip))
+            need_body = need_body_fields or (bool(contains) and not _any_in(contains, subjsnip))
             body = _plain_body(svc, mid) if need_body else ""
-            if contains and not _any_in(contains, subjsnip + " " + body.lower()):
+            pdf_text = _pdf_text(svc, mid) if need_pdf else ""
+            if contains and not _any_in(contains, subjsnip + " " + body.lower() + " " + pdf_text.lower()):
                 continue   # sender matched but the required text isn't present → skip rule
             disp = rule.get("disposition") or "keep"
-            extracted = _run_extract(fields, subject or "", body) if fields else {}
+            extracted = _run_extract(fields, subject or "", body, pdf_text) if fields else {}
+            # Receipt mode → map extract fields (as: amount|date|vendor|invoice_no) to the
+            # structured columns of privacy_site_receipts (viewed under a Privacy Site).
+            vendor = amount = inv_date = inv_no = None
+            if store == "receipt":
+                vendor = rule.get("vendor") or _derive_vendor(from_addr)
+                for f in fields:
+                    role, val = f.get("as"), extracted.get(f.get("field"))
+                    if val in (None, ""):
+                        continue
+                    if role == "amount":
+                        amount = _to_num(val)
+                    elif role == "date":
+                        inv_date = _parse_date(val, f.get("date_format"))
+                    elif role == "vendor":
+                        vendor = val
+                    elif role == "invoice_no":
+                        inv_no = val
+                if inv_no is None:
+                    inv_no = extracted.get("invoice_no")
+            preview = dict(extracted)
+            if store == "receipt":
+                preview["_receipt"] = {"vendor": vendor, "amount": amount,
+                                       "invoice_date": inv_date.isoformat() if inv_date else None,
+                                       "invoice_no": inv_no, "site_id": site_id}
             live = (rule.get("mode") or "dryrun") == "live"
             if not live:
-                _log_auto(rule, from_addr, subject, mid, disp, "dryrun", False, extracted, "would apply")
-                log.info("automation DRY-RUN rule=%s disp=%s from=%s", rule.get("name"), disp, from_addr)
+                _log_auto(rule, from_addr, subject, mid, disp, "dryrun", False, preview, "would apply")
+                log.info("automation DRY-RUN rule=%s disp=%s store=%s from=%s",
+                         rule.get("name"), disp, store, from_addr)
                 return "logged"
             if extracted:
                 try:
@@ -450,6 +568,23 @@ def _apply_rules(svc, mid, from_addr, subject, snippet):
                              json.dumps(extracted)))
                 except Exception:
                     log.exception("extraction store failed")
+            if store == "receipt" and site_id:
+                try:
+                    with db() as c, c.cursor() as cur:
+                        cur.execute(
+                            """INSERT INTO privacy_site_receipts
+                                 (site_id,vendor,amount,currency,invoice_date,invoice_no,gmail_id,data,source)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'email')
+                               ON CONFLICT (gmail_id) WHERE gmail_id IS NOT NULL DO UPDATE SET
+                                 vendor=EXCLUDED.vendor, amount=EXCLUDED.amount, currency=EXCLUDED.currency,
+                                 invoice_date=EXCLUDED.invoice_date, invoice_no=EXCLUDED.invoice_no,
+                                 data=EXCLUDED.data""",
+                            (site_id, vendor, amount, rule.get("currency") or "ILS",
+                             inv_date, inv_no, mid, json.dumps(extracted)))
+                    log.info("receipt stored site=%s vendor=%s amount=%s date=%s from=%s",
+                             site_id, vendor, amount, inv_date, from_addr)
+                except Exception:
+                    log.exception("receipt store failed for %s", mid)
             if disp in _DISP_MODIFY:
                 add, remove = _DISP_MODIFY[disp]
                 _modify_raw(svc, mid, add, remove)
@@ -457,7 +592,7 @@ def _apply_rules(svc, mid, from_addr, subject, snippet):
                     _upsert_message(_get_meta(svc, mid), emit=False)
                 except Exception:
                     log.exception("cache refresh after %s failed for %s", disp, mid)
-            _log_auto(rule, from_addr, subject, mid, disp, "live", True, extracted, "applied")
+            _log_auto(rule, from_addr, subject, mid, disp, "live", True, preview, "applied")
             log.info("automation LIVE rule=%s disp=%s from=%s", rule.get("name"), disp, from_addr)
             return "applied"
         return None
@@ -670,6 +805,36 @@ def api_extractions():
         if r.get("extracted_at"):
             r["extracted_at"] = r["extracted_at"].isoformat()
     return jsonify(rows=rows)
+
+
+@app.get("/api/email/attachment/<mid>")
+def api_attachment(mid):
+    """Stream the first PDF attachment of a message (dashboard files it under a site)."""
+    try:
+        with _gmail_lock:
+            data = _pdf_bytes(gmail(), mid)
+        if not data:
+            return jsonify(error="no_pdf"), 404
+        return Response(data, mimetype="application/pdf",
+                        headers={"Content-Disposition": "inline; filename=receipt.pdf"})
+    except Exception as e:
+        log.exception("attachment fetch failed for %s", mid)
+        return jsonify(error=str(e)), 500
+
+
+@app.post("/api/email/pdf-text")
+def api_pdf_text():
+    """Return the first PDF attachment's text — used by /create-email-rule to build+test regex."""
+    mid = (request.get_json(silent=True) or {}).get("gmail_id")
+    if not mid:
+        return jsonify(error="gmail_id required"), 400
+    try:
+        with _gmail_lock:
+            txt = _pdf_text(gmail(), mid)
+        return jsonify(text=txt)
+    except Exception as e:
+        log.exception("pdf-text failed for %s", mid)
+        return jsonify(error=str(e)), 500
 
 @app.get("/api/email/automation-log")
 def api_automation_log():

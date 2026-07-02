@@ -92,6 +92,36 @@ Trash is the ceiling), **dry-run first**.
 - **Future (phase 2):** AI extraction (Claude), match on Gmail category, **permanent** delete (needs the
   full `https://mail.google.com/` scope + re-consent — current cleanup only Trashes).
 
+## Receipt extraction (PDF → a Privacy Site) — added 2026-07-02
+A rule with **`store:"receipt"`** pulls structured fields (vendor / amount / invoice_date / invoice_no) and
+saves them **under a Privacy Site** so they're graph/CSV-able, and files the **original PDF** into that
+site's Docs window. `store:"row"` (default) just writes the generic `email_extractions` audit row.
+- **PDF text** = **PyMuPDF (`fitz`)** in the agent (`_pdf_text`). Chosen over pdfplumber because fitz keeps
+  **logical Hebrew/RTL order** (`סה"כ מחיר`), while pdfplumber reverses it (`ריחמ כ"הס`). ⚠ In these bills
+  the **value precedes the label** (`57.83\nסה"כ מחיר`, `30/06/26 :תאריך חשבונית`) → use **value-before-label**
+  anchors: `([\d.,]+)\s*<label>`, `(\d{2}/\d{2}/\d{2})\s*:?\s*<label>`. Digits/dates aren't reversed, so the
+  captured VALUES are always correct — only the Hebrew anchor must match the extractor.
+- **Extract field extras:** `source:"pdf"` (first PDF attachment), `as:"amount"|"date"|"vendor"|"invoice_no"`
+  (maps the field to a receipt column), `date_format` (e.g. `DD/MM/YY` → ISO). Vendor = rule `vendor` else
+  derived from the sender domain (`aviem-evm.co.il` → `Aviem`).
+- **On live fire** (`_apply_rules`): writes the `email_extractions` audit row **and** upserts
+  **`privacy_site_receipts`** (`site_id, vendor, amount, currency, invoice_date, invoice_no, gmail_id, data`,
+  `ON CONFLICT (gmail_id)` = one receipt per email). It does **NOT** touch QNAP.
+- **PDF filing (dashboard, not the agent):** LXC 110 has no QNAP mount, so the **dashboard** pulls the PDF
+  from the agent (`GET /api/email/attachment/:gmail_id`) and writes it into the site's Docs window
+  (`privacy_site_docs`, plain `kind='receipt'`), linking back via `privacy_site_receipts.doc_id`. This
+  happens lazily when the site's Receipts window is opened (`GET /api/privacy/sites/:id/receipts` files any
+  `doc_id IS NULL` rows). Surface: **Privacy → Sites → 🧾 Receipts window** (list + total + CSV export) and
+  the filed PDF in **📄 Docs**. Endpoints in `routes-privacy.js`; table migration `PRIVACY/006_site_receipts.sql`
+  (forever + protected).
+- **New agent endpoints:** `GET /api/email/attachment/<gmail_id>` (stream first PDF) + `POST /api/email/pdf-text`
+  `{gmail_id}` (return PDF text — used by `/create-email-rule` to auto-build + test regex).
+- **Authoring:** use **`/create-email-rule`** (asks store-type + which site, pulls the real PDF/body text,
+  builds + TESTS the regex, writes the rule). ⚠ Writing regex into `email.rules` via `node -e "…"` inside a
+  bash double-quoted string **eats the backslashes** (`[\d.,]`→`[d.,]`) — write the updater to a FILE with
+  single-backslash JS literals, then verify the stored pattern shows `\d`. First live rule: **Aviem service
+  invoice** (site #30 AVIEM - CAR CHARGING → ₪57.83 / 2026-06-30 / SI266003502).
+
 ## Rule engine integration (group `email`)
 - `rule_engine.on_mqtt_event` subscribes to `mur/home/email/message` and fires a synthetic event
   `device_id='email'` with `dps = {from, subject, snippet, labels, thread_id, ts}`. A rule declares
@@ -116,9 +146,10 @@ Trash is the ceiling), **dry-run first**.
 |----------|------|
 | Service | `EMAIL/agent/agent.py`, `EMAIL/agent/email-agent.service` |
 | OAuth helper | `EMAIL/agent/oauth_setup.py` |
-| Migrations | `EMAIL/migrations/001_email.sql` (tables), `002_agent_row.sql` (agents row) |
-| Dashboard | `BOILER/dashboard/public/email.html`, `js/email.js` |
+| Migrations | `EMAIL/migrations/001_email.sql` (tables), `002_agent_row.sql`, `003_automation.sql`, `004_spam_trash.sql`; receipts: `PRIVACY/migrations/006_site_receipts.sql` |
+| Dashboard | `BOILER/dashboard/public/email.html`, `js/email.js`; receipts UI in `routes-privacy.js` + `public/privacy.html` + `js/privacy.js` (per-site 🧾 Receipts window) |
 | Rule ingest | `RULES/rule_engine.py` (`mur/home/email/message` → `device_id='email'`) |
+| Skill | `.claude/skills/create-email-rule/SKILL.md` (`/create-email-rule` — build+test rule, receipt→site) |
 | Memory | `memory/project_agent_email.md` |
 
 ## Planned / future

@@ -29,6 +29,7 @@ const { execFile } = require('child_process');
 
 const DOCS_ROOT  = '\\\\192.168.1.155\\Claude_Data\\Privacy_Site_Docs';
 const DOCS_LINUX = '/mnt/qnap-claude/Privacy_Site_Docs';   // LXC 104 view of same share
+const EMAIL_AGENT = process.env.EMAIL_AGENT_URL || 'http://192.168.1.162:8780';  // LXC 110 (receipt PDFs)
 const SSH_HOST = '192.168.1.227';
 const SSH_USER = 'root';
 const SSH_KEY  = process.env.SSH_KEY_PATH || os.homedir() + '/.ssh/id_ed25519';
@@ -66,6 +67,27 @@ async function _sshRm(linuxPaths) {
   ssh.dispose();
 }
 
+// File a receipt's original PDF into the site's Docs window. LXC 110 has no QNAP
+// access, so the dashboard pulls the PDF bytes from the Email Agent and writes them
+// to DOCS_ROOT + a plain kind='receipt' privacy_site_docs row, linked back via doc_id.
+async function _fileReceiptPdf(db, r) {
+  if (!r.gmail_id) return null;
+  const resp = await fetch(`${EMAIL_AGENT}/api/email/attachment/${encodeURIComponent(r.gmail_id)}`);
+  if (!resp.ok) throw new Error('agent attachment ' + resp.status);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const nm = (`Receipt ${r.vendor || ''} ${r.invoice_no || ''}`).replace(/\s+/g, ' ').trim() || 'Receipt';
+  const ins = await db.query(
+    `INSERT INTO privacy_site_docs (site_id, encrypted, kind, doc_name, file_path, mime_type, file_size)
+     VALUES ($1, false, 'receipt', $2, '', 'application/pdf', $3) RETURNING id`,
+    [r.site_id, nm, buf.length]);
+  const docId = ins.rows[0].id;
+  const filename = `${docId}__receipt.pdf`;
+  await fs.promises.writeFile(path.join(DOCS_ROOT, filename), buf);
+  await db.query('UPDATE privacy_site_docs SET file_path = $1 WHERE id = $2', [filename, docId]);
+  await db.query('UPDATE privacy_site_receipts SET doc_id = $1 WHERE id = $2', [docId, r.id]);
+  return docId;
+}
+
 module.exports = function (app, db) {
   // ── Sites CRM ──────────────────────────────────────────────────────────────
   app.get('/api/privacy/sites', async (_req, res) => {
@@ -74,7 +96,9 @@ module.exports = function (app, db) {
         SELECT s.id, s.kind, s.name, s.main_tel, s.add_tels, s.fax, s.email,
                s.website, s.vault_item, s.notes,
                s.next_appointment_at, s.next_appointment_note, s.reminder_text,
-               (SELECT COUNT(*) FROM privacy_site_docs d WHERE d.site_id = s.id) AS doc_count
+               (SELECT COUNT(*) FROM privacy_site_docs d WHERE d.site_id = s.id) AS doc_count,
+               (SELECT COUNT(*) FROM privacy_site_receipts rc WHERE rc.site_id = s.id) AS receipt_count,
+               (SELECT COALESCE(SUM(rc.amount),0) FROM privacy_site_receipts rc WHERE rc.site_id = s.id) AS receipt_total
           FROM privacy_sites s
          ORDER BY s.sort_order ASC NULLS LAST, s.kind NULLS LAST, s.name`);
       res.json(r.rows);
@@ -364,6 +388,53 @@ module.exports = function (app, db) {
       const fp = r.rows[0].file_path;
       if (fp && !/[\\/]/.test(fp)) { try { await _sshRm(DOCS_LINUX + '/' + fp); } catch (e) { console.error('[privacy] doc rm:', e.message); } }
       await db.query('DELETE FROM privacy_site_docs WHERE id = $1', [id]);
+      res.json({ ok: true });
+    } catch (e) { _err(res, e); }
+  });
+
+  // ── Receipts (per site) ─────────────────────────────────────────────────────
+  // Structured receipt rows (vendor/amount/invoice_date) written by the Email Agent;
+  // the original PDF is lazily filed into the site's Docs window on first view.
+  app.get('/api/privacy/sites/:id/receipts', async (req, res) => {
+    try {
+      const siteId = parseInt(req.params.id);
+      // file any not-yet-filed PDFs (best-effort; a missing/deleted email is skipped)
+      const pend = await db.query(
+        `SELECT id, site_id, gmail_id, vendor, invoice_no, invoice_date
+           FROM privacy_site_receipts
+          WHERE site_id = $1 AND doc_id IS NULL AND gmail_id IS NOT NULL`, [siteId]);
+      for (const r of pend.rows) {
+        try { await _fileReceiptPdf(db, r); }
+        catch (e) { console.error('[privacy] receipt pdf file:', e.message); }
+      }
+      const r = await db.query(
+        `SELECT rc.id, rc.vendor, rc.amount, rc.currency, rc.invoice_no, rc.gmail_id, rc.doc_id,
+                to_char(rc.invoice_date, 'YYYY-MM-DD') AS invoice_date,
+                to_char(rc.created_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS created_at
+           FROM privacy_site_receipts rc
+          WHERE rc.site_id = $1
+          ORDER BY rc.invoice_date DESC NULLS LAST, rc.created_at DESC`, [siteId]);
+      const total = r.rows.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+      res.json({ rows: r.rows, total: Math.round(total * 100) / 100 });
+    } catch (e) { _err(res, e); }
+  });
+
+  // Delete a receipt (and its filed PDF doc, if any).
+  app.delete('/api/privacy/receipts/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const r = await db.query('SELECT doc_id FROM privacy_site_receipts WHERE id = $1', [id]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      const docId = r.rows[0].doc_id;
+      await db.query('DELETE FROM privacy_site_receipts WHERE id = $1', [id]);
+      if (docId) {
+        const d = await db.query('SELECT file_path FROM privacy_site_docs WHERE id = $1', [docId]);
+        if (d.rows.length) {
+          const fp = d.rows[0].file_path;
+          if (fp && !/[\\/]/.test(fp)) { try { await _sshRm(DOCS_LINUX + '/' + fp); } catch (e) { console.error('[privacy] receipt doc rm:', e.message); } }
+          await db.query('DELETE FROM privacy_site_docs WHERE id = $1', [docId]);
+        }
+      }
       res.json({ ok: true });
     } catch (e) { _err(res, e); }
   });

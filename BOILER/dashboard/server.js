@@ -2288,7 +2288,7 @@ const DBV_GROUPS = [
   ['Geolocation',           ['device_locations','phone_trips']],
   ['Medical',               ['medical_contacts','medical_documents','medical_test_results']],
   ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_water','ph_steps','ph_steps_excluded_trips','ph_exercise_log']],
-  ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_doc_crypto','privacy_sheets','visited_places']],
+  ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_site_receipts','privacy_doc_crypto','privacy_sheets','visited_places']],
   ['Reminders',             ['reminder_state']],
   ['Email',                 ['email_messages','email_labels','email_state','email_extractions','email_automation_log']],
 ];
@@ -2335,7 +2335,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       medical_contacts: 'created_at', medical_documents: 'uploaded_at',
       medical_test_results: 'tested_at',
       cellular_antennas: 'last_ingest',
-      privacy_sites: 'updated_at', privacy_site_docs: 'created_at', privacy_doc_crypto: 'created_at', privacy_sheets: 'updated_at',
+      privacy_sites: 'updated_at', privacy_site_docs: 'created_at', privacy_site_receipts: 'created_at', privacy_doc_crypto: 'created_at', privacy_sheets: 'updated_at',
       visited_places: 'visited_at',
     };
 
