@@ -597,6 +597,7 @@ async function pvLoadReceipts() {
   try {
     const d = await (await fetch(`/api/privacy/sites/${_pvRcSite.id}/receipts`, { cache: 'no-store' })).json();
     _pvReceipts = d.rows || [];
+    _pvReceiptPeriod = d.chart_period || 'monthly';
     const cur = (_pvReceipts[0] && _pvReceipts[0].currency) || 'ILS';
     document.getElementById('pv-receipts-total').innerHTML =
       `<b>${_pvReceipts.length}</b> receipt(s) · total <b>${(d.total || 0).toLocaleString()} ${cur === 'ILS' ? '₪' : _esc(cur)}</b>`;
@@ -604,28 +605,32 @@ async function pvLoadReceipts() {
   pvRenderReceipts();
   pvRenderReceiptChart();
 }
-let _pvReceiptChart = null;
+let _pvReceiptChart = null, _pvReceiptPeriod = 'monthly';
 function pvRenderReceiptChart() {
   const wrap = document.getElementById('pv-receipts-chartwrap');
   const rows = _pvReceipts.filter(r => r.invoice_date && r.amount != null);
   if (_pvReceiptChart) { _pvReceiptChart.destroy(); _pvReceiptChart = null; }
   if (!rows.length || typeof Chart === 'undefined') { wrap.style.display = 'none'; return; }
-  // Sum amount per calendar month (a vendor can have several receipts in one month).
-  const byMonth = {};
-  rows.forEach(r => { const m = String(r.invoice_date).slice(0, 7); byMonth[m] = (byMonth[m] || 0) + (parseFloat(r.amount) || 0); });
-  const months = Object.keys(byMonth).sort();
-  const vals = months.map(m => Math.round(byMonth[m] * 100) / 100);
+  // Group by the vendor's chosen period (set via /create-email-rule; default monthly).
+  const P = _pvReceiptPeriod === 'yearly' ? { len: 4, word: 'year' }
+          : _pvReceiptPeriod === 'daily'  ? { len: 10, word: 'day' }
+          :                                 { len: 7, word: 'month' };
+  // Sum amount per bucket (a vendor can have several receipts in one bucket).
+  const buckets = {};
+  rows.forEach(r => { const k = String(r.invoice_date).slice(0, P.len); buckets[k] = (buckets[k] || 0) + (parseFloat(r.amount) || 0); });
+  const labels = Object.keys(buckets).sort();
+  const vals = labels.map(k => Math.round(buckets[k] * 100) / 100);
   const cur = (rows[0].currency === 'ILS') ? '₪' : (rows[0].currency || '');
   const name = (_pvRcSite && _pvRcSite.name) || '';
   wrap.style.display = 'block';
   _pvReceiptChart = new Chart(document.getElementById('pv-receipts-chart').getContext('2d'), {
     type: 'bar',
-    data: { labels: months, datasets: [{ data: vals, backgroundColor: '#3a55a8', borderRadius: 3, maxBarThickness: 46 }] },
+    data: { labels, datasets: [{ data: vals, backgroundColor: '#3a55a8', borderRadius: 3, maxBarThickness: 46 }] },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        title: { display: true, text: `Spend per month — ${name}` },
+        title: { display: true, text: `Spend per ${P.word} — ${name}` },
         tooltip: { callbacks: { label: c => cur + c.parsed.y.toLocaleString() } }
       },
       scales: { y: { beginAtZero: true, ticks: { callback: v => cur + v } } }

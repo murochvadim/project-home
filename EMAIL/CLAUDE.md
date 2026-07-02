@@ -112,8 +112,11 @@ site's Docs window. `store:"row"` (default) just writes the generic `email_extra
   (`privacy_site_docs`, plain `kind='receipt'`), linking back via `privacy_site_receipts.doc_id`. This
   happens lazily when the site's Receipts window is opened (`GET /api/privacy/sites/:id/receipts` files any
   `doc_id IS NULL` rows). Surface: **Privacy → Sites → 🧾 Receipts window** (list + total + CSV export **+ a
-  per-vendor spend-per-month bar chart** — Chart.js, `pvRenderReceiptChart`, groups the receipts by
-  `invoice_date` month and sums `amount`; client-side, no new endpoint) and the filed PDF in **📄 Docs**.
+  per-vendor spend bar chart** — Chart.js, `pvRenderReceiptChart`, groups the receipts by the vendor's
+  chosen **period (yearly / monthly / daily)** and sums `amount`; client-side. The period is per-VENDOR in
+  `dashboard_settings.privacy.chart_periods` (`{site_id: period}`, default monthly), asked by
+  `/create-email-rule` and returned by `GET /api/privacy/sites/:id/receipts` as `chart_period`) and the
+  filed PDF in **📄 Docs**.
   Endpoints in `routes-privacy.js`; table migration `PRIVACY/006_site_receipts.sql` (forever + protected).
 - **New agent endpoints:** `GET /api/email/attachment/<gmail_id>` (stream first PDF) + `POST /api/email/pdf-text`
   `{gmail_id}` (return PDF text — used by `/create-email-rule` to auto-build + test regex).

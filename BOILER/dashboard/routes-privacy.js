@@ -415,7 +415,14 @@ module.exports = function (app, db) {
           WHERE rc.site_id = $1
           ORDER BY rc.invoice_date DESC NULLS LAST, rc.created_at DESC`, [siteId]);
       const total = r.rows.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
-      res.json({ rows: r.rows, total: Math.round(total * 100) / 100 });
+      // per-vendor chart grouping (yearly|monthly|daily), set by /create-email-rule; default monthly
+      let chart_period = 'monthly';
+      try {
+        const cp = await db.query("SELECT value FROM dashboard_settings WHERE key = 'privacy.chart_periods'");
+        const m = (cp.rows[0] && cp.rows[0].value) || {};
+        if (m[String(siteId)]) chart_period = m[String(siteId)];
+      } catch (_) {}
+      res.json({ rows: r.rows, total: Math.round(total * 100) / 100, chart_period });
     } catch (e) { _err(res, e); }
   });
 

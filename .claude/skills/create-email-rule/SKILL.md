@@ -74,6 +74,18 @@ ssh root@192.168.1.227 "PGPASSWORD='' psql -h 192.168.1.219 -U postgres -d home_
 The picked `id` → `site_id`. `vendor` defaults from the sender domain (offer to override, e.g. to the
 site name). `currency` defaults `ILS`.
 
+**Then ask the chart period (AskUserQuestion): yearly / monthly / daily.** This is how that vendor's
+📊 Chart on the Privacy page groups its receipts. Write it into the per-vendor map
+`dashboard_settings.privacy.chart_periods` keyed by `site_id` (string), merging (don't clobber other
+vendors):
+```
+# read current, merge {"<site_id>":"<yearly|monthly|daily>"}, POST back:
+GET  http://127.0.0.1:3000/api/dashboard-settings/privacy.chart_periods   → { value: {…} }
+POST http://127.0.0.1:3000/api/dashboard-settings/privacy.chart_periods   body { "value": {…merged…} }
+```
+Default is `monthly` if you skip it. (The chart reads this via `GET /api/privacy/sites/:id/receipts` →
+`chart_period`.) This is per-VENDOR (site), not per-rule.
+
 ## Step 5 — Extract fields (auto-build + test the regex — the important part)
 First, get the **real text** the regex will run against:
 - **PDF** (receipts usually): `POST http://192.168.1.162:8780/api/email/pdf-text {"gmail_id":"<id>"}`
