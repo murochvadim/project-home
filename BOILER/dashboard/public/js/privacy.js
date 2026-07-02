@@ -301,7 +301,7 @@ function pvRenderSites() {
         </div>
         <div style="display:flex; flex-direction:column; gap:5px; flex-shrink:0; width:132px;">
           <button class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box;" onclick="pvOpenDocs(${s.id})">📄 Docs (${s.doc_count})</button>
-          <button class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box;" onclick="pvOpenReceipts(${s.id})" title="Receipts extracted from email (total ${(s.receipt_total||0).toLocaleString()} ₪)">🧾 Receipts (${s.receipt_count||0})</button>
+          <button class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box;" onclick="pvOpenReceipts(${s.id})" title="Spend chart + receipts (total ${(s.receipt_total||0).toLocaleString()} ₪)">📊 Chart (${s.receipt_count||0})</button>
           ${s.vault_item ? `<a class="btn btn-secondary btn-sm" style="width:100%; box-sizing:border-box; text-align:center;" href="https://192.168.1.196" target="_blank" title="Open Vaultwarden (item: ${_esc(s.vault_item)})">🔑 Vaultwarden</a>` : ''}
           <div style="display:flex; gap:5px;">
             <button class="btn btn-secondary btn-sm" style="flex:1;" onclick="pvEditSite(${s.id})">Edit</button>
