@@ -111,9 +111,10 @@ site's Docs window. `store:"row"` (default) just writes the generic `email_extra
   from the agent (`GET /api/email/attachment/:gmail_id`) and writes it into the site's Docs window
   (`privacy_site_docs`, plain `kind='receipt'`), linking back via `privacy_site_receipts.doc_id`. This
   happens lazily when the site's Receipts window is opened (`GET /api/privacy/sites/:id/receipts` files any
-  `doc_id IS NULL` rows). Surface: **Privacy → Sites → 🧾 Receipts window** (list + total + CSV export) and
-  the filed PDF in **📄 Docs**. Endpoints in `routes-privacy.js`; table migration `PRIVACY/006_site_receipts.sql`
-  (forever + protected).
+  `doc_id IS NULL` rows). Surface: **Privacy → Sites → 🧾 Receipts window** (list + total + CSV export **+ a
+  per-vendor spend-per-month bar chart** — Chart.js, `pvRenderReceiptChart`, groups the receipts by
+  `invoice_date` month and sums `amount`; client-side, no new endpoint) and the filed PDF in **📄 Docs**.
+  Endpoints in `routes-privacy.js`; table migration `PRIVACY/006_site_receipts.sql` (forever + protected).
 - **New agent endpoints:** `GET /api/email/attachment/<gmail_id>` (stream first PDF) + `POST /api/email/pdf-text`
   `{gmail_id}` (return PDF text — used by `/create-email-rule` to auto-build + test regex).
 - **Authoring:** use **`/create-email-rule`** (asks store-type + which site, pulls the real PDF/body text,
