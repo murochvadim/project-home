@@ -250,6 +250,27 @@ relative screening / left-right comparison / tracking, NOT clinical dB HL; wired
 headphones recommended. (The verbose inline disclaimer was removed 2026-06-07 per
 user — the card stays clean.)
 
+### 🧠 Cognitive test (2026-07-03)
+Third card in the Tests grid (beside Hearing + Eye) — a ~2–3 min browser self-screen, module
+**`js/medical-cognitive.js`** (`ct*` fns), stored as **`test_type='cognitive'`** (no schema change,
+no new endpoint). Three sub-tasks, run in sequence, each injected into `#ct-runner`:
+1. **Reaction time** — box turns green after a random 1.2–3.8 s wait; tap ASAP; 5 trials (early taps
+   retried) → `results.reaction.avg_ms`.
+2. **Digit span** — digits flash one at a time; type them back; length grows until 2 misses at a length
+   → `results.digit_span.max_span`.
+3. **Stroop** — 30 s; a colour word in a **conflicting** ink; tap the **ink** colour → `results.stroop.net`
+   (correct − wrong, floored at 0).
+**Age (per user request):** on Start (after the shared "🧑 Who is taking this test?" modal), `ctStart`
+resolves the person's **age from `ph_profiles.date_of_birth`** (via `GET /api/personal-health/profiles`,
+matched on `user_id`); if the person has no DOB (or is unassigned) it shows an **age-band picker** and
+requires one. The band drives an **age-normed "below/average/above" rating** per domain from
+**approximate reference midpoints** baked into `CT_NORMS` (rt lower-is-better; span/stroop higher). Stored
+in `meta.{age, age_band, notes}`. **⚠ Self-screen, NOT a diagnosis** (prominent disclaimer on the card);
+norms are rough reference ranges, not a clinical instrument (MoCA/MMSE are clinician-administered). The
+shared **Test Results** list + View dispatch are wired in `medical-hearing.js` (`htRowHtml` cognitive chips
++ `ctRowSummary`; `medTestView` → `ctRenderResult` → the 3 domain scores + ratings in `#ct-result-wrap`).
+No trend chart (user declined).
+
 ### Storage — generic `medical_test_results` table (LXC 102)
 | Column | Type | Note |
 |---|---|---|

@@ -231,6 +231,7 @@ function medPersonConfirm() {
   const t = _medPendingTest; _medPendingTest = null;
   if (t === 'hearing' && typeof htStart === 'function') htStart();
   else if (t === 'vision' && typeof vtStart === 'function') vtStart();
+  else if (t === 'cognitive' && typeof ctStart === 'function') ctStart();
 }
 
 async function medTestsLoad() {
@@ -284,6 +285,12 @@ function htRowHtml(t) {
     chips = `<span class="med-chip" style="background:#ede9fe; color:#5b21b6;">👁 Vision</span>` +
             (corr ? `<span class="med-chip" style="background:#fef3c7; color:#854d0e;">${htEsc(corr)}</span>` : '');
     summary = (typeof vtRowSummary === 'function') ? vtRowSummary(t) : '';
+  } else if (t.test_type === 'cognitive') {
+    const band = (t.meta && t.meta.age_band) || '';
+    const bl = { u40: '<40', '40': '40s', '50': '50s', '60': '60s', '70': '70s', '80': '80+' };
+    chips = `<span class="med-chip" style="background:#f3e8ff; color:#6b21a8;">🧠 Cognitive</span>` +
+            (band ? `<span class="med-chip" style="background:#fef3c7; color:#854d0e;">age ${htEsc(bl[band] || band)}</span>` : '');
+    summary = (typeof ctRowSummary === 'function') ? ctRowSummary(t) : '';
   } else {
     const hp = (t.meta && t.meta.headphones) || '';
     chips = `<span class="med-chip" style="background:#e0f2fe; color:#075985;">🔊 Hearing</span>` +
@@ -310,8 +317,11 @@ function medTestView(id) {
   if (!t) return;
   htCloseChart();
   if (typeof vtCloseResult === 'function') vtCloseResult();
+  if (typeof ctCloseResult === 'function') ctCloseResult();
   if (t.test_type === 'vision') {
     if (typeof renderVision === 'function') renderVision(t);
+  } else if (t.test_type === 'cognitive') {
+    if (typeof ctRenderResult === 'function') ctRenderResult(t);
   } else {
     const d = new Date(t.tested_at).toLocaleDateString('en-GB');
     renderAudiogram(t.results, d + ((t.meta && t.meta.headphones) ? ' · ' + t.meta.headphones : ''));

@@ -334,7 +334,30 @@
       </div>
     </div>
 
-    </div><!-- /tests grid: Hearing + Eye side by side -->
+    <div class="card" style="margin-bottom:0;">
+      <h2 style="margin-top:0;">🧠 Cognitive test</h2>
+      <div id="ct-setup">
+        <div style="font-size:0.8rem; color:#9a3412; background:#fff7ed; border:1px solid #fed7aa; border-radius:6px; padding:7px 10px; margin-bottom:10px;">
+          ⚠ A quick self-screen (reaction · memory · attention) — <b>not a diagnosis</b>. Scores swing with sleep / caffeine / practice; the age-norms are rough reference ranges, not a clinical instrument.
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button class="btn btn-success" onclick="medStartTest('cognitive')">▶ Start test</button>
+          <span style="font-size:0.8rem; color:#888;">3 quick tasks · reaction · memory · attention · ~2–3 min</span>
+        </div>
+      </div>
+      <div id="ct-runner" style="display:none; margin-top:14px; text-align:center;"></div>
+      <div id="ct-finish" style="display:none; margin-top:14px;">
+        <div id="ct-finish-msg" style="font-size:0.86rem; color:#166534; margin-bottom:8px;">Test complete — result below.</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <input type="text" id="ct-notes" placeholder="Notes (optional)"
+                 style="flex:1; min-width:200px; padding:6px 9px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.88rem;">
+          <button class="btn btn-success" onclick="ctSave()">💾 Save to results</button>
+          <button class="btn btn-secondary" onclick="ctCancel()">Discard</button>
+        </div>
+      </div>
+    </div>
+
+    </div><!-- /tests grid: Hearing + Eye + Cognitive -->
 
     <div class="card">
       <h2 style="margin-top:0;">Test Results <span id="ht-result-count" style="font-size:0.85rem; color:#888; font-weight:400; margin-left:6px;"></span></h2>
@@ -346,6 +369,10 @@
       <div id="vt-result-wrap" style="display:none; max-width:640px; margin:0 auto 12px;">
         <div style="text-align:right; margin-bottom:4px;"><button class="btn btn-secondary btn-sm" onclick="vtCloseResult()">✕ Close</button></div>
         <div id="vt-result-body"></div>
+      </div>
+      <div id="ct-result-wrap" style="display:none; max-width:640px; margin:0 auto 12px;">
+        <div style="text-align:right; margin-bottom:4px;"><button class="btn btn-secondary btn-sm" onclick="ctCloseResult()">✕ Close</button></div>
+        <div id="ct-result-body"></div>
       </div>
       <div id="ht-results-list">—</div>
     </div>
@@ -786,6 +813,7 @@
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
+<script src="js/medical-cognitive.js?v=1"></script>
 <script src="js/personal-health.js?v=73"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
