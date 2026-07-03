@@ -164,6 +164,8 @@ The QNAP `Media` share is mounted **NFS on LXC 100 as root** but the Windows/SMB
 
 **UI** (`media.html` + `media.js`, Player tab → QNAP Media grid): **☑ Select** files → the select bar shows **📁 Move to folder…** (opens a **navigable folder-picker modal** — breadcrumb + ⬆ Up + drill-into folders, "📁 Move here" targets the folder you're viewing, or type a new folder name; folders fetched fresh via `/api/media/browse`, not grid state) and **🗑 Delete** (bulk file delete, confirms). Each **folder tile** has a **🗑** (top-right, like the ✏️ on file tiles) → deletes the folder + contents (confirms). Every delete path confirms (incl. `deleteCrop`, fixed same day). NOTE: `MEDIA_API = http://192.168.1.138:8766` (player_service, sends `Access-Control-Allow-Origin: *`); the dashboard calls it cross-origin.
 
+**Ingest download → existing folder (2026-07-03):** the "Download from YouTube" **Folder** field (`#yt-folder`) is a **type-or-pick** input (HTML `datalist#yt-folder-list`) — `ytPopulateFolders()` fills it with the existing sub-folders of the current mode's root (**Music** for 🎵 Audio / **Videos** for 🎬 Video, via `/api/media/browse`), refreshed on ingest-tab open (`loadIngest`) + on the Audio/Video toggle (`ytModeChanged`). So a download can target an existing folder (pick it) or a new one (type it) in the same field; the backend `os.makedirs(exist_ok=True)` handles both.
+
 ---
 
 ## TV Playback

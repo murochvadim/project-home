@@ -448,8 +448,9 @@
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <label for="yt-folder" style="font-size:0.85rem; min-width:90px;">Folder:</label>
-          <input type="text" id="yt-folder" placeholder="(auto-fills after Detect, or type your own)"
+          <input type="text" id="yt-folder" list="yt-folder-list" placeholder="pick an existing folder ▾ or type a new name"
                  style="flex:1; padding:6px 8px; font-size:0.9rem;">
+          <datalist id="yt-folder-list"></datalist>
           <span id="yt-folder-hint" style="font-size:0.78rem; color:#888;">in&nbsp;<code>/mnt/media/Music/</code></span>
         </div>
         <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
@@ -905,6 +906,6 @@
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=1"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=128"></script>
+<script src="js/media.js?v=129"></script>
 </body>
 </html>

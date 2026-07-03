@@ -659,6 +659,7 @@ function ytModeChanged() {
   if (hint) hint.innerHTML = 'in&nbsp;<code>/mnt/media/' + (video ? 'Videos' : 'Music') + '/</code>';
   if (opts) opts.style.display = video ? 'none' : 'flex';
   if (note) note.style.display = video ? 'inline' : 'none';
+  ytPopulateFolders();   // reload the existing-folder list for the new root
   ytSetMeta('', '#888');
 }
 
@@ -1568,7 +1569,22 @@ async function loadAnalyzer(force) {
 }
 
 function loadIngest() {
-  // Ingest tab has its own static UI — nothing to fetch on open
+  ytPopulateFolders();   // fill the Folder datalist with existing folders
+}
+
+// Fill the download "Folder" datalist with the existing sub-folders of the
+// current mode's root (Music for audio / Videos for video) so you can pick an
+// existing folder — the input still accepts a typed new name.
+async function ytPopulateFolders() {
+  const dl = document.getElementById('yt-folder-list');
+  if (!dl) return;
+  const root = ytMode() === 'video' ? 'Videos' : 'Music';
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/browse?path=` + encodeURIComponent(root));
+    const d = await r.json();
+    const dirs = (d.entries || []).filter(e => e.type === 'dir' && !HIDDEN_ENTRIES.has(e.name));
+    dl.innerHTML = dirs.map(x => `<option value="${escHtmlSafe(x.name)}"></option>`).join('');
+  } catch (e) { dl.innerHTML = ''; }
 }
 
 // ── Media Settings ────────────────────────────────────────────────
