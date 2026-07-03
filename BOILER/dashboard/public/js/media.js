@@ -363,6 +363,137 @@ function selectionUpdated() {
   const n = _selectedPaths.size;
   if (countEl) countEl.textContent = n + ' selected';
   if (addBtn) addBtn.disabled = (n === 0 || !target || !target.value);
+  const moveBtn = document.getElementById('media-move-btn');
+  if (moveBtn) moveBtn.disabled = (n === 0);
+  const delBtn = document.getElementById('media-del-btn');
+  if (delBtn) delBtn.disabled = (n === 0);
+}
+
+// ── Move-to-folder + Delete (organize files; backed by LXC 100 — this
+//    service owns the files so it can move/delete where SMB can't, and it
+//    keeps media_library + playlists + MiniDLNA in sync) ──
+
+// The Move modal is a NAVIGABLE folder picker: browse up (⬆) and into folders,
+// then "📁 Move here" drops the files into whichever folder you're viewing — or
+// type a name to create a new sub-folder there first. Folders are fetched fresh
+// so it's independent of the grid's state.
+let _moveNav = '';
+async function openMoveModal() {
+  const n = _selectedPaths.size;
+  if (!n) return;
+  document.getElementById('move-count').textContent = n;
+  document.getElementById('move-msg').textContent = '';
+  _moveNav = _currentPath || '';
+  document.getElementById('move-modal-overlay').style.display = 'flex';
+  await moveNavRender();
+}
+function moveNavTo(path) { _moveNav = path || ''; moveNavRender(); }
+async function moveNavRender() {
+  const box = document.getElementById('move-folder-list');
+  const loc = document.getElementById('move-loc');
+  const btn = document.getElementById('move-do-btn');
+  box.innerHTML = '<div style="color:#aaa; font-size:0.85rem;">Loading…</div>';
+  // clickable breadcrumb of where we'll move to
+  const parts = _moveNav ? _moveNav.split('/').filter(Boolean) : [];
+  let crumb = `<span style="cursor:pointer; color:#2980b9;" onclick="moveNavTo('')">QNAP Media</span>`;
+  let acc = '';
+  for (const p of parts) {
+    acc = acc ? acc + '/' + p : p;
+    crumb += ` › <span style="cursor:pointer; color:#2980b9;" onclick="moveNavTo('${acc.replace(/'/g, "\\'")}')">${escHtmlSafe(p)}</span>`;
+  }
+  loc.innerHTML = crumb;
+  // fetch sub-folders of the nav location (fresh)
+  let dirs = [];
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/browse?path=` + encodeURIComponent(_moveNav));
+    const d = await r.json();
+    dirs = (d.entries || []).filter(e => e.type === 'dir' && !HIDDEN_ENTRIES.has(e.name));
+  } catch (e) {}
+  const rows = [];
+  if (parts.length) {
+    const up = parts.slice(0, -1).join('/');
+    rows.push(`<div style="cursor:pointer; font-size:0.9rem; padding:5px 4px; color:#555;" onclick="moveNavTo('${up.replace(/'/g, "\\'")}')">⬆ Up</div>`);
+  }
+  for (const d of dirs) {
+    const child = (_moveNav ? _moveNav + '/' : '') + d.name;
+    rows.push(`<div style="cursor:pointer; font-size:0.9rem; padding:5px 4px; display:flex; justify-content:space-between;" onclick="moveNavTo('${child.replace(/'/g, "\\'")}')"><span>📁 ${escHtmlSafe(d.name)}</span><span style="color:#bbb;">open ›</span></div>`);
+  }
+  if (!dirs.length) rows.push('<div style="color:#aaa; font-size:0.82rem; padding:4px;">(no sub-folders here)</div>');
+  box.innerHTML =
+    `<div style="max-height:38vh; overflow:auto; border:1px solid #eee; border-radius:6px; padding:4px 8px;">${rows.join('')}</div>` +
+    `<input type="text" id="move-new-name" placeholder="＋ optional: new folder name" style="margin-top:10px; padding:6px 8px; border:1px solid #d0cbc4; border-radius:4px; font-size:0.85rem; width:calc(100% - 18px);">`;
+  if (btn) { btn.disabled = false; btn.textContent = '📁 Move here'; }
+}
+function closeMoveModal() { document.getElementById('move-modal-overlay').style.display = 'none'; }
+
+async function doMove() {
+  const msg = document.getElementById('move-msg');
+  const newName = (document.getElementById('move-new-name')?.value || '').trim();
+  let dest = _moveNav || '';
+  if (newName) {
+    if (newName.includes('/')) { msg.textContent = 'Folder name can\'t contain "/".'; return; }
+    dest = dest ? dest + '/' + newName : newName;
+  }
+  if (!dest) { msg.textContent = 'Navigate into a folder, or type a new folder name.'; return; }
+  const paths = Array.from(_selectedPaths);
+  const btn   = document.getElementById('move-do-btn');
+  btn.disabled = true; btn.textContent = 'Moving…';
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/move`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths, dest }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+    closeMoveModal();
+    const failed = (d.results || []).filter(x => !x.ok);
+    if (failed.length) {
+      alert(`Moved ${d.moved}/${d.total}. Failed:\n` +
+        failed.map(f => String(f.path).split('/').pop() + ' — ' + f.error).join('\n'));
+    }
+    _selectedPaths.clear();
+    if (typeof _selectedMeta !== 'undefined' && _selectedMeta.clear) _selectedMeta.clear();
+    if (_selectMode) toggleSelectMode();
+    loadMediaBrowser(_currentPath);
+  } catch (e) {
+    msg.textContent = 'Move failed: ' + (e.message || e);
+    btn.disabled = false; btn.textContent = '📁 Move here';
+  }
+}
+
+// Bulk-delete the selected files (syncs media_library + playlists server-side).
+async function deleteSelectedFiles() {
+  const n = _selectedPaths.size;
+  if (!n) return;
+  if (!confirm(`Delete ${n} selected file(s)?\nThey are removed from disk and any playlists (not recoverable).`)) return;
+  const paths = Array.from(_selectedPaths);
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/delete`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+    _selectedPaths.clear();
+    if (typeof _selectedMeta !== 'undefined' && _selectedMeta.clear) _selectedMeta.clear();
+    if (_selectMode) toggleSelectMode();
+    loadMediaBrowser(_currentPath);
+  } catch (e) { alert('Delete failed: ' + (e.message || e)); }
+}
+
+// Delete a whole folder (from the 🗑 on a folder tile) + everything in it.
+async function deleteFolder(relPath, name) {
+  if (!confirm(`Delete folder «${name}» and everything inside it?\nThis cannot be undone.`)) return;
+  const full = '/mnt/media/' + (relPath.startsWith('/') ? relPath.slice(1) : relPath);
+  try {
+    const r = await fetch(`${MEDIA_API}/api/media/delete`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: [full] }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+    loadMediaBrowser(_currentPath);
+  } catch (e) { alert('Delete folder failed: ' + (e.message || e)); }
 }
 
 async function refreshPlaylistDropdown() {
@@ -1057,9 +1188,11 @@ function escHtmlSafe(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+let _currentEntries = [];
 function renderGrid(entries, currentPath) {
   const grid = document.getElementById('media-grid');
   entries = entries.filter(e => !HIDDEN_ENTRIES.has(e.name));
+  _currentEntries = entries;   // remembered for the Move modal's folder list
   if (!entries.length) {
     grid.innerHTML = '<div style="color:#aaa;font-size:0.85rem;padding:20px;">Empty folder</div>';
     return;
@@ -1162,6 +1295,17 @@ function renderGrid(entries, currentPath) {
       });
       cell.style.position = 'relative';
       cell.appendChild(editBtn);
+    }
+
+    // Delete button (folders) — top-right, mirroring the ✏️ on file tiles
+    if (e.type === 'dir') {
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '🗑';
+      delBtn.title = 'Delete folder';
+      delBtn.style.cssText = 'position:absolute;top:6px;right:6px;background:rgba(255,255,255,0.9);border:1px solid #e0bcbc;border-radius:4px;padding:1px 5px;font-size:0.78rem;cursor:pointer;line-height:1.4;';
+      delBtn.addEventListener('click', ev => { ev.stopPropagation(); deleteFolder(relPath, e.name); });
+      cell.style.position = 'relative';
+      cell.appendChild(delBtn);
     }
 
     // Play button
@@ -3034,6 +3178,7 @@ async function loadPersonFaces(name, panel) {
 }
 
 async function deleteCrop(cropId, btn) {
+  if (!confirm('Delete this face crop? This cannot be undone.')) return;
   btn.disabled = true;
   try {
     const r = await fetch(`${MEDIA_API}/api/faces/crop/${cropId}`, { method: 'DELETE' });

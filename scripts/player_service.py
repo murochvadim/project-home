@@ -1300,12 +1300,38 @@ def walk_dir():
 
 
 # ── POST /api/media/delete ───────────────────────────────────────
-# Delete files (and their yt-dlp ".description" sidecars) — or a whole
-# folder — from the media library. Used by the dashboard's 🔍 Unassigned
-# modal so junk downloads can be removed without hitting the QNAP SMB
-# delete-permission wall (these files were created by THIS service, so it
-# can remove them). Every path is validated through safe_path() so nothing
-# outside MEDIA_MOUNT can be touched; empty parent folders are pruned.
+# Forget deleted files in the DB: drop their media_library rows + remove them
+# from every playlist, then refresh the DLNA index in the background. Keeps the
+# database consistent with disk so a delete/move never leaves orphan rows or
+# broken playlist paths (the same guarantee /api/media/move already gives).
+def _db_forget_paths(paths):
+    if not paths:
+        return
+    plist = list(paths)
+    try:
+        db_query('DELETE FROM media_library WHERE path = ANY(%s)', (plist,), fetch=False)
+    except Exception as e:
+        log.warning(f"delete: media_library cleanup failed: {e}")
+    try:
+        gone = set(plist)
+        for r in (db_query('SELECT id, items FROM media_playlists WHERE items IS NOT NULL') or []):
+            items = r.get('items') or []
+            kept  = [it for it in items if it.get('path') not in gone]
+            if len(kept) != len(items):
+                db_query('UPDATE media_playlists SET items=%s::jsonb WHERE id=%s',
+                         (json.dumps(kept), r['id']), fetch=False)
+    except Exception as e:
+        log.warning(f"delete: playlist cleanup failed: {e}")
+    threading.Thread(target=_minidlna_full_rescan, daemon=True).start()
+
+
+# Delete files (and their yt-dlp ".description" sidecars) — or a whole folder —
+# from the media library. Used by the 🔍 Unassigned modal AND the grid's 🗑
+# (file/folder) delete. The QNAP SMB user can't delete on this share, but THIS
+# service created the files so it can. Every path is safe_path()-validated;
+# empty parents are pruned. A delete also SYNCS the DB (media_library rows +
+# playlist items) — for a folder, the files inside are collected before rmtree
+# so their rows are cleaned too.
 # Body: {"paths": ["/mnt/media/Music/.../x.m4a", "Music/SubFolder", ...]}.
 @app.route('/api/media/delete', methods=['POST'])
 def media_delete():
@@ -1316,6 +1342,7 @@ def media_delete():
         return jsonify({'error': 'no paths given'}), 400
     base    = os.path.realpath(MEDIA_MOUNT)
     results = []
+    removed = []          # full paths of every FILE removed (for DB cleanup)
     for p in paths:
         rel = p[len('/mnt/media/'):] if isinstance(p, str) and p.startswith('/mnt/media/') else p
         try:
@@ -1325,9 +1352,13 @@ def media_delete():
             continue
         try:
             if os.path.isdir(full) and os.path.realpath(full) != base:
+                for root, _dirs, files in os.walk(full):     # collect inner files first
+                    for fn in files:
+                        removed.append(os.path.join(root, fn))
                 shutil.rmtree(full)
             elif os.path.isfile(full):
                 os.remove(full)
+                removed.append(full)
                 sidecar = os.path.splitext(full)[0] + '.description'
                 if os.path.isfile(sidecar):
                     try: os.remove(sidecar)
@@ -1342,9 +1373,115 @@ def media_delete():
             results.append({'path': p, 'ok': True})
         except Exception as e:
             results.append({'path': p, 'ok': False, 'error': str(e)})
+    _db_forget_paths(removed)                                # keep the DB in sync
     ok = sum(1 for r in results if r.get('ok'))
-    log.info(f"media delete: {ok}/{len(results)} removed")
+    log.info(f"media delete: {ok}/{len(results)} removed ({len(removed)} files, DB synced)")
     return jsonify({'deleted': ok, 'total': len(results), 'results': results})
+
+
+# ── POST /api/media/mkdir ────────────────────────────────────────
+# Create an (empty) folder under the browsed directory. Same permission
+# story as delete/move: this service owns the files (created them), so it
+# can mkdir where the QNAP SMB user can't. safe_path-guarded; unicode names OK.
+# Body: {"parent": "Videos", "name": "Birthdays"}
+@app.route('/api/media/mkdir', methods=['POST'])
+def media_mkdir():
+    data   = request.get_json(silent=True) or {}
+    parent = (data.get('parent') or '').strip()
+    name   = (data.get('name') or '').strip().strip('/')
+    if not name or '/' in name or name in ('.', '..'):
+        return jsonify({'error': 'invalid folder name'}), 400
+    rel = (parent.rstrip('/') + '/' + name) if parent else name
+    try:
+        full = safe_path(rel)
+    except ValueError:
+        return jsonify({'error': 'unsafe path'}), 400
+    try:
+        os.makedirs(full, exist_ok=True)
+        log.info(f"media mkdir: {rel}")
+        return jsonify({'ok': True, 'path': rel})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── POST /api/media/move ─────────────────────────────────────────
+# Move files into a folder (created if new). os.rename on the NFS mount —
+# this service runs as root so it CAN move; the QNAP SMB user can't. A move
+# changes each file's path, so we keep the library + playlists + MiniDLNA in
+# sync afterwards. Body: {"paths": [...full...], "dest": "Videos/Birthdays"}.
+@app.route('/api/media/move', methods=['POST'])
+def media_move():
+    data  = request.get_json(silent=True) or {}
+    paths = data.get('paths') or []
+    dest  = (data.get('dest') or '').strip()
+    if not isinstance(paths, list) or not paths:
+        return jsonify({'error': 'no paths given'}), 400
+    try:
+        dest_full = safe_path(dest)
+    except ValueError:
+        return jsonify({'error': 'unsafe destination'}), 400
+    try:
+        os.makedirs(dest_full, exist_ok=True)
+    except Exception as e:
+        return jsonify({'error': f'could not create folder: {e}'}), 500
+    if not os.path.isdir(dest_full):
+        return jsonify({'error': 'destination is not a folder'}), 400
+    base    = os.path.realpath(MEDIA_MOUNT)
+    results = []
+    moved   = {}          # old_full -> new_full, for DB sync
+    for p in paths:
+        rel = p[len('/mnt/media/'):] if isinstance(p, str) and p.startswith('/mnt/media/') else p
+        try:
+            src = safe_path(rel)
+        except ValueError:
+            results.append({'path': p, 'ok': False, 'error': 'unsafe path'}); continue
+        if not os.path.isfile(src):
+            results.append({'path': p, 'ok': False, 'error': 'not a file'}); continue
+        new = os.path.join(dest_full, os.path.basename(src))
+        if os.path.realpath(new) == os.path.realpath(src):
+            results.append({'path': p, 'ok': False, 'error': 'already in that folder'}); continue
+        if os.path.exists(new):
+            results.append({'path': p, 'ok': False, 'error': 'name already exists there'}); continue
+        try:
+            os.rename(src, new)
+            side = os.path.splitext(src)[0] + '.description'     # move yt-dlp sidecar too
+            if os.path.isfile(side):
+                try: os.rename(side, os.path.splitext(new)[0] + '.description')
+                except OSError: pass
+            parent = os.path.dirname(src)                        # prune emptied source folder
+            if os.path.realpath(parent) != base and not os.listdir(parent):
+                try: os.rmdir(parent)
+                except OSError: pass
+            moved[src] = new
+            results.append({'path': p, 'ok': True, 'new_path': new})
+        except Exception as e:
+            results.append({'path': p, 'ok': False, 'error': str(e)})
+    # keep the DB in sync — a move changes the file's path
+    for old, new in moved.items():
+        try:
+            db_query('UPDATE media_library SET path=%s WHERE path=%s', (new, old), fetch=False)
+        except Exception as e:
+            log.warning(f"media move: media_library path update failed for {old}: {e}")
+    if moved:
+        try:                                                    # rewrite playlist item paths
+            for r in (db_query('SELECT id, items FROM media_playlists WHERE items IS NOT NULL') or []):
+                items = r.get('items') or []
+                changed = False
+                for it in items:
+                    if it.get('path') in moved:
+                        it['path'] = moved[it['path']]; changed = True
+                if changed:
+                    db_query('UPDATE media_playlists SET items=%s::jsonb WHERE id=%s',
+                             (json.dumps(items), r['id']), fetch=False)
+        except Exception as e:
+            log.warning(f"media move: playlist sync failed: {e}")
+        # Refresh the DLNA cast index in the BACKGROUND — a full rescan takes
+        # tens of seconds, and the browser grid reads the filesystem live (no
+        # rescan needed for it), so the move returns immediately.
+        threading.Thread(target=_minidlna_full_rescan, daemon=True).start()
+    ok = sum(1 for r in results if r.get('ok'))
+    log.info(f"media move: {ok}/{len(results)} -> {dest}")
+    return jsonify({'moved': ok, 'total': len(results), 'results': results})
 
 
 # ── GET /api/media/stream/<path> ─────────────────────────────────

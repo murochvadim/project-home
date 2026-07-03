@@ -156,6 +156,16 @@ Dashboard: user labels clusters → person_embeddings updated
 
 ---
 
+## File/Folder management — Player tab grid (added 2026-07-03)
+The QNAP `Media` share is mounted **NFS on LXC 100 as root** but the Windows/SMB `claude` user can't create/move/delete on it (files land `root:root 644`). So all file ops go through **`player_service.py`**, which owns the files. Three endpoints (beside the existing `/api/media/delete`):
+- **`POST /api/media/mkdir`** `{parent, name}` — `os.makedirs(safe_path(parent/name))`. Unicode names OK.
+- **`POST /api/media/move`** `{paths[], dest}` — `os.makedirs(dest)` + `os.rename` each file (+ its `.description` sidecar), prunes the emptied source folder, then **syncs the DB**: `UPDATE media_library.path` old→new + rewrites matching **playlist** item paths, and a **background** `_minidlna_full_rescan()` (so the move returns instantly — a blocking rescan was the first-cut bug).
+- **`POST /api/media/delete`** — now also **syncs the DB** via **`_db_forget_paths()`**: for a folder it `os.walk`s the inner files first, then `DELETE FROM media_library WHERE path = ANY(...)` + strips them from playlists + background rescan. So delete and move are finally consistent (no orphan rows / broken playlists). All paths `safe_path`-guarded.
+
+**UI** (`media.html` + `media.js`, Player tab → QNAP Media grid): **☑ Select** files → the select bar shows **📁 Move to folder…** (opens a **navigable folder-picker modal** — breadcrumb + ⬆ Up + drill-into folders, "📁 Move here" targets the folder you're viewing, or type a new folder name; folders fetched fresh via `/api/media/browse`, not grid state) and **🗑 Delete** (bulk file delete, confirms). Each **folder tile** has a **🗑** (top-right, like the ✏️ on file tiles) → deletes the folder + contents (confirms). Every delete path confirms (incl. `deleteCrop`, fixed same day). NOTE: `MEDIA_API = http://192.168.1.138:8766` (player_service, sends `Access-Control-Allow-Origin: *`); the dashboard calls it cross-origin.
+
+---
+
 ## TV Playback
 
 ### Devices controlled
