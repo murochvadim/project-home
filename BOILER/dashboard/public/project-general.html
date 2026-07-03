@@ -282,6 +282,35 @@
             <span style="font-size:0.82rem; color:#888;">defensive ceiling — fire after this many seconds outside regardless. Should never trigger in normal use; observability signal.</span>
           </div>
 
+          <label style="align-self:start; grid-column:1 / -1; margin-top:6px; font-weight:700; color:#2b4c7e;">📍 Away places (dynamic bases)</label>
+          <div style="grid-column:1 / -1; font-size:0.8rem; color:#888; margin:-6px 0 2px;">
+            Separate additive layer (LXC 104 <code>geo_places.py</code>, every 2 min) — the Home trip algorithm is untouched. When you dwell somewhere away long enough it becomes a named anchor; legs between anchors + stays appear as separate rows in Recent trips.
+          </div>
+
+          <label>Enable places:</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="checkbox" id="geo-places-on" style="transform:scale(1.2);" />
+            <span style="font-size:0.82rem; color:#888;">off by default — turn on to start detecting away-bases (tracks forward only, never backfills history)</span>
+          </div>
+
+          <label>Dwell to make a place (min):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-place-dwell" min="1" max="1440" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">stay within the place radius this many minutes → it becomes a named point + records the leg that got you there</span>
+          </div>
+
+          <label>Min distance from home (m):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-place-mindist" min="100" max="100000" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">a dwell must be at least this far from home to count as a place (keeps near-home GPS phantoms from spawning places)</span>
+          </div>
+
+          <label>Place radius (m):</label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <input type="number" id="geo-place-radius" min="30" max="2000" style="width:120px;" />
+            <span style="font-size:0.82rem; color:#888;">membership + re-arrival circle for a place (default 120 — bigger than Home's 40 m so returning to a base is detected reliably)</span>
+          </div>
+
           <label style="align-self:start;">Tracked devices:</label>
           <div>
             <table class="geo-dev-table" id="geo-dev-table">
@@ -375,6 +404,7 @@
           <thead><tr style="background:#fafaf6;">
             <th style="text-align:center; padding:6px 6px; width:32px;"><input type="checkbox" id="geo-trips-select-all" onchange="geoTripsToggleAll(this.checked)" /></th>
             <th style="text-align:center; padding:6px 12px; width:48px;">#</th>
+            <th style="text-align:left; padding:6px 12px;">Route</th>
             <th style="text-align:center; padding:6px 12px;">Started</th>
             <th style="text-align:center; padding:6px 12px;">Returned</th>
             <th style="text-align:center; padding:6px 12px;">Duration</th>
@@ -382,7 +412,7 @@
             <th style="text-align:center; padding:6px 12px;">Path length</th>
           </tr></thead>
           <tbody id="geo-trips-tbody">
-            <tr><td colspan="7" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
+            <tr><td colspan="8" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -834,6 +864,11 @@ async function geoLoadSettings() {
     document.getElementById('geo-sm-on').checked = d.geofence_use_state_machine !== false;
     document.getElementById('geo-sm-time-fallback').value = d.geofence_time_fallback_sec ?? 60;
     document.getElementById('geo-sm-hard-cap').value = d.geofence_hard_cap_sec ?? 300;
+    // Places layer (2026-07-03) — opt-in dynamic away-bases.
+    document.getElementById('geo-places-on').checked = d.places_enabled === true;
+    document.getElementById('geo-place-dwell').value = d.place_dwell_min ?? 20;
+    document.getElementById('geo-place-mindist').value = d.place_min_dist_m ?? 500;
+    document.getElementById('geo-place-radius').value = d.place_radius_m ?? 120;
     geoRenderDeviceRows(d.tracked_devices || []);
     geoUpdateCenterMarker();
   } catch (e) { console.warn('geoLoadSettings:', e); }
@@ -901,6 +936,11 @@ async function geoSaveSettings() {
     dedup_window_sec:      parseInt(document.getElementById('geo-dedup-s').value, 10) || 60,
     geofence_events:        document.getElementById('geo-geofence-on').checked,
     geofence_heartbeat_sec: parseInt(document.getElementById('geo-geofence-hb').value, 10) || 0,
+    // Places layer (2026-07-03) — read by geo_places.py on LXC 104; Home algo ignores.
+    places_enabled:    document.getElementById('geo-places-on').checked,
+    place_dwell_min:   parseInt(document.getElementById('geo-place-dwell').value, 10) || 20,
+    place_min_dist_m:  parseInt(document.getElementById('geo-place-mindist').value, 10) || 500,
+    place_radius_m:    parseInt(document.getElementById('geo-place-radius').value, 10) || 120,
     // OwnTracks-only after 2026-06-03 HA-removal cleanup. Spread `d` first so
     // any extra field on the existing entry (e.g. mqtt_topic) is preserved.
     tracked_devices: geoCollectDeviceRows().map(d => ({
@@ -1458,7 +1498,7 @@ async function geoReloadTrips() {
     const tbody = document.getElementById('geo-trips-tbody');
     if (!tbody) return;
     if (!trips.length) {
-      tbody.innerHTML = '<tr><td colspan="7" style="padding:14px; text-align:center; color:#aaa;">No trips yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:14px; text-align:center; color:#aaa;">No trips yet.</td></tr>';
       geoTripsUpdateDeleteBtn();
       return;
     }
@@ -1469,16 +1509,35 @@ async function geoReloadTrips() {
       return h > 0 ? `${h}h ${m}m` : (m > 0 ? `${m}m ${sec}s` : `${sec}s`);
     };
     const fmtDist = m => m == null ? '—' : (m >= 1000 ? (m/1000).toFixed(2) + ' km' : m + ' m');
-    tbody.innerHTML = trips.map((t, i) => `
-      <tr style="border-top:1px solid #f0eee8;">
-        <td style="padding:5px 6px; text-align:center;"><input type="checkbox" class="geo-trip-cb" data-trip-id="${t.id}" onchange="geoTripsUpdateDeleteBtn()" /></td>
-        <td style="padding:5px 12px; text-align:center; color:#1565c0; font-weight:600; font-family:monospace;">${total - i}</td>
-        <td style="padding:5px 12px; text-align:center; color:#666;">${pgEsc(new Date(t.started_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
-        <td style="padding:5px 12px; text-align:center; color:#666;">${t.returned_at ? pgEsc(new Date(t.returned_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })) : '<span style="color:#e67e22; font-weight:600;">in progress</span>'}</td>
-        <td style="padding:5px 12px; text-align:center; font-weight:600;">${fmtDur(t.duration_sec)}</td>
-        <td style="padding:5px 12px; text-align:center; color:#c0392b; font-weight:600;">${fmtDist(t.max_dist_m)}</td>
-        <td style="padding:5px 12px; text-align:center; color:#1a7a3a; font-weight:600;">${fmtDist(t.path_length_m)}</td>
-      </tr>`).join('');
+    // Three merged row types (see /api/geolocation/trips): home (the untouched
+    // umbrella trip — DIMMED when place rows sit inside its span), leg (A → B),
+    // stay (📍 dwell at a named place). rid = "home:1"/"leg:2"/"stay:3".
+    tbody.innerHTML = trips.map((t, i) => {
+      const rt = t.row_type || 'home';
+      const dim = rt === 'home' && t.dim;
+      const rowBg = rt === 'stay' ? 'background:#f2f8f2;' : (dim ? 'background:#fbfbf9;' : '');
+      const routeColor = dim ? '#b0aca4'
+        : rt === 'stay' ? '#1a7a3a'
+        : rt === 'leg'  ? '#1565c0' : '#555';
+      const routeWeight = rt === 'home' ? '500' : '700';
+      const muted = dim ? 'color:#c2beb6;' : 'color:#666;';
+      const returnedCell = t.returned_at
+        ? pgEsc(new Date(t.returned_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))
+        : (rt === 'stay'
+            ? '<span style="color:#1a7a3a; font-weight:600;">still here</span>'
+            : '<span style="color:#e67e22; font-weight:600;">in progress</span>');
+      return `
+      <tr style="border-top:1px solid #f0eee8; ${rowBg}">
+        <td style="padding:5px 6px; text-align:center;"><input type="checkbox" class="geo-trip-cb" data-trip-id="${pgEsc(t.rid || ('home:' + t.id))}" onchange="geoTripsUpdateDeleteBtn()" /></td>
+        <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : 'color:#1565c0;'} font-weight:600; font-family:monospace;">${total - i}</td>
+        <td style="padding:5px 12px; text-align:left; color:${routeColor}; font-weight:${routeWeight}; ${dim ? 'font-size:0.82rem;' : ''}">${pgEsc(t.route || '')}${dim ? ' <span style="font-size:0.72rem; color:#c2beb6;">(umbrella)</span>' : ''}</td>
+        <td style="padding:5px 12px; text-align:center; ${muted}">${pgEsc(new Date(t.started_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
+        <td style="padding:5px 12px; text-align:center; ${muted}">${returnedCell}</td>
+        <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : ''} font-weight:600;">${fmtDur(t.duration_sec)}</td>
+        <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : 'color:#c0392b;'} font-weight:600;">${fmtDist(t.max_dist_m)}</td>
+        <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : 'color:#1a7a3a;'} font-weight:600;">${fmtDist(t.path_length_m)}</td>
+      </tr>`;
+    }).join('');
     // Reset the select-all checkbox + button state on each re-render. Per-row
     // selections don't persist across polls — user's expected to pick + delete
     // in one quick action.
@@ -1511,9 +1570,11 @@ function geoTripsUpdateDeleteBtn() {
 }
 
 async function geoDeleteSelectedTrips() {
+  // rid is a composite ("home:1"/"leg:2"/"stay:3"); send as strings — the
+  // server routes each to its own table. Legacy plain ints still accepted there.
   const ids = [...document.querySelectorAll('.geo-trip-cb:checked')]
-    .map(cb => parseInt(cb.dataset.tripId, 10))
-    .filter(n => Number.isFinite(n));
+    .map(cb => cb.dataset.tripId)
+    .filter(Boolean);
   if (!ids.length) return;
   if (!confirm(`Delete ${ids.length} trip${ids.length>1?'s':''} from the database? This cannot be undone.`)) return;
   try {

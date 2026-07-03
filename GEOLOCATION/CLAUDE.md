@@ -57,6 +57,8 @@ LXC 102 PostgreSQL
 | Deployed copy | `root@192.168.1.227:/opt/owntracks_ingest.py` | LXC 104, long-running service |
 | Systemd unit | `owntracks-ingest.service` on LXC 104 | enabled, active |
 | Trip janitor | [scripts/geo_trip_janitor.py](../scripts/geo_trip_janitor.py) → `/opt/geo_trip_janitor.py` | LXC 104, cron `*/5`; deletes GPS bounce-storm fake trips (see below) |
+| Places cron | [scripts/geo_places.py](../scripts/geo_places.py) → `/opt/geo_places.py` | LXC 104, cron `*/2`; the **Places layer** — dwell→named anchor + legs + stays. Additive; NEVER touches ingest / phone_trips (see below) |
+| Places tables | `phone_places` / `phone_place_trips` / `geo_place_state` on LXC 102 | Stays / anchor-to-anchor legs / per-group cursor+state. Migration [GEOLOCATION/migrations/001_places.sql](migrations/001_places.sql) |
 | Env file | `/etc/owntracks-ingest.env` on LXC 104 | `MQTT_USER`, `OWNTRACKS_MQTT_PASS`, `DB_PASS` (HA_TOKEN no longer used) |
 | Dashboard surface | [BOILER/dashboard/public/project-general.html](../BOILER/dashboard/public/project-general.html) Geolocation tab | Settings card + map + events + recent trips |
 | Server endpoints | `/api/geolocation/*` in [BOILER/dashboard/server.js](../BOILER/dashboard/server.js) | settings, status, locations, events, trips |
@@ -80,6 +82,10 @@ LXC 102 PostgreSQL
 | `geofence_use_state_machine` | true | master switch for provisional→confirmed flow |
 | `geofence_time_fallback_sec` | 60 | commit threshold after first outside ping |
 | `geofence_hard_cap_sec` | 300 | defensive ceiling — should never fire in normal use |
+| `places_enabled` | false | **Places layer** master switch (opt-in; read by geo_places.py) |
+| `place_dwell_min` | 20 | dwell minutes → create a named place + record the leg that got you there |
+| `place_min_dist_m` | 500 | a dwell must be at least this far from home to count as a place |
+| `place_radius_m` | 120 | place membership + re-arrival radius (bigger than Home's 40 m so returning to a base is reliably detected) |
 
 **Removed in 2026-06-03 cleanup**: `ha_ingest_enabled`, `sensor_veto_enabled`, `sensor_veto_still_debounce_sec`, `geofence_wifi_min_age_sec`, plus per-device `ha_entity` / `wifi_entity` / `battery_entity` / `activity_entity` / `android_auto_entity` / `wifi_home_ssid` fields.
 
@@ -330,6 +336,58 @@ All three leave `device_locations`/`phone_trips` rows and the ingest/trip algori
 untouched — they only change what the dashboard *draws*. Same 4-crossing fingerprint
 as the janitor. Caveat: a crossing-based filter needs the ping history — clearing
 `device_locations` (the Clear button) disables it until the trail refills.
+
+## Places layer — dynamic away-bases (2026-07-03)
+
+The Home trip algorithm only knows ONE anchor (Home): a trip opens when you leave
+the Home circle and closes when you re-enter it, staying open the whole time
+you're away. The **Places layer** adds *secondary anchors* so a stay in another
+town / abroad is broken into meaningful pieces. **It is a SEPARATE, ADDITIVE,
+opt-in layer — `owntracks_ingest.py`, the Home state machine, `phone_trips`, the
+janitor, and `_flagOutliers` are NOT touched** (same discipline as the janitor).
+
+**How it runs:** `scripts/geo_places.py` → `/opt/geo_places.py`, cron `*/2` on
+LXC 104. It only READS the already-cleaned `device_locations` stream and writes
+the three new tables. Does nothing unless `places_enabled = true`. Incremental via
+a per-group `geo_place_state.last_ts` cursor; first enabled run seeds the cursor
+to the newest ping (tracks **forward only**, never backfills history into fake
+places). Reverse-geocodes place names via Nominatim (verified reachable from LXC
+104; one call per place, User-Agent set, graceful fallback).
+
+**Model — a chain of anchors + the legs between them.** An *anchor* = Home **plus**
+every spot the phone dwells at `≥ place_dwell_min` within `place_radius_m` and
+`> place_min_dist_m` from Home (auto-named). Two row kinds, merged into the same
+Recent trips list:
+- **Stay** (`phone_places` row) — `📍 Stay · <name> · <duration>`; `left_at` NULL
+  while you're still there ("still here").
+- **Leg** (`phone_place_trips` row) — recorded as a COMPLETED row on ARRIVAL at an
+  anchor: `home_to_place` / `place_to_place` / `place_loop` / `place_to_home`.
+  `max_dist_m` measured from the leg's **origin** anchor. **`Home→Home` excursions
+  are dropped** — `phone_trips` already owns those (no duplication).
+
+A journey's anchors persist until you return Home (which clears them), so coming
+back through an earlier anchor (Beach → Haifa) closes a leg there **without** a new
+Stay row. Example `Home → Haifa (stay) → Beach (stay) → Haifa → Home` yields exactly
+6 rows. Robust by design: dwell + `place_min_dist_m` means the ~154 m home phantom
+and single-ping far-teleport replays can't spawn a place.
+
+**Dashboard.** Merged into the existing **Recent trips** card (no separate card):
+`GET /api/geolocation/trips` now UNIONs `phone_trips` (rendered `Home → Home`) +
+`phone_place_trips` + `phone_places`, adds a **Route** column and a `row_type`
+tag, and **DIMS** an umbrella Home trip when place rows fall inside its span (the
+umbrella can't be removed — it's the untouched algorithm — so it just steps back
+visually, tagged `(umbrella)`). The Home-phantom filter stays scoped to `home`
+rows only. `DELETE /api/geolocation/trips` routes composite ids
+(`home:` / `leg:` / `stay:`) to the right table (plain ints still = home, back-compat).
+Settings live in a **📍 Away places** block on the Geolocation Settings card.
+
+**Tables** (LXC 102, retention forever; the two data tables 🔒 protected):
+- `phone_places` — `id, group_id, name, lat, lon, radius_m, arrived_at, left_at, created_at`
+- `phone_place_trips` — `id, group_id, device_label, kind, origin_name, dest_name, from_place_id, to_place_id, started_at, returned_at, duration_sec, max_dist_m, path_length_m, outside_pings, created_at`; partial unique index `uq_phone_place_trips_open_per_group` (unused today — legs are always inserted complete)
+- `geo_place_state` — `group_id PK, last_ts, state JSONB, updated_at`
+
+**Log:** `/var/log/geo-places.log` on LXC 104. **Deploy:** `scp scripts/geo_places.py
+root@192.168.1.227:/opt/geo_places.py` (config via dashboard settings — no restart).
 
 ## Future considerations (NOT scoped)
 

@@ -2285,7 +2285,7 @@ const DBV_GROUPS = [
   ['Backup',                ['backup_storages','backup_jobs','backup_log']],
   ['Power & UPS',           ['power_consumption','power_devices','power_bills','water_bills','ups_status','ups_power_events']],
   ['Gateway / NetBird',     ['netbird_peers_local','netbird_tenant_settings','gateway_peer_transitions']],
-  ['Geolocation',           ['device_locations','phone_trips']],
+  ['Geolocation',           ['device_locations','phone_trips','phone_places','phone_place_trips','geo_place_state']],
   ['Medical',               ['medical_contacts','medical_documents','medical_test_results']],
   ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_water','ph_steps','ph_steps_excluded_trips','ph_exercise_log']],
   ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_site_receipts','privacy_doc_crypto','privacy_sheets','visited_places']],
@@ -2332,6 +2332,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       gateway_peer_transitions: 'ts',
       device_locations: 'ts',
       phone_trips: 'started_at',
+      phone_places: 'arrived_at', phone_place_trips: 'started_at', geo_place_state: 'updated_at',
       medical_contacts: 'created_at', medical_documents: 'uploaded_at',
       medical_test_results: 'tested_at',
       cellular_antennas: 'last_ingest',
@@ -3589,7 +3590,11 @@ app.post('/api/geolocation/settings', async (req, res) => {
                    // State machine (HA-free since 2026-06-03). Two commit knobs.
                    'geofence_use_state_machine',
                    'geofence_time_fallback_sec',
-                   'geofence_hard_cap_sec'];
+                   'geofence_hard_cap_sec',
+                   // Places layer (2026-07-03) — geo_places.py on LXC 104 reads
+                   // these; the Home algorithm ignores them. Opt-in.
+                   'places_enabled', 'place_dwell_min',
+                   'place_min_dist_m', 'place_radius_m'];
   const clean = {};
   for (const k of allowed) if (k in cfg) clean[k] = cfg[k];
   try {
@@ -3806,52 +3811,121 @@ app.get('/api/geolocation/trips', async (req, res) => {
   if (!includeOpen)        clauses.push('returned_at IS NOT NULL');
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   try {
-    const r = await db.query(
+    // (1) Home trips — the EXISTING algorithm's phone_trips, untouched.
+    let trips = (await db.query(
       `SELECT id, group_id, device_label, started_at, returned_at,
-              duration_sec, max_dist_m, path_length_m, outside_pings,
-              confirmed
+              duration_sec, max_dist_m, path_length_m, outside_pings, confirmed
        FROM phone_trips
        ${where}
        ORDER BY started_at DESC LIMIT $1`,
       [limit],
-    );
-    // Hide phantom fake trips at DISPLAY time — same proven rule as the
+    )).rows;
+    // Hide phantom fake HOME trips at DISPLAY time — same proven rule as the
     // geo_trip_janitor: a short trip (< 1 h) whose max distance from home stayed
     // within the ~154 m fixed GPS-multipath phantom (max_dist_m <=
-    // real_trip_min_far_m, default 250 m) never actually left — it's fake. Every
-    // genuine trip in history reaches >= 324 m, so this can't hide a real one.
-    // The janitor deletes these on its 5-min cron; hiding here makes them
-    // invisible IMMEDIATELY so an ongoing GPS storm never flashes a fake trip in
-    // the list between janitor runs. Display-only — rows stay in the DB until the
-    // janitor removes them. (No ping re-query / crossings / dwell math: the trip's
-    // own stored max_dist_m is the whole signal.)
-    let trips = r.rows;
+    // real_trip_min_far_m, default 250 m) never actually left. Applies to HOME
+    // rows only — a place leg can legitimately be short + near its origin anchor.
+    let FAR_M = 250;
     try {
       const g = (await db.query("SELECT value FROM dashboard_settings WHERE key='geolocation'")).rows[0]?.value || {};
-      const FAR_M = Number(g.real_trip_min_far_m) || 250;
+      FAR_M = Number(g.real_trip_min_far_m) || 250;
       trips = trips.filter(t =>
         !((t.duration_sec || 0) < 3600 && (t.max_dist_m || 0) <= FAR_M));
-    } catch (_) { /* on any error, fall back to unfiltered rows */ }
-    res.json({ trips });
+    } catch (_) { /* fall back to unfiltered home rows */ }
+
+    // (2) Places layer (2026-07-03) — SEPARATE tables, additive. Merged into the
+    // same list. Guarded so a missing migration never 500s the whole card.
+    let legs = [], stays = [];
+    try {
+      legs = (await db.query(
+        `SELECT id, group_id, device_label, kind, origin_name, dest_name,
+                started_at, returned_at, duration_sec, max_dist_m, path_length_m
+         FROM phone_place_trips ORDER BY started_at DESC LIMIT $1`, [limit])).rows;
+      stays = (await db.query(
+        `SELECT id, group_id, name, arrived_at, left_at
+         FROM phone_places ORDER BY arrived_at DESC LIMIT $1`, [limit])).rows;
+    } catch (_) { legs = []; stays = []; }
+
+    const routeLeg = (k, o, d) =>
+      k === 'home_to_place' ? `Home → ${d}` :
+      k === 'place_to_home' ? `${o} → Home` :
+      k === 'place_loop'    ? `${o} ⟲ (out & back)` :
+                              `${o} → ${d}`;
+
+    const rows = [];
+    for (const t of trips) rows.push({
+      rid: `home:${t.id}`, row_type: 'home', id: t.id, group_id: t.group_id,
+      route: 'Home → Home', kind: 'home',
+      started_at: t.started_at, returned_at: t.returned_at,
+      duration_sec: t.duration_sec, max_dist_m: t.max_dist_m,
+      path_length_m: t.path_length_m, dim: false, device_label: t.device_label,
+    });
+    for (const l of legs) rows.push({
+      rid: `leg:${l.id}`, row_type: 'leg', id: l.id, group_id: l.group_id,
+      route: routeLeg(l.kind, l.origin_name, l.dest_name), kind: l.kind,
+      started_at: l.started_at, returned_at: l.returned_at,
+      duration_sec: l.duration_sec, max_dist_m: l.max_dist_m,
+      path_length_m: l.path_length_m, dim: false, device_label: l.device_label,
+    });
+    for (const s of stays) {
+      const dur = s.left_at
+        ? Math.max(0, Math.round((new Date(s.left_at) - new Date(s.arrived_at)) / 1000))
+        : null;
+      rows.push({
+        rid: `stay:${s.id}`, row_type: 'stay', id: s.id, group_id: s.group_id,
+        route: `📍 Stay · ${s.name || 'place'}`, kind: 'stay',
+        started_at: s.arrived_at, returned_at: s.left_at,
+        duration_sec: dur, max_dist_m: null, path_length_m: null, dim: false,
+      });
+    }
+    // Dim an umbrella Home trip when place rows fall inside its span — the
+    // granular legs/stays are the real content; the umbrella can't be removed
+    // (that's the untouched algorithm) so it just steps back visually.
+    const placeRows = rows.filter(r => r.row_type !== 'home');
+    for (const h of rows) {
+      if (h.row_type !== 'home' || !h.returned_at) continue;
+      const hs = new Date(h.started_at), he = new Date(h.returned_at);
+      h.dim = placeRows.some(p => p.group_id === h.group_id &&
+        new Date(p.started_at) >= hs && new Date(p.started_at) <= he);
+    }
+    rows.sort((a, b) => new Date(b.started_at) - new Date(a.started_at));
+    res.json({ trips: rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// DELETE /api/geolocation/trips — bulk-delete trip rows by id. Body:
-// `{ ids: [int, int, ...] }`. Used by the Recent trips card's multi-select
-// delete button. Returns `{ deleted: <rowcount> }`.
+// DELETE /api/geolocation/trips — bulk-delete rows from the merged Recent trips
+// list. Body `{ ids: [...] }` where each id is either a plain int (legacy = a
+// phone_trips HOME row) or a `"home:123"` / `"leg:45"` / `"stay:9"` composite
+// (the merged endpoint sends composites). Routes each to its own table so place
+// legs/stays and Home trips can be pruned from the same UI. A deleted stay's
+// legs keep their names (FK is ON DELETE SET NULL). Returns `{ deleted }`.
 app.delete('/api/geolocation/trips', async (req, res) => {
   const raw = (req.body && req.body.ids) || [];
   if (!Array.isArray(raw)) return res.status(400).json({ error: 'ids must be an array' });
-  const ids = raw.map(x => parseInt(x, 10)).filter(n => Number.isFinite(n) && n > 0);
-  if (!ids.length) return res.status(400).json({ error: 'ids must contain at least one positive integer' });
+  const buckets = { home: [], leg: [], stay: [] };
+  for (const x of raw) {
+    const s = String(x);
+    const m = s.match(/^(home|leg|stay):(\d+)$/);
+    if (m) { buckets[m[1]].push(parseInt(m[2], 10)); continue; }
+    const n = parseInt(s, 10);              // legacy plain int = home trip
+    if (Number.isFinite(n) && n > 0) buckets.home.push(n);
+  }
+  const total = buckets.home.length + buckets.leg.length + buckets.stay.length;
+  if (!total) return res.status(400).json({ error: 'ids must contain at least one valid id' });
+  const tableFor = { home: 'phone_trips', leg: 'phone_place_trips', stay: 'phone_places' };
   try {
-    const r = await db.query(
-      'DELETE FROM phone_trips WHERE id = ANY($1::int[])',
-      [ids],
-    );
-    res.json({ deleted: r.rowCount });
+    let deleted = 0;
+    for (const kind of ['home', 'leg', 'stay']) {
+      if (!buckets[kind].length) continue;
+      const r = await db.query(
+        `DELETE FROM ${tableFor[kind]} WHERE id = ANY($1::bigint[])`,
+        [buckets[kind]],
+      );
+      deleted += r.rowCount;
+    }
+    res.json({ deleted });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
