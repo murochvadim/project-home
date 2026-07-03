@@ -29,16 +29,21 @@ function ctAgeBand(age) {
 }
 const CT_BAND_LABEL = { u40: 'under 40', '40': '40–49', '50': '50–59', '60': '60–69', '70': '70–79', '80': '80+' };
 
-// Rough reference midpoints per age band (NOT clinical): rt = avg simple reaction
-// time in ms (lower better); span = max forward digit span (higher better);
-// stroop = net correct in 30 s (higher better).
+// Rough reference midpoints per age band (NOT clinical): rt = MEDIAN simple
+// reaction time in ms (lower better); span = max forward digit span (higher
+// better); stroop = CORRECT taps in 30 s (higher better).
+// ⚠ These are rebased for THIS test's modality — a browser page tapped with a
+// mouse/trackpad, which adds ~60–110 ms of display + input latency vs the
+// keyboard/button-box setups the clinical literature uses. Lab RT norms (~270 ms)
+// would flag a normal browser user as "below average", so the RT midpoints below
+// carry a fixed browser offset and Stroop counts a click-realistic throughput.
 const CT_NORMS = {
-  u40: { rt: 270, span: 7.0, stroop: 22 },
-  '40': { rt: 285, span: 7.0, stroop: 21 },
-  '50': { rt: 300, span: 6.5, stroop: 20 },
-  '60': { rt: 320, span: 6.0, stroop: 18 },
-  '70': { rt: 345, span: 6.0, stroop: 16 },
-  '80': { rt: 380, span: 5.5, stroop: 14 },
+  u40: { rt: 330, span: 7.0, stroop: 22 },
+  '40': { rt: 345, span: 7.0, stroop: 21 },
+  '50': { rt: 360, span: 6.5, stroop: 19 },
+  '60': { rt: 385, span: 6.0, stroop: 17 },
+  '70': { rt: 410, span: 6.0, stroop: 15 },
+  '80': { rt: 440, span: 5.5, stroop: 13 },
 };
 function ctRate(score, norm, dir, tol) {
   if (score == null || norm == null) return { label: '—', color: '#888' };
@@ -119,8 +124,14 @@ function ctReaction(next) {
       if (waiting) { clearTimeout(timer); box.style.background = '#b91c1c'; box.textContent = 'Too early — wait for green'; setTimeout(trialView, 900); return; }
       if (greenAt) {
         times.push(Math.round(performance.now() - greenAt)); greenAt = 0; trial++;
-        if (trial >= TRIALS) next({ avg_ms: Math.round(times.reduce((a, b) => a + b, 0) / times.length), trials: times });
-        else trialView();
+        if (trial >= TRIALS) {
+          // MEDIAN (not mean) so a single attention lapse can't inflate the score.
+          const sorted = times.slice().sort((a, b) => a - b);
+          const n = sorted.length;
+          const median = n % 2 ? sorted[(n - 1) / 2] : Math.round((sorted[n / 2 - 1] + sorted[n / 2]) / 2);
+          const mean = Math.round(times.reduce((a, b) => a + b, 0) / n);
+          next({ avg_ms: median, median_ms: median, mean_ms: mean, trials: times });
+        } else trialView();
       }
     };
   }
@@ -199,7 +210,7 @@ function ctStroop(next) {
       const remain = Math.max(0, Math.ceil((endAt - performance.now()) / 1000));
       const hdr = document.getElementById('ct-st-hdr');
       if (hdr) hdr.textContent = `Task 3/3 · Stroop — tap the INK colour · ${remain}s · ✔${correct} ✗${wrong}`;
-      if (performance.now() >= endAt) { clearInterval(ticker); running = false; next({ correct, wrong, net: Math.max(0, correct - wrong) }); }
+      if (performance.now() >= endAt) { clearInterval(ticker); running = false; next({ correct, wrong, score: correct, net: Math.max(0, correct - wrong) }); }
     }, 250);
   }
   runner.innerHTML = `<div style="font-size:0.95rem; margin-bottom:10px;">🎨 <b>Stroop</b> (Task 3 of 3)</div>
@@ -246,14 +257,14 @@ function ctScores(t) {
   return {
     rt: r.reaction && r.reaction.avg_ms != null ? r.reaction.avg_ms : null,
     span: r.digit_span && r.digit_span.max_span != null ? r.digit_span.max_span : null,
-    stroop: r.stroop ? (r.stroop.net != null ? r.stroop.net : r.stroop.correct) : null,
+    stroop: r.stroop ? (r.stroop.score != null ? r.stroop.score : (r.stroop.correct != null ? r.stroop.correct : (r.stroop.net != null ? r.stroop.net : null))) : null,
   };
 }
 function ctBandOf(t) { return (t.meta && t.meta.age_band) || ctAgeBand(t.meta && t.meta.age); }
 function ctRatings(t) {
   const s = ctScores(t), n = CT_NORMS[ctBandOf(t)] || null;
   return {
-    rt: ctRate(s.rt, n && n.rt, 'lower', 40),
+    rt: ctRate(s.rt, n && n.rt, 'lower', 45),
     span: ctRate(s.span, n && n.span, 'higher', 1.0),
     stroop: ctRate(s.stroop, n && n.stroop, 'higher', 3),
   };
@@ -274,7 +285,7 @@ function ctRenderResult(t) {
        <tr style="color:#666; border-bottom:2px solid #eee;"><th style="text-align:left; padding:6px 10px;">Domain</th><th style="text-align:right; padding:6px 10px;">Score</th><th style="text-align:left; padding:6px 10px;">vs age</th></tr>
        ${row('🖱️ Reaction time', s.rt, ' ms', rt.rt)}
        ${row('🔢 Digit span', s.span, '', rt.span)}
-       ${row('🎨 Stroop (net / 30 s)', s.stroop, '', rt.stroop)}
+       ${row('🎨 Stroop (correct / 30 s)', s.stroop, '', rt.stroop)}
      </table>`;
   const wrap = document.getElementById('ct-result-wrap');
   wrap.style.display = 'block';
