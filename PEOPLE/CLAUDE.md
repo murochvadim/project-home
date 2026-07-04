@@ -25,8 +25,8 @@ graph holds a friend as just another figure with a line. Maps **1:1** onto the m
 nodes, `people_relations` = edges. No schema change needed — this is what the edge-list was for.
 
 - **Nodes = colored person-figure icon + name ONLY** (👤 silhouette + the person's name label —
-  chosen over photo-avatars and plain dots). Fill color = `people.category` (family / friend /
-  colleague / …) with a **legend**. **Nothing else on the node** — keep the graph clean; all other
+  chosen over photo-avatars and plain dots). Fill color = `people.category` (the 4 buckets below).
+  **Nothing else on the node** — keep the graph clean; all other
   detail (contact, dates, notes, photo) lives in the **Directory card** opened on click. (Photos are
   still stored per person for that card; the graph node itself stays icon + name.)
 - **Edges = lines** between connected people (`people_relations`); optionally colored/styled by
@@ -40,6 +40,10 @@ nodes, `people_relations` = edges. No schema change needed — this is what the 
 - **Rendering:** best done with a small vetted graph lib loaded from CDN (candidates **Cytoscape.js**
   or **vis-network** — same CDN pattern as Leaflet/Chart.js already on the dashboard); hand-rolled
   SVG is the fallback for small graphs. **Pin the choice at Phase-2 build time**, not now.
+- **Totals panel — top-right corner (user request):** a live count per `category`, doubling as the
+  graph's **color legend**. Rows: 🔵 **My family** N · 🟣 **Wife's family** N · 🟢 **Friends** N ·
+  ⚪ **People I know** N · **Total** N. Counts recompute from the current people set (and honor any
+  active filter). One panel = both the legend (what each color means) and the summary.
 
 ## Placement (user decision)
 
@@ -51,8 +55,14 @@ Dashboard-only module — no LXC service (like Corridor / Living Room / the othe
 
 ## Data model (LXC 102 `home_data`, designed to grow)
 
-- **`people`** — `id`, names (`given_name` / `family_name` / `maiden_name`), `category`
-  (family / friend / colleague / …), `gender` (for tree layout), `birth_date`, `death_date`
+- **`people`** — `id`, names (`given_name` / `family_name` / `maiden_name`), **`category`** — the
+  bucket that drives BOTH the node color AND the top-right totals; user's set: **`family_mine`
+  ("My family") / `family_spouse` ("Wife's family") / `friend` ("Friends") / `other` ("People I
+  know")**. Note family splits into TWO sides (mine vs spouse's). Extensible — labels + colors come
+  from a small config (`dashboard_settings.people.categories`) so buckets can be renamed/added
+  (e.g. "colleagues") without a schema change. Assignment is **manual** to start (explicit per
+  person); auto-deriving "wife's family" from the spouse link on the graph is a possible later add.
+  Then: `gender` (for tree layout), `birth_date`, `death_date`
   (nullable → living vs deceased), `photo` (basename → QNAP), `phone` / `email` / `address`,
   `relationship_to_me` (how related / how you know them), `origin_place` / `origin_country`
   (+ optional `lat` / `lon` for the origins map), `notes` (story text), `tags` (jsonb — friend
