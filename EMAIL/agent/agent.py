@@ -480,7 +480,16 @@ def _run_extract(fields, subject, body, pdf_text=""):
         except re.error:
             continue
         if m:
-            out[fld] = m.group(1) if m.groups() else m.group(0)
+            val = m.group(1) if m.groups() else m.group(0)
+            # RTL number un-swap (opt-in per field). Some Israeli invoices render a
+            # decimal amount right-to-left so the extractor reads the two segments
+            # swapped around the dot ("100.86" comes out as "86.100"). swap_decimal
+            # flips them back: "A.B" → "B.A". Only touches values with exactly one dot.
+            if f.get("swap_decimal") and val:
+                parts = [p.strip() for p in str(val).split(".")]
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    val = parts[1] + "." + parts[0]
+            out[fld] = val
     return out
 
 

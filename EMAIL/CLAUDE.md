@@ -101,9 +101,17 @@ site's Docs window. `store:"row"` (default) just writes the generic `email_extra
   the **value precedes the label** (`57.83\nסה"כ מחיר`, `30/06/26 :תאריך חשבונית`) → use **value-before-label**
   anchors: `([\d.,]+)\s*<label>`, `(\d{2}/\d{2}/\d{2})\s*:?\s*<label>`. Digits/dates aren't reversed, so the
   captured VALUES are always correct — only the Hebrew anchor must match the extractor.
+- **⚠ Exception — RTL segment-swapped decimals (2026-07-04, Partner):** SOME invoices render the DECIMAL
+  amount right-to-left too, so `100.86` extracts **segment-swapped** as `86.100` (proven: before-VAT
+  `85.47` + VAT `15.39` = `100.86`, all swapped in the text; PyMuPDF also splits it across lines as
+  `86\n.\n100`). A single-capture regex can't reorder, so set **`swap_decimal:true`** on that extract field
+  → the agent un-swaps `A.B → B.A` (whitespace-stripped) before parsing. **Only dotted decimals swap** —
+  slash-format dates (`19/06/26`) and invoice numbers are fine. Capture the swapped number normally
+  (`([\d]+\s*\.\s*[\d]+)\s*\{?\s*<label>`; `{` = the ₪ glyph) and let `swap_decimal` fix it.
 - **Extract field extras:** `source:"pdf"` (first PDF attachment), `as:"amount"|"date"|"vendor"|"invoice_no"`
-  (maps the field to a receipt column), `date_format` (e.g. `DD/MM/YY` → ISO). Vendor = rule `vendor` else
-  derived from the sender domain (`aviem-evm.co.il` → `Aviem`).
+  (maps the field to a receipt column), `date_format` (e.g. `DD/MM/YY` → ISO), **`swap_decimal:true`**
+  (un-swap an RTL `A.B`→`B.A`, e.g. Partner `86.100`→`100.86`; opt-in per field, in `_run_extract`). Vendor =
+  rule `vendor` else derived from the sender domain (`aviem-evm.co.il` → `Aviem`).
 - **On live fire** (`_apply_rules`): writes the `email_extractions` audit row **and** upserts
   **`privacy_site_receipts`** (`site_id, vendor, amount, currency, invoice_date, invoice_no, gmail_id, data`,
   `ON CONFLICT (gmail_id)` = one receipt per email). It does **NOT** touch QNAP.
