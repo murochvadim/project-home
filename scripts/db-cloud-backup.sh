@@ -29,10 +29,27 @@ JOB_ID=$($PSQL -c "SELECT id FROM backup_jobs WHERE name='$JOB_NAME' LIMIT 1" | 
 mark_fail() { [ -n "$LOG_ID" ] && $PSQL -c "UPDATE backup_log SET status='failed',finished_at=now(),message='script aborted' WHERE id=$LOG_ID AND status='running'" >/dev/null 2>&1; }
 trap mark_fail EXIT
 
-# dump → encrypt → stream straight to Drive (no temp file)
-PGPASSWORD='' "$PGDUMP" -h "$DB_HOST" -U "$DB_USER" -Fc "$DB_NAME" \
-  | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file "$PASSFILE" \
-  | rclone rcat "$REMOTE/home_data_${STAMP}.dump.gpg"
+# dump → encrypt → stream straight to Drive (no temp file). HARDENING against the
+# shared rclone client_id rate limit (Error 403 "Queries per minute" on the shared
+# project — the ~146 MB stream was tripping it most nights, see backup docs):
+#   --drive-chunk-size 128M  → ~2 upload chunks instead of ~18 (8M default) = ~9x
+#                              fewer API calls, so far less likely to hit the quota
+#   --tpslimit / --low-level-retries → stay under ~10 tps + ride out transient 403s
+#   outer 3x loop            → rcat can't replay a pipe, so we re-dump on failure
+# REAL fix = a personal Google client_id on the gdrive_sheets remote (rclone's own
+# recommendation; the shared default is heavily used). This only reduces the odds.
+RC_OPTS="--drive-chunk-size 128M --tpslimit 6 --low-level-retries 20"
+up_ok=0
+for attempt in 1 2 3; do
+  if PGPASSWORD='' "$PGDUMP" -h "$DB_HOST" -U "$DB_USER" -Fc "$DB_NAME" \
+      | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file "$PASSFILE" \
+      | rclone rcat $RC_OPTS "$REMOTE/home_data_${STAMP}.dump.gpg"; then
+    up_ok=1; break
+  fi
+  echo "$(date '+%F %T') upload attempt $attempt failed (rate limit?) — retry in 90s"
+  sleep 90
+done
+[ "$up_ok" = 1 ] || { echo "$(date '+%F %T') DB cloud backup FAILED after 3 attempts (shared client_id quota — set a personal client_id)"; exit 1; }
 
 # refresh 'latest' (server-side copy on Drive) + prune dated > KEEP days
 rclone copyto "$REMOTE/home_data_${STAMP}.dump.gpg" "$REMOTE/home_data_latest.dump.gpg"
