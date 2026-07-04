@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Walking-trip -> Personal Health steps importer (LXC 104 cron, */15).
 
-SEGMENT-BASED classifier (2026-06-27). For each confirmed, closed phone_trips row
-not yet imported, pull its GPS points from device_locations and decide
-walk / drive / phantom from PER-POINT segment speeds — instead of trusting the
+SEGMENT-BASED classifier (2026-06-27). For each candidate — a confirmed closed
+phone_trips row (source='trip') OR a Places-layer phone_place_trips leg
+(source='place_leg', since 2026-07-04) — not yet imported, pull its GPS points from
+device_locations and decide walk / drive / phantom from PER-POINT segment speeds.
+The classifier is UNCHANGED: driving legs (home_to_place / place_to_home) auto-skip,
+only genuine between-place walks import. Instead of trusting the
 GPS-jitter-inflated path_length_m (which can't tell a steady walk from
 drive->park->drive, and reads a normal walk as "too fast"). Steps come from the
 CLEAN (good-accuracy) path distance.
@@ -80,6 +83,9 @@ def main():
     cur.execute("DELETE FROM ph_steps WHERE source = 'trip' "
                 "AND NOT EXISTS (SELECT 1 FROM phone_trips t WHERE t.id = ph_steps.trip_id)")
     reconciled = cur.rowcount
+    cur.execute("DELETE FROM ph_steps WHERE source = 'place_leg' "
+                "AND NOT EXISTS (SELECT 1 FROM phone_place_trips t WHERE t.id = ph_steps.trip_id)")
+    reconciled += cur.rowcount
 
     # device_label -> household_users.id
     cur.execute("SELECT id, device_label FROM household_users WHERE device_label IS NOT NULL")
@@ -101,13 +107,23 @@ def main():
 
     # candidate trips: confirmed, closed, not yet imported, not excluded
     cur.execute("""
-        SELECT t.id, t.group_id, t.device_label, t.started_at, t.returned_at
+        SELECT t.id, t.group_id, t.device_label, t.started_at, t.returned_at, 'trip' AS src
           FROM phone_trips t
          WHERE t.confirmed = true AND t.returned_at IS NOT NULL AND t.duration_sec > 0
-           AND NOT EXISTS (SELECT 1 FROM ph_steps s WHERE s.trip_id = t.id)
+           AND NOT EXISTS (SELECT 1 FROM ph_steps s WHERE s.trip_id = t.id AND s.source = 'trip')
            AND t.id NOT IN (SELECT trip_id FROM ph_steps_excluded_trips)
     """)
     trips = cur.fetchall()
+    # Places-layer legs (phone_place_trips) go through the SAME classifier below,
+    # so driving legs (home_to_place / place_to_home) auto-skip and only genuine
+    # walks import. Own id-space -> source='place_leg' (see migration 018).
+    cur.execute("""
+        SELECT t.id, t.group_id, t.device_label, t.started_at, t.returned_at, 'place_leg' AS src
+          FROM phone_place_trips t
+         WHERE t.returned_at IS NOT NULL AND t.duration_sec > 0
+           AND NOT EXISTS (SELECT 1 FROM ph_steps s WHERE s.trip_id = t.id AND s.source = 'place_leg')
+    """)
+    trips += cur.fetchall()
 
     imported = sk_nopts = sk_phantom = sk_drive = sk_far = sk_user = 0
     for tr in trips:
@@ -160,7 +176,7 @@ def main():
         steps = round(clean_m / 1000.0 * spk)
         try:
             cur.execute("INSERT INTO ph_steps (user_id, measured_at, steps, source, trip_id) "
-                        "VALUES (%s, %s, %s, 'trip', %s)", (uid, tr['returned_at'], steps, tr['id']))
+                        "VALUES (%s, %s, %s, %s, %s)", (uid, tr['returned_at'], steps, tr['src'], tr['id']))
             imported += 1
         except psycopg2.Error as e:
             print(f'insert trip {tr["id"]} failed:', e)
