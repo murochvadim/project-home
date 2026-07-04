@@ -342,13 +342,28 @@
   }
   window.phLogWater = async function (cups) {
     const p = profileFor(_selName); if (!p) return;
-    const r = await fetch(`${API}/water`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile_id: p.id, cups: cups || 1 }) });
+    // +1 button → INCREMENT today's daily row (one-row-per-day model). `cups` is the delta.
+    const r = await fetch(`${API}/water/inc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: p.id, delta: cups || 1 }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { $('ph-wt-status').textContent = 'Failed: ' + (j.error || r.status); return; }
     $('ph-wt-status').textContent = '✓'; setTimeout(() => { $('ph-wt-status').textContent = ''; }, 1200);
     await phLoadWater();
   };
+  window.phResetWater = async function () {
+    const p = profileFor(_selName); if (!p) return;
+    if (!confirm("Reset today's water count to 0?")) return;
+    // SET today's row to 0 (upsert on today).
+    const r = await fetch(`${API}/water`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: p.id, cups: 0 }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('ph-wt-status').textContent = 'Failed: ' + (j.error || r.status); return; }
+    $('ph-wt-status').textContent = '↺'; setTimeout(() => { $('ph-wt-status').textContent = ''; }, 1200);
+    await phLoadWater();
+  };
+  // The reminders badge dispatches this after a water Clear (+1 cup) so the card
+  // reflects it without a page reload. Guarded so it only fires when a profile is shown.
+  window.addEventListener('ph-water-changed', () => { if (_selName) phLoadWater(); });
   // ── Settings tab: global 💧 water config (dashboard_settings.medical.water),
   // read by the reminders evaluator + the per-person card's goal line. ──
   const WATER_DEFAULTS = { enabled: true, target: 8, start_hm: '08:00', end_hm: '22:00', interval_min: 0 };

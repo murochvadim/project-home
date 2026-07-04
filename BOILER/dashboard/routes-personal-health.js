@@ -317,17 +317,33 @@ module.exports = (app, db) => {
     } catch (e) { err(res, e); }
   });
 
-  // ── Water (daily cups) — per-profile count tracker (like steps). Today total
-  // for the card + history list/edit. The "behind pace" reminder lives in
-  // routes-reminders.js. "Today" computed in Asia/Jerusalem.
-  const _waterToday = "(measured_at AT TIME ZONE 'Asia/Jerusalem')::date = (now() AT TIME ZONE 'Asia/Jerusalem')::date";
+  // ── Water — ONE ROW PER (profile, local-day) = that day's cup count (2026-07-04,
+  // migration 017; was one +1 row per cup). "Today" in Asia/Jerusalem. The card
+  // reads today's total; +1 / reminder-Clear increment it (/inc, upsert); the
+  // history sets a day's total directly. "behind pace" reminder in routes-reminders.js.
+  const _localToday = "(now() AT TIME ZONE 'Asia/Jerusalem')::date";
   app.get('/api/personal-health/water', async (req, res) => {
     try {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const r = await db.query(
-        `SELECT COALESCE(SUM(cups),0) AS today_total FROM ph_water WHERE profile_id=$1 AND ${_waterToday}`, [pid]);
+        `SELECT COALESCE(SUM(cups),0) AS today_total FROM ph_water WHERE profile_id=$1 AND day = ${_localToday}`, [pid]);
       res.json(r.rows[0]);
+    } catch (e) { err(res, e); }
+  });
+  // +1 (or +delta) cup → increment TODAY's row (create it if absent). Used by the
+  // card's +1 button and the reminder Clear. Returns the new daily total.
+  app.post('/api/personal-health/water/inc', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const pid = parseInt(b.profile_id);
+      const delta = num(b.delta) != null ? num(b.delta) : 1;
+      if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const r = await db.query(
+        `INSERT INTO ph_water (profile_id, day, cups) VALUES ($1, ${_localToday}, $2)
+         ON CONFLICT (profile_id, day) DO UPDATE SET cups = ph_water.cups + EXCLUDED.cups, measured_at = now()
+         RETURNING cups AS today_total`, [pid, delta]);
+      res.json({ ok: true, today_total: Number(r.rows[0].today_total) });
     } catch (e) { err(res, e); }
   });
   app.get('/api/personal-health/water/list', async (req, res) => {
@@ -341,6 +357,8 @@ module.exports = (app, db) => {
       res.json(r.rows);
     } catch (e) { err(res, e); }
   });
+  // SET a day's total (upsert on the local day of measured_at, else today). Used by
+  // the history "add" — one row per day, so re-adding a day overwrites its total.
   app.post('/api/personal-health/water', async (req, res) => {
     try {
       const b = req.body || {};
@@ -348,10 +366,12 @@ module.exports = (app, db) => {
       const cups = num(b.cups);
       if (!pid || cups == null) return res.status(400).json({ error: 'profile_id and cups required' });
       const r = await db.query(
-        `INSERT INTO ph_water (profile_id, cups, measured_at) VALUES ($1,$2, COALESCE($3::timestamptz, now()))
-         RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at`,
+        `INSERT INTO ph_water (profile_id, day, cups, measured_at)
+         VALUES ($1, (COALESCE($3::timestamptz, now()) AT TIME ZONE 'Asia/Jerusalem')::date, $2, COALESCE($3::timestamptz, now()))
+         ON CONFLICT (profile_id, day) DO UPDATE SET cups = EXCLUDED.cups, measured_at = EXCLUDED.measured_at
+         RETURNING id`,
         [pid, cups, b.measured_at || null]);
-      res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
+      res.json({ ok: true, id: r.rows[0].id });
     } catch (e) { err(res, e); }
   });
   app.patch('/api/personal-health/water/:id', async (req, res) => {
@@ -360,7 +380,12 @@ module.exports = (app, db) => {
       const sets = [], params = [];
       const add = (c, v) => { params.push(v); sets.push(`${c} = $${params.length}`); };
       if (b.cups        !== undefined) add('cups', num(b.cups));
-      if (b.measured_at !== undefined) add('measured_at', b.measured_at || null);
+      if (b.measured_at !== undefined) {
+        add('measured_at', b.measured_at || null);
+        // keep `day` in sync with the edited timestamp (one-row-per-day model)
+        params.push(b.measured_at || null);
+        sets.push(`day = (COALESCE($${params.length}::timestamptz, now()) AT TIME ZONE 'Asia/Jerusalem')::date`);
+      }
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       params.push(parseInt(req.params.id));
       await db.query(`UPDATE ph_water SET ${sets.join(', ')} WHERE id = $${params.length}`, params);

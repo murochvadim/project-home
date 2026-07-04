@@ -533,6 +533,7 @@
           <h3 style="margin:0 0 10px;display:flex;align-items:center;">💧 Water<button onclick="phHistory('water')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="phLogWater(1)">+1 cup</button>
+            <button class="btn btn-sm" style="background:#fff;color:#c0392b;border:1px solid #c0392b;" onclick="phResetWater()" title="Set today's count back to 0">↺ Reset today</button>
             <span id="ph-wt-today" style="font-size:0.9rem;">Today: <b>—</b></span>
             <span id="ph-wt-status" style="font-size:0.78rem;color:#888;"></span>
           </div>
@@ -808,13 +809,13 @@
   }
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/reminders-badge.js?v=1"></script>
+<script src="js/reminders-badge.js?v=2"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/medical.js?v=36"></script>
 <script src="js/medical-hearing.js?v=7"></script>
 <script src="js/medical-vision.js?v=4"></script>
 <script src="js/medical-cognitive.js?v=2"></script>
-<script src="js/personal-health.js?v=73"></script>
+<script src="js/personal-health.js?v=75"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>

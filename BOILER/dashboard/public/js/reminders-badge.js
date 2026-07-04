@@ -51,6 +51,11 @@
       await fetch('/api/reminders/' + (which === 'clear' ? 'clear' : 'snooze'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rkey }),
       });
+      // Clearing a water reminder adds +1 cup to today's row — tell the Personal
+      // Health water card to refresh (if it's on this page) so it's not stale.
+      if (which === 'clear' && String(rkey).startsWith('water:')) {
+        window.dispatchEvent(new CustomEvent('ph-water-changed'));
+      }
     } catch (e) { /* ignore */ }
     poll();
   }

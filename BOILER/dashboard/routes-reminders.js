@@ -176,7 +176,7 @@ module.exports = (app, db) => {
           for (const pr of profs) {
             const cups = Number((await db.query(
               `SELECT COALESCE(SUM(cups),0) AS c FROM ph_water
-                WHERE profile_id=$1 AND (measured_at AT TIME ZONE 'Asia/Jerusalem')::date = $2::date`,
+                WHERE profile_id=$1 AND day = $2::date`,
               [pr.id, t.ldate])).rows[0].c) || 0;
             if (cups >= expected) continue;                            // caught up to this interval
             items.push({
@@ -266,11 +266,15 @@ module.exports = (app, db) => {
     try {
       const rkey = (req.body || {}).rkey;
       if (!rkey) return res.status(400).json({ error: 'rkey required' });
-      // Water reminders: Clear means "I drank it" → also LOG +1 cup (ph_water) for
-      // that profile, so the cup count keeps up with the pace. rkey = water:<pid>:…
+      // Water reminders: Clear means "I drank it" → +1 cup to TODAY's row (one-row-
+      // per-day model, migration 017; upsert-increment, not a new row). rkey = water:<pid>:…
       if (rkey.startsWith('water:')) {
         const pid = parseInt(rkey.split(':')[1], 10);
-        if (pid) await db.query('INSERT INTO ph_water (profile_id, cups) VALUES ($1, 1)', [pid]);
+        if (pid) await db.query(
+          `INSERT INTO ph_water (profile_id, day, cups)
+           VALUES ($1, (now() AT TIME ZONE 'Asia/Jerusalem')::date, 1)
+           ON CONFLICT (profile_id, day) DO UPDATE SET cups = ph_water.cups + 1, measured_at = now()`,
+          [pid]);
       }
       // Exercise reminders: Clear means "I did my routine" → LOG it (total calories
       // + muscles, computed from the global definitions). rkey = exercise:<pid>:…
