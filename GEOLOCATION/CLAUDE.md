@@ -44,7 +44,7 @@ LXC 104  owntracks-ingest.service  (long-running paho-mqtt daemon)
    │        commit-this-pass) — re-emits the current state for rule subscribers
    ▼
 LXC 102 PostgreSQL
-   - device_locations (30 d auto_clean)
+   - device_locations (90 d auto_clean since 2026-07-04)
    - device_events (30 d auto_clean) — rules subscribe
    - phone_trips (forever)
 ```
@@ -70,7 +70,7 @@ LXC 102 PostgreSQL
 |---|---|---|
 | `center.{lat,lon}` | apartment GPS | reference for radius checks |
 | `home_radius_m` | 40 | inside radius defines "at home" |
-| `retention_days` | 3 | device_locations auto-clean horizon |
+| `retention_days` | 3 | ⚠ **STALE / UNWIRED** — no code reads this key. `device_locations` cleanup is governed ONLY by `retention_policies.keep_days` (set to **90 d** on 2026-07-04) via the orchestrator `run_retention`. |
 | `tracked_devices` | `[{device_id, name, group_id, source:'owntracks_mqtt', mqtt_topic}]` | list of OwnTracks devices to ingest |
 | `dedup_radius_m` | 25 | ping-vs-last spatial dedup threshold |
 | `dedup_window_sec` | 60 | ping-vs-last temporal dedup threshold |
