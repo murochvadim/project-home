@@ -70,6 +70,22 @@ only the Privacy **site Docs**). **Photos on QNAP** (`\\192.168.1.155\Claude_Dat
 `medical_documents` pattern; DELETE tunneled via LXC-104 SSH — Windows `claude` user has RW but not
 delete on that share). Retention **forever + 🔒 protected** (like the other Personal tables).
 
+## Adding people & relations (UX)
+
+Core interaction the user asked for: **add people, and connect them to other people.**
+
+- **Add/edit person** via a form (all Directory fields). A **Relations** sub-section links them to
+  OTHER people: **+ Add relation** → choose `rel_type` (parent / spouse / child / sibling / friend /
+  …) + pick the other person from a **searchable list of existing people** (or create a new person
+  inline). Each link writes one `people_relations` row and instantly appears as a line on the graph.
+- **Reciprocal relations stored ONCE (no double-entry):** parent↔child, spouse↔spouse,
+  sibling↔sibling, friend↔friend are inverses — enter the edge once; the app derives/renders the
+  reverse. **Directed** types (parent→child) store direction; **symmetric** types (spouse / friend /
+  sibling) are order-independent. (Store canonical `rel_type` + direction; render both ways.)
+- **Phase 2 on-graph editing:** drag a line between two figures, or select a figure → "Add relation",
+  as an alternate path to the same `people_relations` write.
+- Delete/edit a relation from either person's card (removes the single shared edge).
+
 ## Backend & front-end (planned)
 
 | Artifact | Path |
