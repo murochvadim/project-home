@@ -1778,6 +1778,7 @@ const _UPS_DEVICES = [
   { kind: 'lxc',  id: 107, label: 'MQTT' },
   { kind: 'lxc',  id: 108, label: 'NetBird' },
   { kind: 'lxc',  id: 109, label: 'Privacy' },
+  { kind: 'lxc',  id: 110, label: 'Email' },
 ];
 
 // Per-action session: tracks when an action started + per-device transition
