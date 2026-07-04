@@ -195,7 +195,7 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 - Persistent log: `/var/log/test-geolocation-filters.log`
 - Ephemeral progress JSON: `/tmp/geolocation-test-progress.json`
 
-**How it works:** publishes 20 synthetic OwnTracks MQTT messages to the production broker over ~90 sec. The live daemon processes them through the actual filter chain. After each scenario the script queries DB to verify expected outcomes. Time control is via `tst` field forward-dating (a "60-second time_fallback" assertion completes in ~2 sec wall-clock).
+**How it works:** the 20 A/B/C/D scenarios publish synthetic OwnTracks MQTT messages to the production broker over ~90 sec; the live daemon processes them through the actual filter chain; the script then queries DB to verify outcomes. Time control is via `tst` field forward-dating (a "60-second time_fallback" assertion completes in ~2 sec wall-clock). **The 5 P (Places) scenarios test a DIFFERENT component** — `geo_places.py`, the away-base cron — which reads `device_locations` rather than MQTT. A far away-base journey can't go through the daemon (its anti-teleport-from-home guard rejects it by design), so P scenarios insert a controlled `device_locations` stream directly and call `geo_places.process_group` on the sandbox group (with `reverse_geocode` monkeypatched → hermetic, no Nominatim call), asserting `phone_places` (Stays) + `phone_place_trips` (legs). They run in ~2 sec total. `cleanup()` also wipes `phone_places`/`phone_place_trips`/`geo_place_state` for the sandbox group.
 
 **Test isolation:** all pings use sandbox `device_id='owntracks_test_filtertest'` (not in `tracked_devices`). Production phone data is never touched. Try/finally cleanup wipes every sandbox row at end (also runs at start to clear leftover from a crashed prior run).
 
@@ -204,7 +204,7 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 - No rule has `triggers` matching the sandbox device_id.
 - MQTT topic `owntracks/+/+` is consumed only by the daemon.
 
-**Scenarios (20 total, ~90 sec runtime):**
+**Scenarios (25 total, ~90 sec runtime):**
 
 | ID | Category | What it tests |
 |---|---|---|
@@ -228,6 +228,11 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 | D2 | Car | Above-threshold speed (60 m/s drops) |
 | D3 | Car | Just-under-threshold (43 m/s passes) |
 | D4 | Car | Tunnel mid-trip (5-min gap) |
+| P1 | Places | Home→place→Home = 1 Stay + home_to_place + place_to_home |
+| P2 | Places | Multi-anchor chain Home→A→B→A→Home = 2 Stays + 4 legs (the headline behavior) |
+| P3 | Places | Mid-stay jitter ping (167 m out) absorbed by the departure debounce — no spurious loop leg, stay not truncated |
+| P4 | Places | Home excursion with no dwell → 0 places, 0 legs (dropped; phone_trips owns that trip) |
+| P5 | Places | Out-and-back to the same anchor → a `place_loop` leg |
 
 **Invocation:**
 - **Dashboard UI** (preferred): Project General → Geolocation tab → Settings card → "▶ Run filter test" button. Live progress bar + pass/fail counts. End-of-run state shown inline.

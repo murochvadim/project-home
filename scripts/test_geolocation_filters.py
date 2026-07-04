@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""Test harness for owntracks-ingest filter chain + state machine.
+"""Test harness for owntracks-ingest filter chain + state machine + the
+Places away-base layer.
 
-Publishes synthetic MQTT messages to the production broker; the live daemon
-on LXC 104 processes them through the actual filter chain; this script
-verifies the DB outcomes match expectations.
+A/B/C/D scenarios publish synthetic MQTT messages to the production broker; the
+live daemon on LXC 104 processes them through the actual filter chain; this
+script verifies the DB outcomes. P scenarios instead insert a controlled
+device_locations stream directly and run the separate geo_places.py state
+machine (a far away-base journey can't go through MQTT — the daemon's
+anti-teleport-from-home guard would reject it by design), asserting
+phone_places (Stays) + phone_place_trips (legs).
 
-Test isolation: all pings use device_id='owntracks_test_filtertest' (sandbox).
-Production phone data is never touched.
+Test isolation: all pings use device_id='owntracks_test_filtertest' (sandbox);
+Places rows use the same value as group_id. Production phone data is never touched.
 
 Run from LXC 104. The daemon must be `active` (script aborts otherwise).
 
 Usage:
   python3 /opt/test_geolocation_filters.py                       # default fast suite (~90s)
-  python3 /opt/test_geolocation_filters.py --only A1,B2,D4       # subset
+  python3 /opt/test_geolocation_filters.py --only A1,B2,P2       # subset (incl. Places)
   python3 /opt/test_geolocation_filters.py --cleanup             # wipe sandbox, run nothing
   python3 /opt/test_geolocation_filters.py --verbose             # extra logging
   python3 /opt/test_geolocation_filters.py --slow                # include heartbeat + hard_cap (real-time waits)
@@ -20,6 +25,7 @@ Usage:
 """
 import argparse
 import glob
+import importlib.util
 import json
 import logging
 import math
@@ -164,6 +170,12 @@ def cleanup(conn, drop_device_row=False):
         "DELETE FROM device_events WHERE device_id = %s", (TEST_DEVICE_ID,))
     n_locs  = db_execute(conn,
         "DELETE FROM device_locations WHERE device_id = %s", (TEST_DEVICE_ID,))
+    # Places layer (P* scenarios) — additive tables, same sandbox group_id.
+    for t in ('phone_place_trips', 'phone_places', 'geo_place_state'):
+        try:
+            db_execute(conn, f"DELETE FROM {t} WHERE group_id = %s", (TEST_DEVICE_ID,))
+        except Exception:
+            pass  # tables may not exist on an un-migrated host
     n_devs = 0
     if drop_device_row:
         n_devs = db_execute(conn,
@@ -794,6 +806,137 @@ def scenario_d4(conn, ctx):
     return 'FAIL', f'Expected 2 location rows; got {n}'
 
 
+# ─── P. PLACES scenarios (the geo_places.py away-base layer) ───────
+# These test the SEPARATE Places cron algorithm (geo_places.py), not the
+# ingest daemon. A far journey can't be published via MQTT (the daemon's
+# anti-teleport-from-home guard would reject it — by design), so we insert a
+# controlled device_locations stream directly and run geo_places.process_group
+# on the sandbox group, then assert phone_places (Stays) + phone_place_trips
+# (legs). reverse_geocode is monkeypatched so the tests are hermetic (no
+# Nominatim network call). place_dwell_min=2 + 40 s ping spacing keep each
+# scenario sub-second while still clearing the dwell + PLACE_EXIT_SEC gates.
+
+_GP = None
+def _load_gp():
+    """Import /opt/geo_places.py once; stub out the network geocode."""
+    global _GP
+    if _GP is None:
+        spec = importlib.util.spec_from_file_location('geo_places', '/opt/geo_places.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.reverse_geocode = lambda lat, lon: f'P{round(lat, 2)},{round(lon, 2)}'
+        _GP = mod
+    return _GP
+
+
+def _interp(a, b, n):
+    """n evenly-spaced points strictly between coords a and b (linear)."""
+    return [(a[0] + (b[0] - a[0]) * i / (n + 1),
+             a[1] + (b[1] - a[1]) * i / (n + 1)) for i in range(1, n + 1)]
+
+
+def _places_cfg(conn):
+    hlat, hlon = home_coords(conn)
+    return {'center': {'lat': hlat, 'lon': hlon}, 'home_radius_m': 40,
+            'places_enabled': True, 'place_dwell_min': 2,
+            'place_min_dist_m': 500, 'place_radius_m': 120}
+
+
+def _places_run(conn, ctx, coords, cfg, spacing=40):
+    """Insert coords as device_locations (40 s apart from ctx.t0), seed the
+    per-group state to at-home, and run the real geo_places state machine."""
+    gp = _load_gp()
+    for i, (la, lo) in enumerate(coords):
+        ts = datetime.fromtimestamp(ctx.t0 + i * spacing, tz=timezone.utc)
+        db_execute(conn, "INSERT INTO device_locations "
+                   "(device_id, ts, lat, lon, accuracy_m, source) "
+                   "VALUES (%s,%s,%s,%s,15,'test')", (TEST_DEVICE_ID, ts, la, lo))
+    gp.save_state(TEST_DEVICE_ID,
+                  datetime.fromtimestamp(ctx.t0 - 1, tz=timezone.utc),
+                  {'at_anchor': dict(gp.HOME_ANCHOR), 'anchors': [],
+                   'pending_origin': None, 'dwell': None, 'leaving_since': None})
+    gp.process_group(cfg, TEST_DEVICE_ID, [TEST_DEVICE_ID], 'Test')
+
+
+def _places_result(conn):
+    stays = db_query(conn, "SELECT COUNT(*) AS n FROM phone_places "
+                     "WHERE group_id=%s", (TEST_DEVICE_ID,))[0]['n']
+    legs = [r['kind'] for r in db_query(conn,
+            "SELECT kind FROM phone_place_trips WHERE group_id=%s "
+            "ORDER BY started_at", (TEST_DEVICE_ID,))]
+    return stays, legs
+
+
+def scenario_p1(conn, ctx):
+    """Home → dwell at a place → Home. Expect 1 Stay + home_to_place + place_to_home."""
+    h = home_coords(conn); A = coord_at_distance(h[0], h[1], 60000, 0)
+    coords = ([h] * 3 + _interp(h, A, 6) + [A] * 6 + _interp(A, h, 6) + [h] * 3)
+    _places_run(conn, ctx, coords, _places_cfg(conn))
+    stays, legs = _places_result(conn)
+    if stays == 1 and legs == ['home_to_place', 'place_to_home']:
+        return 'PASS', f'1 stay + legs {legs}'
+    return 'FAIL', f'Expected 1 stay + [home_to_place, place_to_home]; got {stays} stays, legs {legs}'
+
+
+def scenario_p2(conn, ctx):
+    """Home → A(stay) → B(stay) → A → Home. The headline chain: 2 Stays + 4 legs."""
+    h = home_coords(conn)
+    A = coord_at_distance(h[0], h[1], 60000, 0)
+    B = coord_at_distance(h[0], h[1], 62000, 0)          # ~2 km past A
+    coords = ([h] * 3 + _interp(h, A, 6) + [A] * 6 + _interp(A, B, 6) + [B] * 6
+              + _interp(B, A, 6) + [A] * 2 + _interp(A, h, 6) + [h] * 3)
+    _places_run(conn, ctx, coords, _places_cfg(conn))
+    stays, legs = _places_result(conn)
+    exp = ['home_to_place', 'place_to_place', 'place_to_place', 'place_to_home']
+    if stays == 2 and legs == exp:
+        return 'PASS', f'2 stays + legs {legs}'
+    return 'FAIL', f'Expected 2 stays + {exp}; got {stays} stays, legs {legs}'
+
+
+def scenario_p3(conn, ctx):
+    """Jitter mid-stay (167 m out, back in) must NOT spawn a loop leg or truncate the stay."""
+    h = home_coords(conn)
+    A = coord_at_distance(h[0], h[1], 60000, 0)
+    Aj = coord_at_distance(h[0], h[1], 60167, 0)         # 167 m past A (outside the 120 m radius)
+    coords = ([h] * 3 + _interp(h, A, 6) + [A] * 5 + [Aj] + [A] * 2
+              + _interp(A, h, 6) + [h] * 3)
+    _places_run(conn, ctx, coords, _places_cfg(conn))
+    stays, legs = _places_result(conn)
+    d = db_query(conn, "SELECT EXTRACT(EPOCH FROM (COALESCE(left_at,now())-arrived_at))::int AS d "
+                 "FROM phone_places WHERE group_id=%s ORDER BY arrived_at LIMIT 1", (TEST_DEVICE_ID,))
+    dur = d[0]['d'] if d else 0
+    if stays == 1 and legs == ['home_to_place', 'place_to_home'] and dur > 150:
+        return 'PASS', f'jitter absorbed: 1 stay (dur={dur}s), legs {legs}'
+    return 'FAIL', f'Expected 1 stay + 2 legs + dur>150; got {stays} stays, legs {legs}, dur={dur}'
+
+
+def scenario_p4(conn, ctx):
+    """Home → out (no dwell) → Home. NO place, NO leg — phone_trips owns that trip."""
+    h = home_coords(conn); X = coord_at_distance(h[0], h[1], 3000, 90)
+    coords = ([h] * 3 + _interp(h, X, 6) + [X] + _interp(X, h, 6) + [h] * 3)
+    _places_run(conn, ctx, coords, _places_cfg(conn))
+    stays, legs = _places_result(conn)
+    if stays == 0 and legs == []:
+        return 'PASS', 'home excursion (no dwell) → 0 places, 0 legs (dropped; phone_trips owns it)'
+    return 'FAIL', f'Expected 0 places + 0 legs; got {stays} places, legs {legs}'
+
+
+def scenario_p5(conn, ctx):
+    """Home → A(stay) → out & back to A (no new dwell) → Home. Expect a place_loop leg."""
+    h = home_coords(conn)
+    A = coord_at_distance(h[0], h[1], 60000, 0)
+    W = coord_at_distance(h[0], h[1], 62000, 0)          # 2 km wander point, no dwell there
+    coords = ([h] * 3 + _interp(h, A, 6) + [A] * 6
+              + _interp(A, W, 5) + [W] + _interp(W, A, 5) + [A] * 2
+              + _interp(A, h, 6) + [h] * 3)
+    _places_run(conn, ctx, coords, _places_cfg(conn))
+    stays, legs = _places_result(conn)
+    exp = ['home_to_place', 'place_loop', 'place_to_home']
+    if stays == 1 and legs == exp:
+        return 'PASS', f'1 stay + legs {legs}'
+    return 'FAIL', f'Expected 1 stay + {exp}; got {stays} stays, legs {legs}'
+
+
 # ─── Scenario registry ─────────────────────────────────────────────
 
 SCENARIOS = [
@@ -817,6 +960,12 @@ SCENARIOS = [
     ('D2', 'Above-threshold speed (60 m/s)',  scenario_d2),
     ('D3', 'Just under threshold (43 m/s)',   scenario_d3),
     ('D4', 'Tunnel mid-trip (5-min gap)',     scenario_d4),
+    # Places layer (geo_places.py away-bases) — insert device_locations directly + run the state machine.
+    ('P1', 'Places: Home→place→Home',         scenario_p1),
+    ('P2', 'Places: multi-anchor chain (2 stays, 4 legs)', scenario_p2),
+    ('P3', 'Places: jitter absorbed (no loop leg)', scenario_p3),
+    ('P4', 'Places: home excursion dropped',  scenario_p4),
+    ('P5', 'Places: out-and-back loop leg',   scenario_p5),
 ]
 
 

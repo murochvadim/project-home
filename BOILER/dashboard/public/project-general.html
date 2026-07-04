@@ -350,7 +350,7 @@
               <pre id="geo-test-log-panel" style="display:none; margin-top:8px; padding:8px; max-height:300px; overflow:auto; background:#fafaf6; border:1px solid #d0cbc4; border-radius:3px; font-size:0.74rem; line-height:1.45; white-space:pre-wrap; word-break:break-word;"></pre>
             </div>
             <div style="font-size:0.78rem; color:#888; margin-top:6px;">
-              Publishes 20 synthetic MQTT pings to the live daemon and verifies the filter chain + state machine. ~30-90 s total. Sandbox device_id = <code>owntracks_test_filtertest</code>. Production data untouched. End-of-run cleanup is automatic. Log file on LXC 104: <code>/var/log/test-geolocation-filters.log</code>.
+              Runs 25 scenarios (~30-90 s): 20 publish synthetic MQTT pings to the live daemon (filter chain + Home state machine), and 5 <b>Places</b> scenarios (P1-P5) insert a controlled ping stream and run the away-base algorithm (dwell→named anchor, legs, stays, jitter debounce, loop legs). Sandbox device_id = <code>owntracks_test_filtertest</code>. Production data untouched. End-of-run cleanup is automatic. Log file on LXC 104: <code>/var/log/test-geolocation-filters.log</code>.
             </div>
           </div>
         </div>
@@ -1020,7 +1020,7 @@ async function geoStartFilterTest() {
   document.getElementById('geo-test-summary').textContent = '';
   document.getElementById('geo-test-failures').textContent = '';
   document.getElementById('geo-test-bar').style.width = '0%';
-  document.getElementById('geo-test-counter').textContent = '0 / 20';
+  document.getElementById('geo-test-counter').textContent = '0 / 25';
   _geoTestT0 = Date.now();
   try {
     const r = await fetch('/api/geolocation/run-filter-test', { method: 'POST' });
