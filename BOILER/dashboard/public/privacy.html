@@ -58,6 +58,7 @@
     <button class="tab-btn active" onclick="showTab('sites', this)">Sites</button>
     <button class="tab-btn" onclick="showTab('doccreate', this)">Doc Create</button>
     <button class="tab-btn" onclick="showTab('places', this)">Places</button>
+    <button class="tab-btn" onclick="showTab('journal', this); pvJournalOnShow()">📓 Daily Journal</button>
     <button class="tab-btn" onclick="showTab('settings', this)">Settings</button>
     <span style="display:inline-block; width:1px; height:22px; background:#cbd5e1; margin:0 10px; align-self:center;"></span>
     <button class="tab-btn" onclick="showTab('offers', this); pvofOnTabShow()">Budget</button>
@@ -209,6 +210,31 @@
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: Daily Journal                                          -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-journal">
+    <div class="card" style="margin-bottom:14px;">
+      <h2 style="margin-top:0;">📓 Today</h2>
+      <div id="pvj-today"><div style="color:#aaa;">Loading…</div></div>
+    </div>
+    <div class="card" style="margin-bottom:14px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <h2 style="margin:0;">Mood trend</h2>
+        <select id="pvj-range" onchange="pvJournalRenderChart()" style="padding:3px 6px; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:4px;">
+          <option value="14">last 14 days</option>
+          <option value="30" selected>last 30 days</option>
+          <option value="90">last 90 days</option>
+        </select>
+      </div>
+      <div style="height:180px; margin-top:10px;"><canvas id="pvj-chart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0;">History</h2>
+      <div id="pvj-timeline"><div style="color:#aaa;">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
   <!-- TAB: Settings                                              -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-settings">
@@ -277,6 +303,24 @@
         <span id="pv-users-status" style="font-size:0.82rem; color:#2e7d32; min-height:1.1em;"></span>
       </div>
       <div style="font-size:0.74rem; color:#aaa; line-height:1.4; margin-top:6px;">📱 suggestions come from your tracked phones + named network devices — type to filter, or enter any text.</div>
+    </div>
+
+    <div class="card" style="max-width:560px; margin-top:16px;">
+      <h2 style="margin-top:0;">📓 Daily Journal reminders</h2>
+      <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
+        Choose <b>how many times a day</b> the journal nudge pops (a wide box to the <b>left of the red badge</b>) and
+        <b>at what time</b> — <b>name each one yourself</b>. Each is recorded separately per day; entries are stored in
+        your own DB (plaintext, LAN-only) so they stay readable for a future reflection.
+      </p>
+      <label style="display:flex; align-items:center; gap:8px; font-size:0.92rem; margin-bottom:12px;">
+        <input id="pvj-enabled" type="checkbox"> Enable daily-journal reminders
+      </label>
+      <div id="pvj-slots" style="margin-bottom:8px;"></div>
+      <button class="btn btn-secondary btn-sm" onclick="pvJournalCfgAddSlot()">+ Add reminder</button>
+      <div style="display:flex; align-items:center; gap:10px; margin-top:14px;">
+        <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvJournalCfgSave()">Save</button>
+        <span id="pvj-cfg-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
+      </div>
     </div>
   </div>
 
@@ -513,9 +557,9 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/reminders-badge.js?v=2"></script>
+<script src="js/reminders-badge.js?v=4"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/privacy.js?v=77"></script>
+<script src="js/privacy.js?v=78"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>

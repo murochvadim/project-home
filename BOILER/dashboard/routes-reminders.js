@@ -192,6 +192,40 @@ module.exports = (app, db) => {
       }
     }
 
+    // ── daily journal: for each configured slot, nudge once its time has passed
+    // (today) UNTIL that slot's entry exists. Config GLOBAL in
+    // dashboard_settings.journal {enabled, user_id, slots:[{id,name,time_hm}]}.
+    // rkey journal:<uid>:<date>:<slot_id> → Skip(Clear)/Later(snooze) stick per slot;
+    // Save (from the capture panel) writes journal_entries → the nudge disappears. ──
+    let jCfg = null;
+    try {
+      const jr = await db.query("SELECT value FROM dashboard_settings WHERE key='journal'");
+      const v = jr.rows[0] && jr.rows[0].value;
+      jCfg = (v && typeof v === 'object') ? v : (v ? JSON.parse(v) : null);
+    } catch (e) { /* no config → no journal reminders */ }
+    if (jCfg && jCfg.enabled && Array.isArray(jCfg.slots) && jCfg.slots.length) {
+      const juid = Number(jCfg.user_id) || 1;
+      const juName = (await db.query("SELECT name FROM household_users WHERE id=$1", [juid])).rows[0]?.name || '—';
+      for (const slot of jCfg.slots) {
+        if (!slot || !slot.id || !slot.time_hm) continue;
+        if (nowMin < hm2min(slot.time_hm)) continue;                 // not due yet today
+        const done = Number((await db.query(
+          "SELECT count(*) AS c FROM journal_entries WHERE user_id=$1 AND entry_date=$2::date AND slot_id=$3",
+          [juid, t.ldate, slot.id])).rows[0].c) || 0;
+        if (done) continue;                                          // this slot already written today
+        items.push({
+          rkey: `journal:${juid}:${t.ldate}:${slot.id}`,
+          user_name: juName,
+          label: `📓 ${slot.name || 'Journal'}`,
+          kind: 'journal',
+          slot_id: slot.id,
+          slot_name: slot.name || '',
+          entry_date: t.ldate,
+          user_id: juid,
+        });
+      }
+    }
+
     // ── morning exercises: due once per day after the scheduled time, until the
     // routine is logged (the card's ✓ Done OR this reminder's Clear). Config is
     // GLOBAL in dashboard_settings.medical.exercises {enabled, schedule:{time_hm},

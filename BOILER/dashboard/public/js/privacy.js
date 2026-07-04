@@ -56,7 +56,7 @@ function showTab(name, btn) {
   if (name === 'settings') { _pvFillSettingsForm(); pvLoadUsers(); pvLoadReminders(); }
   if (name === 'places' && typeof pvPlacesOnShow === 'function') pvPlacesOnShow();
 }
-async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); }
+async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); pvJournalLoadCfg(); }
 
 // Appointment color-band widths, stored as dashboard_settings key 'privacy.settings'.
 const _PV_BAND_KEYS = ['yellow_days', 'red_days', 'grey_days'];
@@ -910,3 +910,150 @@ async function pvDeleteDoc(id) {
   await fetch(`/api/privacy/docs/${id}`, { method: 'DELETE' });
   await pvLoadDocs(); await pvLoadSites();
 }
+
+// ─── Daily Journal (Privacy → Daily Journal tab) ─────────────────────────────
+const PVJ_MOODS = ['😞', '😕', '😐', '🙂', '😄'];   // 1..5
+const PVJ_UID = 1;                                   // Vadim (household_users.id)
+let pvjCfg = { enabled: false, user_id: PVJ_UID, slots: [] };
+let pvjEntries = [];
+let _pvjChart = null;
+const pvjEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function _pvjFrom(days) { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); }
+
+async function pvJournalLoadCfg() {
+  try {
+    const j = await (await fetch('/api/dashboard-settings/journal')).json();
+    const v = (j && j.value) || {};
+    pvjCfg = { enabled: v.enabled === true, user_id: Number(v.user_id) || PVJ_UID, slots: Array.isArray(v.slots) ? v.slots : [] };
+  } catch (e) { pvjCfg = { enabled: false, user_id: PVJ_UID, slots: [] }; }
+  pvJournalCfgRender();
+}
+function pvJournalCfgRender() {
+  const en = document.getElementById('pvj-enabled'); if (en) en.checked = !!pvjCfg.enabled;
+  const box = document.getElementById('pvj-slots'); if (!box) return;
+  if (!pvjCfg.slots.length) { box.innerHTML = '<div style="font-size:0.82rem;color:#aaa;margin:6px 0;">No reminders yet — click “+ Add reminder”.</div>'; return; }
+  box.innerHTML = pvjCfg.slots.map((s, i) => `
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+      <input value="${pvjEsc(s.name || '')}" data-pvj-i="${i}" data-pvj-k="name" placeholder="name (e.g. בוקר)"
+        style="flex:1; padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+      <input type="time" value="${pvjEsc(s.time_hm || '')}" data-pvj-i="${i}" data-pvj-k="time_hm"
+        style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+      <button onclick="pvJournalCfgRemoveSlot(${i})" title="Remove"
+        style="padding:3px 9px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
+    </div>`).join('');
+}
+function pvJournalCfgCollect() {
+  const slots = pvjCfg.slots.map(s => ({ ...s }));
+  document.querySelectorAll('[data-pvj-i]').forEach(inp => {
+    const i = parseInt(inp.dataset.pvjI), k = inp.dataset.pvjK;
+    while (slots.length <= i) slots.push({});
+    slots[i][k] = inp.value;
+  });
+  return slots.filter(s => s.time_hm).map(s => ({
+    id: s.id || ('s' + Math.random().toString(36).slice(2, 9)),
+    name: (s.name || '').trim(), time_hm: s.time_hm,
+  }));
+}
+function pvJournalCfgAddSlot() { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.slots.push({ id: 's' + Math.random().toString(36).slice(2, 9), name: '', time_hm: '12:00' }); pvJournalCfgRender(); }
+function pvJournalCfgRemoveSlot(i) { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.slots.splice(i, 1); pvJournalCfgRender(); }
+async function pvJournalCfgSave() {
+  const st = document.getElementById('pvj-cfg-status');
+  const value = { enabled: document.getElementById('pvj-enabled').checked, user_id: PVJ_UID, slots: pvJournalCfgCollect() };
+  try {
+    const r = await fetch('/api/dashboard-settings/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    pvjCfg = value; pvJournalCfgRender();
+    if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; setTimeout(() => { st.textContent = ''; }, 2000); }
+  } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Error: ' + (e.message || e); } }
+}
+
+async function pvJournalOnShow() {
+  await pvJournalLoadCfg();
+  await pvJournalRenderToday();
+  await pvJournalLoadEntries();
+  pvJournalRenderChart(); pvJournalRenderTimeline();
+}
+async function pvJournalRenderToday() {
+  const box = document.getElementById('pvj-today'); if (!box) return;
+  let today = [];
+  try { today = await (await fetch(`/api/journal/today?user_id=${PVJ_UID}`)).json(); } catch (e) { today = []; }
+  const byId = {}; (today || []).forEach(e => { byId[e.slot_id] = e; });
+  if (!pvjCfg.slots.length) { box.innerHTML = '<div style="font-size:0.86rem;color:#888;">No journal reminders configured — set them in <b>Settings → 📓 Daily Journal reminders</b>.</div>'; return; }
+  box.innerHTML = pvjCfg.slots.map(s => {
+    const e = byId[s.id] || {}; const mood = Number(e.mood) || 0;
+    return `<div style="border:1px solid #eee; border-radius:8px; padding:10px 12px; margin-bottom:10px;" data-pvj-slot="${pvjEsc(s.id)}" data-pvj-name="${pvjEsc(s.name)}"${mood ? ` data-mood="${mood}"` : ''}>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;"><b>${pvjEsc(s.name || 'Journal')}</b><span style="font-size:0.78rem;color:#999;">${pvjEsc(s.time_hm || '')}</span></div>
+      <textarea dir="rtl" rows="3" placeholder="מה קרה היום?…" style="width:100%; box-sizing:border-box; resize:vertical; border:1px solid #ddd; border-radius:6px; padding:7px 9px; font-size:0.95rem;">${pvjEsc(e.comment || '')}</textarea>
+      <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+        <div class="pvj-mood" style="display:flex; gap:3px;">
+          ${PVJ_MOODS.map((m, i) => `<button type="button" data-mood="${i + 1}" style="font-size:1.3rem; background:${mood === i + 1 ? '#dcfce7' : '#f6f6f6'}; border:2px solid ${mood === i + 1 ? '#16a34a' : 'transparent'}; border-radius:7px; cursor:pointer; padding:2px 5px;">${m}</button>`).join('')}
+        </div>
+        <button onclick="pvJournalSaveToday(this)" class="btn btn-sm" style="background:#0f766e; color:#fff; margin-left:auto;">💾 Save</button>
+        <span class="pvj-slot-status" style="font-size:0.8rem; color:#2e7d32;"></span>
+      </div>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-pvj-slot]').forEach(row => {
+    row.querySelectorAll('.pvj-mood button').forEach(mb => mb.addEventListener('click', () => {
+      row.dataset.mood = mb.getAttribute('data-mood');
+      row.querySelectorAll('.pvj-mood button').forEach(b => { b.style.borderColor = 'transparent'; b.style.background = '#f6f6f6'; });
+      mb.style.borderColor = '#16a34a'; mb.style.background = '#dcfce7';
+    }));
+  });
+}
+async function pvJournalSaveToday(btn) {
+  const row = btn.closest('[data-pvj-slot]');
+  const comment = (row.querySelector('textarea').value || '').trim();
+  const mood = row.dataset.mood ? parseInt(row.dataset.mood) : null;
+  const st = row.querySelector('.pvj-slot-status');
+  try {
+    const r = await fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: PVJ_UID, slot_id: row.dataset.pvjSlot, slot_name: row.dataset.pvjName, comment, mood }) });
+    if (!r.ok) throw new Error(r.status);
+    if (st) { st.textContent = '✓'; setTimeout(() => { st.textContent = ''; }, 1500); }
+    await pvJournalLoadEntries(); pvJournalRenderChart(); pvJournalRenderTimeline();
+  } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Failed'; } }
+}
+async function pvJournalLoadEntries() {
+  try { pvjEntries = await (await fetch(`/api/journal?user_id=${PVJ_UID}&from=${_pvjFrom(90)}`)).json(); }
+  catch (e) { pvjEntries = []; }
+}
+function pvJournalRenderChart() {
+  const cv = document.getElementById('pvj-chart'); if (!cv || typeof Chart === 'undefined') return;
+  const days = parseInt(document.getElementById('pvj-range')?.value) || 30;
+  const cutoff = _pvjFrom(days), byDay = {};
+  (pvjEntries || []).filter(e => e.entry_date >= cutoff && e.mood != null).forEach(e => { (byDay[e.entry_date] = byDay[e.entry_date] || []).push(Number(e.mood)); });
+  const labels = Object.keys(byDay).sort();
+  const data = labels.map(d => { const a = byDay[d]; return a.reduce((x, y) => x + y, 0) / a.length; });
+  if (_pvjChart) _pvjChart.destroy();
+  _pvjChart = new Chart(cv, {
+    type: 'line',
+    data: { labels, datasets: [{ label: 'Mood', data, borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', tension: 0.3, fill: true, pointRadius: 3 }] },
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 1, max: 5, ticks: { stepSize: 1, callback: (v) => PVJ_MOODS[v - 1] || v } } }, plugins: { legend: { display: false } } },
+  });
+}
+function pvJournalRenderTimeline() {
+  const box = document.getElementById('pvj-timeline'); if (!box) return;
+  if (!(pvjEntries || []).length) { box.innerHTML = '<div style="color:#aaa;">No entries yet.</div>'; return; }
+  const byDay = {}; pvjEntries.forEach(e => { (byDay[e.entry_date] = byDay[e.entry_date] || []).push(e); });
+  const days = Object.keys(byDay).sort().reverse();
+  box.innerHTML = days.map(d => `
+    <div style="border-top:1px solid #f0eee8; padding:8px 0;">
+      <div style="font-weight:700; color:#0f766e; margin-bottom:4px;">${pvjEsc(d)}</div>
+      ${byDay[d].map(e => `<div style="display:flex; gap:8px; align-items:flex-start; margin:3px 0;">
+        <span style="font-size:1.1rem;">${e.mood ? PVJ_MOODS[e.mood - 1] : '·'}</span>
+        <span style="font-size:0.78rem; color:#999; min-width:70px;">${pvjEsc(e.slot_name || '')}</span>
+        <span dir="rtl" style="flex:1; text-align:right;">${pvjEsc(e.comment || '')}</span>
+        <button onclick="pvJournalDelEntry(${e.id})" title="Delete" style="border:none;background:none;color:#c0392b;cursor:pointer;font-size:0.8rem;">✕</button>
+      </div>`).join('')}
+    </div>`).join('');
+}
+async function pvJournalDelEntry(id) {
+  if (!confirm('Delete this journal entry?')) return;
+  await fetch(`/api/journal/${id}`, { method: 'DELETE' });
+  await pvJournalLoadEntries(); pvJournalRenderToday(); pvJournalRenderChart(); pvJournalRenderTimeline();
+}
+// Refresh the tab after a capture-panel Save (reminders-badge dispatches this).
+window.addEventListener('ph-journal-changed', () => {
+  if (document.getElementById('tab-journal')) { pvJournalRenderToday(); pvJournalLoadEntries().then(() => { pvJournalRenderChart(); pvJournalRenderTimeline(); }); }
+});
