@@ -689,6 +689,17 @@ async function refreshAll() {
 }
 
 // ── Proxmox Backups ──────────────────────────────────────────
+// Proxmox retention can be a legacy scalar (maxfiles) OR a prune-backups object
+// like {"keep-daily":"4"} — render the object as "4 daily" instead of "[object Object]".
+function fmtRetention(r) {
+  if (r == null || r === '') return '—';
+  if (typeof r === 'object') {
+    const parts = Object.entries(r).map(([k, v]) => `${v} ${String(k).replace(/^keep-/, '')}`);
+    return parts.length ? parts.join(', ') : '—';
+  }
+  return String(r);
+}
+
 async function loadBackups() {
   const jobsTbody   = document.getElementById('backup-jobs-body');
   const tasksTbody  = document.getElementById('backup-tasks-body');
@@ -718,7 +729,7 @@ async function loadBackups() {
           <td style="font-size:0.82rem;">${j.storage}</td>
           <td style="font-size:0.78rem;">${j.vmid}</td>
           <td style="font-size:0.78rem; color:#666;">${j.mode}</td>
-          <td style="font-size:0.78rem; color:#666;">${j.retention}</td>
+          <td style="font-size:0.78rem; color:#666;">${fmtRetention(j.retention)}</td>
           <td style="font-size:0.75rem; color:#888; white-space:nowrap;">${lastRunTs}</td>
           <td style="text-align:center; font-size:0.8rem; font-weight:600; color:${statusColor};">${statusText}</td>
         </tr>`;
