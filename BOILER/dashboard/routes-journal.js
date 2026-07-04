@@ -57,21 +57,7 @@ module.exports = (app, db) => {
     } catch (e) { err(res, e); }
   });
 
-  app.patch('/api/journal/:id', async (req, res) => {
-    try {
-      const b = req.body || {};
-      const sets = [], params = [];
-      const add = (c, v) => { params.push(v); sets.push(`${c} = $${params.length}`); };
-      if (b.comment !== undefined) add('comment', b.comment == null ? '' : String(b.comment));
-      if (b.mood !== undefined) add('mood', (b.mood == null || b.mood === '') ? null : (parseInt(b.mood) || null));
-      if (!sets.length) return res.status(400).json({ error: 'no fields' });
-      sets.push('updated_at = now()');
-      params.push(parseInt(req.params.id));
-      await db.query(`UPDATE journal_entries SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
-      res.json({ ok: true });
-    } catch (e) { err(res, e); }
-  });
-
+  // (No PATCH/:id — edits go through the POST upsert keyed by user+date+slot.)
   app.delete('/api/journal/:id', async (req, res) => {
     try { await db.query('DELETE FROM journal_entries WHERE id = $1', [parseInt(req.params.id)]); res.json({ ok: true }); }
     catch (e) { err(res, e); }
