@@ -19,6 +19,12 @@ JOB_NAME="Guest Images (Drive)"
 GUESTS="100 101 102 103 104 105 106 107 108 109 110"
 [ -n "$1" ] && GUESTS="$1"
 
+# HARDENING vs the shared rclone client_id rate limit (Error 403 "Queries per
+# minute"), same as db-cloud-backup.sh — see backup docs. These images are
+# GB-scale so 128M chunks cut the API-call count hard; a personal client_id on
+# the gdrive_sheets remote is the real fix (own quota). Per-guest 3x retry below.
+RC_OPTS="--drive-chunk-size 128M --tpslimit 6 --low-level-retries 20"
+
 [ -r "$PASSFILE" ] || { echo "$(date '+%F %T') passphrase missing — abort"; exit 1; }
 mountpoint -q "$PBS" || { echo "$(date '+%F %T') $PBS not mounted — abort"; exit 1; }
 
@@ -42,8 +48,17 @@ for id in $GUESTS; do
   [ -z "$f" ] && { echo "guest $id: no backup found — skip"; continue; }
   base="$(basename "$f")"
   sz=$(stat -c%s "$f")
-  gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file "$PASSFILE" -o - "$f" \
-    | rclone rcat "$REMOTE/$id/${base}.gpg"
+  # stream gpg -> rcat, 3x retry (rcat can't replay a pipe, so re-gpg on failure)
+  up_ok=0
+  for attempt in 1 2 3; do
+    if gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file "$PASSFILE" -o - "$f" \
+        | rclone rcat $RC_OPTS "$REMOTE/$id/${base}.gpg"; then
+      up_ok=1; break
+    fi
+    echo "$(date '+%F %T') guest $id upload attempt $attempt failed (rate limit?) — retry in 90s"
+    sleep 90
+  done
+  [ "$up_ok" = 1 ] || { echo "$(date '+%F %T') guest $id FAILED after 3 attempts — skip"; continue; }
   rclone copyto "$REMOTE/$id/${base}.gpg" "$REMOTE/$id/latest.gpg"
   rclone delete "$REMOTE/$id" --min-age ${DAYS}d --include "vzdump-*.gpg" 2>/dev/null || true
   TOTAL=$((TOTAL+sz)); DONE=$((DONE+1))
