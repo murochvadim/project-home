@@ -5,9 +5,9 @@
 # rolled back when Postgres or MQTT die while clients are still mid-write:
 #
 #   [1] QNAP halt (CGI) — issued first, has its own boot-down sequence
-#   [2] Phase A — clients in parallel (60 s): 100, 101, 103, 104, 105, 106, 108, 109, 110
+#   [2] Phase A — clients sequential, 60 s each: 100, 101, 103, 104, 105, 106, 108, 109, 110
 #       things that write to Postgres / MQTT must finish before services die
-#   [3] Phase B — services in parallel (30 s): 102 (Postgres), 107 (MQTT)
+#   [3] Phase B — services sequential, 30 s each: 102 (Postgres), 107 (MQTT)
 #       safe to halt now — nobody is writing
 #   [4] Write Phase 4 marker → halt PVE
 #
