@@ -641,17 +641,56 @@
       </div>
 
       <div class="card" style="margin-bottom:0;grid-column:1 / -1;">
-        <h2 style="margin-top:0;">🛹 BoBo Balance Board</h2>
-        <!-- live preview: only the ticked params -->
-        <div id="bobo-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;min-height:46px;align-items:center;"></div>
-        <!-- config list header -->
-        <div style="display:grid;grid-template-columns:34px 1fr 130px;gap:10px;font-size:0.72rem;color:#999;padding-bottom:4px;border-bottom:2px solid #e5e0d8;">
-          <span style="text-align:center;">See</span><span>Parameter name</span><span style="text-align:right;">Live value</span>
+        <h2 style="margin-top:0;">🛹 BoBo Balance Board — Calibration</h2>
+        <div id="bobo-conn" style="font-size:0.82rem;color:#888;margin-bottom:8px;">connecting to sensor stream…</div>
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;color:#555;margin-bottom:14px;cursor:pointer;">
+          <input type="checkbox" id="bobo-live-toggle" checked style="transform:scale(1.15);"> Show live values <span style="color:#999;">(uncheck to free resources)</span>
+        </label>
+
+        <!-- guided wizard prompt (shown only while calibrating) -->
+        <div id="bobo-wiz" style="display:none;text-align:center;padding:16px;margin-bottom:14px;border-radius:10px;background:#f2f7ff;border:1px solid #cfe0ff;">
+          <div id="bobo-wiz-step" style="font-size:1.2rem;font-weight:700;color:#1e40af;"></div>
+          <div id="bobo-wiz-sub" style="font-size:0.9rem;color:#555;margin-top:4px;"></div>
+          <div id="bobo-wiz-count" style="font-size:2.4rem;font-weight:800;color:#2563eb;line-height:1.1;margin-top:6px;min-height:46px;"></div>
         </div>
-        <div id="bobo-param-list"></div>
-        <div style="margin-top:16px;display:flex;gap:10px;align-items:center;">
-          <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="medBoboSave()">💾 Save All</button>
-          <button class="btn btn-sm" onclick="medBoboResetNames()">↺ Reset names</button>
+
+        <!-- live 2-D position pad (meaningful once calibrated) -->
+        <div style="margin-bottom:16px;">
+          <div style="font-size:0.72rem;color:#999;margin-bottom:5px;">Live position — lean to move the dot</div>
+          <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
+            <div style="position:relative;width:150px;height:150px;background:#ece7df;border-radius:12px;flex:0 0 auto;">
+              <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:#c9c2b6;"></div>
+              <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:#c9c2b6;"></div>
+              <div id="bobo-dot" style="position:absolute;width:18px;height:18px;border-radius:50%;background:#2563eb;left:calc(50% - 9px);top:calc(50% - 9px);transition:left .08s linear,top .08s linear;"></div>
+            </div>
+            <div style="font-size:0.9rem;color:#555;line-height:1.8;">
+              <div>Left ⟷ Right: <b id="bobo-xval" style="font-variant-numeric:tabular-nums;color:#333;">—</b></div>
+              <div>Back ⟷ Forward: <b id="bobo-yval" style="font-variant-numeric:tabular-nums;color:#333;">—</b></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- board tuning — kept to the LEFT HALF of the card (doesn't spread past the middle) -->
+        <div style="max-width:50%;margin-bottom:16px;font-size:0.82rem;color:#555;">
+          <label style="display:flex;align-items:center;gap:10px;">
+            <span style="min-width:78px;">Sensitivity</span>
+            <input type="range" id="bobo-sens" min="30" max="300" step="5" value="100" style="flex:1;min-width:0;">
+            <b id="bobo-sens-val" style="min-width:46px;text-align:right;">100%</b>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:10px;">
+            <span style="min-width:78px;">Deadzone</span>
+            <input type="range" id="bobo-dz" min="0" max="40" step="1" value="0" style="flex:1;min-width:0;">
+            <b id="bobo-dz-val" style="min-width:46px;text-align:right;">0</b>
+          </label>
+          <div style="font-size:0.7rem;color:#999;margin-top:4px;">Sensitivity: higher = less lean to reach the edge. Deadzone: center band snapped to 0 (kills idle drift). Both applied on the board.</div>
+        </div>
+
+        <!-- live raw sensor channels -->
+        <div style="font-size:0.72rem;color:#999;margin-bottom:4px;">Live sensor channels</div>
+        <div id="bobo-axes" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;"></div>
+
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <button id="bobo-start" class="btn btn-sm" style="background:#16a34a;color:#fff;">▶ Start Calibration</button>
           <span id="bobo-status" style="font-size:0.82rem;color:#888;"></span>
         </div>
       </div>
@@ -832,7 +871,8 @@
 <script src="js/medical-vision.js?v=4"></script>
 <script src="js/medical-cognitive.js?v=2"></script>
 <script src="js/personal-health.js?v=75"></script>
-<script src="js/medical-bobo.js?v=2"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="js/medical-bobo.js?v=9"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>
