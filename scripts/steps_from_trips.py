@@ -5,11 +5,17 @@ SEGMENT-BASED classifier (2026-06-27). For each candidate — a confirmed closed
 phone_trips row (source='trip') OR a Places-layer phone_place_trips leg
 (source='place_leg', since 2026-07-04) — not yet imported, pull its GPS points from
 device_locations and decide walk / drive / phantom from PER-POINT segment speeds.
-The classifier is UNCHANGED: driving legs (home_to_place / place_to_home) auto-skip,
-only genuine between-place walks import. Instead of trusting the
-GPS-jitter-inflated path_length_m (which can't tell a steady walk from
-drive->park->drive, and reads a normal walk as "too fast"). Steps come from the
-CLEAN (good-accuracy) path distance.
+Driving legs (home_to_place / place_to_home) auto-skip, only genuine walks import.
+Instead of trusting the GPS-jitter-inflated path_length_m (which can't tell a steady
+walk from drive->park->drive, and reads a normal walk as "too fast"). Steps come
+from the CLEAN (good-accuracy) path distance.
+
+GPS-GLITCH GUARD (2026-07-05): a segment faster than `glitch_kmh` (45) between two
+adjacent pings is a physically-impossible GPS teleport (e.g. the dot jumps 124 m in
+4 s = 112 km/h on a real walk). Such segments are dropped from the distance AND break
+the consecutive fast-run — so a short GPS glitch cluster can no longer make a real
+walk look like a car (the bug that skipped trip 13212's 3.6 km walk on 2026-07-05).
+Glitches are KEPT in the p85 pool, so a genuinely sustained fast drive still trips it.
 
   walking  -> insert ph_steps (steps = clean_km * steps_per_km, measured_at = returned_at)
   driving  -> skip (a sustained fast run, or a fast 85th-percentile)
@@ -37,6 +43,11 @@ DEFAULTS = {
     'phantom_min_m':   150.0,   # clean distance below this = GPS phantom / no real trip
     'drive_kmh':       15.0,    # vehicle-like: drives if p85 segment speed > this, OR
     'drive_run_segs':  3,       # >= this many CONSECUTIVE segments faster than drive_kmh
+    'glitch_kmh':      45.0,    # a segment faster than this between two ADJACENT pings is a
+                                # GPS teleport glitch (impossible on foot): its phantom distance
+                                # is dropped AND it breaks the consecutive fast-run, so a few GPS
+                                # blips can't make a real walk look like a car. Kept in the p85
+                                # pool so a genuinely sustained fast drive still trips the p85 test.
 }
 
 
@@ -78,6 +89,7 @@ def main():
     phantom_min = float(cfg['phantom_min_m'])
     drive_kmh  = float(cfg['drive_kmh'])
     drive_run  = int(cfg['drive_run_segs'])
+    glitch_kmh = float(cfg['glitch_kmh'])
 
     # reconcile: drop trip-steps whose trip the geo janitor has since deleted
     cur.execute("DELETE FROM ph_steps WHERE source = 'trip' "
@@ -151,13 +163,22 @@ def main():
                          prev['accuracy_m'] if prev['accuracy_m'] is not None else 9999)
                 if dt > 0 and am <= acc_gate:
                     kmh = haversine(prev['lat'], prev['lon'], pt['lat'], pt['lon']) / dt * 3.6
-                    clean_m += kmh / 3.6 * dt
-                    speeds.append(kmh)
-                    if kmh > drive_kmh:
-                        run += 1
-                        max_run = max(max_run, run)
-                    else:
+                    if kmh > glitch_kmh:
+                        # GPS teleport glitch: the dot "jumped" an impossible distance between
+                        # two adjacent pings (e.g. 124 m in 4 s = 112 km/h on a walk). Its
+                        # distance is phantom → don't add it to clean_m, and it can't be part
+                        # of a real fast-run → reset run. Kept in `speeds` so a genuinely
+                        # sustained drive (many real fast segments) still trips the p85 test.
+                        speeds.append(kmh)
                         run = 0
+                    else:
+                        clean_m += kmh / 3.6 * dt
+                        speeds.append(kmh)
+                        if kmh > drive_kmh:
+                            run += 1
+                            max_run = max(max_run, run)
+                        else:
+                            run = 0
             prev = pt
 
         if clean_m < phantom_min:
@@ -184,7 +205,7 @@ def main():
     print(f"steps_from_trips: reconciled={reconciled} imported={imported} "
           f"skipped(nopts={sk_nopts} phantom={sk_phantom} drive={sk_drive} far={sk_far} nouser={sk_user}) "
           f"candidates={len(trips)} "
-          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|run>={drive_run}) cap={maxkm}km)")
+          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|run>={drive_run}) glitch>{glitch_kmh}km/h cap={maxkm}km)")
 
 
 if __name__ == '__main__':
