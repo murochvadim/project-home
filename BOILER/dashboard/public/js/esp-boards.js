@@ -253,6 +253,19 @@ function renderStatus(b) {
       </div>
     </div>
 
+    ${('ble_connected' in status) ? `
+      <div class="esp-card">
+        <h3 class="esp-card-title">BoBo Balance Board</h3>
+        <div class="status-grid">
+          <div class="item"><label>BLE link</label><div class="value">${dotCell(online ? status.ble_connected : null, 'connected', 'disconnected')}</div></div>
+          <div class="item"><label>Battery</label><div class="value ${status.bobo_battery != null ? '' : 'dim'}">${status.bobo_battery != null ? status.bobo_battery + '%' : '—'}</div></div>
+          <div class="item"><label>BoBo RSSI</label><div class="value ${(online && status.ble_connected && status.bobo_rssi) ? '' : 'dim'}">${(online && status.ble_connected && status.bobo_rssi) ? status.bobo_rssi + ' dBm' : '—'}</div></div>
+          <div class="item"><label>Frames</label><div class="value ${status.frames_total != null ? '' : 'dim'}">${status.frames_total != null ? status.frames_total : '—'}</div></div>
+        </div>
+        ${online ? '' : '<p style="margin:8px 0 0 0;font-size:0.75rem;color:#aaa;font-style:italic;">Board offline — BoBo state unknown until heartbeat resumes.</p>'}
+      </div>
+    ` : ''}
+
     ${(() => {
       // Render each broker row only if the board's last_status actually
       // publishes that field — boards that don't bridge to HiveMQ would
