@@ -914,6 +914,10 @@ class RuleEngine:
         'last_recognition', 'last_recognition_ts',
         'enrolled_count', 'pending_user_name',
         'users',   # JSON array of {id, name} — rendered as Enrolled Users table on Params tab
+        # balcony bridge (balcony_bridge) — BoBo balance board battery + BLE link state.
+        # bobo_battery -> Batt Devices (dps_labels maps it to "Battery"); ble_connected drives
+        # the Batt card's online/offline (the ESP32 itself is always up on USB).
+        'ble_connected', 'bobo_battery',
     )
 
     def _update_esp_device_dps(self, board_id, status_payload):

@@ -1613,7 +1613,13 @@ function groupByRoom(batteryDevices) {
 function renderBatteryCard(device, batteryVal, color) {
   const name = escHtml(device.name);
   const ls = lastSeenText(device.last_seen, false);
-  const online = isOnline(device);
+  // For a bridge that proxies another device's battery over BLE (e.g. Balcony
+  // Bridge → BoBo), the battery belongs to the BLE PEER, not the always-on
+  // (USB-powered) ESP32. So when the board reports `ble_connected`, use THAT as
+  // the online signal — the card shows "offline" the moment the peer disconnects,
+  // even though the ESP32 itself keeps reporting. Otherwise fall back to isOnline().
+  const _st = device.last_state || {};
+  const online = ('ble_connected' in _st) ? !!_st.ble_connected : isOnline(device);
   const hasBattery = batteryVal != null;
 
   // ── Non-battery devices (e.g. IR remote hubs) — alive/offline only ──
