@@ -111,7 +111,7 @@
     <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
     <button class="tab-btn"        onclick="showMedTab('tests',     this); medTestsInit();">Tests</button>
     <button class="tab-btn"        onclick="showMedTab('personal-health', this); phInit();">Personal Health</button>
-    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit(); medWaterSettingsInit(); medExSettingsInit();">Settings</button>
+    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit(); medWaterSettingsInit(); medExSettingsInit(); medBoboSettingsInit();">Settings</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -639,6 +639,22 @@
         <h2 style="margin-top:0;">🧍 Muscle Map</h2>
         <div id="setx-musclemap" style="flex:1;display:flex;flex-direction:column;"></div>
       </div>
+
+      <div class="card" style="margin-bottom:0;grid-column:1 / -1;">
+        <h2 style="margin-top:0;">🛹 BoBo Balance Board</h2>
+        <!-- live preview: only the ticked params -->
+        <div id="bobo-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;min-height:46px;align-items:center;"></div>
+        <!-- config list header -->
+        <div style="display:grid;grid-template-columns:34px 1fr 130px;gap:10px;font-size:0.72rem;color:#999;padding-bottom:4px;border-bottom:2px solid #e5e0d8;">
+          <span style="text-align:center;">See</span><span>Parameter name</span><span style="text-align:right;">Live value</span>
+        </div>
+        <div id="bobo-param-list"></div>
+        <div style="margin-top:16px;display:flex;gap:10px;align-items:center;">
+          <button class="btn btn-sm" style="background:#2563eb;color:#fff;" onclick="medBoboSave()">💾 Save All</button>
+          <button class="btn btn-sm" onclick="medBoboResetNames()">↺ Reset names</button>
+          <span id="bobo-status" style="font-size:0.82rem;color:#888;"></span>
+        </div>
+      </div>
     </div>
   </div><!-- /tab-settings -->
 
@@ -816,6 +832,7 @@
 <script src="js/medical-vision.js?v=4"></script>
 <script src="js/medical-cognitive.js?v=2"></script>
 <script src="js/personal-health.js?v=75"></script>
+<script src="js/medical-bobo.js?v=2"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>
