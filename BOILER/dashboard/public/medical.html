@@ -111,7 +111,7 @@
     <button class="tab-btn"        onclick="showMedTab('documents', this); medLoadDocuments();">Documents</button>
     <button class="tab-btn"        onclick="showMedTab('tests',     this); medTestsInit();">Tests</button>
     <button class="tab-btn"        onclick="showMedTab('personal-health', this); phInit();">Personal Health</button>
-    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit(); medWaterSettingsInit(); medExSettingsInit(); medBoboSettingsInit();">Settings</button>
+    <button class="tab-btn"        onclick="showMedTab('settings', this); medSettingsInit(); medWaterSettingsInit(); medExSettingsInit(); medBoboSettingsInit(); boboGameInit();">Settings</button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════ -->
@@ -640,7 +640,9 @@
         <div id="setx-musclemap" style="flex:1;display:flex;flex-direction:column;"></div>
       </div>
 
-      <div class="card" style="margin-bottom:0;grid-column:1 / -1;">
+      <!-- BoBo row: Calibration (left) + Game (right) share one full-width 2-col row -->
+      <div style="grid-column:1 / -1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch;">
+      <div class="card" style="margin-bottom:0;">
         <h2 style="margin-top:0;">🛹 BoBo Balance Board — Calibration</h2>
         <div id="bobo-conn" style="font-size:0.82rem;color:#888;margin-bottom:8px;">connecting to sensor stream…</div>
         <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;color:#555;margin-bottom:14px;cursor:pointer;">
@@ -670,8 +672,8 @@
           </div>
         </div>
 
-        <!-- board tuning — kept to the LEFT HALF, then trimmed ~2cm shorter -->
-        <div style="max-width:calc(50% - 80px);margin-bottom:16px;font-size:0.82rem;color:#555;">
+        <!-- board tuning (card is now half-width; sliders fill it) -->
+        <div style="margin-bottom:16px;font-size:0.82rem;color:#555;">
           <label style="display:flex;align-items:center;gap:10px;">
             <span style="min-width:78px;">Sensitivity</span>
             <input type="range" id="bobo-sens" min="30" max="500" step="5" value="100" style="flex:1;min-width:0;">
@@ -694,6 +696,11 @@
           <span id="bobo-status" style="font-size:0.82rem;color:#888;"></span>
         </div>
       </div>
+      <div class="card" style="margin-bottom:0;">
+        <h2 style="margin-top:0;">🎮 BoBo Game</h2>
+        <div id="bobo-root"></div>
+      </div>
+      </div><!-- /BoBo row -->
     </div>
   </div><!-- /tab-settings -->
 
@@ -867,12 +874,13 @@
 <script src="js/reminders-badge.js?v=4"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/medical.js?v=36"></script>
-<script src="js/medical-hearing.js?v=7"></script>
+<script src="js/medical-hearing.js?v=8"></script>
 <script src="js/medical-vision.js?v=4"></script>
 <script src="js/medical-cognitive.js?v=2"></script>
 <script src="js/personal-health.js?v=75"></script>
-<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="/vendor/mqtt/mqtt.min.js"></script>
 <script src="js/medical-bobo.js?v=12"></script>
+<script src="js/bobo-game.js?v=2"></script>
 <!-- DICOM viewer (vendored locally — web workers must be same-origin) -->
 <script src="vendor/dicom/jszip.min.js"></script>
 <script src="vendor/dicom/dicomParser.min.js"></script>
