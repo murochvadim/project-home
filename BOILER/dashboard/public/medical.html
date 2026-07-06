@@ -869,6 +869,24 @@
     const tabEl = document.getElementById('tab-' + name);
     if (tabEl) tabEl.classList.add('active');
   }
+
+  // Deep-link: medical.html#bobo → auto-open the Settings tab and jump to the 🎮 BoBo Game card.
+  // Lets the balcony TV use this URL as its browser home page so launching the browser lands on the game.
+  function medOpenBoboDeepLink() {
+    if ((location.hash || '').toLowerCase() !== '#bobo') return;
+    const btns = document.querySelectorAll('.tab-btn');
+    for (const b of btns) {
+      const oc = b.getAttribute('onclick') || '';
+      if (oc.indexOf("showMedTab('settings'") !== -1) { b.click(); break; }
+    }
+    setTimeout(() => {
+      const root = document.getElementById('bobo-root');
+      const card = root && root.closest('.card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 350);
+  }
+  window.addEventListener('DOMContentLoaded', medOpenBoboDeepLink);
+  window.addEventListener('hashchange', medOpenBoboDeepLink);
 </script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=4"></script>
