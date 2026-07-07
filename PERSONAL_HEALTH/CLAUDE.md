@@ -72,19 +72,27 @@ A **👟 Daily steps** card in the same grid row as Log weight / Log blood press
 - `routes-personal-health.js` is a backend route module → needs a **dashboard restart** (`pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`) to register the routes.
 - The migration runs on LXC 102 via LXC 104 (`psql -h 192.168.1.219`).
 
-## 🛹 Bobo card (2026-07-07)
-Per-person balance-game card, mirroring "Log weight". Each finished BoBo game (played on the balcony TV)
-already writes `medical_test_results` (test_type='balance', user_id, `results{score,duration_s,level,…}`);
-the LXC `bobo_game_service.py` `POST /api/bobo/score` now ALSO computes **burned calories** =
-`MET(level) × latest ph_measurements.weight_kg × duration_s/3600` (MET 2.5/3.0/3.5 easy/med/hard; skipped
-if the player has no weight logged) and stores it as `results.calories`. The card (`phLoadBobo(p)` in
-`personal-health.js`, `#ph-bobocard` in `medical.html`) shows the person's recent games
-(date · score · duration · 🔥cal, filtered client-side to `user_id`) + totals (games · time · cal), plus a
-**🔔 Play schedule** — a new `ph_profiles.bobo_sched` jsonb (migration `019`), SAME `{freq, interval_n}`
-shape as the measure schedules. Reminders (`routes-reminders.js`) shows a **"🛹 Bobo"** pill when no game
-has been played within the schedule window (`max(tested_at)` from `medical_test_results` by `user_id`);
-clears after a game. Schedule helpers reused by registering `bobo` in the hardcoded `_schedPre` +
-`phSchedChange` maps. Full BoBo pipeline (bridge/game/calibration/TV auto-switch): `project-bobo-balance-bridge`
+## 🛹 Bobo card (2026-07-07; storage moved to `ph_bobo` same day)
+Per-person balance-game card, mirroring "Log weight". BoBo is a Personal Health **activity** (like BP / water /
+steps / exercises), so its games live in their **own table `ph_bobo`** keyed by **`profile_id`** — NOT in
+`medical_test_results` as a "test" (the original wiring; the user flagged that it wrongly showed under Medical →
+Tests). **`ph_bobo`** cols: `profile_id` FK ph_profiles, `measured_at`, `game`, `level`, `score`, `duration_s`,
+`calories`, `details` jsonb, `created_at`; index `(profile_id, measured_at DESC)`; retention forever+protected.
+Migration **`020_bobo.sql`** creates it, migrates the old `test_type='balance'` rows over (mapping user_id→profile),
+and DELETEs them from `medical_test_results`. **Endpoints `/api/personal-health/bobo`** (`routes-personal-health.js`):
+GET `?profile_id=` = one person's history / no id = all-players recent (game menu); POST resolves `profile_id` from
+`user_id` (the TV only knows the household user); DELETE. GET returns the old row shape (`results` blob + `meta.game`
++ `member_name`) so the shared game shell + `renderBalance` work unchanged. **Burned calories** computed on save in
+the LXC `bobo_game_service.py` `POST /api/bobo/score` = `MET(level) × latest ph_measurements.weight_kg ×
+duration_s/3600` (MET 2.5/3.0/3.5 easy/med/hard; skipped if no weight), first-classed into `ph_bobo.calories`. The
+card (`phLoadBobo(p)` + `#ph-bobocard`) shows totals (games · time · 🔥cal) + a **🕓 history** (view via
+`renderBalance` / delete, like BP). Both writers (LXC `/api/bobo/{score,recent}` + dashboard `bobo-game.js`
+`EP.{saveScore,recent}`) point at `ph_bobo`; the `balance` branches were removed from `medical-hearing.js` (out of
+Tests). **🔔 Play schedule** — `ph_profiles.bobo_sched` jsonb (migration `019`), SAME `{freq, interval_n}` shape.
+Reminders (`routes-reminders.js`) shows a **"🛹 Bobo"** pill when no game within the window (`max(measured_at) FROM
+ph_bobo WHERE profile_id`; was reading the emptied balance tests → would fire forever). Schedule helpers reused by
+registering `bobo` in the hardcoded `_schedPre` + `phSchedChange` maps. Full BoBo pipeline
+(bridge/game/calibration/TV auto-switch): `project-bobo-balance-bridge`
 memory + `BOILER/dashboard/bobo-lxc/`.
 
 ## Extending
