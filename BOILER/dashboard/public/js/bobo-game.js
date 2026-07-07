@@ -36,6 +36,7 @@
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   window.BOBO_GAMES = window.BOBO_GAMES || {};
+  const _rr = (ctx, x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
 
   let _mqtt = null, _mqttUp = false, _x = 0, _y = 0, _lastMsg = 0, _key = 0;
   let _players = [], _sel = null, _game = null, _level = 'medium', _settings = { levels: {} };
@@ -335,7 +336,8 @@
   window.renderBalance = function (t) {
     const rr = t.results || {};
     let d = ''; try { d = new Date(t.tested_at).toLocaleString('en-GB', { hour12: false }); } catch (e) {}
-    const gname = (rr.game && window.BOBO_GAMES[rr.game] && window.BOBO_GAMES[rr.game].name) || 'Colour Tunnel';
+    const gid = (t.meta && t.meta.game) || rr.game;   // game id lives in meta.game
+    const gname = (gid && window.BOBO_GAMES[gid] && window.BOBO_GAMES[gid].name) || 'Colour Tunnel';
     const m = document.createElement('div');
     m.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);';
     m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
@@ -428,6 +430,94 @@
         },
         result() {
           return { score: G.score, obstacles: G.passed, duration_s: Math.round(G.t), level: levelKey, top_speed: Math.round(G.top * 100) / 100 };
+        },
+      };
+    },
+  };
+
+  // ══ GAME MODULE: Balance Training (left/right weight-shift, à la BoBo) ══════
+  window.BOBO_GAMES['balance_training'] = {
+    id: 'balance_training',
+    name: 'Balance Training',
+    levels: {
+      easy:   { label: 'Easy',   tag: '#22c55e', threshold: 45, hold_req: 0.5, step_time: 4.0, idle_end: 8, ramp: 0.06, min_step: 1.4 },
+      medium: { label: 'Medium', tag: '#eab308', threshold: 55, hold_req: 0.5, step_time: 3.0, idle_end: 7, ramp: 0.08, min_step: 1.1 },
+      hard:   { label: 'Hard',   tag: '#ef4444', threshold: 65, hold_req: 0.4, step_time: 2.2, idle_end: 6, ramp: 0.10, min_step: 0.9 },
+    },
+    create(levelKey) {
+      const L = this.levels[levelKey] || this.levels.medium;
+      let G;
+      const init = () => { G = { target: 'left', hold: 0, curStep: L.step_time, stepClock: L.step_time, idle: 0, started: false, score: 0, streak: 0, streakMax: 0, steps: 0, alive: true, t: 0, marker: 0.5, flash: 0 }; };
+      init();
+      return {
+        get alive() { return G.alive; },
+        reset: init,
+        update(dt, input) {
+          G.t += dt;
+          const targetPos = Math.max(0, Math.min(1, (input + 100) / 200));   // −100..100 → 0..1
+          G.marker += (targetPos - G.marker) * Math.min(1, dt * 14);
+          if (G.flash > 0) G.flash -= dt;
+          const onLeft = input <= -L.threshold, onRight = input >= L.threshold;
+          const onTarget = (G.target === 'left' && onLeft) || (G.target === 'right' && onRight);
+          if (onTarget) {
+            G.hold += dt;
+            if (G.hold >= L.hold_req) {                 // ── STEP registered ──
+              G.steps++; G.score += 10 + G.streak * 2;
+              G.streak++; G.streakMax = Math.max(G.streakMax, G.streak);
+              G.target = G.target === 'left' ? 'right' : 'left';
+              G.hold = 0; G.flash = 0.25; G.idle = 0; G.started = true;
+              G.curStep = Math.max(L.min_step, L.step_time - G.steps * L.ramp);
+              G.stepClock = G.curStep;
+            }
+          } else { G.hold = 0; }
+          if (G.started) {                              // streak window + idle round-ender (only after 1st step)
+            G.stepClock -= dt;
+            if (G.stepClock <= 0) { G.streak = 0; G.stepClock = G.curStep; }
+            G.idle = onTarget ? 0 : G.idle + dt;
+            if (G.idle >= L.idle_end) G.alive = false;
+          }
+        },
+        draw(ctx, W, H, env) {
+          ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, W, H);
+          const padW = W * 0.26, padH = H * 0.36, padY = H * 0.5 - padH / 2, leftX = W * 0.13, rightX = W * 0.61;
+          const pad = (x, side) => {
+            const active = G.target === side;
+            ctx.fillStyle = active ? 'rgba(34,197,94,0.20)' : 'rgba(255,255,255,0.05)';
+            ctx.strokeStyle = active ? '#22c55e' : 'rgba(255,255,255,0.18)'; ctx.lineWidth = active ? 6 : 2;
+            _rr(ctx, x, padY, padW, padH, 22); ctx.fill(); ctx.stroke();
+            ctx.textAlign = 'center';
+            ctx.fillStyle = active ? '#22c55e' : 'rgba(255,255,255,0.30)';
+            ctx.font = '900 ' + Math.round(H * 0.16) + 'px system-ui,sans-serif';
+            ctx.fillText(side === 'left' ? 'L' : 'R', x + padW / 2, padY + padH / 2 + H * 0.055);
+            ctx.fillStyle = active ? '#eafff1' : 'rgba(255,255,255,0.4)';
+            ctx.font = '800 ' + Math.round(H * 0.033) + 'px system-ui,sans-serif';
+            ctx.fillText(side === 'left' ? 'LEFT' : 'RIGHT', x + padW / 2, padY - H * 0.03);
+            if (active && G.hold > 0) {                 // hold-progress ring under the lit pad
+              const frac = Math.min(1, G.hold / L.hold_req);
+              ctx.strokeStyle = '#facc15'; ctx.lineWidth = 8; ctx.beginPath();
+              ctx.arc(x + padW / 2, padY + padH + H * 0.05, H * 0.032, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2); ctx.stroke();
+            }
+          };
+          pad(leftX, 'left'); pad(rightX, 'right');
+          // weight marker on a track
+          const trackY = H * 0.9, mx = W * 0.14 + (W * 0.72) * G.marker;
+          ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(W * 0.14, trackY); ctx.lineTo(W * 0.86, trackY); ctx.stroke();
+          ctx.fillStyle = G.flash > 0 ? '#22c55e' : '#e5f2ff';
+          ctx.beginPath(); ctx.arc(mx, trackY, H * 0.022, 0, Math.PI * 2); ctx.fill();
+          // HUD
+          ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+          ctx.font = '800 ' + Math.round(H * 0.09) + 'px system-ui,sans-serif';
+          ctx.fillText(String(G.score), W / 2, H * 0.15);
+          ctx.font = '700 ' + Math.round(H * 0.03) + 'px system-ui,sans-serif';
+          ctx.fillStyle = G.streak > 1 ? '#facc15' : 'rgba(255,255,255,.6)';
+          ctx.fillText(G.streak > 1 ? ('🔥 ' + G.streak + ' streak') : 'shift onto the lit foot', W / 2, H * 0.21);
+          ctx.font = '600 ' + Math.round(H * 0.026) + 'px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.5)';
+          ctx.fillText((env.playerName || '') + ' · ' + L.label + ' · ' + G.steps + ' steps', W / 2, H * 0.965);
+          if (!env.live) { ctx.fillStyle = 'rgba(255,210,0,.7)'; ctx.font = '600 ' + Math.round(H * 0.024) + 'px system-ui,sans-serif'; ctx.fillText('use ← → arrow keys (BoBo not detected)', W / 2, H * 0.05); }
+        },
+        result() {
+          return { score: G.score, steps: G.steps, duration_s: Math.round(G.t), level: levelKey, streak_max: G.streakMax };
         },
       };
     },
