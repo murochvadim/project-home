@@ -2,19 +2,20 @@
 """
 BoBo TV auto-switch — LXC 100 (bobo-tv-watch.service).
 
-Step ON the board  → BoBo connects → its pos stream flows → turn the balcony TV ON + open the game.
+Step ON the board  → BoBo connects → its pos stream flows → turn the balcony TV ON (it resumes the game).
 Step OFF the board → BoBo disconnects → stream stops → turn the TV OFF after a grace delay.
 
 Uses the SAME fast signal the game uses: the `pos` MQTT stream (~10 Hz while someone's on the board;
 stops within ~2.5 s of stepping off — the bridge firmware gates it on a live BLE link). TV on/off goes
-through the media agent's tv_control.py (:8765, entity 'tv55' = SmartThings, reliable — same path the
-balcony panel uses). The game is shown by relaunching the TV browser (tv_launch.py → DIAL → the browser's
-Home page, which is http://192.168.1.138:8770/). All co-located on LXC 100.
+through the media agent's tv_control.py (:8765, entity 'tv55' = SmartThings, reliable) — EXACTLY the same
+turn_on/turn_off the balcony panel uses, nothing more. We do NOT relaunch the browser via DIAL: the TV
+resumes its last app (the game browser) on power-on by itself; the DIAL relaunch made the screen jump.
+Home page of that browser is http://192.168.1.138:8770/. All co-located on LXC 100.
 
 Tunables (env, all optional): BOBO_TV_OFF_DELAY (s, default 60), BOBO_TV_ON_SUSTAIN (s, default 2),
 BOBO_TV_CONNECT_GAP (s, default 3). Disable anytime: `systemctl stop bobo-tv-watch`.
 """
-import os, time, json, subprocess, threading, logging, urllib.request
+import os, time, json, threading, logging, urllib.request
 import paho.mqtt.client as mqtt
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -25,9 +26,6 @@ MQTT_USER = 'esp_boards';    MQTT_PASS = os.environ.get('ESP_BOARDS_MQTT_PASS', 
 POS_TOPIC = 'mur/home/esp/balcony_bridge/pos'
 
 TV_CMD_URL = 'http://127.0.0.1:8765/media/command'   # tv_control.py media_command
-TV_DIAL    = 'http://192.168.1.199:8080/ws/app/WebBrowser'   # DIAL app endpoint (200 when ready; root / is 403)
-VENV_PY    = '/opt/media-agent/venv/bin/python3'
-LAUNCH_PY  = '/opt/media-agent/tv_launch.py'
 
 CONNECT_GAP = float(os.environ.get('BOBO_TV_CONNECT_GAP', '3'))   # no frame within this ⇒ disconnected
 ON_SUSTAIN  = float(os.environ.get('BOBO_TV_ON_SUSTAIN',  '2'))   # connected this long before TV on (anti-flap)
@@ -61,29 +59,10 @@ def tv(cmd):
     except Exception as e:
         log.warning('TV %s failed: %s', cmd, e)
 
-def dial_ready(timeout=120):
-    # Cold-boot: the TV powers on then takes ~30-90 s before its DIAL (port 8080) answers.
-    t = time.time()
-    while time.time() - t < timeout:
-        try:
-            urllib.request.urlopen(TV_DIAL, timeout=3); return True
-        except Exception:
-            time.sleep(2)
-    return False
-
-def launch_browser():
-    try:
-        subprocess.run([VENV_PY, LAUNCH_PY], timeout=40)
-        log.info('browser relaunched (→ game)')
-    except Exception as e:
-        log.warning('browser launch failed: %s', e)
-
 def turn_on_and_show():
+    # EXACTLY like the balcony panel: just power the TV on. The TV resumes its last app (the game
+    # browser) on its own — do NOT relaunch the browser via DIAL (that made the screen jump).
     tv('turn_on')
-    if dial_ready():
-        launch_browser()
-    else:
-        log.warning('TV DIAL not ready after power-on — game not launched (TV may still be booting)')
 
 def main():
     cli = mqtt.Client()
