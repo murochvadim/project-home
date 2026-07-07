@@ -271,8 +271,8 @@
     _ov.id = 'bobo-overlay';
     _ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#05060a;overflow:hidden;';
     _cv = document.createElement('canvas'); _ov.appendChild(_cv);
-    const ex = document.createElement('button'); ex.textContent = '✕'; ex.title = 'Exit';
-    ex.style.cssText = 'position:absolute;top:12px;right:16px;z-index:2;background:rgba(255,255,255,.12);color:#fff;border:none;border-radius:8px;font-size:1.3rem;width:46px;height:46px;cursor:pointer;';
+    const ex = document.createElement('button'); ex.textContent = '✕ Exit'; ex.title = 'Stop and back to settings (or press Esc)';
+    ex.style.cssText = 'position:absolute;top:16px;right:18px;z-index:3;background:#ef4444;color:#fff;border:none;border-radius:11px;font-size:1.05rem;font-weight:700;padding:11px 20px;cursor:pointer;box-shadow:0 3px 14px rgba(0,0,0,.45);';
     ex.addEventListener('click', () => { quitGame(); renderMenu(); }); _ov.appendChild(ex);
     document.body.appendChild(_ov);
     _ctx = _cv.getContext('2d'); resize();
@@ -316,6 +316,7 @@
 
   // ── keyboard fallback ─────────────────────────────────────────────
   function onKey(e) {
+    if (e.type === 'keydown' && e.key === 'Escape' && _ov) { quitGame(); renderMenu(); return; }   // Esc = stop → settings
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     if (_ov) e.preventDefault();
     if (e.type === 'keydown') { _key = (e.key === 'ArrowLeft') ? -100 : 100; }
