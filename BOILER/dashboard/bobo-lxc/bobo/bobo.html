@@ -22,49 +22,50 @@
   <div class="row2">
     <!-- Calibration (same card as Medical → Settings) -->
     <div class="card">
-      <h2>🛹 BoBo Balance Board — Calibration</h2>
-      <div id="bobo-conn" style="font-size:0.82rem;color:#888;margin-bottom:8px;">connecting to sensor stream…</div>
-      <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;color:#555;margin-bottom:14px;">
-        <input type="checkbox" id="bobo-live-toggle" checked style="transform:scale(1.15);"> Show live values <span style="color:#999;">(auto — BoBo connected)</span>
-      </label>
-      <div id="bobo-wiz" style="display:none;text-align:center;padding:16px;margin-bottom:14px;border-radius:10px;background:#f2f7ff;border:1px solid #cfe0ff;">
-        <div id="bobo-wiz-step" style="font-size:1.2rem;font-weight:700;color:#1e40af;"></div>
-        <div id="bobo-wiz-sub" style="font-size:0.9rem;color:#555;margin-top:4px;"></div>
-        <div id="bobo-wiz-count" style="font-size:2.4rem;font-weight:800;color:#2563eb;line-height:1.1;margin-top:6px;min-height:46px;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;">
+        <h2 style="margin:0;font-size:1.1rem;">🛹 BoBo Balance Board — Calibration</h2>
+        <div style="text-align:right;flex:0 0 auto;">
+          <button id="bobo-start" class="btn btn-sm" style="background:#16a34a;color:#fff;">▶ Start Calibration</button>
+          <div id="bobo-status" style="font-size:0.72rem;color:#888;margin-top:3px;"></div>
+        </div>
       </div>
-      <div style="margin-bottom:16px;">
-        <div style="font-size:0.72rem;color:#999;margin-bottom:5px;">Live position — lean to move the dot</div>
-        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
-          <div style="position:relative;width:150px;height:150px;background:#ece7df;border-radius:12px;flex:0 0 auto;">
+      <div id="bobo-conn" style="font-size:0.8rem;color:#888;margin-bottom:6px;">connecting to sensor stream…</div>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.8rem;color:#555;margin-bottom:10px;">
+        <input type="checkbox" id="bobo-live-toggle" checked style="transform:scale(1.1);"> Show live values <span style="color:#999;">(auto — BoBo connected)</span>
+      </label>
+      <div id="bobo-wiz" style="display:none;text-align:center;padding:12px;margin-bottom:10px;border-radius:10px;background:#f2f7ff;border:1px solid #cfe0ff;">
+        <div id="bobo-wiz-step" style="font-size:1.1rem;font-weight:700;color:#1e40af;"></div>
+        <div id="bobo-wiz-sub" style="font-size:0.85rem;color:#555;margin-top:3px;"></div>
+        <div id="bobo-wiz-count" style="font-size:2.1rem;font-weight:800;color:#2563eb;line-height:1.1;margin-top:4px;min-height:40px;"></div>
+      </div>
+      <div style="margin-bottom:10px;">
+        <div style="font-size:0.7rem;color:#999;margin-bottom:4px;">Live position — lean to move the dot</div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+          <div style="position:relative;width:118px;height:118px;background:#ece7df;border-radius:12px;flex:0 0 auto;">
             <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:#c9c2b6;"></div>
             <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:#c9c2b6;"></div>
-            <div id="bobo-dot" style="position:absolute;width:18px;height:18px;border-radius:50%;background:#2563eb;left:calc(50% - 9px);top:calc(50% - 9px);transition:left .08s linear,top .08s linear;"></div>
+            <div id="bobo-dot" style="position:absolute;width:16px;height:16px;border-radius:50%;background:#2563eb;left:calc(50% - 8px);top:calc(50% - 8px);transition:left .08s linear,top .08s linear;"></div>
           </div>
-          <div style="font-size:0.9rem;color:#555;line-height:1.8;">
+          <div style="font-size:0.85rem;color:#555;line-height:1.7;">
             <div>Left ⟷ Right: <b id="bobo-xval" style="font-variant-numeric:tabular-nums;color:#333;">—</b></div>
             <div>Back ⟷ Forward: <b id="bobo-yval" style="font-variant-numeric:tabular-nums;color:#333;">—</b></div>
           </div>
         </div>
       </div>
-      <div style="margin-bottom:16px;font-size:0.82rem;color:#555;">
+      <div style="margin-bottom:10px;font-size:0.8rem;color:#555;">
         <label style="display:flex;align-items:center;gap:10px;">
-          <span style="min-width:78px;">Sensitivity</span>
+          <span style="min-width:72px;">Sensitivity</span>
           <input type="range" id="bobo-sens" min="30" max="500" step="5" value="100" style="flex:1;min-width:0;">
-          <b id="bobo-sens-val" style="min-width:46px;text-align:right;">100%</b>
+          <b id="bobo-sens-val" style="min-width:44px;text-align:right;">100%</b>
         </label>
-        <label style="display:flex;align-items:center;gap:10px;margin-top:10px;">
-          <span style="min-width:78px;">Deadzone</span>
+        <label style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+          <span style="min-width:72px;">Deadzone</span>
           <input type="range" id="bobo-dz" min="0" max="40" step="1" value="0" style="flex:1;min-width:0;">
-          <b id="bobo-dz-val" style="min-width:46px;text-align:right;">0</b>
+          <b id="bobo-dz-val" style="min-width:44px;text-align:right;">0</b>
         </label>
-        <div style="font-size:0.7rem;color:#999;margin-top:4px;">Sensitivity: higher = less lean to reach the edge. Deadzone: center band snapped to 0. Both applied on the board.</div>
       </div>
-      <div style="font-size:0.72rem;color:#999;margin-bottom:4px;">Live sensor channels</div>
-      <div id="bobo-axes" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;"></div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button id="bobo-start" class="btn btn-sm" style="background:#16a34a;color:#fff;">▶ Start Calibration</button>
-        <span id="bobo-status" style="font-size:0.82rem;color:#888;"></span>
-      </div>
+      <div style="font-size:0.7rem;color:#999;margin-bottom:3px;">Live sensor channels</div>
+      <div id="bobo-axes" style="display:flex;flex-wrap:wrap;gap:5px;"></div>
     </div>
 
     <!-- Game -->

@@ -55,10 +55,10 @@
     const el = $('bobo-axes'); if (!el || el.dataset.built) return;
     el.dataset.built = '1';
     el.innerHTML = CH_NAMES.map((nm, i) => `
-      <div style="display:flex;flex-direction:column;align-items:center;min-width:64px;padding:4px 6px;background:#f7f4ef;border-radius:6px;">
-        <span style="font-size:0.62rem;color:#888;">${nm}</span>
-        <span data-ax="${i}" style="font-weight:700;font-size:0.8rem;font-variant-numeric:tabular-nums;color:#333;">—</span>
-        <div style="position:relative;width:52px;height:5px;background:#e2ddd4;border-radius:3px;margin-top:3px;">
+      <div style="display:flex;flex-direction:column;align-items:center;min-width:52px;padding:2px 4px;background:#f7f4ef;border-radius:6px;">
+        <span style="font-size:0.58rem;color:#888;">${nm}</span>
+        <span data-ax="${i}" style="font-weight:700;font-size:0.72rem;font-variant-numeric:tabular-nums;color:#333;">—</span>
+        <div style="position:relative;width:42px;height:5px;background:#e2ddd4;border-radius:3px;margin-top:2px;">
           <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:#c3bcb0;"></div>
           <div data-axb="${i}" style="position:absolute;top:0;bottom:0;width:3px;border-radius:2px;background:#2563eb;left:calc(50% - 1.5px);transition:left .08s linear;"></div>
         </div>

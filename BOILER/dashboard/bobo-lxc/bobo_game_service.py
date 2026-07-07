@@ -76,13 +76,17 @@ def _err(e):
     return jsonify({'error': str(e)}), 500
 
 # ── static (the game) ──────────────────────────────────────────────
+def _nocache(resp):
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
+
 @app.route('/')
 def index():
-    return send_from_directory(STATIC_DIR, 'bobo.html')
+    return _nocache(send_from_directory(STATIC_DIR, 'bobo.html'))
 
 @app.route('/<path:fn>')
 def static_file(fn):
-    return send_from_directory(STATIC_DIR, fn)
+    return _nocache(send_from_directory(STATIC_DIR, fn))
 
 # ── data endpoints (mirror the dashboard shapes) ───────────────────
 @app.route('/health')
