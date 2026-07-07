@@ -118,7 +118,7 @@
     try {
       const r = await fetch(EP.saveScore, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test_type: 'balance', user_id: _sel ? _sel.id : null, results: res, meta: { game: gameId } }),
+        body: JSON.stringify({ user_id: _sel ? _sel.id : null, results: res, meta: { game: gameId } }),
       });
       return r.ok;
     } catch (e) { return false; }
