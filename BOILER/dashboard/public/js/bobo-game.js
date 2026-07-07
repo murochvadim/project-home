@@ -154,7 +154,7 @@
       <div style="margin-top:16px;border-top:1px solid #f0ece6;padding-top:9px;">
         <span style="font-size:0.75rem;color:#777;">Recent:</span> ${recentHtml}
       </div>
-      ${IS_TV ? '' : renderDefaultsUI()}`;
+      ${renderDefaultsUI()}`;
 
     panel.querySelectorAll('[data-game]').forEach(el => el.addEventListener('click', () => { _game = el.dataset.game; renderMenu(); }));
     panel.querySelectorAll('[data-player]').forEach(el => el.addEventListener('click', () => {
@@ -165,7 +165,7 @@
     panel.querySelectorAll('[data-level]').forEach(el => el.addEventListener('click', () => { _level = el.dataset.level; renderMenu(); }));
     const play = $('bobo-play');
     if (play) play.addEventListener('click', () => { if (!_sel) { alert('Pick a player first'); return; } saveLevel(); startGame(_game, _level); });
-    if (!IS_TV) wireDefaultsUI(panel);
+    wireDefaultsUI(panel);
     tickStatus();
   }
 
