@@ -1,0 +1,15 @@
+[Unit]
+Description=BoBo TV auto-switch — board connect → balcony TV on + game; disconnect → TV off
+After=network.target bobo-game.service media-agent.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/media-agent
+EnvironmentFile=/etc/environment
+ExecStartPre=/opt/media-agent/kill-orphan.sh bobo_tv_watch.py
+ExecStart=/opt/media-agent/venv/bin/python3 /opt/media-agent/bobo_tv_watch.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

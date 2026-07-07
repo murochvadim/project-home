@@ -14,6 +14,12 @@ TV works with the laptop dashboard off. Same URL the TV uses: **`http://192.168.
 - **`bobo/bobo.html`** — the standalone page (Calibration + Game cards, identical to Medical → Settings).
   Sets `window.BOBO_CFG` to the `/api/bobo/*` endpoints.
 - **`bobo-game.service`** — systemd unit (venv python, `EnvironmentFile=/etc/environment`, orphan-guard).
+- **`bobo_tv_watch.py`** + **`bobo-tv-watch.service`** — the **auto-switch**: watches the board's `pos`
+  MQTT stream and drives the balcony TV. Step ON the board (stream flows) → turn TV **on** (tv_control.py
+  `:8765` `{entity:'tv55',turn_on}` = SmartThings, reliable) → wait for the TV's DIAL
+  (`:8080/ws/app/WebBrowser` — root `/` is 403, so poll the app endpoint) → `tv_launch.py` opens the game.
+  Step OFF (no frames ≥ `BOBO_TV_OFF_DELAY`, default 60 s) → turn TV **off**. Anti-flap: must be connected
+  `BOBO_TV_ON_SUSTAIN` (2 s) before on. Tunables via env; disable with `systemctl stop bobo-tv-watch`.
 - **`tv/`** — TV-control helpers (Samsung WS remote / DIAL), used to point the TV at this page and for the
   planned Auto/Manual launch flow:
   - `tv_launch.py` — DIAL stop+start the TV browser (reopens on its Home page → the game).
