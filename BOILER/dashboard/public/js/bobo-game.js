@@ -87,7 +87,7 @@
     try { const j = await (await fetch(EP.settingsGet)).json(); cur = (j && j.value) || {}; } catch (e) { cur = {}; }
     const merged = Object.assign({}, cur, patch);
     if (patch.levels) merged.levels = Object.assign({}, cur.levels || {}, patch.levels);
-    if (patch.bt)     merged.bt     = Object.assign({}, cur.bt || {}, patch.bt);   // per-user Balance Training opts
+    // bt is a flat GLOBAL {sets,hold,rest} → the Object.assign above already replaces it wholesale.
     _settings = merged;
     try { await fetch(EP.settingsPost, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: merged }) }); }
     catch (e) { /* non-fatal */ }
@@ -97,18 +97,18 @@
     _settings.levels = _settings.levels || {}; _settings.levels[_sel.id] = _level;
     saveSettings({ levels: { [_sel.id]: _level } });
   }
-  // Balance Training Sets/Hold/Rest — resolve from the per-user store (else the game module's defaults).
+  // Balance Training Sets/Hold/Rest — ONE GLOBAL setting saved forever (not per-player, not per-session).
   function applyBT() {
     const g = curGame();
     const d = (g && g.usesSets) ? { sets: g.defaultSets || 3, hold: g.defaultHold || 30, rest: g.defaultRest != null ? g.defaultRest : 10 }
                                 : { sets: 3, hold: 30, rest: 10 };
-    const s = (_sel && _settings.bt && _settings.bt[_sel.id]) || {};
+    const s = (_settings.bt && typeof _settings.bt.sets !== 'undefined') ? _settings.bt : {};   // flat global {sets,hold,rest}
     _sets = s.sets || d.sets; _hold = s.hold || d.hold; _rest = (s.rest != null ? s.rest : d.rest);
   }
   function saveBT() {
-    if (!_sel) return;
-    _settings.bt = _settings.bt || {}; _settings.bt[_sel.id] = { sets: _sets, hold: _hold, rest: _rest };
-    saveSettings({ bt: { [_sel.id]: { sets: _sets, hold: _hold, rest: _rest } } });
+    _settings.bt = { sets: _sets, hold: _hold, rest: _rest };   // global — no player required
+    saveSettings({ bt: { sets: _sets, hold: _hold, rest: _rest } });
+    const st = $('bobo-bt-status'); if (st) { st.textContent = '✓ saved'; setTimeout(() => { if (st) st.textContent = ''; }, 1500); }
   }
   async function loadRecent() {
     try { const rows = await (await fetch(EP.recent)).json(); return Array.isArray(rows) ? rows.slice(0, 6) : []; }
@@ -162,7 +162,7 @@
         #bobo-root .bobo-lbl{font-size:0.75rem;color:#777;margin-bottom:5px;}
       </style>
       <div id="bobo-game-status" style="font-size:0.82rem;margin-bottom:12px;color:#888;">connecting…</div>
-      ${games.length > 1 ? `<div class="bobo-lbl">Game</div><div class="bobo-row" style="align-items:center;">${gameTiles}${(curGame() && curGame().usesSets) ? `<div style="display:flex;align-items:center;gap:10px;font-size:0.8rem;color:#555;margin-left:8px;"><label>Sets <input id="bobo-bt-sets" type="number" min="1" max="10" value="${_sets}" style="width:48px;padding:4px;"></label><label>Hold s <input id="bobo-bt-hold" type="number" min="5" max="120" value="${_hold}" style="width:52px;padding:4px;"></label><label>Rest s <input id="bobo-bt-rest" type="number" min="0" max="60" value="${_rest}" style="width:52px;padding:4px;"></label></div>` : ''}</div>` : ''}
+      ${games.length > 1 ? `<div class="bobo-lbl">Game</div><div class="bobo-row" style="align-items:center;">${gameTiles}${(curGame() && curGame().usesSets) ? `<div style="display:flex;align-items:center;gap:10px;font-size:0.8rem;color:#555;margin-left:8px;"><label>Sets <input id="bobo-bt-sets" type="number" min="1" max="10" value="${_sets}" style="width:48px;padding:4px;"></label><label>Hold s <input id="bobo-bt-hold" type="number" min="5" max="120" value="${_hold}" style="width:52px;padding:4px;"></label><label>Rest s <input id="bobo-bt-rest" type="number" min="0" max="60" value="${_rest}" style="width:52px;padding:4px;"></label><span id="bobo-bt-status" style="color:#3a7d44;font-size:0.78rem;font-weight:600;"></span></div>` : ''}</div>` : ''}
       <div class="bobo-lbl">Player</div>
       <div class="bobo-row">${playerTiles}</div>
       <div class="bobo-lbl">Difficulty</div>
