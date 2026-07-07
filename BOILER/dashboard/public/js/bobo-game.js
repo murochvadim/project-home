@@ -480,7 +480,7 @@
       const stanceLabel = (st) => st === 'both' ? 'Balance on BOTH legs'
         : (st === 'left' ? 'Stand on your LEFT leg' : 'Stand on your RIGHT leg');
       let G;
-      const init = () => { G = { idx: 0, phase: 'hold', clock: hold, balancedT: 0, alive: true, t: 0, sx: 0, sy: 0, steady: false, flash: 0, paused: false }; };
+      const init = () => { G = { idx: 0, phase: 'rest', clock: Math.max(3, rest), prep: true, balancedT: 0, alive: true, t: 0, sx: 0, sy: 0, steady: false, flash: 0, paused: false }; };
       init();
       return {
         get alive() { return G.alive; },
@@ -502,13 +502,17 @@
               else if (rest > 0) { G.phase = 'rest'; G.clock = rest; }
               else { G.idx++; G.clock = hold; G.flash = 0.4; }
             }
-          } else {                                       // rest
-            if (G.clock <= 0) { G.idx++; G.phase = 'hold'; G.clock = hold; G.flash = 0.4; }
+          } else {                                       // rest (incl. the initial "step on board" prep)
+            if (G.clock <= 0) {
+              if (G.prep) { G.prep = false; } else { G.idx++; }   // prep → 1st hold (no bump); rest → next hold
+              G.phase = 'hold'; G.clock = hold; G.flash = 0.4;
+            }
           }
         },
         draw(ctx, W, H, env) {
           ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, W, H);
-          const cx = W / 2, cy = H * 0.56, R = Math.min(W, H) * 0.28, scale = R / L.zone;
+          // fixed marker scale; ring radius = the steady zone → smaller (harder) on medium/hard, and clears the text
+          const cx = W / 2, cy = H * 0.56, scale = Math.min(W, H) * 0.0055, R = L.zone * scale;
           const stance = seq[G.idx], isHold = G.phase === 'hold';
           // balance target ring (= the steady zone) + crosshair
           ctx.lineWidth = 4; ctx.strokeStyle = G.steady ? 'rgba(34,197,94,0.8)' : 'rgba(239,68,68,0.7)';
@@ -527,7 +531,7 @@
           ctx.font = '900 ' + Math.round(H * 0.14) + 'px system-ui,sans-serif';
           ctx.fillText(String(Math.ceil(Math.max(0, G.clock))), cx, H * 0.19);
           ctx.fillStyle = '#fff'; ctx.font = '700 ' + Math.round(H * 0.036) + 'px system-ui,sans-serif';
-          ctx.fillText(isHold ? stanceLabel(stance) : 'Rest — get ready', cx, H * 0.27);
+          ctx.fillText(isHold ? stanceLabel(stance) : (G.prep ? 'Step on the board' : 'Rest — get ready'), cx, H * 0.27);
           // score + set progress
           const isWarm = warmN && G.idx === 0;
           const setNo = Math.min(sets, Math.floor((G.idx - warmN) / patLen) + 1);
