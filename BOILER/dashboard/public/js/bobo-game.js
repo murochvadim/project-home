@@ -162,20 +162,12 @@
         #bobo-root .bobo-lbl{font-size:0.75rem;color:#777;margin-bottom:5px;}
       </style>
       <div id="bobo-game-status" style="font-size:0.82rem;margin-bottom:12px;color:#888;">connecting…</div>
-      ${games.length > 1 ? `<div class="bobo-lbl">Game</div><div class="bobo-row">${gameTiles}</div>` : ''}
+      ${games.length > 1 ? `<div class="bobo-lbl">Game</div><div class="bobo-row" style="align-items:center;">${gameTiles}${(curGame() && curGame().usesSets) ? `<div style="display:flex;align-items:center;gap:10px;font-size:0.8rem;color:#555;margin-left:8px;"><label>Sets <input id="bobo-bt-sets" type="number" min="1" max="10" value="${_sets}" style="width:48px;padding:4px;"></label><label>Hold s <input id="bobo-bt-hold" type="number" min="5" max="120" value="${_hold}" style="width:52px;padding:4px;"></label><label>Rest s <input id="bobo-bt-rest" type="number" min="0" max="60" value="${_rest}" style="width:52px;padding:4px;"></label></div>` : ''}</div>` : ''}
       <div class="bobo-lbl">Player</div>
       <div class="bobo-row">${playerTiles}</div>
       <div class="bobo-lbl">Difficulty</div>
       <div class="bobo-row">${levelTiles}</div>
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-        <button id="bobo-play" data-nav style="background:#16a34a;color:#fff;font-size:1.1rem;padding:11px 26px;border-radius:11px;border:none;cursor:pointer;">▶ Play</button>
-        ${(curGame() && curGame().usesSets) ? `
-        <div style="display:flex;align-items:center;gap:10px;font-size:0.8rem;color:#555;">
-          <label>Sets <input id="bobo-bt-sets" type="number" min="1" max="10" value="${_sets}" style="width:48px;padding:4px;"></label>
-          <label>Hold s <input id="bobo-bt-hold" type="number" min="5" max="120" value="${_hold}" style="width:52px;padding:4px;"></label>
-          <label>Rest s <input id="bobo-bt-rest" type="number" min="0" max="60" value="${_rest}" style="width:52px;padding:4px;"></label>
-        </div>` : ''}
-      </div>
+      <button id="bobo-play" data-nav style="background:#16a34a;color:#fff;font-size:1.1rem;padding:11px 26px;border-radius:11px;border:none;cursor:pointer;">▶ Play</button>
       <div style="color:#999;font-size:0.76rem;margin-top:9px;">Lean left / right to steer${IS_TV ? ' · lean forward to select' : ' · arrow keys also work'} · plays full-screen</div>
       <div style="margin-top:16px;border-top:1px solid #f0ece6;padding-top:9px;">
         <span style="font-size:0.75rem;color:#777;">Recent:</span> ${recentHtml}
