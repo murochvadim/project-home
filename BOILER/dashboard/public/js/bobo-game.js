@@ -297,12 +297,15 @@
     const ok = await saveScore(res, _curGame);
     if (!_ov) return;
     const lbl = (curLevels()[res.level] && curLevels()[res.level].label) || res.level;
+    const summ = (res.obstacles != null)   // game-aware Game-Over sub-line (Colour Tunnel vs Balance Training)
+      ? `${res.obstacles} dodged · ${res.duration_s}s · ${esc(lbl)}`
+      : `${res.sets}×${res.hold_s}s hold · ${res.duration_s}s · ${esc(lbl)}`;
     const p = document.createElement('div');
     p.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(5,6,10,.85);color:#fff;z-index:3;text-align:center;';
     p.innerHTML = `
       <div style="font-size:2.4rem;font-weight:800;">Game Over</div>
       <div style="font-size:4.4rem;font-weight:900;color:#22c55e;margin:4px 0;">${res.score}</div>
-      <div style="opacity:.75;">${res.obstacles} dodged · ${res.duration_s}s · ${esc(lbl)}</div>
+      <div style="opacity:.75;">${summ}</div>
       <div style="opacity:.6;margin-top:6px;font-size:.9rem;">${ok ? ('✓ saved to ' + esc(_sel ? _sel.name : '—') + "'s medical") : '⚠ save failed'}</div>
       <div style="margin-top:28px;display:flex;gap:14px;">
         <button id="bobo-again" style="background:#16a34a;color:#fff;border:none;border-radius:12px;font-size:1.2rem;padding:12px 28px;cursor:pointer;">▶ Play again</button>
@@ -359,6 +362,13 @@
     let d = ''; try { d = new Date(t.tested_at).toLocaleString('en-GB', { hour12: false }); } catch (e) {}
     const gid = (t.meta && t.meta.game) || rr.game;   // game id lives in meta.game
     const gname = (gid && window.BOBO_GAMES[gid] && window.BOBO_GAMES[gid].name) || 'Colour Tunnel';
+    const isBalance = gid === 'balance_training' || rr.hold_s != null;   // game-aware detail rows
+    const midRows = isBalance
+      ? `Balanced: <b>${esc(rr.score != null ? rr.score : 0)}s</b><br>
+        Sets × Hold: <b>${esc(rr.sets != null ? rr.sets : '—')} × ${esc(rr.hold_s != null ? rr.hold_s : '—')}s</b><br>
+        Rest: <b>${esc(rr.rest_s != null ? rr.rest_s : '—')}s</b><br>`
+      : `Obstacles dodged: <b>${esc(rr.obstacles != null ? rr.obstacles : 0)}</b><br>
+        Top speed: <b>${esc(rr.top_speed != null ? rr.top_speed : '—')}</b><br>`;
     const m = document.createElement('div');
     m.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);';
     m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
@@ -368,9 +378,8 @@
       <div style="color:#555;font-size:.9rem;line-height:1.9;text-align:left;display:inline-block;">
         Player: <b>${esc(t.member_name || '—')}</b><br>
         Difficulty: <b>${esc(rr.level || '—')}</b><br>
-        Obstacles dodged: <b>${esc(rr.obstacles != null ? rr.obstacles : 0)}</b><br>
+        ${midRows}
         Duration: <b>${esc(rr.duration_s != null ? rr.duration_s : 0)}s</b><br>
-        Top speed: <b>${esc(rr.top_speed != null ? rr.top_speed : '—')}</b><br>
         <span style="color:#999;font-size:.82rem;">${esc(d)}</span>
       </div>
       <div><button style="margin-top:16px;background:#2563eb;color:#fff;border:none;border-radius:10px;padding:8px 24px;cursor:pointer;">Close</button></div>
