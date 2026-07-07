@@ -156,8 +156,8 @@ module.exports = (app, db) => {
       const bs = pr.bobo_sched;
       if (bs && bs.freq && pr.uid != null) {
         const last = (await db.query(
-          `SELECT max(tested_at) AS m FROM medical_test_results WHERE user_id=$1 AND test_type='balance'`,
-          [pr.uid])).rows[0].m;
+          `SELECT max(measured_at) AS m FROM ph_bobo WHERE profile_id=$1`,
+          [pr.id])).rows[0].m;
         const overdue = !last || (Date.now() - new Date(last).getTime()) / 86400000 >= windowDays(bs);
         if (overdue) items.push({
           rkey: `bobo:${pr.id}:${windowKey(bs, t.ldate, Number(t.epoch))}`,
