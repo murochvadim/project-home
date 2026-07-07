@@ -2288,7 +2288,7 @@ const DBV_GROUPS = [
   ['Gateway / NetBird',     ['netbird_peers_local','netbird_tenant_settings','gateway_peer_transitions']],
   ['Geolocation',           ['device_locations','phone_trips','phone_places','phone_place_trips','geo_place_state']],
   ['Medical',               ['medical_contacts','medical_documents','medical_test_results']],
-  ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_water','ph_steps','ph_steps_excluded_trips','ph_exercise_log']],
+  ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_water','ph_steps','ph_steps_excluded_trips','ph_exercise_log','ph_bobo']],
   ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_site_receipts','privacy_doc_crypto','privacy_sheets','visited_places','journal_entries']],
   ['Reminders',             ['reminder_state']],
   ['Email',                 ['email_messages','email_labels','email_state','email_extractions','email_automation_log']],
@@ -2321,7 +2321,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       manual_people_log: 'ts', ups_status: 'ts', ups_power_events: 'started_at',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
-      household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at', ph_body: 'measured_at', ph_water: 'measured_at', ph_steps: 'measured_at', ph_steps_excluded_trips: 'excluded_at', ph_exercise_log: 'measured_at', reminder_state: 'updated_at',
+      household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at', ph_body: 'measured_at', ph_water: 'measured_at', ph_steps: 'measured_at', ph_steps_excluded_trips: 'excluded_at', ph_exercise_log: 'measured_at', ph_bobo: 'measured_at', reminder_state: 'updated_at',
       email_messages: 'msg_ts', email_labels: 'updated_at', email_state: 'updated_at',
       email_extractions: 'extracted_at', email_automation_log: 'ts',
       power_consumption: 'ts',
@@ -5868,7 +5868,7 @@ async function ensureSchema() {
       `, [[
         'medical_contacts', 'medical_documents', 'medical_test_results',
         'privacy_sites', 'privacy_site_docs', 'privacy_doc_crypto', 'visited_places',
-        'household_users', 'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp', 'ph_body', 'ph_water', 'ph_steps', 'ph_steps_excluded_trips', 'ph_exercise_log',
+        'household_users', 'ph_profiles', 'ph_measurements', 'ph_medications', 'ph_bp', 'ph_body', 'ph_water', 'ph_steps', 'ph_steps_excluded_trips', 'ph_exercise_log', 'ph_bobo',
       ]]);
       await db.query(`
         INSERT INTO dashboard_settings (key, value, updated_at)

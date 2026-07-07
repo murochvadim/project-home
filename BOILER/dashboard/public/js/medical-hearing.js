@@ -291,12 +291,6 @@ function htRowHtml(t) {
     chips = `<span class="med-chip" style="background:#f3e8ff; color:#6b21a8;">🧠 Cognitive</span>` +
             (band ? `<span class="med-chip" style="background:#fef3c7; color:#854d0e;">age ${htEsc(bl[band] || band)}</span>` : '');
     summary = (typeof ctRowSummary === 'function') ? ctRowSummary(t) : '';
-  } else if (t.test_type === 'balance') {
-    const rr = t.results || {};
-    const lv = rr.level || '';
-    chips = `<span class="med-chip" style="background:#dcfce7; color:#166534;">⚖ Balance</span>` +
-            (lv ? `<span class="med-chip" style="background:#fef3c7; color:#854d0e;">${htEsc(lv)}</span>` : '');
-    summary = `Score ${htEsc(rr.score != null ? rr.score : '—')} · ${htEsc(rr.obstacles != null ? rr.obstacles : 0)} dodged · ${htEsc(rr.duration_s != null ? rr.duration_s : 0)}s`;
   } else {
     const hp = (t.meta && t.meta.headphones) || '';
     chips = `<span class="med-chip" style="background:#e0f2fe; color:#075985;">🔊 Hearing</span>` +
@@ -328,8 +322,6 @@ function medTestView(id) {
     if (typeof renderVision === 'function') renderVision(t);
   } else if (t.test_type === 'cognitive') {
     if (typeof ctRenderResult === 'function') ctRenderResult(t);
-  } else if (t.test_type === 'balance') {
-    if (typeof renderBalance === 'function') renderBalance(t);
   } else {
     const d = new Date(t.tested_at).toLocaleDateString('en-GB');
     renderAudiogram(t.results, d + ((t.meta && t.meta.headphones) ? ' · ' + t.meta.headphones : ''));

@@ -246,19 +246,55 @@
     _phRenderAcDisplay(p);
   }
 
-  // 🛹 Bobo — this person's balance games (score · duration · calories) + totals. Read-only;
-  // games are created by playing on the TV (results land in medical_test_results test_type='balance').
+  // 🛹 Bobo — this person's balance games (a Personal Health activity in ph_bobo,
+  // like BP — NOT a medical test). Totals on the card; full list in the 🕓 history.
   const _fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); return m ? `${m}m ${s % 60}s` : `${s}s`; };
   async function phLoadBobo(p) {
-    const totEl = $('ph-bobo-totals'); if (!totEl) return;   // totals only — per-game rows live in the DB
+    const totEl = $('ph-bobo-totals'); if (!totEl) return;   // totals only — full list in the history modal
     let rows = [];
-    try { rows = await (await fetch('/api/medical/test-results?type=balance')).json(); } catch (e) { rows = []; }
-    rows = (Array.isArray(rows) ? rows : []).filter(r => String(r.user_id) === String(p.user_id));
+    try { rows = await (await fetch(`${API}/bobo?profile_id=${p.id}`)).json(); } catch (e) { rows = []; }
+    rows = Array.isArray(rows) ? rows : [];
     if (!rows.length) { totEl.textContent = 'No games yet — play on the balcony TV.'; return; }
     let totDur = 0, totCal = 0;
-    for (const r of rows) { const rr = r.results || {}; totDur += Number(rr.duration_s) || 0; totCal += Number(rr.calories) || 0; }
+    for (const r of rows) { const rr = r.results || {}; totDur += Number(r.duration_s ?? rr.duration_s) || 0; totCal += Number(r.calories ?? rr.calories) || 0; }
     totEl.innerHTML = `<b>${rows.length}</b> games · <b>${_fmtDur(totDur)}</b> · <b>🔥 ${Math.round(totCal)}</b> cal`;
   }
+
+  // 🕓 Bobo history — per-game list with view (renderBalance) + delete (like BP's history).
+  window.phBoboHistory = async function () {
+    const p = profileFor(_selName); if (!p) return;
+    let rows = [];
+    try { rows = await (await fetch(`${API}/bobo?profile_id=${p.id}`)).json(); } catch (e) { rows = []; }
+    rows = Array.isArray(rows) ? rows : [];
+    const gname = { balance_training: 'Balance Training', colour_tunnel: 'Colour Tunnel' };
+    const body = rows.length ? rows.map(r => {
+      const rr = r.results || {};
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid #eee;font-size:.86rem;">
+        <span>${esc(r.measured_at || '')} · <b>${esc(gname[r.game] || r.game || '—')}</b> · ${esc(r.level || '')}</span>
+        <span>score <b>${esc(r.score ?? rr.score ?? '—')}</b> · ${_fmtDur(r.duration_s ?? rr.duration_s)} · 🔥${Math.round(Number(r.calories ?? rr.calories) || 0)}
+          <button onclick='phBoboView(${JSON.stringify(r).replace(/'/g, "&#39;")})' style="margin-left:6px;background:#eef;border:none;border-radius:6px;cursor:pointer;padding:2px 8px;">view</button>
+          <button onclick="phBoboDel(${r.id})" style="margin-left:4px;background:#fee;border:none;border-radius:6px;cursor:pointer;padding:2px 8px;">🗑</button></span>
+      </div>`;
+    }).join('') : '<div style="color:#999;padding:8px 0;">No games yet.</div>';
+    const ov = document.createElement('div');
+    ov.id = 'ph-bobo-hist';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:9997;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);';
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    ov.innerHTML = `<div style="background:#fff;border-radius:14px;padding:18px 22px;max-width:520px;width:92%;max-height:80vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.3);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-size:1.05rem;font-weight:700;color:#166534;">🛹 ${esc(p.name)} — Bobo history</div>
+        <button onclick="document.getElementById('ph-bobo-hist').remove()" style="background:#eee;border:none;border-radius:8px;cursor:pointer;padding:4px 12px;">Close</button>
+      </div>${body}</div>`;
+    document.body.appendChild(ov);
+  };
+  window.phBoboView = function (r) { if (typeof renderBalance === 'function') renderBalance(r); };
+  window.phBoboDel = async function (id) {
+    if (!confirm('Delete this game?')) return;
+    await fetch(`${API}/bobo/${id}`, { method: 'DELETE' });
+    const ov = $('ph-bobo-hist'); if (ov) ov.remove();
+    await renderDetail();
+    if (typeof phBoboHistory === 'function') phBoboHistory();
+  };
 
   // ── log weight — stamped with a server timestamp on Save (same style as BP) ──
   window.phLogWeight = async function () {

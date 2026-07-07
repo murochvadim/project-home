@@ -8,7 +8,7 @@ Data: 6 small endpoints backed by Postgres (LXC 102) — the SAME response/reque
 the dashboard uses, so the shared bobo-game.js just swaps BOBO_CFG URLs (no fork).
 
 Board input still comes straight from MQTT-WS on LXC 107 (laptop-independent). Scores land
-in medical_test_results, so they show in Medical -> Tests when the dashboard is next up.
+in ph_bobo (Personal Health, keyed by profile_id) — a balance-board ACTIVITY, not a test.
 
 Runs as systemd service bobo-game.service. Env from /etc/environment: DB_PASS + MQTT_BROWSER_PASS.
 """
@@ -131,12 +131,15 @@ def settings_post():
 @app.route('/api/bobo/recent')
 def recent():
     try:
-        rows = q("""SELECT t.id, t.test_type, t.tested_at, t.results, t.meta, t.created_at,
-                           t.user_id, h.name AS member_name
-                      FROM medical_test_results t
-                      LEFT JOIN household_users h ON h.id = t.user_id
-                     WHERE t.test_type = 'balance'
-                     ORDER BY t.tested_at DESC
+        # BoBo is a Personal Health activity (ph_bobo, keyed by profile_id) — NOT a
+        # medical test. Shaped like the old test-results rows for the menu's "Recent".
+        rows = q("""SELECT b.id, 'balance' AS test_type, b.measured_at AS tested_at,
+                           b.details AS results, jsonb_build_object('game', b.game) AS meta,
+                           b.created_at, p.user_id, h.name AS member_name
+                      FROM ph_bobo b
+                      JOIN ph_profiles p ON p.id = b.profile_id
+                      LEFT JOIN household_users h ON h.id = p.user_id
+                     ORDER BY b.measured_at DESC
                      LIMIT 20""")
         return jsonify(rows)
     except Exception as e:
@@ -169,10 +172,23 @@ def score():
                     results['calories'] = round(met * w * dur / 3600.0)
             except Exception:
                 log.exception('bobo calories calc failed')
-        row = q("""INSERT INTO medical_test_results (test_type, results, meta, user_id)
-                   VALUES ('balance', %s::jsonb, %s::jsonb, %s)
-                   RETURNING id, test_type, tested_at, results, meta, created_at, user_id""",
-                (json.dumps(results), json.dumps(b.get('meta') or {}), uid), fetch='one')
+        # Store in ph_bobo (Personal Health), keyed by profile_id resolved from the
+        # household user_id. First-class the graphable fields; keep the full blob in details.
+        meta = b.get('meta') or {}
+        game = meta.get('game') or results.get('game')
+        def _n(v):
+            try:
+                return float(v) if v not in (None, '') else None
+            except (TypeError, ValueError):
+                return None
+        row = q("""INSERT INTO ph_bobo (profile_id, game, level, score, duration_s, calories, details)
+                   SELECT p.id, %s, %s, %s, %s, %s, %s::jsonb
+                     FROM ph_profiles p WHERE p.user_id = %s
+                   RETURNING id, profile_id, measured_at AS tested_at, details AS results, created_at""",
+                (game, results.get('level'), _n(results.get('score')), _n(results.get('duration_s')),
+                 _n(results.get('calories')), json.dumps(results), uid), fetch='one')
+        if not row:
+            return jsonify({'error': 'no Personal Health profile for that user'}), 400
         return jsonify(row)
     except Exception as e:
         return _err(e)

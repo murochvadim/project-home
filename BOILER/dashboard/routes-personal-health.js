@@ -268,6 +268,63 @@ module.exports = (app, db) => {
     } catch (e) { err(res, e); }
   });
 
+  // ── BoBo balance-board activity — a first-class PH metric (like ph_bp), NOT a
+  // medical test. Accepts profile_id OR user_id (the TV game only knows the
+  // household user_id) and resolves the profile. GET list / POST / DELETE.
+  const _boboPid = async (v, uid) => {
+    let pid = parseInt(v);
+    if (!pid && uid) {
+      const r = await db.query('SELECT id FROM ph_profiles WHERE user_id = $1', [parseInt(uid)]);
+      pid = r.rows[0] && r.rows[0].id;
+    }
+    return pid || null;
+  };
+  // Shape mirrors the old test-results row (results blob + meta.game) so the shared
+  // game shell + renderBalance work unchanged, plus first-class columns for the card.
+  const _boboCols = `b.id, b.profile_id, p.user_id,
+                to_char(b.measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+                b.game, b.level, b.score, b.duration_s, b.calories,
+                b.details AS results, jsonb_build_object('game', b.game) AS meta, h.name AS member_name`;
+  app.get('/api/personal-health/bobo', async (req, res) => {
+    try {
+      const pid = await _boboPid(req.query.profile_id, req.query.user_id);
+      const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      if (pid) {   // one person's history (the Personal Health card)
+        const r = await db.query(
+          `SELECT ${_boboCols} FROM ph_bobo b JOIN ph_profiles p ON p.id = b.profile_id
+             LEFT JOIN household_users h ON h.id = p.user_id
+            WHERE b.profile_id = $1 ORDER BY b.measured_at DESC, b.id DESC LIMIT $2`, [pid, lim]);
+        return res.json(r.rows);
+      }
+      // no id → recent across ALL players (the game menu's "Recent" strip)
+      const r = await db.query(
+        `SELECT ${_boboCols} FROM ph_bobo b JOIN ph_profiles p ON p.id = b.profile_id
+           LEFT JOIN household_users h ON h.id = p.user_id
+          ORDER BY b.measured_at DESC, b.id DESC LIMIT $1`, [Math.min(lim, 20)]);
+      res.json(r.rows);
+    } catch (e) { err(res, e); }
+  });
+  app.post('/api/personal-health/bobo', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const pid = await _boboPid(b.profile_id, b.user_id);
+      if (!pid) return res.status(400).json({ error: 'profile_id or user_id required' });
+      const rs = b.results || {};
+      const game = b.game || (b.meta && b.meta.game) || rs.game || null;   // shell sends meta.game
+      const r = await db.query(
+        `INSERT INTO ph_bobo (profile_id, game, level, score, duration_s, calories, details)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) RETURNING id`,
+        [pid, game, rs.level || null, num(rs.score), num(rs.duration_s), num(rs.calories), JSON.stringify(rs)]);
+      res.json({ ok: true, id: r.rows[0].id });
+    } catch (e) { err(res, e); }
+  });
+  app.delete('/api/personal-health/bobo/:id', async (req, res) => {
+    try {
+      await db.query('DELETE FROM ph_bobo WHERE id = $1', [parseInt(req.params.id)]);
+      res.json({ ok: true });
+    } catch (e) { err(res, e); }
+  });
+
   // ── Body (waist & hip circumference, cm) — time-series like weight/BP. WHR
   // (waist ÷ hip) is COMPUTED here (2 dp), never stored. Server-stamped on Save
   // (timestamp overridable via the history "+ Add"); backs the history modal.

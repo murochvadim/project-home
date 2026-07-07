@@ -20,8 +20,8 @@
     players:      CFG.players      || '/api/household-users',
     settingsGet:  CFG.settingsGet  || '/api/dashboard-settings/medical.bobo_game',
     settingsPost: CFG.settingsPost || '/api/dashboard-settings/medical.bobo_game',
-    recent:       CFG.recent       || '/api/medical/test-results?type=balance',
-    saveScore:    CFG.saveScore    || '/api/medical/test-results',
+    recent:       CFG.recent       || '/api/personal-health/bobo',        // all-players recent
+    saveScore:    CFG.saveScore    || '/api/personal-health/bobo',        // BoBo = a PH activity, not a test
   };
   const BROKER_URL = CFG.broker   || 'ws://192.168.1.189:9001';
   const BROKER_USR = CFG.mqttUser || 'dashboard_browser';
