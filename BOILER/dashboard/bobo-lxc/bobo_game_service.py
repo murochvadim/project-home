@@ -15,6 +15,7 @@ Runs as systemd service bobo-game.service. Env from /etc/environment: DB_PASS + 
 import os, json, logging
 from pathlib import Path
 import psycopg2, psycopg2.extras, psycopg2.pool
+import paho.mqtt.publish as mqtt_publish
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
@@ -32,6 +33,14 @@ DB_USER     = 'postgres'
 DB_PASS     = os.environ.get('DB_PASS', '')
 SETTINGS_KEY = 'medical.bobo_game'
 MQTT_BROWSER_PASS = os.environ.get('MQTT_BROWSER_PASS', '')
+
+# ESP-board config push (calibration wizard) — publish params to the board's /config topic,
+# same as the dashboard's /api/esp/boards/<id>/parameters. esp_boards user has write ACL.
+MQTT_HOST     = '192.168.1.189'
+MQTT_PORT     = 1883
+ESP_MQTT_USER = 'esp_boards'
+ESP_MQTT_PASS = os.environ.get('ESP_BOARDS_MQTT_PASS', '')
+ESP_CONFIG_TOPIC = 'mur/home/esp/balcony_bridge/config'
 
 # ── DB pool (same pattern as player_service.py) ────────────────────
 _pool = None
@@ -148,6 +157,54 @@ def score():
         return jsonify(row)
     except Exception as e:
         return _err(e)
+
+# ── calibration wizard endpoints (parity with the dashboard) ───────
+def _ds_get(key):
+    row = q("SELECT value FROM dashboard_settings WHERE key = %s", (key,), fetch='one')
+    return {'value': (row['value'] if row else {})}
+
+def _ds_set(key, val):
+    q("""INSERT INTO dashboard_settings (key, value) VALUES (%s, %s::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+      (key, json.dumps(val)), fetch='none')
+
+@app.route('/api/bobo/esp-params', methods=['POST'])
+def esp_params():
+    # Publish calibration params to the ESP board's /config topic (board saves to EEPROM).
+    try:
+        params = request.get_json(force=True, silent=True) or {}
+        mqtt_publish.single(ESP_CONFIG_TOPIC, json.dumps(params), qos=1,
+                            hostname=MQTT_HOST, port=MQTT_PORT,
+                            auth={'username': ESP_MQTT_USER, 'password': ESP_MQTT_PASS})
+        return jsonify({'ok': True, 'published': ESP_CONFIG_TOPIC, 'keys': list(params.keys())})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/bobo/cal')
+def cal_get():
+    try: return jsonify(_ds_get('medical.bobo_cal'))
+    except Exception as e: return _err(e)
+
+@app.route('/api/bobo/cal', methods=['POST'])
+def cal_post():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        _ds_set('medical.bobo_cal', b.get('value', {}))
+        return jsonify({'ok': True})
+    except Exception as e: return _err(e)
+
+@app.route('/api/bobo/tune')
+def tune_get():
+    try: return jsonify(_ds_get('medical.bobo_tune'))
+    except Exception as e: return _err(e)
+
+@app.route('/api/bobo/tune', methods=['POST'])
+def tune_post():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        _ds_set('medical.bobo_tune', b.get('value', {}))
+        return jsonify({'ok': True})
+    except Exception as e: return _err(e)
 
 if __name__ == '__main__':
     log.info('bobo-game service starting on :%d (static=%s)', PORT, STATIC_DIR)

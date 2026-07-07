@@ -3,47 +3,107 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>BoBo Game</title>
+<title>BoBo — Calibration & Game</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #05060a; color: #eee;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
-  #wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 4vh 4vw; box-sizing: border-box; }
-  #card { width: min(760px, 92vw); background: #fbf9f5; color: #222; border-radius: 18px;
-    padding: 28px 30px; box-shadow: 0 12px 50px rgba(0,0,0,.5); }
-  #card h1 { margin: 0 0 4px; font-size: 1.5rem; }
-  #card .sub { color: #888; font-size: .9rem; margin-bottom: 16px; }
-  /* the game overlay (created by bobo-game.js) covers everything, so this card only shows the menu */
+  html, body { margin: 0; min-height: 100%; background: #05060a; color: #eee;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 3vh 3vw; box-sizing: border-box; }
+  h1.page { margin: 0 0 14px; font-size: 1.4rem; color: #fff; }
+  .row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; align-items: stretch; }
+  .card { background: #fbf9f5; color: #222; border-radius: 14px; padding: 20px 22px; box-shadow: 0 8px 34px rgba(0,0,0,.4); }
+  .card h2 { margin-top: 0; font-size: 1.15rem; }
+  .btn { border: none; border-radius: 9px; padding: 9px 18px; font-size: .95rem; cursor: pointer; }
+  .btn-sm { padding: 7px 14px; font-size: .88rem; }
+  /* the game overlay (bobo-game.js) is position:fixed full-screen, so it covers this page while playing */
 </style>
 </head>
 <body>
-  <div id="wrap">
-    <div id="card">
-      <h1>🎮 BoBo Game</h1>
-      <div class="sub">Balcony TV · lean on the board to play</div>
+  <h1 class="page">🛹 BoBo — Balcony</h1>
+  <div class="row2">
+    <!-- Calibration (same card as Medical → Settings) -->
+    <div class="card">
+      <h2>🛹 BoBo Balance Board — Calibration</h2>
+      <div id="bobo-conn" style="font-size:0.82rem;color:#888;margin-bottom:8px;">connecting to sensor stream…</div>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;color:#555;margin-bottom:14px;">
+        <input type="checkbox" id="bobo-live-toggle" checked style="transform:scale(1.15);"> Show live values <span style="color:#999;">(auto — BoBo connected)</span>
+      </label>
+      <div id="bobo-wiz" style="display:none;text-align:center;padding:16px;margin-bottom:14px;border-radius:10px;background:#f2f7ff;border:1px solid #cfe0ff;">
+        <div id="bobo-wiz-step" style="font-size:1.2rem;font-weight:700;color:#1e40af;"></div>
+        <div id="bobo-wiz-sub" style="font-size:0.9rem;color:#555;margin-top:4px;"></div>
+        <div id="bobo-wiz-count" style="font-size:2.4rem;font-weight:800;color:#2563eb;line-height:1.1;margin-top:6px;min-height:46px;"></div>
+      </div>
+      <div style="margin-bottom:16px;">
+        <div style="font-size:0.72rem;color:#999;margin-bottom:5px;">Live position — lean to move the dot</div>
+        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
+          <div style="position:relative;width:150px;height:150px;background:#ece7df;border-radius:12px;flex:0 0 auto;">
+            <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:#c9c2b6;"></div>
+            <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:#c9c2b6;"></div>
+            <div id="bobo-dot" style="position:absolute;width:18px;height:18px;border-radius:50%;background:#2563eb;left:calc(50% - 9px);top:calc(50% - 9px);transition:left .08s linear,top .08s linear;"></div>
+          </div>
+          <div style="font-size:0.9rem;color:#555;line-height:1.8;">
+            <div>Left ⟷ Right: <b id="bobo-xval" style="font-variant-numeric:tabular-nums;color:#333;">—</b></div>
+            <div>Back ⟷ Forward: <b id="bobo-yval" style="font-variant-numeric:tabular-nums;color:#333;">—</b></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-bottom:16px;font-size:0.82rem;color:#555;">
+        <label style="display:flex;align-items:center;gap:10px;">
+          <span style="min-width:78px;">Sensitivity</span>
+          <input type="range" id="bobo-sens" min="30" max="500" step="5" value="100" style="flex:1;min-width:0;">
+          <b id="bobo-sens-val" style="min-width:46px;text-align:right;">100%</b>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;margin-top:10px;">
+          <span style="min-width:78px;">Deadzone</span>
+          <input type="range" id="bobo-dz" min="0" max="40" step="1" value="0" style="flex:1;min-width:0;">
+          <b id="bobo-dz-val" style="min-width:46px;text-align:right;">0</b>
+        </label>
+        <div style="font-size:0.7rem;color:#999;margin-top:4px;">Sensitivity: higher = less lean to reach the edge. Deadzone: center band snapped to 0. Both applied on the board.</div>
+      </div>
+      <div style="font-size:0.72rem;color:#999;margin-bottom:4px;">Live sensor channels</div>
+      <div id="bobo-axes" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;"></div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button id="bobo-start" class="btn btn-sm" style="background:#16a34a;color:#fff;">▶ Start Calibration</button>
+        <span id="bobo-status" style="font-size:0.82rem;color:#888;"></span>
+      </div>
+    </div>
+
+    <!-- Game -->
+    <div class="card">
+      <h2>🎮 BoBo Game</h2>
       <div id="bobo-root">loading…</div>
     </div>
   </div>
 
   <script>
-    // Host config: point the shared shell at THIS LXC service (laptop-independent).
+    // Point the shared shell + calibration wizard at THIS LXC service (laptop-independent).
     window.BOBO_CFG = {
-      autostart:    true,                 // TV context → honor the configured Auto/Manual mode
+      autostart:    true,
       mqttPass:     '/api/bobo/mqtt-pass',
       players:      '/api/bobo/players',
       settingsGet:  '/api/bobo/settings',
       settingsPost: '/api/bobo/settings',
       recent:       '/api/bobo/recent',
       saveScore:    '/api/bobo/score',
+      espParams:    '/api/bobo/esp-params',
+      calGet:       '/api/bobo/cal',
+      calPost:      '/api/bobo/cal',
+      tuneGet:      '/api/bobo/tune',
+      tunePost:     '/api/bobo/tune',
       broker:       'ws://192.168.1.189:9001',
       mqttUser:     'dashboard_browser',
       posTopic:     'mur/home/esp/balcony_bridge/pos',
     };
   </script>
   <script src="mqtt.min.js"></script>
+  <script src="medical-bobo.js"></script>
   <script src="bobo-game.js"></script>
   <script>
-    if (window.boboGameInit) window.boboGameInit();
-    else window.addEventListener('DOMContentLoaded', function () { window.boboGameInit && window.boboGameInit(); });
+    function boboStart() {
+      if (window.medBoboSettingsInit) window.medBoboSettingsInit();
+      if (window.boboGameInit) window.boboGameInit();
+    }
+    if (document.readyState !== 'loading') boboStart();
+    else window.addEventListener('DOMContentLoaded', boboStart);
   </script>
 </body>
 </html>

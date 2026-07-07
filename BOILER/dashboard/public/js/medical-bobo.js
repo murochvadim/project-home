@@ -21,6 +21,17 @@
   const POS_TOPIC  = 'mur/home/esp/' + DEVICE_ID + '/pos';
   const LIVE_MS    = 3000;   // no pos frame within this window ⇒ "not live" (nobody on BoBo)
 
+  // Host-agnostic endpoints (window.BOBO_CFG on the LXC 100 standalone page; dashboard defaults here).
+  const CFG = window.BOBO_CFG || {};
+  const EP = {
+    mqttPass:  CFG.mqttPass  || '/api/dashboard-settings/_mqtt_browser_pass',
+    espParams: CFG.espParams || ('/api/esp/boards/' + DEVICE_ID + '/parameters'),
+    calGet:    CFG.calGet    || '/api/dashboard-settings/medical.bobo_cal',
+    calPost:   CFG.calPost   || '/api/dashboard-settings/medical.bobo_cal',
+    tuneGet:   CFG.tuneGet   || '/api/dashboard-settings/medical.bobo_tune',
+    tunePost:  CFG.tunePost  || '/api/dashboard-settings/medical.bobo_tune',
+  };
+
   // Default channel names (9-axis IMU: Accel/Gyro/Orient X-Y-Z). Display only.
   const CH_NAMES = ['Accel X','Accel Y','Accel Z','Gyro X','Gyro Y','Gyro Z','Orient X','Orient Y','Orient Z'];
 
@@ -34,7 +45,7 @@
 
   const $   = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const visible = () => { const p = $('tab-settings'); return p && p.offsetParent !== null; };
+  const visible = () => { const p = $('tab-settings'); return p ? p.offsetParent !== null : true; };
   const clampI = (v) => Math.max(-32000, Math.min(32000, Math.round(v)));
 
   function status(msg, color) { const s = $('bobo-status'); if (s) { s.textContent = msg; s.style.color = color || '#888'; } }
@@ -118,7 +129,7 @@
   async function connectMqtt() {
     if (_mqtt || !_liveOn || typeof mqtt === 'undefined') return;
     let pass;
-    try { pass = (await (await fetch('/api/dashboard-settings/_mqtt_browser_pass')).json()).value; }
+    try { pass = (await (await fetch(EP.mqttPass)).json()).value; }
     catch (e) { status('broker pass fetch failed', '#c0392b'); return; }
     if (!pass) { status('MQTT_BROWSER_PASS not set', '#c0392b'); return; }
     _mqtt = mqtt.connect(BROKER_URL, {
@@ -169,7 +180,7 @@
 
   async function pushCal(cx, cy) {
     try {
-      const r = await fetch('/api/esp/boards/' + DEVICE_ID + '/parameters', {
+      const r = await fetch(EP.espParams, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           calibrated: 1,
@@ -184,7 +195,7 @@
 
   async function saveCalMeta(cal) {
     try {
-      await fetch('/api/dashboard-settings/medical.bobo_cal', {
+      await fetch(EP.calPost, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: cal }),
       });
     } catch (e) { /* non-fatal — the board's EEPROM is the source of truth */ }
@@ -197,7 +208,7 @@
   async function loadTuning() {
     let sv = 100, dz = 0;
     try {
-      const j = await (await fetch('/api/dashboard-settings/medical.bobo_tune')).json();
+      const j = await (await fetch(EP.tuneGet)).json();
       const t = j && j.value;
       if (t) { if (typeof t.sens === 'number') sv = t.sens; if (typeof t.deadzone === 'number') dz = t.deadzone; }
     } catch (e) { /* defaults */ }
@@ -212,12 +223,12 @@
     const sv = parseInt(($('bobo-sens') || {}).value || '100', 10);
     const dz = parseInt(($('bobo-dz')   || {}).value || '0',   10);
     try {
-      const r = await fetch('/api/esp/boards/' + DEVICE_ID + '/parameters', {
+      const r = await fetch(EP.espParams, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cal_sens: sv, cal_deadzone: dz }),
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      fetch('/api/dashboard-settings/medical.bobo_tune', {
+      fetch(EP.tunePost, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: { sens: sv, deadzone: dz } }),
       }).catch(() => {});
       status('Saved: sensitivity ' + sv + '%, deadzone ' + dz, '#2e7d32');
@@ -226,7 +237,7 @@
 
   async function loadCalMeta() {
     try {
-      const j = await (await fetch('/api/dashboard-settings/medical.bobo_cal')).json();
+      const j = await (await fetch(EP.calGet)).json();
       if (j && j.value && j.value.ts) _lastCal = j.value;
     } catch (e) { /* ignore */ }
   }
