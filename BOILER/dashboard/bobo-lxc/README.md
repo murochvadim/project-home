@@ -47,5 +47,8 @@ ssh root@192.168.1.138 "systemctl daemon-reload && systemctl restart bobo-game"
 Env (once): `/etc/environment` on LXC 100 needs `DB_PASS`, `MQTT_BROWSER_PASS`, `ESP_BOARDS_MQTT_PASS`.
 
 ## Scores
-Still write to `medical_test_results` (test_type='balance') → show in Medical → Tests when the dashboard
-is up. Board input is MQTT-WS from LXC 107 (already laptop-independent).
+Written to **`ph_bobo`** (Personal Health activity, keyed by `profile_id` — `/api/bobo/score` resolves the
+profile from the household `user_id`). Moved off `medical_test_results`/`test_type='balance'` on 2026-07-07
+(BoBo is an activity, not a test). Board input is MQTT-WS from LXC 107 (already laptop-independent).
+NOTE: this `bobo_game_service.py` runs from `/opt/media-agent/` (parent) — deploy the `.py` there, NOT the
+`bobo/` subdir (that only holds the static files).

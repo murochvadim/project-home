@@ -340,9 +340,10 @@ The single **Test Results** card lists **all** test types (`medTestsLoad` fetche
   `js/medical-bobo.js`, MQTT-WS to the board's `pos` stream — see the `project-bobo-balance-bridge` memory)
   + **🎮 BoBo Game** (a lightweight "Colour Tunnel" lean-to-steer game — `js/bobo-game.js` renders the start
   screen into `#bobo-root`, **▶ Play → full-viewport overlay**; reads the calibrated `x` over MQTT-WS;
-  **arrow-key fallback** for desktop). Score → `medical_test_results` (`test_type='balance'`,
-  `{score,obstacles,duration_s,level}`) → shows in **Tests → Test Results** (⚖ Balance branch in
-  `medical-hearing.js` `htRowHtml`/`medTestView` + `window.renderBalance` detail). Difficulty remembered
+  **arrow-key fallback** for desktop). Score → **`ph_bobo`** (Personal Health activity keyed by `profile_id`,
+  via `/api/personal-health/bobo`; moved off `medical_test_results`/`test_type='balance'` on 2026-07-07 — BoBo
+  is an activity, not a test, so it's OUT of the Tests list; `renderBalance` renders the detail from the
+  Personal Health card's 🕓 history). Difficulty remembered
   per user in `dashboard_settings.medical.bobo_game`. **mqtt.js vendored locally**
   (`public/vendor/mqtt/mqtt.min.js`, no CDN — `medical.html` loads the local copy; the calibration wizard
   uses the same global). No server.js/DB/firmware change — reuses `medical_test_results` +
