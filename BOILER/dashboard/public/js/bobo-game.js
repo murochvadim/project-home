@@ -36,10 +36,10 @@
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   window.BOBO_GAMES = window.BOBO_GAMES || {};
-  const _rr = (ctx, x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
 
   let _mqtt = null, _mqttUp = false, _x = 0, _y = 0, _lastMsg = 0, _key = 0;
   let _players = [], _sel = null, _game = null, _level = 'medium', _settings = { levels: {} };
+  let _sets = 3, _hold = 30, _rest = 10;   // Balance Training options (per-user, persisted in _settings.bt)
   let _wired = false, _inited = false, _statusTimer = null;
 
   // ── MQTT input (reuse the wizard's pattern; own clientId) ──────────
@@ -66,8 +66,9 @@
       } catch (e) { /* ignore */ }
     });
   }
-  const live  = () => (Date.now() - _lastMsg) < LIVE_MS;
-  const input = () => (live() ? _x : _key);   // −100..100
+  const live   = () => (Date.now() - _lastMsg) < LIVE_MS;   // frames flowing = someone ON the board
+  const input  = () => (live() ? _x : _key);   // −100..100 (left/right)
+  const inputY = () => (live() ? _y : 0);      // −100..100 (forward/back) — for 2-D balance games
 
   // ── data (host-agnostic via BOBO_CFG) ─────────────────────────────
   async function loadPlayers() {
@@ -78,13 +79,15 @@
     try { const j = await (await fetch(EP.settingsGet)).json(); _settings = (j && j.value) || {}; }
     catch (e) { _settings = {}; }
     if (!_settings.levels) _settings.levels = {};
+    if (!_settings.bt) _settings.bt = {};
   }
-  // read-merge-write (audit #3): never clobber levels / mode / default_* against each other.
+  // read-merge-write (audit #3): never clobber levels / bt / mode / default_* against each other.
   async function saveSettings(patch) {
     let cur = {};
     try { const j = await (await fetch(EP.settingsGet)).json(); cur = (j && j.value) || {}; } catch (e) { cur = {}; }
     const merged = Object.assign({}, cur, patch);
     if (patch.levels) merged.levels = Object.assign({}, cur.levels || {}, patch.levels);
+    if (patch.bt)     merged.bt     = Object.assign({}, cur.bt || {}, patch.bt);   // per-user Balance Training opts
     _settings = merged;
     try { await fetch(EP.settingsPost, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: merged }) }); }
     catch (e) { /* non-fatal */ }
@@ -93,6 +96,19 @@
     if (!_sel) return;
     _settings.levels = _settings.levels || {}; _settings.levels[_sel.id] = _level;
     saveSettings({ levels: { [_sel.id]: _level } });
+  }
+  // Balance Training Sets/Hold/Rest — resolve from the per-user store (else the game module's defaults).
+  function applyBT() {
+    const g = curGame();
+    const d = (g && g.usesSets) ? { sets: g.defaultSets || 3, hold: g.defaultHold || 30, rest: g.defaultRest != null ? g.defaultRest : 10 }
+                                : { sets: 3, hold: 30, rest: 10 };
+    const s = (_sel && _settings.bt && _settings.bt[_sel.id]) || {};
+    _sets = s.sets || d.sets; _hold = s.hold || d.hold; _rest = (s.rest != null ? s.rest : d.rest);
+  }
+  function saveBT() {
+    if (!_sel) return;
+    _settings.bt = _settings.bt || {}; _settings.bt[_sel.id] = { sets: _sets, hold: _hold, rest: _rest };
+    saveSettings({ bt: { [_sel.id]: { sets: _sets, hold: _hold, rest: _rest } } });
   }
   async function loadRecent() {
     try { const rows = await (await fetch(EP.recent)).json(); return Array.isArray(rows) ? rows.slice(0, 6) : []; }
@@ -119,6 +135,7 @@
     const games = gameIds();
     const LV = curLevels();
     if (!LV[_level]) _level = LV.medium ? 'medium' : Object.keys(LV)[0];
+    applyBT();   // resolve Sets/Hold/Rest for the current player + game
     const recent = await loadRecent();
     const nameById = {}; _players.forEach(p => { nameById[p.id] = p.name; });
 
@@ -150,6 +167,13 @@
       <div class="bobo-row">${playerTiles}</div>
       <div class="bobo-lbl">Difficulty</div>
       <div class="bobo-row">${levelTiles}</div>
+      ${(curGame() && curGame().usesSets) ? `
+      <div class="bobo-lbl">Balance options</div>
+      <div class="bobo-row" style="align-items:center;">
+        <label style="font-size:0.8rem;color:#555;">Sets <input id="bobo-bt-sets" type="number" min="1" max="10" value="${_sets}" style="width:52px;padding:4px;"></label>
+        <label style="font-size:0.8rem;color:#555;">Hold s <input id="bobo-bt-hold" type="number" min="5" max="120" value="${_hold}" style="width:56px;padding:4px;"></label>
+        <label style="font-size:0.8rem;color:#555;">Rest s <input id="bobo-bt-rest" type="number" min="0" max="60" value="${_rest}" style="width:56px;padding:4px;"></label>
+      </div>` : ''}
       <button id="bobo-play" data-nav style="background:#16a34a;color:#fff;font-size:1.1rem;padding:11px 26px;border-radius:11px;border:none;cursor:pointer;">▶ Play</button>
       <div style="color:#999;font-size:0.76rem;margin-top:9px;">Lean left / right to steer${IS_TV ? ' · lean forward to select' : ' · arrow keys also work'} · plays full-screen</div>
       <div style="margin-top:16px;border-top:1px solid #f0ece6;padding-top:9px;">
@@ -164,8 +188,12 @@
       renderMenu();
     }));
     panel.querySelectorAll('[data-level]').forEach(el => el.addEventListener('click', () => { _level = el.dataset.level; renderMenu(); }));
+    const bs = $('bobo-bt-sets'), bh = $('bobo-bt-hold'), br = $('bobo-bt-rest');
+    if (bs) bs.addEventListener('change', () => { _sets = Math.max(1, Math.min(10, parseInt(bs.value) || 3)); bs.value = _sets; saveBT(); });
+    if (bh) bh.addEventListener('change', () => { _hold = Math.max(5, Math.min(120, parseInt(bh.value) || 30)); bh.value = _hold; saveBT(); });
+    if (br) br.addEventListener('change', () => { const v = parseInt(br.value); _rest = isNaN(v) ? 10 : Math.max(0, Math.min(60, v)); br.value = _rest; saveBT(); });
     const play = $('bobo-play');
-    if (play) play.addEventListener('click', () => { if (!_sel) { alert('Pick a player first'); return; } saveLevel(); startGame(_game, _level); });
+    if (play) play.addEventListener('click', () => { if (!_sel) { alert('Pick a player first'); return; } saveLevel(); saveBT(); startGame(_game, _level, { sets: _sets, hold: _hold, rest: _rest }); });
     wireDefaultsUI(panel);
     tickStatus();
   }
@@ -243,9 +271,9 @@
   // ── game host (full-viewport overlay canvas) ──────────────────────
   let _raf = null, _ov = null, _ctx = null, _cv = null, _last = 0, _inst = null, _curGame = null, _gameOver = false;
 
-  function startGame(gameId, level) {
+  function startGame(gameId, level, opts) {
     const game = window.BOBO_GAMES[gameId]; if (!game) return;
-    _curGame = gameId; _inst = game.create(level); _gameOver = false;
+    _curGame = gameId; _inst = game.create(level, opts || { sets: _sets, hold: _hold, rest: _rest }); _gameOver = false;
     _ov = document.createElement('div');
     _ov.id = 'bobo-overlay';
     _ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#05060a;overflow:hidden;';
@@ -268,7 +296,7 @@
   function loop(ts) {
     _raf = requestAnimationFrame(loop);
     const dt = Math.min(0.05, (ts - _last) / 1000); _last = ts;
-    if (_inst && _inst.alive) _inst.update(dt, input());
+    if (_inst && _inst.alive) _inst.update(dt, input(), inputY(), live());
     if (_inst) _inst.draw(_ctx, _cv.width, _cv.height, { playerName: _sel ? _sel.name : '', live: live() });
     if (_inst && !_inst.alive && !_gameOver) { _gameOver = true; endGame(); }
   }
@@ -326,7 +354,7 @@
     _game = gameIds()[0] || null;
     if (IS_TV && _settings.mode === 'auto') {
       const d = resolveDefaults();
-      if (d.player && d.gid) { _game = d.gid; _sel = d.player; _level = d.lvl; startGame(_game, _level); return; }
+      if (d.player && d.gid) { _game = d.gid; _sel = d.player; _level = d.lvl; applyBT(); startGame(_game, _level); return; }
     }
     renderMenu();
     if (IS_TV) enableBoardNav();
@@ -435,89 +463,93 @@
     },
   };
 
-  // ══ GAME MODULE: Balance Training (left/right weight-shift, à la BoBo) ══════
+  // ══ GAME MODULE: Balance Training (timed single-leg / both-legs HOLD, à la BoBo) ══
   window.BOBO_GAMES['balance_training'] = {
     id: 'balance_training',
     name: 'Balance Training',
+    usesSets: true, defaultSets: 3, defaultHold: 30, defaultRest: 10,
+    // Difficulty drives the STANCE + how steady you must be (zone). Hold/Rest/Sets come from opts.
     levels: {
-      easy:   { label: 'Easy',   tag: '#22c55e', threshold: 45, hold_req: 0.5, step_time: 4.0, idle_end: 8, ramp: 0.06, min_step: 1.4 },
-      medium: { label: 'Medium', tag: '#eab308', threshold: 55, hold_req: 0.5, step_time: 3.0, idle_end: 7, ramp: 0.08, min_step: 1.1 },
-      hard:   { label: 'Hard',   tag: '#ef4444', threshold: 65, hold_req: 0.4, step_time: 2.2, idle_end: 6, ramp: 0.10, min_step: 0.9 },
+      easy:   { label: 'Easy',   tag: '#22c55e', zone: 38, pattern: ['both'],         warmup: null   },
+      medium: { label: 'Medium', tag: '#eab308', zone: 28, pattern: ['left', 'right'], warmup: null   },
+      hard:   { label: 'Hard',   tag: '#ef4444', zone: 20, pattern: ['left', 'right'], warmup: 'both' },
     },
-    create(levelKey) {
+    create(levelKey, opts) {
       const L = this.levels[levelKey] || this.levels.medium;
+      const o = opts || {};
+      const sets = Math.max(1, o.sets || this.defaultSets);
+      const hold = Math.max(3, o.hold || this.defaultHold);
+      const rest = (o.rest != null ? Math.max(0, o.rest) : this.defaultRest);
+      const patLen = L.pattern.length, warmN = L.warmup ? 1 : 0;
+      const seq = L.warmup ? [L.warmup] : [];
+      for (let s = 0; s < sets; s++) for (const st of L.pattern) seq.push(st);
+      const stanceLabel = (st) => st === 'both' ? 'Balance on BOTH legs'
+        : (st === 'left' ? 'Stand on your LEFT leg' : 'Stand on your RIGHT leg');
       let G;
-      const init = () => { G = { target: 'left', hold: 0, curStep: L.step_time, stepClock: L.step_time, idle: 0, started: false, score: 0, streak: 0, streakMax: 0, steps: 0, alive: true, t: 0, marker: 0.5, flash: 0 }; };
+      const init = () => { G = { idx: 0, phase: 'hold', clock: hold, balancedT: 0, alive: true, t: 0, sx: 0, sy: 0, steady: false, flash: 0 }; };
       init();
       return {
         get alive() { return G.alive; },
         reset: init,
-        update(dt, input) {
-          G.t += dt;
-          const targetPos = Math.max(0, Math.min(1, (input + 100) / 200));   // −100..100 → 0..1
-          G.marker += (targetPos - G.marker) * Math.min(1, dt * 14);
-          if (G.flash > 0) G.flash -= dt;
-          const onLeft = input <= -L.threshold, onRight = input >= L.threshold;
-          const onTarget = (G.target === 'left' && onLeft) || (G.target === 'right' && onRight);
-          if (onTarget) {
-            G.hold += dt;
-            if (G.hold >= L.hold_req) {                 // ── STEP registered ──
-              G.steps++; G.score += 10 + G.streak * 2;
-              G.streak++; G.streakMax = Math.max(G.streakMax, G.streak);
-              G.target = G.target === 'left' ? 'right' : 'left';
-              G.hold = 0; G.flash = 0.25; G.idle = 0; G.started = true;
-              G.curStep = Math.max(L.min_step, L.step_time - G.steps * L.ramp);
-              G.stepClock = G.curStep;
+        update(dt, x, y, onBoard) {
+          // On/off-board PAUSE: the board streams only while someone's standing on it.
+          if (!onBoard) { G.t += dt; return; }
+          G.t += dt; if (G.flash > 0) G.flash -= dt;
+          G.sx += (x - G.sx) * Math.min(1, dt * 12);   // smoothed marker position
+          G.sy += (y - G.sy) * Math.min(1, dt * 12);
+          const dev = Math.hypot(G.sx, G.sy);
+          G.steady = dev <= L.zone;
+          G.clock -= dt;
+          if (G.phase === 'hold') {
+            if (G.steady) G.balancedT += dt;             // score only while steady
+            if (G.clock <= 0) {
+              if (G.idx === seq.length - 1) { G.alive = false; }
+              else if (rest > 0) { G.phase = 'rest'; G.clock = rest; }
+              else { G.idx++; G.clock = hold; G.flash = 0.4; }
             }
-          } else { G.hold = 0; }
-          if (G.started) {                              // streak window + idle round-ender (only after 1st step)
-            G.stepClock -= dt;
-            if (G.stepClock <= 0) { G.streak = 0; G.stepClock = G.curStep; }
-            G.idle = onTarget ? 0 : G.idle + dt;
-            if (G.idle >= L.idle_end) G.alive = false;
+          } else {                                       // rest
+            if (G.clock <= 0) { G.idx++; G.phase = 'hold'; G.clock = hold; G.flash = 0.4; }
           }
         },
         draw(ctx, W, H, env) {
           ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, W, H);
-          const padW = W * 0.26, padH = H * 0.36, padY = H * 0.5 - padH / 2, leftX = W * 0.13, rightX = W * 0.61;
-          const pad = (x, side) => {
-            const active = G.target === side;
-            ctx.fillStyle = active ? 'rgba(34,197,94,0.20)' : 'rgba(255,255,255,0.05)';
-            ctx.strokeStyle = active ? '#22c55e' : 'rgba(255,255,255,0.18)'; ctx.lineWidth = active ? 6 : 2;
-            _rr(ctx, x, padY, padW, padH, 22); ctx.fill(); ctx.stroke();
-            ctx.textAlign = 'center';
-            ctx.fillStyle = active ? '#22c55e' : 'rgba(255,255,255,0.30)';
-            ctx.font = '900 ' + Math.round(H * 0.16) + 'px system-ui,sans-serif';
-            ctx.fillText(side === 'left' ? 'L' : 'R', x + padW / 2, padY + padH / 2 + H * 0.055);
-            ctx.fillStyle = active ? '#eafff1' : 'rgba(255,255,255,0.4)';
-            ctx.font = '800 ' + Math.round(H * 0.033) + 'px system-ui,sans-serif';
-            ctx.fillText(side === 'left' ? 'LEFT' : 'RIGHT', x + padW / 2, padY - H * 0.03);
-            if (active && G.hold > 0) {                 // hold-progress ring under the lit pad
-              const frac = Math.min(1, G.hold / L.hold_req);
-              ctx.strokeStyle = '#facc15'; ctx.lineWidth = 8; ctx.beginPath();
-              ctx.arc(x + padW / 2, padY + padH + H * 0.05, H * 0.032, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2); ctx.stroke();
-            }
-          };
-          pad(leftX, 'left'); pad(rightX, 'right');
-          // weight marker on a track
-          const trackY = H * 0.9, mx = W * 0.14 + (W * 0.72) * G.marker;
-          ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 3;
-          ctx.beginPath(); ctx.moveTo(W * 0.14, trackY); ctx.lineTo(W * 0.86, trackY); ctx.stroke();
-          ctx.fillStyle = G.flash > 0 ? '#22c55e' : '#e5f2ff';
-          ctx.beginPath(); ctx.arc(mx, trackY, H * 0.022, 0, Math.PI * 2); ctx.fill();
-          // HUD
-          ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
-          ctx.font = '800 ' + Math.round(H * 0.09) + 'px system-ui,sans-serif';
-          ctx.fillText(String(G.score), W / 2, H * 0.15);
-          ctx.font = '700 ' + Math.round(H * 0.03) + 'px system-ui,sans-serif';
-          ctx.fillStyle = G.streak > 1 ? '#facc15' : 'rgba(255,255,255,.6)';
-          ctx.fillText(G.streak > 1 ? ('🔥 ' + G.streak + ' streak') : 'shift onto the lit foot', W / 2, H * 0.21);
-          ctx.font = '600 ' + Math.round(H * 0.026) + 'px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.5)';
-          ctx.fillText((env.playerName || '') + ' · ' + L.label + ' · ' + G.steps + ' steps', W / 2, H * 0.965);
-          if (!env.live) { ctx.fillStyle = 'rgba(255,210,0,.7)'; ctx.font = '600 ' + Math.round(H * 0.024) + 'px system-ui,sans-serif'; ctx.fillText('use ← → arrow keys (BoBo not detected)', W / 2, H * 0.05); }
+          const cx = W / 2, cy = H * 0.56, R = Math.min(W, H) * 0.28, scale = R / L.zone;
+          const stance = seq[G.idx], isHold = G.phase === 'hold';
+          // balance target ring (= the steady zone) + crosshair
+          ctx.lineWidth = 4; ctx.strokeStyle = G.steady ? 'rgba(34,197,94,0.8)' : 'rgba(239,68,68,0.7)';
+          ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+          ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(cx - R * 1.5, cy); ctx.lineTo(cx + R * 1.5, cy);
+          ctx.moveTo(cx, cy - R * 1.5); ctx.lineTo(cx, cy + R * 1.5); ctx.stroke();
+          // marker dot (green steady / red wobbling)
+          const mx = Math.max(cx - W * 0.45, Math.min(cx + W * 0.45, cx + G.sx * scale));
+          const my = Math.max(cy - H * 0.38, Math.min(cy + H * 0.38, cy - G.sy * scale));
+          ctx.fillStyle = G.steady ? '#22c55e' : '#ef4444';
+          ctx.beginPath(); ctx.arc(mx, my, H * 0.022, 0, Math.PI * 2); ctx.fill();
+          // big countdown — GREEN in hold, BLUE in rest
+          ctx.textAlign = 'center';
+          ctx.fillStyle = isHold ? '#22c55e' : '#3b82f6';
+          ctx.font = '900 ' + Math.round(H * 0.14) + 'px system-ui,sans-serif';
+          ctx.fillText(String(Math.ceil(Math.max(0, G.clock))), cx, H * 0.19);
+          ctx.fillStyle = '#fff'; ctx.font = '700 ' + Math.round(H * 0.036) + 'px system-ui,sans-serif';
+          ctx.fillText(isHold ? stanceLabel(stance) : 'Rest — get ready', cx, H * 0.27);
+          // score + set progress
+          const isWarm = warmN && G.idx === 0;
+          const setNo = Math.min(sets, Math.floor((G.idx - warmN) / patLen) + 1);
+          const prog = isWarm ? 'Warm-up' : ('Set ' + setNo + '/' + sets + ' · ' + (stance === 'both' ? 'both' : stance));
+          ctx.font = '700 ' + Math.round(H * 0.03) + 'px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)';
+          ctx.fillText('🔥 ' + Math.round(G.balancedT) + 's balanced · ' + prog, cx, H * 0.9);
+          ctx.font = '600 ' + Math.round(H * 0.026) + 'px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.45)';
+          ctx.fillText((env.playerName || '') + ' · ' + L.label, cx, H * 0.965);
+          // off-board pause overlay
+          if (!env.live) {
+            ctx.fillStyle = 'rgba(5,8,14,0.72)'; ctx.fillRect(0, 0, W, H);
+            ctx.fillStyle = '#facc15'; ctx.font = '800 ' + Math.round(H * 0.05) + 'px system-ui,sans-serif';
+            ctx.fillText('⚠ Step onto the board — paused', cx, cy);
+          }
         },
         result() {
-          return { score: G.score, steps: G.steps, duration_s: Math.round(G.t), level: levelKey, streak_max: G.streakMax };
+          return { score: Math.round(G.balancedT), sets, hold_s: hold, rest_s: rest, duration_s: Math.round(G.t), level: levelKey };
         },
       };
     },
