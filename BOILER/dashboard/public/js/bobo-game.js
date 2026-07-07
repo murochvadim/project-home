@@ -168,7 +168,6 @@
       <div class="bobo-lbl">Difficulty</div>
       <div class="bobo-row">${levelTiles}</div>
       <button id="bobo-play" data-nav style="background:#16a34a;color:#fff;font-size:1.1rem;padding:11px 26px;border-radius:11px;border:none;cursor:pointer;">▶ Play</button>
-      <div style="color:#999;font-size:0.76rem;margin-top:9px;">Lean left / right to steer${IS_TV ? ' · lean forward to select' : ' · arrow keys also work'} · plays full-screen</div>
       <div style="margin-top:16px;border-top:1px solid #f0ece6;padding-top:9px;">
         <span style="font-size:0.75rem;color:#777;">Recent:</span> ${recentHtml}
       </div>
