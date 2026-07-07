@@ -1,0 +1,15 @@
+[Unit]
+Description=BoBo Game Service — balcony TV game (laptop-independent), port 8770
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/media-agent
+EnvironmentFile=/etc/environment
+ExecStartPre=/opt/media-agent/kill-orphan.sh bobo_game_service.py
+ExecStart=/opt/media-agent/venv/bin/python3 /opt/media-agent/bobo_game_service.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

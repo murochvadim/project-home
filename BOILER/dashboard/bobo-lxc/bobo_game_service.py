@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""
+BoBo Game Service — LXC 100 (192.168.1.138), port 8770.
+
+Serves the balcony-TV BoBo game so it runs WITHOUT the laptop dashboard being on.
+Static: the standalone game shell (bobo.html + bobo-game.js + mqtt.min.js) from ./bobo/.
+Data: 6 small endpoints backed by Postgres (LXC 102) — the SAME response/request shapes
+the dashboard uses, so the shared bobo-game.js just swaps BOBO_CFG URLs (no fork).
+
+Board input still comes straight from MQTT-WS on LXC 107 (laptop-independent). Scores land
+in medical_test_results, so they show in Medical -> Tests when the dashboard is next up.
+
+Runs as systemd service bobo-game.service. Env from /etc/environment: DB_PASS + MQTT_BROWSER_PASS.
+"""
+import os, json, logging
+from pathlib import Path
+import psycopg2, psycopg2.extras, psycopg2.pool
+from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+log = logging.getLogger(__name__)
+
+app = Flask(__name__)
+CORS(app)
+
+PORT        = 8770
+STATIC_DIR  = str(Path(__file__).resolve().parent / 'bobo')
+DB_HOST     = '192.168.1.219'
+DB_NAME     = 'home_data'
+DB_USER     = 'postgres'
+DB_PASS     = os.environ.get('DB_PASS', '')
+SETTINGS_KEY = 'medical.bobo_game'
+MQTT_BROWSER_PASS = os.environ.get('MQTT_BROWSER_PASS', '')
+
+# ── DB pool (same pattern as player_service.py) ────────────────────
+_pool = None
+def _get_pool():
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            1, 6, host=DB_HOST, dbname=DB_NAME, user=DB_USER, password=DB_PASS,
+        )
+    return _pool
+
+def q(sql, params=None, fetch='all'):
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params or ())
+            row = None
+            if fetch == 'all':
+                row = cur.fetchall()
+            elif fetch == 'one':
+                row = cur.fetchone()
+            conn.commit()
+            return row
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+def _err(e):
+    log.exception('bobo-game error')
+    return jsonify({'error': str(e)}), 500
+
+# ── static (the game) ──────────────────────────────────────────────
+@app.route('/')
+def index():
+    return send_from_directory(STATIC_DIR, 'bobo.html')
+
+@app.route('/<path:fn>')
+def static_file(fn):
+    return send_from_directory(STATIC_DIR, fn)
+
+# ── data endpoints (mirror the dashboard shapes) ───────────────────
+@app.route('/health')
+def health():
+    return jsonify({'ok': True, 'service': 'bobo-game', 'port': PORT})
+
+@app.route('/api/bobo/mqtt-pass')
+def mqtt_pass():
+    # dashboard_browser MQTT-WS password (audit #1) — same {value:...} shape the dashboard serves.
+    return jsonify({'value': MQTT_BROWSER_PASS})
+
+@app.route('/api/bobo/players')
+def players():
+    try:
+        rows = q("SELECT id, name FROM household_users WHERE active IS NOT FALSE ORDER BY name")
+        return jsonify(rows)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/bobo/settings')
+def settings_get():
+    try:
+        row = q("SELECT value FROM dashboard_settings WHERE key = %s", (SETTINGS_KEY,), fetch='one')
+        return jsonify({'value': (row['value'] if row else {})})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/bobo/settings', methods=['POST'])
+def settings_post():
+    # Client (bobo-game.js saveSettings) already read-merge-writes the full value; we upsert it
+    # verbatim — identical to the dashboard's /api/dashboard-settings POST (audit #2/#3).
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        val = body.get('value', {})
+        q("""INSERT INTO dashboard_settings (key, value) VALUES (%s, %s::jsonb)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+          (SETTINGS_KEY, json.dumps(val)), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/bobo/recent')
+def recent():
+    try:
+        rows = q("""SELECT t.id, t.test_type, t.tested_at, t.results, t.meta, t.created_at,
+                           t.user_id, h.name AS member_name
+                      FROM medical_test_results t
+                      LEFT JOIN household_users h ON h.id = t.user_id
+                     WHERE t.test_type = 'balance'
+                     ORDER BY t.tested_at DESC
+                     LIMIT 20""")
+        return jsonify(rows)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/bobo/score', methods=['POST'])
+def score():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        results = b.get('results')
+        if not isinstance(results, dict):
+            return jsonify({'error': 'results (object) required'}), 400
+        uid = b.get('user_id')
+        try:
+            uid = int(uid) if uid not in (None, '') else None
+        except (TypeError, ValueError):
+            uid = None
+        row = q("""INSERT INTO medical_test_results (test_type, results, meta, user_id)
+                   VALUES ('balance', %s::jsonb, %s::jsonb, %s)
+                   RETURNING id, test_type, tested_at, results, meta, created_at, user_id""",
+                (json.dumps(results), json.dumps(b.get('meta') or {}), uid), fetch='one')
+        return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
+if __name__ == '__main__':
+    log.info('bobo-game service starting on :%d (static=%s)', PORT, STATIC_DIR)
+    app.run(host='0.0.0.0', port=PORT, threaded=True)

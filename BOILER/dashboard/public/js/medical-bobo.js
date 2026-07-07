@@ -80,11 +80,14 @@
   }
 
   function tick() {
-    _live = _liveOn && (Date.now() - _lastMsg) < LIVE_MS;
+    _live = (Date.now() - _lastMsg) < LIVE_MS;
+    // "Show live values" is an AUTO-DRIVEN indicator of the board link: checked only while BoBo is
+    // connected (streaming), unchecked when it disconnects. Disabled so it reads as a status, not a
+    // manual switch — the MQTT stream stays connected the whole time so we can detect BoBo returning.
+    const cb = $('bobo-live-toggle'); if (cb) { cb.checked = _live; cb.disabled = true; }
     const c = $('bobo-conn');
     if (c) {
-      if (!_liveOn)      { c.textContent = 'live values off (saving resources) — check the box to enable'; c.style.color = '#888'; }
-      else if (!_mqttUp) { c.textContent = 'connecting to sensor stream…'; c.style.color = '#888'; }
+      if (!_mqttUp)      { c.textContent = 'connecting to sensor stream…'; c.style.color = '#888'; }
       else if (_live)    { c.textContent = '● live — BoBo connected' + (_lastCal ? '  ·  last calibrated ' + calAge() : ''); c.style.color = '#16a34a'; }
       else               { c.textContent = 'waiting — stand on BoBo to see live data' + (_lastCal ? '  ·  last calibrated ' + calAge() : ''); c.style.color = '#b8860b'; }
     }
@@ -281,8 +284,8 @@
   window.medBoboSettingsInit = async function () {
     renderAxesInit();
     status('', '#888');
-    try { _liveOn = localStorage.getItem('bobo.liveValues') !== '0'; } catch (e) { _liveOn = true; }
-    const cb = $('bobo-live-toggle'); if (cb) cb.checked = _liveOn;
+    _liveOn = true;   // stream stays connected while the tab is open; the checkbox is now an auto indicator
+    const cb = $('bobo-live-toggle'); if (cb) cb.disabled = true;
     await loadCalMeta();
     loadTuning();
     if (!_wired) {
@@ -300,7 +303,7 @@
       }
       _wired = true;
     }
-    if (_liveOn) connectMqtt();
+    connectMqtt();   // always monitor so the indicator can follow BoBo connect/disconnect
     if (_tick) clearInterval(_tick);
     tick(); _tick = setInterval(tick, 500);
     if (visible()) patchLive();
