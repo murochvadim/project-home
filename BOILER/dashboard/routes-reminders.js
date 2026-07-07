@@ -132,7 +132,7 @@ module.exports = (app, db) => {
 
     // ── measure schedules (weight / BP) ──
     const profs = (await db.query(
-      `SELECT pr.id, hu.name AS user_name, pr.weight_sched, pr.bp_sched, pr.body_sched
+      `SELECT pr.id, hu.id AS uid, hu.name AS user_name, pr.weight_sched, pr.bp_sched, pr.body_sched, pr.bobo_sched
          FROM ph_profiles pr LEFT JOIN household_users hu ON hu.id = pr.user_id`)).rows;
     for (const pr of profs) {
       const checks = [
@@ -150,6 +150,20 @@ module.exports = (app, db) => {
           user_name: pr.user_name || '—',
           label: label,
           kind,
+        });
+      }
+      // ── play Bobo: overdue = no balance game within the schedule window ──
+      const bs = pr.bobo_sched;
+      if (bs && bs.freq && pr.uid != null) {
+        const last = (await db.query(
+          `SELECT max(tested_at) AS m FROM medical_test_results WHERE user_id=$1 AND test_type='balance'`,
+          [pr.uid])).rows[0].m;
+        const overdue = !last || (Date.now() - new Date(last).getTime()) / 86400000 >= windowDays(bs);
+        if (overdue) items.push({
+          rkey: `bobo:${pr.id}:${windowKey(bs, t.ldate, Number(t.epoch))}`,
+          user_name: pr.user_name || '—',
+          label: '🛹 Bobo',
+          kind: 'bobo',
         });
       }
     }

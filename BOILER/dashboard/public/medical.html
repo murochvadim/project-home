@@ -520,6 +520,21 @@
             <span id="ph-body-sched-status" style="color:#3a7d44;"></span>
           </div>
         </div>
+        <div class="card" id="ph-bobocard" style="margin-bottom:0;display:flex;flex-direction:column;">
+          <h3 style="margin:0 0 10px;display:flex;align-items:center;">🛹 Bobo</h3>
+          <div id="ph-bobo-totals" style="font-size:0.82rem;color:#333;margin-bottom:8px;">—</div>
+          <div id="ph-bobo-list" style="font-size:0.74rem;color:#555;max-height:120px;overflow:auto;"></div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:12px;font-size:0.76rem;color:#555;">
+            <span title="Reminder schedule — drives the reminders badge">🔔 Play:</span>
+            <select id="ph-bobo-freq" onchange="phSchedChange('bobo')" style="padding:4px 6px;font-size:0.76rem;">
+              <option value="">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+              <option value="every_n_days">Every N days</option><option value="every_n_months">Every N months</option>
+            </select>
+            <input id="ph-bobo-interval" type="number" min="1" placeholder="N" onchange="phSchedChange('bobo')" style="width:48px;padding:4px;display:none;font-size:0.76rem;">
+            <span id="ph-bobo-interval-unit" style="display:none;color:#888;"></span>
+            <span id="ph-bobo-sched-status" style="color:#3a7d44;"></span>
+          </div>
+        </div>
         <div class="card" id="ph-stepscard" style="margin-bottom:0;display:flex;flex-direction:column;">
           <h3 style="margin:0 0 10px;display:flex;align-items:center;">👟 Daily steps<button onclick="phHistory('steps')" title="History — view / edit / remove" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;">🕓</button></h3>
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
@@ -895,7 +910,7 @@
 <script src="js/medical-hearing.js?v=8"></script>
 <script src="js/medical-vision.js?v=4"></script>
 <script src="js/medical-cognitive.js?v=2"></script>
-<script src="js/personal-health.js?v=75"></script>
+<script src="js/personal-health.js?v=76"></script>
 <script src="/vendor/mqtt/mqtt.min.js"></script>
 <script src="js/medical-bobo.js?v=16"></script>
 <script src="js/bobo-game.js?v=4"></script>

@@ -28,7 +28,7 @@ module.exports = (app, db) => {
         // to_char so DATE returns as 'YYYY-MM-DD' (a bare pg DATE serializes as a
         // timezone-shifted Date → off-by-one day in the browser).
         `SELECT p.id, p.name, p.user_id, p.sex, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
-                p.height_cm, p.allergies, p.conditions, p.weight_sched, p.bp_sched, p.body_sched, p.water_sched, p.created_at,
+                p.height_cm, p.allergies, p.conditions, p.weight_sched, p.bp_sched, p.body_sched, p.water_sched, p.bobo_sched, p.created_at,
                 (SELECT m.weight_kg FROM ph_measurements m WHERE m.profile_id = p.id
                   ORDER BY m.measured_at DESC, m.id DESC LIMIT 1) AS latest_weight_kg,
                 (SELECT b.waist_cm FROM ph_body b WHERE b.profile_id = p.id
@@ -73,6 +73,7 @@ module.exports = (app, db) => {
       if (b.bp_sched      !== undefined) add('bp_sched', b.bp_sched);
       if (b.body_sched    !== undefined) add('body_sched', b.body_sched);
       if (b.water_sched   !== undefined) add('water_sched', b.water_sched);
+      if (b.bobo_sched    !== undefined) add('bobo_sched', b.bobo_sched);
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       params.push(parseInt(req.params.id));
       await db.query(`UPDATE ph_profiles SET ${sets.join(', ')} WHERE id = $${params.length}`, params);

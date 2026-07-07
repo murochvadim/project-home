@@ -154,6 +154,21 @@ def score():
             uid = int(uid) if uid not in (None, '') else None
         except (TypeError, ValueError):
             uid = None
+        # Burned calories = MET(level) × latest body weight × duration. Stored on the results row;
+        # skipped if the player has no weight logged in Personal Health (card then shows "—").
+        if uid is not None and results.get('calories') is None:
+            try:
+                wrow = q("""SELECT m.weight_kg FROM ph_measurements m
+                            JOIN ph_profiles p ON p.id = m.profile_id
+                            WHERE p.user_id = %s ORDER BY m.measured_at DESC LIMIT 1""",
+                         (uid,), fetch='one')
+                w = float(wrow['weight_kg']) if wrow and wrow.get('weight_kg') is not None else None
+                dur = float(results.get('duration_s') or 0)
+                if w and dur > 0:
+                    met = {'easy': 2.5, 'medium': 3.0, 'hard': 3.5}.get(results.get('level'), 3.0)
+                    results['calories'] = round(met * w * dur / 3600.0)
+            except Exception:
+                log.exception('bobo calories calc failed')
         row = q("""INSERT INTO medical_test_results (test_type, results, meta, user_id)
                    VALUES ('balance', %s::jsonb, %s::jsonb, %s)
                    RETURNING id, test_type, tested_at, results, meta, created_at, user_id""",
