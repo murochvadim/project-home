@@ -383,10 +383,19 @@ function pvofRefreshCells() {
 // 🔗 Pull cell button → dialog → write the value + remember the link.
 function pvofPullCell() {
   if (!_pvofXs || !_pvofShown) { _pvofStatus('Unlock first', false); return; }
-  const active = _pvofXs.data || (_pvofXs.sheet && _pvofXs.sheet.data);
-  if (!active || !active.selector) { _pvofStatus('Click the target cell first', false); return; }
-  const tgt = { ts: active.name, tri: active.selector.ri | 0, tci: active.selector.ci | 0 };
-  _pvofOpenPullDialog(tgt);
+  _pvofOpenPullDialog(_pvofActiveSel());   // never bails — the target is editable in the dialog
+}
+
+// Best-effort active sheet + selected cell (accessors vary by x-spreadsheet build);
+// falls back to first sheet / A1 — the dialog lets the user correct the target.
+function _pvofActiveSel() {
+  const xs = _pvofXs, wb = _pvofWorkbook();
+  const first = (wb[0] && wb[0].name) || 'Sheet1';
+  const dp = (xs && xs.data && xs.data.selector) ? xs.data : (xs && xs.sheet && xs.sheet.data);
+  if (!dp || !dp.selector) return { ts: first, tri: 0, tci: 0 };
+  const sel = dp.selector, rng = sel.range || {};
+  const num = (v, d) => (typeof v === 'number' && v >= 0) ? v : d;
+  return { ts: dp.name || first, tri: num(sel.ri, num(rng.sri, 0)), tci: num(sel.ci, num(rng.sci, 0)) };
 }
 
 function _pvofApplyLink(link) {
@@ -406,7 +415,6 @@ function _pvofApplyLink(link) {
 function _pvofOpenPullDialog(tgt) {
   const wb = _pvofWorkbook();
   const names = wb.map(s => s.name);
-  const tgtLabel = tgt.ts + '!' + _pvofColName(tgt.tci) + (tgt.tri + 1);
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);';
   const close = () => ov.remove();
@@ -419,11 +427,19 @@ function _pvofOpenPullDialog(tgt) {
   const render = () => {
     ov.innerHTML = `<div style="background:#fff;border-radius:14px;padding:20px 24px;max-width:420px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,.3);">
       <div style="font-size:1.05rem;font-weight:700;color:#166534;margin-bottom:4px;">🔗 Pull a value from another sheet</div>
-      <div style="font-size:.82rem;color:#666;margin-bottom:12px;">Into <b>${_pvofEsc(tgtLabel)}</b> (the selected cell)</div>
+      <div style="font-size:.82rem;color:#666;margin-bottom:12px;">Copy a cell's value from one sheet <b>into</b> another. The target is pre-filled from the cell you clicked — change it if needed.</div>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
+        <label style="font-size:.8rem;color:#444;">Into sheet<br>
+          <select id="pvof-pd-tsheet" style="margin-top:3px;padding:5px;min-width:130px;">
+            ${names.map(n => `<option value="${_pvofEsc(n)}">${_pvofEsc(n)}</option>`).join('')}
+          </select></label>
+        <label style="font-size:.8rem;color:#444;">Cell<br>
+          <input id="pvof-pd-tcell" placeholder="e.g. B2" style="margin-top:3px;padding:5px;width:90px;text-transform:uppercase;"></label>
+      </div>
       <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
         <label style="font-size:.8rem;color:#444;">From sheet<br>
           <select id="pvof-pd-sheet" style="margin-top:3px;padding:5px;min-width:130px;">
-            ${names.map(n => `<option value="${_pvofEsc(n)}" ${n === tgt.ts ? '' : ''}>${_pvofEsc(n)}</option>`).join('')}
+            ${names.map(n => `<option value="${_pvofEsc(n)}">${_pvofEsc(n)}</option>`).join('')}
           </select></label>
         <label style="font-size:.8rem;color:#444;">Cell<br>
           <input id="pvof-pd-cell" placeholder="e.g. B20" style="margin-top:3px;padding:5px;width:90px;text-transform:uppercase;"></label>
@@ -433,15 +449,20 @@ function _pvofOpenPullDialog(tgt) {
       <div id="pvof-pd-err" style="font-size:.8rem;color:#c0392b;min-height:1.1em;margin-top:6px;"></div>
       <div style="margin-top:10px;"><div style="font-size:.78rem;color:#777;margin-bottom:2px;">Current pulls</div>${linkRows()}</div>
     </div>`;
+    const tsheet = ov.querySelector('#pvof-pd-tsheet'); if (tsheet) tsheet.value = tgt.ts;
+    const tcell = ov.querySelector('#pvof-pd-tcell'); if (tcell) tcell.value = _pvofColName(tgt.tci) + (tgt.tri + 1);
     const def = names.find(n => n !== tgt.ts) || names[0];
-    const sel = ov.querySelector('#pvof-pd-sheet'); if (sel && def) sel.value = def;
+    const ssheet = ov.querySelector('#pvof-pd-sheet'); if (ssheet && def) ssheet.value = def;
     ov.querySelector('#pvof-pd-cancel').addEventListener('click', close);
     ov.querySelector('#pvof-pd-go').addEventListener('click', () => {
+      const err = ov.querySelector('#pvof-pd-err');
+      const tsN = ov.querySelector('#pvof-pd-tsheet').value;
+      const tRef = _pvofParseRef((ov.querySelector('#pvof-pd-tcell').value || '').trim());
       const ss = ov.querySelector('#pvof-pd-sheet').value;
       const sr = (ov.querySelector('#pvof-pd-cell').value || '').trim();
-      const err = ov.querySelector('#pvof-pd-err');
-      if (!_pvofParseRef(sr)) { err.textContent = 'Enter a cell like B20.'; return; }
-      _pvofApplyLink({ ts: tgt.ts, tri: tgt.tri, tci: tgt.tci, ss: ss, sr: sr.toUpperCase() });
+      if (!tRef) { err.textContent = 'Enter a target cell like B2.'; return; }
+      if (!_pvofParseRef(sr)) { err.textContent = 'Enter a source cell like B20.'; return; }
+      _pvofApplyLink({ ts: tsN, tri: tRef.ri, tci: tRef.ci, ss: ss, sr: sr.toUpperCase() });
       close();
     });
     ov.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => {
