@@ -296,7 +296,7 @@
   function loop(ts) {
     _raf = requestAnimationFrame(loop);
     const dt = Math.min(0.05, (ts - _last) / 1000); _last = ts;
-    if (_inst && _inst.alive) _inst.update(dt, input(), inputY(), live());
+    if (_inst && _inst.alive) _inst.update(dt, input(), inputY(), live() || !IS_TV);   // desktop/dashboard = always "on board" (arrow-key testing); real off-board pause only on the TV
     if (_inst) _inst.draw(_ctx, _cv.width, _cv.height, { playerName: _sel ? _sel.name : '', live: live() });
     if (_inst && !_inst.alive && !_gameOver) { _gameOver = true; endGame(); }
   }
@@ -486,13 +486,14 @@
       const stanceLabel = (st) => st === 'both' ? 'Balance on BOTH legs'
         : (st === 'left' ? 'Stand on your LEFT leg' : 'Stand on your RIGHT leg');
       let G;
-      const init = () => { G = { idx: 0, phase: 'hold', clock: hold, balancedT: 0, alive: true, t: 0, sx: 0, sy: 0, steady: false, flash: 0 }; };
+      const init = () => { G = { idx: 0, phase: 'hold', clock: hold, balancedT: 0, alive: true, t: 0, sx: 0, sy: 0, steady: false, flash: 0, paused: false }; };
       init();
       return {
         get alive() { return G.alive; },
         reset: init,
         update(dt, x, y, onBoard) {
           // On/off-board PAUSE: the board streams only while someone's standing on it.
+          G.paused = !onBoard;
           if (!onBoard) { G.t += dt; return; }
           G.t += dt; if (G.flash > 0) G.flash -= dt;
           G.sx += (x - G.sx) * Math.min(1, dt * 12);   // smoothed marker position
@@ -541,8 +542,8 @@
           ctx.fillText('🔥 ' + Math.round(G.balancedT) + 's balanced · ' + prog, cx, H * 0.9);
           ctx.font = '600 ' + Math.round(H * 0.026) + 'px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.45)';
           ctx.fillText((env.playerName || '') + ' · ' + L.label, cx, H * 0.965);
-          // off-board pause overlay
-          if (!env.live) {
+          // off-board pause overlay (matches the update pause exactly)
+          if (G.paused) {
             ctx.fillStyle = 'rgba(5,8,14,0.72)'; ctx.fillRect(0, 0, W, H);
             ctx.fillStyle = '#facc15'; ctx.font = '800 ' + Math.round(H * 0.05) + 'px system-ui,sans-serif';
             ctx.fillText('⚠ Step onto the board — paused', cx, cy);
