@@ -72,5 +72,20 @@ A **👟 Daily steps** card in the same grid row as Log weight / Log blood press
 - `routes-personal-health.js` is a backend route module → needs a **dashboard restart** (`pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`) to register the routes.
 - The migration runs on LXC 102 via LXC 104 (`psql -h 192.168.1.219`).
 
+## 🛹 Bobo card (2026-07-07)
+Per-person balance-game card, mirroring "Log weight". Each finished BoBo game (played on the balcony TV)
+already writes `medical_test_results` (test_type='balance', user_id, `results{score,duration_s,level,…}`);
+the LXC `bobo_game_service.py` `POST /api/bobo/score` now ALSO computes **burned calories** =
+`MET(level) × latest ph_measurements.weight_kg × duration_s/3600` (MET 2.5/3.0/3.5 easy/med/hard; skipped
+if the player has no weight logged) and stores it as `results.calories`. The card (`phLoadBobo(p)` in
+`personal-health.js`, `#ph-bobocard` in `medical.html`) shows the person's recent games
+(date · score · duration · 🔥cal, filtered client-side to `user_id`) + totals (games · time · cal), plus a
+**🔔 Play schedule** — a new `ph_profiles.bobo_sched` jsonb (migration `019`), SAME `{freq, interval_n}`
+shape as the measure schedules. Reminders (`routes-reminders.js`) shows a **"🛹 Bobo"** pill when no game
+has been played within the schedule window (`max(tested_at)` from `medical_test_results` by `user_id`);
+clears after a game. Schedule helpers reused by registering `bobo` in the hardcoded `_schedPre` +
+`phSchedChange` maps. Full BoBo pipeline (bridge/game/calibration/TV auto-switch): `project-bobo-balance-bridge`
+memory + `BOILER/dashboard/bobo-lxc/`.
+
 ## Extending
 Add the deferred metrics by extending `ph_measurements` (waist_cm, resting_hr, bp_*) + `ph_profiles` (activity_level, target_weight_kg), then the front-end derivations (BMR/TDEE/body-fat) + a Chart.js progress card + a goals card. Steps/distance would be a sibling table `ph_activity_log`.

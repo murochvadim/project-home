@@ -250,23 +250,14 @@
   // games are created by playing on the TV (results land in medical_test_results test_type='balance').
   const _fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); return m ? `${m}m ${s % 60}s` : `${s}s`; };
   async function phLoadBobo(p) {
-    const totEl = $('ph-bobo-totals'), listEl = $('ph-bobo-list');
-    if (!totEl || !listEl) return;
+    const totEl = $('ph-bobo-totals'); if (!totEl) return;   // totals only — per-game rows live in the DB
     let rows = [];
     try { rows = await (await fetch('/api/medical/test-results?type=balance')).json(); } catch (e) { rows = []; }
     rows = (Array.isArray(rows) ? rows : []).filter(r => String(r.user_id) === String(p.user_id));
-    if (!rows.length) { totEl.textContent = 'No games yet — play on the balcony TV.'; listEl.innerHTML = ''; return; }
+    if (!rows.length) { totEl.textContent = 'No games yet — play on the balcony TV.'; return; }
     let totDur = 0, totCal = 0;
     for (const r of rows) { const rr = r.results || {}; totDur += Number(rr.duration_s) || 0; totCal += Number(rr.calories) || 0; }
     totEl.innerHTML = `<b>${rows.length}</b> games · <b>${_fmtDur(totDur)}</b> · <b>🔥 ${Math.round(totCal)}</b> cal`;
-    listEl.innerHTML = rows.slice(0, 8).map(r => {
-      const rr = r.results || {};
-      let d = ''; try { d = new Date(r.tested_at).toLocaleDateString('en-GB'); } catch (e) {}
-      const cal = rr.calories != null ? ('🔥' + Math.round(rr.calories)) : '—';
-      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #f0ece6;">
-        <span>${esc(d)}</span><span>Score <b>${esc(rr.score != null ? rr.score : '—')}</b></span>
-        <span>${esc(Math.round(rr.duration_s || 0))}s</span><span>${cal}</span></div>`;
-    }).join('');
   }
 
   // ── log weight — stamped with a server timestamp on Save (same style as BP) ──
