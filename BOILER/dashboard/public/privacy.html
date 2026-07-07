@@ -334,6 +334,8 @@
         <button id="pvof-unlock-btn" class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvofUnlock()">🔓 Unlock</button>
         <button id="pvof-save-btn" class="btn btn-sm" style="background:#2563eb; color:#fff; display:none;" onclick="pvofSave()">💾 Save</button>
         <button id="pvof-lock-btn" class="btn btn-secondary btn-sm" style="display:none;" onclick="pvofLockTab()">🔒 Lock</button>
+        <button id="pvof-pull-btn" class="btn btn-secondary btn-sm" style="display:none;" title="Copy a value from any cell on another sheet into the selected cell" onclick="pvofPullCell()">🔗 Pull cell</button>
+        <button id="pvof-refresh-btn" class="btn btn-secondary btn-sm" style="display:none;" title="Re-read every pulled cell from its source" onclick="pvofRefreshCells()">↻ Refresh</button>
         <span id="pvof-size-ctl" style="display:none; align-items:center; gap:6px; font-size:0.8rem; color:#555;">
           <span>Rows <input id="pvof-rows" type="number" min="1" max="5000" style="width:62px; padding:3px 5px; font-size:0.8rem;"></span>
           <span>Cols <input id="pvof-cols" type="number" min="1" max="100" style="width:54px; padding:3px 5px; font-size:0.8rem;"></span>
@@ -565,6 +567,6 @@
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>
 <script src="vendor/sheets/xspreadsheet.js"></script>
-<script src="js/privacy-offers.js?v=10"></script>
+<script src="js/privacy-offers.js?v=11"></script>
 </body>
 </html>
