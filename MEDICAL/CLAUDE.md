@@ -347,4 +347,17 @@ The single **Test Results** card lists **all** test types (`medTestsLoad` fetche
   (`public/vendor/mqtt/mqtt.min.js`, no CDN — `medical.html` loads the local copy; the calibration wizard
   uses the same global). No server.js/DB/firmware change — reuses `medical_test_results` +
   `/api/dashboard-settings` + `/api/household-users`.
+- 2026-07-07: **BoBo game+calibration ALSO hosted on LXC 100 → balcony TV works with the laptop OFF.**
+  `bobo-game.js` refactored into a **shell + game registry** (`window.BOBO_GAMES`; Colour Tunnel = module #1
+  `{alive,update,draw,result,reset}`) so adding a game = a new module. **Both `bobo-game.js` +
+  `medical-bobo.js` are host-agnostic via `window.BOBO_CFG`** — the dashboard uses its own endpoints
+  (defaults), and the LXC 100 standalone page (`http://192.168.1.138:8770/`) sets `/api/bobo/*`; ONE shared
+  file each (no fork). The LXC page shows **both cards + the TV-defaults editor, identical to this Settings
+  tab**. Service = `bobo-game.service` on LXC 100 (repo `BOILER/dashboard/bobo-lxc/`, see its README + root
+  CLAUDE.md "LXC 100 … Services"). Extras: read-merge-write settings, TV **auto-start** (settings
+  `mode:'auto'` → default game/user/difficulty), **board menu-nav** (lean L/R = move, forward = select — TV
+  has no mouse), a dashboard **game-card TV-defaults editor** (mode + default game/user/difficulty in
+  `dashboard_settings.medical.bobo_game`). **"Show live values"** is now clickable + auto (auto-checks on
+  BoBo connect, unchecks on disconnect; click to toggle the live display). Calibration card compacted
+  (Start button top-right). See the `project-bobo-balance-bridge` memory.
 - 2026-06-25: **Personal Health tab** added (4th tab) — per-person body-metrics + medications record. **Owned by its own module, NOT documented in detail here** — see [PERSONAL_HEALTH/CLAUDE.md](../PERSONAL_HEALTH/CLAUDE.md). In brief: people come from the canonical **`household_users` table** (`/api/household-users`); each gets a profile (sex/DOB/height/allergies/conditions) + weight log → BMI/age/ideal-weight + a **medications list** (row = name·dose·schedule; an **ℹ️ Info window** holds the safety info — purpose/ingredients/avoid_with/contraindications/side_effects/warnings/prescriber — feeding a future med-safety cross-check). Backend `BOILER/dashboard/routes-personal-health.js` (one `require()` line, like `routes-medical-tests.js`); front-end `js/personal-health.js` + `#tab-personal-health` in `medical.html`; tables `ph_profiles`/`ph_measurements`/`ph_medications` on LXC 102 (migration `PERSONAL_HEALTH/migrations/setup.sql`).

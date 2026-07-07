@@ -303,7 +303,8 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - **LXC 105**: `/opt/main-agent/kill-orphans.sh` in `ExecStartPre` for rule-engine service
 
 ### LXC 100 (192.168.1.138) — Media Agent Services
-- **Services**: `media-agent` (tv_control.py:8765), `player` (player_service.py:8766), `ingest` (ingest_service.py:8767), `pixoo` (pixoo_service.py:8768-8769), `analyzer` (analyzer.py)
+- **Services**: `media-agent` (tv_control.py:8765), `player` (player_service.py:8766), `ingest` (ingest_service.py:8767), `pixoo` (pixoo_service.py:8768-8769), `analyzer` (analyzer.py), **`bobo-game` (bobo_game_service.py:8770 — since 2026-07-07)**
+- **`bobo-game` service**: serves the **balcony-TV BoBo game + calibration** at `http://192.168.1.138:8770/` so the TV works with the **laptop dashboard OFF**. Flask, serves the standalone `/opt/media-agent/bobo/` page (Calibration + Game cards, identical to Medical → Settings) + `/api/bobo/*` endpoints (Postgres-backed, mirror the dashboard shapes; `esp-params` publishes calibration to the ESP via paho as `esp_boards`; static sent `no-cache`). Env needs `DB_PASS` + `MQTT_BROWSER_PASS` + `ESP_BOARDS_MQTT_PASS`. Repo source + deploy: `BOILER/dashboard/bobo-lxc/` (README there). The game/calibration JS (`public/js/bobo-game.js` + `medical-bobo.js`) is host-agnostic via `window.BOBO_CFG` and shared with the dashboard. Scores → `medical_test_results`. See [[project-bobo-balance-bridge]].
 - All use `HA_TOKEN` from `/etc/environment`
 - **Orphan guard**: all 4 services (except analyzer) have `ExecStartPre=/opt/media-agent/kill-orphan.sh <script>` to kill stray processes before starting — prevents port-conflict crash loops
 - **Local script**: `scripts/lxc100-kill-orphan.sh`
