@@ -36,6 +36,7 @@
   const CH_NAMES = ['Accel X','Accel Y','Accel Z','Gyro X','Gyro Y','Gyro Z','Orient X','Orient Y','Orient Z'];
 
   let _mqtt = null, _mqttUp = false, _liveOn = true;
+  let _showLive = false, _prevConn = false;   // _showLive: render live values (clickable + auto on connect)
   let _ch = new Array(9).fill(0), _x = 0, _y = 0, _lastMsg = 0, _live = false;
   let _axMax = new Array(9).fill(1);
   let _cap = null;            // when an array, each incoming frame's ch[] is pushed (capture window)
@@ -87,37 +88,36 @@
     if (typeof m.y === 'number') _y = m.y;
     _lastMsg = Date.now();
     if (_cap) _cap.push(_ch.slice());
-    if (visible()) patchLive();
+    if (_showLive && visible()) patchLive();
   }
 
   function tick() {
-    _live = (Date.now() - _lastMsg) < LIVE_MS;
-    // "Show live values" is an AUTO-DRIVEN indicator of the board link: checked only while BoBo is
-    // connected (streaming), unchecked when it disconnects. Disabled so it reads as a status, not a
-    // manual switch — the MQTT stream stays connected the whole time so we can detect BoBo returning.
-    const cb = $('bobo-live-toggle'); if (cb) { cb.checked = _live; cb.disabled = true; }
+    const conn = (Date.now() - _lastMsg) < LIVE_MS;   // BoBo streaming?
+    // Auto-follow the board link ON TRANSITIONS only: auto-check when BoBo connects, auto-uncheck when
+    // it drops — but stay manually clickable in between (the MQTT stream stays connected regardless, so
+    // the connect/disconnect detection keeps working even while the display is off).
+    if (conn !== _prevConn) { _showLive = conn; _prevConn = conn; }
+    _live = conn;
+    const cb = $('bobo-live-toggle'); if (cb) cb.checked = _showLive;
     const c = $('bobo-conn');
     if (c) {
       if (!_mqttUp)      { c.textContent = 'connecting to sensor stream…'; c.style.color = '#888'; }
-      else if (_live)    { c.textContent = '● live — BoBo connected' + (_lastCal ? '  ·  last calibrated ' + calAge() : ''); c.style.color = '#16a34a'; }
+      else if (conn)     { c.textContent = '● live — BoBo connected' + (_lastCal ? '  ·  last calibrated ' + calAge() : ''); c.style.color = '#16a34a'; }
       else               { c.textContent = 'waiting — stand on BoBo to see live data' + (_lastCal ? '  ·  last calibrated ' + calAge() : ''); c.style.color = '#b8860b'; }
     }
-    const b = $('bobo-start'); if (b && !_wizRunning) b.disabled = !_live;
+    const b = $('bobo-start'); if (b && !_wizRunning) b.disabled = !conn;
   }
 
-  // Enable/disable the live stream. Off = drop the MQTT WS + rendering (frees browser resources).
+  // Manual toggle for the live DISPLAY (show/hide the numbers + dot). The MQTT stream stays connected
+  // either way, so the auto connect/disconnect behaviour keeps working; off just stops rendering.
   function setLive(on) {
-    _liveOn = on;
-    try { localStorage.setItem('bobo.liveValues', on ? '1' : '0'); } catch (e) { /* ignore */ }
+    _showLive = on;
     const cb = $('bobo-live-toggle'); if (cb) cb.checked = on;
-    if (on) { connectMqtt(); }
+    if (on) { if (visible()) patchLive(); }
     else {
-      if (_mqtt) { try { _mqtt.end(true); } catch (e) { /* ignore */ } _mqtt = null; }
-      _mqttUp = false; _live = false;
       const xv = $('bobo-xval'); if (xv) xv.textContent = '—';
       const yv = $('bobo-yval'); if (yv) yv.textContent = '—';
     }
-    tick();
   }
 
   function calAge() {
@@ -295,8 +295,8 @@
   window.medBoboSettingsInit = async function () {
     renderAxesInit();
     status('', '#888');
-    _liveOn = true;   // stream stays connected while the tab is open; the checkbox is now an auto indicator
-    const cb = $('bobo-live-toggle'); if (cb) cb.disabled = true;
+    _liveOn = true;   // stream stays connected while the tab is open (auto connect/disconnect detection)
+    const cb = $('bobo-live-toggle'); if (cb) { cb.disabled = false; cb.checked = _showLive; }
     await loadCalMeta();
     loadTuning();
     if (!_wired) {
