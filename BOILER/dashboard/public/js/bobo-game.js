@@ -167,9 +167,9 @@
       <div class="bobo-row">${playerTiles}</div>
       <div class="bobo-lbl">Difficulty</div>
       <div class="bobo-row">${levelTiles}</div>
-      <button id="bobo-play" data-nav style="background:#16a34a;color:#fff;font-size:1.1rem;padding:11px 26px;border-radius:11px;border:none;cursor:pointer;">▶ Play</button>
-      <div style="margin-top:16px;border-top:1px solid #f0ece6;padding-top:9px;">
-        <span style="font-size:0.75rem;color:#777;">Recent:</span> ${recentHtml}
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <button id="bobo-play" data-nav style="background:#16a34a;color:#fff;font-size:1.1rem;padding:11px 26px;border-radius:11px;border:none;cursor:pointer;">▶ Play</button>
+        <div style="display:flex;align-items:center;flex-wrap:wrap;"><span style="font-size:0.75rem;color:#777;margin-right:6px;">Recent:</span> ${recentHtml}</div>
       </div>
       ${renderDefaultsUI()}`;
 
