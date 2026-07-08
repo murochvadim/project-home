@@ -34,6 +34,52 @@ Visualization + Phasing sections below remain the contract for them.
   edge) + Delete. The **＋ opens the SAME window empty** to add a person (name + fields + photo +
   category + household-member dropdown from `/api/household-users` + 📍 Find geocode via Nominatim).
   This canvas is the **foundation for the Phase-2 graph** (connecting lines over the same figures).
+
+## Phase 2 — relationship graph + Settings (2026-07-08)
+Pure front-end + config (no DB/schema change; `people_relations` already holds the edges).
+- **Relationship LINES:** `pvPeopleRender` injects an `<svg id="ppl-svg">` layer as the first child of
+  `#ppl-canvas` (`pointer-events:none`), then draws a `<line>` for every `_rels` edge between the two
+  figures' centers (`x+44, y+32`), **styled per relation type** (color + `stroke-dasharray`:
+  solid/dashed/dotted). Lines follow live while dragging (`_updateLines` patches endpoints of
+  `line[data-from|to]`), full redraw on drop/render. `_loadRels()` = `GET /api/people/relations` (all edges).
+- **Network ↔ Groups toggle** (segmented control in the toolbar, `localStorage['people.view']`;
+  the old Tree view was dropped 2026-07-08 per user — a strict tree can't hold friends/in-laws):
+  **Network** = saved `pos_x/pos_y` snap-grid + every per-relation line; **Groups** = `_groupLayout`
+  **clusters people into labeled region-boxes by CATEGORY** (groups = categories, so "add a group" =
+  add a category in Settings — unlimited), and draws **only USER-DEFINED group connections**
+  (`dashboard_settings.people.group_edges = [{a,b}]`, edited in Settings → 👥 People → 🔗 Group connections:
+  pick two groups + Connect), each line drawn between the two boxes' **nearest corners** (`_nearestCorners`,
+  recomputed live as a box is dragged via `_regionById`), styled by the configurable **group-link**
+  (`group_link = {color, style}`). **PERSON → GROUP connections too** (`person_group_edges = [{p,g}]`,
+  same Settings section, e.g. Vadim → Vadim friends) — a line from that person's figure to the group
+  box's nearest corner. (The earlier auto-derived-from-people aggregation was dropped 2026-07-08 — the
+  user wanted explicit links only.) **The group boxes are
+  DRAGGABLE** (grab a box → the box + its people + its lines move together, snap-to-grid, persisted in
+  `dashboard_settings.people.group_pos = {<catId>:{x,y}}`; boxes without a saved pos auto-flow).
+  People inside a box aren't individually draggable in Groups (click icon = open, click name = highlight).
+  A **"gray unconnected" toggle** (Groups toolbar, `localStorage['people.dimUnconnected']`) grayscales
+  every person who is NOT `_connectedOutside` their group — i.e. has neither a person→group edge NOR a
+  relation to someone in a different group — so the cross-group "connectors" (like Vadim) stand out.
+- **Click split:** the **avatar** carries drag + click→`pvPeopleEdit` (open window); the **name** div
+  carries click→`pvPeopleHighlight` (sets `_focusId`; re-render dims every figure + line except that
+  person, their connections, and the lines between — opacity 0.12–0.15; click name again / empty canvas clears).
+- **Settings — 👥 People card** (Privacy → Settings, now a **uniform 2-column grid** of all settings
+  cards): two editors mirroring the journal category editor — **Categories** (name + `<input type=color>`)
+  , **Relation types** (name + line color + solid/dashed/dotted), and **TWO Groups-view connection-line
+  styles** — 🫂 **Group ↔ group** (`group_link`) and 👤 **Person → group** (`pg_link`), each color + style,
+  so the two link kinds look distinct. Saved as the WHOLE blob to
+  `dashboard_settings.people = {categories, rel_types, group_link:{color,style}, pg_link:{color,style}, group_pos, group_edges, person_group_edges}`
+  (server replaces the whole value → both arrays re-emitted every save). Stable ids (`c…`/`r…`) so
+  renames don't break existing people/edges. `pvPeopleSettingsLoad()` is called from the Settings-tab
+  branch in `privacy.js`. The Edit-modal relation dropdown + line colors both read `_relTypes`.
+- **Defaults** (when config absent): cats = the 4 Phase-1 buckets; rels = parent(solid dark-red)/
+  child(solid red)/spouse(solid pink)/sibling(dashed amber)/friend(dashed green)/other(dotted grey).
+  Config was seeded with these on 2026-07-08.
+- **Verified:** config round-trips (4 cats + 6 rel types persist); `/api/people/relations` (all) returns
+  the edge array; endpoints unchanged. Cache-busts `privacy-people.js?v=8` + `privacy.js?v=83`.
+- **v1 limits:** Groups cluster by the person's single `category` (one group per person — a many-to-many
+  groups layer was the alternative, not taken); aggregated group lines join box centroids (can cross a
+  box). Cache-bust `privacy-people.js?v=9`. **Phases 3–4** (birthday reminders + origins map, legacy) still planned.
 - **Categories** default to the 4 buckets client-side (`PPL_DEFAULT_CATS`: 🔵 My family / 🟣 Wife's
   family / 🟢 Friends / ⚪ People I know) with per-bucket colors; overridable later via
   `dashboard_settings.people.categories`.

@@ -53,7 +53,7 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
   if (name === 'doccreate' && typeof pvdcOnShow === 'function') pvdcOnShow();
-  if (name === 'settings') { _pvFillSettingsForm(); pvLoadUsers(); pvLoadReminders(); }
+  if (name === 'settings') { _pvFillSettingsForm(); pvLoadUsers(); pvLoadReminders(); if (typeof pvPeopleSettingsLoad === 'function') pvPeopleSettingsLoad(); }
   if (name === 'places' && typeof pvPlacesOnShow === 'function') pvPlacesOnShow();
 }
 async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); pvJournalLoadCfg(); }

@@ -243,8 +243,13 @@
   <div class="tab-panel" id="tab-people">
     <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px;">
       <select id="ppl-filter-cat" onchange="pvPeopleRender()" style="padding:5px 8px; font-size:0.85rem; border:1px solid #d0cbc4; border-radius:4px;"><option value="">All categories</option></select>
+      <div style="display:inline-flex; border:1px solid #cbd5e1; border-radius:6px; overflow:hidden;">
+        <button id="ppl-view-network" onclick="pvPeopleSetView('network')" style="border:none; padding:5px 12px; cursor:pointer; font-size:0.82rem; background:#0f766e; color:#fff;">Network</button>
+        <button id="ppl-view-group" onclick="pvPeopleSetView('group')" style="border:none; padding:5px 12px; cursor:pointer; font-size:0.82rem; background:#eee; color:#555;">Groups</button>
+      </div>
+      <label title="In Groups view, gray out people with no connection outside their group" style="font-size:0.78rem; color:#555; display:inline-flex; align-items:center; gap:4px; cursor:pointer;"><input type="checkbox" id="ppl-dim-unconn" onchange="pvPeopleToggleDim(this.checked)"> gray unconnected</label>
       <span id="ppl-totals" style="font-size:0.8rem; color:#555;"></span>
-      <span style="font-size:0.72rem; color:#aaa; margin-left:auto;">drag to arrange · click to open</span>
+      <span style="font-size:0.72rem; color:#aaa; margin-left:auto;">drag to arrange · click icon = open · click name = highlight</span>
     </div>
     <div style="position:relative;">
       <div style="position:absolute; top:10px; left:10px; z-index:5; display:flex; gap:8px; align-items:center;">
@@ -260,8 +265,8 @@
   <!-- TAB: Settings                                              -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-settings">
-    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:stretch;">
-    <div class="card" style="flex:1; min-width:320px; margin-bottom:0;">
+    <div style="display:grid; grid-template-columns:repeat(2, minmax(300px, 1fr)); gap:16px; align-items:stretch;">
+    <div class="card" style="margin:0;">
       <h2 style="margin-top:0;">Schedule &amp; appointment colors</h2>
       <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
         The next-appointment card is colored by how close it is. A far-off appointment is
@@ -283,7 +288,7 @@
       </div>
     </div>
 
-    <div class="card" style="flex:1; min-width:320px; margin-bottom:0;">
+    <div class="card" style="margin:0;">
       <h2 style="margin-top:0;">🔔 Reminders</h2>
       <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
         A red reminder badge appears top-right on the pages you pick, listing what's due —
@@ -311,9 +316,8 @@
         <span id="pv-rem-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
       </div>
     </div>
-    </div>
 
-    <div class="card" style="max-width:560px; margin-top:16px;">
+    <div class="card" style="margin:0;">
       <h2 style="margin-top:0;">Users</h2>
       <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
         Household members and the smartphone that belongs to each — use <b>real names</b> (like the Gateway peer overlay).
@@ -327,7 +331,7 @@
       <div style="font-size:0.74rem; color:#aaa; line-height:1.4; margin-top:6px;">📱 suggestions come from your tracked phones + named network devices — type to filter, or enter any text.</div>
     </div>
 
-    <div class="card" style="max-width:560px; margin-top:16px;">
+    <div class="card" style="margin:0;">
       <h2 style="margin-top:0;">📓 Daily Journal reminders</h2>
       <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
         Choose <b>how many times a day</b> the journal nudge pops (a wide box to the <b>left of the red badge</b>) and
@@ -350,6 +354,54 @@
         <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvJournalCfgSave()">Save</button>
         <span id="pvj-cfg-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
       </div>
+    </div>
+
+    <div class="card" style="margin:0;">
+      <h2 style="margin-top:0;">👥 People</h2>
+      <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
+        <b>Categories</b> color the person icons on the People graph; <b>relation types</b> set the
+        line <b>color + style</b> drawn between connected people. Add / rename / remove as many as you like.
+      </p>
+      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">🏷 Categories (name + color)</div>
+      <div id="pplset-cats" style="margin-bottom:8px;"></div>
+      <button class="btn btn-secondary btn-sm" onclick="pvPeopleCatAdd()">+ Add category</button>
+      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🔗 Relation types (name + line color + style)</div>
+      <div id="pplset-rels" style="margin-bottom:8px;"></div>
+      <button class="btn btn-secondary btn-sm" onclick="pvPeopleRelTypeAdd()">+ Add relation type</button>
+      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🎨 Connection line styles (Groups view)</div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+        <span style="min-width:132px; font-size:0.82rem;">🫂 Group ↔ group</span>
+        <input type="color" id="pplset-gl-color" value="#64748b" title="line color" style="width:38px; height:30px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
+        <select id="pplset-gl-style" style="padding:5px; border:1px solid #ccc; border-radius:4px;"><option value="solid">solid</option><option value="dashed">dashed</option><option value="dotted">dotted</option></select>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span style="min-width:132px; font-size:0.82rem;">👤 Person → group</span>
+        <input type="color" id="pplset-pgl-color" value="#0ea5e9" title="line color" style="width:38px; height:30px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
+        <select id="pplset-pgl-style" style="padding:5px; border:1px solid #ccc; border-radius:4px;"><option value="solid">solid</option><option value="dashed">dashed</option><option value="dotted">dotted</option></select>
+      </div>
+      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🔗 Group connections</div>
+      <p style="font-size:0.8rem; color:#777; line-height:1.4; margin:0 0 8px;">Pick two groups to connect — a line runs <b>name → name</b> between them in <b>Groups</b> view. Only these lines show.</p>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <select id="pplset-ge-a" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
+        <span style="color:#888;">—</span>
+        <select id="pplset-ge-b" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
+        <button class="btn btn-secondary btn-sm" onclick="pvPeopleGroupEdgeAdd()">+ Connect</button>
+      </div>
+      <div id="pplset-gedges" style="margin-bottom:4px;"></div>
+      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🔗 Person → group connections</div>
+      <p style="font-size:0.8rem; color:#777; line-height:1.4; margin:0 0 8px;">Connect a single person to a group (e.g. <i>Vadim → Vadim friends</i>) — a line runs from that person to the group box.</p>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <select id="pplset-pg-p" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
+        <span style="color:#888;">→</span>
+        <select id="pplset-pg-g" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
+        <button class="btn btn-secondary btn-sm" onclick="pvPeoplePGEdgeAdd()">+ Connect</button>
+      </div>
+      <div id="pplset-pgedges" style="margin-bottom:4px;"></div>
+      <div style="display:flex; align-items:center; gap:10px; margin-top:14px;">
+        <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvPeopleSettingsSave()">Save</button>
+        <span id="pplset-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
+      </div>
+    </div>
     </div>
   </div>
 
@@ -590,9 +642,9 @@
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/privacy.js?v=82"></script>
+<script src="js/privacy.js?v=83"></script>
 <script src="js/privacy-places.js?v=11"></script>
-<script src="js/privacy-people.js?v=7"></script>
+<script src="js/privacy-people.js?v=17"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>
