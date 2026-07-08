@@ -121,6 +121,7 @@ require('./routes-phonelink')(app, db);
 
 // Travel map — visited_places CRUD (Privacy > Places tab).
 require('./routes-places')(app, db);
+require('./routes-people')(app, db);
 
 // MQTT client for rule engine commands (test, reload).
 // Fail-loud guard — if MQTT_RULE_PASS isn't in the env, the dashboard will
@@ -2290,6 +2291,7 @@ const DBV_GROUPS = [
   ['Medical',               ['medical_contacts','medical_documents','medical_test_results']],
   ['Personal Health',       ['household_users','ph_profiles','ph_measurements','ph_medications','ph_bp','ph_body','ph_water','ph_steps','ph_steps_excluded_trips','ph_exercise_log','ph_bobo']],
   ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_site_receipts','privacy_doc_crypto','privacy_sheets','visited_places','journal_entries']],
+  ['People',                ['people','people_relations']],
   ['Reminders',             ['reminder_state']],
   ['Email',                 ['email_messages','email_labels','email_state','email_extractions','email_automation_log']],
 ];
@@ -2340,6 +2342,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       privacy_sites: 'updated_at', privacy_site_docs: 'created_at', privacy_site_receipts: 'created_at', privacy_doc_crypto: 'created_at', privacy_sheets: 'updated_at',
       visited_places: 'visited_at',
       journal_entries: 'created_at',
+      people: 'created_at', people_relations: 'created_at',
     };
 
     const sizes = await db.query(`

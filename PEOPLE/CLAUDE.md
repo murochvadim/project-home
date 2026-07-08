@@ -1,7 +1,51 @@
 # People / Heritage — Family & Friends
 
-**Status: PLANNING (scoped 2026-07-04 — NOT built yet).** This file is the module index +
-agreed design. No tables, endpoints, or UI exist yet; it's the contract to build against.
+**Status: Phase 1 BUILT (2026-07-08).** The Directory + relationship-edge foundation is live
+(Privacy → **People** tab). Phases 2–4 (graph / reminders+map / legacy) are still planned — the
+Visualization + Phasing sections below remain the contract for them.
+
+## Phase 1 — what's built (2026-07-08)
+- **DB (LXC 102):** tables `people` + `people_relations` (migration `PEOPLE/migrations/001_people.sql`).
+  `people_relations.from/to_person_id` → `people(id)` **ON DELETE CASCADE** (a person's edges vanish
+  with them); `people.household_user_id` → `household_users(id)` **ON DELETE SET NULL**; unique edge
+  `(from,to,rel_type)`. Retention **forever + 🔒 protected** (seeded protected in the migration since
+  the server's once-only protect-seed already ran). Registered in `server.js` `DBV_GROUPS` (new
+  **'People'** group) + `tsCol` (`created_at`).
+- **Backend:** `BOILER/dashboard/routes-people.js` (own module, one `require('./routes-people')(app, db)`
+  line in server.js ~L124 — passes the architecture-guard hook). Endpoints:
+  `GET /api/people` (`?q=` free-text + `?category=`) · `POST /api/people` · `PATCH /api/people/:id`
+  (dynamic whitelist like routes-places) · `DELETE /api/people/:id` (also SSH-deletes the photo) ·
+  `GET /api/people/relations?person_id=` · `POST /api/people/relations` (idempotent on the unique edge)
+  · `DELETE /api/people/relations/:id` · `POST /api/people/:id/photo` (multer) · `GET /api/people/:id/photo`.
+  **Relations routes are registered BEFORE `/:id`** so `relations` isn't parsed as an id.
+- **Photos:** on QNAP `\\192.168.1.155\Claude_Data\People_Photos` (subfolder of the existing Claude_Data
+  share, auto-created on startup). Upload/serve/delete mirrors `routes-privacy.js` — DELETE tunnels via
+  LXC-104 SSH (`192.168.1.227`, `/mnt/qnap-claude/People_Photos`). Only the basename is in `people.photo`.
+- **Frontend:** `BOILER/dashboard/public/js/privacy-people.js` (entry `pvPeopleOnShow()`) + a **People**
+  tab on `privacy.html` — placed after a separator that follows **Doc Create**, grouped with
+  Places + Daily Journal (`Sites · Doc Create ‖ Places · Daily Journal · 👥 People · Settings ‖ Budget`).
+  **Free-canvas layout (NOT a card, per the user):** a slim top toolbar = **＋ add icon (top-left)** +
+  search + category filter + **totals legend** (count+color per category); below it an open
+  `#ppl-canvas` where each person is a **draggable figure = colored icon (photo or 👤 silhouette,
+  ring colored by category) + first/last name only** — nothing else on the figure. **Drag to arrange**
+  (pointer events; saves `pos_x`/`pos_y` per person via PATCH — migration `002_people_positions.sql`);
+  unplaced people auto-grid until first drag. **Click a figure → a window** opens with ALL fields to
+  view/edit (`_openModal`) + photo + a **🔗 Relations** sub-section (add `rel_type → person`, delete an
+  edge) + Delete. The **＋ opens the SAME window empty** to add a person (name + fields + photo +
+  category + household-member dropdown from `/api/household-users` + 📍 Find geocode via Nominatim).
+  This canvas is the **foundation for the Phase-2 graph** (connecting lines over the same figures).
+- **Categories** default to the 4 buckets client-side (`PPL_DEFAULT_CATS`: 🔵 My family / 🟣 Wife's
+  family / 🟢 Friends / ⚪ People I know) with per-bucket colors; overridable later via
+  `dashboard_settings.people.categories`.
+- **Verified end-to-end 2026-07-08:** create (w/ category) · patch · relation add/list · search +
+  member-name join · photo upload+serve (image/png) · person delete → relation CASCADE + photo
+  SSH-removed from QNAP · both tables show protected in Project Health → DB Volumes.
+- **Not yet:** the network/tree graph (Phase 2), birthday reminders + origins map (Phase 3), legacy
+  layer (Phase 4). Cache-bust `privacy-people.js?v=1`.
+
+---
+
+## (Original design — retained as the contract for Phases 2–4)
 
 ## Purpose
 
