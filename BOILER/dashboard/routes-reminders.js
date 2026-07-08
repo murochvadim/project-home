@@ -220,6 +220,12 @@ module.exports = (app, db) => {
     if (jCfg && jCfg.enabled && Array.isArray(jCfg.slots) && jCfg.slots.length) {
       const juid = Number(jCfg.user_id) || 1;
       const juName = (await db.query("SELECT name FROM household_users WHERE id=$1", [juid])).rows[0]?.name || '—';
+      // categories ("gloomys") divide each capture — the badge renders one box per
+      // active one. Fall back to a single General category if none configured yet.
+      const jCats = (Array.isArray(jCfg.categories) && jCfg.categories.length
+        ? jCfg.categories : [{ id: 'general', name: 'General' }])
+        .filter(c => c && c.id && c.active !== false)
+        .map(c => ({ id: c.id, name: c.name || c.id }));
       for (const slot of jCfg.slots) {
         if (!slot || !slot.id || !slot.time_hm) continue;
         if (nowMin < hm2min(slot.time_hm)) continue;                 // not due yet today
@@ -236,6 +242,7 @@ module.exports = (app, db) => {
           slot_name: slot.name || '',
           entry_date: t.ldate,
           user_id: juid,
+          categories: jCats,
         });
       }
     }

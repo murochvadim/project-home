@@ -218,15 +218,16 @@
       <div id="pvj-today"><div style="color:#aaa;">Loading…</div></div>
     </div>
     <div class="card" style="margin-bottom:14px;">
-      <div style="display:flex; align-items:center; gap:10px;">
-        <h2 style="margin:0;">Mood trend</h2>
-        <select id="pvj-range" onchange="pvJournalRenderChart()" style="padding:3px 6px; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:4px;">
-          <option value="14">last 14 days</option>
-          <option value="30" selected>last 30 days</option>
-          <option value="90">last 90 days</option>
-        </select>
+      <h2 style="margin-top:0;">🔍 Search</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <select id="pvj-s-cat" style="padding:5px 8px; font-size:0.85rem; border:1px solid #d0cbc4; border-radius:4px;"><option value="">All categories</option></select>
+        <input id="pvj-s-q" placeholder="words…" onkeydown="if(event.key==='Enter')pvJournalSearch()" style="flex:1; min-width:140px; padding:5px 8px; border:1px solid #d0cbc4; border-radius:4px;">
+        <label style="font-size:0.8rem; color:#555;">from <input id="pvj-s-from" type="date" style="padding:4px 6px; border:1px solid #d0cbc4; border-radius:4px;"></label>
+        <label style="font-size:0.8rem; color:#555;">to <input id="pvj-s-to" type="date" style="padding:4px 6px; border:1px solid #d0cbc4; border-radius:4px;"></label>
+        <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvJournalSearch()">Search</button>
+        <button class="btn btn-secondary btn-sm" onclick="pvJournalSearchClear()">Clear</button>
       </div>
-      <div style="height:180px; margin-top:10px;"><canvas id="pvj-chart"></canvas></div>
+      <div id="pvj-search-results" style="margin-top:10px;"><div style="color:#aaa;">Enter a filter and press Search.</div></div>
     </div>
     <div class="card">
       <h2 style="margin-top:0;">History</h2>
@@ -315,8 +316,15 @@
       <label style="display:flex; align-items:center; gap:8px; font-size:0.92rem; margin-bottom:12px;">
         <input id="pvj-enabled" type="checkbox"> Enable daily-journal reminders
       </label>
+      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">⏰ Reminder times</div>
       <div id="pvj-slots" style="margin-bottom:8px;"></div>
       <button class="btn btn-secondary btn-sm" onclick="pvJournalCfgAddSlot()">+ Add reminder</button>
+      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🏷 Categories</div>
+      <p style="font-size:0.82rem; color:#777; line-height:1.4; margin:0 0 8px;">
+        Divide each journal entry into your own sections (e.g. <i>Politics · Weather · Special things</i>) — every reminder shows one box per category. Add as many as you like.
+      </p>
+      <div id="pvj-cats" style="margin-bottom:8px;"></div>
+      <button class="btn btn-secondary btn-sm" onclick="pvJournalCatAdd()">+ Add category</button>
       <div style="display:flex; align-items:center; gap:10px; margin-top:14px;">
         <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvJournalCfgSave()">Save</button>
         <span id="pvj-cfg-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
@@ -559,9 +567,9 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/reminders-badge.js?v=4"></script>
+<script src="js/reminders-badge.js?v=6"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/privacy.js?v=78"></script>
+<script src="js/privacy.js?v=82"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>

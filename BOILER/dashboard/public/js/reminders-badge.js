@@ -3,11 +3,11 @@
 // renders a fixed top-right row: [journal capture panel] [red reminders badge].
 // The red badge lists due items (pills / weight-BP / water / exercise) with
 // Clear/Delay. Journal items (kind:'journal') render in the WIDE teal panel to
-// its LEFT — an RTL Hebrew note + a 😞→😄 mood + Save/Skip/Later. Settings live
-// in Privacy → Settings (dashboard_settings.reminders + .journal).
+// its LEFT — one RTL Hebrew note per category ("gloomy") + Save/Skip/Later.
+// Settings live in Privacy → Settings (dashboard_settings.reminders + .journal).
 (function () {
   const POLL_MS = 30000;
-  const MOODS = ['😞', '😕', '😐', '🙂', '😄'];   // 1..5
+  const MOODS = ['😞', '😕', '😐', '🙂', '😄'];   // 1..5 — ONE mood per reminder capture
   const SLUG = (() => {
     let p = (location.pathname || '').split('/').pop() || 'index.html';
     if (!p) p = 'index.html';
@@ -53,28 +53,39 @@
   function renderJournal(items) {
     // Signature guard: don't re-render (and clobber what the user is typing) while
     // the same set of journal slots is due — only rebuild when a slot appears/goes.
-    const sig = items.map(i => i.rkey).sort().join('|');
+    const sig = items.map(i => i.rkey + ':' + (i.categories || []).map(c => c.id).join(',')).sort().join('|');
     if (!items.length) { journalEl.style.display = 'none'; journalEl.innerHTML = ''; _jsig = ''; return; }
     if (sig === _jsig && journalEl.style.display !== 'none') return;
     _jsig = sig;
     journalEl.style.display = 'block';
-    journalEl.innerHTML = items.map(it => `
+    journalEl.innerHTML = items.map(it => {
+      // categories ("gloomys") divide the capture — one box each. Fall back to a
+      // single General category so the panel always works if none configured yet.
+      const cats = (Array.isArray(it.categories) && it.categories.length)
+        ? it.categories : [{ id: 'general', name: 'General' }];
+      const boxes = cats.map(c => `
+        <div style="margin-bottom:6px;">
+          <div style="font-size:0.74rem;font-weight:600;opacity:.9;margin-bottom:2px;">${esc(c.name)}</div>
+          <textarea dir="rtl" rows="2" data-cat="${esc(c.id)}" data-catname="${esc(c.name)}" placeholder="…"
+            style="width:100%;box-sizing:border-box;resize:vertical;border:none;border-radius:6px;padding:6px 9px;font-size:0.9rem;line-height:1.4;color:#0b3b37;background:#f0fdfa;"></textarea>
+        </div>`).join('');
+      return `
       <div class="jrn-item" data-rk="${esc(it.rkey)}" data-uid="${esc(it.user_id)}"
            data-sid="${esc(it.slot_id)}" data-sname="${esc(it.slot_name)}" data-date="${esc(it.entry_date)}"
            style="padding:4px 0;">
         <div style="font-weight:700;margin-bottom:6px;">📓 ${esc(it.slot_name || 'Journal')} · <span style="opacity:.85;font-weight:400;">${esc(it.entry_date)}</span></div>
-        <textarea dir="rtl" rows="4" placeholder="מה קרה היום?…"
-          style="width:100%;box-sizing:border-box;resize:vertical;border:none;border-radius:6px;padding:7px 9px;font-size:0.92rem;line-height:1.4;color:#0b3b37;background:#f0fdfa;"></textarea>
+        ${boxes}
         <div class="jrn-mood" style="display:flex;gap:4px;justify-content:center;margin:8px 0;">
           ${MOODS.map((m, i) => `<button type="button" data-mood="${i + 1}" title="${i + 1}/5"
             style="font-size:1.35rem;line-height:1;background:rgba(255,255,255,.12);border:2px solid transparent;border-radius:8px;cursor:pointer;padding:2px 5px;">${m}</button>`).join('')}
         </div>
-        <div style="display:flex;gap:6px;">
+        <div style="display:flex;gap:6px;margin-top:2px;">
           <button data-jact="save"  style="flex:1;background:#fff;color:#0f766e;border:none;border-radius:5px;cursor:pointer;font-weight:700;font-size:0.8rem;padding:5px 0;">💾 שמור</button>
           <button data-jact="skip"  style="background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:5px;cursor:pointer;font-size:0.78rem;padding:5px 9px;">דלג</button>
           <button data-jact="later" style="background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:5px;cursor:pointer;font-size:0.78rem;padding:5px 9px;">אחר כך</button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     journalEl.querySelectorAll('.jrn-item').forEach(el => {
       el.querySelectorAll('.jrn-mood button').forEach(mb => mb.addEventListener('click', () => {
         el.dataset.mood = mb.getAttribute('data-mood');
@@ -88,17 +99,30 @@
   }
 
   async function jSave(el) {
-    const comment = (el.querySelector('textarea').value || '').trim();
-    const mood = el.dataset.mood ? parseInt(el.dataset.mood) : null;
-    if (!comment && !mood) { el.querySelector('textarea').focus(); return; }
+    const mood = el.dataset.mood ? parseInt(el.dataset.mood) : null;   // one mood per reminder
+    const post = (cat, name, comment) => fetch('/api/journal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: el.dataset.uid, entry_date: el.dataset.date,
+        slot_id: el.dataset.sid, slot_name: el.dataset.sname,
+        category_id: cat, category_name: name, comment, mood,
+      }),
+    });
+    // POST each non-empty category box (≥1 filled = the slot's nudge clears).
+    const posts = [];
+    el.querySelectorAll('textarea[data-cat]').forEach(ta => {
+      const comment = (ta.value || '').trim();
+      if (!comment) return;
+      posts.push(post(ta.dataset.cat, ta.dataset.catname, comment));
+    });
+    // mood-only capture (no category text) → attach the mood to the first category
+    if (!posts.length && mood) {
+      const ta = el.querySelector('textarea[data-cat]');
+      if (ta) posts.push(post(ta.dataset.cat, ta.dataset.catname, ''));
+    }
+    if (!posts.length) { el.querySelector('textarea[data-cat]')?.focus(); return; }
     try {
-      await fetch('/api/journal', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: el.dataset.uid, entry_date: el.dataset.date,
-          slot_id: el.dataset.sid, slot_name: el.dataset.sname, comment, mood,
-        }),
-      });
+      await Promise.all(posts);
       window.dispatchEvent(new CustomEvent('ph-journal-changed'));
     } catch (e) { /* ignore */ }
     _jsig = '';        // force a rebuild so the saved slot drops off

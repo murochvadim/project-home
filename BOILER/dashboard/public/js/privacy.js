@@ -912,35 +912,54 @@ async function pvDeleteDoc(id) {
 }
 
 // ─── Daily Journal (Privacy → Daily Journal tab) ─────────────────────────────
-const PVJ_MOODS = ['😞', '😕', '😐', '🙂', '😄'];   // 1..5
+const PVJ_MOODS = ['😞', '😕', '😐', '🙂', '😄'];   // 1..5 — ONE mood per reminder capture
 const PVJ_UID = 1;                                   // Vadim (household_users.id)
-let pvjCfg = { enabled: false, user_id: PVJ_UID, slots: [] };
+const PVJ_DEFAULT_CATS = [{ id: 'general', name: 'General' }];   // seed when none set
+let pvjCfg = { enabled: false, user_id: PVJ_UID, slots: [], categories: [] };
 let pvjEntries = [];
-let _pvjChart = null;
 const pvjEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function _pvjFrom(days) { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); }
+// active category list (falls back to a single "General" so the journal always works)
+function pvjCats() { return (pvjCfg.categories && pvjCfg.categories.length) ? pvjCfg.categories : PVJ_DEFAULT_CATS; }
 
 async function pvJournalLoadCfg() {
   try {
     const j = await (await fetch('/api/dashboard-settings/journal')).json();
     const v = (j && j.value) || {};
-    pvjCfg = { enabled: v.enabled === true, user_id: Number(v.user_id) || PVJ_UID, slots: Array.isArray(v.slots) ? v.slots : [] };
-  } catch (e) { pvjCfg = { enabled: false, user_id: PVJ_UID, slots: [] }; }
+    pvjCfg = { enabled: v.enabled === true, user_id: Number(v.user_id) || PVJ_UID,
+               slots: Array.isArray(v.slots) ? v.slots : [],
+               categories: Array.isArray(v.categories) ? v.categories : [] };
+  } catch (e) { pvjCfg = { enabled: false, user_id: PVJ_UID, slots: [], categories: [] }; }
   pvJournalCfgRender();
 }
 function pvJournalCfgRender() {
   const en = document.getElementById('pvj-enabled'); if (en) en.checked = !!pvjCfg.enabled;
-  const box = document.getElementById('pvj-slots'); if (!box) return;
-  if (!pvjCfg.slots.length) { box.innerHTML = '<div style="font-size:0.82rem;color:#aaa;margin:6px 0;">No reminders yet — click “+ Add reminder”.</div>'; return; }
-  box.innerHTML = pvjCfg.slots.map((s, i) => `
-    <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-      <input value="${pvjEsc(s.name || '')}" data-pvj-i="${i}" data-pvj-k="name" placeholder="name (e.g. בוקר)"
-        style="flex:1; padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
-      <input type="time" value="${pvjEsc(s.time_hm || '')}" data-pvj-i="${i}" data-pvj-k="time_hm"
-        style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
-      <button onclick="pvJournalCfgRemoveSlot(${i})" title="Remove"
-        style="padding:3px 9px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
-    </div>`).join('');
+  const box = document.getElementById('pvj-slots');
+  if (box) {
+    box.innerHTML = !pvjCfg.slots.length
+      ? '<div style="font-size:0.82rem;color:#aaa;margin:6px 0;">No reminders yet — click “+ Add reminder”.</div>'
+      : pvjCfg.slots.map((s, i) => `
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+          <input value="${pvjEsc(s.name || '')}" data-pvj-i="${i}" data-pvj-k="name" placeholder="name (e.g. בוקר)"
+            style="flex:1; padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+          <input type="time" value="${pvjEsc(s.time_hm || '')}" data-pvj-i="${i}" data-pvj-k="time_hm"
+            style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+          <button onclick="pvJournalCfgRemoveSlot(${i})" title="Remove"
+            style="padding:3px 9px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
+        </div>`).join('');
+  }
+  const cbox = document.getElementById('pvj-cats');
+  if (cbox) {
+    cbox.innerHTML = !pvjCfg.categories.length
+      ? '<div style="font-size:0.82rem;color:#aaa;margin:6px 0;">No categories yet — a single “General” is used until you add some.</div>'
+      : pvjCfg.categories.map((c, i) => `
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+          <input value="${pvjEsc(c.name || '')}" data-pvjc-i="${i}" placeholder="category (e.g. פוליטיקה)"
+            style="flex:1; padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
+          <button onclick="pvJournalCatRemove(${i})" title="Remove"
+            style="padding:3px 9px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
+        </div>`).join('');
+  }
 }
 function pvJournalCfgCollect() {
   const slots = pvjCfg.slots.map(s => ({ ...s }));
@@ -954,11 +973,27 @@ function pvJournalCfgCollect() {
     name: (s.name || '').trim(), time_hm: s.time_hm,
   }));
 }
-function pvJournalCfgAddSlot() { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.slots.push({ id: 's' + Math.random().toString(36).slice(2, 9), name: '', time_hm: '12:00' }); pvJournalCfgRender(); }
-function pvJournalCfgRemoveSlot(i) { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.slots.splice(i, 1); pvJournalCfgRender(); }
+// Categories keep a STABLE id across renames (entries link by id) — the name input
+// only edits the label. Rows with a blank name are dropped on collect/save.
+function pvJournalCatCollect() {
+  const cats = pvjCfg.categories.map(c => ({ ...c }));
+  document.querySelectorAll('[data-pvjc-i]').forEach(inp => {
+    const i = parseInt(inp.dataset.pvjcI);
+    while (cats.length <= i) cats.push({});
+    cats[i].name = inp.value;
+  });
+  return cats.filter(c => (c.name || '').trim()).map(c => ({
+    id: c.id || ('c' + Math.random().toString(36).slice(2, 9)),
+    name: (c.name || '').trim(),
+  }));
+}
+function pvJournalCfgAddSlot() { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.categories = pvJournalCatCollect(); pvjCfg.slots.push({ id: 's' + Math.random().toString(36).slice(2, 9), name: '', time_hm: '12:00' }); pvJournalCfgRender(); }
+function pvJournalCfgRemoveSlot(i) { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.categories = pvJournalCatCollect(); pvjCfg.slots.splice(i, 1); pvJournalCfgRender(); }
+function pvJournalCatAdd() { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.categories = pvJournalCatCollect(); pvjCfg.categories.push({ id: 'c' + Math.random().toString(36).slice(2, 9), name: '' }); pvJournalCfgRender(); }
+function pvJournalCatRemove(i) { pvjCfg.slots = pvJournalCfgCollect(); pvjCfg.categories = pvJournalCatCollect(); pvjCfg.categories.splice(i, 1); pvJournalCfgRender(); }
 async function pvJournalCfgSave() {
   const st = document.getElementById('pvj-cfg-status');
-  const value = { enabled: document.getElementById('pvj-enabled').checked, user_id: PVJ_UID, slots: pvJournalCfgCollect() };
+  const value = { enabled: document.getElementById('pvj-enabled').checked, user_id: PVJ_UID, slots: pvJournalCfgCollect(), categories: pvJournalCatCollect() };
   try {
     const r = await fetch('/api/dashboard-settings/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
@@ -969,23 +1004,36 @@ async function pvJournalCfgSave() {
 
 async function pvJournalOnShow() {
   await pvJournalLoadCfg();
+  pvJournalSearchCats();
   await pvJournalRenderToday();
   await pvJournalLoadEntries();
-  pvJournalRenderChart(); pvJournalRenderTimeline();
+  pvJournalRenderTimeline();
 }
 async function pvJournalRenderToday() {
   const box = document.getElementById('pvj-today'); if (!box) return;
   let today = [];
   try { today = await (await fetch(`/api/journal/today?user_id=${PVJ_UID}`)).json(); } catch (e) { today = []; }
-  const byId = {}; (today || []).forEach(e => { byId[e.slot_id] = e; });
+  // key existing entries by slot → category
+  const byId = {}; (today || []).forEach(e => { (byId[e.slot_id] = byId[e.slot_id] || {})[e.category_id] = e; });
   if (!pvjCfg.slots.length) { box.innerHTML = '<div style="font-size:0.86rem;color:#888;">No journal reminders configured — set them in <b>Settings → 📓 Daily Journal reminders</b>.</div>'; return; }
+  const cats = pvjCats();
   box.innerHTML = pvjCfg.slots.map(s => {
-    const e = byId[s.id] || {}; const mood = Number(e.mood) || 0;
+    const bySlot = byId[s.id] || {};
+    // one mood per reminder — read it from any existing category row of this slot
+    const mood = Number(Object.values(bySlot).map(e => e.mood).find(m => m != null)) || 0;
+    const catBoxes = cats.map(c => {
+      const e = bySlot[c.id] || {};
+      return `<div style="margin-bottom:8px;">
+        <div style="font-size:0.8rem; color:#0f766e; font-weight:600; margin-bottom:3px;">${pvjEsc(c.name)}</div>
+        <textarea dir="rtl" rows="2" data-cat="${pvjEsc(c.id)}" data-catname="${pvjEsc(c.name)}" data-eid="${e.id != null ? e.id : ''}"
+          placeholder="…" style="width:100%; box-sizing:border-box; resize:vertical; border:1px solid #ddd; border-radius:6px; padding:6px 9px; font-size:0.95rem;">${pvjEsc(e.comment || '')}</textarea>
+      </div>`;
+    }).join('');
     return `<div style="border:1px solid #eee; border-radius:8px; padding:10px 12px; margin-bottom:10px;" data-pvj-slot="${pvjEsc(s.id)}" data-pvj-name="${pvjEsc(s.name)}"${mood ? ` data-mood="${mood}"` : ''}>
-      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;"><b>${pvjEsc(s.name || 'Journal')}</b><span style="font-size:0.78rem;color:#999;">${pvjEsc(s.time_hm || '')}</span></div>
-      <textarea dir="rtl" rows="3" placeholder="מה קרה היום?…" style="width:100%; box-sizing:border-box; resize:vertical; border:1px solid #ddd; border-radius:6px; padding:7px 9px; font-size:0.95rem;">${pvjEsc(e.comment || '')}</textarea>
-      <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
-        <div class="pvj-mood" style="display:flex; gap:3px;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><b>${pvjEsc(s.name || 'Journal')}</b><span style="font-size:0.78rem;color:#999;">${pvjEsc(s.time_hm || '')}</span></div>
+      ${catBoxes}
+      <div style="display:flex; align-items:center; gap:10px; margin-top:4px;">
+        <div class="pvj-mood" title="Mood for this reminder" style="display:flex; gap:3px;">
           ${PVJ_MOODS.map((m, i) => `<button type="button" data-mood="${i + 1}" style="font-size:1.3rem; background:${mood === i + 1 ? '#dcfce7' : '#f6f6f6'}; border:2px solid ${mood === i + 1 ? '#16a34a' : 'transparent'}; border-radius:7px; cursor:pointer; padding:2px 5px;">${m}</button>`).join('')}
         </div>
         <button onclick="pvJournalSaveToday(this)" class="btn btn-sm" style="background:#0f766e; color:#fff; margin-left:auto;">💾 Save</button>
@@ -1003,57 +1051,105 @@ async function pvJournalRenderToday() {
 }
 async function pvJournalSaveToday(btn) {
   const row = btn.closest('[data-pvj-slot]');
-  const comment = (row.querySelector('textarea').value || '').trim();
-  const mood = row.dataset.mood ? parseInt(row.dataset.mood) : null;
   const st = row.querySelector('.pvj-slot-status');
+  const mood = row.dataset.mood ? parseInt(row.dataset.mood) : null;   // one mood per reminder
+  const post = (cat, name, comment) => fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: PVJ_UID, slot_id: row.dataset.pvjSlot, slot_name: row.dataset.pvjName,
+      category_id: cat, category_name: name, comment, mood }) });
+  // Per box: text → upsert; emptied a box that HAD a saved row → delete it; untouched empty → skip.
+  const posts = [];
+  row.querySelectorAll('textarea[data-cat]').forEach(ta => {
+    const comment = (ta.value || '').trim();
+    if (comment) posts.push(post(ta.dataset.cat, ta.dataset.catname, comment));
+    else if (ta.dataset.eid) posts.push(fetch(`/api/journal/${ta.dataset.eid}`, { method: 'DELETE' }));
+  });
+  // mood-only capture (no category text, nothing to delete) → attach the mood to the first category
+  if (!posts.length && mood) {
+    const ta = row.querySelector('textarea[data-cat]');
+    if (ta) posts.push(post(ta.dataset.cat, ta.dataset.catname, ''));
+  }
+  if (!posts.length) { row.querySelector('textarea[data-cat]')?.focus(); return; }
   try {
-    const r = await fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: PVJ_UID, slot_id: row.dataset.pvjSlot, slot_name: row.dataset.pvjName, comment, mood }) });
-    if (!r.ok) throw new Error(r.status);
+    const rs = await Promise.all(posts);
+    if (rs.some(r => !r.ok)) throw new Error('save');
     if (st) { st.textContent = '✓'; setTimeout(() => { st.textContent = ''; }, 1500); }
-    await pvJournalLoadEntries(); pvJournalRenderChart(); pvJournalRenderTimeline();
+    await pvJournalRenderToday();
+    await pvJournalLoadEntries(); pvJournalRenderTimeline();
   } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Failed'; } }
 }
 async function pvJournalLoadEntries() {
   try { pvjEntries = await (await fetch(`/api/journal?user_id=${PVJ_UID}&from=${_pvjFrom(90)}`)).json(); }
   catch (e) { pvjEntries = []; }
 }
-function pvJournalRenderChart() {
-  const cv = document.getElementById('pvj-chart'); if (!cv || typeof Chart === 'undefined') return;
-  const days = parseInt(document.getElementById('pvj-range')?.value) || 30;
-  const cutoff = _pvjFrom(days), byDay = {};
-  (pvjEntries || []).filter(e => e.entry_date >= cutoff && e.mood != null).forEach(e => { (byDay[e.entry_date] = byDay[e.entry_date] || []).push(Number(e.mood)); });
-  const labels = Object.keys(byDay).sort();
-  const data = labels.map(d => { const a = byDay[d]; return a.reduce((x, y) => x + y, 0) / a.length; });
-  if (_pvjChart) _pvjChart.destroy();
-  _pvjChart = new Chart(cv, {
-    type: 'line',
-    data: { labels, datasets: [{ label: 'Mood', data, borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', tension: 0.3, fill: true, pointRadius: 3 }] },
-    options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 1, max: 5, ticks: { stepSize: 1, callback: (v) => PVJ_MOODS[v - 1] || v } } }, plugins: { legend: { display: false } } },
-  });
+// Shared renderer (History + Search): group Day → Reminder(slot). The mood is
+// shown ONCE per reminder (it's a single value for the whole capture), with its
+// categories listed underneath — never a mood-per-category.
+function _pvjEntryList(rows) {
+  if (!rows.length) return '<div style="color:#aaa;">No entries.</div>';
+  const byDay = {}; rows.forEach(e => { (byDay[e.entry_date] = byDay[e.entry_date] || []).push(e); });
+  const days = Object.keys(byDay).sort().reverse();
+  return days.map(d => {
+    const bySlot = {}; byDay[d].forEach(e => { (bySlot[e.slot_id] = bySlot[e.slot_id] || []).push(e); });
+    const blocks = Object.keys(bySlot).map(sid => {
+      const es = bySlot[sid];
+      const mood = Number(es.map(e => e.mood).find(m => m != null)) || 0;   // one per reminder
+      const lines = es.map(e => `<div style="display:flex; gap:8px; align-items:flex-start; margin:2px 0;">
+        <span style="font-size:0.72rem; color:#0f766e; background:#e6f4f1; border-radius:4px; padding:1px 6px; white-space:nowrap;">${pvjEsc(e.category_name || 'General')}</span>
+        <span dir="rtl" style="flex:1; text-align:right;">${pvjEsc(e.comment || '')}</span>
+        <button onclick="pvJournalDelEntry(${e.id})" title="Delete" style="border:none;background:none;color:#c0392b;cursor:pointer;font-size:0.8rem;">✕</button>
+      </div>`).join('');
+      return `<div style="margin:4px 0 8px;">
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:2px;">
+          <span style="font-size:1.15rem;" title="mood for this reminder">${mood ? PVJ_MOODS[mood - 1] : '·'}</span>
+          <span style="font-size:0.78rem; color:#999;">${pvjEsc(es[0].slot_name || '')}</span>
+        </div>
+        <div style="padding-left:28px;">${lines}</div>
+      </div>`;
+    }).join('');
+    return `<div style="border-top:1px solid #f0eee8; padding:8px 0;">
+      <div style="font-weight:700; color:#0f766e; margin-bottom:4px;">${pvjEsc(d)}</div>
+      ${blocks}
+    </div>`;
+  }).join('');
 }
 function pvJournalRenderTimeline() {
   const box = document.getElementById('pvj-timeline'); if (!box) return;
-  if (!(pvjEntries || []).length) { box.innerHTML = '<div style="color:#aaa;">No entries yet.</div>'; return; }
-  const byDay = {}; pvjEntries.forEach(e => { (byDay[e.entry_date] = byDay[e.entry_date] || []).push(e); });
-  const days = Object.keys(byDay).sort().reverse();
-  box.innerHTML = days.map(d => `
-    <div style="border-top:1px solid #f0eee8; padding:8px 0;">
-      <div style="font-weight:700; color:#0f766e; margin-bottom:4px;">${pvjEsc(d)}</div>
-      ${byDay[d].map(e => `<div style="display:flex; gap:8px; align-items:flex-start; margin:3px 0;">
-        <span style="font-size:1.1rem;">${e.mood ? PVJ_MOODS[e.mood - 1] : '·'}</span>
-        <span style="font-size:0.78rem; color:#999; min-width:70px;">${pvjEsc(e.slot_name || '')}</span>
-        <span dir="rtl" style="flex:1; text-align:right;">${pvjEsc(e.comment || '')}</span>
-        <button onclick="pvJournalDelEntry(${e.id})" title="Delete" style="border:none;background:none;color:#c0392b;cursor:pointer;font-size:0.8rem;">✕</button>
-      </div>`).join('')}
-    </div>`).join('');
+  box.innerHTML = _pvjEntryList(pvjEntries || []);
+}
+// ── Search: by category + words + date range (full history, server-side) ──
+function pvJournalSearchCats() {
+  const sel = document.getElementById('pvj-s-cat'); if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All categories</option>' +
+    pvjCats().map(c => `<option value="${pvjEsc(c.id)}">${pvjEsc(c.name)}</option>`).join('');
+  sel.value = cur;
+}
+async function pvJournalSearch() {
+  const box = document.getElementById('pvj-search-results'); if (!box) return;
+  const cat = document.getElementById('pvj-s-cat')?.value || '';
+  const q = document.getElementById('pvj-s-q')?.value.trim() || '';
+  const from = document.getElementById('pvj-s-from')?.value || '';
+  const to = document.getElementById('pvj-s-to')?.value || '';
+  const p = new URLSearchParams({ user_id: PVJ_UID });
+  if (cat) p.set('cat', cat); if (q) p.set('q', q); if (from) p.set('from', from); if (to) p.set('to', to);
+  box.innerHTML = '<div style="color:#aaa;">Searching…</div>';
+  let rows = [];
+  try { rows = await (await fetch(`/api/journal/search?${p}`)).json(); } catch (e) { rows = []; }
+  box.innerHTML = _pvjEntryList(Array.isArray(rows) ? rows : []);
+}
+function pvJournalSearchClear() {
+  ['pvj-s-cat', 'pvj-s-q', 'pvj-s-from', 'pvj-s-to'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const box = document.getElementById('pvj-search-results'); if (box) box.innerHTML = '<div style="color:#aaa;">Enter a filter and press Search.</div>';
 }
 async function pvJournalDelEntry(id) {
   if (!confirm('Delete this journal entry?')) return;
   await fetch(`/api/journal/${id}`, { method: 'DELETE' });
-  await pvJournalLoadEntries(); pvJournalRenderToday(); pvJournalRenderChart(); pvJournalRenderTimeline();
+  await pvJournalLoadEntries(); pvJournalRenderToday(); pvJournalRenderTimeline();
+  // if the Search results are showing, refresh them too (the row may be there)
+  const sr = document.getElementById('pvj-search-results');
+  if (sr && sr.querySelector('[onclick^="pvJournalDelEntry"]')) pvJournalSearch();
 }
 // Refresh the tab after a capture-panel Save (reminders-badge dispatches this).
 window.addEventListener('ph-journal-changed', () => {
-  if (document.getElementById('tab-journal')) { pvJournalRenderToday(); pvJournalLoadEntries().then(() => { pvJournalRenderChart(); pvJournalRenderTimeline(); }); }
+  if (document.getElementById('tab-journal')) { pvJournalRenderToday(); pvJournalLoadEntries().then(() => pvJournalRenderTimeline()); }
 });
