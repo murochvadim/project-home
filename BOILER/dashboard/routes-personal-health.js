@@ -283,6 +283,7 @@ module.exports = (app, db) => {
   // game shell + renderBalance work unchanged, plus first-class columns for the card.
   const _boboCols = `b.id, b.profile_id, p.user_id,
                 to_char(b.measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+                b.measured_at AS tested_at,   -- renderBalance() reads tested_at (dashboard detail modal)
                 b.game, b.level, b.score, b.duration_s, b.calories,
                 b.details AS results, jsonb_build_object('game', b.game) AS meta, h.name AS member_name`;
   app.get('/api/personal-health/bobo', async (req, res) => {
