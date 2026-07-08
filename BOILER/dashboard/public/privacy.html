@@ -248,7 +248,6 @@
         <button id="ppl-view-group" onclick="pvPeopleSetView('group')" style="border:none; padding:5px 12px; cursor:pointer; font-size:0.82rem; background:#eee; color:#555;">Groups</button>
       </div>
       <label title="In Groups view, gray out people with no connection outside their group" style="font-size:0.78rem; color:#555; display:inline-flex; align-items:center; gap:4px; cursor:pointer;"><input type="checkbox" id="ppl-dim-unconn" onchange="pvPeopleToggleDim(this.checked)"> gray unconnected</label>
-      <span id="ppl-totals" style="font-size:0.8rem; color:#555;"></span>
       <span style="font-size:0.72rem; color:#aaa; margin-left:auto;">drag to arrange · click icon = open · click name = highlight</span>
     </div>
     <div style="position:relative;">
@@ -256,6 +255,10 @@
         <button onclick="pvPeopleAddOpen()" title="Add person" style="width:38px; height:38px; border-radius:50%; border:none; background:#0f766e; color:#fff; font-size:1.3rem; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 6px rgba(0,0,0,.18);">＋</button>
         <button onclick="pvPeopleSearchToggle()" title="Search" style="width:38px; height:38px; border-radius:50%; border:none; background:#64748b; color:#fff; font-size:1.05rem; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 6px rgba(0,0,0,.18);">🔍</button>
         <input id="ppl-filter-q" placeholder="search…" oninput="pvPeopleRender()" style="display:none; padding:7px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.88rem; width:190px; box-shadow:0 2px 10px rgba(0,0,0,.18);">
+        <span id="ppl-total-wrap" style="display:inline-flex; align-items:baseline; gap:7px;">
+          <span style="font-size:1.05rem; color:#555; font-weight:700;">TOTAL</span>
+          <span id="ppl-total-big" style="font-size:1.6rem; font-weight:800; color:#0f766e; line-height:1;" title="">—</span>
+        </span>
       </div>
       <div id="ppl-canvas" style="position:relative; min-height:76vh; border:1px dashed #e2ded7; border-radius:10px; overflow:auto; background:#fbfaf8;"><div style="color:#aaa; padding:12px;">Loading…</div></div>
     </div>
@@ -356,47 +359,51 @@
       </div>
     </div>
 
-    <div class="card" style="margin:0;">
+    <div class="card" style="margin:0; grid-column:1 / -1;">
       <h2 style="margin-top:0;">👥 People</h2>
-      <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
-        <b>Categories</b> color the person icons on the People graph; <b>relation types</b> set the
-        line <b>color + style</b> drawn between connected people. Add / rename / remove as many as you like.
-      </p>
-      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">🏷 Categories (name + color)</div>
-      <div id="pplset-cats" style="margin-bottom:8px;"></div>
-      <button class="btn btn-secondary btn-sm" onclick="pvPeopleCatAdd()">+ Add category</button>
-      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🔗 Relation types (name + line color + style)</div>
-      <div id="pplset-rels" style="margin-bottom:8px;"></div>
-      <button class="btn btn-secondary btn-sm" onclick="pvPeopleRelTypeAdd()">+ Add relation type</button>
-      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🎨 Connection line styles (Groups view)</div>
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-        <span style="min-width:132px; font-size:0.82rem;">🫂 Group ↔ group</span>
-        <input type="color" id="pplset-gl-color" value="#64748b" title="line color" style="width:38px; height:30px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
-        <select id="pplset-gl-style" style="padding:5px; border:1px solid #ccc; border-radius:4px;"><option value="solid">solid</option><option value="dashed">dashed</option><option value="dotted">dotted</option></select>
+      <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:10px 18px; align-items:start; font-size:0.8rem;">
+        <div>
+          <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">🏷 Categories (name + color)</div>
+          <div id="pplset-cats" style="margin-bottom:6px;"></div>
+          <button class="btn btn-secondary btn-sm" onclick="pvPeopleCatAdd()">+ Add category</button>
+        </div>
+        <div>
+          <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">🔗 Relation types (name + color + style)</div>
+          <div id="pplset-rels" style="margin-bottom:6px;"></div>
+          <button class="btn btn-secondary btn-sm" onclick="pvPeopleRelTypeAdd()">+ Add relation type</button>
+        </div>
+        <div>
+          <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">🎨 Connection line styles (Groups)</div>
+          <div style="display:grid; grid-template-columns:minmax(0,1fr) 28px auto; gap:6px 6px; align-items:center;">
+            <span style="font-size:0.78rem;" title="Group ↔ group line">🫂 Group → Group</span>
+            <input type="color" id="pplset-gl-color" value="#64748b" title="line color" style="width:28px; height:26px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
+            <select id="pplset-gl-style" style="padding:3px 2px; font-size:0.75rem; border:1px solid #ccc; border-radius:4px;"><option value="solid">solid</option><option value="dashed">dashed</option><option value="dotted">dotted</option></select>
+            <span style="font-size:0.78rem;" title="Person → group line">👤 Person → Group</span>
+            <input type="color" id="pplset-pgl-color" value="#0ea5e9" title="line color" style="width:28px; height:26px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
+            <select id="pplset-pgl-style" style="padding:3px 2px; font-size:0.75rem; border:1px solid #ccc; border-radius:4px;"><option value="solid">solid</option><option value="dashed">dashed</option><option value="dotted">dotted</option></select>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">🫂 Group ↔ group connections</div>
+          <div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+            <select id="pplset-ge-a" style="min-width:0; max-width:100%; padding:4px; font-size:0.76rem; border:1px solid #ccc; border-radius:4px;"></select>
+            <span style="color:#888;">—</span>
+            <select id="pplset-ge-b" style="min-width:0; max-width:100%; padding:4px; font-size:0.76rem; border:1px solid #ccc; border-radius:4px;"></select>
+            <button class="btn btn-secondary btn-sm" onclick="pvPeopleGroupEdgeAdd()">+ Connect</button>
+          </div>
+          <div id="pplset-gedges"></div>
+        </div>
+        <div>
+          <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin-bottom:6px;">👤 Person → group connections</div>
+          <div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+            <select id="pplset-pg-p" style="min-width:0; max-width:100%; padding:4px; font-size:0.76rem; border:1px solid #ccc; border-radius:4px;"></select>
+            <span style="color:#888;">→</span>
+            <select id="pplset-pg-g" style="min-width:0; max-width:100%; padding:4px; font-size:0.76rem; border:1px solid #ccc; border-radius:4px;"></select>
+            <button class="btn btn-secondary btn-sm" onclick="pvPeoplePGEdgeAdd()">+ Connect</button>
+          </div>
+          <div id="pplset-pgedges"></div>
+        </div>
       </div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <span style="min-width:132px; font-size:0.82rem;">👤 Person → group</span>
-        <input type="color" id="pplset-pgl-color" value="#0ea5e9" title="line color" style="width:38px; height:30px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
-        <select id="pplset-pgl-style" style="padding:5px; border:1px solid #ccc; border-radius:4px;"><option value="solid">solid</option><option value="dashed">dashed</option><option value="dotted">dotted</option></select>
-      </div>
-      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🔗 Group connections</div>
-      <p style="font-size:0.8rem; color:#777; line-height:1.4; margin:0 0 8px;">Pick two groups to connect — a line runs <b>name → name</b> between them in <b>Groups</b> view. Only these lines show.</p>
-      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-        <select id="pplset-ge-a" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
-        <span style="color:#888;">—</span>
-        <select id="pplset-ge-b" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
-        <button class="btn btn-secondary btn-sm" onclick="pvPeopleGroupEdgeAdd()">+ Connect</button>
-      </div>
-      <div id="pplset-gedges" style="margin-bottom:4px;"></div>
-      <div style="font-size:0.82rem; font-weight:700; color:#0f766e; margin:16px 0 6px;">🔗 Person → group connections</div>
-      <p style="font-size:0.8rem; color:#777; line-height:1.4; margin:0 0 8px;">Connect a single person to a group (e.g. <i>Vadim → Vadim friends</i>) — a line runs from that person to the group box.</p>
-      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-        <select id="pplset-pg-p" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
-        <span style="color:#888;">→</span>
-        <select id="pplset-pg-g" style="padding:5px 8px; border:1px solid #ccc; border-radius:4px;"></select>
-        <button class="btn btn-secondary btn-sm" onclick="pvPeoplePGEdgeAdd()">+ Connect</button>
-      </div>
-      <div id="pplset-pgedges" style="margin-bottom:4px;"></div>
       <div style="display:flex; align-items:center; gap:10px; margin-top:14px;">
         <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvPeopleSettingsSave()">Save</button>
         <span id="pplset-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
@@ -644,7 +651,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="js/privacy.js?v=83"></script>
 <script src="js/privacy-places.js?v=11"></script>
-<script src="js/privacy-people.js?v=17"></script>
+<script src="js/privacy-people.js?v=20"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>

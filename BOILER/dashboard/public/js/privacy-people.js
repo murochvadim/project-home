@@ -147,8 +147,8 @@
     const match = (p) => (!fc || p.category === fc) &&
       (!fq || (`${p.given_name || ''} ${p.family_name || ''} ${p.maiden_name || ''} ${p.relationship_to_me || ''} ${p.notes || ''}`).toLowerCase().includes(fq));
     const rows = _people.filter(match);
-    const tEl = document.getElementById('ppl-totals');
-    if (tEl) tEl.innerHTML = _cats.map(c => `<span style="margin-left:8px; white-space:nowrap;"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c.color};"></span> ${esc(c.name)} ${_people.filter(p => p.category === c.id).length}</span>`).join('') + ` · <b>Total ${_people.length}</b>`;
+    const tEl = document.getElementById('ppl-total-big');
+    if (tEl) { tEl.textContent = _people.length; tEl.title = _cats.map(c => `${c.name}: ${_people.filter(p => p.category === c.id).length}`).join(' · '); }
     box.innerHTML = '';
     if (!rows.length) { box.innerHTML = '<div style="color:#aaa; padding:12px;">No people yet — click ＋ to add someone.</div>'; return; }
 
@@ -519,17 +519,17 @@
   };
   function _renderSettings() {
     const cbox = document.getElementById('pplset-cats');
-    if (cbox) cbox.innerHTML = _cats.map((c, i) => `<div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-      <input value="${esc(c.name || '')}" data-pplc-i="${i}" placeholder="category" style="flex:1; padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
-      <input type="color" value="${esc(c.color || '#9ca3af')}" data-pplcc-i="${i}" title="color" style="width:38px; height:30px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
-      <button onclick="pvPeopleCatRemove(${i})" title="Remove" style="padding:3px 9px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
+    if (cbox) cbox.innerHTML = _cats.map((c, i) => `<div style="display:flex; gap:5px; align-items:center; margin-bottom:5px;">
+      <input value="${esc(c.name || '')}" data-pplc-i="${i}" placeholder="category" style="flex:1; min-width:0; padding:4px 6px; font-size:0.78rem; border:1px solid #ccc; border-radius:4px;">
+      <input type="color" value="${esc(c.color || '#9ca3af')}" data-pplcc-i="${i}" title="color" style="width:28px; height:26px; flex:0 0 auto; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
+      <button onclick="pvPeopleCatRemove(${i})" title="Remove" style="flex:0 0 auto; padding:2px 6px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
     </div>`).join('');
     const rbox = document.getElementById('pplset-rels');
-    if (rbox) rbox.innerHTML = _relTypes.map((r, i) => `<div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-      <input value="${esc(r.name || '')}" data-pplr-i="${i}" placeholder="relation" style="flex:1; padding:5px 8px; border:1px solid #ccc; border-radius:4px;">
-      <input type="color" value="${esc(r.color || '#9ca3af')}" data-pplrc-i="${i}" title="line color" style="width:38px; height:30px; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
-      <select data-pplrs-i="${i}" style="padding:5px; border:1px solid #ccc; border-radius:4px;">${['solid', 'dashed', 'dotted'].map(s => `<option value="${s}"${(r.style || 'solid') === s ? ' selected' : ''}>${s}</option>`).join('')}</select>
-      <button onclick="pvPeopleRelTypeRemove(${i})" title="Remove" style="padding:3px 9px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
+    if (rbox) rbox.innerHTML = _relTypes.map((r, i) => `<div style="display:flex; gap:5px; align-items:center; margin-bottom:5px;">
+      <input value="${esc(r.name || '')}" data-pplr-i="${i}" placeholder="relation" style="flex:1; min-width:0; padding:4px 6px; font-size:0.78rem; border:1px solid #ccc; border-radius:4px;">
+      <input type="color" value="${esc(r.color || '#9ca3af')}" data-pplrc-i="${i}" title="line color" style="width:28px; height:26px; flex:0 0 auto; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
+      <select data-pplrs-i="${i}" style="flex:0 0 auto; padding:3px 2px; font-size:0.75rem; border:1px solid #ccc; border-radius:4px;">${['solid', 'dashed', 'dotted'].map(s => `<option value="${s}"${(r.style || 'solid') === s ? ' selected' : ''}>${s}</option>`).join('')}</select>
+      <button onclick="pvPeopleRelTypeRemove(${i})" title="Remove" style="flex:0 0 auto; padding:2px 5px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
     </div>`).join('');
     const glc = document.getElementById('pplset-gl-color'); if (glc) glc.value = _groupLink.color || '#64748b';
     const gls = document.getElementById('pplset-gl-style'); if (gls) gls.value = _groupLink.style || 'solid';

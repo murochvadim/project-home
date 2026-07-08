@@ -25,7 +25,8 @@ Visualization + Phasing sections below remain the contract for them.
   tab on `privacy.html` — placed after a separator that follows **Doc Create**, grouped with
   Places + Daily Journal (`Sites · Doc Create ‖ Places · Daily Journal · 👥 People · Settings ‖ Budget`).
   **Free-canvas layout (NOT a card, per the user):** a slim top toolbar = **＋ add icon (top-left)** +
-  search + category filter + **totals legend** (count+color per category); below it an open
+  search + category filter + a **big TOTAL** count next to the 🔍 icon (per-category breakdown on hover);
+  below it an open
   `#ppl-canvas` where each person is a **draggable figure = colored icon (photo or 👤 silhouette,
   ring colored by category) + first/last name only** — nothing else on the figure. **Drag to arrange**
   (pointer events; saves `pos_x`/`pos_y` per person via PATCH — migration `002_people_positions.sql`);
