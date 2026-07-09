@@ -66,6 +66,13 @@ module.exports = (app, db) => {
     catch (e) { err(res, e); }
   });
 
+  // Clear the fired-event log (the "Recent notifications" list). Safe: browsers
+  // track their own cursor, so removing old rows never re-pops anything.
+  app.delete('/api/notifications/events', async (_req, res) => {
+    try { const r = await db.query('DELETE FROM notification_events'); res.json({ ok: true, deleted: r.rowCount }); }
+    catch (e) { err(res, e); }
+  });
+
   // ── Popup feed: events newer than the caller's cursor, still fresh, popup-surfaced.
   // The client (notify-toast.js) passes ?since=<last id it showed> and filters by page.
   app.get('/api/notifications/feed', async (req, res) => {

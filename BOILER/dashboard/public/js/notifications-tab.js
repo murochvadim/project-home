@@ -202,6 +202,11 @@
     await fetch('/api/notifications/defs/' + id, { method: 'DELETE' });
     notifLoad();
   };
+  window.notifClearRecent = async function () {
+    if (!confirm('Clear the recent notifications log?')) return;
+    try { await fetch('/api/notifications/events', { method: 'DELETE' }); } catch (e) { /* ignore */ }
+    loadRecent();
+  };
   window.notifTest = async function (id) {
     await fetch('/api/notifications/test/' + id, { method: 'POST' });
     // Ask the popup component to check immediately instead of waiting for its poll.

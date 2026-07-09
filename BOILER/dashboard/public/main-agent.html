@@ -496,7 +496,10 @@
       <div id="notif-list"></div>
     </div>
     <div class="card" style="margin-top:14px;">
-      <h2 style="margin:0 0 8px;">Recent notifications</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <h2 style="margin:0;">Recent notifications</h2>
+        <button onclick="notifClearRecent()" title="Delete the fired-notification log" style="background:#fff;color:#666;border:1px solid #ccc;border-radius:4px;padding:4px 12px;font-size:0.8rem;cursor:pointer;">Clear</button>
+      </div>
       <div id="notif-recent" style="font-size:0.82rem;color:#555;">—</div>
     </div>
   </div>
@@ -596,6 +599,6 @@
 <script src="js/notify-toast.js?v=10"></script>
 <script src="js/main-agent.js?v=117"></script>
 <!-- after main-agent.js so its showTab wrapper chains on (not clobbered by) main-agent's -->
-<script src="js/notifications-tab.js?v=2"></script>
+<script src="js/notifications-tab.js?v=3"></script>
 </body>
 </html>
