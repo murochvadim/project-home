@@ -119,6 +119,7 @@
     <button class="tab-btn" onclick="showTab('base-rules',this)">Base Rule Settings</button>
     <button class="tab-btn" onclick="showTab('corridor-sim',this)">Corridor Simulator</button>
     <button class="tab-btn" onclick="showTab('scenes',this)">Scenes</button>
+    <button class="tab-btn" onclick="showTab('notifications',this)">Notifications</button>
     <div class="time-mode-bar" id="time-mode-bar">
       <span class="tmb-item"><span class="tmb-label">home mode:</span> <span class="tmb-value" id="tmb-home-mode">—</span></span>
       <span class="tmb-sep">·</span>
@@ -481,12 +482,120 @@
     </div>
   </div>
 
+  <div class="tab-panel" id="tab-notifications">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <h2 style="margin:0;">Notifications</h2>
+        <button onclick="notifNew()" style="background:#2b4c7e;color:#fff;border:none;border-radius:4px;padding:5px 14px;font-size:0.82rem;cursor:pointer;">+ Add notification</button>
+      </div>
+      <p style="margin:0 0 12px;color:#666;font-size:0.82rem;">
+        Get told when something happens. Each notification = a <b>trigger</b> (what makes it fire) +
+        optional <b>conditions</b> + <b>when</b> you're told. Shows as a popup on the chosen pages.
+        <i>Phone notifications come later.</i>
+      </p>
+      <div id="notif-list"></div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <h2 style="margin:0 0 8px;">Recent notifications</h2>
+      <div id="notif-recent" style="font-size:0.82rem;color:#555;">—</div>
+    </div>
+  </div>
+
+  <!-- Notification editor modal -->
+  <div id="notif-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:0; width:560px; max-width:94vw; max-height:92vh; overflow:auto; box-shadow:0 8px 30px rgba(0,0,0,0.3);">
+      <div style="background:#2b4c7e; color:#fff; padding:12px 18px; border-radius:10px 10px 0 0; display:flex; justify-content:space-between; align-items:center;">
+        <h3 id="notif-modal-title" style="margin:0; font-size:1rem;">New notification</h3>
+        <span style="cursor:pointer; font-size:1.2rem;" onclick="notifCloseModal()">&times;</span>
+      </div>
+      <div style="padding:16px 18px;">
+        <input type="hidden" id="notif-f-id">
+        <label class="notif-lbl">Name</label>
+        <input id="notif-f-name" class="notif-in" placeholder="e.g. Someone came home">
+
+        <label class="notif-lbl">When this happens (trigger)</label>
+        <select id="notif-f-trigger" class="notif-in" onchange="notifTriggerChanged()">
+          <option value="main_door_closed">Main door closes</option>
+          <option value="home_mode_changed">Home mode changes</option>
+          <option value="people_count_changed">People count changes</option>
+          <option value="scheduled_time">At a scheduled time</option>
+        </select>
+        <div id="notif-f-trigparam-mode" style="display:none;">
+          <label class="notif-lbl">…to which mode?</label>
+          <select id="notif-f-trigparam-modeval" class="notif-in">
+            <option value="">Any change</option>
+            <option value="home">home (someone comes home)</option>
+            <option value="away">away</option>
+            <option value="abroad">abroad</option>
+          </select>
+        </div>
+        <div id="notif-f-trigparam-time" style="display:none;">
+          <label class="notif-lbl">…at what time?</label>
+          <input id="notif-f-trigparam-timeval" class="notif-in" type="time">
+        </div>
+
+        <label class="notif-lbl">Only if… (conditions — all must be true)</label>
+        <div id="notif-f-conds"></div>
+        <button onclick="notifAddCond()" style="background:#eef2f7;color:#2b4c7e;border:1px solid #cdd8e6;border-radius:4px;padding:3px 10px;font-size:0.78rem;cursor:pointer;margin-top:4px;">+ Add condition</button>
+
+        <label class="notif-lbl">Message <span style="color:#999;font-weight:400;">— you can use {people_home} {home_mode} {time} {date} {count}</span></label>
+        <input id="notif-f-message" class="notif-in" placeholder="🚪 Main door closed — {people_home} people at home">
+
+        <div style="display:flex; gap:12px;">
+          <div style="flex:1;">
+            <label class="notif-lbl">Tell me…</label>
+            <select id="notif-f-delivery" class="notif-in" onchange="notifDeliveryChanged()">
+              <option value="immediate">Immediately</option>
+              <option value="at_time">At a set time</option>
+              <option value="daily">Daily summary</option>
+            </select>
+          </div>
+          <div id="notif-f-delivtime-wrap" style="flex:1; display:none;">
+            <label class="notif-lbl">at</label>
+            <input id="notif-f-delivtime" class="notif-in" type="time">
+          </div>
+          <div style="flex:1;">
+            <label class="notif-lbl">Style</label>
+            <select id="notif-f-level" class="notif-in">
+              <option value="info">Info (blue)</option>
+              <option value="warn">Warning (orange)</option>
+              <option value="alert">Alert (red)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:16px; align-items:center; margin-top:10px;">
+          <label style="font-size:0.82rem;"><input type="checkbox" id="notif-f-popup" checked> Show popup</label>
+          <label style="font-size:0.82rem; color:#999;" title="Coming later"><input type="checkbox" id="notif-f-phone" disabled> Phone (later)</label>
+          <label style="font-size:0.82rem;">Max once every <input id="notif-f-throttle" type="number" min="0" value="0" style="width:52px; padding:2px 4px;"> min</label>
+        </div>
+        <div style="margin-top:8px; padding:8px 10px; background:#f4f7fa; border-radius:6px;">
+          <label style="font-size:0.82rem;"><input type="checkbox" id="notif-f-setpeople"> Let me <b>set the number of people at home</b> in the popup (adds an input + Save that updates the manual count)</label>
+        </div>
+
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:18px;">
+          <button onclick="notifCloseModal()" style="background:#fff;color:#666;border:1px solid #ccc;border-radius:4px;padding:6px 14px;cursor:pointer;font-size:0.85rem;">Cancel</button>
+          <button onclick="notifSave()" style="background:#2b4c7e;color:#fff;border:none;border-radius:4px;padding:6px 16px;cursor:pointer;font-size:0.85rem;">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <style>
+    .notif-lbl{display:block;font-size:0.78rem;color:#333;font-weight:600;margin:10px 0 3px;}
+    .notif-in{width:100%;box-sizing:border-box;padding:6px 9px;border:1px solid #cdd3da;border-radius:5px;font-size:0.88rem;}
+    .notif-cond-row{display:flex;gap:6px;margin-bottom:5px;align-items:center;}
+    .notif-cond-row select,.notif-cond-row input{padding:4px 6px;border:1px solid #cdd3da;border-radius:4px;font-size:0.8rem;}
+  </style>
+
 </main>
 
 <script src="js/scroll-stabilizer.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/device-picker.js?v=16"></script>
-<script src="js/main-agent.js?v=116"></script>
+<script src="js/notify-toast.js?v=10"></script>
+<script src="js/main-agent.js?v=117"></script>
+<!-- after main-agent.js so its showTab wrapper chains on (not clobbered by) main-agent's -->
+<script src="js/notifications-tab.js?v=2"></script>
 </body>
 </html>

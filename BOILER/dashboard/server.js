@@ -84,6 +84,11 @@ require('./routes-household-users')(app, db);
 // evaluator + snooze/clear state. Settings on Privacy → Settings.
 require('./routes-reminders')(app, db);
 
+// Notifications — Main Agent → Notifications tab. Authoring (notification_defs
+// CRUD) + the popup feed (notification_events). Firing runs on the LXC rule
+// engine (RULES/rules/notifications.py). Own module for the architecture-guard.
+require('./routes-notifications')(app, db);
+
 // Power Outage Log — read endpoint (/api/power/outages) for the Project Power
 // page card. Own module for the same architecture-guard reason as above.
 require('./routes-power-outages')(app, db);
@@ -2293,6 +2298,7 @@ const DBV_GROUPS = [
   ['Privacy',               ['privacy_sites','privacy_site_docs','privacy_site_receipts','privacy_doc_crypto','privacy_sheets','visited_places','journal_entries']],
   ['People',                ['people','people_relations']],
   ['Reminders',             ['reminder_state']],
+  ['Notifications',         ['notification_defs','notification_events']],
   ['Email',                 ['email_messages','email_labels','email_state','email_extractions','email_automation_log']],
 ];
 const DBV_TABLES = DBV_GROUPS.flatMap(g => g[1]);
@@ -2324,6 +2330,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
       esp_boards: 'created_at',
       household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at', ph_body: 'measured_at', ph_water: 'measured_at', ph_steps: 'measured_at', ph_steps_excluded_trips: 'excluded_at', ph_exercise_log: 'measured_at', ph_bobo: 'measured_at', reminder_state: 'updated_at',
+      notification_defs: 'updated_at', notification_events: 'ts',
       email_messages: 'msg_ts', email_labels: 'updated_at', email_state: 'updated_at',
       email_extractions: 'extracted_at', email_automation_log: 'ts',
       power_consumption: 'ts',
