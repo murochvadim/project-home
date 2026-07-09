@@ -5,6 +5,55 @@ implementation route is **Path C** (custom Arduino sketch on a spare
 ESP32-C3, fits our `esp_boards` subsystem). Paths A and B are kept
 below for context but are not the active route.
 
+## ✅ BREAKTHROUGH (2026-07-10) — laptop BLE decodes REAL stats; the year-long blocker was a wrong key
+
+Everything below (Phase 2 "blocked on the machine file", write hangs, undecodable
+reads) is **resolved**. Proven live from the **laptop's Bluetooth** (`bleak`) —
+tools in [tools/](tools/) (`jura_stats.py` is the payoff).
+
+**The root cause of the whole block: the encryption key was wrong.** The real key
+is `manufacturer_data[171][0]` — the **first byte of the BLE advertisement's
+manufacturer payload** (company id 171 = `0xAB`). On this dongle **key = `0x2A`**.
+The old sketch hardcoded `0xAB`, which is the company *id*, not the key. With the
+right key the `juraEncDec` (already correctly ported — self-test confirms it's
+involutory) decrypts everything.
+
+**Statistics read flow (works, per AlexxIT/Jura):**
+1. `encrypt([0x2A,0x00,0x01,0xFF,0xFF], key)` → write to **STATS_COMMAND `5a401533`**
+   (`encrypt` overwrites byte[0] with the key, then `encdec`). This is a *read-request*, no brewing.
+2. Poll-read STATS_COMMAND until **`byte[1] != 0xE1`** (`0xE1`/225 = "not ready" —
+   this is exactly why our earlier bare reads returned `xx E1 3D D6…`: we never sent the request).
+3. Read **STATS_DATA `5a401534`**, `encdec` with the key → **3-byte big-endian counters**,
+   indexed by product `@Code` (index 0 = grand total).
+
+**Live result (2026-07-10):** total **10,981**; Coffee 5062, Milk 4931, Cappuccino 316,
+Espresso 276, Flat White 247, Latte 74, Ristretto 56, Espresso Macchiato 10, Hot water 9.
+
+**The machine file — obtained.** `AlexxIT/Jura` bundles `core/resources.zip` with
+Jura's own per-model command files. Our J6 = family **`EF557`** (map
+`JOE_MACHINES.TXT`: `15111;J6;EF557`), file `documents/xml/EF557/1.0.xml`. It lists
+**every** command the J6 accepts: brew products (Ristretto `01`, Espresso `02`,
+Coffee `03`, Cappuccino `04`, Latte `07`, Flat White `2E`, 2× variants, Hot water
+`0D`…), maintenance `@TG:` (CappuClean 21, CappuRinse 23, Cleaning 24, Decalc 25,
+FilterChange 26, PressRinse 10), reads `@TR:32` (product counters) / `@TG:43` /
+`@TG:C0`, and `@TS:00/01`.
+
+**⛔ There is NO power-off / standby command** — not in the machine file, not in
+AlexxIT, not in protocol-bt-cpp. Jura never exposed it. The only power item is an
+*alert* the machine emits (`SwitchOff Delay active`). **Turning the J6 off over BLE
+is impossible by design.** On/off is instead **detected by advertising presence**:
+dongle advertising = ON, dongle absent = OFF (verified both ways, 3× each).
+
+**Now reachable (same key + machine file):** coffee counters ✅ (done), machine
+status/alerts (water/beans/grounds/clean/descale — decrypt MACHINE_STATUS `5a401524`
+with the key), brew commands (encrypt 18-byte product packet → START_PRODUCT `5a401525`),
+maintenance triggers. **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
+plaintext from char `5a401531`.
+
+**Radio note:** only the **laptop** (dashboard host) is within BLE range of the
+kitchen Jura. The balcony bridge (BoBo) is out of range AND is a working module —
+do NOT reflash it. A live Jura tile would run a scanner on the laptop.
+
 ## Hardware
 
 | Item | Value |
