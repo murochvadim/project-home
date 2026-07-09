@@ -30,7 +30,9 @@
   const GENDERS = ['', 'female', 'male', 'other'];
 
   // shared grid so figures stay aligned in rows/columns (auto-layout AND after a drag snaps to it)
-  const GRID = { COLW: 104, ROWH: 118, PAD: 14, PAD_TOP: 56 };
+  const GRID = { COLW: 72, ROWH: 86, PAD: 14, PAD_TOP: 56 };
+  // figure geometry (smaller icon) — AV=avatar dia, FIGW=figure width, CX/CY=line-endpoint center offset
+  const AV = 40, FIGW = 58, CX = 29, CY = 22;
   const _snap = (v, origin, cell) => Math.max(0, origin + Math.round((v - origin) / cell) * cell);
 
   let _cats = PPL_DEFAULT_CATS, _relTypes = DEFAULT_RELS, _groupLink = DEFAULT_GROUP_LINK, _pgLink = DEFAULT_PG_LINK, _groupPos = {}, _groupEdges = [], _personGroupEdges = [], _people = [], _users = [], _rels = [];
@@ -115,19 +117,21 @@
   const _peopleById = () => { const m = {}; _people.forEach(p => m[p.id] = p); return m; };
   // Group view: cluster people into labeled region-boxes by their category. Boxes with a
   // saved position (_groupPos, drag-persisted) use it; the rest auto-flow. Returns {pos, regions, members}.
-  const GC = 3, GPAD = 16, GHEAD = 30, GGAP = 26;
+  const GC = 3, GPAD = 12, GHEAD = 26, GGAP = 20;
   function _groupLayout(rows, canvasW) {
     const order = _cats.map(c => c.id);
     const groups = {}; rows.forEach(p => { const k = p.category || 'other'; (groups[k] = groups[k] || []).push(p); });
     const keys = Object.keys(groups).sort((a, b) => { const ia = order.indexOf(a), ib = order.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
-    const dims = {}; keys.forEach(k => { const n = groups[k].length, cols = Math.min(GC, Math.max(1, n)), gr = Math.ceil(n / cols); dims[k] = { cols, w: cols * GRID.COLW + GPAD, h: GHEAD + gr * GRID.ROWH + GPAD }; });
+    const dims = {}; keys.forEach(k => { const n = groups[k].length, cap = Math.max(1, (catBy(k).cols || GC)), cols = Math.min(cap, Math.max(1, n)), gr = Math.ceil(n / cols); dims[k] = { cols, w: cols * GRID.COLW + GPAD, h: GHEAD + gr * GRID.ROWH + GPAD }; });
     // origins: saved positions win; the remainder auto-flow in reading order
+    // snap EVERY box origin to the current grid (GPAD, COLW/ROWH) so all groups align uniformly —
+    // saved positions may have been snapped to an older cell size, so re-snap them here too.
     const origin = {}; let cx = GPAD, cy = GPAD, rowH = 0;
     keys.forEach(k => {
-      if (_groupPos[k]) { origin[k] = { x: _groupPos[k].x, y: _groupPos[k].y }; return; }
+      if (_groupPos[k]) { origin[k] = { x: _snap(_groupPos[k].x, GPAD, GRID.COLW), y: _snap(_groupPos[k].y, GPAD, GRID.ROWH) }; return; }
       const w = dims[k].w, h = dims[k].h;
       if (cx + w > (canvasW - GPAD) && cx > GPAD) { cx = GPAD; cy += rowH + GGAP; rowH = 0; }
-      origin[k] = { x: cx, y: cy }; cx += w + GGAP; rowH = Math.max(rowH, h);
+      origin[k] = { x: _snap(cx, GPAD, GRID.COLW), y: _snap(cy, GPAD, GRID.ROWH) }; cx += w + GGAP; rowH = Math.max(rowH, h);
     });
     const pos = {}, regions = [], members = {};
     keys.forEach(k => {
@@ -174,12 +178,15 @@
       const c = catBy(r.id);
       const b = document.createElement('div');
       b.style.cssText = `position:absolute; left:${r.x}px; top:${r.y}px; width:${r.w}px; height:${r.h}px; border:2px solid ${c.color}; border-radius:12px; background:${c.color}0d; z-index:0; cursor:grab; touch-action:none;`;
-      b.innerHTML = `<div style="position:absolute; top:-11px; left:12px; background:#fbfaf8; padding:0 8px; font-size:0.8rem; font-weight:700; color:${c.color};">⠿ ${esc(c.name)}</div>`;
+      b.innerHTML = `<div class="ppl-glabel" style="position:absolute; top:-11px; left:10px; max-width:${Math.max(40, r.w - 14)}px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; background:#fbfaf8; padding:0 6px; font-size:12px; font-weight:700; color:${c.color};">⠿ ${esc(c.name)}</div>`;
       box.appendChild(b);
+      // keep the group name on ONE line — shrink its font until the single line fits the box width
+      const _lbl = b.firstChild, _avail = r.w - 14;
+      if (_lbl) { let _fs = 12; while (_lbl.scrollWidth > _avail && _fs > 7) { _fs -= 0.5; _lbl.style.fontSize = _fs + 'px'; } }
       _makeGroupDraggable(b, r.id, r, groupMembers[r.id] || []);
       maxX = Math.max(maxX, r.x + r.w + 20); maxY = Math.max(maxY, r.y + r.h + 20);
     });
-    rows.forEach(p => { const q = posMap[p.id]; if (q) { maxX = Math.max(maxX, q.x + 120); maxY = Math.max(maxY, q.y + 150); } });
+    rows.forEach(p => { const q = posMap[p.id]; if (q) { maxX = Math.max(maxX, q.x + FIGW + 30); maxY = Math.max(maxY, q.y + 120); } });
 
     // SVG line layer
     const svg = _svg('svg', { id: 'ppl-svg', style: `position:absolute;left:0;top:0;width:${maxX}px;height:${maxY}px;pointer-events:none;z-index:0;` });
@@ -199,7 +206,7 @@
       // person → group connections (a person's figure to a group box's nearest corner)
       _personGroupEdges.forEach(e => {
         const f = posMap[e.p], region = _regionById[e.g]; if (!f || !region) return;   // person visible + group on screen
-        const px = f.x + 44, py = f.y + 32, c = _nearestCornerToPoint(region, px, py);
+        const px = f.x + CX, py = f.y + CY, c = _nearestCornerToPoint(region, px, py);
         const line = _svg('line', { x1: px, y1: py, x2: c.x, y2: c.y, stroke: _pgLink.color, 'stroke-width': 2, 'stroke-dasharray': DASH[_pgLink.style] || '', 'stroke-linecap': 'round' });
         line.dataset.person = e.p; line.dataset.group = e.g;
         if (focusSet && !focusSet.has(e.p)) line.setAttribute('opacity', '0.12');
@@ -210,7 +217,7 @@
         if (!visible.has(r.from_person_id) || !visible.has(r.to_person_id)) return;
         const a = posMap[r.from_person_id], b = posMap[r.to_person_id]; if (!a || !b) return;
         const rt = relTypeBy(r.rel_type);
-        const line = _svg('line', { x1: a.x + 44, y1: a.y + 32, x2: b.x + 44, y2: b.y + 32, stroke: rt.color, 'stroke-width': 2, 'stroke-dasharray': DASH[rt.style] || '', 'stroke-linecap': 'round' });
+        const line = _svg('line', { x1: a.x + CX, y1: a.y + CY, x2: b.x + CX, y2: b.y + CY, stroke: rt.color, 'stroke-width': 2, 'stroke-dasharray': DASH[rt.style] || '', 'stroke-linecap': 'round' });
         line.dataset.from = r.from_person_id; line.dataset.to = r.to_person_id;
         if (focusSet && !(focusSet.has(r.from_person_id) && focusSet.has(r.to_person_id))) line.setAttribute('opacity', '0.12');
         svg.appendChild(line);
@@ -225,14 +232,14 @@
       const grayDim = isGroup && _dimUnconnected && !_connectedOutside(p.id, p.category || 'other');
       const dimStyle = focusDim ? ' opacity:0.15;' : (grayDim ? ' filter:grayscale(1); opacity:0.5;' : '');
       const avInner = p.photo
-        ? `<img src="${API}/${p.id}/photo?t=${Date.now()}" draggable="false" style="display:block;margin:0 auto;width:64px;height:64px;border-radius:50%;object-fit:cover;border:3px solid ${c.color};pointer-events:none;">`
-        : `<div style="margin:0 auto;width:64px;height:64px;border-radius:50%;background:${c.color}22;border:3px solid ${c.color};display:flex;align-items:center;justify-content:center;font-size:1.9rem;pointer-events:none;">👤</div>`;
+        ? `<img src="${API}/${p.id}/photo?t=${Date.now()}" draggable="false" style="display:block;margin:0 auto;width:${AV}px;height:${AV}px;border-radius:50%;object-fit:cover;border:2px solid ${c.color};pointer-events:none;">`
+        : `<div style="margin:0 auto;width:${AV}px;height:${AV}px;border-radius:50%;background:${c.color}22;border:2px solid ${c.color};display:flex;align-items:center;justify-content:center;font-size:1.15rem;pointer-events:none;">👤</div>`;
       const el = document.createElement('div');
       el.dataset.id = p.id;
-      el.style.cssText = `position:absolute; left:${q.x}px; top:${q.y}px; width:88px; text-align:center; z-index:1; user-select:none;${dimStyle}`;
+      el.style.cssText = `position:absolute; left:${q.x}px; top:${q.y}px; width:${FIGW}px; text-align:center; z-index:1; user-select:none;${dimStyle}`;
       el.innerHTML =
         `<div class="ppl-av" title="${esc(nameOf(p))} — ${esc(c.name)} · open" style="cursor:${isGroup ? 'pointer' : 'grab'};">${avInner}</div>` +
-        `<div class="ppl-nm" title="highlight connections" style="font-size:0.82rem; margin-top:5px; line-height:1.2; word-break:break-word; cursor:pointer;">${esc(nameOf(p))}</div>`;
+        `<div class="ppl-nm" title="highlight connections" style="font-size:0.72rem; margin-top:3px; line-height:1.12; word-break:break-word; cursor:pointer;">${esc(nameOf(p))}</div>`;
       box.appendChild(el);
       const avEl = el.querySelector('.ppl-av'), nmEl = el.querySelector('.ppl-nm');
       if (isGroup) { avEl.addEventListener('click', () => pvPeopleEdit(p.id)); }
@@ -261,7 +268,7 @@
       if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
       const nx = Math.max(0, ox + dx), ny = Math.max(0, oy + dy);
       figureEl.style.left = nx + 'px'; figureEl.style.top = ny + 'px';
-      _updateLines(p.id, nx + 44, ny + 32);
+      _updateLines(p.id, nx + CX, ny + CY);
     });
     const end = () => {
       if (!dragging) return; dragging = false; figureEl.style.zIndex = 1; handleEl.style.cursor = 'grab';
@@ -269,7 +276,7 @@
         const nx = _snap(parseFloat(figureEl.style.left) || 0, GRID.PAD, GRID.COLW);
         const ny = _snap(parseFloat(figureEl.style.top) || 0, GRID.PAD_TOP, GRID.ROWH);
         figureEl.style.left = nx + 'px'; figureEl.style.top = ny + 'px';
-        _updateLines(p.id, nx + 44, ny + 32);
+        _updateLines(p.id, nx + CX, ny + CY);
         p.pos_x = nx; p.pos_y = ny;
         fetch(`${API}/${p.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pos_x: nx, pos_y: ny }) }).catch(() => {});
       } else { pvPeopleEdit(p.id); }   // click on the icon → open the window
@@ -291,7 +298,7 @@
     // person→group lines: person figures already moved (if members), boxes updated → recompute all
     svg.querySelectorAll('line[data-person]').forEach(l => {
       const f = document.querySelector(`#ppl-canvas [data-id="${l.dataset.person}"]`); if (!f) return;
-      const px = (parseFloat(f.style.left) || 0) + 44, py = (parseFloat(f.style.top) || 0) + 32;
+      const px = (parseFloat(f.style.left) || 0) + CX, py = (parseFloat(f.style.top) || 0) + CY;
       const region = (l.dataset.group === gid) ? movedRegion : _regionById[l.dataset.group]; if (!region) return;
       const c = _nearestCornerToPoint(region, px, py);
       l.setAttribute('x1', px); l.setAttribute('y1', py); l.setAttribute('x2', c.x); l.setAttribute('y2', c.y);
@@ -522,6 +529,8 @@
     if (cbox) cbox.innerHTML = _cats.map((c, i) => `<div style="display:flex; gap:5px; align-items:center; margin-bottom:5px;">
       <input value="${esc(c.name || '')}" data-pplc-i="${i}" placeholder="category" style="flex:1; min-width:0; padding:4px 6px; font-size:0.78rem; border:1px solid #ccc; border-radius:4px;">
       <input type="color" value="${esc(c.color || '#9ca3af')}" data-pplcc-i="${i}" title="color" style="width:28px; height:26px; flex:0 0 auto; border:1px solid #ccc; border-radius:4px; padding:1px; cursor:pointer;">
+      <input type="number" min="1" max="12" value="${c.cols || GC}" data-pplcn-i="${i}" title="icons per row in this group's box" style="width:40px; flex:0 0 auto; padding:3px 4px; font-size:0.78rem; border:1px solid #ccc; border-radius:4px;">
+      <span title="icons per row" style="font-size:0.62rem; color:#999; flex:0 0 auto;">/row</span>
       <button onclick="pvPeopleCatRemove(${i})" title="Remove" style="flex:0 0 auto; padding:2px 6px; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:4px; cursor:pointer;">✕</button>
     </div>`).join('');
     const rbox = document.getElementById('pplset-rels');
@@ -570,7 +579,8 @@
     const cats = _cats.map(c => ({ ...c }));
     document.querySelectorAll('[data-pplc-i]').forEach(inp => { const i = +inp.dataset.pplcI; while (cats.length <= i) cats.push({}); cats[i].name = inp.value; });
     document.querySelectorAll('[data-pplcc-i]').forEach(inp => { const i = +inp.dataset.pplccI; while (cats.length <= i) cats.push({}); cats[i].color = inp.value; });
-    return cats.filter(c => (c.name || '').trim()).map(c => ({ id: c.id || ('c' + Math.random().toString(36).slice(2, 9)), name: (c.name || '').trim(), color: c.color || '#9ca3af' }));
+    document.querySelectorAll('[data-pplcn-i]').forEach(inp => { const i = +inp.dataset.pplcnI; while (cats.length <= i) cats.push({}); cats[i].cols = Math.max(1, Math.min(12, parseInt(inp.value) || GC)); });
+    return cats.filter(c => (c.name || '').trim()).map(c => ({ id: c.id || ('c' + Math.random().toString(36).slice(2, 9)), name: (c.name || '').trim(), color: c.color || '#9ca3af', cols: Math.max(1, Math.min(12, c.cols || GC)) }));
   }
   function _collectRels() {
     const rt = _relTypes.map(r => ({ ...r }));
