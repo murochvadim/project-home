@@ -44,10 +44,21 @@ AlexxIT, not in protocol-bt-cpp. Jura never exposed it. The only power item is a
 is impossible by design.** On/off is instead **detected by advertising presence**:
 dongle advertising = ON, dongle absent = OFF (verified both ways, 3× each).
 
-**Now reachable (same key + machine file):** coffee counters ✅ (done), machine
-status/alerts (water/beans/grounds/clean/descale — decrypt MACHINE_STATUS `5a401524`
-with the key), brew commands (encrypt 18-byte product packet → START_PRODUCT `5a401525`),
-maintenance triggers. **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
+**✅ BREW CONFIRMED (2026-07-10) — full CONTROL, not just reading.** Sent **Hot water
+(code `0x0D`)** from the laptop and the machine **physically dispensed** (user-confirmed
+live). Packet (`tools/jura_brew.py`): `data[1]=code`, `data[4]=water_ml/5` (WATER_AMOUNT
+arg `F4`, step 5), `data[7]=temp` (TEMPERATURE arg `F7`; `01`=normal), `data[0]=data[17]=key`;
+`encrypt` → write **START_PRODUCT `5a401525`** (`response=True`). Live packet:
+plaintext `2a0d00002c0000010000000000000000002a` → encrypted `77e73dd64981d3dba323fa98a4a3faab47fd`.
+Any drink = swap the product code (Espresso `02`, Coffee `03`, Cappuccino `04`, Flat White
+`2E`, 2× variants…); simple coffee/water drinks share the F4/F7 layout, milk drinks carry
+extra args in the machine file. ⚠ Physical action — cup under the spout first. (AlexxIT
+notes a *malformed* packet can half-brick the machine → power-cycle; our packet matches the
+EF557 file and worked first try.)
+
+**Now reachable (same key + machine file):** coffee counters ✅ (done), **brew ✅ (done)**,
+machine status/alerts (decrypt MACHINE_STATUS `5a401524` with the key — water/beans/grounds/
+clean/descale), maintenance triggers (`@TG:` → STATS_COMMAND-style writes). **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
 plaintext from char `5a401531`.
 
 **Radio note:** only the **laptop** (dashboard host) is within BLE range of the
