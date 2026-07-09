@@ -56,9 +56,20 @@ extra args in the machine file. ⚠ Physical action — cup under the spout firs
 notes a *malformed* packet can half-brick the machine → power-cycle; our packet matches the
 EF557 file and worked first try.)
 
+**✅ STATUS/ALERTS CONFIRMED (2026-07-10) — but only with the HEARTBEAT.** MACHINE_STATUS
+`5a401524` returns a stale/blank blob on a bare read; you must **keep sending the heartbeat
+`encrypt([0x00,0x7F,0x80], key)` → P_MODE `5a401529`** (AlexxIT's keepalive) first, then read +
+decrypt. Alerts are **bit-encoded**: for bit `i`, byte `(i>>3)+1`, bit `7-(i&7)` (MSB-first).
+EF557 alert bits: 0 insert tray, **1 fill water (tank empty)**, 2 empty grounds, 3 empty tray,
+4 insert coffee bin, 8 fill system, 10 no beans, 13 coffee ready, 21 fill powder, 24 remove
+water tank, 25 press rinse, 32 filter, 33 descale, 34 cleaning, 35 cappu rinse, 47 switch-off
+delay. Live-verified: with the tank emptied the status read `2a40…e0…` → **bit 1 FILL WATER =
+active**, plus filter/descale/cleaning maintenance flags. Tool: `tools/jura_status.py`. So every
+container's *status* (water/grounds/beans/tray) + maintenance-due flags are readable. The exact
+maintenance **counts/percent** (`@TG:43`/`@TG:C0`) are NOT implemented by AlexxIT — separate RE.
+
 **Now reachable (same key + machine file):** coffee counters ✅ (done), **brew ✅ (done)**,
-machine status/alerts (decrypt MACHINE_STATUS `5a401524` with the key — water/beans/grounds/
-clean/descale), maintenance triggers (`@TG:` → STATS_COMMAND-style writes). **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
+**live status/alerts ✅ (done, needs heartbeat)**, maintenance triggers (`@TG:` → STATS_COMMAND-style writes). **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
 plaintext from char `5a401531`.
 
 **Radio note:** only the **laptop** (dashboard host) is within BLE range of the
