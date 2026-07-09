@@ -73,16 +73,20 @@ The statistics interface takes a request word at bytes[1-2] of the 5-byte reques
 `[key, type_hi, type_lo, 0xFF, 0xFF]` → STATS_COMMAND `5a401533`, then read STATS_DATA `5a401534`.
 Documented: `0x0001` = product counters, `0x0010` = daily. **Found by probing:** **`0x0008` =
 maintenance PERCENT**, **`0x0004` = maintenance COUNTERS** (all other words return zeros). Tool:
-`tools/jura_maint.py`. Live (idle):
-- `0x0008` → `64 64 FF` = **Cleaning 100% · Descale 100% · Filter 0xFF(none/expired)** — the two
-  100% values line up exactly with the confirmed cleaning+descale alert bits (32/33/34), so the
-  decode is well-supported (exact triplet label order is inferred, not screen-read).
-- `0x0004` → `0006 0007 000D 0B28 16FA 0099` = **6 cleanings · 7 descalings · 13 filter changes**
-  + accumulators 2856/5882/153 (lifetime).
+`tools/jura_maint.py`. **Field labels + ORDER come from the machine file's `<BANK>` defs**
+(`@TG:C0` percent = Cleaning, Filter, Decalc; `@TG:43` counter = Cleaning, FilterChange, Decalc,
+CappuRinse, CoffeeRinse, CappuClean) — authoritative, so no guessing. Live (idle):
+- `0x0008` → `64 64 FF` (one byte each) = **Cleaning 100% · Filter 100% · Descale 0xFF (overdue/N-A)**.
+  (Cleaning + Filter at 100% match the active cleaning+filter alerts.)
+- `0x0004` → `0006 0007 000D 0B28 16FA 0099` (u16 each) = **Cleaning 6 · Filter changes 7 ·
+  Descalings 13 · Milk-system rinses (CappuRinse) 2856 · Coffee rinses 5882 · Milk-system cleans
+  (CappuClean) 153** (lifetime). Rinse counts are large because rinses auto-run on power-cycles / after milk.
 - **⚠ State-dependent:** these two datasets read **all zeros while the user is navigating the
   machine's own maintenance/care MENU** — read them when the machine is IDLE (main screen).
   Product counters `0x0001` are unaffected.
 - **Grounds bin** has NO countdown number on this machine — it's the yes/no alert (bit 2) only.
+- ⚠ Correction to the prior commit's tentative order: it's Cleaning/**Filter** at 100% (not
+  Cleaning/Descale), and counter #2/#3 are **Filter/Descale** (not Descale/Filter) — the `<BANK>` labels settled it.
 
 **Now reachable (same key + machine file):** coffee counters ✅, **brew ✅**, **live status/alerts
 ✅ (needs heartbeat)**, **maintenance %/counters ✅ (0x0008/0x0004, idle only)**, maintenance
