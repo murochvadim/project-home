@@ -68,8 +68,25 @@ active**, plus filter/descale/cleaning maintenance flags. Tool: `tools/jura_stat
 container's *status* (water/grounds/beans/tray) + maintenance-due flags are readable. The exact
 maintenance **counts/percent** (`@TG:43`/`@TG:C0`) are NOT implemented by AlexxIT — separate RE.
 
-**Now reachable (same key + machine file):** coffee counters ✅ (done), **brew ✅ (done)**,
-**live status/alerts ✅ (done, needs heartbeat)**, maintenance triggers (`@TG:` → STATS_COMMAND-style writes). **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
+**✅ MAINTENANCE % + COUNTERS CRACKED (2026-07-10) — undocumented, not in AlexxIT/protocol-bt-cpp.**
+The statistics interface takes a request word at bytes[1-2] of the 5-byte request
+`[key, type_hi, type_lo, 0xFF, 0xFF]` → STATS_COMMAND `5a401533`, then read STATS_DATA `5a401534`.
+Documented: `0x0001` = product counters, `0x0010` = daily. **Found by probing:** **`0x0008` =
+maintenance PERCENT**, **`0x0004` = maintenance COUNTERS** (all other words return zeros). Tool:
+`tools/jura_maint.py`. Live (idle):
+- `0x0008` → `64 64 FF` = **Cleaning 100% · Descale 100% · Filter 0xFF(none/expired)** — the two
+  100% values line up exactly with the confirmed cleaning+descale alert bits (32/33/34), so the
+  decode is well-supported (exact triplet label order is inferred, not screen-read).
+- `0x0004` → `0006 0007 000D 0B28 16FA 0099` = **6 cleanings · 7 descalings · 13 filter changes**
+  + accumulators 2856/5882/153 (lifetime).
+- **⚠ State-dependent:** these two datasets read **all zeros while the user is navigating the
+  machine's own maintenance/care MENU** — read them when the machine is IDLE (main screen).
+  Product counters `0x0001` are unaffected.
+- **Grounds bin** has NO countdown number on this machine — it's the yes/no alert (bit 2) only.
+
+**Now reachable (same key + machine file):** coffee counters ✅, **brew ✅**, **live status/alerts
+✅ (needs heartbeat)**, **maintenance %/counters ✅ (0x0008/0x0004, idle only)**, maintenance
+triggers (`@TG:` clean/descale/rinse via product-style writes). **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
 plaintext from char `5a401531`.
 
 **Radio note:** only the **laptop** (dashboard host) is within BLE range of the
