@@ -206,7 +206,10 @@ def _deliver(state, d, ctx, today):
         state.shared[f"_notify:{did}:pending"] = json.dumps(
             {"people_home": ctx.get("people_home"), "home_mode": ctx.get("home_mode")})
     elif delivery == "daily":
-        ckey = f"_notify:{did}:daycount:{today}"
+        # ONE rolling counter, reset at each delivery — so the summary covers the
+        # whole window since the last delivery (not a partial same-day count), and
+        # we don't leak a key per calendar day.
+        ckey = f"_notify:{did}:daily_count"
         state.shared[ckey] = int(state.shared.get(ckey, 0) or 0) + 1
     else:  # immediate
         _emit(state, d, ctx)
@@ -236,13 +239,17 @@ def _process_pending(state, d, ctx, now_local, today):
         _emit(state, d, c)
         state.shared[f"_notify:{did}:pending"] = ""
         state.shared[dkey] = today
-    else:  # daily
-        cnt = int(state.shared.get(f"_notify:{did}:daycount:{today}", 0) or 0)
+    else:  # daily — deliver the rolling count once/day at delivery_time, then reset.
+        # Mark the day done FIRST (even when the count is 0) so a later event can't
+        # trigger an early partial delivery — the whole point of the fix.
+        state.shared[dkey] = today
+        ckey = f"_notify:{did}:daily_count"
+        cnt = int(state.shared.get(ckey, 0) or 0)
         if cnt <= 0:
-            return
+            return                       # nothing happened this window → no nag
         c = dict(ctx); c["count"] = cnt
         _emit(state, d, c)
-        state.shared[dkey] = today
+        state.shared[ckey] = 0           # reset — next window starts fresh
 
 
 # ─────────────────────────── trigger signals ───────────────────────────
