@@ -88,6 +88,20 @@ CappuRinse, CoffeeRinse, CappuClean) — authoritative, so no guessing. Live (id
 - ⚠ Correction to the prior commit's tentative order: it's Cleaning/**Filter** at 100% (not
   Cleaning/Descale), and counter #2/#3 are **Filter/Descale** (not Descale/Filter) — the `<BANK>` labels settled it.
 
+**When to change the FILTER (2026-07-10):** readable = **Filter % (`0x0008` byte[1]), 0=fresh →
+100=replace** + the **filter alert (status bit 32)** that fires at exhaustion. So a live "filter
+life left" + a "change filter" nudge is doable. ⚠ Caveat on THIS machine: it's flagging **filter
+AND descale at once** — on Jura you normally use a CLARIS filter *or* descale, not both, so the
+current 100%+alert may mean **no filter configured** (i.e. "install one") rather than "installed
+filter exhausted". Confirm with a before/after read when a filter is inserted+registered (the %
+should drop then climb). Same read gives descale/cleaning due.
+
+**Possible integration (not built):** a read-only **Jura dashboard tile** on the laptop — on/off
+(advert presence) + coffee counters (`0x0001`) + container status/alerts (heartbeat) + maintenance
+%/counters (`0x0004`/`0x0008`), refreshed by a laptop scanner → MQTT/dashboard, feeding
+Notifications (e.g. "change filter", "descale due", "grounds full"). Brew/maintenance triggers
+optional. Only the laptop is in BLE range; do NOT reflash the BoBo balcony bridge.
+
 **Now reachable (same key + machine file):** coffee counters ✅, **brew ✅**, **live status/alerts
 ✅ (needs heartbeat)**, **maintenance %/counters ✅ (0x0008/0x0004, idle only)**, maintenance
 triggers (`@TG:` clean/descale/rinse via product-style writes). **Model** `EF557M` + firmware `V05.08F`/`V01.05` read as
