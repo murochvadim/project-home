@@ -43,7 +43,7 @@
 //
 // Cleaning cycle is intentionally NOT in actions — the cleaning_required
 // bool DPS surfaces the need, the user triggers cleaning on the machine.
-static const char ESP_SCHEMA_JSON[] PROGMEM = R"json({"parameters":[{"key":"poll_interval_sec","type":"int","default":30,"min":5,"max":300,"persistent":true,"description":"BlueFrog stats poll interval (seconds)"},{"key":"reconnect_backoff_sec","type":"int","default":10,"min":5,"max":120,"persistent":true,"description":"BLE reconnect cooldown after disconnect (seconds)"},{"key":"auth_retry_max","type":"int","default":3,"min":1,"max":10,"persistent":true,"description":"Jutta-Proto auth handshake attempts before reboot"}],"actions":[{"key":"on","label":"Power ON","description":"Wake + brew espresso (alias for brew_espresso)"},{"key":"off","label":"Power OFF","description":"Put machine in standby (alias for standby)"},{"key":"enter_ota_mode","label":"Enter OTA Mode","description":"Reboot into BLE-disabled mode for 5 minutes so OTA push can succeed (C3 NimBLE+WiFi coex workaround)"},{"key":"brew_espresso","label":"Brew Espresso","description":"Start a single espresso"},{"key":"brew_coffee","label":"Brew Coffee","description":"Start a single coffee"},{"key":"brew_2x_espresso","label":"Brew 2× Espresso","description":"Two espressos in succession"},{"key":"brew_2x_coffee","label":"Brew 2× Coffee","description":"Two coffees in succession"},{"key":"hot_water","label":"Hot Water","description":"Dispense hot water"},{"key":"cancel","label":"Cancel","description":"Abort current operation"},{"key":"standby","label":"Standby","description":"Put machine in standby"}]})json";
+static const char ESP_SCHEMA_JSON[] PROGMEM = R"json({"parameters":[{"key":"poll_interval_sec","type":"int","default":30,"min":5,"max":300,"persistent":true,"description":"BlueFrog stats poll interval (seconds)"},{"key":"reconnect_backoff_sec","type":"int","default":10,"min":5,"max":120,"persistent":true,"description":"BLE reconnect cooldown after disconnect (seconds)"},{"key":"auth_retry_max","type":"int","default":3,"min":1,"max":10,"persistent":true,"description":"Jutta-Proto auth handshake attempts before reboot"}],"actions":[{"key":"on","label":"Power ON","description":"Wake + brew espresso (alias for brew_espresso)"},{"key":"off","label":"Power OFF","description":"Put machine in standby (alias for standby)"},{"key":"brew_espresso","label":"Brew Espresso","description":"Start a single espresso"},{"key":"brew_coffee","label":"Brew Coffee","description":"Start a single coffee"},{"key":"brew_2x_espresso","label":"Brew 2× Espresso","description":"Two espressos in succession"},{"key":"brew_2x_coffee","label":"Brew 2× Coffee","description":"Two coffees in succession"},{"key":"hot_water","label":"Hot Water","description":"Dispense hot water"},{"key":"cancel","label":"Cancel","description":"Abort current operation"},{"key":"standby","label":"Standby","description":"Put machine in standby"}]})json";
 
 // ─── EEPROM-backed param load / save ──────────────────────────────────────
 static void loadEspParams() {
@@ -90,39 +90,39 @@ static void publishEspStatus() {
   // _ESP_STATUS_DPS_FIELDS (must include these names there).
   doc["power_state"]        = jura_state.power_state;
   doc["current_drink"]      = jura_state.current_drink;
-  // live alerts
-  doc["water_low"]          = jura_state.water_low;
-  doc["grounds_full"]       = jura_state.grounds_full;
-  doc["tray_full"]          = jura_state.tray_full;
-  doc["beans_low"]          = jura_state.beans_low;
-  doc["filter_required"]    = jura_state.filter_required;
-  doc["cleaning_required"]  = jura_state.cleaning_required;
-  doc["descale_required"]   = jura_state.descale_required;
-  // lifetime product counters
-  doc["total_dispensed"]    = jura_state.total_dispensed;
-  doc["cnt_ristretto"]      = jura_state.cnt_ristretto;
-  doc["cnt_espresso"]       = jura_state.cnt_espresso;
-  doc["cnt_coffee"]         = jura_state.cnt_coffee;
-  doc["cnt_cappuccino"]     = jura_state.cnt_cappuccino;
-  doc["cnt_esp_macchiato"]  = jura_state.cnt_esp_macchiato;
-  doc["cnt_latte"]          = jura_state.cnt_latte;
-  doc["cnt_milk"]           = jura_state.cnt_milk;
-  doc["cnt_hotwater"]       = jura_state.cnt_hotwater;
-  doc["cnt_2ristretti"]     = jura_state.cnt_2ristretti;
-  doc["cnt_2espressi"]      = jura_state.cnt_2espressi;
-  doc["cnt_2coffee"]        = jura_state.cnt_2coffee;
-  doc["cnt_flat_white"]     = jura_state.cnt_flat_white;
-  // maintenance percentages (255 = N/A)
-  doc["pct_cleaning"]       = jura_state.pct_cleaning;
-  doc["pct_filter"]         = jura_state.pct_filter;
-  doc["pct_descale"]        = jura_state.pct_descale;
-  // maintenance counters
-  doc["maint_cleanings"]      = jura_state.maint_cleanings;
-  doc["maint_filter_changes"] = jura_state.maint_filter_changes;
-  doc["maint_descalings"]     = jura_state.maint_descalings;
-  doc["maint_milk_rinses"]    = jura_state.maint_milk_rinses;
-  doc["maint_coffee_rinses"]  = jura_state.maint_coffee_rinses;
-  doc["maint_milk_cleans"]    = jura_state.maint_milk_cleans;
+  doc["stats_valid"]        = jura_state.stats_valid;
+  // Counters + maintenance are published ONLY once a BLE read has actually
+  // succeeded this boot (stats_valid). Otherwise they'd be default 0s and the
+  // rule engine's JSONB merge would clobber the DB's real last-known counts
+  // (e.g. wipe 10987 -> 0 on a reboot while the machine is off).
+  // NOTE: live alert bits (water/beans/grounds/tray/…) are intentionally NOT
+  // published — MACHINE_STATUS echoes the stats command on this machine, so
+  // the bits are unreliable (see [[project_jura_phase2]]). Removed rather than
+  // show wrong data; counters + maintenance are solid.
+  if (jura_state.stats_valid) {
+    doc["total_dispensed"]      = jura_state.total_dispensed;
+    doc["cnt_ristretto"]        = jura_state.cnt_ristretto;
+    doc["cnt_espresso"]         = jura_state.cnt_espresso;
+    doc["cnt_coffee"]           = jura_state.cnt_coffee;
+    doc["cnt_cappuccino"]       = jura_state.cnt_cappuccino;
+    doc["cnt_esp_macchiato"]    = jura_state.cnt_esp_macchiato;
+    doc["cnt_latte"]            = jura_state.cnt_latte;
+    doc["cnt_milk"]             = jura_state.cnt_milk;
+    doc["cnt_hotwater"]         = jura_state.cnt_hotwater;
+    doc["cnt_2ristretti"]       = jura_state.cnt_2ristretti;
+    doc["cnt_2espressi"]        = jura_state.cnt_2espressi;
+    doc["cnt_2coffee"]          = jura_state.cnt_2coffee;
+    doc["cnt_flat_white"]       = jura_state.cnt_flat_white;
+    doc["pct_cleaning"]         = jura_state.pct_cleaning;
+    doc["pct_filter"]           = jura_state.pct_filter;
+    doc["pct_descale"]          = jura_state.pct_descale;
+    doc["maint_cleanings"]      = jura_state.maint_cleanings;
+    doc["maint_filter_changes"] = jura_state.maint_filter_changes;
+    doc["maint_descalings"]     = jura_state.maint_descalings;
+    doc["maint_milk_rinses"]    = jura_state.maint_milk_rinses;
+    doc["maint_coffee_rinses"]  = jura_state.maint_coffee_rinses;
+    doc["maint_milk_cleans"]    = jura_state.maint_milk_cleans;
+  }
   // Bridge diagnostic (dashboard Status sub-tab):
   doc["ble_connected"]      = jura_state.ble_connected;
   doc["auth_ok"]            = jura_state.auth_ok;

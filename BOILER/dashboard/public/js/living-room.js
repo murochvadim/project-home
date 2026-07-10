@@ -92,11 +92,6 @@
     ['maint_descalings', 'Descalings'], ['maint_coffee_rinses', 'Coffee rinses'],
     ['maint_milk_rinses', 'Milk rinses'], ['maint_milk_cleans', 'Milk cleans'],
   ];
-  const JURA_ALERTS = [
-    ['water_low', 'Fill water'], ['beans_low', 'Add beans'], ['grounds_full', 'Empty grounds'],
-    ['tray_full', 'Empty tray'], ['filter_required', 'Change filter'],
-    ['cleaning_required', 'Clean'], ['descale_required', 'Descale'],
-  ];
 
   function startJura() {
     loadJura();
@@ -175,16 +170,6 @@
          </div>`).join('');
     }
 
-    // alerts (experimental)
-    const aEl = document.getElementById('jura-alerts');
-    if (aEl) {
-      aEl.innerHTML = JURA_ALERTS.map(([k, label]) => {
-        const on = st[k] === true || st[k] === 'true';
-        return `<span style="padding:5px 10px;border-radius:14px;font-size:0.8rem;
-          background:${on ? '#fdecea' : '#eef6ee'};color:${on ? '#c0392b' : '#5a8a5a'};
-          border:1px solid ${on ? '#f0b4ad' : '#cfe3cf'};">${on ? '⚠ ' : '✓ '}${label}</span>`;
-      }).join('');
-    }
   }
   window.loadJura = loadJura;
 

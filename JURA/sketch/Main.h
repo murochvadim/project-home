@@ -36,7 +36,7 @@ const int   mqtt_port_moskuitto   = 1883;
 // ─── Sketch identity ─────────────────────────────────────────────────────
 const char* device_id      = "salon_bridge";
 const char* sketch_name    = "Salon_Bridge";
-const char* sketch_version = "v5";
+const char* sketch_version = "v6";
 const char* build_ts       = __DATE__ " " __TIME__;
 
 // Shared OTA password (every board uses the same value via .env ESP_OTA_PASSWORD).
@@ -134,6 +134,7 @@ struct JuraState {
   uint32_t maint_coffee_rinses = 0;
   uint32_t maint_milk_cleans   = 0;
   // ── Bridge state (not Jura state — diagnostic for the dashboard) ─────
+  bool    stats_valid          = false;   // true once a BLE stats read has succeeded this boot
   bool    ble_connected        = false;
   bool    auth_ok              = false;
   uint32_t last_poll_unix      = 0;

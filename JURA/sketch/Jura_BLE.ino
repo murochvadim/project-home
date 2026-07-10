@@ -139,6 +139,7 @@ static void readProductStats() {
   uint8_t buf[64];
   size_t n = readStatsDataset(0x0001, buf, sizeof(buf));
   if (n < 3) { publishEspEvent("stats", "ble", "products", "empty"); return; }
+  jura_state.stats_valid = true;   // a real read succeeded — counters may now be published
   auto val = [&](size_t idx) -> uint32_t {
     size_t o = idx * 3;
     if (o + 2 >= n) return 0;
@@ -188,6 +189,7 @@ static void readMaintenance() {
 // Live alerts (MACHINE_STATUS 5a401524). A P_MODE (5a401529) heartbeat write
 // [key,7F,80] refreshes the status; then read + decrypt + bit-decode.
 //   bit b -> byte (b>>3)+1, position 7-(b&7)
+__attribute__((unused))
 static void readMachineStatus() {
   NimBLERemoteCharacteristic* pmode = _svc->getCharacteristic(NimBLEUUID(JURA_CHAR_P_MODE));
   NimBLERemoteCharacteristic* mstat = _svc->getCharacteristic(NimBLEUUID(JURA_CHAR_MACHINE_STATUS));
@@ -240,7 +242,11 @@ static void pollStats() {
   // the MACHINE_STATUS characteristic (it echoes the last stats request:
   // "2A00<ds>..."), so the alert bits come out stale/garbage. The laptop's
   // status tool read it standalone for the same reason.
-  readMachineStatus();
+  // readMachineStatus() intentionally NOT called — on this machine
+  // MACHINE_STATUS echoes the last stats command instead of returning a clean
+  // status frame, so the live alert bits are unreliable and are no longer
+  // published. Counters + maintenance below are solid. (The function is kept
+  // for reference / a future dedicated-status-session approach.)
   readProductStats();
   readMaintenance();
   jura_state.last_poll_unix = (uint32_t)(millis() / 1000);

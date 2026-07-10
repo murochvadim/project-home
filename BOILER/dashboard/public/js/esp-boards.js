@@ -253,7 +253,7 @@ function renderStatus(b) {
       </div>
     </div>
 
-    ${('bobo_battery' in status) ? `
+    ${(b.id === 'balcony_bridge') ? `
       <div class="esp-card">
         <h3 class="esp-card-title">BoBo Balance Board</h3>
         <div class="status-grid">
@@ -266,7 +266,7 @@ function renderStatus(b) {
       </div>
     ` : ''}
 
-    ${('total_dispensed' in status) ? `
+    ${(b.id === 'salon_bridge') ? `
       <div class="esp-card">
         <h3 class="esp-card-title">Jura J6 Coffee Machine</h3>
         <div class="status-grid">
