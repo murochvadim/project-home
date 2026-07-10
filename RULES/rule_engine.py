@@ -900,12 +900,11 @@ class RuleEngine:
         # remoteXY gate
         'door_relay', 'charge_relay', 'door_open_enabled',
         # jura coffee bridge (salon_bridge) — full stats + maintenance (NimBLE, 2026-07-10).
-        # NOTE: live alert bits (water/beans/grounds/tray/filter) are projected but
-        # currently UNRELIABLE — MACHINE_STATUS echoes the stats command on this
-        # machine (see [[project_jura_phase2]]); counters + maintenance are solid.
-        'power_state', 'current_drink',
-        'water_low', 'beans_low', 'grounds_full', 'tray_full', 'filter_required',
-        'cleaning_required', 'descale_required',
+        # Live alert bits (water/beans/grounds/tray/filter) were REMOVED (v6) — on this
+        # machine MACHINE_STATUS echoes the stats command so they're unreliable; the
+        # firmware no longer publishes them (see [[project_jura_phase2]]). Counters +
+        # maintenance are solid. stats_valid guards the no-0-until-read behaviour.
+        'power_state', 'current_drink', 'stats_valid',
         'total_dispensed',
         # per-drink lifetime counters
         'cnt_ristretto', 'cnt_espresso', 'cnt_coffee', 'cnt_cappuccino',
