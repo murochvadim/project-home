@@ -114,12 +114,19 @@
     } catch (e) { /* leave dev null */ }
     const st = (dev && dev.last_state) || {};
 
-    // link + freshness
+    // Indicator: the ESP bridge is always powered, so freshness of last_seen
+    // only tells us the BRIDGE is up. The MACHINE on/off comes from power_state
+    // (firmware sets it from BLE connect success/failure = advertising presence).
     const linkEl = document.getElementById('jura-link');
     if (linkEl) {
-      const online = !!(dev && dev.last_seen && (Date.now() - new Date(dev.last_seen).getTime()) < 180000);
-      linkEl.textContent = online ? '● Online' : '● Offline';
-      linkEl.style.color = online ? '#27ae60' : '#c0392b';
+      const bridgeFresh = !!(dev && dev.last_seen && (Date.now() - new Date(dev.last_seen).getTime()) < 180000);
+      if (!bridgeFresh) {
+        linkEl.textContent = '● Bridge offline'; linkEl.style.color = '#c0392b';
+      } else if (st.power_state === 'on') {
+        linkEl.textContent = '● Machine on'; linkEl.style.color = '#27ae60';
+      } else {
+        linkEl.textContent = '● Machine off'; linkEl.style.color = '#888';
+      }
     }
     const lr = document.getElementById('jura-lastread');
     if (lr) lr.textContent = dev && dev.last_seen

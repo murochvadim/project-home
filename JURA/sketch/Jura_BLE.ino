@@ -227,7 +227,6 @@ static void readMachineStatus() {
   jura_state.filter_required   = bit(32);
   jura_state.descale_required  = bit(33);
   jura_state.cleaning_required = bit(34);
-  jura_state.power_state       = "on";   // a successful status read = machine reachable/on
 }
 
 // One session's full read: products + live alerts + maintenance.
@@ -341,15 +340,25 @@ void juraBleLoop() {
   }
 
   // ── Step 1: connect by address (NimBLE handles random-addr resolve) ─
+  // Machine on/off is DETECTED by advertising presence: the BlueFrog only
+  // advertises while the Jura is ON, so a successful connect => machine on,
+  // and repeated connect failures => machine off (there is no power-off
+  // command; this is the only on/off signal). Debounce with 2 consecutive
+  // fails so one missed advertisement doesn't flip the state.
+  static uint8_t _consec_connect_fail = 0;
   Serial.println("BLE: connecting to BlueFrog by address...");
   if (!_client->connect(_bluefrog)) {
     Serial.println("BLE: connect failed — backing off");
     publishEspEvent("connect-fail", "ble", "", "");
     jura_state.ble_connected = false;
+    if (_consec_connect_fail < 255) _consec_connect_fail++;
+    if (_consec_connect_fail >= 2) jura_state.power_state = "off";   // machine not advertising
     _last_failed_attempt_ms = millis();
     return;
   }
+  _consec_connect_fail = 0;
   jura_state.ble_connected = true;
+  jura_state.power_state   = "on";     // connected => machine is on
   Serial.println("BLE: connected to BlueFrog");
   publishEspEvent("state", "ble", "bluefrog", "connected");
   { char hb[16]; snprintf(hb, sizeof(hb), "%u", (unsigned)ESP.getFreeHeap());
