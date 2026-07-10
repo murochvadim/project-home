@@ -253,7 +253,7 @@ function renderStatus(b) {
       </div>
     </div>
 
-    ${('ble_connected' in status) ? `
+    ${('bobo_battery' in status) ? `
       <div class="esp-card">
         <h3 class="esp-card-title">BoBo Balance Board</h3>
         <div class="status-grid">
@@ -263,6 +263,19 @@ function renderStatus(b) {
           <div class="item"><label>Frames</label><div class="value ${status.frames_total != null ? '' : 'dim'}">${status.frames_total != null ? status.frames_total : '—'}</div></div>
         </div>
         ${online ? '' : '<p style="margin:8px 0 0 0;font-size:0.75rem;color:#aaa;font-style:italic;">Board offline — BoBo state unknown until heartbeat resumes.</p>'}
+      </div>
+    ` : ''}
+
+    ${('total_dispensed' in status) ? `
+      <div class="esp-card">
+        <h3 class="esp-card-title">Jura J6 Coffee Machine</h3>
+        <div class="status-grid">
+          <div class="item"><label>BLE link</label><div class="value">${dotCell(online ? status.ble_connected : null, 'connected', 'disconnected')}</div></div>
+          <div class="item"><label>Machine</label><div class="value ${status.power_state ? '' : 'dim'}">${status.power_state === 'on' ? '● on' : status.power_state === 'off' ? '○ off' : '—'}</div></div>
+          <div class="item"><label>Total drinks</label><div class="value ${status.total_dispensed != null ? '' : 'dim'}">${status.total_dispensed != null ? Number(status.total_dispensed).toLocaleString() : '—'}</div></div>
+          <div class="item"><label>Last read</label><div class="value ${(status.uptime_s != null && status.last_poll_unix) ? '' : 'dim'}">${(status.uptime_s != null && status.last_poll_unix) ? Math.max(0, status.uptime_s - status.last_poll_unix) + 's ago' : '—'}</div></div>
+        </div>
+        ${online ? '' : '<p style="margin:8px 0 0 0;font-size:0.75rem;color:#aaa;font-style:italic;">Board offline — Jura state unknown until heartbeat resumes.</p>'}
       </div>
     ` : ''}
 
