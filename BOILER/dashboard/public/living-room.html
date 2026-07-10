@@ -102,6 +102,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" onclick="showTab('wallmote', this)">Wallmote</button>
     <button class="tab-btn" onclick="showTab('awtrix', this)">Awtrix</button>
+    <button class="tab-btn" onclick="showTab('jura', this)">Jura</button>
   </div>
 
   <div class="tab-panel active" id="tab-wallmote">
@@ -379,6 +380,41 @@
     </div>
   </div>
 
+  <div class="tab-panel" id="tab-jura">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <h2 style="margin:0;">☕ Jura J6 — Salon Bridge</h2>
+        <div style="display:flex;align-items:center;gap:14px;font-size:0.85rem;color:#666;">
+          <span id="jura-link">● —</span>
+          <span>Last read: <span id="jura-lastread">—</span></span>
+        </div>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin-top:12px;">
+        <span style="font-size:2.6rem;font-weight:700;color:#6f4e37;" id="jura-total">—</span>
+        <span style="color:#888;">drinks dispensed (lifetime)</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 10px;">Per-drink counts</h3>
+      <div id="jura-drinks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;">
+        <div style="color:#888;">Loading…</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 10px;">Maintenance</h3>
+      <div id="jura-maint-pct" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:14px;"></div>
+      <div id="jura-maint-cnt" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px;">Machine alerts</h3>
+      <div style="font-size:0.78rem;color:#c0392b;margin-bottom:10px;">⚠ Experimental — the machine echoes its stats command into the status channel, so these may be inaccurate. Counters above are reliable.</div>
+      <div id="jura-alerts" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+    </div>
+  </div>
+
 </main>
 
 <!-- Device picker popover -->
@@ -406,6 +442,6 @@
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/device-picker.js?v=16"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/living-room.js?v=50"></script>
+<script src="js/living-room.js?v=51"></script>
 </body>
 </html>

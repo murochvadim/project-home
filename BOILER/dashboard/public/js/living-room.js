@@ -72,8 +72,114 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-' + name).classList.add('active');
     btn.classList.add('active');
+    if (name === 'jura') startJura(); else stopJura();
   }
   window.showTab = showTab;
+
+  // ─── Jura tab (read-only view of salon_bridge stats) ───────────────────
+  let _juraTimer = null;
+  const JURA_ID = 'salon_bridge';
+  // display order + labels for per-drink counters (hidden when 0)
+  const JURA_DRINKS = [
+    ['cnt_coffee', 'Coffee'], ['cnt_espresso', 'Espresso'], ['cnt_cappuccino', 'Cappuccino'],
+    ['cnt_latte', 'Latte Macchiato'], ['cnt_esp_macchiato', 'Espresso Macchiato'],
+    ['cnt_ristretto', 'Ristretto'], ['cnt_milk', 'Milk Portion'], ['cnt_hotwater', 'Hot Water'],
+    ['cnt_flat_white', 'Flat White'], ['cnt_2espressi', '2× Espresso'],
+    ['cnt_2coffee', '2× Coffee'], ['cnt_2ristretti', '2× Ristretto'],
+  ];
+  const JURA_MAINT_CNT = [
+    ['maint_cleanings', 'Cleanings'], ['maint_filter_changes', 'Filter changes'],
+    ['maint_descalings', 'Descalings'], ['maint_coffee_rinses', 'Coffee rinses'],
+    ['maint_milk_rinses', 'Milk rinses'], ['maint_milk_cleans', 'Milk cleans'],
+  ];
+  const JURA_ALERTS = [
+    ['water_low', 'Fill water'], ['beans_low', 'Add beans'], ['grounds_full', 'Empty grounds'],
+    ['tray_full', 'Empty tray'], ['filter_required', 'Change filter'],
+    ['cleaning_required', 'Clean'], ['descale_required', 'Descale'],
+  ];
+
+  function startJura() {
+    loadJura();
+    if (!_juraTimer) _juraTimer = setInterval(loadJura, 15000);
+  }
+  function stopJura() {
+    if (_juraTimer) { clearInterval(_juraTimer); _juraTimer = null; }
+  }
+
+  async function loadJura() {
+    let dev = null;
+    try {
+      const devs = await fetch('/api/devices').then(r => r.json());
+      dev = (Array.isArray(devs) ? devs : []).find(d => d && d.id === JURA_ID);
+    } catch (e) { /* leave dev null */ }
+    const st = (dev && dev.last_state) || {};
+
+    // link + freshness
+    const linkEl = document.getElementById('jura-link');
+    if (linkEl) {
+      const online = !!(dev && dev.last_seen && (Date.now() - new Date(dev.last_seen).getTime()) < 180000);
+      linkEl.textContent = online ? '● Online' : '● Offline';
+      linkEl.style.color = online ? '#27ae60' : '#c0392b';
+    }
+    const lr = document.getElementById('jura-lastread');
+    if (lr) lr.textContent = dev && dev.last_seen
+      ? new Date(dev.last_seen).toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '—';
+
+    const totEl = document.getElementById('jura-total');
+    if (totEl) totEl.textContent = (st.total_dispensed != null) ? Number(st.total_dispensed).toLocaleString() : '—';
+
+    // per-drink
+    const dEl = document.getElementById('jura-drinks');
+    if (dEl) {
+      const rows = JURA_DRINKS.filter(([k]) => Number(st[k]) > 0)
+        .sort((a, b) => Number(st[b[0]]) - Number(st[a[0]]));
+      dEl.innerHTML = rows.length ? rows.map(([k, label]) =>
+        `<div style="background:#f6f2ec;border-radius:8px;padding:10px 12px;">
+           <div style="font-size:1.5rem;font-weight:700;color:#6f4e37;">${Number(st[k]).toLocaleString()}</div>
+           <div style="font-size:0.8rem;color:#777;">${label}</div>
+         </div>`).join('') : '<div style="color:#888;">No data yet</div>';
+    }
+
+    // maintenance percentages (255 = N/A)
+    const pctEl = document.getElementById('jura-maint-pct');
+    if (pctEl) {
+      const pcts = [['pct_cleaning', 'Cleaning'], ['pct_filter', 'Filter'], ['pct_descale', 'Descale']];
+      pctEl.innerHTML = pcts.map(([k, label]) => {
+        const v = st[k];
+        const na = (v == null || Number(v) === 255);
+        const pct = na ? 0 : Math.max(0, Math.min(100, Number(v)));
+        const col = pct >= 50 ? '#27ae60' : pct >= 20 ? '#e67e22' : '#c0392b';
+        return `<div>
+          <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#555;margin-bottom:3px;">
+            <span>${label}</span><span>${na ? 'N/A' : pct + '%'}</span></div>
+          <div style="height:8px;background:#e6e0d8;border-radius:5px;overflow:hidden;">
+            <div style="height:100%;width:${na ? 0 : pct}%;background:${col};"></div></div>
+        </div>`;
+      }).join('');
+    }
+
+    // maintenance counters
+    const cntEl = document.getElementById('jura-maint-cnt');
+    if (cntEl) {
+      cntEl.innerHTML = JURA_MAINT_CNT.map(([k, label]) =>
+        `<div style="background:#f6f2ec;border-radius:8px;padding:8px 12px;">
+           <div style="font-size:1.2rem;font-weight:600;">${st[k] != null ? Number(st[k]).toLocaleString() : '—'}</div>
+           <div style="font-size:0.78rem;color:#777;">${label}</div>
+         </div>`).join('');
+    }
+
+    // alerts (experimental)
+    const aEl = document.getElementById('jura-alerts');
+    if (aEl) {
+      aEl.innerHTML = JURA_ALERTS.map(([k, label]) => {
+        const on = st[k] === true || st[k] === 'true';
+        return `<span style="padding:5px 10px;border-radius:14px;font-size:0.8rem;
+          background:${on ? '#fdecea' : '#eef6ee'};color:${on ? '#c0392b' : '#5a8a5a'};
+          border:1px solid ${on ? '#f0b4ad' : '#cfe3cf'};">${on ? '⚠ ' : '✓ '}${label}</span>`;
+      }).join('');
+    }
+  }
+  window.loadJura = loadJura;
 
   function refreshPage() {
     const el = document.getElementById('last-refresh');
