@@ -99,73 +99,152 @@ static void runAuthHandshake() {
   jura_state.auth_ok = true;
 }
 
-// ─── Stats decoder (Jutta-Proto: 3-byte big-endian counters) ─────────────
+// ─── Statistics + maintenance + machine-status reads ─────────────────────
 //
-// After juraEncDec(raw, key) the payload is a sequence of 3-byte big-endian
-// counters. Counter 0 is the total products dispensed; later counters are
-// indexed by the machine's per-product code (from its machine file).
-static size_t getStatVal(const uint8_t* buf, size_t len, size_t productIdx) {
-  size_t off = productIdx * 3;
-  if (off + 2 >= len) return (size_t)-1;
-  return ((size_t)buf[off] << 16) | ((size_t)buf[off + 1] << 8) | (size_t)buf[off + 2];
-}
-
-static void decodeStatsPayload(const uint8_t* enc, size_t len) {
-  if (len == 0) {
-    Serial.println("BLE: stats payload empty (read returned 0 bytes)");
-    return;
-  }
-  static uint8_t buf[64];
-  size_t n = (len > sizeof(buf)) ? sizeof(buf) : len;
-  memcpy(buf, enc, n);
-  juraEncDec(buf, n, _jura_key);
-  size_t total = getStatVal(buf, n, 0);
-  Serial.printf("BLE: stats len=%u total=%u (key=0x%02X) first16=", (unsigned)n, (unsigned)total, _jura_key);
-  for (size_t i = 0; i < n && i < 16; i++) Serial.printf("%02X ", buf[i]);
-  Serial.println();
-  if (total != (size_t)-1) {
-    jura_state.total_dispensed = (uint32_t)total;
-  }
-}
-
-// ─── Per-session stats read (Jutta-Proto / AlexxIT flow) ─────────────────
+// All validated live from the laptop tools (JURA/tools/) 2026-07-10, key 0x2A.
+// Common stats flow: write encrypt([key, ds_hi, ds_lo, FF, FF]) to
+// STATISTICS_COMMAND (5a401533), poll-read it until byte[1] != 0xE1
+// (0xE1 = not ready), then read STATISTICS_DATA (5a401534) and decrypt.
+// Dataset selector `ds`:
+//   0x0001 = product counters   (total + per-drink, 3-byte BE each)
+//   0x0004 = maintenance counters (cleaning/filter/descale/rinses, u16 BE each)
+//   0x0008 = maintenance percent  (cleaning/filter/descale, 1 byte each)
+// Live alerts come from MACHINE_STATUS (5a401524) after a P_MODE heartbeat.
+// NimBLE's writeValue has an internal ACK timeout (returns false on failure),
+// so a non-ACKing peer no longer wedges the loop into a watchdog crash.
 //
-//   1. write encrypt([key,00,01,FF,FF]) to STATISTICS_COMMAND (5a401533)
-//   2. poll-read STATISTICS_COMMAND until byte[1] != 0xE1 (0xE1 = not ready)
-//   3. read STATISTICS_DATA (5a401534) + decrypt -> 3-byte counters ([0]=total)
-//
-// The request write is a read-request (no brewing). If we reach "stats-req-ok"
-// and total is sane, the ESP32 write path works. NimBLE's writeValue has an
-// internal ACK timeout (returns false on failure) so a non-ACKing peer no
-// longer wedges the loop into a task-watchdog crash like Bluedroid did.
-static void pollStats() {
-  if (!_svc) return;
+// Reads decrypt in place into out[] and return the decrypted length.
+static size_t readStatsDataset(uint16_t ds, uint8_t* out, size_t outMax) {
   NimBLERemoteCharacteristic* cmd = _svc->getCharacteristic(NimBLEUUID(JURA_CHAR_STATISTICS_COMMAND));
   NimBLERemoteCharacteristic* dat = _svc->getCharacteristic(NimBLEUUID(JURA_CHAR_STATISTICS_DATA));
-  { char hb[40]; snprintf(hb, sizeof(hb), "cmd=%d dat=%d h=%u", cmd ? 1 : 0, dat ? 1 : 0, (unsigned)ESP.getFreeHeap());
-    publishEspEvent("poll-chars", "ble", (cmd && dat) ? "ok" : "MISSING", hb); }
-  if (!cmd || !dat) { Serial.println("BLE: STATISTICS char(s) not found"); return; }
-
-  uint8_t req[5] = { _jura_key, 0x00, 0x01, 0xFF, 0xFF };
+  if (!cmd || !dat) return 0;
+  uint8_t req[5] = { _jura_key, (uint8_t)(ds >> 8), (uint8_t)(ds & 0xFF), 0xFF, 0xFF };
   juraEncDec(req, sizeof(req), _jura_key);
-  publishEspEvent("stats-req", "ble", "write", "");
-  bool wok = cmd->writeValue(req, sizeof(req), true);      // write-with-response
-  publishEspEvent("stats-req-ok", "ble", wok ? "wrote" : "write_fail", "");
-  if (!wok) { Serial.println("BLE: stats request write failed"); return; }
-
-  bool ready = false;
-  for (int i = 0; i < 20; i++) {                           // wait for byte[1] != 0xE1 (max ~8 s)
+  if (!cmd->writeValue(req, sizeof(req), true)) return 0;
+  for (int i = 0; i < 20; i++) {                    // wait for byte[1] != 0xE1 (max ~8 s)
     NimBLEAttValue st = cmd->readValue();
-    if (st.length() > 1 && st.data()[1] != 0xE1) { ready = true; break; }
+    if (st.length() > 1 && st.data()[1] != 0xE1) break;
     delay(400);
   }
-  if (!ready) publishEspEvent("stats-notready", "ble", "", "");
-
   NimBLEAttValue data = dat->readValue();
-  decodeStatsPayload(data.data(), data.length());
-  jura_state.last_poll_unix = (uint32_t)(millis() / 1000);
+  size_t n = data.length();
+  if (n > outMax) n = outMax;
+  memcpy(out, data.data(), n);
+  juraEncDec(out, n, _jura_key);                    // decrypt in place
+  return n;
+}
+
+// Lifetime product counters (dataset 0x0001). Indices are Jura product codes.
+static void readProductStats() {
+  uint8_t buf[64];
+  size_t n = readStatsDataset(0x0001, buf, sizeof(buf));
+  if (n < 3) { publishEspEvent("stats", "ble", "products", "empty"); return; }
+  auto val = [&](size_t idx) -> uint32_t {
+    size_t o = idx * 3;
+    if (o + 2 >= n) return 0;
+    uint32_t v = ((uint32_t)buf[o] << 16) | ((uint32_t)buf[o + 1] << 8) | (uint32_t)buf[o + 2];
+    return (v == 0xFFFF) ? 0 : v;   // 0xFFFF = unused-drink-slot sentinel -> 0
+  };
+  jura_state.total_dispensed   = val(0);
+  jura_state.cnt_ristretto     = val(1);
+  jura_state.cnt_espresso      = val(2);
+  jura_state.cnt_coffee        = val(3);
+  jura_state.cnt_cappuccino    = val(4);
+  jura_state.cnt_esp_macchiato = val(6);
+  jura_state.cnt_latte         = val(7);
+  jura_state.cnt_milk          = val(10);
+  jura_state.cnt_hotwater      = val(13);
+  jura_state.cnt_2ristretti    = val(17);
+  jura_state.cnt_2espressi     = val(18);
+  jura_state.cnt_2coffee       = val(19);
+  jura_state.cnt_flat_white    = val(46);
+  Serial.printf("BLE: total=%lu esp=%lu cof=%lu capp=%lu\n",
+    (unsigned long)jura_state.total_dispensed, (unsigned long)jura_state.cnt_espresso,
+    (unsigned long)jura_state.cnt_coffee, (unsigned long)jura_state.cnt_cappuccino);
   char tot[16]; snprintf(tot, sizeof(tot), "%lu", (unsigned long)jura_state.total_dispensed);
-  publishEspEvent("stats-total", "ble", "", tot);          // watch this: should read ~10982
+  publishEspEvent("stats-total", "ble", "", tot);
+}
+
+// Maintenance percentages (0x0008, 1 byte each) + counters (0x0004, u16 BE).
+// ⚠ These read zero while the machine is in its own maintenance menu — the
+// values are valid on the MAIN/idle screen (product counters are unaffected).
+static void readMaintenance() {
+  uint8_t buf[32];
+  size_t n = readStatsDataset(0x0008, buf, sizeof(buf));
+  if (n >= 1) jura_state.pct_cleaning = buf[0];
+  if (n >= 2) jura_state.pct_filter   = buf[1];
+  if (n >= 3) jura_state.pct_descale  = buf[2];
+
+  n = readStatsDataset(0x0004, buf, sizeof(buf));
+  auto u16 = [&](size_t o) -> uint32_t { return (o + 1 < n) ? (((uint32_t)buf[o] << 8) | buf[o + 1]) : 0; };
+  jura_state.maint_cleanings      = u16(0);
+  jura_state.maint_filter_changes = u16(2);
+  jura_state.maint_descalings     = u16(4);
+  jura_state.maint_milk_rinses    = u16(6);
+  jura_state.maint_coffee_rinses  = u16(8);
+  jura_state.maint_milk_cleans    = u16(10);
+}
+
+// Live alerts (MACHINE_STATUS 5a401524). A P_MODE (5a401529) heartbeat write
+// [key,7F,80] refreshes the status; then read + decrypt + bit-decode.
+//   bit b -> byte (b>>3)+1, position 7-(b&7)
+static void readMachineStatus() {
+  NimBLERemoteCharacteristic* pmode = _svc->getCharacteristic(NimBLEUUID(JURA_CHAR_P_MODE));
+  NimBLERemoteCharacteristic* mstat = _svc->getCharacteristic(NimBLEUUID(JURA_CHAR_MACHINE_STATUS));
+  if (!mstat) return;
+  // Heartbeat P_MODE [key,7F,80] then read — repeated a few times so the
+  // machine settles to a real MACHINE_STATUS frame (a single quick read right
+  // after connect can catch a not-ready frame with every alert bit set). The
+  // laptop tool loops the same way; the LAST read is the accurate one.
+  uint8_t st[32];
+  size_t  n = 0;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (pmode) {
+      uint8_t hb[3] = { _jura_key, 0x7F, 0x80 };
+      juraEncDec(hb, sizeof(hb), _jura_key);
+      pmode->writeValue(hb, sizeof(hb), true);
+    }
+    delay(1000);
+    NimBLEAttValue raw = mstat->readValue();
+    n = raw.length();
+    if (n > sizeof(st)) n = sizeof(st);
+    memcpy(st, raw.data(), n);
+    juraEncDec(st, n, _jura_key);
+  }
+  // Dump the decrypted status bytes so the decode can be verified over MQTT
+  // (an all-FF frame = machine asleep/not-ready; alerts are only valid awake).
+  { char hx[48]; size_t k = 0;
+    for (size_t i = 0; i < n && k + 2 < sizeof(hx); i++) k += snprintf(hx + k, sizeof(hx) - k, "%02X", st[i]);
+    publishEspEvent("mstatus", "ble", "raw", hx); }
+  auto bit = [&](int b) -> bool {
+    size_t by = (b >> 3) + 1;
+    return (by < n) && ((st[by] >> (7 - (b & 7))) & 1);
+  };
+  jura_state.water_low         = bit(1);
+  jura_state.grounds_full      = bit(2);
+  jura_state.tray_full         = bit(3);
+  jura_state.beans_low         = bit(10);
+  jura_state.filter_required   = bit(32);
+  jura_state.descale_required  = bit(33);
+  jura_state.cleaning_required = bit(34);
+  jura_state.power_state       = "on";   // a successful status read = machine reachable/on
+}
+
+// One session's full read: products + live alerts + maintenance.
+static void pollStats() {
+  if (!_svc) return;
+  NimBLERemoteCharacteristic* probe = _svc->getCharacteristic(NimBLEUUID(JURA_CHAR_STATISTICS_COMMAND));
+  { char hb[40]; snprintf(hb, sizeof(hb), "chars=%d h=%u", probe ? 1 : 0, (unsigned)ESP.getFreeHeap());
+    publishEspEvent("poll-chars", "ble", probe ? "ok" : "MISSING", hb); }
+  // Machine status FIRST — reading it in isolation (only a P_MODE heartbeat
+  // before it) keeps it clean. Running any STATISTICS_COMMAND first pollutes
+  // the MACHINE_STATUS characteristic (it echoes the last stats request:
+  // "2A00<ds>..."), so the alert bits come out stale/garbage. The laptop's
+  // status tool read it standalone for the same reason.
+  readMachineStatus();
+  readProductStats();
+  readMaintenance();
+  jura_state.last_poll_unix = (uint32_t)(millis() / 1000);
 }
 
 // ─── Public API: command dispatch (called from Esp_Base.ino) ─────────────

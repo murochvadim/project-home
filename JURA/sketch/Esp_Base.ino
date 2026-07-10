@@ -77,7 +77,7 @@ static void saveEspParams() {
 // ─── Outbound publishers ──────────────────────────────────────────────────
 static void publishEspStatus() {
   if (!client_Moskuitto.connected()) return;
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<1536> doc;
   doc["ip"]                 = WiFi.localIP().toString();
   doc["rssi"]               = WiFi.RSSI();
   doc["uptime_s"]           = millis() / 1000;
@@ -90,18 +90,44 @@ static void publishEspStatus() {
   // _ESP_STATUS_DPS_FIELDS (must include these names there).
   doc["power_state"]        = jura_state.power_state;
   doc["current_drink"]      = jura_state.current_drink;
+  // live alerts
   doc["water_low"]          = jura_state.water_low;
-  doc["beans_low"]          = jura_state.beans_low;
   doc["grounds_full"]       = jura_state.grounds_full;
+  doc["tray_full"]          = jura_state.tray_full;
+  doc["beans_low"]          = jura_state.beans_low;
+  doc["filter_required"]    = jura_state.filter_required;
   doc["cleaning_required"]  = jura_state.cleaning_required;
   doc["descale_required"]   = jura_state.descale_required;
+  // lifetime product counters
   doc["total_dispensed"]    = jura_state.total_dispensed;
-  doc["espressos_today"]    = jura_state.espressos_today;
+  doc["cnt_ristretto"]      = jura_state.cnt_ristretto;
+  doc["cnt_espresso"]       = jura_state.cnt_espresso;
+  doc["cnt_coffee"]         = jura_state.cnt_coffee;
+  doc["cnt_cappuccino"]     = jura_state.cnt_cappuccino;
+  doc["cnt_esp_macchiato"]  = jura_state.cnt_esp_macchiato;
+  doc["cnt_latte"]          = jura_state.cnt_latte;
+  doc["cnt_milk"]           = jura_state.cnt_milk;
+  doc["cnt_hotwater"]       = jura_state.cnt_hotwater;
+  doc["cnt_2ristretti"]     = jura_state.cnt_2ristretti;
+  doc["cnt_2espressi"]      = jura_state.cnt_2espressi;
+  doc["cnt_2coffee"]        = jura_state.cnt_2coffee;
+  doc["cnt_flat_white"]     = jura_state.cnt_flat_white;
+  // maintenance percentages (255 = N/A)
+  doc["pct_cleaning"]       = jura_state.pct_cleaning;
+  doc["pct_filter"]         = jura_state.pct_filter;
+  doc["pct_descale"]        = jura_state.pct_descale;
+  // maintenance counters
+  doc["maint_cleanings"]      = jura_state.maint_cleanings;
+  doc["maint_filter_changes"] = jura_state.maint_filter_changes;
+  doc["maint_descalings"]     = jura_state.maint_descalings;
+  doc["maint_milk_rinses"]    = jura_state.maint_milk_rinses;
+  doc["maint_coffee_rinses"]  = jura_state.maint_coffee_rinses;
+  doc["maint_milk_cleans"]    = jura_state.maint_milk_cleans;
   // Bridge diagnostic (dashboard Status sub-tab):
   doc["ble_connected"]      = jura_state.ble_connected;
   doc["auth_ok"]            = jura_state.auth_ok;
   doc["last_poll_unix"]     = jura_state.last_poll_unix;
-  char buf[512];
+  char buf[1536];
   size_t n = serializeJson(doc, buf, sizeof(buf));
   client_Moskuitto.publish(esp_status_topic.c_str(), (const uint8_t*)buf, n, false);
 }

@@ -36,7 +36,7 @@ const int   mqtt_port_moskuitto   = 1883;
 // ─── Sketch identity ─────────────────────────────────────────────────────
 const char* device_id      = "salon_bridge";
 const char* sketch_name    = "Salon_Bridge";
-const char* sketch_version = "v1";
+const char* sketch_version = "v4";
 const char* build_ts       = __DATE__ " " __TIME__;
 
 // Shared OTA password (every board uses the same value via .env ESP_OTA_PASSWORD).
@@ -98,16 +98,42 @@ struct {
 // Published in publishEspStatus() so the rule engine projects these fields
 // into devices.last_state.dps for rules + dashboard.
 struct JuraState {
-  String  power_state          = "unknown";   // standby | on | brewing | heating
-  String  current_drink        = "";          // drink id while dispensing
-  bool    water_low            = false;
-  bool    beans_low            = false;
-  bool    grounds_full         = false;
-  bool    cleaning_required    = false;
-  bool    descale_required     = false;
-  uint32_t total_dispensed     = 0;
-  uint32_t espressos_today     = 0;
-  // Bridge state (not Jura state — diagnostic for the dashboard):
+  String  power_state          = "unknown";   // on | unknown  (on = status read succeeded)
+  String  current_drink        = "";          // drink id while dispensing (reserved)
+  // ── Live machine-status alerts (MACHINE_STATUS 5a401524 bit-decode) ──
+  bool    water_low            = false;        // bit 1  — FILL WATER (tank empty)
+  bool    grounds_full         = false;        // bit 2  — empty grounds container
+  bool    tray_full            = false;        // bit 3  — empty drip tray
+  bool    beans_low            = false;        // bit 10 — NO BEANS
+  bool    filter_required      = false;        // bit 32 — change filter
+  bool    descale_required     = false;        // bit 33 — descale
+  bool    cleaning_required    = false;        // bit 34 — cleaning
+  // ── Lifetime product counters (stats dataset 0x0001, 3-byte BE) ──────
+  uint32_t total_dispensed     = 0;            // counter[0]
+  uint32_t cnt_ristretto       = 0;            // [1]
+  uint32_t cnt_espresso        = 0;            // [2]
+  uint32_t cnt_coffee          = 0;            // [3]
+  uint32_t cnt_cappuccino      = 0;            // [4]
+  uint32_t cnt_esp_macchiato   = 0;            // [6]
+  uint32_t cnt_latte           = 0;            // [7]  Latte Macchiato
+  uint32_t cnt_milk            = 0;            // [10] Milk Portion
+  uint32_t cnt_hotwater        = 0;            // [13]
+  uint32_t cnt_2ristretti      = 0;            // [17]
+  uint32_t cnt_2espressi       = 0;            // [18]
+  uint32_t cnt_2coffee         = 0;            // [19]
+  uint32_t cnt_flat_white      = 0;            // [46]
+  // ── Maintenance percentages (dataset 0x0008, 1 byte each; 255 = N/A) ─
+  uint8_t  pct_cleaning        = 255;
+  uint8_t  pct_filter          = 255;
+  uint8_t  pct_descale         = 255;
+  // ── Maintenance counters (dataset 0x0004, u16 BE each) ───────────────
+  uint32_t maint_cleanings     = 0;
+  uint32_t maint_filter_changes= 0;
+  uint32_t maint_descalings    = 0;
+  uint32_t maint_milk_rinses   = 0;
+  uint32_t maint_coffee_rinses = 0;
+  uint32_t maint_milk_cleans   = 0;
+  // ── Bridge state (not Jura state — diagnostic for the dashboard) ─────
   bool    ble_connected        = false;
   bool    auth_ok              = false;
   uint32_t last_poll_unix      = 0;
