@@ -6,7 +6,7 @@
 // BLE client + Wi-Fi → MQTT bridge for the Jura Impressa J6 + BlueFrog
 // dongle. Acts as a Smart Connect client: connects via NimBLE, runs the
 // Jutta-Proto auth handshake, polls the stats characteristic on a configurable
-// interval, and publishes decoded state to mur/home/esp/jura_bridge_01/status.
+// interval, and publishes decoded state to mur/home/esp/salon_bridge/status.
 // Subscribes to .../command for brew / cancel / standby actions.
 //
 // See JURA/CLAUDE.md (Path C) for the architecture overview.
@@ -34,8 +34,8 @@ const char* mqtt_pass_moskuitto   = "=N!9ioNYZWH-8Rz+y+6n";
 const int   mqtt_port_moskuitto   = 1883;
 
 // ─── Sketch identity ─────────────────────────────────────────────────────
-const char* device_id      = "jura_bridge_01";
-const char* sketch_name    = "Jura_Coffee_Bridge";
+const char* device_id      = "salon_bridge";
+const char* sketch_name    = "Salon_Bridge";
 const char* sketch_version = "v1";
 const char* build_ts       = __DATE__ " " __TIME__;
 
@@ -57,13 +57,12 @@ const char* build_ts       = __DATE__ " " __TIME__;
 #define JURA_CHAR_P_MODE              "5a401529-ab2e-2548-c435-08c300000710"  // power mode write
 #define JURA_CHAR_BARISTA_MODE        "5a401530-ab2e-2548-c435-08c300000710"
 #define JURA_CHAR_ABOUT_MACHINE       "5a401531-ab2e-2548-c435-08c300000710"  // model + firmware ids
-#define JURA_CHAR_STATISTICS_COMMAND  "5a401533-ab2e-2548-c435-08c300000710"  // WRITE the request
-// NOTE: protocol-bt-cpp lists STATISTICS_DATA as 5a401534, but on the
-// J6's BlueFrog the actual readable stats characteristic is 5a401531
-// (verified 2026-05-02 via bleak scan + read returned 56 bytes).
-// 5a401534 doesn't exist on this firmware. Different J6 models /
-// BlueFrog firmware revisions may use different UUIDs.
-#define JURA_CHAR_STATISTICS_DATA     "5a401531-ab2e-2548-c435-08c300000710"  // READ encrypted stats
+#define JURA_CHAR_STATISTICS_COMMAND  "5a401533-ab2e-2548-c435-08c300000710"  // WRITE the stats request
+// CORRECTED 2026-07-10: STATISTICS_DATA IS 5a401534. The laptop bleak
+// enumeration found 5a401534 and it returns real 3-byte counters AFTER the
+// request write. The old note (claiming stats live at 5a401531 / "5a401534
+// doesn't exist") was wrong — 5a401531 is the ABOUT (model/firmware) char.
+#define JURA_CHAR_STATISTICS_DATA     "5a401534-ab2e-2548-c435-08c300000710"  // READ encrypted stats
 #define JURA_CHAR_P_MODE_READ         "5a401538-ab2e-2548-c435-08c300000710"
 
 // ─── ESP-base topic Strings (built once in espBaseSetup) ─────────────────
@@ -131,7 +130,7 @@ void juraBleLoop();                        // called every loop tick — owns co
 bool juraSendCommand(const char* action);  // dispatch a sketch action key (brew_*, cancel, standby)
 void juraBlePrepareForOta();               // graceful BLE shutdown — call from ArduinoOTA.onStart
 
-// OTA-only boot mode (defined in jura_bridge_01.ino). Set the RTC flag,
+// OTA-only boot mode (defined in salon_bridge.ino). Set the RTC flag,
 // reboot, and the next setup() skips BLE entirely so ArduinoOTA has the
 // radio to itself. Auto-reverts to normal mode after OTA completes or
 // after the safety timeout.

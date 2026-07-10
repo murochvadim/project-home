@@ -1,4 +1,4 @@
-/* jura_bridge_01 — Path C of the Jura Coffee Machine integration.
+/* salon_bridge — Path C of the Jura Coffee Machine integration.
  *
  *   ESP32-C3 → BLE client to BlueFrog → Wi-Fi → Mosquitto on LXC 107
  *   Slots into our esp_boards subsystem (Project Boards tab, OTA, rule
@@ -8,8 +8,8 @@
  *   reconnect, HTTP /set_ip recovery, 1 Hz tick). BLE communication is in
  *   Jura_BLE.ino — driven once per loop tick from juraBleLoop().
  *
- *   Reference sketches: My_Bathroom_Smell_Claude (the closest sibling), and
- *   RemoteXY_ESP8266_Claude (the original ESP base pattern).
+ *   Reference sketches: My_Bathroom_Smell_6 (the closest sibling), and
+ *   RemoteXY_ESP8266_ver13 (the original ESP base pattern).
  */
 
 #include <Arduino.h>

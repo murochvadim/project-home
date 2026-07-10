@@ -1,7 +1,7 @@
 /*
- * Esp_Base.ino — ESP base for jura_bridge_01 (ESP32-C3).
+ * Esp_Base.ino — ESP base for salon_bridge (ESP32-C3).
  *
- * Same shape as the My_Bathroom_Smell_Claude base block — pulls per-board
+ * Same shape as the My_Bathroom_Smell_6 base block — pulls per-board
  * specifics from Main.h, owns the schema/avail/status/config/command/event
  * MQTT plumbing. Status payload publishes the JuraState struct fields so the
  * rule engine projects them into devices.last_state.dps.
@@ -24,7 +24,7 @@
 #include <EEPROM.h>
 
 // ─── EEPROM layout ────────────────────────────────────────────────────────
-// 0..31  : HA_IP (managed by jura_bridge_01.ino /set_ip recovery path)
+// 0..31  : HA_IP (managed by salon_bridge.ino /set_ip recovery path)
 // 32     : magic byte (0xA5 → params written; anything else → defaults)
 // 33..36 : poll_interval_sec     (uint32_t)
 // 37..40 : reconnect_backoff_sec (uint32_t)
@@ -140,7 +140,7 @@ static void publishEspAck(const char* action) {
   client_Moskuitto.publish(esp_event_topic.c_str(), (const uint8_t*)buf, n, false);
 }
 
-// ─── Setup hook (called from jura_bridge_01.ino setup()) ─────────────────
+// ─── Setup hook (called from salon_bridge.ino setup()) ─────────────────
 void espBaseSetup() {
   String idStr = String(device_id);
   esp_avail_topic   = "mur/home/esp/" + idStr + "/availability";
