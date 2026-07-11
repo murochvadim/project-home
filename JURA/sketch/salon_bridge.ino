@@ -245,6 +245,7 @@ void setup() {
   params.mqtt_flag = LINK_DISCONNECTED;
   Serial.begin(115200);
   delay(50);
+  Serial.printf("\n\n==== %s  %s  (built %s) ====\n", sketch_name, sketch_version, build_ts);
   disableLoopTaskWdt();   // BLE connect can block several seconds; don't let the 5 s loop WDT panic us
   esp_wifi_restore();
 
