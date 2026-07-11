@@ -368,22 +368,29 @@ void juraBleLoop() {
 
   // ── Step 1: connect by address (NimBLE handles random-addr resolve) ─
   // Machine on/off is DETECTED by advertising presence: the BlueFrog only
-  // advertises while the Jura is ON, so a successful connect => machine on,
-  // and repeated connect failures => machine off (there is no power-off
-  // command; this is the only on/off signal). Debounce with 2 consecutive
-  // fails so one missed advertisement doesn't flip the state.
-  static uint8_t _consec_connect_fail = 0;
+  // advertises while the Jura is ON, so a successful connect => machine on.
+  // BUT transient connect failures happen while the machine IS on (marginal
+  // signal, poll timing), so we must NOT flip to "off" on a couple of blips.
+  // Rule: a successful connect => ON immediately; declare OFF only after a
+  // SUSTAINED period with no successful connect (OFF_AFTER_MS). Before the
+  // first-ever connect we reference the BLE-init time (~60 s).
+  static unsigned long       _last_ble_success_ms = 0;
+  static bool                _ever_connected      = false;
+  static const unsigned long OFF_AFTER_MS         = 180000UL;   // 3 min no connect => off
   Serial.println("BLE: connecting to BlueFrog by address...");
   if (!_client->connect(_bluefrog)) {
     Serial.println("BLE: connect failed — backing off");
     publishEspEvent("connect-fail", "ble", "", "");
     jura_state.ble_connected = false;
-    if (_consec_connect_fail < 255) _consec_connect_fail++;
-    if (_consec_connect_fail >= 2) jura_state.power_state = "off";   // machine not advertising
+    unsigned long since_ok = _ever_connected ? (millis() - _last_ble_success_ms)
+                                             : (millis() - 60000UL);   // loop runs only after 60 s
+    if (since_ok > OFF_AFTER_MS) jura_state.power_state = "off";       // sustained failure => off
+    // else keep the previous power_state (transient blip while the machine is on)
     _last_failed_attempt_ms = millis();
     return;
   }
-  _consec_connect_fail = 0;
+  _last_ble_success_ms = millis();
+  _ever_connected      = true;
   jura_state.ble_connected = true;
   jura_state.power_state   = "on";     // connected => machine is on
   Serial.println("BLE: connected to BlueFrog");
