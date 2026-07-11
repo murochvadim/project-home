@@ -180,7 +180,40 @@ When the auth handshake is implemented, expect to read:
 
 ## Integration paths
 
-### ⭐ Path C — custom Arduino sketch on regular ESP32 (CHOSEN; Phase 1 done 2026-05-04)
+### ⭐ Path C — custom Arduino sketch on regular ESP32 (WORKING — v10, 2026-07-11)
+
+> **✅ CURRENT STATE — the bridge is LIVE and reading the full Jura data.** The
+> design notes further below are the original 2026-05-04 write-up and are partly
+> superseded (board id, BLE library, "Phase 2 TODO"). Authoritative live tracker:
+> the [[project_jura_phase2]] memory. Summary of what actually runs today:
+>
+> - **Board id `salon_bridge`** (renamed from `jura_bridge_01`), regular ESP32
+>   WROOM-32, MAC `80:F3:DA:5E:B3:AC`, IP 192.168.1.118. Flashed by USB **or OTA**
+>   (*Enter OTA Mode* button on Project Boards → 5-min BLE-off window; the espota
+>   path in `.env` `ESP32_OTA_PY` must point at the **current** esp32 core —
+>   updated to **3.3.10** on 2026-07-11 when a core auto-update emptied 3.3.8).
+> - **BLE stack = NimBLE-Arduino 2.3.1** (migrated from Bluedroid 2026-07-10). The
+>   year-long "can't read stats" block was **HEAP**: Bluedroid+WiFi left ~15-21 KB
+>   free — too little for GATT characteristic discovery; NimBLE frees ~108 KB so
+>   discovery + reads work with WiFi on. Minimal SPIFFS partition.
+> - **Encryption key = `0x2A`** = `manufacturer_data[171][0]` (NOT the 0xAB company
+>   id — that was the original bug). Full Jutta-Proto encDec + stats/maintenance
+>   decode ported to Arduino and working.
+> - **Reads (all live):** total + per-drink counters (dataset 0x0001), maintenance
+>   % (0x0008) + maintenance counters (0x0004). **Sanity guard** rejects corrupt
+>   frames (total ≥ 1 M / decrease / Δ > 100). **no-0-until-read** guards the DB count.
+> - **Machine on/off** = BLE advertising presence (connect success → on; 3-min
+>   sustained fail → off). **Fast-reconnect**: retry every 8 s while disconnected so
+>   a Jura power-on registers in ~8-15 s; 30 s poll once connected. **BLE RSSI**
+>   captured per connect (`_client->getRssi()`).
+> - **Live ALERT bits REMOVED** — MACHINE_STATUS echoes the stats command on this
+>   machine (unreliable); counters + maintenance are solid. **NO power-off command** exists.
+> - **Dashboard:** Living Room → **Jura tab** (total + per-drink + maintenance card)
+>   and Project Boards → **Jura J6 card** (Machine on/off · BLE signal dBm · Total ·
+>   Reads live/idle/stalled · **firmware version in the title**). Every sketch prints
+>   a `==== <name> <version> (built …) ====` banner at boot (standing rule).
+> - Sketch: `JURA/sketch/` (Main.h / Jura_BLE.ino / Esp_Base.ino / salon_bridge.ino);
+>   version-controlled + authoritative Arduino copy at `Arduino_Projects/salon_bridge/`.
 
 ```
 J6 service port → BlueFrog dongle → BLE (5 m line-of-sight)
