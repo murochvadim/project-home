@@ -36,7 +36,7 @@ const int   mqtt_port_moskuitto   = 1883;
 // ─── Sketch identity ─────────────────────────────────────────────────────
 const char* device_id      = "salon_bridge";
 const char* sketch_name    = "Salon_Bridge";
-const char* sketch_version = "v6";
+const char* sketch_version = "v7";
 const char* build_ts       = __DATE__ " " __TIME__;
 
 // Shared OTA password (every board uses the same value via .env ESP_OTA_PASSWORD).

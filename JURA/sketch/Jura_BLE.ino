@@ -139,14 +139,35 @@ static void readProductStats() {
   uint8_t buf[64];
   size_t n = readStatsDataset(0x0001, buf, sizeof(buf));
   if (n < 3) { publishEspEvent("stats", "ble", "products", "empty"); return; }
-  jura_state.stats_valid = true;   // a real read succeeded — counters may now be published
   auto val = [&](size_t idx) -> uint32_t {
     size_t o = idx * 3;
     if (o + 2 >= n) return 0;
     uint32_t v = ((uint32_t)buf[o] << 16) | ((uint32_t)buf[o + 1] << 8) | (uint32_t)buf[o + 2];
     return (v == 0xFFFF) ? 0 : v;   // 0xFFFF = unused-drink-slot sentinel -> 0
   };
-  jura_state.total_dispensed   = val(0);
+  uint32_t total = val(0);
+  // Sanity guard — reject corrupt frames (observed ~1-in-6 reads: total ~6.5M
+  // with every per-drink counter 0). Lifetime totals are small + monotonic, so:
+  //   - cap the absolute value (SANITY_MAX), and
+  //   - once a baseline exists, reject a decrease or an implausible jump.
+  // On reject we KEEP the last good values (stats_valid untouched) instead of
+  // publishing garbage that would clobber the DB count for ~30 s.
+  static const uint32_t SANITY_MAX = 1000000UL;
+  static const uint32_t MAX_DELTA  = 100;   // max plausible drinks between two ~30 s polls
+  static uint32_t _last_total = 0;
+  static bool     _have_baseline = false;
+  bool sane = (total < SANITY_MAX);
+  if (sane && _have_baseline && (total < _last_total || (total - _last_total) > MAX_DELTA)) sane = false;
+  if (!sane) {
+    char m[24]; snprintf(m, sizeof(m), "total=%lu", (unsigned long)total);
+    publishEspEvent("stats-rejected", "ble", "implausible", m);
+    Serial.printf("BLE: stats REJECTED (implausible) total=%lu\n", (unsigned long)total);
+    return;   // keep last good jura_state
+  }
+  _last_total = total;
+  _have_baseline = true;
+  jura_state.stats_valid = true;   // a plausible read succeeded — counters may now be published
+  jura_state.total_dispensed   = total;
   jura_state.cnt_ristretto     = val(1);
   jura_state.cnt_espresso      = val(2);
   jura_state.cnt_coffee        = val(3);
