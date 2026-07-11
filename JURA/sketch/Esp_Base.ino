@@ -125,6 +125,7 @@ static void publishEspStatus() {
   }
   // Bridge diagnostic (dashboard Status sub-tab):
   doc["ble_connected"]      = jura_state.ble_connected;
+  doc["ble_rssi"]           = jura_state.ble_rssi;
   doc["auth_ok"]            = jura_state.auth_ok;
   doc["last_poll_unix"]     = jura_state.last_poll_unix;
   char buf[1536];

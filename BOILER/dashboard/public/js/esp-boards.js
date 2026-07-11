@@ -292,6 +292,7 @@ function renderStatus(b) {
         <h3 class="esp-card-title">Jura J6 Coffee Machine</h3>
         <div class="status-grid">
           <div class="item"><label>Machine</label><div class="value ${status.power_state ? '' : 'dim'}">${status.power_state === 'on' ? '<span style="color:#27ae60;">● on</span>' : status.power_state === 'off' ? '<span style="color:#888;">○ off</span>' : '—'}</div></div>
+          <div class="item"><label>BLE signal</label><div class="value">${(status.ble_rssi && status.ble_rssi < 0) ? `<span style="color:${status.ble_rssi >= -65 ? '#27ae60' : status.ble_rssi >= -78 ? '#e67e22' : '#c0392b'};">${status.ble_rssi} dBm</span>` : '—'}</div></div>
           <div class="item"><label>Reads</label><div class="value">${status.power_state !== 'on' ? '<span style="color:#888;">— idle</span>' : ((status.uptime_s != null && status.last_poll_unix && (status.uptime_s - status.last_poll_unix) < 90) ? '<span style="color:#27ae60;">● live</span>' : '<span style="color:#c0392b;">● stalled</span>')}</div></div>
           <div class="item"><label>Total drinks</label><div class="value ${status.total_dispensed != null ? '' : 'dim'}">${status.total_dispensed != null ? Number(status.total_dispensed).toLocaleString() : '—'}</div></div>
           <div class="item"><label>Last read</label><div class="value ${(status.uptime_s != null && status.last_poll_unix) ? '' : 'dim'}">${(status.uptime_s != null && status.last_poll_unix) ? Math.max(0, status.uptime_s - status.last_poll_unix) + 's ago' : '—'}</div></div>

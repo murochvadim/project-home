@@ -393,7 +393,8 @@ void juraBleLoop() {
   _ever_connected      = true;
   jura_state.ble_connected = true;
   jura_state.power_state   = "on";     // connected => machine is on
-  Serial.println("BLE: connected to BlueFrog");
+  jura_state.ble_rssi      = _client->getRssi();   // BlueFrog link strength (dBm)
+  Serial.printf("BLE: connected to BlueFrog (rssi %d dBm)\n", jura_state.ble_rssi);
   publishEspEvent("state", "ble", "bluefrog", "connected");
   { char hb[16]; snprintf(hb, sizeof(hb), "%u", (unsigned)ESP.getFreeHeap());
     publishEspEvent("heap-connect", "ble", "", hb); }
