@@ -41,10 +41,18 @@ static NimBLERemoteService*  _svc    = nullptr;
 static NimBLEAddress         _bluefrog(BLUEFROG_MAC, BLE_ADDR_RANDOM);
 static unsigned long         _last_session_ms        = 0;
 static unsigned long         _last_failed_attempt_ms = 0;   // when the last session aborted
+static unsigned long         _last_ble_success_ms    = 0;   // last successful BlueFrog connect (millis)
+static bool                  _ever_connected         = false;
 // After a failed session (connect refused / dongle asleep), hold off this
 // long before retrying — even with a brew queued — so back-to-back connect
-// attempts don't starve the BlueFrog's advertising window.
-static const unsigned long   FAILED_RETRY_BACKOFF_MS = 12000;
+// attempts don't starve the BlueFrog's advertising window. Kept short so we
+// catch the machine coming on quickly (was 12 s).
+static const unsigned long   FAILED_RETRY_BACKOFF_MS = 8000;
+// While DISCONNECTED (machine off / unreachable) we retry at this fast cadence
+// so "Jura turned on -> dashboard knows" is ~8-15 s instead of ~40 s-2 min.
+// Once connected we fall back to the normal poll_interval_sec (30 s). ~8 s still
+// leaves the BlueFrog quiet windows to advertise (don't go much lower).
+static const unsigned long   FAST_RETRY_MS           = 8000;
 static String                _pending_cmd_action;          // queued brew/cancel; latest wins
 
 // ─── Jutta-Proto encryption (ported from protocol-bt-cpp) ────────────────
@@ -351,8 +359,13 @@ void juraBleLoop() {
     return;
   }
 
-  bool poll_due    = (_last_session_ms == 0) ||
-                     (now - _last_session_ms >= (unsigned long)esp_params.poll_interval_sec * 1000UL);
+  // Adaptive cadence: while we can't reach the machine (last attempt failed, or
+  // never connected) retry FAST so a Jura power-on is noticed within ~8-15 s;
+  // once connected, poll at the normal interval so normal operation is quiet.
+  bool notConnected = !_ever_connected || (_last_failed_attempt_ms > _last_ble_success_ms);
+  unsigned long interval = notConnected ? FAST_RETRY_MS
+                                        : (unsigned long)esp_params.poll_interval_sec * 1000UL;
+  bool poll_due    = (_last_session_ms == 0) || (now - _last_session_ms >= interval);
   bool cmd_pending = (_pending_cmd_action.length() > 0);
   if (!poll_due && !cmd_pending) return;
 
@@ -374,9 +387,9 @@ void juraBleLoop() {
   // Rule: a successful connect => ON immediately; declare OFF only after a
   // SUSTAINED period with no successful connect (OFF_AFTER_MS). Before the
   // first-ever connect we reference the BLE-init time (~60 s).
-  static unsigned long       _last_ble_success_ms = 0;
-  static bool                _ever_connected      = false;
-  static const unsigned long OFF_AFTER_MS         = 180000UL;   // 3 min no connect => off
+  // _last_ble_success_ms / _ever_connected are file-static (also used by the
+  // adaptive-retry cadence above).
+  static const unsigned long OFF_AFTER_MS = 180000UL;   // 3 min no connect => off
   Serial.println("BLE: connecting to BlueFrog by address...");
   if (!_client->connect(_bluefrog)) {
     Serial.println("BLE: connect failed — backing off");
