@@ -289,7 +289,7 @@ function renderStatus(b) {
 
     ${(b.id === 'salon_bridge') ? `
       <div class="esp-card">
-        <h3 class="esp-card-title">Jura J6 Coffee Machine</h3>
+        <h3 class="esp-card-title">Jura J6 Coffee Machine ${b.sketch_version ? `<span style="font-size:0.78rem;color:#888;font-weight:normal;">(firmware ${escHtml(b.sketch_version)})</span>` : ''}</h3>
         <div class="status-grid">
           <div class="item"><label>Machine</label><div class="value ${status.power_state ? '' : 'dim'}">${status.power_state === 'on' ? '<span style="color:#27ae60;">● on</span>' : status.power_state === 'off' ? '<span style="color:#888;">○ off</span>' : '—'}</div></div>
           <div class="item"><label>BLE signal</label><div class="value">${(status.ble_rssi && status.ble_rssi < 0) ? `<span style="color:${status.ble_rssi >= -65 ? '#27ae60' : status.ble_rssi >= -78 ? '#e67e22' : '#c0392b'};">${status.ble_rssi} dBm</span>` : '—'}</div></div>
