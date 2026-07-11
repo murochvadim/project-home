@@ -107,6 +107,27 @@ async function loadBoards(auto = false) {
     const r = await fetch('/api/esp/boards');
     const data = await r.json();
     BOARDS = data.boards || [];
+    // Enrich salon_bridge (Jura) with the last-known counters from the persistent
+    // merged store. The firmware withholds counters until it reads the machine
+    // (no-0 rule), so the live /status omits them right after a reboot — but
+    // devices.last_state keeps the real values. Fall back to them so the Jura
+    // card never shows a blank count.
+    try {
+      const jb = BOARDS.find(b => b.id === 'salon_bridge');
+      if (jb) {
+        const devs = await fetch('/api/devices').then(r2 => r2.json());
+        const ls = ((Array.isArray(devs) ? devs : []).find(d => d.id === 'salon_bridge') || {}).last_state;
+        if (ls) {
+          jb.last_status = jb.last_status || {};
+          ['total_dispensed','cnt_ristretto','cnt_espresso','cnt_coffee','cnt_cappuccino',
+           'cnt_esp_macchiato','cnt_latte','cnt_milk','cnt_hotwater','cnt_2ristretti',
+           'cnt_2espressi','cnt_2coffee','cnt_flat_white','pct_cleaning','pct_filter',
+           'pct_descale','maint_cleanings','maint_filter_changes','maint_descalings',
+           'maint_milk_rinses','maint_coffee_rinses','maint_milk_cleans'
+          ].forEach(k => { if (jb.last_status[k] == null && ls[k] != null) jb.last_status[k] = ls[k]; });
+        }
+      }
+    } catch (e) { /* best-effort fallback */ }
   } catch (e) {
     BOARDS = [];
     document.getElementById('summary-text').innerHTML = `<span style="color:#c0392b;">Failed to load: ${escHtml(e.message)}</span>`;
@@ -271,7 +292,7 @@ function renderStatus(b) {
         <h3 class="esp-card-title">Jura J6 Coffee Machine</h3>
         <div class="status-grid">
           <div class="item"><label>Machine</label><div class="value ${status.power_state ? '' : 'dim'}">${status.power_state === 'on' ? '<span style="color:#27ae60;">● on</span>' : status.power_state === 'off' ? '<span style="color:#888;">○ off</span>' : '—'}</div></div>
-          <div class="item"><label>Reads</label><div class="value">${(status.uptime_s != null && status.last_poll_unix && (status.uptime_s - status.last_poll_unix) < 90) ? '<span style="color:#27ae60;">● live</span>' : '<span style="color:#c0392b;">● stalled</span>'}</div></div>
+          <div class="item"><label>Reads</label><div class="value">${status.power_state !== 'on' ? '<span style="color:#888;">— idle</span>' : ((status.uptime_s != null && status.last_poll_unix && (status.uptime_s - status.last_poll_unix) < 90) ? '<span style="color:#27ae60;">● live</span>' : '<span style="color:#c0392b;">● stalled</span>')}</div></div>
           <div class="item"><label>Total drinks</label><div class="value ${status.total_dispensed != null ? '' : 'dim'}">${status.total_dispensed != null ? Number(status.total_dispensed).toLocaleString() : '—'}</div></div>
           <div class="item"><label>Last read</label><div class="value ${(status.uptime_s != null && status.last_poll_unix) ? '' : 'dim'}">${(status.uptime_s != null && status.last_poll_unix) ? Math.max(0, status.uptime_s - status.last_poll_unix) + 's ago' : '—'}</div></div>
         </div>
