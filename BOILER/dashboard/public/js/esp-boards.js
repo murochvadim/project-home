@@ -680,7 +680,7 @@ function renderSimulation(b) {
   //    in the Params Users table provides the id
   //  - `register_user` is surfaced next to Save Parameters on the Params tab
   //    so the natural flow (type name → Save → Register) stays in one place
-  const SURFACED_ELSEWHERE = new Set(['delete_user', 'register_user']);
+  const SURFACED_ELSEWHERE = new Set(['delete_user', 'register_user', 'enter_ota_mode']);
   const groupedKeys = new Set();
   ACTION_GROUPS.forEach(g => g.keys.forEach(k => groupedKeys.add(k)));
   let html = ACTION_GROUPS.filter(g => g.tab === 'simulation').map(g => renderActionGroup(b, g)).join('');
