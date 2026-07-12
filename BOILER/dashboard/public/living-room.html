@@ -385,7 +385,14 @@
 
   <div class="tab-panel" id="tab-jura">
     <div class="card">
-      <h3 style="margin:0 0 8px;">Drinks per day <span style="font-size:0.78rem;color:#888;font-weight:normal;">(excludes hot water &amp; milk portions)</span></h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 8px;">
+        <h3 style="margin:0;">Coffees per day <span style="font-size:0.78rem;color:#888;font-weight:normal;">(Coffee drinks only)</span></h3>
+        <div style="display:flex;gap:4px;">
+          <button class="btn btn-secondary btn-sm jura-per-btn" data-per="day" style="background:#6f4e37;color:#fff;border-color:#6f4e37;" onclick="setJuraPeriod('day',this)">Daily</button>
+          <button class="btn btn-secondary btn-sm jura-per-btn" data-per="month" onclick="setJuraPeriod('month',this)">Monthly</button>
+          <button class="btn btn-secondary btn-sm jura-per-btn" data-per="year" onclick="setJuraPeriod('year',this)">Yearly</button>
+        </div>
+      </div>
       <div style="height:260px;"><canvas id="jura-daily-chart"></canvas></div>
       <div id="jura-daily-note" style="font-size:0.78rem;color:#888;margin-top:8px;">Loading…</div>
     </div>
@@ -433,6 +440,6 @@
 <script src="js/device-picker.js?v=16"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/living-room.js?v=54"></script>
+<script src="js/living-room.js?v=56"></script>
 </body>
 </html>

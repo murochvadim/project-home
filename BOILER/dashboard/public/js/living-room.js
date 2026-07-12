@@ -104,17 +104,22 @@
 
   // ── Drinks-per-day bar chart (excludes hot water + milk portions) ────────
   let _juraChart = null;
+  let _juraPeriod = 'day';   // day | month | year
   async function loadJuraGraph() {
     const canvas = document.getElementById('jura-daily-chart');
     const note = document.getElementById('jura-daily-note');
     if (!canvas || typeof Chart === 'undefined') return;
     let rows = [];
-    try { rows = await fetch('/api/jura/daily-drinks?days=30').then(r => r.json()); } catch (e) { rows = []; }
+    try { rows = await fetch('/api/jura/daily-drinks?period=' + _juraPeriod).then(r => r.json()); } catch (e) { rows = []; }
     if (!Array.isArray(rows)) rows = [];
+    const unit = _juraPeriod === 'year' ? 'year' : _juraPeriod === 'month' ? 'month' : 'day';
     if (note) note.textContent = rows.length
-      ? `${rows.length} day(s) — excludes hot water & milk portions`
-      : 'No full day logged yet — logging started today, first bar appears tomorrow.';
-    const labels = rows.map(r => r.day.slice(5));   // MM-DD
+      ? `${rows.length} ${unit}(s) — Coffee drinks only`
+      : (_juraPeriod === 'day'
+          ? 'No full day logged yet — logging started today, first bar appears tomorrow.'
+          : `Not enough data yet for a ${unit}ly view — it fills in as days accumulate.`);
+    // day → MM-DD, month → YYYY-MM, year → YYYY
+    const labels = rows.map(r => _juraPeriod === 'day' ? String(r.label).slice(5) : r.label);
     const data = rows.map(r => r.drinks);
     if (_juraChart) {
       _juraChart.data.labels = labels;
@@ -124,14 +129,22 @@
     }
     _juraChart = new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { labels, datasets: [{ label: 'Drinks', data, backgroundColor: '#6f4e37', borderRadius: 3 }] },
+      data: { labels, datasets: [{ label: 'Coffees', data, backgroundColor: '#6f4e37', borderRadius: 3 }] },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.parsed.y} drinks` } } },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.parsed.y} coffees` } } },
         scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
       },
     });
   }
+
+  function setJuraPeriod(p, btn) {
+    _juraPeriod = p;
+    document.querySelectorAll('.jura-per-btn').forEach(b => { b.style.background = ''; b.style.color = ''; b.style.borderColor = ''; });
+    if (btn) { btn.style.background = '#6f4e37'; btn.style.color = '#fff'; btn.style.borderColor = '#6f4e37'; }
+    loadJuraGraph();
+  }
+  window.setJuraPeriod = setJuraPeriod;
 
   async function loadJura() {
     let dev = null;
