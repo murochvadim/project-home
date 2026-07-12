@@ -97,6 +97,10 @@ require('./routes-power-outages')(app, db);
 // page's Water tab. Own module for the same architecture-guard reason as above.
 require('./routes-water')(app, db);
 
+// Jura — GET /api/jura/daily-drinks for the Living Room → Jura tab per-day graph.
+// Own module (architecture-guard). Reads jura_daily (filled by the LXC-104 cron).
+require('./routes-jura')(app, db);
+
 // Scenes — POST /api/scenes/run (Main Agent → Scenes ▶ Run). Own module for the
 // same architecture-guard reason. Gets a getter for the mqtt client (declared
 // below) since server.js can swap it on the auto-heal path.
@@ -2288,7 +2292,7 @@ const DBV_GROUPS = [
   ['Devices & Rooms',       ['devices','device_events','device_agent_log','device_blocklist','rooms','room_device_placements','manual_people_log']],
   ['Network',               ['net_devices','net_ports','net_scans','cellular_antennas']],
   ['Rule Engine',           ['rule_events','rule_engine_state','rule_engine_log']],
-  ['Panels & Boards',       ['hasp_panels','hasp_buttons','hasp_displays','esp_boards']],
+  ['Panels & Boards',       ['hasp_panels','hasp_buttons','hasp_displays','esp_boards','jura_daily']],
   ['Backup',                ['backup_storages','backup_jobs','backup_log']],
   ['Power & UPS',           ['power_consumption','power_devices','power_bills','water_bills','ups_status','ups_power_events']],
   ['Gateway / NetBird',     ['netbird_peers_local','netbird_tenant_settings','gateway_peer_transitions']],
@@ -2328,7 +2332,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       dashboard_settings: 'updated_at', room_device_placements: 'updated_at',
       manual_people_log: 'ts', ups_status: 'ts', ups_power_events: 'started_at',
       hasp_panels: 'created_at', hasp_buttons: 'created_at', hasp_displays: 'created_at',
-      esp_boards: 'created_at',
+      esp_boards: 'created_at', jura_daily: 'updated_at',
       household_users: 'created_at', ph_profiles: 'created_at', ph_measurements: 'measured_at', ph_medications: 'created_at', ph_bp: 'measured_at', ph_body: 'measured_at', ph_water: 'measured_at', ph_steps: 'measured_at', ph_steps_excluded_trips: 'excluded_at', ph_exercise_log: 'measured_at', ph_bobo: 'measured_at', reminder_state: 'updated_at',
       notification_defs: 'updated_at', notification_events: 'ts',
       email_messages: 'msg_ts', email_labels: 'updated_at', email_state: 'updated_at',

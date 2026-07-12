@@ -382,17 +382,9 @@
 
   <div class="tab-panel" id="tab-jura">
     <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
-        <h2 style="margin:0;">☕ Jura J6 — Salon Bridge</h2>
-        <div style="display:flex;align-items:center;gap:14px;font-size:0.85rem;color:#666;">
-          <span id="jura-link">● —</span>
-          <span>Last read: <span id="jura-lastread">—</span></span>
-        </div>
-      </div>
-      <div style="display:flex;align-items:baseline;gap:10px;margin-top:12px;">
-        <span style="font-size:2.6rem;font-weight:700;color:#6f4e37;" id="jura-total">—</span>
-        <span style="color:#888;">drinks dispensed (lifetime)</span>
-      </div>
+      <h3 style="margin:0 0 8px;">Drinks per day <span style="font-size:0.78rem;color:#888;font-weight:normal;">(excludes hot water &amp; milk portions)</span></h3>
+      <div style="height:260px;"><canvas id="jura-daily-chart"></canvas></div>
+      <div id="jura-daily-note" style="font-size:0.78rem;color:#888;margin-top:8px;">Loading…</div>
     </div>
 
     <div class="card">
@@ -437,6 +429,7 @@
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/device-picker.js?v=16"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="js/living-room.js?v=53"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="js/living-room.js?v=54"></script>
 </body>
 </html>

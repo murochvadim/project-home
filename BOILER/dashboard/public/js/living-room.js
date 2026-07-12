@@ -95,10 +95,42 @@
 
   function startJura() {
     loadJura();
-    if (!_juraTimer) _juraTimer = setInterval(loadJura, 15000);
+    loadJuraGraph();
+    if (!_juraTimer) _juraTimer = setInterval(() => { loadJura(); loadJuraGraph(); }, 15000);
   }
   function stopJura() {
     if (_juraTimer) { clearInterval(_juraTimer); _juraTimer = null; }
+  }
+
+  // ── Drinks-per-day bar chart (excludes hot water + milk portions) ────────
+  let _juraChart = null;
+  async function loadJuraGraph() {
+    const canvas = document.getElementById('jura-daily-chart');
+    const note = document.getElementById('jura-daily-note');
+    if (!canvas || typeof Chart === 'undefined') return;
+    let rows = [];
+    try { rows = await fetch('/api/jura/daily-drinks?days=30').then(r => r.json()); } catch (e) { rows = []; }
+    if (!Array.isArray(rows)) rows = [];
+    if (note) note.textContent = rows.length
+      ? `${rows.length} day(s) — excludes hot water & milk portions`
+      : 'No full day logged yet — logging started today, first bar appears tomorrow.';
+    const labels = rows.map(r => r.day.slice(5));   // MM-DD
+    const data = rows.map(r => r.drinks);
+    if (_juraChart) {
+      _juraChart.data.labels = labels;
+      _juraChart.data.datasets[0].data = data;
+      _juraChart.update();
+      return;
+    }
+    _juraChart = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Drinks', data, backgroundColor: '#6f4e37', borderRadius: 3 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.parsed.y} drinks` } } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      },
+    });
   }
 
   async function loadJura() {
