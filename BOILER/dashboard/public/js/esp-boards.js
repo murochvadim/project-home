@@ -90,6 +90,21 @@ const ACTION_GROUPS = [
       { key: 'screen_state', label: 'Screen' }
     ]
   },
+  // Kazir_15 EK15 network monitor (ESP32 + W5500). Scan/Ethernet-info buttons
+  // + live EK15 link/IP/host-count status + the incremental-sweep progress bar
+  // (scan_progress 0..100 from /status). See KAZIR_15_NETWORK/CLAUDE.md.
+  { id: 'network', label: 'Network Monitor', tab: 'simulation',
+    keys: ['scan_now', 'eth_info'],
+    statusFields: [
+      { key: 'eth_link',       label: 'EK15 Link' },
+      { key: 'eth_ip',         label: 'EK15 IP' },
+      { key: 'eth_gw',         label: 'EK15 Gateway' },
+      { key: 'hosts_up',       label: 'Hosts Up' },
+      { key: 'hosts_total',    label: 'Hosts Seen' },
+      { key: 'last_scan_unix', label: 'Last Scan (uptime s)' }  // board has no RTC — seconds-since-boot, not epoch
+    ],
+    progressFields: [{ key: 'scan_progress', label: 'Sweep' }]
+  },
 ];
 
 // ─── Load + render ─────────────────────────────────────────────────────

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kazir 15 Network</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .kz-summary { display:flex; flex-wrap:wrap; gap:22px 34px; align-items:center; padding:14px 16px; }
+    .kz-summary .item label { display:block; font-size:0.7rem; color:#888; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:3px; }
+    .kz-summary .item .value { font-size:1.0rem; font-weight:600; color:#222; }
+    .kz-summary .item .value.dim { color:#aaa; font-weight:400; font-style:italic; }
+    .kz-pill { padding:3px 10px; border-radius:10px; font-weight:600; font-size:0.78rem; }
+    .kz-pill.up { background:#dcecd8; color:#3a7d44; }
+    .kz-pill.down { background:#f4d8d3; color:#c0392b; }
+    .kz-pill.scan { background:#eef2f7; color:#4a6d90; }
+
+    .kz-table { width:100%; border-collapse:collapse; font-size:0.86rem; }
+    .kz-table th { text-align:left; padding:7px 10px; border-bottom:2px solid #d0cbc4; color:#666; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.4px; }
+    .kz-table td { padding:6px 10px; border-bottom:1px solid #eee6db; }
+    .kz-table tr:hover td { background:#faf8f5; }
+    .kz-table td.mono { font-family:monospace; }
+    .kz-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+    .kz-dot.up { background:#3a7d44; }
+    .kz-dot.down { background:#c0392b; }
+    .kz-empty { padding:28px 14px; text-align:center; color:#aaa; }
+    #kz-count { font-size:0.8rem; color:#888; font-weight:normal; }
+    .kz-name { width:150px; padding:2px 6px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.82rem; background:#fff; }
+    .kz-name:focus { border-color:#7a9ab8; outline:none; }
+  </style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="logo">Smart Home<div class="badges-wrap"><div style="display:flex;gap:6px;align-items:center;"><a href="health.html" id="alert-indicator"></a><a href="devices.html#battery" id="batt-indicator"></a></div><a href="health.html" id="integrations-indicator"></a><a href="network.html" id="network-indicator"></a><a href="gateway.html" id="netbird-indicator"></a></div></div>
+
+  <div class="section-label">General</div>
+  <a href="health.html">Project Health</a>
+  <a href="network.html">Project Network</a>
+  <a href="gateway.html">Project Gateway</a>
+  <a href="rooms.html">Project Rooms</a>
+  <a href="esp-boards.html">Project Boards</a>
+  <a href="power.html">Project Power</a>
+  <a href="project-general.html">Project General</a>
+
+  <div class="section-label">Agents</div>
+  <a href="main-agent.html">Main Agent</a>
+  <a href="index.html">Boiler Agent</a>
+  <a href="media.html">Media Agents</a>
+  <a href="corridor.html">Corridor Agents</a>
+  <a href="devices.html">Device Agent</a>
+  <a href="living-room.html">Living Room Agent</a>
+  <a href="balcony.html">Balcony Agent</a>
+  <a href="my-bathroom.html">My BathRoom Agent</a>
+  <a href="bedroom.html">Bedroom Agent</a>
+
+  <div class="section-label">Personal</div>
+  <a href="privacy.html">Privacy</a>
+  <a href="email.html">Email</a>
+  <a href="medical.html">Medical</a>
+
+  <div class="section-label">Voice</div>
+  <a href="voice.html">Voice</a>
+
+  <div class="section-label">Kazir 15</div>
+  <a href="kazir-15.html" class="active">Kazir 15 Network</a>
+
+  <div class="section-label" style="margin-top:auto; padding-top:32px;">Future Agents</div>
+  <a href="#" style="opacity:0.4; pointer-events:none;">— coming soon —</a>
+</nav>
+
+<main id="content">
+  <div class="page-header">
+    <h1>Kazir 15 Network</h1>
+    <div class="refresh-bar">
+      <span id="last-refresh">—</span>
+      <button class="btn btn-secondary btn-sm" onclick="kzScanNow()">↻ Scan Now</button>
+      <button class="btn btn-secondary btn-sm" onclick="kzLoad()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- KZ15 board summary (from esp_boards.last_status) -->
+  <div class="card kz-summary" id="kz-summary"><span style="color:#aaa;">Loading…</span></div>
+
+  <!-- Who's connected -->
+  <div class="card">
+    <h3 style="margin:0 0 10px 0; font-size:0.95rem;">Who's connected <span id="kz-count"></span></h3>
+    <div style="overflow-x:auto;">
+      <table class="kz-table">
+        <thead>
+          <tr><th>Status</th><th>IP</th><th>MAC</th><th>Name</th><th>Last seen</th></tr>
+        </thead>
+        <tbody id="kz-hosts">
+          <tr><td colspan="5" class="kz-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script src="js/alerts-monitor.js?v=11"></script>
+<script src="js/reminders-badge.js?v=6"></script>
+<script src="js/kazir-15.js?v=20260712d"></script>
+</body>
+</html>
