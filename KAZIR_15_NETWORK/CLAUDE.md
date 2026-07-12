@@ -1,6 +1,39 @@
 # KAZIR_15_NETWORK — Second-Site Network Infrastructure at Efraim Kazir 15
 
-> **Status:** scoping / design phase. Hardware not yet purchased; no gateway peer installed; no APIs polled yet. This doc captures the architecture + APIs documented + integration plan so the build can be picked up when the user is ready.
+> **Status (2026-07-12):** a **network-presence monitor is BUILT + LIVE** — via a completely different, simpler approach than the NetBird/UniFi/camera plan documented below. **The user rejected NetBird.** See the ✅ BUILT section immediately below. Everything after it (NetBird gateway + UniFi API + Provision cameras) is **deferred / superseded for transport** — kept only as reference for possible future richer monitoring; the live KZ15 integration today is the ESP32 board.
+
+## ✅ BUILT (2026-07-12) — ESP32 + W5500 network-presence monitor
+
+A **dual-homed ESP32 board** bridges the KZ15 building network into the project **without NetBird** — the user's apartment is *inside* the KZ15 building, so the board sits in the apartment with both networks physically present:
+
+- **Hardware:** ESP32-WROOM-32 + **WIZnet W5500** SPI Ethernet (VSPI: MOSI 23 / MISO 19 / SCLK 18 / CS 5 / INT 4 / RST 2, 3.3 V).
+- **Dual-homed:** **WiFi → home** (`192.168.1.167`, MQTT uplink to broker `192.168.1.189`) + **W5500 Ethernet → KZ15 building LAN**. KZ15 turned out to be **`192.168.1.0/24` — the SAME subnet as home** (gw `.1`), but it's a *separate physical network*, so it's fine: the board reaches KZ15 over Ethernet and home over WiFi. No subnet change, no NetBird. Proven by data (0 of the KZ15 devices exist in home `net_devices`).
+- **Discovery = ARP-aware sweep (`Net_Scan.ino` v7).** For each IP in the KZ15 /24 it sends an ICMP via **`esp_ping`** (which *forces an ARP resolution* on the way) and marks the host **up if it replied OR resolved in the lwIP ARP cache** — so **power-save devices (the KZ15 Deco APs) that answer ARP but ignore ping are still caught**. This mirrors the home `arp_scan.py` L2 approach. `esp_ping` is **pinned to the ETH interface** (`cfg.interface`) so every probe goes to KZ15, not the same-subnet home WiFi. **⚠ Do NOT use raw `etharp_request` + `LOCK_TCPIP_CORE` from the loop task** — that DEADLOCKED the board mid-sweep (the abandoned v6); `esp_ping` (own task) + a cache *read* is the safe pattern.
+- **Board = esp_boards subsystem** (`id='kazir_15'`, Project Boards tab, OTA, schema, `scan_now`/`eth_info` actions, `Network Monitor` action-group card in `esp-boards.js`). No BLE → OTA works normally. Params: `scan_interval_sec` (300) / `ping_timeout_ms` (300, = ARP reply wait) / `hosts_per_tick` (4).
+- **Firmware source:** `C:\Users\muroc\Arduino_Projects\Kazir_15\` (`Kazir_15.ino` + `Main.h` + `Esp_Base.ino` + `Net_Scan.ino`). **NOT in the repo** (bakes WiFi/MQTT/OTA creds). Deploy = USB (or OTA once running). Sketch prints `==== Kazir_15  v<N>  (built …) ====` at boot.
+
+### Data flow + storage (all separate from the home inventory)
+```
+board → mur/home/esp/kazir_15/{status,event}  (MQTT, broker LXC 107)
+  /status → rule engine → esp_boards.last_status  (eth link/ip/gw, host counts, scan progress)
+  /event kind:"scan" → kazir15-ingest.service (LXC 104, scripts/kazir15_ingest.py)
+        → kazir15_hosts (LXC 102): mark-subnet-down + upsert up-hosts + 30-min stale prune
+routes-kazir15.js → GET /api/kazir15/hosts (+ kazir15_names join) + /status, POST /api/kazir15/name
+Kazir 15 page (kazir-15.html + js/kazir-15.js, LAST sidebar entry, all 21 pages)
+```
+- **DB (LXC 102):** `kazir15_hosts` (ip PK, mac, up, subnet, first/last_seen, last_scan_at) + `kazir15_names` (mac PK → user name). Both retention=forever, in Health DB-Volumes group **"Kazir 15"**.
+- **Ingest (LXC 104):** `kazir15-ingest.service` (sibling of `owntracks-ingest`), MQTT user `esp_boards`, env `/etc/kazir15-ingest.env`. Reuses the shared `esp_boards` broker user.
+- **Page features:** connected-device list with **15-min online grace** (a device seen in the last 15 min shows "connected" even if it missed the latest sweep — masks Deco power-save flicker, same idea as the home scanner's `ONLINE_GRACE_MIN`); **per-MAC device naming** (inline edit, saved by MAC so it survives IP change / prune; `_kzEditing` gates the auto-refresh so typing isn't clobbered); **Scan Now** (fires the board's `scan_now`); board summary card (eth link/ip/gw, host counts).
+
+### Scope + known limits
+- v1 = **read-only presence + reachability** ("who's connected on KZ15" + up/down). **No traffic/bandwidth** (lives in the switches/controller, not on the wire) and **no device control** — those would need per-device APIs.
+- Very-stubborn responders can be missed for long stretches (e.g. a Deco silent > 30 min gets pruned). Mitigation if needed: raise `ping_timeout_ms`, or a firmware retry (probe each host 2–3×). The loop-task WDT is disabled, so a *future* firmware hang wouldn't self-recover (v7 doesn't hang).
+- Deploy commit: `d8e11c2` (dashboard + ingest + backend; firmware separate).
+
+---
+
+## (DEFERRED / SUPERSEDED) Original NetBird + UniFi + cameras plan
+> The sections below were the original 2026-05-24 scope. **NetBird was rejected** for the presence monitor above. These remain as reference IF richer monitoring (UniFi AP telemetry, camera feeds) is ever wanted — but they are NOT the current implementation.
 
 ## Purpose
 
