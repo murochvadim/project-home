@@ -100,6 +100,12 @@ def on_message(client, userdata, msg):
         with conn.cursor() as cur:
             cur.execute(UPSERT, (coffee,))
             cur.execute(UPDATE_MADE)
+            # Per-coffee timestamped event(s) for the sub-day (6h/24h) graph —
+            # only a REAL increment (not the first-message baseline, not a
+            # counter reset). qty = how many coffees since the last report.
+            if _last_coffee is not None and coffee > _last_coffee:
+                cur.execute("INSERT INTO jura_drinks (ts, qty) VALUES (now(), %s)",
+                            (coffee - _last_coffee,))
         _last_coffee = coffee
         log.info('jura_daily updated: coffee=%d', coffee)
     except Exception as e:

@@ -102,25 +102,30 @@
     if (_juraTimer) { clearInterval(_juraTimer); _juraTimer = null; }
   }
 
-  // ── Drinks-per-day bar chart (excludes hot water + milk portions) ────────
+  // ── Coffees bar chart — Coffee drink only, 6 time ranges ─────────────────
+  // 6h/24h read the per-coffee event log (jura_drinks); week..3yr read the
+  // daily totals (jura_daily). Empty buckets come back as 0 (filled server-side).
   let _juraChart = null;
-  let _juraPeriod = 'day';   // day | month | year
+  let _juraPeriod = '24h';   // 6h | 24h | 1week | 1month | 1year | 3year
+  const JURA_RANGE_LABEL = {
+    '6h': 'last 6 hours', '24h': 'last 24 hours', '1week': 'last week',
+    '1month': 'last month', '1year': 'last year', '3year': 'last 3 years',
+  };
   async function loadJuraGraph() {
     const canvas = document.getElementById('jura-daily-chart');
     const note = document.getElementById('jura-daily-note');
     if (!canvas || typeof Chart === 'undefined') return;
     let rows = [];
-    try { rows = await fetch('/api/jura/daily-drinks?period=' + _juraPeriod).then(r => r.json()); } catch (e) { rows = []; }
+    try { rows = await fetch('/api/jura/drinks?range=' + _juraPeriod).then(r => r.json()); } catch (e) { rows = []; }
     if (!Array.isArray(rows)) rows = [];
-    const unit = _juraPeriod === 'year' ? 'year' : _juraPeriod === 'month' ? 'month' : 'day';
-    if (note) note.textContent = rows.length
-      ? `${rows.length} ${unit}(s) — Coffee drinks only`
-      : (_juraPeriod === 'day'
-          ? 'No full day logged yet — logging started today, first bar appears tomorrow.'
-          : `Not enough data yet for a ${unit}ly view — it fills in as days accumulate.`);
-    // day → MM-DD, month → YYYY-MM, year → YYYY
-    const labels = rows.map(r => _juraPeriod === 'day' ? String(r.label).slice(5) : r.label);
+    const labels = rows.map(r => r.label);
     const data = rows.map(r => r.drinks);
+    const total = data.reduce((a, b) => a + (+b || 0), 0);
+    const rangeTxt = JURA_RANGE_LABEL[_juraPeriod] || _juraPeriod;
+    const subDay = (_juraPeriod === '6h' || _juraPeriod === '24h');
+    if (note) note.textContent = total
+      ? `${total} coffee${total === 1 ? '' : 's'} — ${rangeTxt}`
+      : `No coffees in the ${rangeTxt} yet` + (subDay ? ' — per-coffee logging just started; bars appear as you brew.' : '.');
     if (_juraChart) {
       _juraChart.data.labels = labels;
       _juraChart.data.datasets[0].data = data;
