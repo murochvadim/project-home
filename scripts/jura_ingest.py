@@ -4,20 +4,20 @@
 Event-driven: SUBSCRIBES to the jura board's status topic and updates
 jura_daily the instant the board publishes — no polling. Always listening.
 
-The board (jura) reads the Jura over BLE and publishes its counters to
-mur/home/esp/jura/status every ~60 s while the machine is on. Each such
-message carries cnt_coffee; on every one we:
+The board (jura) reads the Jura over BLE (~10 s poll + publish-on-change while
+the machine is on) and publishes its counters to mur/home/esp/jura/status.
+Each message carries cnt_coffee; when it ADVANCES we:
   • upsert TODAY's jura_daily row: coffee = GREATEST(cnt_coffee)  (high-water)
   • recompute made = coffee − previous logged day's coffee (coffees made today)
+  • append one jura_drinks event (ts + qty) — the per-coffee timestamped log
+    that feeds the sub-day (6h/24h) graph; day+ ranges use jura_daily.made
   • stamp updated_at
 
-Only the Coffee counter is tracked (per the user). `made` is the explicit
-per-day count, preserved forever (jura_daily retention = forever + protected).
-
-This gives near-real-time capture (within the board's ~60 s report cadence) vs
-the old 30-min cron. NOTE: "as fast as the board SENDS" = ~60 s; for truly
-instant per-drink capture the board firmware would need to publish the moment a
-counter changes (separate change).
+Only the Coffee counter is tracked (per the user). Both tables are preserved
+forever (retention = forever + protected). The first message after a (re)start
+is a baseline: it seeds _last_coffee WITHOUT logging a jura_drinks event, so a
+restart can't invent a phantom coffee (jura_daily's high-water still catches any
+coffee brewed during downtime, only its exact timestamp is lost).
 
 Required env:
   ESP_BOARDS_MQTT_PASS   password for the shared `esp_boards` MQTT user
