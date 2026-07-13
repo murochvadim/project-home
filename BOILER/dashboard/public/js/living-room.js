@@ -106,39 +106,68 @@
   // 6h/24h read the per-coffee event log (jura_drinks); week..3yr read the
   // daily totals (jura_daily). Empty buckets come back as 0 (filled server-side).
   let _juraChart = null;
+  let _juraChartSig = '';    // set of stacked types currently drawn (rebuild only on change)
   let _juraPeriod = '24h';   // 6h | 24h | 1week | 1month | 1year | 3year
   const JURA_RANGE_LABEL = {
     '6h': 'last 6 hours', '24h': 'last 24 hours', '1week': 'last week',
     '1month': 'last month', '1year': 'last year', '3year': 'last 3 years',
   };
+  // drink_type slug -> stacked-bar label + colour (matches the server's TYPE_ORDER)
+  const JURA_TYPE_META = {
+    coffee:        { label: 'Coffee',             color: '#6f4e37' },
+    espresso:      { label: 'Espresso',           color: '#c0392b' },
+    cappuccino:    { label: 'Cappuccino',         color: '#e67e22' },
+    latte:         { label: 'Latte Macchiato',    color: '#f1c40f' },
+    esp_macchiato: { label: 'Espresso Macchiato', color: '#16a085' },
+    ristretto:     { label: 'Ristretto',          color: '#2980b9' },
+    milk:          { label: 'Milk Portion',       color: '#95a5a6' },
+    '2espressi':   { label: '2× Espresso',   color: '#27ae60' },
+    '2coffee':     { label: '2× Coffee',     color: '#8e44ad' },
+    '2ristretti':  { label: '2× Ristretto',  color: '#34495e' },
+  };
   async function loadJuraGraph() {
     const canvas = document.getElementById('jura-daily-chart');
     const note = document.getElementById('jura-daily-note');
     if (!canvas || typeof Chart === 'undefined') return;
-    let rows = [];
-    try { rows = await fetch('/api/jura/drinks?range=' + _juraPeriod).then(r => r.json()); } catch (e) { rows = []; }
-    if (!Array.isArray(rows)) rows = [];
-    const labels = rows.map(r => r.label);
-    const data = rows.map(r => r.drinks);
-    const total = data.reduce((a, b) => a + (+b || 0), 0);
+    let payload = { labels: [], series: [] };
+    try { payload = await fetch('/api/jura/drinks?range=' + _juraPeriod).then(r => r.json()); } catch (e) { /* keep empty */ }
+    const labels = Array.isArray(payload.labels) ? payload.labels : [];
+    const series = Array.isArray(payload.series) ? payload.series : [];
+    const datasets = series.map(s => {
+      const meta = JURA_TYPE_META[s.key] || { label: s.key, color: '#999' };
+      return { label: meta.label, data: s.data, backgroundColor: meta.color, borderWidth: 0, borderRadius: 2, stack: 'drinks' };
+    });
+    const total = series.reduce((a, s) => a + (s.data || []).reduce((x, y) => x + (+y || 0), 0), 0);
     const rangeTxt = JURA_RANGE_LABEL[_juraPeriod] || _juraPeriod;
     const subDay = (_juraPeriod === '6h' || _juraPeriod === '24h');
     if (note) note.textContent = total
-      ? `${total} coffee${total === 1 ? '' : 's'} — ${rangeTxt}`
-      : `No coffees in the ${rangeTxt} yet` + (subDay ? ' — per-coffee logging just started; bars appear as you brew.' : '.');
-    if (_juraChart) {
+      ? `${total} drink${total === 1 ? '' : 's'} — ${rangeTxt}`
+      : `No drinks in the ${rangeTxt} yet` + (subDay ? ' — per-drink logging just started; bars appear as you brew.' : '.');
+
+    // Rebuild only when the SET of stacked types changes; otherwise patch data
+    // in place so the 15 s poll doesn't flicker.
+    const sig = datasets.map(d => d.label).join('|');
+    if (_juraChart && _juraChartSig === sig) {
       _juraChart.data.labels = labels;
-      _juraChart.data.datasets[0].data = data;
+      datasets.forEach((d, i) => { _juraChart.data.datasets[i].data = d.data; });
       _juraChart.update();
       return;
     }
+    if (_juraChart) { _juraChart.destroy(); _juraChart = null; }
+    _juraChartSig = sig;
     _juraChart = new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { labels, datasets: [{ label: 'Coffees', data, backgroundColor: '#6f4e37', borderRadius: 3 }] },
+      data: { labels, datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.parsed.y} coffees` } } },
-        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+        plugins: {
+          legend: { display: true, position: 'bottom', labels: { boxWidth: 12, padding: 10, font: { size: 11 } } },
+          tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y}` } },
+        },
+        scales: {
+          x: { stacked: true },
+          y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } },
+        },
       },
     });
   }

@@ -386,7 +386,10 @@
   <div class="tab-panel" id="tab-jura">
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 8px;">
-        <h3 style="margin:0;">Coffees <span style="font-size:0.78rem;color:#888;font-weight:normal;">(Coffee drinks only)</span></h3>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <h3 style="margin:0;">Drinks <span style="font-size:0.78rem;color:#888;font-weight:normal;">(excl. hot water &amp; flat white)</span></h3>
+          <span id="jura-link" style="font-size:0.85rem;font-weight:600;color:#888;white-space:nowrap;">—</span>
+        </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;">
           <button class="btn btn-secondary btn-sm jura-per-btn" data-per="6h" onclick="setJuraPeriod('6h',this)">6h</button>
           <button class="btn btn-secondary btn-sm jura-per-btn" data-per="24h" style="background:#6f4e37;color:#fff;border-color:#6f4e37;" onclick="setJuraPeriod('24h',this)">24h</button>
@@ -443,6 +446,6 @@
 <script src="js/device-picker.js?v=16"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/living-room.js?v=58"></script>
+<script src="js/living-room.js?v=59"></script>
 </body>
 </html>
