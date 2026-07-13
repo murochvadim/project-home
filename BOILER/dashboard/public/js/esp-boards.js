@@ -122,16 +122,16 @@ async function loadBoards(auto = false) {
     const r = await fetch('/api/esp/boards');
     const data = await r.json();
     BOARDS = data.boards || [];
-    // Enrich salon_bridge (Jura) with the last-known counters from the persistent
+    // Enrich jura (Jura) with the last-known counters from the persistent
     // merged store. The firmware withholds counters until it reads the machine
     // (no-0 rule), so the live /status omits them right after a reboot — but
     // devices.last_state keeps the real values. Fall back to them so the Jura
     // card never shows a blank count.
     try {
-      const jb = BOARDS.find(b => b.id === 'salon_bridge');
+      const jb = BOARDS.find(b => b.id === 'jura');
       if (jb) {
         const devs = await fetch('/api/devices').then(r2 => r2.json());
-        const ls = ((Array.isArray(devs) ? devs : []).find(d => d.id === 'salon_bridge') || {}).last_state;
+        const ls = ((Array.isArray(devs) ? devs : []).find(d => d.id === 'jura') || {}).last_state;
         if (ls) {
           jb.last_status = jb.last_status || {};
           ['total_dispensed','cnt_ristretto','cnt_espresso','cnt_coffee','cnt_cappuccino',
@@ -302,7 +302,7 @@ function renderStatus(b) {
       </div>
     ` : ''}
 
-    ${(b.id === 'salon_bridge') ? `
+    ${(b.id === 'jura') ? `
       <div class="esp-card">
         <h3 class="esp-card-title">Jura J6 Coffee Machine ${b.sketch_version ? `<span style="font-size:0.78rem;color:#888;font-weight:normal;">(firmware ${escHtml(b.sketch_version)})</span>` : ''}</h3>
         <div class="status-grid">

@@ -899,7 +899,7 @@ class RuleEngine:
         'pump_state', 'auto_enabled', 'auto_phase', 'manual_active',
         # remoteXY gate
         'door_relay', 'charge_relay', 'door_open_enabled',
-        # jura coffee bridge (salon_bridge) — full stats + maintenance (NimBLE, 2026-07-10).
+        # jura coffee bridge (jura) — full stats + maintenance (NimBLE, 2026-07-10).
         # Live alert bits (water/beans/grounds/tray/filter) were REMOVED (v6) — on this
         # machine MACHINE_STATUS echoes the stats command so they're unreliable; the
         # firmware no longer publishes them (see [[project_jura_phase2]]). Counters +

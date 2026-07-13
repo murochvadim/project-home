@@ -76,9 +76,9 @@
   }
   window.showTab = showTab;
 
-  // ─── Jura tab (read-only view of salon_bridge stats) ───────────────────
+  // ─── Jura tab (read-only view of jura stats) ───────────────────
   let _juraTimer = null;
-  const JURA_ID = 'salon_bridge';
+  const JURA_ID = 'jura';
   // display order + labels for per-drink counters (hidden when 0)
   const JURA_DRINKS = [
     ['cnt_coffee', 'Coffee'], ['cnt_espresso', 'Espresso'], ['cnt_cappuccino', 'Cappuccino'],

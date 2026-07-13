@@ -187,7 +187,7 @@ When the auth handshake is implemented, expect to read:
 > superseded (board id, BLE library, "Phase 2 TODO"). Authoritative live tracker:
 > the [[project_jura_phase2]] memory. Summary of what actually runs today:
 >
-> - **Board id `salon_bridge`** (renamed from `jura_bridge_01`), regular ESP32
+> - **Board id `jura`** (renamed from `jura_bridge_01`), regular ESP32
 >   WROOM-32, MAC `80:F3:DA:5E:B3:AC`, IP 192.168.1.118. Flashed by USB **or OTA**
 >   (*Enter OTA Mode* button on Project Boards → 5-min BLE-off window; the espota
 >   path in `.env` `ESP32_OTA_PY` must point at the **current** esp32 core —
@@ -212,8 +212,8 @@ When the auth handshake is implemented, expect to read:
 >   and Project Boards → **Jura J6 card** (Machine on/off · BLE signal dBm · Total ·
 >   Reads live/idle/stalled · **firmware version in the title**). Every sketch prints
 >   a `==== <name> <version> (built …) ====` banner at boot (standing rule).
-> - Sketch: `JURA/sketch/` (Main.h / Jura_BLE.ino / Esp_Base.ino / salon_bridge.ino);
->   version-controlled + authoritative Arduino copy at `Arduino_Projects/salon_bridge/`.
+> - Sketch: `JURA/sketch/` (Main.h / Jura_BLE.ino / Esp_Base.ino / jura.ino);
+>   version-controlled + authoritative Arduino copy at `Arduino_Projects/jura/`.
 
 ```
 J6 service port → BlueFrog dongle → BLE (5 m line-of-sight)

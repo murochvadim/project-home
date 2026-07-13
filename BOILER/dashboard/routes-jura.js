@@ -3,7 +3,7 @@
 // Own module (wired from server.js via one require line) so server.js stays
 // clear of the architecture-guard hook. UI-only: reads the jura_daily snapshot
 // table (LXC 102) that the LXC-104 cron `jura_daily_snapshot.py` fills every
-// 30 min from devices.last_state (salon_bridge cumulative counters).
+// 30 min from devices.last_state (jura cumulative counters).
 //
 // GET /api/jura/daily-drinks?period=day|month|year[&limit=N]
 //   Coffees made per day — the pre-computed jura_daily.made column (today's

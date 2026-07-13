@@ -1,12 +1,12 @@
 #ifndef MAIN_H
 #define MAIN_H
 
-// ─── Jura Coffee Bridge (ESP32-C3) — Project Boards Phase 2 ──────────────
+// ─── Jura Coffee Bridge (ESP32) — Project Boards Phase 2 ──────────────
 //
 // BLE client + Wi-Fi → MQTT bridge for the Jura Impressa J6 + BlueFrog
 // dongle. Acts as a Smart Connect client: connects via NimBLE, runs the
 // Jutta-Proto auth handshake, polls the stats characteristic on a configurable
-// interval, and publishes decoded state to mur/home/esp/salon_bridge/status.
+// interval, and publishes decoded state to mur/home/esp/jura/status.
 // Subscribes to .../command for brew / cancel / standby actions.
 //
 // See JURA/CLAUDE.md (Path C) for the architecture overview.
@@ -34,9 +34,9 @@ const char* mqtt_pass_moskuitto   = "=N!9ioNYZWH-8Rz+y+6n";
 const int   mqtt_port_moskuitto   = 1883;
 
 // ─── Sketch identity ─────────────────────────────────────────────────────
-const char* device_id      = "salon_bridge";
-const char* sketch_name    = "Salon_Bridge";
-const char* sketch_version = "v10";
+const char* device_id      = "jura";
+const char* sketch_name    = "Jura";
+const char* sketch_version = "v11";
 const char* build_ts       = __DATE__ " " __TIME__;
 
 // Shared OTA password (every board uses the same value via .env ESP_OTA_PASSWORD).
@@ -75,7 +75,7 @@ String esp_event_topic;
 
 // ─── Tunable parameters (loaded from EEPROM in espBaseSetup) ─────────────
 struct EspParams {
-  uint32_t poll_interval_sec      = 30;    // BlueFrog stats read interval
+  uint32_t poll_interval_sec      = 10;    // BlueFrog stats read interval (~10 s reaction)
   uint32_t reconnect_backoff_sec  = 10;    // BLE reconnect cooldown after disconnect
   uint8_t  auth_retry_max         = 3;     // handshake attempts before reboot
 } esp_params;
@@ -147,6 +147,7 @@ void  espBaseOnMosquittoConnect();
 void  espBaseLoop();
 bool  espBaseHandleMessage(const char* topic, byte* payload, unsigned int length);
 void  publishEspEvent(const char* kind, const char* src, const char* topic, const char* payload);
+void  publishEspStatus();   // exposed so Jura_BLE.ino can publish-on-change (drink made)
 
 // Forward decls implemented in the .ino (called from Esp_Base.ino).
 void reconnect_Mosquitto();
@@ -158,7 +159,7 @@ void juraBleLoop();                        // called every loop tick — owns co
 bool juraSendCommand(const char* action);  // dispatch a sketch action key (brew_*, cancel, standby)
 void juraBlePrepareForOta();               // graceful BLE shutdown — call from ArduinoOTA.onStart
 
-// OTA-only boot mode (defined in salon_bridge.ino). Set the RTC flag,
+// OTA-only boot mode (defined in jura.ino). Set the RTC flag,
 // reboot, and the next setup() skips BLE entirely so ArduinoOTA has the
 // radio to itself. Auto-reverts to normal mode after OTA completes or
 // after the safety timeout.

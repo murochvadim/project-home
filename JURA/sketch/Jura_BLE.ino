@@ -52,8 +52,12 @@ static const unsigned long   FAILED_RETRY_BACKOFF_MS = 8000;
 // so "Jura turned on -> dashboard knows" is ~8-15 s instead of ~40 s-2 min.
 // Once connected we fall back to the normal poll_interval_sec (30 s). ~8 s still
 // leaves the BlueFrog quiet windows to advertise (don't go much lower).
-static const unsigned long   FAST_RETRY_MS           = 8000;
+static const unsigned long   FAST_RETRY_MS           = 10000;   // retry every 10 s while machine off
 static String                _pending_cmd_action;          // queued brew/cancel; latest wins
+// Publish-on-change (2026-07-13): publish /status the MOMENT the total advances
+// (a drink was made) instead of waiting for the 60 s heartbeat — so the ~10 s
+// poll surfaces a new coffee immediately.
+static uint32_t              _last_pub_total = 0xFFFFFFFFUL;
 
 // ─── Jutta-Proto encryption (ported from protocol-bt-cpp) ────────────────
 //
@@ -279,6 +283,12 @@ static void pollStats() {
   readProductStats();
   readMaintenance();
   jura_state.last_poll_unix = (uint32_t)(millis() / 1000);
+  // Publish THE MOMENT a drink was made (total advanced) — don't wait for the
+  // 60 s heartbeat, so a ~10 s poll surfaces the new count right away.
+  if (jura_state.stats_valid && jura_state.total_dispensed != _last_pub_total) {
+    _last_pub_total = jura_state.total_dispensed;
+    publishEspStatus();
+  }
 }
 
 // ─── Public API: command dispatch (called from Esp_Base.ino) ─────────────

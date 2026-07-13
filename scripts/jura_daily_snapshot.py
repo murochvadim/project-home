@@ -2,7 +2,7 @@
 """Jura per-day COFFEE-count snapshot.
 
 Preserves, forever, how many **Coffees** were made each day. Reads the
-salon_bridge cumulative Coffee counter (last_state->>'cnt_coffee') and writes
+jura cumulative Coffee counter (last_state->>'cnt_coffee') and writes
 TODAY's row in jura_daily (LXC 102):
   • coffee = cumulative cnt_coffee, GREATEST high-water for the day
   • made   = coffee − previous logged day's coffee = coffees MADE today
@@ -32,7 +32,7 @@ SELECT (now() AT TIME ZONE 'Asia/Jerusalem')::date,
        (last_state->>'cnt_coffee')::int,
        now()
 FROM devices
-WHERE id = 'salon_bridge'
+WHERE id = 'jura'
   AND last_state ? 'cnt_coffee'
 ON CONFLICT (day) DO UPDATE SET
   coffee     = GREATEST(jura_daily.coffee, EXCLUDED.coffee),

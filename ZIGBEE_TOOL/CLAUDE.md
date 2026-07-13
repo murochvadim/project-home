@@ -14,7 +14,7 @@ touching the production coordinator. Bench/diagnostic only — not a deployed se
 
 - **Native USB** (the C6's built-in USB Serial/JTAG, Espressif **VID `303A:1001`**) — no CH340/CP210x chip. Enumerates as **"USB Serial Device (COMx)"** (was COM6 here).
 - **Connecting gotchas** (hit during setup):
-  - Needs a **USB data cable** (charge-only powers the LEDs but the PC sees nothing). The board's USB-C ≠ the micro-USB cable used for the WROOM-32/salon_bridge boards.
+  - Needs a **USB data cable** (charge-only powers the LEDs but the PC sees nothing). The board's USB-C ≠ the micro-USB cable used for the WROOM-32/jura boards.
   - If no COM port appears while a sketch is running, the flashed firmware had **USB CDC On Boot: Disabled** — force the ROM bootloader (hold **BOOT**, tap **RESET**, release BOOT) and it enumerates. Flash with **USB CDC On Boot: Enabled** so it stays visible.
 - **Board package:** nothing to install — the Espressif **esp32 core 3.3.10** already ships C6 support incl. `DFRobot Beetle ESP32-C6` / `DFRobot FireBeetle 2 ESP32-C6` / generic `ESP32C6 Dev Module`.
 

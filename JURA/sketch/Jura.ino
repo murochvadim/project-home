@@ -1,4 +1,4 @@
-/* salon_bridge — Path C of the Jura Coffee Machine integration.
+/* jura — Path C of the Jura Coffee Machine integration.
  *
  *   ESP32-C3 → BLE client to BlueFrog → Wi-Fi → Mosquitto on LXC 107
  *   Slots into our esp_boards subsystem (Project Boards tab, OTA, rule
