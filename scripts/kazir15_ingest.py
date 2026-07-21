@@ -69,10 +69,25 @@ def get_conn():
     return _db_conn
 
 
+def _clean_mac(mac):
+    """Reject multicast/broadcast/junk MACs (I/G bit set on the first octet) — a
+    real NIC MAC is always unicast. The board firmware (<= v7) occasionally forged
+    a multicast junk MAC (01:00:00:00:64:00) for ICMP-only responders that had no
+    ARP entry; treat those as no-MAC so they never reach the DB."""
+    if not mac:
+        return None
+    try:
+        if int(mac.split(':')[0], 16) & 0x01:   # multicast/broadcast bit → not a real device
+            return None
+    except (ValueError, IndexError):
+        return None
+    return mac
+
+
 def ingest_scan(subnet, hosts):
     """Mark the subnet down, then upsert the up-hosts. mac is COALESCEd so a
     scan where the ARP harvest missed a host's MAC doesn't wipe a previously
-    resolved one."""
+    resolved one; junk multicast MACs are filtered out (see _clean_mac)."""
     conn = get_conn()
     with conn.cursor() as cur:
         if subnet:
@@ -85,7 +100,7 @@ def ingest_scan(subnet, hosts):
             ip = h.get('ip')
             if not ip:
                 continue
-            mac = h.get('mac')
+            mac = _clean_mac(h.get('mac'))
             rtt = h.get('rtt')
             cur.execute(
                 """INSERT INTO kazir15_hosts
