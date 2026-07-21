@@ -62,7 +62,7 @@ function renderSummary(st, cats) {
 // answer every single sweep; this is the same 15-min "online grace" the home
 // ARP scanner uses, so the list doesn't flicker.
 const GRACE_MS = 15 * 60 * 1000;
-const ipNum = ip => ip.split('.').reduce((a, o) => a * 256 + (+o), 0);
+const ipNum = ip => ip ? ip.split('.').reduce((a, o) => a * 256 + (+o), 0) : Infinity;
 
 // Server returns every named device (online + offline) + unnamed-connected, with
 // an `online` flag. Online = green "connected"; offline = red "disconnected"
@@ -71,7 +71,10 @@ function renderHosts(hosts) {
   const offlineOnly = document.getElementById('kz-offline-only') && document.getElementById('kz-offline-only').checked;
   const onCount  = hosts.filter(h => h.online).length;
   const offCount = hosts.length - onCount;
-  const rows = offlineOnly ? hosts.filter(h => !h.online) : hosts;
+  // Single list in numeric IP order (.1 → .254), online + offline interleaved
+  // (colour still distinguishes them). ipNum sorts numerically so .2 < .10 < .100.
+  const rows = (offlineOnly ? hosts.filter(h => !h.online) : hosts.slice())
+    .sort((a, b) => ipNum(a.ip) - ipNum(b.ip));
   const tb = document.getElementById('kz-hosts');
   document.getElementById('kz-count').textContent = `(${onCount} connected · ${offCount} disconnected)`;
   if (!rows.length) {
