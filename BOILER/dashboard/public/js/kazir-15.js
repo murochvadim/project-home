@@ -19,11 +19,12 @@ async function kzLoad() {
   if (window._kzEditing) return;   // don't clobber a name being typed mid-refresh
   document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
   try {
-    const [st, hosts] = await Promise.all([
+    const [st, hosts, cats] = await Promise.all([
       fetch('/api/kazir15/status').then(r => r.json()),
       fetch('/api/kazir15/hosts').then(r => r.json()),
+      fetch('/api/kazir15/summary').then(r => r.json()),
     ]);
-    renderSummary(st || {});
+    renderSummary(st || {}, cats || {});
     renderHosts(Array.isArray(hosts) ? hosts : []);
   } catch (e) {
     document.getElementById('kz-summary').innerHTML =
@@ -31,8 +32,10 @@ async function kzLoad() {
   }
 }
 
-function renderSummary(st) {
+function renderSummary(st, cats) {
   const s = st.last_status || {};
+  const c = cats || {};
+  const oo = (o) => { o = o || {}; return `<span style="color:#16a34a;">${o.on || 0} on</span> <span style="color:#bbb;">· ${o.off || 0} off</span>`; };
   const online = st.last_seen && (Date.now() - new Date(st.last_seen).getTime()) < 180000;
   const link = s.eth_link || 'down';
   const linkUp = link === 'up';
@@ -45,8 +48,9 @@ function renderSummary(st) {
     + item('EK15 IP', s.eth_ip ? escHtml(s.eth_ip) : '—', s.eth_ip ? '' : 'dim')
     + item('Gateway', s.eth_gw ? escHtml(s.eth_gw) : '—', s.eth_gw ? '' : 'dim')
     + item('Subnet', s.eth_subnet ? escHtml(s.eth_subnet) + '.0/24' : '—', s.eth_subnet ? '' : 'dim')
-    + item('Hosts Up', s.hosts_up != null ? s.hosts_up : '—')
-    + item('Hosts Seen', s.hosts_total != null ? s.hosts_total : '—')
+    + item('Cameras', oo(c.cameras))
+    + item('Access Points', oo(c.aps))
+    + item('Deco', oo(c.deco))
     + item('Scan', scanning
         ? `<span class="kz-pill scan">scanning ${s.scan_progress || 0}%</span>`
         : '<span style="color:#888;">idle</span>')

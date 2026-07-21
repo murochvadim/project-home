@@ -46,6 +46,38 @@ module.exports = (app, db) => {
     }
   });
 
+  // Category on/off counts (Cameras / Access Points / Deco). Counted against the
+  // PERSISTENT named inventory (kazir15_names survives pruning), so "off" = a
+  // named device that isn't currently connected. Classified by the name each
+  // device was given (Cam / UniFi AP / Deco). "online" = seen within 15 min
+  // (same grace as the host list).
+  app.get('/api/kazir15/summary', async (req, res) => {
+    try {
+      // GROUP BY mac so a device that appears on >1 IP (e.g. two DHCP leases) is
+      // counted ONCE; online = any of its host rows seen within 15 min.
+      const r = await db.query(`
+        SELECT n.name,
+               bool_or(h.last_seen IS NOT NULL AND h.last_seen > now() - interval '15 minutes') AS online
+        FROM kazir15_names n
+        LEFT JOIN kazir15_hosts h ON lower(h.mac) = lower(n.mac)
+        GROUP BY n.mac, n.name
+      `);
+      const cat = { cameras: { on: 0, off: 0 }, aps: { on: 0, off: 0 }, deco: { on: 0, off: 0 } };
+      for (const row of r.rows) {
+        const nm = row.name || '';
+        let b = null;
+        if (/deco/i.test(nm))               b = 'deco';
+        else if (/\bap\b|unifi/i.test(nm))   b = 'aps';
+        else if (/cam/i.test(nm))            b = 'cameras';   // NVR/Router/other excluded on purpose
+        if (!b) continue;
+        cat[b][row.online ? 'on' : 'off']++;
+      }
+      res.json(cat);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Board summary — eth link/ip/gateway + host counts + last scan.
   app.get('/api/kazir15/status', async (req, res) => {
     try {
