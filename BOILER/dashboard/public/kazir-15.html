@@ -84,7 +84,12 @@
 
   <!-- Who's connected -->
   <div class="card">
-    <h3 style="margin:0 0 10px 0; font-size:0.95rem;">Who's connected <span id="kz-count"></span></h3>
+    <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:0 0 10px 0;">
+      <h3 style="margin:0; font-size:0.95rem;">Devices <span id="kz-count" style="font-weight:normal; color:#888;"></span></h3>
+      <label style="font-size:0.8rem; color:#555; display:flex; align-items:center; gap:5px; cursor:pointer;">
+        <input type="checkbox" id="kz-offline-only" onchange="kzLoad()"> Show offline only
+      </label>
+    </div>
     <div style="overflow-x:auto;">
       <table class="kz-table">
         <thead>
@@ -100,6 +105,6 @@
 
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=6"></script>
-<script src="js/kazir-15.js?v=20260721a"></script>
+<script src="js/kazir-15.js?v=20260721b"></script>
 </body>
 </html>

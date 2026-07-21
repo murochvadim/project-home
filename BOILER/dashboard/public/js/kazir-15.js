@@ -64,27 +64,37 @@ function renderSummary(st, cats) {
 const GRACE_MS = 15 * 60 * 1000;
 const ipNum = ip => ip.split('.').reduce((a, o) => a * 256 + (+o), 0);
 
+// Server returns every named device (online + offline) + unnamed-connected, with
+// an `online` flag. Online = green "connected"; offline = red "disconnected"
+// (same red as Project Network). "Show offline only" filters to the down ones.
 function renderHosts(hosts) {
-  const now = Date.now();
-  const conn = hosts
-    .filter(h => h.last_seen && (now - new Date(h.last_seen).getTime()) < GRACE_MS)
-    .sort((a, b) => ipNum(a.ip) - ipNum(b.ip));
+  const offlineOnly = document.getElementById('kz-offline-only') && document.getElementById('kz-offline-only').checked;
+  const onCount  = hosts.filter(h => h.online).length;
+  const offCount = hosts.length - onCount;
+  const rows = offlineOnly ? hosts.filter(h => !h.online) : hosts;
   const tb = document.getElementById('kz-hosts');
-  document.getElementById('kz-count').textContent = conn.length ? `(${conn.length} connected)` : '';
-  if (!conn.length) {
-    tb.innerHTML = '<tr><td colspan="5" class="kz-empty">No devices seen recently — plug the board into KZ15, or hit Scan Now.</td></tr>';
+  document.getElementById('kz-count').textContent = `(${onCount} connected · ${offCount} disconnected)`;
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="kz-empty">' +
+      (offlineOnly ? 'No disconnected devices.' : 'No devices — plug the board into KZ15, or hit Scan Now.') +
+      '</td></tr>';
     return;
   }
-  tb.innerHTML = conn.map(h => `
-    <tr>
-      <td><span class="kz-dot up"></span>connected</td>
-      <td class="mono">${escHtml(h.ip)}</td>
+  tb.innerHTML = rows.map(h => {
+    const on = !!h.online;
+    return `
+    <tr${on ? '' : ' style="background:#fdf3f2;"'}>
+      <td>${on
+        ? '<span class="kz-dot up"></span>connected'
+        : '<span class="kz-dot down"></span><span style="color:#c0392b; font-weight:600;">disconnected</span>'}</td>
+      <td class="mono">${h.ip ? escHtml(h.ip) : '<span style="color:#bbb;">—</span>'}</td>
       <td class="mono">${h.mac ? escHtml(h.mac) : '<span style="color:#bbb;">—</span>'}</td>
       <td>${h.mac
         ? `<input class="kz-name" data-mac="${escHtml(h.mac)}" value="${escHtml(h.name || '')}" placeholder="name…" onfocus="window._kzEditing=true" onblur="kzSaveName(this)" onkeydown="if(event.key==='Enter'){this.blur();}">`
         : '<span style="color:#bbb;">—</span>'}</td>
       <td>${fmtTime(h.last_seen)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 // Save (or clear, if blank) a device name — keyed by MAC so it survives IP

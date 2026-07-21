@@ -116,13 +116,16 @@ def ingest_scan(subnet, hosts):
                 (ip, mac, rtt, subnet),
             )
             up += 1
-        # Prune hosts gone for > 30 min so the page always shows CURRENT
-        # reality — no stale rows piling up from old sweeps. A host that
-        # comes back is re-inserted on the next scan that sees it.
+        # Prune UNNAMED hosts gone for > 30 min so transient/unknown rows don't
+        # pile up. NAMED devices are kept forever (up=false) so the dashboard can
+        # show them as "disconnected" with their last-known IP + last_seen — a
+        # named camera/AP that goes offline must stay visible, not vanish.
         if subnet:
             cur.execute(
-                "DELETE FROM kazir15_hosts WHERE subnet = %s AND up = false "
-                "AND last_seen < now() - interval '30 minutes'",
+                "DELETE FROM kazir15_hosts h WHERE h.subnet = %s AND h.up = false "
+                "AND h.last_seen < now() - interval '30 minutes' "
+                "AND NOT EXISTS (SELECT 1 FROM kazir15_names n "
+                "                WHERE lower(n.mac) = lower(h.mac))",
                 (subnet,),
             )
     log.info('scan ingested: subnet=%s up_hosts=%d', subnet, up)

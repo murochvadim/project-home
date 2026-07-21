@@ -11,12 +11,29 @@ module.exports = (app, db) => {
   // Who's connected on KZ15 — host list + any user-set name (joined by MAC).
   app.get('/api/kazir15/hosts', async (req, res) => {
     try {
+      // Full device picture: every NAMED device (online or offline — one row per
+      // MAC, its newest host row) PLUS any currently-connected UNNAMED host. So
+      // offline named devices (cameras/APs that stopped answering) still show,
+      // with their last-known IP + last_seen, marked offline.
       const r = await db.query(`
-        SELECT h.ip, h.mac, h.up, h.rtt_ms, h.subnet,
-               h.first_seen, h.last_seen, h.last_scan_at, n.name
-        FROM kazir15_hosts h
-        LEFT JOIN kazir15_names n ON lower(n.mac) = lower(h.mac)
-        ORDER BY h.up DESC, h.ip::inet
+        WITH named AS (
+          SELECT DISTINCT ON (lower(n.mac))
+                 n.mac, n.name, h.ip, h.last_seen, h.rtt_ms,
+                 (h.last_seen IS NOT NULL AND h.last_seen > now() - interval '15 min') AS online
+          FROM kazir15_names n
+          LEFT JOIN kazir15_hosts h ON lower(h.mac) = lower(n.mac)
+          ORDER BY lower(n.mac), h.last_seen DESC NULLS LAST
+        ),
+        unnamed AS (
+          SELECT h.mac, NULL::text AS name, h.ip, h.last_seen, h.rtt_ms, true AS online
+          FROM kazir15_hosts h
+          WHERE h.last_seen > now() - interval '15 min'
+            AND NOT EXISTS (SELECT 1 FROM kazir15_names n WHERE lower(n.mac) = lower(h.mac))
+        )
+        SELECT * FROM named
+        UNION ALL
+        SELECT * FROM unnamed
+        ORDER BY online DESC, name NULLS LAST, ip
       `);
       res.json(r.rows);
     } catch (e) {
