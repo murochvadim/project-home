@@ -1002,17 +1002,37 @@ async function pvJournalCfgSave() {
   } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Error: ' + (e.message || e); } }
 }
 
+// "Today" as the Asia/Jerusalem local day (YYYY-MM-DD) — independent of the
+// device's timezone, so the entry_date we send always matches the server's day
+// even when the laptop is abroad (en-CA formats as YYYY-MM-DD; he-IL would give
+// DD.MM.YYYY which a <input type="date"> can't consume).
+function pvjTodayJeru() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+}
 async function pvJournalOnShow() {
   await pvJournalLoadCfg();
   pvJournalSearchCats();
+  // Default to today (Jerusalem) on every open, so normal daily use isn't left
+  // pointed at a previously back-dated day.
+  const dEl = document.getElementById('pvj-date');
+  if (dEl) { dEl.max = pvjTodayJeru(); dEl.value = pvjTodayJeru(); }
   await pvJournalRenderToday();
   await pvJournalLoadEntries();
   pvJournalRenderTimeline();
 }
 async function pvJournalRenderToday() {
   const box = document.getElementById('pvj-today'); if (!box) return;
+  // The card authors ONE date — today by default, or any past day picked in
+  // #pvj-date (back-dating). Load that day's existing rows to pre-fill.
+  const D = document.getElementById('pvj-date')?.value || pvjTodayJeru();
+  const hintEl = document.getElementById('pvj-backdate-hint');
+  if (hintEl) {
+    const back = D !== pvjTodayJeru();
+    hintEl.style.display = back ? '' : 'none';
+    if (back) hintEl.textContent = `Back-dating to ${D} — fill any box and Save.`;
+  }
   let today = [];
-  try { today = await (await fetch(`/api/journal/today?user_id=${PVJ_UID}`)).json(); } catch (e) { today = []; }
+  try { today = await (await fetch(`/api/journal?user_id=${PVJ_UID}&from=${D}&to=${D}`)).json(); } catch (e) { today = []; }
   // key existing entries by slot → category
   const byId = {}; (today || []).forEach(e => { (byId[e.slot_id] = byId[e.slot_id] || {})[e.category_id] = e; });
   if (!pvjCfg.slots.length) { box.innerHTML = '<div style="font-size:0.86rem;color:#888;">No journal reminders configured — set them in <b>Settings → 📓 Daily Journal reminders</b>.</div>'; return; }
@@ -1053,8 +1073,13 @@ async function pvJournalSaveToday(btn) {
   const row = btn.closest('[data-pvj-slot]');
   const st = row.querySelector('.pvj-slot-status');
   const mood = row.dataset.mood ? parseInt(row.dataset.mood) : null;   // one mood per reminder
+  // Author date. For TODAY, omit entry_date so the server stays authoritative on
+  // the date (identical to the original behaviour — no client/server midnight
+  // clock-skew for normal same-day capture). Only send it when back-dating.
+  const D = document.getElementById('pvj-date')?.value || pvjTodayJeru();
+  const dateField = (D && D !== pvjTodayJeru()) ? { entry_date: D } : {};
   const post = (cat, name, comment) => fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: PVJ_UID, slot_id: row.dataset.pvjSlot, slot_name: row.dataset.pvjName,
+    body: JSON.stringify({ user_id: PVJ_UID, ...dateField, slot_id: row.dataset.pvjSlot, slot_name: row.dataset.pvjName,
       category_id: cat, category_name: name, comment, mood }) });
   // Per box: text → upsert; emptied a box that HAD a saved row → delete it; untouched empty → skip.
   const posts = [];

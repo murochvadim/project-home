@@ -219,7 +219,13 @@
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-journal">
     <div class="card" style="margin-bottom:14px;">
-      <h2 style="margin-top:0;">📓 Today</h2>
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px;">
+        <h2 style="margin:0;">📓 Entry</h2>
+        <label style="font-size:0.82rem; color:#555; display:flex; align-items:center; gap:5px;">Date
+          <input type="date" id="pvj-date" onchange="pvJournalRenderToday()" style="padding:4px 6px; border:1px solid #d0cbc4; border-radius:4px;">
+        </label>
+        <span id="pvj-backdate-hint" style="display:none; font-size:0.8rem; color:#b45309; background:#fef3c7; border-radius:5px; padding:2px 8px;"></span>
+      </div>
       <div id="pvj-today"><div style="color:#aaa;">Loading…</div></div>
     </div>
     <div class="card" style="margin-bottom:14px;">
@@ -652,7 +658,7 @@
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/privacy.js?v=83"></script>
+<script src="js/privacy.js?v=84"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="js/privacy-people.js?v=25"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
