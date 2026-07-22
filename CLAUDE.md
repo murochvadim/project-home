@@ -34,6 +34,9 @@ Config: `C:\Users\muroc\AppData\Roaming\Code\User\globalStorage\saoudrizwan.clau
 - **Do NOT switch to SSE type** (`http://192.168.1.110:8123/api/mcp/sse`) — HA does not have `mcp_server:` enabled
 - When HA token expires/resets: update only the `HA_TOKEN` value in that file, keep everything else unchanged
 
+### ⚠ HA Tuya integration can silently freeze — auto-reload in place
+The HA **Tuya cloud** integration occasionally stops syncing: every Tuya entity's HA state freezes at one timestamp and HA commands become no-ops, while non-Tuya integrations (HomeKit/Z-Wave/SmartThings/Shelly) stay live. Symptom seen 2026-07-20: the **8 Gang Switch AWAY button dead** (AWAY = DPS 8 is **cloud-only**, so it fully depends on this path; HOME/ABROAD are local relays and kept working) + **boiler valve control blind** (`raw_data.valve_state` is read from the frozen HA entity, so the boiler agent couldn't see the valve's real state — which was physically ON). **Fix = reload the integration** (HA → Settings → Devices & Services → Tuya → ⋮ → Reload; if that doesn't restore it, re-authenticate — one-timestamp freeze = Tuya IoT Cloud token/subscription expiry). **Auto-recover:** HA automation **"Tuya Integration Reload"** (`automation.reload_tuya_integration_auto_recover`) runs **daily 04:00**, calling `homeassistant.reload_config_entry` on Tuya entry `01JJ6F8S69NZACDBP7Z6QV36K1` (targeted by entry-id). **Debug trap:** during a Tuya freeze, never infer a device's physical state from HA-fed data (`raw_data`, HA entity states) — check the LOCAL device row (`tcp_push` / `devices.last_state`). See memory `incident_tuya_integration_freeze`.
+
 ## Dashboard Server
 - Runs locally on **Windows host** (not on any LXC)
 - Managed by **pm2** — available at `C:\Users\muroc\AppData\Roaming\npm\pm2` (already in PATH)
