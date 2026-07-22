@@ -108,6 +108,7 @@
     <button class="tab-btn active" onclick="showTab('panel', this)">Panel</button>
     <button class="tab-btn" onclick="showTab('smart-switch', this)">Balcony Smart Switch</button>
     <button class="tab-btn" onclick="showTab('star-projector', this)">Star Projector</button>
+    <button class="tab-btn" onclick="showTab('somfy', this)">Somfy</button>
   </div>
 
   <div class="tab-panel active" id="tab-panel">
@@ -326,9 +327,46 @@
   </div>
 </div>
 
+  <div class="tab-panel" id="tab-somfy">
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.05rem;">Somfy Blinds
+          <span id="sf-online-dot" title="board freshness" style="font-size:0.85rem;color:#aaa;">●</span>
+          <span id="sf-online-text" style="font-size:0.72rem;color:#888;font-weight:normal;">loading…</span>
+        </h2>
+        <span id="sf-cc-chip" style="font-size:0.78rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">CC1101: —</span>
+        <span style="font-size:0.82rem;color:#666;">board <b>balcony_bridge</b> · 433.42 MHz</span>
+      </div>
+      <div style="font-size:0.78rem;color:#777;margin-top:6px;">
+        Somfy RTS motors via the balcony CC1101. Open / Close / Stop send a rolling-code frame; <b>Pair</b> adds this remote to a motor. <code>counter</code> = next rolling code (a heartbeat that the motor is being driven).
+      </div>
+    </div>
+
+    <div id="sf-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;">
+      <div style="color:#888;font-style:italic;padding:8px;">loading motors…</div>
+    </div>
+  </div>
+
+  <!-- Somfy pair modal -->
+  <div id="sf-pair-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1000;align-items:center;justify-content:center;">
+    <div class="card" style="max-width:460px;padding:22px;margin:16px;">
+      <h2 style="margin-top:0;font-size:1.1rem;">🔗 Pair <span id="sf-pair-name" style="color:#2b4c7e;"></span></h2>
+      <ol style="font-size:0.9rem;color:#444;line-height:1.6;padding-left:20px;margin:10px 0;">
+        <li>Press &amp; hold <b>PROG</b> on the motor's original Somfy remote (~2–3 s) until the motor <b>jogs</b> (short twitch).</li>
+        <li>Within a few seconds, click <b>Send PROG</b> below.</li>
+        <li>The motor should <b>jog again</b> = paired. Then test Open / Close.</li>
+      </ol>
+      <div id="sf-pair-status" style="font-size:0.82rem;color:#3a7d44;min-height:1.1em;"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;">
+        <button class="btn-test" onclick="sfClosePair()">Close</button>
+        <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;font-weight:600;" onclick="sfSendProg()">Send PROG</button>
+      </div>
+    </div>
+  </div>
+
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=6"></script>
-<script src="js/balcony.js?v=20260621d"></script>
+<script src="js/balcony.js?v=20260722a"></script>
 </body>
 </html>

@@ -1751,3 +1751,154 @@
   };
 })();
 
+// ─── Somfy tab (self-contained; balcony_bridge CC1101 RTS blaster) ───────────
+// Frontend-only: commands via POST /api/esp/boards/balcony_bridge/command
+// (schema-validated somfy_up/down/my/prog:<idx>); names/invert in
+// dashboard_settings.balcony.somfy_motors; live cc1101_ok + counters from
+// GET /api/esp/boards (response is {boards:[...]}). Verified live 2026-07-22.
+(function () {
+  const BOARD = 'balcony_bridge';
+  const DEFAULTS = [
+    { idx: 0, name: 'Left Roof',     invert: false },
+    { idx: 1, name: 'Right Roof',    invert: false },
+    { idx: 2, name: 'Left Curtain',  invert: false },
+    { idx: 3, name: 'Right Curtain', invert: false },
+  ];
+  let sfMotors = null, sfInited = false, sfTimer = null, sfPairIdx = null;
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  async function sfSaveConfig(v) {
+    try {
+      await fetch('/api/dashboard-settings/balcony.somfy_motors', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: v || sfMotors }),
+      });
+    } catch (e) { /* non-fatal */ }
+  }
+
+  async function sfLoadConfig() {
+    try {
+      const r = await fetch('/api/dashboard-settings/balcony.somfy_motors').then(x => x.json());
+      let v = r && r.value;
+      if (!Array.isArray(v) || v.length !== 4) { v = DEFAULTS.slice(); sfMotors = v; await sfSaveConfig(v); return; }
+      sfMotors = v.map((m, i) => ({ idx: i, name: (m && m.name) || DEFAULTS[i].name, invert: !!(m && m.invert) }));
+    } catch (e) { sfMotors = DEFAULTS.slice(); }
+  }
+
+  function sfRender() {
+    const wrap = document.getElementById('sf-cards');
+    if (!wrap || !sfMotors) return;
+    wrap.innerHTML = sfMotors.map(m => `
+      <div class="card" style="padding:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <h2 style="margin:0;font-size:1.0rem;">${esc(m.name)}</h2>
+          <span style="font-size:0.72rem;color:#999;white-space:nowrap;">counter: <b id="sf-cnt-${m.idx}">—</b></span>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="btn-test" style="flex:1;border-color:#3a7d44;color:#3a7d44;" onclick="sfCmd(${m.idx},'open')">▲ Open</button>
+          <button class="btn-test" style="flex:1;" onclick="sfCmd(${m.idx},'stop')">■ Stop</button>
+          <button class="btn-test" style="flex:1;border-color:#c0392b;color:#c0392b;" onclick="sfCmd(${m.idx},'close')">▼ Close</button>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
+          <button class="btn-test" onclick="sfOpenPair(${m.idx})">🔗 Pair</button>
+          <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.invert ? 'checked' : ''} onchange="sfToggleInvert(${m.idx}, this.checked)"> invert open/close</label>
+        </div>
+      </div>`).join('');
+  }
+
+  async function sfPublish(actionStr) {
+    try {
+      const r = await fetch(`/api/esp/boards/${BOARD}/command`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: actionStr }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.error) console.warn('[somfy] command failed', actionStr, j);
+      return r.ok && !j.error;
+    } catch (e) { console.warn('[somfy] command error', e); return false; }
+  }
+
+  async function sfCmd(idx, action) {
+    const m = sfMotors[idx] || { invert: false };
+    let a;
+    if (action === 'open')       a = m.invert ? 'somfy_down' : 'somfy_up';
+    else if (action === 'close') a = m.invert ? 'somfy_up'   : 'somfy_down';
+    else                         a = 'somfy_my';   // stop (Somfy My == Stop)
+    await sfPublish(`${a}:${idx}`);
+  }
+  window.sfCmd = sfCmd;
+
+  function sfOpenPair(idx) {
+    sfPairIdx = idx;
+    document.getElementById('sf-pair-name').textContent = (sfMotors[idx] || {}).name || ('Motor ' + idx);
+    const st = document.getElementById('sf-pair-status'); st.textContent = ''; st.style.color = '#3a7d44';
+    document.getElementById('sf-pair-modal').style.display = 'flex';
+  }
+  window.sfOpenPair = sfOpenPair;
+
+  function sfClosePair() { document.getElementById('sf-pair-modal').style.display = 'none'; sfPairIdx = null; }
+  window.sfClosePair = sfClosePair;
+
+  async function sfSendProg() {
+    if (sfPairIdx == null) return;
+    const st = document.getElementById('sf-pair-status');
+    st.textContent = 'Sending PROG…'; st.style.color = '#666';
+    const ok = await sfPublish(`somfy_prog:${sfPairIdx}`);
+    st.textContent = ok ? 'PROG sent — the motor should jog. If it did, it is paired; test Open/Close.'
+                        : 'Failed to send (board offline?).';
+    st.style.color = ok ? '#3a7d44' : '#c0392b';
+  }
+  window.sfSendProg = sfSendProg;
+
+  async function sfToggleInvert(idx, checked) {
+    if (sfMotors[idx]) sfMotors[idx].invert = !!checked;
+    await sfSaveConfig();
+  }
+  window.sfToggleInvert = sfToggleInvert;
+
+  async function sfPoll() {
+    try {
+      const d = await fetch('/api/esp/boards').then(r => r.json());
+      const b = (d.boards || []).find(x => x.id === BOARD);
+      const dot = document.getElementById('sf-online-dot');
+      const txt = document.getElementById('sf-online-text');
+      const chip = document.getElementById('sf-cc-chip');
+      const cards = document.getElementById('sf-cards');
+      if (!b) { if (txt) txt.textContent = 'board not found'; if (dot) dot.style.color = '#c0392b'; return; }
+      const ls = b.last_status || {};
+      const ageSec = b.last_seen ? (Date.now() - new Date(b.last_seen).getTime()) / 1000 : 9e9;
+      const online = ageSec < 180;
+      if (dot) dot.style.color = online ? '#27ae60' : '#c0392b';
+      if (txt) txt.textContent = online ? 'online' : 'offline';
+      if (chip) {
+        const ok = ls.cc1101_ok === true;
+        chip.textContent = 'CC1101: ' + (ok ? '✓ detected' : (ls.cc1101_ok === false ? '✗ not detected' : '—'));
+        chip.style.background   = ok ? '#e7f6ec' : '#f6e7e7';
+        chip.style.color        = ok ? '#1e7d34' : '#c0392b';
+        chip.style.borderColor  = ok ? '#b7e0c2' : '#e0b7b7';
+      }
+      const counters = ls.somfy_counters || [];
+      for (let i = 0; i < 4; i++) {
+        const el = document.getElementById('sf-cnt-' + i);
+        if (el) el.textContent = (counters[i] != null ? counters[i] : '—');
+      }
+      if (cards) { cards.style.opacity = online ? '1' : '0.45'; cards.style.pointerEvents = online ? '' : 'none'; }
+    } catch (e) { /* keep last-known */ }
+  }
+
+  async function sfInit() {
+    if (sfInited) { sfPoll(); return; }
+    sfInited = true;
+    await sfLoadConfig();
+    sfRender();
+    sfPoll();
+    if (!sfTimer) sfTimer = setInterval(sfPoll, 5000);
+  }
+
+  const _prevShowTabSomfy = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTabSomfy === 'function') _prevShowTabSomfy(name, btn);
+    if (name === 'somfy') sfInit();
+  };
+})();
+
