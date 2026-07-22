@@ -61,7 +61,8 @@ A Somfy motor tracks the rolling code; if the board's counter is ever **lower** 
 The motors are fixed (4, firmware-hardcoded indexes + addresses), so **no `somfy_motors` table and no `routes-somfy.js`** — that was over-built. Everything reuses EXISTING endpoints:
 - **Commands** → `POST /api/esp/boards/balcony_bridge/command { action:"somfy_up:0" }` (schema already declares the 4 actions, so it validates + publishes).
 - **Names config** → generic `dashboard_settings` key **`balcony.somfy_motors`** (read/written via the existing `/api/dashboard-settings/:key`). Seed with the 4 names below.
-- **Live state** (CC1101 ok + rolling counters) → `GET /api/esp/boards` → `last_status.cc1101_ok` + `last_status.somfy_counters[idx]`.
+- **Live state** (CC1101 ok + rolling counters) → `GET /api/esp/boards` → **response is `{boards:[…]}`** (verified 2026-07-22 — read `data.boards[i]`, NOT the response directly) → `boards[i].last_status.cc1101_ok` + `boards[i].last_status.somfy_counters[idx]`.
+- **Command path proven live (2026-07-22):** `POST …/command {action:"somfy_my:0"}` → board parsed + ran `somfyTx` → counter[0] `0→2` in `/status`. The `counter: N` display = the **next rolling code** (increments per press; first press jumps 0→2 due to the uninitialized-flash guard, then +1 each). It's a heartbeat, not a press-count — label it plainly.
 - No `server.js` changes, no DB migration, no new route module. Fits "dashboard = UI only" cleanly.
 
 ## Dashboard — new **Somfy tab** in `BOILER/dashboard/public/balcony.html` + `js/balcony.js`  ✅ confirmed scope
