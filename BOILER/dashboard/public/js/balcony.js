@@ -1789,19 +1789,15 @@
     const wrap = document.getElementById('sf-cards');
     if (!wrap || !sfMotors) return;
     wrap.innerHTML = sfMotors.map(m => `
-      <div class="card" style="padding:14px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <h2 style="margin:0;font-size:1.0rem;">${esc(m.name)}</h2>
-          <span style="font-size:0.72rem;color:#999;white-space:nowrap;">counter: <b id="sf-cnt-${m.idx}">—</b></span>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:12px;">
-          <button class="btn-test" style="flex:1;border-color:#3a7d44;color:#3a7d44;" onclick="sfCmd(${m.idx},'open')">▲ Open</button>
-          <button class="btn-test" style="flex:1;" onclick="sfCmd(${m.idx},'stop')">■ Stop</button>
-          <button class="btn-test" style="flex:1;border-color:#c0392b;color:#c0392b;" onclick="sfCmd(${m.idx},'close')">▼ Close</button>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
+      <div class="card" style="padding:14px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <h2 style="margin:0;font-size:1.0rem;min-width:120px;">${esc(m.name)}</h2>
+          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="sfCmd(${m.idx},'open')">▲ Open</button>
+          <button class="btn-test" onclick="sfCmd(${m.idx},'stop')">■ Stop</button>
+          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="sfCmd(${m.idx},'close')">▼ Close</button>
           <button class="btn-test" onclick="sfOpenPair(${m.idx})">🔗 Pair</button>
-          <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.invert ? 'checked' : ''} onchange="sfToggleInvert(${m.idx}, this.checked)"> invert open/close</label>
+          <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.invert ? 'checked' : ''} onchange="sfToggleInvert(${m.idx}, this.checked)"> invert</label>
+          <span style="margin-left:auto;font-size:0.72rem;color:#999;white-space:nowrap;">counter: <b id="sf-cnt-${m.idx}">—</b></span>
         </div>
       </div>`).join('');
   }
