@@ -300,6 +300,16 @@ function renderStatus(b) {
         </div>
         ${online ? '' : '<p style="margin:8px 0 0 0;font-size:0.75rem;color:#aaa;font-style:italic;">Board offline — BoBo state unknown until heartbeat resumes.</p>'}
       </div>
+      <div class="esp-card">
+        <h3 class="esp-card-title">CC1101 RF (Somfy)</h3>
+        <div class="status-grid">
+          <div class="item"><label>Module</label><div class="value">${dotCell(online ? status.cc1101_ok : null, 'detected', 'not detected')}</div></div>
+          <div class="item"><label>PARTNUM</label><div class="value ${status.cc1101_partnum != null ? '' : 'dim'}">${status.cc1101_partnum != null ? '0x' + Number(status.cc1101_partnum).toString(16).padStart(2,'0').toUpperCase() : '—'}</div></div>
+          <div class="item"><label>VERSION</label><div class="value ${status.cc1101_version != null ? '' : 'dim'}">${status.cc1101_version != null ? '0x' + Number(status.cc1101_version).toString(16).padStart(2,'0').toUpperCase() : '—'}</div></div>
+          <div class="item"><label>Expected</label><div class="value" style="font-size:0.82rem;">PARTNUM 0x00 · VERSION 0x14</div></div>
+        </div>
+        ${online ? '' : '<p style="margin:8px 0 0 0;font-size:0.75rem;color:#aaa;font-style:italic;">Board offline — CC1101 state unknown until heartbeat resumes.</p>'}
+      </div>
     ` : ''}
 
     ${(b.id === 'jura') ? `
