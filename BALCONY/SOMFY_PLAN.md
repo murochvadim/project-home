@@ -57,33 +57,32 @@ A Somfy motor tracks the rolling code; if the board's counter is ever **lower** 
 - **Send** = same address, next incremented counter, button = chosen action.
 - Buttons exposed: **Up / Down / My (stop/preset) / Prog**. (Somfy "Stop" and "My" are the same physical button; the lib sends the MY/STOP code.)
 
-## Backend (dashboard = UI only — architecture rule)
-- **DB table `somfy_motors`** (LXC 102), retention **forever** (~4 rows), add to Health DB-Volumes:
-  ```sql
-  CREATE TABLE somfy_motors (
-    id                      SERIAL PRIMARY KEY,
-    board_id                TEXT NOT NULL DEFAULT 'balcony_bridge',
-    motor_index             INT  NOT NULL,           -- 0..3, the <n> in somfy_up:<n>
-    name                    TEXT NOT NULL UNIQUE,    -- "Balcony Awning", "Left Blind", ...
-    virtual_remote_address  INT  NOT NULL UNIQUE,    -- 24-bit (1..0xFFFFFF)
-    rolling_counter         INT  NOT NULL DEFAULT 0, -- 16-bit mirror of the board's NVS counter
-    paired                  BOOLEAN DEFAULT FALSE,   -- TRUE only after a confirmed pairing dance
-    paired_at               TIMESTAMPTZ,
-    category                TEXT,                     -- 'awning'|'blind'|'shade'|'curtain'|'shutter'|'other'
-    room                    TEXT,
-    notes                   TEXT,
-    created_at              TIMESTAMPTZ DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ DEFAULT NOW()
-  );
-  ```
-  Migration under `BALCONY/migrations/`.
-- **`BOILER/dashboard/routes-somfy.js`** (new module, one `require()` past the architecture-guard hook): **only** `GET/POST /api/somfy/motors` (the `somfy_motors` CRUD). **The Up/Down/My/Pair buttons reuse the EXISTING `POST /api/esp/boards/balcony_bridge/command` endpoint** (already schema-validates + publishes `somfy_up:0` etc.) — no action-proxy needed. No business logic in `server.js`.
-- **Rolling-counter DB mirror is display-only:** the ESP can't write Postgres — the board is authoritative via NVS and reports the counter in `/status`. The dashboard reads it from `esp_boards.last_status` for display; the motor never depends on the DB value.
+## Backend — NONE NEW (frontend-only) ✅ confirmed 2026-07-22
+The motors are fixed (4, firmware-hardcoded indexes + addresses), so **no `somfy_motors` table and no `routes-somfy.js`** — that was over-built. Everything reuses EXISTING endpoints:
+- **Commands** → `POST /api/esp/boards/balcony_bridge/command { action:"somfy_up:0" }` (schema already declares the 4 actions, so it validates + publishes).
+- **Names config** → generic `dashboard_settings` key **`balcony.somfy_motors`** (read/written via the existing `/api/dashboard-settings/:key`). Seed with the 4 names below.
+- **Live state** (CC1101 ok + rolling counters) → `GET /api/esp/boards` → `last_status.cc1101_ok` + `last_status.somfy_counters[idx]`.
+- No `server.js` changes, no DB migration, no new route module. Fits "dashboard = UI only" cleanly.
 
-## Dashboard — new **Somfy tab** in `BOILER/dashboard/public/balcony.html` + `js/balcony.js`
-- One card per motor (×4): name + room + **▲ Up / ■ Stop(My) / ▼ Down** + **Pair (PROG)** + paired ✓/✗ + live counter + address (read-only).
-- A config row to name motors / assign room+category / set address (writes `somfy_motors`; auto-assigns the next free 24-bit address on add).
-- Pair button shows a confirm dialog with the pairing steps.
+## Dashboard — new **Somfy tab** in `BOILER/dashboard/public/balcony.html` + `js/balcony.js`  ✅ confirmed scope
+New **Somfy** tab (same tab pattern as Panel / Star Projector). Header strip: **CC1101 ✓ detected · board online** (greys out + disables buttons when offline). **4 motor cards** (no All-shortcuts):
+
+| Card | idx | name key |
+|---|---|---|
+| **Left Roof** | 0 | `balcony.somfy_motors[0].name` |
+| **Right Roof** | 1 | `[1]` |
+| **Left Curtain** | 2 | `[2]` |
+| **Right Curtain** | 3 | `[3]` |
+
+Each card:
+- Motor name.
+- **▲ Open** (`somfy_up:idx`) · **■ Stop** (`somfy_my:idx`) · **▼ Close** (`somfy_down:idx`) buttons.
+- **🔗 Pair** button → small modal with the pairing steps + a **Send PROG** action (`somfy_prog:idx`).
+- **counter: N** — live rolling code from `last_status.somfy_counters[idx]`, polled from `/api/esp/boards` (a heartbeat that the motor's actually being driven).
+- **invert** toggle (open↔close swap, stored in `balcony.somfy_motors[idx].invert`) — set during testing if a motor's Open/Close is physically reversed.
+
+Seed `dashboard_settings.balcony.somfy_motors` once = `[{idx:0,name:"Left Roof",invert:false},{idx:1,name:"Right Roof",…},{idx:2,name:"Left Curtain",…},{idx:3,name:"Right Curtain",…}]`.
+Cache-bust `js/balcony.js?v=` bumped.
 
 ## Pairing flow (one-time per motor — user has the original remote)
 1. Hold **PROG** on the original Somfy remote until the motor **jogs** (programming mode).
