@@ -47,7 +47,7 @@ Balcony home-theater built from three boxes (a projector is not "smart" and an a
 
 | Device | Direct protocol | Method |
 |--------|----------------|--------|
-| **Projector** (PK52 / UHD38x) | RS-232 ASCII commands | ⚠️ **both are RS-232-only, no LAN** → add a **RS-232 → Ethernet adapter** (serial device server, ~$25, e.g. USR-TCP232). LXC sends Optoma ASCII over TCP → adapter → serial. **HDMI-CEC** is the free on/off fallback (Xiaomi wake powers the projector); IR via the [IR/RF/Somfy tool](../IR_RF_SOMFY_TOOL/CLAUDE.md) as last resort. |
+| **Projector** (PK52 / UHD38x) | RS-232 ASCII commands | ⚠️ **both are RS-232-only, no LAN** → add a **RS-232 → Ethernet adapter** (serial device server, ~$25, e.g. USR-TCP232). LXC sends Optoma ASCII over TCP → adapter → serial. **HDMI-CEC** is the free on/off fallback (Xiaomi wake powers the projector); IR via a dedicated IR blaster board (TBD) as last resort. |
 | **Xiaomi streamer** | Android TV Remote v2 (TLS) + Cast | **`androidtvremote2`** (power / nav / app launch) + **`pychromecast`** (cast video/audio/stations). One-time 6-digit pairing; token stored locally. |
 | **WiiM Amp** | **LinkPlay HTTP API** | plain HTTP GET — `http://<ip>/httpapi.asp?command=…` : `setPlayerCmd:vol:NN`, `:pause`, `:play:<url>`, `getPlayerStatus`. Trivial to wrap. |
 
