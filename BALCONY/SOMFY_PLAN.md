@@ -10,7 +10,7 @@ Add a **CC1101 433.42 MHz transmitter** to the existing `balcony_bridge` (BoBo) 
 - CC1101 pins 5/18/23/19/4/15 are **free** — the BoBo sketch uses **zero GPIO** (pure BLE↔MQTT bridge; load cells live on the BoBo board and arrive over BLE).
 - Board runs **NimBLE** with ~**108 KB free heap** (v14) → room for the Somfy + CC1101 libs.
 - CC1101 is an **external SPI radio** → no coexistence hit with the ESP32 BLE+WiFi; Somfy TX is a brief burst, the ~10 Hz BoBo position stream is unaffected.
-- ⚠ Board has been **offline since 07-10** — must be powered on to flash/test.
+- 🔴 **Board must be ALWAYS POWERED.** It's been **offline since 07-10** — if it's only powered while you play the BoBo balance game, the blinds are **uncontrollable whenever the game is off**. A permanent Somfy blaster requires the BoBo board on permanent power. **Confirm the power arrangement before building — this is the top open question.**
 
 ## Hardware
 CC1101 → ESP32-WROOM-32 (on the BoBo bridge):
@@ -31,12 +31,14 @@ CC1101 → ESP32-WROOM-32 (on the BoBo bridge):
 
 ## Firmware — `C:\Users\muroc\Arduino_Projects\balcony_bridge\balcony_bridge.ino` v14 → **v15**
 *(local sketch, NOT in repo — bakes WiFi/MQTT/OTA creds, like all esp_boards firmware)*
-1. Add libs `SmartRC-CC1101-Driver-Lib` (LSatan) + `Somfy_Remote_Lib` (Nickduino). CC1101 in **async OOK TX @ 433.42 MHz**; the Somfy frame is bit-banged on GDO0.
-2. **First-boot CC1101 sanity check:** read `PARTNUM (0x00)` should be `0x00` and `VERSION (0x14)` should be `0x14` over SPI — log it, so a mis-wired module is obvious.
-3. **4 virtual remotes** — one unique 24-bit address per motor (e.g. `0x100001..0x100004`).
-4. Command actions in the existing dispatcher: `somfy_up:<n>`, `somfy_down:<n>`, `somfy_stop:<n>`, `somfy_my:<n>` (preset "My" position), `somfy_prog:<n>` (pairing). n = 0–3. `esp_boards` schema declares them. (server.js `/command` regex already allows the `:N` payload shape.)
-5. Board reports each motor's live rolling counter in `/status` so the dashboard can mirror/verify.
-6. Boot banner `Balcony_Bridge v15 (built …)`; BoBo BLE + position stream must keep working (regression-checked).
+1. Add libs `SmartRC-CC1101-Driver-Lib` (LSatan) + `Somfy_Remote_Lib` (Nickduino). CC1101 put in **async OOK TX @ 433.42 MHz**, then the Somfy frame is driven on GDO0. **⚠ SmartRC is FIFO/packet-oriented and the Somfy lib expects to toggle a data pin — this bridge is not drop-in; validate the async-TX register setup on bench early.**
+2. **⚠ Timing (the #1 correctness risk):** Somfy frames are µs-precise Manchester bursts repeated over ~150 ms. Nickduino's `delayMicroseconds` bit-bang can be **corrupted by NimBLE/WiFi interrupts mid-frame** → the motor intermittently ignores commands. **Drive the OOK waveform with the ESP32 RMT peripheral (hardware-timed, jitter-immune)** or brief per-symbol critical sections — do **NOT** block all interrupts for the whole burst (WDT / WiFi drop). RMT also means the ~10 Hz BoBo stream doesn't stall during a send.
+3. **First-boot CC1101 sanity check:** `PARTNUM (0x00)` == `0x00`, `VERSION (0x14)` == `0x14` over SPI — log it so a mis-wired module is obvious.
+4. **4 virtual remotes** — one unique 24-bit address per motor (e.g. `0x100001..0x100004`).
+5. Command actions handled in the existing `mqttCallback` chain (currently only `rescan`/`restart`): **`somfy_up:<n>` / `somfy_down:<n>` / `somfy_my:<n>` / `somfy_prog:<n>`** (n = 0–3). **Only these four** — Somfy **Stop and My are the SAME button/code**, so the ■ Stop button sends `somfy_my` (there is no separate `somfy_stop`).
+6. **⚠ Schema declaration is REQUIRED (not optional).** The dashboard command endpoint (`server.js:5686`) rejects any base action **not** listed in `esp_boards.board_schema.actions` (400). So the four `somfy_*` actions **must** be added to the BoBo `SCHEMA_JSON`, and **v15 must be flashed (republishing the schema) BEFORE any dashboard button will work** — order matters.
+7. Board reports each motor's live rolling counter in `/status` (display/backup only — see below).
+8. Boot banner `Balcony_Bridge v15 (built …)`; BoBo BLE + position stream must keep working (regression-checked).
 
 ## ⚠ Rolling counter — the #1 correctness rule
 A Somfy motor tracks the rolling code; if the board's counter is ever **lower** than the motor's last-seen value, the motor **rejects commands until re-paired**. Requirements:
@@ -73,7 +75,8 @@ A Somfy motor tracks the rolling code; if the board's counter is ever **lower** 
   );
   ```
   Migration under `BALCONY/migrations/`.
-- **`BOILER/dashboard/routes-somfy.js`** (new module, one `require()` past the architecture-guard hook): `GET/POST /api/somfy/motors` (config CRUD) + a thin `POST /api/somfy/:index/:action` that proxies to the existing `mur/home/esp/balcony_bridge/command` path. No business logic in `server.js`.
+- **`BOILER/dashboard/routes-somfy.js`** (new module, one `require()` past the architecture-guard hook): **only** `GET/POST /api/somfy/motors` (the `somfy_motors` CRUD). **The Up/Down/My/Pair buttons reuse the EXISTING `POST /api/esp/boards/balcony_bridge/command` endpoint** (already schema-validates + publishes `somfy_up:0` etc.) — no action-proxy needed. No business logic in `server.js`.
+- **Rolling-counter DB mirror is display-only:** the ESP can't write Postgres — the board is authoritative via NVS and reports the counter in `/status`. The dashboard reads it from `esp_boards.last_status` for display; the motor never depends on the DB value.
 
 ## Dashboard — new **Somfy tab** in `BOILER/dashboard/public/balcony.html` + `js/balcony.js`
 - One card per motor (×4): name + room + **▲ Up / ■ Stop(My) / ▼ Down** + **Pair (PROG)** + paired ✓/✗ + live counter + address (read-only).
@@ -84,6 +87,8 @@ A Somfy motor tracks the rolling code; if the board's counter is ever **lower** 
 1. Hold **PROG** on the original Somfy remote until the motor **jogs** (programming mode).
 2. Within ~2 s, click **Pair** on that motor's card → board sends its PROG frame → motor **jogs again** → paired → set `paired=true`, `paired_at=now()`.
 3. Test ▲/■/▼. Repeat for all 4.
+- **Pairing is additive** — Somfy motors hold many remotes, so your **original handheld remote keeps working** after we add the virtual one. Pick virtual addresses (`0x10000X`) that don't collide with an existing remote (extremely unlikely).
+- **Range:** all 4 motors must be within CC1101 range of the balcony board — confirm they're all balcony-area (awning/blinds right there), not a distant motor.
 
 ## Rollout / test order
 1. Wire CC1101 (power off) → flash v15 via **USB** first → confirm boot banner + CC1101 PARTNUM/VERSION OK + **BoBo still connects** + heap healthy.
