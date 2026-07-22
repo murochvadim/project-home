@@ -7,7 +7,7 @@
 Add a **CC1101 433.42 MHz transmitter** to the existing `balcony_bridge` (BoBo) ESP32, turning it into a permanent **Somfy RTS remote for 4 motors**, controlled from a new **Somfy tab in the Balcony Agent**. Self-contained — no capture bench tool needed (Somfy pairs directly; no code capture).
 
 ## Feasibility (verified 2026-07-22)
-- CC1101 pins 5/18/23/19/4/15 are **free** — the BoBo sketch uses **zero GPIO** (pure BLE↔MQTT bridge; load cells live on the BoBo board and arrive over BLE).
+- CC1101 pins used — 5/18/23/19/4 — are **free** (BoBo sketch uses **zero GPIO**; load cells arrive over BLE). GDO2 is left unconnected (GPIO 15 is a strapping pin — see wiring note).
 - Board runs **NimBLE** with ~**108 KB free heap** (v14) → room for the Somfy + CC1101 libs.
 - CC1101 is an **external SPI radio** → no coexistence hit with the ESP32 BLE+WiFi; Somfy TX is a brief burst, the ~10 Hz BoBo position stream is unaffected.
 - 🔴 **Board must be ALWAYS POWERED.** It's been **offline since 07-10** — if it's only powered while you play the BoBo balance game, the blinds are **uncontrollable whenever the game is off**. A permanent Somfy blaster requires the BoBo board on permanent power. **Confirm the power arrangement before building — this is the top open question.**
@@ -21,10 +21,12 @@ CC1101 → ESP32-WROOM-32 (on the BoBo bridge):
 | SCK (5) | GPIO 18 | VSPI SCK |
 | MOSI (6) | GPIO 23 | VSPI MOSI |
 | MISO (7) | GPIO 19 | VSPI MISO |
-| GDO0 (3) | GPIO 4 | async OOK TX data pin (Somfy frame bit-banged here) |
-| GDO2 (8) | GPIO 15 | second GDO (optional) |
+| GDO0 (3) | GPIO 4 | async OOK TX data pin (not a strapping pin — safe) |
+| GDO2 (8) | **— LEAVE UNCONNECTED —** | ⚠ GPIO 15 is a **strapping pin** and GDO2 is a CC1101 *output* → it can pull GPIO 15 LOW at reset and disrupt boot. GDO2 is unused for Somfy TX, so skip it. (For future RX, use a non-strapping pin: GPIO 22/32/33.) |
 | VCC (2) | **3V3 only — NEVER 5 V** | CC1101 is 3.3 V only |
 | GND (1) | GND | common ground critical |
+
+**⚠ ESP32 strapping-pin check (verified):** the WROOM-32's 5 strapping pins are GPIO 0/2/5/12/15. In this wiring only **GPIO 5 (CSN)** and **GPIO 15 (GDO2)** are strapping. CSN is ESP32-driven with an internal pull-up (HIGH at reset = correct) → **safe**. GDO2/GPIO 15 is a CC1101 output → **left unconnected** to avoid a boot disruption. GPIO 12 (the flash-voltage strap that bricks boot) is deliberately not used. **Firmware:** set CC1101 IOCFG0 (GDO0 → async data-in) over SPI *before* the ESP32 drives GPIO 4, to avoid brief startup pin contention.
 
 - **Antenna:** 17.3 cm quarter-wave wire on the CC1101 ANT pad (or the SMA whip) — required for range.
 - Power the BoBo board OFF before wiring.
