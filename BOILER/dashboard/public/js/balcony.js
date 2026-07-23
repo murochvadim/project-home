@@ -1759,10 +1759,10 @@
 (function () {
   const BOARD = 'balcony_bridge';
   const DEFAULTS = [
-    { idx: 0, name: 'Left Roof',     invert: false, enabled: true, run_sec: 20, position_pct: 0 },
-    { idx: 1, name: 'Right Roof',    invert: false, enabled: true, run_sec: 20, position_pct: 0 },
-    { idx: 2, name: 'Left Curtain',  invert: false, enabled: true, run_sec: 20, position_pct: 0 },
-    { idx: 3, name: 'Right Curtain', invert: false, enabled: true, run_sec: 20, position_pct: 0 },
+    { idx: 0, name: 'Left Roof',     invert: false, enabled: true, run_sec: 20, position_pct: 0, astop_dir: 'open',  astop_sec: 15 },
+    { idx: 1, name: 'Right Roof',    invert: false, enabled: true, run_sec: 20, position_pct: 0, astop_dir: 'open',  astop_sec: 15 },
+    { idx: 2, name: 'Left Curtain',  invert: false, enabled: true, run_sec: 20, position_pct: 0, astop_dir: 'close', astop_sec: 15 },
+    { idx: 3, name: 'Right Curtain', invert: false, enabled: true, run_sec: 20, position_pct: 0, astop_dir: 'close', astop_sec: 15 },
   ];
   let sfMotors = null, sfInited = false, sfTimer = null, sfPairIdx = null;
   const sfAnim = {};   // idx -> active timed-estimate animation {timer,...}
@@ -1789,6 +1789,8 @@
         enabled: !(m && m.enabled === false),
         run_sec: (m && +m.run_sec > 0) ? +m.run_sec : 20,
         position_pct: (m && typeof m.position_pct === 'number') ? Math.max(0, Math.min(100, m.position_pct)) : 0,
+        astop_dir: (m && ['off', 'open', 'close'].includes(m.astop_dir)) ? m.astop_dir : DEFAULTS[i].astop_dir,
+        astop_sec: (m && +m.astop_sec > 0) ? +m.astop_sec : 15,
       }));
     } catch (e) { sfMotors = DEFAULTS.slice(); }
   }
@@ -1810,6 +1812,13 @@
         <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="sfCmd(${m.idx},'close')" ${dis}>▼ Close</button>
         <label style="font-size:0.74rem;color:#777;">run <input type="number" min="1" max="300" value="${m.run_sec}" onchange="sfSetRun(${m.idx}, this.value)" style="width:46px;padding:2px 4px;"> s</label>
         <label style="font-size:0.74rem;color:#777;">set <input type="number" min="0" max="100" placeholder="%" onchange="sfSetPct(${m.idx}, this.value)" style="width:46px;padding:2px 4px;"> %</label>
+        <label style="font-size:0.74rem;color:#777;">auto-stop
+          <select onchange="sfSetAstopDir(${m.idx}, this.value)" style="font-size:0.72rem;padding:1px;">
+            <option value="off"${m.astop_dir === 'off' ? ' selected' : ''}>off</option>
+            <option value="open"${m.astop_dir === 'open' ? ' selected' : ''}>open</option>
+            <option value="close"${m.astop_dir === 'close' ? ' selected' : ''}>close</option>
+          </select>
+          <input type="number" min="1" max="600" value="${m.astop_sec}" onchange="sfSetAstopSec(${m.idx}, this.value)" style="width:42px;padding:2px 4px;"> s</label>
         <button class="btn-test" onclick="sfOpenPair(${m.idx})" ${dis}>🔗 Pair</button>
         <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="sfToggleEnabled(${m.idx}, this.checked)"> enabled</label>
         <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.invert ? 'checked' : ''} onchange="sfToggleInvert(${m.idx}, this.checked)"> invert</label>
@@ -1850,15 +1859,14 @@
 
   function sfStopAnim(idx) { const a = sfAnim[idx]; if (a && a.timer) clearInterval(a.timer); delete sfAnim[idx]; }
 
-  function sfAnimateTo(idx, targetPct) {
+  function sfAnimateOver(idx, targetPct, durMs) {
     sfStopAnim(idx);
     const m = sfMotors[idx];
     const startPct = Math.max(0, Math.min(100, m.position_pct || 0));
-    const run = Math.max(1, m.run_sec || 20);
-    const durMs = Math.abs(targetPct - startPct) / 100 * run * 1000;
-    if (durMs < 60) { m.position_pct = targetPct; sfPaint(idx, targetPct, false); sfSaveConfig(); return; }
+    targetPct = Math.max(0, Math.min(100, targetPct));
+    if (durMs < 60 || Math.abs(targetPct - startPct) < 0.5) { m.position_pct = targetPct; sfPaint(idx, targetPct, false); sfSaveConfig(); return; }
     const startTs = Date.now();
-    const a = { startTs, startPct, targetPct, durMs, timer: null };
+    const a = { timer: null };
     a.timer = setInterval(() => {
       const frac = Math.min(1, (Date.now() - startTs) / durMs);
       const pct = startPct + (targetPct - startPct) * frac;
@@ -1868,13 +1876,28 @@
     }, 100);
     sfAnim[idx] = a;
   }
+  function sfAnimateTo(idx, targetPct) {   // full travel: duration derived from run_sec
+    const m = sfMotors[idx];
+    const startPct = Math.max(0, Math.min(100, m.position_pct || 0));
+    const run = Math.max(1, m.run_sec || 20);
+    sfAnimateOver(idx, targetPct, Math.abs(targetPct - startPct) / 100 * run * 1000);
+  }
 
   async function sfMove(idx, dir) {   // dir 'open' (→100) | 'close' (→0)
     const m = sfMotors[idx]; if (!m || !m.enabled) return;
     const a = dir === 'open' ? (m.invert ? 'somfy_down' : 'somfy_up')
                              : (m.invert ? 'somfy_up'   : 'somfy_down');
     await sfPublish(`${a}:${idx}`);
-    sfAnimateTo(idx, dir === 'open' ? 100 : 0);
+    // Auto-stop on this direction → mirror the board: animate to a PARTIAL position
+    // over astop_sec then freeze. Otherwise full travel over the run-based time.
+    if (m.astop_dir === dir && m.astop_sec > 0) {
+      const cur = Math.max(0, Math.min(100, m.position_pct || 0));
+      const delta = Math.min(100, (m.astop_sec / Math.max(1, m.run_sec || 20)) * 100);
+      const target = dir === 'open' ? Math.min(100, cur + delta) : Math.max(0, cur - delta);
+      sfAnimateOver(idx, target, m.astop_sec * 1000);
+    } else {
+      sfAnimateTo(idx, dir === 'open' ? 100 : 0);
+    }
   }
   async function sfStop(idx) {
     const m = sfMotors[idx]; if (!m || !m.enabled) return;
@@ -1917,6 +1940,38 @@
   }
   window.sfToggleEnabled = sfToggleEnabled;
 
+  // ── auto-stop: dashboard holds open/close + sec; the board holds up/down + sec ──
+  function sfAstopCsv() {   // map each motor's open/close→up(1)/down(2) via invert
+    return sfMotors.map(m => {
+      let dir = 0;
+      if (m.astop_dir === 'open')  dir = m.invert ? 2 : 1;
+      else if (m.astop_dir === 'close') dir = m.invert ? 1 : 2;
+      const sec = (dir && m.astop_sec > 0) ? m.astop_sec : 0;
+      return dir ? `${dir}:${sec}` : '0:0';
+    }).join(',');
+  }
+  async function sfPushAstop() {   // push the CSV to the board (needs v17 schema)
+    try {
+      await fetch(`/api/esp/boards/${BOARD}/parameters`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ somfy_astop: sfAstopCsv() }),
+      });
+    } catch (e) { console.warn('[somfy] astop push failed', e); }
+  }
+  async function sfSetAstopDir(idx, val) {
+    const m = sfMotors[idx]; if (!m) return;
+    m.astop_dir = ['off', 'open', 'close'].includes(val) ? val : 'off';
+    await sfSaveConfig(); await sfPushAstop();
+  }
+  window.sfSetAstopDir = sfSetAstopDir;
+  async function sfSetAstopSec(idx, val) {
+    const m = sfMotors[idx]; if (!m) return;
+    let s = parseInt(val, 10); if (isNaN(s) || s < 1) s = 1; if (s > 600) s = 600;
+    m.astop_sec = s;
+    await sfSaveConfig(); await sfPushAstop();
+  }
+  window.sfSetAstopSec = sfSetAstopSec;
+
   function sfOpenPair(idx) {
     const m = sfMotors[idx]; if (!m || !m.enabled) return;
     sfPairIdx = idx;
@@ -1943,6 +1998,7 @@
   async function sfToggleInvert(idx, checked) {
     if (sfMotors[idx]) sfMotors[idx].invert = !!checked;
     await sfSaveConfig();
+    await sfPushAstop();   // invert flips the open/close → up/down mapping
   }
   window.sfToggleInvert = sfToggleInvert;
 
@@ -1982,6 +2038,7 @@
     await sfLoadConfig();
     sfRender();
     sfPoll();
+    sfPushAstop();   // sync the board with the saved config on open
     if (!sfTimer) sfTimer = setInterval(sfPoll, 5000);
   }
 
