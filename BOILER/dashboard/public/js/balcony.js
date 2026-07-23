@@ -1759,12 +1759,13 @@
 (function () {
   const BOARD = 'balcony_bridge';
   const DEFAULTS = [
-    { idx: 0, name: 'Left Roof',     invert: false },
-    { idx: 1, name: 'Right Roof',    invert: false },
-    { idx: 2, name: 'Left Curtain',  invert: false },
-    { idx: 3, name: 'Right Curtain', invert: false },
+    { idx: 0, name: 'Left Roof',     invert: false, enabled: true, run_sec: 20, position_pct: 0 },
+    { idx: 1, name: 'Right Roof',    invert: false, enabled: true, run_sec: 20, position_pct: 0 },
+    { idx: 2, name: 'Left Curtain',  invert: false, enabled: true, run_sec: 20, position_pct: 0 },
+    { idx: 3, name: 'Right Curtain', invert: false, enabled: true, run_sec: 20, position_pct: 0 },
   ];
   let sfMotors = null, sfInited = false, sfTimer = null, sfPairIdx = null;
+  const sfAnim = {};   // idx -> active timed-estimate animation {timer,...}
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
   async function sfSaveConfig(v) {
@@ -1781,25 +1782,41 @@
       const r = await fetch('/api/dashboard-settings/balcony.somfy_motors').then(x => x.json());
       let v = r && r.value;
       if (!Array.isArray(v) || v.length !== 4) { v = DEFAULTS.slice(); sfMotors = v; await sfSaveConfig(v); return; }
-      sfMotors = v.map((m, i) => ({ idx: i, name: (m && m.name) || DEFAULTS[i].name, invert: !!(m && m.invert) }));
+      sfMotors = v.map((m, i) => ({
+        idx: i,
+        name: (m && m.name) || DEFAULTS[i].name,
+        invert: !!(m && m.invert),
+        enabled: !(m && m.enabled === false),
+        run_sec: (m && +m.run_sec > 0) ? +m.run_sec : 20,
+        position_pct: (m && typeof m.position_pct === 'number') ? Math.max(0, Math.min(100, m.position_pct)) : 0,
+      }));
     } catch (e) { sfMotors = DEFAULTS.slice(); }
   }
 
   function sfRender() {
     const wrap = document.getElementById('sf-cards');
     if (!wrap || !sfMotors) return;
-    wrap.innerHTML = sfMotors.map(m => `
-      <div class="card" style="padding:14px;margin-bottom:16px;">
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-          <h2 style="margin:0;font-size:1.0rem;min-width:120px;">${esc(m.name)}</h2>
-          <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="sfCmd(${m.idx},'open')">▲ Open</button>
-          <button class="btn-test" onclick="sfCmd(${m.idx},'stop')">■ Stop</button>
-          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="sfCmd(${m.idx},'close')">▼ Close</button>
-          <button class="btn-test" onclick="sfOpenPair(${m.idx})">🔗 Pair</button>
-          <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.invert ? 'checked' : ''} onchange="sfToggleInvert(${m.idx}, this.checked)"> invert</label>
-          <span style="margin-left:auto;font-size:0.72rem;color:#999;white-space:nowrap;">counter: <b id="sf-cnt-${m.idx}">—</b></span>
+    wrap.innerHTML = sfMotors.map(m => {
+      const dis = m.enabled ? '' : 'disabled';
+      return `
+      <div class="sf-row" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 0;border-bottom:1px dashed #e8e2da;${m.enabled ? '' : 'opacity:0.55;'}">
+        <div class="curtain-vis" id="sf-vis-${m.idx}" title="${esc(m.name)} — estimated position">
+          <div class="curtain-pane curtain-left"  id="sf-paneL-${m.idx}" style="transform:translateX(0%);"></div>
+          <div class="curtain-pane curtain-right" id="sf-paneR-${m.idx}" style="transform:translateX(0%);"></div>
         </div>
-      </div>`).join('');
+        <div style="min-width:104px;font-weight:600;font-size:0.9rem;">${esc(m.name)}</div>
+        <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="sfCmd(${m.idx},'open')" ${dis}>▲ Open</button>
+        <button class="btn-test" onclick="sfCmd(${m.idx},'stop')" ${dis}>■ Stop</button>
+        <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="sfCmd(${m.idx},'close')" ${dis}>▼ Close</button>
+        <label style="font-size:0.74rem;color:#777;">run <input type="number" min="1" max="300" value="${m.run_sec}" onchange="sfSetRun(${m.idx}, this.value)" style="width:46px;padding:2px 4px;"> s</label>
+        <label style="font-size:0.74rem;color:#777;">set <input type="number" min="0" max="100" placeholder="%" onchange="sfSetPct(${m.idx}, this.value)" style="width:46px;padding:2px 4px;"> %</label>
+        <button class="btn-test" onclick="sfOpenPair(${m.idx})" ${dis}>🔗 Pair</button>
+        <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="sfToggleEnabled(${m.idx}, this.checked)"> enabled</label>
+        <label style="font-size:0.74rem;color:#777;cursor:pointer;"><input type="checkbox" ${m.invert ? 'checked' : ''} onchange="sfToggleInvert(${m.idx}, this.checked)"> invert</label>
+        <span style="margin-left:auto;font-size:0.72rem;color:#999;white-space:nowrap;"><span id="sf-lbl-${m.idx}">—</span> · cnt <b id="sf-cnt-${m.idx}">—</b></span>
+      </div>`;
+    }).join('');
+    sfPaintAll();
   }
 
   async function sfPublish(actionStr) {
@@ -1814,17 +1831,94 @@
     } catch (e) { console.warn('[somfy] command error', e); return false; }
   }
 
-  async function sfCmd(idx, action) {
-    const m = sfMotors[idx] || { invert: false };
-    let a;
-    if (action === 'open')       a = m.invert ? 'somfy_down' : 'somfy_up';
-    else if (action === 'close') a = m.invert ? 'somfy_up'   : 'somfy_down';
-    else                         a = 'somfy_my';   // stop (Somfy My == Stop)
+  // ── Timed position ESTIMATE (Somfy RTS gives no feedback — this is a guess) ──
+  function sfShift(pct) { return Math.max(0, Math.min(92, (pct / 100) * 92)); }  // pane translateX %
+  function sfPaint(idx, pct, moving) {
+    const L = document.getElementById('sf-paneL-' + idx);
+    const R = document.getElementById('sf-paneR-' + idx);
+    const s = sfShift(pct);
+    if (L) L.style.transform = `translateX(-${s}%)`;
+    if (R) R.style.transform = `translateX(${s}%)`;
+    const lbl = document.getElementById('sf-lbl-' + idx);
+    if (lbl) {
+      lbl.textContent = `${Math.round(pct)}%${moving ? ' · moving' : ''}`;
+      lbl.style.color = moving ? '#c0392b' : '#999';
+      lbl.style.fontWeight = moving ? '700' : '400';
+    }
+  }
+  function sfPaintAll() { if (sfMotors) sfMotors.forEach(m => sfPaint(m.idx, m.position_pct || 0, !!sfAnim[m.idx])); }
+
+  function sfStopAnim(idx) { const a = sfAnim[idx]; if (a && a.timer) clearInterval(a.timer); delete sfAnim[idx]; }
+
+  function sfAnimateTo(idx, targetPct) {
+    sfStopAnim(idx);
+    const m = sfMotors[idx];
+    const startPct = Math.max(0, Math.min(100, m.position_pct || 0));
+    const run = Math.max(1, m.run_sec || 20);
+    const durMs = Math.abs(targetPct - startPct) / 100 * run * 1000;
+    if (durMs < 60) { m.position_pct = targetPct; sfPaint(idx, targetPct, false); sfSaveConfig(); return; }
+    const startTs = Date.now();
+    const a = { startTs, startPct, targetPct, durMs, timer: null };
+    a.timer = setInterval(() => {
+      const frac = Math.min(1, (Date.now() - startTs) / durMs);
+      const pct = startPct + (targetPct - startPct) * frac;
+      m.position_pct = pct;
+      sfPaint(idx, pct, frac < 1);
+      if (frac >= 1) { sfStopAnim(idx); m.position_pct = targetPct; sfPaint(idx, targetPct, false); sfSaveConfig(); }
+    }, 100);
+    sfAnim[idx] = a;
+  }
+
+  async function sfMove(idx, dir) {   // dir 'open' (→100) | 'close' (→0)
+    const m = sfMotors[idx]; if (!m || !m.enabled) return;
+    const a = dir === 'open' ? (m.invert ? 'somfy_down' : 'somfy_up')
+                             : (m.invert ? 'somfy_up'   : 'somfy_down');
     await sfPublish(`${a}:${idx}`);
+    sfAnimateTo(idx, dir === 'open' ? 100 : 0);
+  }
+  async function sfStop(idx) {
+    const m = sfMotors[idx]; if (!m || !m.enabled) return;
+    sfStopAnim(idx);                        // freeze the estimate where it is
+    sfPaint(idx, m.position_pct || 0, false);
+    await sfPublish(`somfy_my:${idx}`);
+    await sfSaveConfig();
+  }
+  function sfCmd(idx, action) {
+    if (action === 'open') sfMove(idx, 'open');
+    else if (action === 'close') sfMove(idx, 'close');
+    else sfStop(idx);
   }
   window.sfCmd = sfCmd;
 
+  async function sfSetRun(idx, val) {
+    const m = sfMotors[idx]; if (!m) return;
+    let r = parseInt(val, 10); if (isNaN(r) || r < 1) r = 1; if (r > 300) r = 300;
+    m.run_sec = r; await sfSaveConfig();
+  }
+  window.sfSetRun = sfSetRun;
+
+  async function sfSetPct(idx, val) {   // manual anchor to correct drift
+    const m = sfMotors[idx]; if (!m) return;
+    let p = parseInt(val, 10); if (isNaN(p)) return;
+    p = Math.max(0, Math.min(100, p));
+    sfStopAnim(idx);
+    m.position_pct = p;
+    sfPaint(idx, p, false);
+    await sfSaveConfig();
+  }
+  window.sfSetPct = sfSetPct;
+
+  async function sfToggleEnabled(idx, checked) {
+    const m = sfMotors[idx]; if (!m) return;
+    m.enabled = !!checked;
+    if (!m.enabled) sfStopAnim(idx);
+    await sfSaveConfig();
+    sfRender();   // re-render to grey/enable the row's controls (sfPaintAll runs inside)
+  }
+  window.sfToggleEnabled = sfToggleEnabled;
+
   function sfOpenPair(idx) {
+    const m = sfMotors[idx]; if (!m || !m.enabled) return;
     sfPairIdx = idx;
     document.getElementById('sf-pair-name').textContent = (sfMotors[idx] || {}).name || ('Motor ' + idx);
     const st = document.getElementById('sf-pair-status'); st.textContent = ''; st.style.color = '#3a7d44';
