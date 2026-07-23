@@ -1,6 +1,6 @@
 # Balcony Somfy RTS Blaster — Plan
 
-> **Status:** PLAN ONLY — nothing built yet. Do not implement until explicitly told to.
+> **Status: ✅ SHIPPED + WORKING (2026-07-23)** — firmware `v16-somfy` flashed to `balcony_bridge`, Somfy tab live in the Balcony Agent, first motor paired + Open/Stop/Close confirmed. This doc is now the reference/firmware spec (kept for the CC1101 wiring, EEPROM-counter design, and the v15-sanity rollback). Below is the as-built plan.
 > Self-contained. Absorbs the Somfy-relevant design from the (now-removed) `IR_RF_SOMFY_TOOL/` module — the IR / fixed-code-433-RF / spectrum-analyzer scope of that tool was dropped; only the **Somfy RTS blaster** survives, permanently, on the balcony BoBo board.
 
 ## Goal
