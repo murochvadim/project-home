@@ -1,6 +1,7 @@
 # Balcony Somfy RTS Blaster — Plan
 
-> **Status: ✅ SHIPPED + WORKING (2026-07-23)** — firmware `v16-somfy` flashed to `balcony_bridge`, Somfy tab live in the Balcony Agent, first motor paired + Open/Stop/Close confirmed. This doc is now the reference/firmware spec (kept for the CC1101 wiring, EEPROM-counter design, and the v15-sanity rollback). Below is the as-built plan.
+> **Status: ✅ SHIPPED + WORKING (2026-07-23)** — firmware **`v17-somfy`** flashed to `balcony_bridge` (OTA), Somfy tab live, first motor paired + Open/Stop/Close confirmed.
+> **Evolved past this plan:** the tab is now **curtain-style** (Project-General-Curtain 60×40 window + sliding panes, one card / 4 rows) with a **client-side timed position estimate** (per-motor manual `run` s; `set %` to re-anchor), a per-motor **enable** toggle, and **firmware timed auto-stop** (v17: per-motor `somfy_astop` schema param → `/config` CSV, board sends Stop N s after the chosen direction, EEPROM-persisted, robust even with the dashboard closed; defaults roof→open, curtain→close). ⚠ the `cnt` rolling code is NEVER reset. See root `CLAUDE.md` (BALCONY row) + `BALCONY/CLAUDE.md` (Somfy tab) for the as-built detail; this doc keeps the CC1101 wiring / EEPROM design / v15-sanity rollback. Below is the original plan.
 > Self-contained. Absorbs the Somfy-relevant design from the (now-removed) `IR_RF_SOMFY_TOOL/` module — the IR / fixed-code-433-RF / spectrum-analyzer scope of that tool was dropped; only the **Somfy RTS blaster** survives, permanently, on the balcony BoBo board.
 
 ## Goal
