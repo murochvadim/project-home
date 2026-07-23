@@ -661,7 +661,10 @@ class RuleEngine:
                                 "(a target device is slow/unreachable)", _qsz)
                 # Detect what changed
                 elapsed = self._rule_stats.get(rule_name, {}).get('_last_ms', 0) + _disp_ms
-                changed_keys = [k for k in self.state.shared
+                # Snapshot the keys before iterating: load_shared_state() on the
+                # heartbeat thread can add a key in-place (under a different lock),
+                # which would otherwise raise "dict changed size during iteration".
+                changed_keys = [k for k in list(self.state.shared)
                                if self.state.shared.get(k) != rule_shared_before.get(k)
                                and not k.startswith('_')]
 

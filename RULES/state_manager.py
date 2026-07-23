@@ -851,6 +851,12 @@ class StateManager:
             if value is not None and value != prev_value:
                 # Transition: old row value -> newer row value (prev_value)
                 return (prev_ts, value, prev_value)
+            if value is not None and value == prev_value:
+                # Same (current) value on an older row — walk prev_ts back to the
+                # instant the value actually took effect. Without this, duplicate /
+                # re-reported events over-state the transition time by the gap between
+                # the duplicates (the device re-emits the same value ~30s apart).
+                prev_ts = ts
         return None
 
     def get_events_between(self, device_ids, from_ts, to_ts):
