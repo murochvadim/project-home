@@ -1940,6 +1940,10 @@
   }
   window.sfToggleEnabled = sfToggleEnabled;
 
+  // ── Balcony fan (RF via balcony_bridge) — fan_tx:<value> (needs v18 firmware) ──
+  async function fanCmd(value) { await sfPublish(`fan_tx:${value}`); }
+  window.fanCmd = fanCmd;
+
   // ── auto-stop: dashboard holds open/close + sec; the board holds up/down + sec ──
   function sfAstopCsv() {   // map each motor's open/close→up(1)/down(2) via invert
     return sfMotors.map(m => {
@@ -2028,6 +2032,23 @@
         const el = document.getElementById('sf-cnt-' + i);
         if (el) el.textContent = (counters[i] != null ? counters[i] : '—');
       }
+      // fan state (estimate synced from remote + dashboard)
+      const fp = document.getElementById('fan-power-chip');
+      const fl = document.getElementById('fan-light-chip');
+      const fsl = document.getElementById('fan-speed-lbl');
+      if (fp) {
+        const on = ls.fan_power === true;
+        fp.textContent = 'fan: ' + (ls.fan_power === undefined ? '—' : (on ? 'ON' : 'OFF'));
+        fp.style.background = on ? '#e7f6ec' : '#eee'; fp.style.color = on ? '#1e7d34' : '#888';
+        fp.style.borderColor = on ? '#b7e0c2' : '#d0cbc4';
+      }
+      if (fl) {
+        const lon = ls.fan_light === true;
+        fl.textContent = 'light: ' + (ls.fan_light === undefined ? '—' : (lon ? 'ON' : 'OFF'));
+        fl.style.background = lon ? '#fdf6d8' : '#eee'; fl.style.color = lon ? '#8a6d00' : '#888';
+        fl.style.borderColor = lon ? '#e8dca0' : '#d0cbc4';
+      }
+      if (fsl) fsl.innerHTML = 'speed: <b>' + (ls.fan_speed != null ? ls.fan_speed : '—') + '</b>';
       if (cards) { cards.style.opacity = online ? '1' : '0.45'; cards.style.pointerEvents = online ? '' : 'none'; }
     } catch (e) { /* keep last-known */ }
   }
