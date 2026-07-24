@@ -705,7 +705,11 @@ function renderSimulation(b) {
   //    in the Params Users table provides the id
   //  - `register_user` is surfaced next to Save Parameters on the Params tab
   //    so the natural flow (type name → Save → Register) stays in one place
-  const SURFACED_ELSEWHERE = new Set(['delete_user', 'register_user', 'enter_ota_mode']);
+  //  - `somfy_*` / `fan_tx` (balcony_bridge_devices) are driven from the Balcony
+  //    Agent → "somfy + fan" tab (they need a motor index / RF code the bare
+  //    Simulation button can't supply, so they'd be no-ops here anyway)
+  const SURFACED_ELSEWHERE = new Set(['delete_user', 'register_user', 'enter_ota_mode',
+    'somfy_up', 'somfy_down', 'somfy_my', 'somfy_prog', 'fan_tx']);
   const groupedKeys = new Set();
   ACTION_GROUPS.forEach(g => g.keys.forEach(k => groupedKeys.add(k)));
   let html = ACTION_GROUPS.filter(g => g.tab === 'simulation').map(g => renderActionGroup(b, g)).join('');
