@@ -488,6 +488,8 @@
             <label style="font-size:0.78rem;color:#555;">Systolic<br><input id="ph-bp-sys" type="number" min="0" placeholder="120" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
             <label style="font-size:0.78rem;color:#555;">Diastolic<br><input id="ph-bp-dia" type="number" min="0" placeholder="80" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
             <label style="font-size:0.78rem;color:#555;">Pulse<br><input id="ph-bp-pulse" type="number" min="0" placeholder="—" style="padding:5px 6px;width:56px;box-sizing:border-box;height:32px;"></label>
+            <label style="font-size:0.78rem;color:#555;">When<br><select id="ph-bp-context" style="padding:5px 6px;height:32px;box-sizing:border-box;font-size:0.82rem;"><option value="rest">At rest</option><option value="exertion">After exertion</option></select></label>
+            <label style="font-size:0.78rem;color:#555;flex:1;min-width:150px;">Note (how measured)<br><input id="ph-bp-note" type="text" maxlength="500" placeholder="e.g. left arm, seated, 5 min rest" style="padding:5px 6px;width:100%;box-sizing:border-box;height:32px;"></label>
             <button class="btn btn-sm" style="background:#3a7d44;color:#fff;" onclick="phLogBP()">Save</button>
             <span id="ph-bp-status" style="font-size:0.78rem;color:#888;"></span>
           </div>
@@ -912,7 +914,7 @@
 <script src="js/medical-hearing.js?v=9"></script>
 <script src="js/medical-vision.js?v=4"></script>
 <script src="js/medical-cognitive.js?v=2"></script>
-<script src="js/personal-health.js?v=78"></script>
+<script src="js/personal-health.js?v=79"></script>
 <script src="/vendor/mqtt/mqtt.min.js"></script>
 <script src="js/medical-bobo.js?v=16"></script>
 <script src="js/bobo-game.js?v=12"></script>

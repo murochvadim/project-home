@@ -227,7 +227,7 @@ module.exports = (app, db) => {
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
       const r = await db.query(
-        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at, systolic, diastolic, pulse
+        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at, systolic, diastolic, pulse, context, note
            FROM ph_bp WHERE profile_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
       res.json(r.rows);
     } catch (e) { err(res, e); }
@@ -239,10 +239,12 @@ module.exports = (app, db) => {
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const sys = num(b.systolic), dia = num(b.diastolic), pulse = num(b.pulse);
       if (sys == null && dia == null && pulse == null) return res.status(400).json({ error: 'enter a reading' });
+      const ctx = (b.context === 'rest' || b.context === 'exertion') ? b.context : null;
+      const note = (b.note != null && String(b.note).trim()) ? String(b.note).trim().slice(0, 500) : null;
       const r = await db.query(
-        `INSERT INTO ph_bp (profile_id, systolic, diastolic, pulse, measured_at)
-         VALUES ($1,$2,$3,$4, COALESCE($5::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at`,
-        [pid, sys, dia, pulse, b.measured_at || null]);
+        `INSERT INTO ph_bp (profile_id, systolic, diastolic, pulse, context, note, measured_at)
+         VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at`,
+        [pid, sys, dia, pulse, ctx, note, b.measured_at || null]);
       res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }
   });
@@ -254,6 +256,8 @@ module.exports = (app, db) => {
       if (b.systolic    !== undefined) add('systolic', num(b.systolic));
       if (b.diastolic   !== undefined) add('diastolic', num(b.diastolic));
       if (b.pulse       !== undefined) add('pulse', num(b.pulse));
+      if (b.context     !== undefined) add('context', (b.context === 'rest' || b.context === 'exertion') ? b.context : null);
+      if (b.note        !== undefined) add('note', (b.note != null && String(b.note).trim()) ? String(b.note).trim().slice(0, 500) : null);
       if (b.measured_at !== undefined) add('measured_at', b.measured_at || null);
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       params.push(parseInt(req.params.id));

@@ -313,11 +313,15 @@
     const p = profileFor(_selName); if (!p) return;
     const sys = $('ph-bp-sys').value, dia = $('ph-bp-dia').value, pulse = $('ph-bp-pulse').value;
     if (!sys && !dia && !pulse) { $('ph-bp-status').textContent = 'Enter a reading'; return; }
+    const ctx = ($('ph-bp-context') || {}).value || 'rest';
+    const note = (($('ph-bp-note') || {}).value || '').trim();
     const r = await fetch(`${API}/bp`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile_id: p.id, systolic: sys || null, diastolic: dia || null, pulse: pulse || null }) });
+      body: JSON.stringify({ profile_id: p.id, systolic: sys || null, diastolic: dia || null, pulse: pulse || null, context: ctx, note: note || null }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { $('ph-bp-status').textContent = 'Failed: ' + (j.error || r.status); return; }
     $('ph-bp-sys').value = ''; $('ph-bp-dia').value = ''; $('ph-bp-pulse').value = '';
+    if ($('ph-bp-note')) $('ph-bp-note').value = '';
+    if ($('ph-bp-context')) $('ph-bp-context').value = 'rest';
     $('ph-bp-status').textContent = '✓ saved ' + (j.measured_at || '');
   };
   window.phDelMeas = async function (id) {
@@ -916,7 +920,9 @@
       title: 'Blood pressure history', base: () => `${API}/bp`, ok: () => !!_curProfileId,
       listUrl: (n) => `${API}/bp?profile_id=${_curProfileId}&limit=${n}`,
       fields: [{ k: 'systolic', ph: 'sys', w: 60 }, { k: 'diastolic', ph: 'dia', w: 60 }, { k: 'pulse', ph: 'pulse', w: 60 }],
-      rowVal: (r) => `${r.systolic == null ? '—' : r.systolic}/${r.diastolic == null ? '—' : r.diastolic}${r.pulse != null ? ' · ♥ ' + r.pulse : ''}`,
+      rowVal: (r) => `${r.systolic == null ? '—' : r.systolic}/${r.diastolic == null ? '—' : r.diastolic}${r.pulse != null ? ' · ♥ ' + r.pulse : ''}`
+        + (r.context ? ` <span style="font-size:0.66rem;background:${r.context === 'exertion' ? '#fde68a' : '#e0f2fe'};color:${r.context === 'exertion' ? '#92400e' : '#075985'};padding:1px 6px;border-radius:8px;">${r.context === 'exertion' ? 'after exertion' : 'at rest'}</span>` : '')
+        + (r.note ? ` <span style="color:#888;font-size:0.72rem;">— ${esc(r.note)}</span>` : ''),
       addBody: (v, ts) => ({ profile_id: _curProfileId, systolic: v.systolic || null, diastolic: v.diastolic || null, pulse: v.pulse || null, measured_at: ts }),
       patchBody: (v, ts) => ({ systolic: v.systolic || null, diastolic: v.diastolic || null, pulse: v.pulse || null, measured_at: ts }),
     },
