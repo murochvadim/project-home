@@ -937,6 +937,85 @@ def scenario_p5(conn, ctx):
     return 'FAIL', f'Expected 1 stay + {exp}; got {stays} stays, legs {legs}'
 
 
+# ─── Janitor rules (geo_trip_janitor.py) — J1-J4 ───────────────────────────
+# The phantom-trip janitor is a SEPARATE cleanup pass (not the ingest pipeline),
+# so — like the Places P* scenarios — we insert a controlled sandbox phone_trips
+# row + its device_locations pings and evaluate the janitor's REAL rule functions
+# (trip_good_dists + classify_trip) in-process. Hermetic: no real trip is touched,
+# and _run_scenario's cleanup wipes the sandbox trip before the next scenario.
+
+_JAN = None
+def _load_janitor():
+    """Import /opt/geo_trip_janitor.py once so the test runs the DEPLOYED rules."""
+    global _JAN
+    if _JAN is None:
+        spec = importlib.util.spec_from_file_location('geo_trip_janitor', '/opt/geo_trip_janitor.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _JAN = mod
+    return _JAN
+
+
+def _janitor_verdict(conn, ctx, dur, max_dist, path_len, outside, pings):
+    """Insert a sandbox confirmed trip + its pings, then run the janitor's real
+    trip_good_dists + classify_trip on it. `pings` = [(dist_m, bearing_deg,
+    accuracy_m), …] placed relative to the real home centre. Returns the reason
+    string ('close-phantom' | 'teleport' | 'sparse-track') or None (keep)."""
+    jan = _load_janitor()
+    h = home_coords(conn)
+    started = datetime.fromtimestamp(ctx.t0, tz=timezone.utc)
+    returned = datetime.fromtimestamp(ctx.t0 + dur, tz=timezone.utc)
+    for i, (dist, brg, acc) in enumerate(pings):
+        la, lo = coord_at_distance(h[0], h[1], dist, brg)
+        ts = datetime.fromtimestamp(ctx.t0 + i, tz=timezone.utc)
+        db_execute(conn, "INSERT INTO device_locations "
+                   "(device_id, ts, lat, lon, accuracy_m, source) "
+                   "VALUES (%s,%s,%s,%s,%s,'test')", (TEST_DEVICE_ID, ts, la, lo, acc))
+    db_execute(conn, "INSERT INTO phone_trips "
+               "(group_id, device_label, started_at, returned_at, duration_sec, "
+               " max_dist_m, path_length_m, outside_pings, confirmed, detected_at) "
+               "VALUES (%s,'FilterTest',%s,%s,%s,%s,%s,%s,TRUE,now())",
+               (TEST_DEVICE_ID, started, returned, dur, max_dist, path_len, outside))
+    t = db_query(conn, "SELECT * FROM phone_trips WHERE group_id=%s ORDER BY id DESC LIMIT 1",
+                 (TEST_DEVICE_ID,))[0]
+    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m = jan.read_cfg(conn)
+    good, _total = jan.trip_good_dists(conn, [TEST_DEVICE_ID], started, returned, clat, clon, acc_gate)
+    cmax = good[-1] if good else float(t['max_dist_m'] or 0)
+    return jan.classify_trip(t, good, cmax, far_m, tele_far, tele_inner, fix_spacing_m)
+
+
+def scenario_j1(conn, ctx):
+    """Janitor Rule 3 — sparse-track ~1 km ghost (13 fixes, ~282 m/fix) → DELETE."""
+    r = _janitor_verdict(conn, ctx, dur=4060, max_dist=1097, path_len=3671, outside=13,
+                         pings=[(20, 0, 10), (1050, 225, 30), (1050, 225, 30), (20, 0, 10)])
+    return ('PASS', 'sparse-track (~1 km, 282 m/fix) flagged') if r == 'sparse-track' \
+        else ('FAIL', f'Expected sparse-track; got {r!r}')
+
+
+def scenario_j2(conn, ctx):
+    """Janitor — real dense ~1 km trip (101 fixes, ~26 m/fix) → KEEP (no false positive)."""
+    r = _janitor_verdict(conn, ctx, dur=1523, max_dist=1081, path_len=2639, outside=101,
+                         pings=[(20, 0, 10), (500, 90, 10), (1050, 90, 10), (500, 90, 10), (20, 0, 10)])
+    return ('PASS', 'real dense trip kept (26 m/fix)') if r is None \
+        else ('FAIL', f'Expected keep (None); got {r!r}')
+
+
+def scenario_j3(conn, ctx):
+    """Janitor Rule 1 — close phantom (short, clean_max ~150 m ≤ 250) → DELETE."""
+    r = _janitor_verdict(conn, ctx, dur=600, max_dist=150, path_len=300, outside=4,
+                         pings=[(20, 0, 10), (150, 225, 20), (150, 225, 20), (20, 0, 10)])
+    return ('PASS', 'close-phantom (≤250 m, <1 h) flagged') if r == 'close-phantom' \
+        else ('FAIL', f'Expected close-phantom; got {r!r}')
+
+
+def scenario_j4(conn, ctx):
+    """Janitor Rule 2 — far teleport (30 km reach, empty intermediate band) → DELETE."""
+    r = _janitor_verdict(conn, ctx, dur=6000, max_dist=30000, path_len=60000, outside=6,
+                         pings=[(20, 0, 10), (30000, 120, 20), (30000, 120, 20), (20, 0, 10)])
+    return ('PASS', 'far-teleport (30 km, empty band) flagged') if r == 'teleport' \
+        else ('FAIL', f'Expected teleport; got {r!r}')
+
+
 # ─── Scenario registry ─────────────────────────────────────────────
 
 SCENARIOS = [
@@ -966,6 +1045,12 @@ SCENARIOS = [
     ('P3', 'Places: jitter absorbed (no loop leg)', scenario_p3),
     ('P4', 'Places: home excursion dropped',  scenario_p4),
     ('P5', 'Places: out-and-back loop leg',   scenario_p5),
+    # Janitor rules (geo_trip_janitor.py phantom cleanup) — insert a sandbox trip + pings,
+    # run the janitor's real classify_trip. J2 is the negative control (no false positive).
+    ('J1', 'Janitor: sparse-track ~1km ghost deleted', scenario_j1),
+    ('J2', 'Janitor: real dense trip kept',            scenario_j2),
+    ('J3', 'Janitor: close-phantom (<=250m) deleted',  scenario_j3),
+    ('J4', 'Janitor: far-teleport (>20km) deleted',    scenario_j4),
 ]
 
 

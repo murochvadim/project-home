@@ -180,6 +180,32 @@ def trip_good_dists(conn, device_ids, start, end, clat, clon, acc_gate):
     return good, len(pings)
 
 
+def classify_trip(t, good_dists, cmax, far_m, tele_far, tele_inner, fix_spacing_m):
+    """Return the deletion reason for a trip, or None to keep it. Pure function of
+    the trip row (`max_dist_m`/`path_length_m`/`outside_pings`/`duration_sec`) plus
+    its good-accuracy distances + clean-max reach — so both main() and the Filter
+    Test (J1-J4) evaluate the SAME rules. Rules are OR'd, first match wins."""
+    stored = t['max_dist_m'] or 0
+    opings = t['outside_pings'] or 0
+    plen = t['path_length_m'] or 0
+    fix_spacing = (plen / opings) if opings > 0 else 0.0
+    # Rule 1 — close phantom: short trips that never credibly left ~far_m.
+    if t['duration_sec'] < MAX_TRIP_SEC and cmax <= far_m:
+        return 'close-phantom'
+    # Rule 2 — far teleport: reached far on good pings but with NO fixes in the
+    # intermediate band → no path was travelled (cache replay). Any duration.
+    if good_dists and cmax > tele_far:
+        band_lo, band_hi = tele_inner, cmax - tele_inner
+        if band_hi > band_lo and not any(band_lo <= d <= band_hi for d in good_dists):
+            return 'teleport'
+    # Rule 3 — sparse track: reached far (> far_m) but the fixes are spaced too far
+    # apart to be a real path (> fix_spacing_m per outside fix). Catches the fixed
+    # ~1 km ghost that lives in the gap between rules 1 & 2. Any duration.
+    if stored > far_m and opings > 0 and fix_spacing > fix_spacing_m:
+        return 'sparse-track'
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true',
@@ -229,22 +255,7 @@ def main():
         opings = t['outside_pings'] or 0
         plen = t['path_length_m'] or 0
         fix_spacing = (plen / opings) if opings > 0 else 0.0
-
-        reason = None
-        # Rule 1 — close phantom: short trips that never credibly left ~250 m.
-        if t['duration_sec'] < MAX_TRIP_SEC and cmax <= far_m:
-            reason = 'close-phantom'
-        # Rule 2 — far teleport: reached far on good pings but with NO fixes in
-        # the intermediate band → no path was travelled (cache replay). Any dur.
-        elif good_dists and cmax > tele_far:
-            band_lo, band_hi = tele_inner, cmax - tele_inner
-            if band_hi > band_lo and not any(band_lo <= d <= band_hi for d in good_dists):
-                reason = 'teleport'
-        # Rule 3 — sparse track: reached far (> far_m) but the fixes are spaced too
-        # far apart to be a real path (> fix_spacing_m per outside fix). Catches the
-        # fixed ~1 km ghost that lives in the gap between rules 1 & 2. Any duration.
-        elif stored > far_m and opings > 0 and fix_spacing > fix_spacing_m:
-            reason = 'sparse-track'
+        reason = classify_trip(t, good_dists, cmax, far_m, tele_far, tele_inner, fix_spacing_m)
 
         log.info('trip #%d dur=%ds stored=%dm clean=%dm (good %d/%d pings, %dm/fix) -> %s',
                  t['id'], t['duration_sec'], stored, int(cmax), len(good_dists), total,
