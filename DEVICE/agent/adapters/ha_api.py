@@ -66,6 +66,11 @@ class HAApiAdapter(DeviceAdapter):
         'vacuum.viomi_v6_2b2a_robot_cleaner': [
             ('vacuum.viomi_v6_2b2a_robot_cleaner', None),  # main entity (battery in attrs)
         ],
+        # Roborock S6 (Xiaomi Miot Auto entity — Mi Home account, local control).
+        # Same shape as Viomi: battery_level is in the vacuum entity's attributes.
+        'vacuum.roborock_s6_f881_robot_cleaner': [
+            ('vacuum.roborock_s6_f881_robot_cleaner', None),  # main entity (battery in attrs)
+        ],
         # Aqara FP2 (paired via HomeKit Controller, NOT Tuya). Each zone in
         # Aqara's app surfaces as its own binary_sensor in HA. The 6 zones
         # below are the named zones currently set in the Living Room FP2;

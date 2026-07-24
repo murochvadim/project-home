@@ -2070,3 +2070,102 @@
   };
 })();
 
+// ─── Roborock tab (self-contained; HA-mediated vacuum via /api/vacuum) ───────
+// Frontend-only: status from GET /api/devices/states, control via
+// POST /api/vacuum/:entity/:verb. Mirrors the Star Projector tab pattern.
+(function () {
+  'use strict';
+
+  const RV_ID = 'vacuum.roborock_s6_f881_robot_cleaner';
+  let RV_STATE = {};        // last_state {state, battery}
+  let RV_LAST_SEEN = null;
+  let RV_TIMER = null;
+  let RV_INITED = false;
+
+  // HA vacuum state → chip style
+  const RV_STATE_STYLE = {
+    cleaning:  { label: 'cleaning',  bg: '#3a7d44', fg: '#fff' },
+    returning: { label: 'returning', bg: '#2b4c7e', fg: '#fff' },
+    paused:    { label: 'paused',    bg: '#e6a23c', fg: '#fff' },
+    docked:    { label: 'docked',    bg: '#6b7a8f', fg: '#fff' },
+    idle:      { label: 'idle',      bg: '#6b7a8f', fg: '#fff' },
+    error:     { label: 'error',     bg: '#c0392b', fg: '#fff' },
+  };
+
+  async function rvFetch() {
+    const r = await fetch('/api/devices/states?ids=' + encodeURIComponent(RV_ID));
+    if (!r.ok) throw new Error('GET /api/devices/states ' + r.status);
+    const list = await r.json();
+    const dev = Array.isArray(list) ? list.find(d => d.id === RV_ID) : null;
+    RV_STATE     = (dev && dev.last_state) || {};
+    RV_LAST_SEEN = (dev && dev.last_seen) || null;
+    return dev;
+  }
+
+  // Send a vacuum verb (start/stop/pause/dock/locate) via the existing endpoint.
+  window.rvCmd = async function (verb) {
+    const st = document.getElementById('rv-cmd-status');
+    if (st) { st.textContent = '· ' + verb + '…'; st.style.color = '#888'; }
+    try {
+      const r = await fetch('/api/vacuum/' + encodeURIComponent(RV_ID) + '/' + encodeURIComponent(verb), { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (st) { st.textContent = '✓ ' + verb + ' sent'; st.style.color = '#3a7d44'; }
+      setTimeout(() => { rvFetch().then(rvRender).catch(() => {}); }, 1200);  // let HA settle, then refresh
+    } catch (e) {
+      if (st) { st.textContent = '✗ ' + verb + ' failed: ' + e.message; st.style.color = '#c0392b'; }
+    }
+  };
+
+  function rvFmtAge(iso) {
+    if (!iso) return '—';
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  }
+
+  function rvRender() {
+    const dot  = document.getElementById('rv-online-dot');
+    const txt  = document.getElementById('rv-online-text');
+    const seen = document.getElementById('rv-last-seen');
+    const chip = document.getElementById('rv-state-chip');
+    const batt = document.getElementById('rv-batt-chip');
+    // Vacuums push sparsely (docked sits idle for hours) — 30 min freshness window.
+    const fresh = RV_LAST_SEEN && (Date.now() - new Date(RV_LAST_SEEN).getTime()) < 30 * 60 * 1000;
+    if (seen) seen.textContent = rvFmtAge(RV_LAST_SEEN);
+    if (dot) dot.style.color = fresh ? '#3a7d44' : '#c0392b';
+    if (txt) { txt.textContent = fresh ? 'online' : 'offline'; txt.style.color = fresh ? '#3a7d44' : '#c0392b'; }
+
+    const state = String(RV_STATE.state || '').toLowerCase();
+    if (chip) {
+      const s = RV_STATE_STYLE[state];
+      if (s) { chip.textContent = 'state: ' + s.label; chip.style.background = s.bg; chip.style.color = s.fg; chip.style.borderColor = s.bg; }
+      else   { chip.textContent = 'state: ' + (state || '—'); chip.style.background = '#eee'; chip.style.color = '#888'; chip.style.borderColor = '#d0cbc4'; }
+    }
+    if (batt) {
+      const b = RV_STATE.battery;
+      batt.textContent = '🔋 ' + (b != null ? b + '%' : '—');
+    }
+  }
+
+  async function rvInit() {
+    if (RV_INITED) { rvFetch().then(rvRender).catch(() => {}); return; }
+    RV_INITED = true;
+    try { await rvFetch(); rvRender(); }
+    catch (e) {
+      console.error('[roborock] init failed:', e);
+      const txt = document.getElementById('rv-online-text');
+      if (txt) { txt.textContent = 'init failed: ' + e.message; txt.style.color = '#c0392b'; }
+    }
+    if (!RV_TIMER) RV_TIMER = setInterval(() => { rvFetch().then(rvRender).catch(() => {}); }, 5000);
+  }
+
+  const _prevShowTabRv = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTabRv === 'function') _prevShowTabRv(name, btn);
+    if (name === 'roborock') rvInit();
+  };
+})();
+
