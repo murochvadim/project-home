@@ -95,6 +95,27 @@ PHANTOM_ACCURACY_GATE_M = 50
 TELEPORT_FAR_M = 20000      # only jumps beyond 20 km are teleport candidates
 TELEPORT_INNER_M = 1500     # band = [INNER, reach - INNER]
 
+# ── Sparse-track (fix-spacing) rule (2026-07-23) ─────────────────────────────
+# A NEW, fixed GPS ghost ~1 km SW of home makes the phone teleport out-and-back
+# while it is physically at home; the "trip" then reaches ~1 km on only a handful
+# of fixes (proven on trips 14779-14784, 14865: 2-13 outside pings for a ~1 km
+# reach). Rule 1 (close-phantom, <=250 m) is too near, Rule 2 (teleport, >20 km)
+# is too far — this ~1 km ghost lives in the gap between them, and the
+# continuity/empty-band test can't reach down here (home GPS scatter reaching
+# 300-400 m pollutes the band; sparse phantoms have too few good pings).
+#
+# The clean, distance- and duration-agnostic signal is TRACK DENSITY: a real
+# moving phone drops a fix every ~25-45 m of travel (OwnTracks publishes on
+# displacement); a phantom's path_length is mostly imaginary teleport distance,
+# so its fixes are hundreds of metres apart. Measured over the last 24 h:
+#   phantoms  282-945 m/fix   |   real trips  25-45 m/fix   (a clean 6x gap).
+# So a trip that reached FAR (> far_m) but whose path_length / outside_pings
+# exceeds PHANTOM_FIX_SPACING_M covered its "distance" without a real track =>
+# fake. Uses only stored columns (no ping re-fetch). Overridable via
+# phantom_fix_spacing_m. 150 m sits safely between the two clusters (real <=45,
+# phantom >=282) — a >2x margin on each side.
+PHANTOM_FIX_SPACING_M = 150
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('geo_trip_janitor')
 
@@ -111,7 +132,7 @@ def haversine_m(lat1, lon1, lat2, lon2):
 def read_cfg(conn):
     """Read the dashboard_settings.geolocation singleton so this janitor and the
     dashboard display filter stay in lock-step. Returns
-    (far_m, center_lat, center_lon, acc_gate, group_device_map, tele_far, tele_inner)."""
+    (far_m, center_lat, center_lon, acc_gate, group_device_map, tele_far, tele_inner, near_m)."""
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT value FROM dashboard_settings WHERE key = 'geolocation'")
         row = cur.fetchone()
@@ -120,6 +141,7 @@ def read_cfg(conn):
     acc_gate = float(val.get('phantom_accuracy_gate_m') or PHANTOM_ACCURACY_GATE_M)
     tele_far = float(val.get('teleport_far_m') or TELEPORT_FAR_M)
     tele_inner = float(val.get('teleport_inner_m') or TELEPORT_INNER_M)
+    fix_spacing_m = float(val.get('phantom_fix_spacing_m') or PHANTOM_FIX_SPACING_M)
     center = val.get('center') or {}
     clat = float(center['lat']) if center.get('lat') is not None else None
     clon = float(center['lon']) if center.get('lon') is not None else None
@@ -128,7 +150,7 @@ def read_cfg(conn):
         g, dev = d.get('group_id'), d.get('device_id')
         if g and dev:
             gmap.setdefault(g, []).append(dev)
-    return far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner
+    return far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m
 
 
 def trip_good_dists(conn, device_ids, start, end, clat, clon, acc_gate):
@@ -167,18 +189,20 @@ def main():
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
 
-    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner = read_cfg(conn)
+    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m = read_cfg(conn)
     log.info('close-phantom: clean_max(acc<=%.0fm) <= %.0fm (dur < %ds) | '
-             'teleport: reach > %.0fm with empty band [%.0fm .. reach-%.0fm] (any dur)  %s',
+             'teleport: reach > %.0fm with empty band [%.0fm .. reach-%.0fm] | '
+             'sparse-track: reach > %.0fm AND > %.0fm/fix (any dur)  %s',
              acc_gate, far_m, MAX_TRIP_SEC, tele_far, tele_inner, tele_inner,
-             '[DRY RUN]' if args.dry_run else '[LIVE]')
+             far_m, fix_spacing_m, '[DRY RUN]' if args.dry_run else '[LIVE]')
 
     # All confirmed closed trips in the look-back — ANY duration. The close-
     # phantom rule self-limits to < MAX_TRIP_SEC; the teleport rule needs to see
     # long trips too (the 115 km fakes were 100-127 min, i.e. > 1 h).
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            """SELECT id, group_id, started_at, returned_at, duration_sec, max_dist_m
+            """SELECT id, group_id, started_at, returned_at, duration_sec,
+                      max_dist_m, path_length_m, outside_pings
                FROM phone_trips
                WHERE confirmed = TRUE
                  AND returned_at IS NOT NULL
@@ -200,6 +224,11 @@ def main():
         # clean reach = farthest good-accuracy ping; fall back to stored max when
         # there's no good evidence (never delete on empty evidence).
         cmax = good_dists[-1] if good_dists else float(stored)
+        # Track density: metres of path per outside fix. Real trips ~25-45 m/fix;
+        # a stationary-phone ghost covers its "distance" on a handful of fixes.
+        opings = t['outside_pings'] or 0
+        plen = t['path_length_m'] or 0
+        fix_spacing = (plen / opings) if opings > 0 else 0.0
 
         reason = None
         # Rule 1 — close phantom: short trips that never credibly left ~250 m.
@@ -211,10 +240,15 @@ def main():
             band_lo, band_hi = tele_inner, cmax - tele_inner
             if band_hi > band_lo and not any(band_lo <= d <= band_hi for d in good_dists):
                 reason = 'teleport'
+        # Rule 3 — sparse track: reached far (> far_m) but the fixes are spaced too
+        # far apart to be a real path (> fix_spacing_m per outside fix). Catches the
+        # fixed ~1 km ghost that lives in the gap between rules 1 & 2. Any duration.
+        elif stored > far_m and opings > 0 and fix_spacing > fix_spacing_m:
+            reason = 'sparse-track'
 
-        log.info('trip #%d dur=%ds stored=%dm clean=%dm (good %d/%d pings) -> %s',
+        log.info('trip #%d dur=%ds stored=%dm clean=%dm (good %d/%d pings, %dm/fix) -> %s',
                  t['id'], t['duration_sec'], stored, int(cmax), len(good_dists), total,
-                 ('DELETE:' + reason) if reason else 'keep(real)')
+                 int(fix_spacing), ('DELETE:' + reason) if reason else 'keep(real)')
         if reason:
             t['_reason'] = reason
             to_delete.append(t)
