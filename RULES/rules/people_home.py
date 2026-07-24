@@ -422,8 +422,12 @@ def evaluate(event, state):
     else:
         people_count_state = 'stable'
 
-    # Authoritative transition source for this tick
-    if main_door_opened_now:
+    # Authoritative transition source for this tick. Both Main Door EDGES (open
+    # AND close) are door_sensor transitions — and the close edge must win over a
+    # concurrent inferred_entry, or the door-close RESET (which the "Main door
+    # closed" notification watches via _people_last_reset_ts + this tag) gets
+    # mislabeled 'inferred_entry' and the notification is suppressed.
+    if main_door_opened_now or main_door_closed_now:
         transition_source = 'door_sensor'
     elif inferred_transit:
         transition_source = f'inferred_{inferred_transit}'
