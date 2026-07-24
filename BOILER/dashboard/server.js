@@ -114,6 +114,7 @@ require('./routes-cellular')(app, db);
 // Bedroom CD player — POST /api/cd/:action fires HA scenes (IR control) for the
 // Media Agents → CD Player tab. Own module (gets callHA, a hoisted function).
 require('./routes-media-cd')(app, callHA);
+require('./routes-vacuum')(app, callHA);
 
 // Privacy page — Sites CRM + per-site documents (client-side encrypted or
 // plain). Own module; file bytes on QNAP, server stays blind to plaintext.

@@ -2117,6 +2117,25 @@
     }
   };
 
+  // Set suction/fan speed via the dedicated endpoint (routes-vacuum.js).
+  window.rvSetFan = async function (speed) {
+    const st = document.getElementById('rv-cmd-status');
+    if (st) { st.textContent = '· suction → ' + speed + '…'; st.style.color = '#888'; }
+    try {
+      const r = await fetch('/api/vacuum/' + encodeURIComponent(RV_ID) + '/fan-speed', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speed: speed }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      RV_STATE.fan_speed = speed;  // optimistic
+      if (st) { st.textContent = '✓ suction: ' + speed; st.style.color = '#3a7d44'; }
+      setTimeout(() => { rvFetch().then(rvRender).catch(() => {}); }, 1200);
+    } catch (e) {
+      if (st) { st.textContent = '✗ suction failed: ' + e.message; st.style.color = '#c0392b'; }
+    }
+  };
+
   function rvFmtAge(iso) {
     if (!iso) return '—';
     const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -2148,6 +2167,12 @@
       const b = RV_STATE.battery;
       batt.textContent = '🔋 ' + (b != null ? b + '%' : '—');
     }
+    const ca = document.getElementById('rv-clean-area');
+    const ct = document.getElementById('rv-clean-time');
+    if (ca) ca.textContent = (RV_STATE.clean_area != null ? RV_STATE.clean_area : '—');
+    if (ct) ct.textContent = (RV_STATE.clean_time != null ? RV_STATE.clean_time : '—');
+    const fan = document.getElementById('rv-fan');
+    if (fan && RV_STATE.fan_speed && document.activeElement !== fan) fan.value = RV_STATE.fan_speed;
   }
 
   async function rvInit() {

@@ -399,10 +399,18 @@ class HAApiAdapter(DeviceAdapter):
                         # so battery comes via a sibling sensor entity in
                         # HA_DIRECT_DEVICES).
                         if ent['domain'] == 'vacuum':
+                            _attrs = s.get('attributes') or {}
                             device_dps.setdefault(tuya_id, {})['state'] = state_val
-                            batt = (s.get('attributes') or {}).get('battery_level')
+                            batt = _attrs.get('battery_level')
                             if isinstance(batt, (int, float)):
                                 device_dps[tuya_id]['battery'] = batt
+                            for _src in ('clean_area', 'clean_time'):
+                                _v = _attrs.get(_src)
+                                if isinstance(_v, (int, float)):
+                                    device_dps[tuya_id][_src] = _v
+                            _fs = _attrs.get('fan_speed')
+                            if isinstance(_fs, str) and _fs:
+                                device_dps[tuya_id]['fan_speed'] = _fs
                         else:
                             val = self._ha_state_to_dps_value(ent['domain'], state_val)
                             device_dps.setdefault(tuya_id, {})[ent['dp_key']] = val
@@ -519,10 +527,19 @@ class HAApiAdapter(DeviceAdapter):
                 # Roomba), the key is omitted so on_state_change merges
                 # without disturbing the existing battery from the sensor.
                 if ent_info['domain'] == 'vacuum':
+                    attrs = new_state.get('attributes') or {}
                     dps = {'state': state_val}
-                    batt = (new_state.get('attributes') or {}).get('battery_level')
+                    batt = attrs.get('battery_level')
                     if isinstance(batt, (int, float)):
                         dps['battery'] = batt
+                    # Extra telemetry (Roborock exposes these; Roomba/Viomi may not).
+                    for _src in ('clean_area', 'clean_time'):
+                        _v = attrs.get(_src)
+                        if isinstance(_v, (int, float)):
+                            dps[_src] = _v
+                    _fs = attrs.get('fan_speed')
+                    if isinstance(_fs, str) and _fs:
+                        dps['fan_speed'] = _fs
                     self.on_state_change(tuya_id, dps, 'ha_api')
                     return
 
