@@ -1535,8 +1535,12 @@
     }
     if (batt) {
       const b = IR_STATE.battery;
-      batt.textContent = '🔋 ' + (b != null ? Math.round(b) + '%' : '—');
+      batt.textContent = '🔋 ' + (b != null ? Math.round(b) + '%' : '—') + (IR_STATE.charging === true ? ' ⚡' : '');
     }
+    const mEl = document.getElementById('ir-missions');
+    const aEl = document.getElementById('ir-avg');
+    if (mEl) mEl.textContent = (IR_STATE.total_missions != null ? Math.round(IR_STATE.total_missions) : '—');
+    if (aEl) aEl.textContent = (IR_STATE.avg_mission_time != null ? Math.round(IR_STATE.avg_mission_time) : '—');
     if (bin) {
       const bf = IR_STATE.bin_full;
       if (bf === true) { bin.textContent = '🗑 FULL'; bin.style.background = '#c0392b'; bin.style.color = '#fff'; bin.style.borderColor = '#c0392b'; }

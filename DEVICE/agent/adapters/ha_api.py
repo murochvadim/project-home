@@ -60,8 +60,11 @@ class HAApiAdapter(DeviceAdapter):
     # entity's attributes — no auxiliary sensor needed.
     HA_DIRECT_DEVICES = {
         'vacuum.roomba': [
-            ('vacuum.roomba',         None),       # main entity, multi-attr
-            ('sensor.roomba_battery', 'battery'),  # aux sensor → 'battery'
+            ('vacuum.roomba',                      None),              # main entity, multi-attr
+            ('sensor.roomba_battery',              'battery'),         # aux sensor → 'battery'
+            ('binary_sensor.roomba_charging',      'charging'),        # on/off → bool
+            ('sensor.roomba_total_missions',       'total_missions'),  # lifetime mission count
+            ('sensor.roomba_average_mission_time', 'avg_mission_time'),# minutes
         ],
         'vacuum.viomi_v6_2b2a_robot_cleaner': [
             ('vacuum.viomi_v6_2b2a_robot_cleaner', None),  # main entity (battery in attrs)
