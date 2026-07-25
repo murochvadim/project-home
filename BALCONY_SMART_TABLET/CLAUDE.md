@@ -90,6 +90,22 @@ updates are server-side and the tablet picks them up on reload:
   cache on reload", or a manual pull-to-refresh. Home-screen icon = just a bookmark, so
   it always loads the latest from the server.
 
+## Security (home-LAN threat model)
+Safe for a home LAN — same trust model as the existing OpenHASP panels / dashboard /
+ESP boards (plaintext MQTT + a shared browser user on the LAN); it adds **no new
+internet exposure**.
+- **LAN-only, behind the router** — never port-forward `panel_service`.
+- **Narrow blast radius:** reuse the existing `dashboard_browser` MQTT user (restricted
+  ACL) + add exactly ONE write (`mur/home/device/panel/event`) — a leaked cred can't do
+  broker-admin, only that one command topic + the user's existing grants.
+- **Realistic risk = someone already on the WiFi** (plaintext HTTP/MQTT on the LAN; the
+  browser pass is LAN-reachable) — but that already applies to the current panels/
+  dashboard, not new to this.
+- **Harden cheaply:** Fully Kiosk PIN-lock the tablet (can't exit kiosk / change settings);
+  strong WiFi; keep the tablet on the trusted network.
+- **Overkill-if-ever:** a dedicated `tablet` MQTT user (not `dashboard_browser`) + TLS
+  (`wss://` broker + HTTPS panel_service). Not needed for a home LAN.
+
 ## Open decisions (confirm before building)
 1. **Host for `panel_service`** — reuse LXC 100 (recommended, least new infra) vs dedicated.
 2. **Which lights/rooms in v1** — default = main light of each room unless a specific list.
