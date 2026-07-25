@@ -78,6 +78,18 @@ Tab A7 (Fully Kiosk Browser, full-screen)
 6. **Kiosk** — Fully Kiosk Browser on the Tab A7 → start URL `http://<host>:8771/` →
    full-screen + keep-screen-on/dim + auto-reload; add-to-home-screen.
 
+## Updating the "app" (no reinstall — it's a PWA)
+The tablet never gets a reinstall/APK — the panel is a web page served by the LXC, so
+updates are server-side and the tablet picks them up on reload:
+- **Config** (which lights/scenes/rooms show) — edit the **dashboard Panel tab** → DB →
+  tablet reflects on refresh. No deploy, instant. (Day-to-day, user-driven.)
+- **App code** (features/fixes to the panel) — change files in `BALCONY_SMART_TABLET/`,
+  `scp` to the LXC `panel_service` (+ bump cache-bust `?v=N`, same as every dashboard
+  page); the tablet **reloads to the new version**. No reinstall.
+- **Tablet picks it up** via **Fully Kiosk Browser** auto-reload (scheduled) + "clear
+  cache on reload", or a manual pull-to-refresh. Home-screen icon = just a bookmark, so
+  it always loads the latest from the server.
+
 ## Open decisions (confirm before building)
 1. **Host for `panel_service`** — reuse LXC 100 (recommended, least new infra) vs dedicated.
 2. **Which lights/rooms in v1** — default = main light of each room unless a specific list.
