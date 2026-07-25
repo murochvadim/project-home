@@ -1433,3 +1433,137 @@
     if (name === 'awtrix') awInit();
   };
 })();
+
+// ─── IRobot tab (self-contained; HA-mediated Roomba via /api/vacuum) ─────────
+// Status from GET /api/devices/states, control via POST /api/vacuum/:entity/:verb
+// (+ /fan-speed). Polls only while the tab is open (irStart/irStop wired into the
+// showTab wrap). Mirrors the Balcony Roborock tab; Roomba specifics: fan speeds
+// Automatic/Eco/Performance, bin status, no clean-area/time, docked-quiet = "idle".
+(function () {
+  'use strict';
+
+  const IR_ID = 'vacuum.roomba';
+  let IR_STATE = {};
+  let IR_LAST_SEEN = null;
+  let IR_TIMER = null;
+
+  const IR_STATE_STYLE = {
+    cleaning:  { label: 'cleaning',  bg: '#3a7d44', fg: '#fff' },
+    returning: { label: 'returning', bg: '#2b4c7e', fg: '#fff' },
+    paused:    { label: 'paused',    bg: '#e6a23c', fg: '#fff' },
+    docked:    { label: 'docked',    bg: '#6b7a8f', fg: '#fff' },
+    idle:      { label: 'idle',      bg: '#6b7a8f', fg: '#fff' },
+    error:     { label: 'error',     bg: '#c0392b', fg: '#fff' },
+  };
+
+  async function irFetch() {
+    const r = await fetch('/api/devices/states?ids=' + encodeURIComponent(IR_ID));
+    if (!r.ok) throw new Error('GET /api/devices/states ' + r.status);
+    const list = await r.json();
+    const dev = Array.isArray(list) ? list.find(d => d.id === IR_ID) : null;
+    IR_STATE     = (dev && dev.last_state) || {};
+    IR_LAST_SEEN = (dev && dev.last_seen) || null;
+    return dev;
+  }
+
+  window.irCmd = async function (verb) {
+    const st = document.getElementById('ir-cmd-status');
+    if (st) { st.textContent = '· ' + verb + '…'; st.style.color = '#888'; }
+    try {
+      const r = await fetch('/api/vacuum/' + encodeURIComponent(IR_ID) + '/' + encodeURIComponent(verb), { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (st) { st.textContent = '✓ ' + verb + ' sent'; st.style.color = '#3a7d44'; }
+      setTimeout(() => { irFetch().then(irRender).catch(() => {}); }, 1200);
+    } catch (e) {
+      if (st) { st.textContent = '✗ ' + verb + ' failed: ' + e.message; st.style.color = '#c0392b'; }
+    }
+  };
+
+  window.irSetFan = async function (speed) {
+    const st = document.getElementById('ir-cmd-status');
+    if (st) { st.textContent = '· suction → ' + speed + '…'; st.style.color = '#888'; }
+    try {
+      const r = await fetch('/api/vacuum/' + encodeURIComponent(IR_ID) + '/fan-speed', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speed: speed }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      IR_STATE.fan_speed = speed;  // optimistic
+      if (st) { st.textContent = '✓ suction: ' + speed; st.style.color = '#3a7d44'; }
+      setTimeout(() => { irFetch().then(irRender).catch(() => {}); }, 1200);
+    } catch (e) {
+      if (st) { st.textContent = '✗ suction failed: ' + e.message; st.style.color = '#c0392b'; }
+    }
+  };
+
+  function irFmtAge(iso) {
+    if (!iso) return '—';
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  }
+
+  function irRender() {
+    const dot  = document.getElementById('ir-online-dot');
+    const txt  = document.getElementById('ir-online-text');
+    const seen = document.getElementById('ir-last-seen');
+    const chip = document.getElementById('ir-state-chip');
+    const batt = document.getElementById('ir-batt-chip');
+    const bin  = document.getElementById('ir-bin-chip');
+    if (seen) seen.textContent = irFmtAge(IR_LAST_SEEN);
+
+    // A docked Roomba idles quietly for hours — that's "idle", not "offline".
+    // Only truly-missing state is offline.
+    const stateKnown = !!(IR_STATE && IR_STATE.state);
+    const ageMs = IR_LAST_SEEN ? (Date.now() - new Date(IR_LAST_SEEN).getTime()) : Infinity;
+    let dc, lbl;
+    if (!stateKnown) { dc = '#c0392b'; lbl = 'offline'; }
+    else if (ageMs < 30 * 60 * 1000) { dc = '#3a7d44'; lbl = 'online'; }
+    else { dc = '#e6a23c'; lbl = 'idle'; }
+    if (dot) dot.style.color = dc;
+    if (txt) { txt.textContent = lbl; txt.style.color = dc; }
+
+    const state = String(IR_STATE.state || '').toLowerCase();
+    if (chip) {
+      const s = IR_STATE_STYLE[state];
+      if (s) { chip.textContent = 'state: ' + s.label; chip.style.background = s.bg; chip.style.color = s.fg; chip.style.borderColor = s.bg; }
+      else   { chip.textContent = 'state: ' + (state || '—'); chip.style.background = '#eee'; chip.style.color = '#888'; chip.style.borderColor = '#d0cbc4'; }
+    }
+    if (batt) {
+      const b = IR_STATE.battery;
+      batt.textContent = '🔋 ' + (b != null ? Math.round(b) + '%' : '—');
+    }
+    if (bin) {
+      const bf = IR_STATE.bin_full;
+      if (bf === true) { bin.textContent = '🗑 FULL'; bin.style.background = '#c0392b'; bin.style.color = '#fff'; bin.style.borderColor = '#c0392b'; }
+      else if (bf === false) { bin.textContent = '🗑 OK'; bin.style.background = '#eef6ee'; bin.style.color = '#3a7d44'; bin.style.borderColor = '#bfe0bf'; }
+      else { bin.textContent = '🗑 —'; bin.style.background = '#eee'; bin.style.color = '#888'; bin.style.borderColor = '#d0cbc4'; }
+    }
+    const fan = document.getElementById('ir-fan');
+    if (fan && IR_STATE.fan_speed && document.activeElement !== fan) fan.value = IR_STATE.fan_speed;
+  }
+
+  async function irStart() {
+    try { await irFetch(); irRender(); }
+    catch (e) {
+      console.error('[irobot] load failed:', e);
+      const txt = document.getElementById('ir-online-text');
+      if (txt) { txt.textContent = 'load failed: ' + e.message; txt.style.color = '#c0392b'; }
+    }
+    if (!IR_TIMER) IR_TIMER = setInterval(() => { irFetch().then(irRender).catch(() => {}); }, 5000);
+  }
+  function irStop() {
+    if (IR_TIMER) { clearInterval(IR_TIMER); IR_TIMER = null; }
+  }
+
+  // Wrap showTab: start polling when IRobot opens, stop when leaving.
+  const _prevShowTabIr = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTabIr === 'function') _prevShowTabIr(name, btn);
+    if (name === 'irobot') irStart(); else irStop();
+  };
+})();

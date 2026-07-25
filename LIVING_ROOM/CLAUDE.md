@@ -53,6 +53,8 @@ Path: `/living-room.html` (served by the Windows dashboard). Sidebar link under 
 
 - **Wallmote** — binding editor for Wallmote 1 and Wallmote 2 (4 buttons × Pushed/Held = 8 slots per wallmote)
 - **Awtrix** — sentence editor + saved-apps manager for the AWTRIX 3 LED matrix display. See root CLAUDE.md → Living Room Agent row for full details.
+- **Jura** — read-only view of the Jura coffee-machine stats + a stacked-by-type drinks graph (base `showTab` starts/stops its 15 s poll). See root CLAUDE.md.
+- **IRobot** (2026-07-25) — control tab for the **Roomba** robot vacuum (`vacuum.roomba`, iRobot, Hallway; HA-mediated). Status chip (docked/cleaning/paused/returning/idle/error) + 🔋 battery + **🗑 bin (OK/FULL)** + **Start / Stop / Pause / Dock / Locate** + **Suction** (Automatic/Eco/Performance). Self-contained IIFE in `living-room.js` (`ir-*` ids) that polls `GET /api/devices/states?ids=vacuum.roomba` every 5 s **only while the tab is open** (start/stop wired into the `showTab` wrap), controlling via `POST /api/vacuum/:entity/:verb` + `/fan-speed`. Mirrors the Balcony Roborock tab; Roomba-specifics: its own fan-speed list, bin status (`bin_full` projected by `ha_api.py`), **no clean-area/time**, and a docked-quiet Roomba renders **"idle"** (amber) not "offline". See root CLAUDE.md vacuum-integration section.
 
 > **Removed (2026-05-05):** `Rule Settings` tab. Rule authoring consolidated to Main Agent — see the Main Agent → Base Rule Settings tab. Rationale: every real rule cross-cuts rooms; a per-room rule namespace added complexity without value. Living Room agent now hosts only room-specific non-rule UI (wallmote bindings + Awtrix). Pattern applies to all future per-room agents.
 

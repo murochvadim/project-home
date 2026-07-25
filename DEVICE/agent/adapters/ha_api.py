@@ -411,6 +411,9 @@ class HAApiAdapter(DeviceAdapter):
                             _fs = _attrs.get('fan_speed')
                             if isinstance(_fs, str) and _fs:
                                 device_dps[tuya_id]['fan_speed'] = _fs
+                            _bf = _attrs.get('bin_full')
+                            if isinstance(_bf, bool):
+                                device_dps[tuya_id]['bin_full'] = _bf
                         else:
                             val = self._ha_state_to_dps_value(ent['domain'], state_val)
                             device_dps.setdefault(tuya_id, {})[ent['dp_key']] = val
@@ -540,6 +543,11 @@ class HAApiAdapter(DeviceAdapter):
                     _fs = attrs.get('fan_speed')
                     if isinstance(_fs, str) and _fs:
                         dps['fan_speed'] = _fs
+                    # bin_full is a bool — explicit isinstance(bool) so it's not
+                    # swept up by the numeric guard above (bool subclasses int).
+                    _bf = attrs.get('bin_full')
+                    if isinstance(_bf, bool):
+                        dps['bin_full'] = _bf
                     self.on_state_change(tuya_id, dps, 'ha_api')
                     return
 

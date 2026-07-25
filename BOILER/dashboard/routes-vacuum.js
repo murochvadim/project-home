@@ -10,17 +10,18 @@
 // (app_segment_clean / app_zoned_clean via vacuum.send_command).
 //
 // Endpoint:
-//   POST /api/vacuum/:entity/fan-speed   body { speed: "Silent"|"Basic"|"Strong"|"Full Speed" }
-
-const VACUUM_FAN_SPEEDS = ['Silent', 'Basic', 'Strong', 'Full Speed'];
+//   POST /api/vacuum/:entity/fan-speed   body { speed: "<any value from the device's own fan_speed_list>" }
+//
+// Fan-speed names differ per vacuum (Roborock: Silent/Basic/Strong/Full Speed;
+// Roomba: Automatic/Eco/Performance), so we do NOT hardcode a list — we accept
+// any non-empty value and let HA's vacuum.set_fan_speed validate it against the
+// entity's own fan_speed_list (an unknown value comes back as an HA error).
 
 module.exports = function (app, callHA) {
   app.post('/api/vacuum/:entity/fan-speed', async (req, res) => {
     try {
-      const speed = String((req.body || {}).speed || '');
-      if (!VACUUM_FAN_SPEEDS.includes(speed)) {
-        return res.status(400).json({ error: `unknown speed '${speed}' (allowed: ${VACUUM_FAN_SPEEDS.join(', ')})` });
-      }
+      const speed = String((req.body || {}).speed || '').trim();
+      if (!speed) return res.status(400).json({ error: 'speed required' });
       await callHA('vacuum', 'set_fan_speed', { entity_id: req.params.entity, fan_speed: speed });
       res.json({ ok: true, fan_speed: speed });
     } catch (e) { res.status(500).json({ error: e.message }); }
