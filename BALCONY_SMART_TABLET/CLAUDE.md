@@ -65,9 +65,16 @@ Tab A7 (Fully Kiosk Browser, full-screen)
 4. **Broker ACL (LXC 107)** — one line: `dashboard_browser` gains
    `topic write mur/home/device/panel/event` (already has the reads). Reload mosquitto.
    No new user, no new listener (WS:9001 already exists).
-5. **Config** — seed `dashboard_settings.panel` (main lights per room + common scenes +
-   modes); authored on the laptop dashboard (fine — only runtime must be laptop-free); a
-   Panel-editor tab is a v2 nicety.
+5. **Config + a dashboard "Panel" editor tab (v1 — user wants dashboard↔tablet config
+   sync).** Config lives in `dashboard_settings.panel` (main lights per room + scenes +
+   modes). A **Panel editor tab on the (laptop) dashboard** lets the user pick which
+   lights/scenes/rooms/mode buttons the tablet shows (+ order/labels) → writes
+   `dashboard_settings.panel` → the LXC `panel_service` reads it → the tablet renders
+   exactly that. Configure once on the dashboard, the tablet mirrors the layout. Two
+   senses of "reflect": **config/layout** flows dashboard→tablet; **live device state**
+   is mirrored by BOTH surfaces through the real devices over MQTT (not a direct
+   dashboard↔tablet link). Authoring on the laptop dashboard is fine — only the tablet
+   *runtime* must be laptop-independent.
 6. **Kiosk** — Fully Kiosk Browser on the Tab A7 → start URL `http://<host>:8771/` →
    full-screen + keep-screen-on/dim + auto-reload; add-to-home-screen.
 
