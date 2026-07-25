@@ -183,13 +183,31 @@ def _emit(state, d, ctx):
         data["action"] = d["action"]
         if d["action"] == "set_people":
             data["people_home"] = ctx.get("people_home")
+    interactive = bool(data.get("action"))
     try:
-        state.db_execute(
-            "INSERT INTO notification_events (def_id, title, body, level, surfaces, expires_at, data) "
-            "VALUES (%s, %s, %s, %s, %s::jsonb, now() + make_interval(mins => %s), %s::jsonb)",
-            (did, d.get("name"), body, d.get("level") or "info",
-             json.dumps(surfaces), _EVENT_TTL_MIN, json.dumps(data)),
-        )
+        if interactive:
+            # STICKY: supersede any prior unresolved prompt for this def so only the
+            # LATEST (current occupancy) stays pending — one prompt, never a stack.
+            state.db_execute(
+                "UPDATE notification_events SET resolved_at = now() "
+                "WHERE def_id = %s AND resolved_at IS NULL AND (data->>'action') IS NOT NULL",
+                (did,),
+            )
+            # No expiry — a sticky interactive prompt lives until the user resolves
+            # it (Save), so a main-door-close can never be missed (laptop closed etc).
+            state.db_execute(
+                "INSERT INTO notification_events (def_id, title, body, level, surfaces, expires_at, data) "
+                "VALUES (%s, %s, %s, %s, %s::jsonb, NULL, %s::jsonb)",
+                (did, d.get("name"), body, d.get("level") or "info",
+                 json.dumps(surfaces), json.dumps(data)),
+            )
+        else:
+            state.db_execute(
+                "INSERT INTO notification_events (def_id, title, body, level, surfaces, expires_at, data) "
+                "VALUES (%s, %s, %s, %s, %s::jsonb, now() + make_interval(mins => %s), %s::jsonb)",
+                (did, d.get("name"), body, d.get("level") or "info",
+                 json.dumps(surfaces), _EVENT_TTL_MIN, json.dumps(data)),
+            )
     except Exception as e:
         log.warning("notifications: emit failed for def %s: %s", did, e)
         return

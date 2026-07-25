@@ -30,6 +30,9 @@
   let card = null, _timer = null, _posTimer = null;
   const _queue = [];
   let _showing = false;
+  let _currentEv = null;          // event currently on screen (for Save/×)
+  const _laterIds = new Set();    // sticky prompts postponed via × THIS session
+  const _seenIds = new Set();     // sticky ids currently queued/showing (dedup)
 
   const CARD_W = 320, GAP = 12;
 
@@ -88,17 +91,29 @@
     if (_timer) { clearTimeout(_timer); _timer = null; }
     if (_posTimer) { clearInterval(_posTimer); _posTimer = null; }
     if (card) card.style.display = 'none';
+    if (_currentEv) { _seenIds.delete(_currentEv.id); _currentEv = null; }
     _showing = false;
     if (_queue.length) setTimeout(showNext, 250);
+  }
+
+  // × on a sticky interactive prompt = "later": hide it for THIS session only. It
+  // re-appears on the next page open (a fresh session) because the server still
+  // returns it as pending — only Save resolves it. Non-interactive × just dismisses.
+  function postpone() {
+    if (_currentEv) _laterIds.add(_currentEv.id);
+    dismiss();
   }
 
   async function savePeople(inp) {
     const raw = (inp.value || '').trim();
     const body = raw === '' ? { value: null } : { value: parseInt(raw, 10) };
+    const evId = _currentEv && _currentEv.id;
     try {
       await fetch('/api/main-agent/manual-people', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
+      // Resolve the sticky prompt server-side so it stops resurfacing everywhere.
+      if (evId) await fetch('/api/notifications/' + evId + '/resolve', { method: 'POST' });
       if (typeof window.loadState === 'function') window.loadState();
     } catch (e) { /* ignore */ }
     dismiss();
@@ -108,6 +123,7 @@
     if (_showing || !_queue.length) return;
     ensureCard();
     const ev = _queue.shift();
+    _currentEv = ev;
     const accent = ACCENT[ev.level] || ACCENT.info;
     const data = ev.data || {};
     const isSet = data.action === 'set_people';
@@ -139,7 +155,7 @@
     // us — keep re-flowing left of them every 300 ms so we can never overlap.
     if (_posTimer) clearInterval(_posTimer);
     _posTimer = setInterval(positionCard, 300);
-    card.querySelector('#nt-x').addEventListener('click', dismiss);
+    card.querySelector('#nt-x').addEventListener('click', isSet ? postpone : dismiss);
     if (isSet) {
       const inp = card.querySelector('#nt-people');
       card.querySelector('#nt-save').addEventListener('click', () => savePeople(inp));
@@ -168,6 +184,18 @@
       data = await r.json();
     } catch (e) { return; }
     if (!data) return;
+
+    // Sticky interactive prompts (e.g. the main-door-close set_people prompt):
+    // queue every UNRESOLVED one regardless of the cursor, unless postponed (×)
+    // this session or already up. Only Save (→ /resolve) removes it server-side,
+    // so it can never be missed just because the laptop was closed.
+    for (const ev of (data.pending || [])) {
+      if (!pageWants(ev)) continue;
+      if (_laterIds.has(ev.id) || _seenIds.has(ev.id)) continue;
+      _seenIds.add(ev.id);
+      _queue.push(ev);
+    }
+
     // First load on this browser (or after a refresh): still show anything fired
     // in the last 90 s so a fresh notification is visible on reload — then set the
     // cursor. (Older history is not replayed.)

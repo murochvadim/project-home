@@ -78,6 +78,8 @@ module.exports = (app, db) => {
   app.get('/api/notifications/feed', async (req, res) => {
     try {
       const since = parseInt(req.query.since) || 0;
+      // Normal (non-interactive) notifications: since-cursor, not-expired. Interactive
+      // ones are handled by the sticky `pending` channel below, so they're excluded here.
       const r = await db.query(
         `SELECT id, def_id, level, title, body, surfaces, data,
                 extract(epoch FROM ts) AS ts_epoch,
@@ -86,11 +88,36 @@ module.exports = (app, db) => {
           WHERE id > $1
             AND (surfaces->>'popup') = 'true'
             AND (expires_at IS NULL OR expires_at > now())
+            AND (data->>'action') IS NULL
           ORDER BY id ASC LIMIT 50`, [since]);
+      // Sticky interactive notifications (e.g. the main-door-close set_people prompt):
+      // every UNRESOLVED one is returned on EVERY poll — independent of the browser
+      // cursor AND of expires_at — so it can never be missed just because the laptop
+      // was closed. Cleared only by POST /:id/resolve (the popup's Save).
+      const p = await db.query(
+        `SELECT id, def_id, level, title, body, surfaces, data,
+                extract(epoch FROM ts) AS ts_epoch
+           FROM notification_events
+          WHERE (surfaces->>'popup') = 'true'
+            AND (data->>'action') IS NOT NULL
+            AND resolved_at IS NULL
+          ORDER BY id ASC LIMIT 20`);
       // Also return the current max id so a first-load client can set its cursor
-      // WITHOUT replaying history (only future events should pop).
+      // WITHOUT replaying history (only future non-interactive events should pop).
       const maxR = await db.query('SELECT COALESCE(MAX(id),0) AS max_id FROM notification_events');
-      res.json({ events: r.rows, max_id: parseInt(maxR.rows[0].max_id) });
+      res.json({ events: r.rows, pending: p.rows, max_id: parseInt(maxR.rows[0].max_id) });
+    } catch (e) { err(res, e); }
+  });
+
+  // ── Resolve a sticky interactive notification. The popup's Save calls this
+  // after writing the value; the event then stops resurfacing in `pending` on
+  // every browser. This is the ONLY thing that clears a main-door-close prompt. ──
+  app.post('/api/notifications/:id/resolve', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!id) return res.status(400).json({ error: 'id required' });
+      await db.query('UPDATE notification_events SET resolved_at = now() WHERE id = $1 AND resolved_at IS NULL', [id]);
+      res.json({ ok: true });
     } catch (e) { err(res, e); }
   });
 
