@@ -23,6 +23,7 @@
   ];
   const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater',
     'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player', 'vacuum']);
+  const MAX_ROWS = 3, MAX_COLS = 5;   // the tablet fits at most 3 rows × 5 positions
 
   let cfg = { pages: [] };
   let activePage = 0;
@@ -166,8 +167,8 @@
         </div>
         <div class="pe-pos">
           <label>Page <select onchange="peMoveToPage('${t.id}', this.value)">${pageOpts}</select></label>
-          <label>Row <input type="number" min="1" value="${t.row || 1}" onchange="peSetRow('${t.id}', this.value)"></label>
-          <label>Pos <input type="number" min="1" value="${t.pos || 1}" onchange="peSetPos('${t.id}', this.value)"></label>
+          <label>Row <input type="number" min="1" max="${MAX_ROWS}" value="${t.row || 1}" onchange="peSetRow('${t.id}', this.value)"></label>
+          <label>Pos <input type="number" min="1" max="${MAX_COLS}" value="${t.pos || 1}" onchange="peSetPos('${t.id}', this.value)"></label>
         </div>
         <div class="pe-binds ${(t.bindings && t.bindings.length) ? '' : 'empty'}" onclick="peEditTile('${t.id}')">${binds}</div>
         <div class="pe-tile-foot"><button class="pe-btn sm" onclick="peEditTile('${t.id}')">Edit bindings</button></div>
@@ -211,10 +212,14 @@
   };
 
   // ── tile ops ──────────────────────────────────────────────────────
+  function rowCount(p, row) { return (p.tiles || []).filter(t => (t.row || 1) === row).length; }
   window.peAddTile = () => {
     const p = cfg.pages[activePage]; if (!p) return; p.tiles = p.tiles || [];
-    const row = 1;
-    const pos = p.tiles.filter(t => (t.row || 1) === row).length + 1;   // next slot in row 1
+    // first row (1..MAX_ROWS) that still has a free position
+    let row = 0;
+    for (let r = 1; r <= MAX_ROWS; r++) { if (rowCount(p, r) < MAX_COLS) { row = r; break; } }
+    if (!row) { alert(`This page is full — the tablet fits at most ${MAX_ROWS} rows × ${MAX_COLS} positions. Use another page.`); return; }
+    const pos = rowCount(p, row) + 1;
     p.tiles.push({ id: uid('t'), label: 'New tile', bindings: [], row, pos });
     markDirty(); renderTiles();
   };
@@ -226,9 +231,12 @@
   };
   window.peSetRow = (id, v) => {
     const p = cfg.pages[activePage]; const t = findTile(id); if (!t) return;
-    const old = t.row || 1; t.row = Math.max(1, parseInt(v, 10) || 1); renumberRow(p, old); markDirty(); renderTiles();
+    const old = t.row || 1;
+    const want = Math.min(MAX_ROWS, Math.max(1, parseInt(v, 10) || 1));
+    if (want !== old && rowCount(p, want) >= MAX_COLS) { alert(`Row ${want} is full (max ${MAX_COLS} positions).`); renderTiles(); return; }
+    t.row = want; renumberRow(p, old); markDirty(); renderTiles();
   };
-  window.peSetPos = (id, v) => { const t = findTile(id); if (t) { t.pos = Math.max(1, parseInt(v, 10) || 1); markDirty(); renderTiles(); } };
+  window.peSetPos = (id, v) => { const t = findTile(id); if (t) { t.pos = Math.min(MAX_COLS, Math.max(1, parseInt(v, 10) || 1)); markDirty(); renderTiles(); } };
   window.peMoveToPage = (id, v) => {
     const src = cfg.pages[activePage]; const ti = parseInt(v, 10); const t = findTile(id);
     if (!src || ti === activePage || !cfg.pages[ti] || !t) { renderTiles(); return; }
@@ -241,9 +249,14 @@
   let _dragId = null;
   function moveTileTo(dragId, targetRow, beforeId) {
     const p = cfg.pages[activePage]; const t = findTile(dragId); if (!p || !t) return;
-    const oldRow = t.row || 1; t.row = targetRow;
+    const oldRow = t.row || 1;
+    if (targetRow > MAX_ROWS) { alert(`The tablet fits at most ${MAX_ROWS} rows.`); renderTiles(); return; }
     const rowTiles = (p.tiles || []).filter(x => x.id !== dragId && (x.row || 1) === targetRow)
       .sort((a, b) => (a.pos || 0) - (b.pos || 0));
+    // Moving into a DIFFERENT row that's already full is not allowed (reordering
+    // within the same row always is — the count doesn't grow).
+    if (oldRow !== targetRow && rowTiles.length >= MAX_COLS) { alert(`Row ${targetRow} is full (max ${MAX_COLS} positions).`); renderTiles(); return; }
+    t.row = targetRow;
     let at = beforeId ? rowTiles.findIndex(x => x.id === beforeId) : rowTiles.length;
     if (at < 0) at = rowTiles.length;
     rowTiles.splice(at, 0, t);
