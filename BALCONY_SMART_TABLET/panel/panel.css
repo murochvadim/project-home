@@ -35,13 +35,16 @@ body {
 .tile {
   position: relative; min-height: 168px; border-radius: 20px;
   background: #1c2130; border: 1px solid #2a3142;
-  display: flex; flex-direction: column; justify-content: space-between;
+  /* fixed rows: icon band (constant height) + label band → every device name
+     starts at the SAME vertical position across all tiles, 1-line or 2-line. */
+  display: grid; grid-template-rows: 3rem 1fr; row-gap: 12px;
   padding: 20px 22px; transition: transform .08s, background .2s, border-color .2s;
 }
 .tile:active { transform: scale(.96); }
 .tile.on { background: #223a2c; border-color: #2f7d4a; }
 .tile.on .tile-icon { color: #46d07d; }
-.tile-icon { font-size: 2.7rem; line-height: 1; color: #8b93a3; }
+.tile-icon { font-size: 2.7rem; line-height: 3rem; color: #8b93a3; }
+.tile-body { align-self: start; }
 .tile-label { font-size: 1.32rem; font-weight: 600; line-height: 1.25; word-break: break-word; }
 .tile-sub { font-size: .9rem; color: #7a8496; margin-top: 3px; }
 .tile-state {

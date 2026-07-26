@@ -75,7 +75,7 @@
       const sb = stateBinding(t);
       el.innerHTML =
         `<div class="tile-icon">${esc(tileIcon(t))}</div>` +
-        `<div><div class="tile-label">${esc(t.label || '?')}</div>` +
+        `<div class="tile-body"><div class="tile-label">${esc(t.label || '?')}</div>` +
         (t.sub ? `<div class="tile-sub">${esc(t.sub)}</div>` : '') + `</div>` +
         (sb ? `<span class="tile-state"></span>` : '');
       el.addEventListener('click', () => tap(t, el));
