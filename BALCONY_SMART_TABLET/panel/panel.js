@@ -104,7 +104,11 @@
       items.forEach((x, idx) => { const p = x.t.pos || (idx + 1); (byPos[p] = byPos[p] || []).push(x.t); });
       for (let p = 1; p <= maxCols; p++) {
         if (!byPos[p]) { const sp = document.createElement('div'); sp.className = 'tile-spacer'; rowEl.appendChild(sp); continue; }
-        for (const t of byPos[p]) rowEl.appendChild(makeTile(t));
+        for (const t of byPos[p]) {
+          // A tile marked hidden is a deliberate spacer — holds its slot, invisible + not tappable.
+          if (t.hidden) { const sp = document.createElement('div'); sp.className = 'tile-spacer'; rowEl.appendChild(sp); }
+          else rowEl.appendChild(makeTile(t));
+        }
       }
       grid.appendChild(rowEl);
     }

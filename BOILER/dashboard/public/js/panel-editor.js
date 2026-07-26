@@ -156,11 +156,13 @@
       ? t.bindings.map(b => `${esc(bindingName(b))}<span class="pe-tag ${esc(bindingTag(b))}">${esc(bindingTag(b))}</span>`).join(' · ')
       : '— tap to set what this tile does —';
     return `
-      <div class="pe-tile" draggable="true" data-tid="${t.id}"
+      <div class="pe-tile ${t.hidden ? 'pe-tile-hidden' : ''}" draggable="true" data-tid="${t.id}"
            ondragstart="peDragStart(event,'${t.id}')" ondragend="peDragEnd(event)"
            ondragover="peTileOver(event)" ondragleave="peTileLeave(event)" ondrop="peTileDrop(event,'${t.id}')">
         <div class="pe-tile-head">
           <span class="pe-drag" title="Drag to move">⋮⋮</span>
+          <input class="pe-tile-icon" maxlength="4" value="${esc(t.icon || '')}" placeholder="🔆"
+                 title="Icon (emoji) — leave blank for auto" oninput="peSetIcon('${t.id}', this.value)">
           <input class="pe-tile-label" value="${esc(t.label || '')}" placeholder="Tile label"
                  oninput="peSetLabel('${t.id}', this.value)">
           <button class="pe-x" title="Delete tile" onclick="peDeleteTile('${t.id}')">×</button>
@@ -169,6 +171,7 @@
           <label>Page <select onchange="peMoveToPage('${t.id}', this.value)">${pageOpts}</select></label>
           <label>Row <input type="number" min="1" max="${MAX_ROWS}" value="${t.row || 1}" onchange="peSetRow('${t.id}', this.value)"></label>
           <label>Pos <input type="number" min="1" max="${MAX_COLS}" value="${t.pos || 1}" onchange="peSetPos('${t.id}', this.value)"></label>
+          <label class="pe-hide" title="Render this slot as an empty space (holds the position, invisible on the tablet)"><input type="checkbox" ${t.hidden ? 'checked' : ''} onchange="peSetHidden('${t.id}', this.checked)"> Hidden</label>
         </div>
         <div class="pe-binds ${(t.bindings && t.bindings.length) ? '' : 'empty'}" onclick="peEditTile('${t.id}')">${binds}</div>
         <div class="pe-tile-foot"><button class="pe-btn sm" onclick="peEditTile('${t.id}')">Edit bindings</button></div>
@@ -224,6 +227,8 @@
     markDirty(); renderTiles();
   };
   window.peSetLabel = (id, v) => { const t = findTile(id); if (t) { t.label = v; markDirty(); } };
+  window.peSetIcon = (id, v) => { const t = findTile(id); if (t) { t.icon = (v || '').trim(); markDirty(); } };
+  window.peSetHidden = (id, checked) => { const t = findTile(id); if (t) { t.hidden = !!checked; markDirty(); renderTiles(); } };
   window.peDeleteTile = (id) => {
     const p = cfg.pages[activePage]; const t = findTile(id); if (!p || !t) return;
     if (!confirm('Delete this tile?')) return;
