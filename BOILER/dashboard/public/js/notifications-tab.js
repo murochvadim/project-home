@@ -71,7 +71,7 @@
       <div style="display:flex;align-items:center;gap:10px;">
         <label style="font-size:0.78rem;white-space:nowrap;"><input type="checkbox" ${d.enabled ? 'checked' : ''} onchange="notifToggle(${d.id},this.checked)"> on</label>
         <b style="flex:1;">${esc(d.name)}</b>
-        <button onclick="notifTest(${d.id})" title="Fire a test popup now" style="background:#27ae60;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.76rem;cursor:pointer;">▶ Test</button>
+        <button onclick="notifTest(${d.id})" title="Fire a test now — popup + tablet flash (if configured)" style="background:#27ae60;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.76rem;cursor:pointer;">▶ Test</button>
         <button onclick="notifEdit(${d.id})" style="background:#eef2f7;color:#2b4c7e;border:1px solid #cdd8e6;border-radius:4px;padding:3px 10px;font-size:0.76rem;cursor:pointer;">Edit</button>
         <button onclick="notifDelete(${d.id},'${esc(d.name).replace(/'/g, '')}')" style="background:#fff;color:#c0392b;border:1px solid #e0b4b4;border-radius:4px;padding:3px 9px;font-size:0.76rem;cursor:pointer;">✕</button>
       </div>

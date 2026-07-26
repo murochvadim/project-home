@@ -7,7 +7,7 @@
 //
 // The engine rule reads notification_defs with a 30 s TTL cache, so create/edit
 // take effect within ~30 s with no reload. Deletes/toggles the same.
-module.exports = (app, db) => {
+module.exports = (app, db, getMqtt) => {
   const err = (res, e) => { console.error('notifications:', e); res.status(500).json({ error: e.message }); };
 
   // ── Authoring: list / create / update / delete a notification ──
@@ -165,7 +165,21 @@ module.exports = (app, db) => {
         `INSERT INTO notification_events (def_id, title, body, level, surfaces, data)
          VALUES ($1,$2,$3,$4,$5,$6)`,
         [id, def.name, body, def.level, def.surfaces, JSON.stringify(data)]);
-      res.json({ ok: true, body });
+      // Also preview the TABLET alert if this def has one — publish straight to the
+      // panel alert topic (same payload the rule's panel_alert dispatch sends), so
+      // ▶ Test flashes the real tablet without needing the trigger to happen.
+      let tabletFired = false;
+      const tab = (def.surfaces && def.surfaces.tablet) || {};
+      const mq = tab.enabled && typeof getMqtt === 'function' ? getMqtt() : null;
+      if (mq) {
+        mq.publish('mur/home/device/panel/alert', JSON.stringify({
+          icon: tab.icon || 'door', color: tab.color || '#e5352b',
+          blink: tab.blink !== false, sound: tab.sound !== false,
+          duration_sec: parseInt(tab.duration_sec) || 12, message: body,
+        }), { qos: 1 });
+        tabletFired = true;
+      }
+      res.json({ ok: true, body, tablet: tabletFired });
     } catch (e) { err(res, e); }
   });
 };

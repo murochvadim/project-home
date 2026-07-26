@@ -87,7 +87,7 @@ require('./routes-reminders')(app, db);
 // Notifications — Main Agent → Notifications tab. Authoring (notification_defs
 // CRUD) + the popup feed (notification_events). Firing runs on the LXC rule
 // engine (RULES/rules/notifications.py). Own module for the architecture-guard.
-require('./routes-notifications')(app, db);
+require('./routes-notifications')(app, db, () => mqttClient);
 
 // Power Outage Log — read endpoint (/api/power/outages) for the Project Power
 // page card. Own module for the same architecture-guard reason as above.
