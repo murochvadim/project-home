@@ -69,29 +69,40 @@
       return;
     }
     grid.innerHTML = '';
-    // Group tiles by their configured row, then order each row by position.
+
+    function makeTile(t) {
+      const el = document.createElement('div');
+      el.className = 'tile';
+      const sb = stateBinding(t);
+      el.innerHTML =
+        `<div class="tile-icon">${esc(tileIcon(t))}</div>` +
+        `<div class="tile-body"><div class="tile-label">${esc(t.label || '?')}</div>` +
+        (t.sub ? `<div class="tile-sub">${esc(t.sub)}</div>` : '') + `</div>` +
+        (sb ? `<span class="tile-state"></span>` : '');
+      el.addEventListener('click', () => tap(t, el));
+      if (sb && sb.device_id) {
+        if (!stateMap.has(sb.device_id)) stateMap.set(sb.device_id, []);
+        stateMap.get(sb.device_id).push({ el, channel: sb.channel || null });
+      }
+      return el;
+    }
+
+    // Group tiles by their configured row; within a row, `pos` is the ABSOLUTE
+    // slot (1,2,3…) — empty slots render as invisible spacers so a tile at pos 3
+    // really sits 3rd, leaving gaps for 1 and 2.
     const rows = {};
     tiles.forEach((t, i) => { const r = t.row || 1; (rows[r] = rows[r] || []).push({ t, i }); });
     const rowNums = Object.keys(rows).map(Number).sort((a, b) => a - b);
     for (const rn of rowNums) {
       const rowEl = document.createElement('div');
       rowEl.className = 'tile-row';
-      const items = rows[rn].sort((a, b) => (a.t.pos || a.i + 1) - (b.t.pos || b.i + 1));
-      for (const { t } of items) {
-        const el = document.createElement('div');
-        el.className = 'tile';
-        const sb = stateBinding(t);
-        el.innerHTML =
-          `<div class="tile-icon">${esc(tileIcon(t))}</div>` +
-          `<div class="tile-body"><div class="tile-label">${esc(t.label || '?')}</div>` +
-          (t.sub ? `<div class="tile-sub">${esc(t.sub)}</div>` : '') + `</div>` +
-          (sb ? `<span class="tile-state"></span>` : '');
-        el.addEventListener('click', () => tap(t, el));
-        rowEl.appendChild(el);
-        if (sb && sb.device_id) {
-          if (!stateMap.has(sb.device_id)) stateMap.set(sb.device_id, []);
-          stateMap.get(sb.device_id).push({ el, channel: sb.channel || null });
-        }
+      const items = rows[rn];
+      const byPos = {};
+      items.forEach((x, idx) => { const p = x.t.pos || (idx + 1); (byPos[p] = byPos[p] || []).push(x.t); });
+      const maxPos = Math.max(items.length, ...items.map((x, idx) => x.t.pos || (idx + 1)));
+      for (let p = 1; p <= maxPos; p++) {
+        if (!byPos[p]) { const sp = document.createElement('div'); sp.className = 'tile-spacer'; rowEl.appendChild(sp); continue; }
+        for (const t of byPos[p]) rowEl.appendChild(makeTile(t));
       }
       grid.appendChild(rowEl);
     }

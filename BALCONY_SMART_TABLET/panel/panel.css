@@ -31,6 +31,8 @@ body {
 }
 /* Each configured row = a horizontal band of tiles, left-to-right by position. */
 .tile-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: stretch; }
+/* empty slot reserved by an absolute `pos` gap — holds a tile's width, invisible */
+.tile-spacer { width: 215px; flex: 0 0 215px; }
 #empty { text-align: center; color: #7a8496; padding: 60px 20px; font-size: 1.05rem; line-height: 1.6; }
 
 .tile {
