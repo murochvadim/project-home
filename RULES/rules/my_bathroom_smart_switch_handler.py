@@ -41,10 +41,11 @@ from _display_chips import (  # noqa: E402
 
 log = logging.getLogger("rule.my_bathroom_smart_switch_handler")
 
-# Tuya TS0044 device id (Z2M friendly name "My BathRoom Smart Switch").
-# TODO: set to the My BathRoom TS0044 IEEE address when paired (Z2M friendly name `My BathRoom Smart Switch`).
-#       Until paired, the placeholder ensures the rule never matches a real event.
-SMART_SWITCH_ID = "0xMYBATHROOM_TS0044_NOT_PAIRED_YET"
+# Tuya TS0044 4-button remote (Zigbee IEEE id). MOVED here from the Balcony agent
+# on 2026-07-26 — this is the physically-real TS0044 (Z2M friendly name still
+# "Balcony Smart Switch"; the id is the stable IEEE so the rule fires regardless of
+# the display name). The balcony handler was deleted so only this one dispatches.
+SMART_SWITCH_ID = "0x8c65a3fffeb139ae"
 
 RULE = {
     "name":        "My BathRoom Smart Switch Handler",
