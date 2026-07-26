@@ -66,3 +66,16 @@ body {
 .tile.on .tile-state { background: #46d07d; box-shadow: 0 0 8px #46d07d88; }
 .tile.pressed { animation: flash .5s; }
 @keyframes flash { 0% { border-color: #2d6cdf; } 100% { border-color: #2a3142; } }
+
+/* Confirm-before-trigger dialog */
+#confirm { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  z-index: 99998; align-items: center; justify-content: center; }
+.confirm-box { background: #1c2130; border: 1px solid #2f394d; border-radius: 18px;
+  padding: 28px 30px; min-width: min(440px, 90vw); text-align: center; }
+.confirm-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 22px; }
+.confirm-btns { display: flex; gap: 16px; justify-content: center; }
+.confirm-btns button { flex: 1; padding: 18px 24px; font-size: 1.2rem; font-weight: 700;
+  border: none; border-radius: 12px; cursor: pointer; }
+.confirm-no { background: #333b4d; color: #cdd4e0; }
+.confirm-yes { background: #2d6cdf; color: #fff; }
+.confirm-yes:active, .confirm-no:active { transform: scale(.96); }

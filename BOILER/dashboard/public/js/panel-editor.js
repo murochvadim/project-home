@@ -214,6 +214,7 @@
           <label>Row <input type="number" min="1" max="${MAX_ROWS}" value="${t.row || 1}" onchange="peSetRow('${t.id}', this.value)"></label>
           <label>Pos <input type="number" min="1" max="${MAX_COLS}" value="${t.pos || 1}" onchange="peSetPos('${t.id}', this.value)"></label>
           <label class="pe-hide" title="Render this slot as an empty space (holds the position, invisible on the tablet)"><input type="checkbox" ${t.hidden ? 'checked' : ''} onchange="peSetHidden('${t.id}', this.checked)"> Hidden</label>
+          <label class="pe-hide" title="Ask for confirmation on the tablet before this tile triggers"><input type="checkbox" ${t.confirm ? 'checked' : ''} onchange="peSetConfirm('${t.id}', this.checked)"> Confirm</label>
         </div>
         <div class="pe-binds ${(t.bindings && t.bindings.length) ? '' : 'empty'}" onclick="peEditTile('${t.id}')">${binds}</div>
         <div class="pe-tile-foot"><button class="pe-btn sm" onclick="peEditTile('${t.id}')">Edit bindings</button></div>
@@ -271,6 +272,7 @@
   window.peSetLabel = (id, v) => { const t = findTile(id); if (t) { t.label = v; markDirty(); } };
   window.peSetIcon = (id, v) => { const t = findTile(id); if (t) { t.icon = (v || '').trim(); markDirty(); } };
   window.peSetHidden = (id, checked) => { const t = findTile(id); if (t) { t.hidden = !!checked; markDirty(); renderTiles(); } };
+  window.peSetConfirm = (id, checked) => { const t = findTile(id); if (t) { t.confirm = !!checked; markDirty(); } };
 
   // ── icon palette ──────────────────────────────────────────────────
   let _iconTile = null, _iconOverlay = null;

@@ -152,10 +152,35 @@
   }
 
   function tap(tile, el) {
+    if (tile.confirm) { askConfirm(tile, el); return; }
+    doTap(tile, el);
+  }
+  function doTap(tile, el) {
     el.classList.remove('pressed'); void el.offsetWidth; el.classList.add('pressed');
     if (mq && mqUp) {
       mq.publish(EVENT_TOPIC, JSON.stringify({ dps: { tile: tile.id, event: 'short' } }), { qos: 0 });
     }
+  }
+  let confirmEl = null;
+  function ensureConfirm() {
+    if (confirmEl) return;
+    confirmEl = document.createElement('div');
+    confirmEl.id = 'confirm';
+    confirmEl.innerHTML =
+      '<div class="confirm-box"><div class="confirm-title" id="confirm-title"></div>' +
+      '<div class="confirm-btns"><button class="confirm-no" id="confirm-no">Cancel</button>' +
+      '<button class="confirm-yes" id="confirm-yes">Confirm</button></div></div>';
+    confirmEl.addEventListener('click', (e) => { if (e.target === confirmEl) confirmEl.style.display = 'none'; });
+    document.body.appendChild(confirmEl);
+  }
+  function askConfirm(tile, el) {
+    ensureConfirm();
+    $('confirm-title').textContent = (tile.label ? '“' + tile.label + '”' : 'This') + ' — run it?';
+    const yes = $('confirm-yes'), no = $('confirm-no');
+    const close = () => { yes.onclick = null; no.onclick = null; confirmEl.style.display = 'none'; };
+    yes.onclick = () => { close(); doTap(tile, el); };
+    no.onclick = close;
+    confirmEl.style.display = 'flex';
   }
 
   function applyState(deviceId, dps) {
