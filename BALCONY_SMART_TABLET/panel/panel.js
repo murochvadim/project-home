@@ -89,9 +89,12 @@
 
     // Group tiles by their configured row; within a row, `pos` is the ABSOLUTE
     // slot (1,2,3…) — empty slots render as invisible spacers so a tile at pos 3
-    // really sits 3rd, leaving gaps for 1 and 2.
+    // really sits 3rd. Every row is padded to the page's max column count so all
+    // rows are the same width (positions line up) and the grid centers as a block.
     const rows = {};
     tiles.forEach((t, i) => { const r = t.row || 1; (rows[r] = rows[r] || []).push({ t, i }); });
+    const maxCols = Math.max(1, ...tiles.map(t => t.pos || 1));
+    grid.style.setProperty('--cols', maxCols);
     const rowNums = Object.keys(rows).map(Number).sort((a, b) => a - b);
     for (const rn of rowNums) {
       const rowEl = document.createElement('div');
@@ -99,8 +102,7 @@
       const items = rows[rn];
       const byPos = {};
       items.forEach((x, idx) => { const p = x.t.pos || (idx + 1); (byPos[p] = byPos[p] || []).push(x.t); });
-      const maxPos = Math.max(items.length, ...items.map((x, idx) => x.t.pos || (idx + 1)));
-      for (let p = 1; p <= maxPos; p++) {
+      for (let p = 1; p <= maxCols; p++) {
         if (!byPos[p]) { const sp = document.createElement('div'); sp.className = 'tile-spacer'; rowEl.appendChild(sp); continue; }
         for (const t of byPos[p]) rowEl.appendChild(makeTile(t));
       }
