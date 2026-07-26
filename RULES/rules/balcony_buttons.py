@@ -85,6 +85,22 @@ def _get_bindings(state):
 
 def _resolve_toggle(state, device_id, channel):
     """Read current device state and return 'turn_on' or 'turn_off' to flip it."""
+    # HASP on-board relay: the on/off lives on the PLATE device's
+    # last_state->output<n> (the button is stateless). Read the output mapping + the
+    # state from the DB so it never depends on in-memory dps_config being loaded.
+    # Mirrors my_bathroom_smart_switch_handler._hasp_relay_state.
+    if str(device_id).startswith("hasp:"):
+        _plate = "hasp:" + str(device_id)[5:].split(":", 1)[0]
+        try:
+            _rows = state.db_query(
+                "SELECT b.dps_config->'relay'->>'output', "
+                "p.last_state ->> (b.dps_config->'relay'->>'output') "
+                "FROM devices b LEFT JOIN devices p ON p.id = %s WHERE b.id = %s",
+                (_plate, device_id))
+        except Exception:
+            _rows = None
+        if _rows and _rows[0] and _rows[0][0] is not None:
+            return "turn_off" if _rows[0][1] in (True, 1, "on", "ON", "true", "True") else "turn_on"
     dev_state = state.devices.get(device_id, {}) or {}
     cur_dps = dev_state.get("dps", {}) or {}
     if channel:

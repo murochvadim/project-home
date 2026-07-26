@@ -98,13 +98,45 @@ def _get_bindings(state):
     return data
 
 
-def _resolve_target(action_str, dev_state, channel):
+def _hasp_relay_state(state, device_id):
+    """If the target is a HASP on-board relay, return (onoff, True) where onoff is
+    the live 'true'/'false'/None read from the PLATE device's `last_state->output<n>`.
+    The button device itself has no persistent state; the plate rewrites `last_state`
+    on every relay change (rule_engine._update_hasp_panel_state), so the DB is the
+    authoritative, always-fresh source (in-memory is stale for output keys). The
+    relay's `output` mapping is ALSO read from the DB, so this never depends on the
+    in-memory `dps_config` being loaded. Returns (None, False) when not a HASP relay
+    — caller falls back to the normal in-memory dps read."""
+    if not str(device_id).startswith("hasp:"):
+        return None, False
+    plate = "hasp:" + str(device_id)[5:].split(":", 1)[0]
+    try:
+        rows = state.db_query(
+            "SELECT b.dps_config->'relay'->>'output', "
+            "       p.last_state ->> (b.dps_config->'relay'->>'output') "
+            "FROM devices b LEFT JOIN devices p ON p.id = %s WHERE b.id = %s",
+            (plate, device_id))
+    except Exception as e:
+        log.warning("toggle: hasp relay state read failed for %s: %s", device_id, e)
+        return None, False
+    if not rows or not rows[0] or rows[0][0] is None:
+        return None, False   # not a relay-mapped HASP device
+    return rows[0][1], True
+
+
+def _resolve_target(action_str, device_id, state, channel):
     """Resolve 'toggle' against current device state. Returns 'turn_on'/'turn_off'/None."""
     if action_str in ("turn_on", "turn_off"):
         return action_str
     if action_str != "toggle":
         return None
-    cur_dps = (dev_state or {}).get("dps", {}) or {}
+    # HASP on-board relay (e.g. mybathroom-panel p1b20 = the main light): read the
+    # real on/off from the plate, not this stateless button, so toggle alternates.
+    relay_val, is_relay = _hasp_relay_state(state, device_id)
+    if is_relay:
+        return "turn_off" if relay_val in (True, 1, "on", "ON", "true", "True") else "turn_on"
+    dev_state = state.devices.get(device_id, {}) or {}
+    cur_dps = dev_state.get("dps", {}) or {}
     if channel:
         cur_val = cur_dps.get(channel)
     elif "1" in cur_dps:
@@ -137,7 +169,7 @@ def _build_commands(slot, state, slot_key):
         if special_cmd:
             commands.append(special_cmd)
             continue
-        target  = _resolve_target(action, state.devices.get(device_id, {}), channel)
+        target  = _resolve_target(action, device_id, state, channel)
         if not target:
             log.warning("Unknown action '%s' in binding for %s — skipping", action, slot_key)
             continue
