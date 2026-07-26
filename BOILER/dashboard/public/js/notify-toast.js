@@ -107,15 +107,26 @@
   async function savePeople(inp) {
     const raw = (inp.value || '').trim();
     const body = raw === '' ? { value: null } : { value: parseInt(raw, 10) };
-    const evId = _currentEv && _currentEv.id;
+    const ev = _currentEv;
+    const evId = ev && ev.id;
+    const defId = ev && ev.def_id;
     try {
       await fetch('/api/main-agent/manual-people', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
-      // Resolve the sticky prompt server-side so it stops resurfacing everywhere.
+      // Resolve the sticky prompt server-side. The endpoint clears the WHOLE def
+      // family (every unresolved door prompt), so one Save can never leave siblings.
       if (evId) await fetch('/api/notifications/' + evId + '/resolve', { method: 'POST' });
       if (typeof window.loadState === 'function') window.loadState();
     } catch (e) { /* ignore */ }
+    // Locally purge any other queued/seen prompt for this def so a superseded
+    // sibling already sitting in the queue can't pop after we've saved.
+    if (defId != null) {
+      for (let i = _queue.length - 1; i >= 0; i--) {
+        const q = _queue[i];
+        if (q.data && q.data.action && q.def_id === defId) { _seenIds.delete(q.id); _queue.splice(i, 1); }
+      }
+    }
     dismiss();
   }
 
@@ -194,6 +205,17 @@
       if (_laterIds.has(ev.id) || _seenIds.has(ev.id)) continue;
       _seenIds.add(ev.id);
       _queue.push(ev);
+    }
+    // Reconcile: drop any QUEUED interactive prompt that's no longer pending
+    // server-side (it was superseded by a newer close, or resolved). Without this a
+    // flapping burst leaves stale prompts in the queue that keep popping one-by-one.
+    const _pendingIds = new Set((data.pending || []).map(e => e.id));
+    for (let i = _queue.length - 1; i >= 0; i--) {
+      const q = _queue[i];
+      if (q.data && q.data.action && !_pendingIds.has(q.id)) {
+        _seenIds.delete(q.id);
+        _queue.splice(i, 1);
+      }
     }
 
     // First load on this browser (or after a refresh): still show anything fired
