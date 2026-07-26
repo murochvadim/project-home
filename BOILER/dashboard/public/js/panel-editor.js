@@ -142,17 +142,28 @@
     renderTiles();
   }
 
+  function sortTiles(page) {
+    (page.tiles || []).sort((a, b) => (a.row || 1) - (b.row || 1) || (a.pos || 0) - (b.pos || 0));
+  }
   function renderTiles() {
     const grid = $('pe-grid'); if (!grid) return;
-    const page = cfg.pages[activePage];
-    const tiles = (page && page.tiles) || [];
+    const page = cfg.pages[activePage]; if (!page) return;
+    sortTiles(page);
+    const tiles = page.tiles || [];
     if (!tiles.length) { grid.innerHTML = '<div class="pe-empty">No tiles on this page. Click “+ Add tile”.</div>'; return; }
+    const pageOpts = cfg.pages.map((p, pi) =>
+      `<option value="${pi}" ${pi === activePage ? 'selected' : ''}>${esc(p.name || 'Page ' + (pi + 1))}</option>`).join('');
     grid.innerHTML = tiles.map((t, i) => `
       <div class="pe-tile" data-ti="${i}">
         <div class="pe-tile-head">
           <input class="pe-tile-label" value="${esc(t.label || '')}" placeholder="Tile label"
                  oninput="peSetLabel(${i}, this.value)">
           <button class="pe-x" title="Delete tile" onclick="peDeleteTile(${i})">×</button>
+        </div>
+        <div class="pe-pos">
+          <label>Page <select onchange="peMoveToPage(${i}, this.value)">${pageOpts}</select></label>
+          <label>Row <input type="number" min="1" value="${t.row || 1}" onchange="peSetRow(${i}, this.value)"></label>
+          <label>Pos <input type="number" min="1" value="${t.pos || i + 1}" onchange="peSetPos(${i}, this.value)"></label>
         </div>
         <div class="pe-binds ${(t.bindings && t.bindings.length) ? '' : 'empty'}" onclick="peEditTile(${i})">
           ${(t.bindings && t.bindings.length)
@@ -161,9 +172,6 @@
         </div>
         <div class="pe-tile-foot">
           <button class="pe-btn sm" onclick="peEditTile(${i})">Edit bindings</button>
-          <span style="flex:1"></span>
-          <button class="pe-btn sm" onclick="peMoveTile(${i},-1)" ${i === 0 ? 'disabled' : ''}>◀</button>
-          <button class="pe-btn sm" onclick="peMoveTile(${i},1)" ${i === tiles.length - 1 ? 'disabled' : ''}>▶</button>
         </div>
       </div>`).join('');
   }
@@ -179,10 +187,24 @@
   };
 
   // ── tile ops ──────────────────────────────────────────────────────
-  window.peAddTile = () => { const p = cfg.pages[activePage]; if (!p) return; (p.tiles = p.tiles || []).push({ id: uid('t'), label: 'New tile', bindings: [] }); markDirty(); renderTiles(); };
+  window.peAddTile = () => {
+    const p = cfg.pages[activePage]; if (!p) return; p.tiles = p.tiles || [];
+    const row = 1;
+    const pos = p.tiles.filter(t => (t.row || 1) === row).length + 1;   // next slot in row 1
+    p.tiles.push({ id: uid('t'), label: 'New tile', bindings: [], row, pos });
+    markDirty(); renderTiles();
+  };
   window.peSetLabel = (i, v) => { const p = cfg.pages[activePage]; if (p && p.tiles[i]) { p.tiles[i].label = v; markDirty(); } };
   window.peDeleteTile = (i) => { const p = cfg.pages[activePage]; if (!p) return; if (!confirm('Delete this tile?')) return; p.tiles.splice(i, 1); markDirty(); renderTiles(); };
-  window.peMoveTile = (i, d) => { const p = cfg.pages[activePage]; if (!p) return; const j = i + d; if (j < 0 || j >= p.tiles.length) return; const t = p.tiles.splice(i, 1)[0]; p.tiles.splice(j, 0, t); markDirty(); renderTiles(); };
+  window.peSetRow = (i, v) => { const p = cfg.pages[activePage]; if (p && p.tiles[i]) { p.tiles[i].row = Math.max(1, parseInt(v, 10) || 1); markDirty(); renderTiles(); } };
+  window.peSetPos = (i, v) => { const p = cfg.pages[activePage]; if (p && p.tiles[i]) { p.tiles[i].pos = Math.max(1, parseInt(v, 10) || 1); markDirty(); renderTiles(); } };
+  window.peMoveToPage = (i, v) => {
+    const src = cfg.pages[activePage]; const ti = parseInt(v, 10);
+    if (!src || ti === activePage || !cfg.pages[ti] || !src.tiles[i]) { renderTiles(); return; }
+    const t = src.tiles.splice(i, 1)[0];
+    (cfg.pages[ti].tiles = cfg.pages[ti].tiles || []).push(t);
+    markDirty(); renderTiles();
+  };
 
   // ── binding picker ────────────────────────────────────────────────
   function ensureOverlay() {
