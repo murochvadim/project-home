@@ -116,21 +116,28 @@ TELEPORT_INNER_M = 1500     # band = [INNER, reach - INNER]
 # phantom >=282) — a >2x margin on each side.
 PHANTOM_FIX_SPACING_M = 150
 
-# ── Places-layer far-teleport rule (2026-07-26) ──────────────────────────────
+# ── Places-layer far-teleport rule (2026-07-26; absolute-path + re-stitch 2026-07-26b) ──
 # The rules above act on phone_trips (Home-trips) ONLY; the Places layer
 # (phone_place_trips / phone_places) had NO phantom cleaner. A GPS cache-replay
-# can park the phone at a far ghost long enough for geo_places.py to build a
-# bogus anchor + legs — e.g. a 115 km 'الجيزة, الأردن' stay reached on a 12 m
-# path. Signal (stored columns only, no ping re-fetch): a home_to_place /
-# place_to_home leg with max_dist_m > TELEPORT_FAR_M AND path_length_m <
-# PLACE_TELEPORT_PATH_RATIO * max_dist_m — you cannot reach a point 20+ km away
-# having travelled a fraction of that distance. A REAL far leg has path >= its
-# straight-line distance, so this can only ever fire on a teleport. The phantom
-# anchor is that leg's place endpoint; delete it + EVERY leg referencing it (in
-# AND out). The real downstream anchor (a closer, non-teleport place) survives —
-# it is never itself a home-teleport target. Overridable via
-# place_teleport_path_ratio.
-PLACE_TELEPORT_PATH_RATIO = 0.5
+# can park the phone at a far ghost long enough for geo_places.py to build a bogus
+# anchor + legs — e.g. a 115 km 'الجيزة, الأردن' stay reached on a 12 m path.
+#
+# TELEPORT signal = ABSOLUTE tiny path (NOT a path/dist ratio): a home_to_place /
+# place_to_home leg with `max_dist_m > TELEPORT_FAR_M` AND `path_length_m <
+# PLACE_TELEPORT_MAX_PATH_M` — you cannot be 20+ km away having *moved only a few
+# metres*. ⚠ The first version used `path < 0.5*max_dist`, which WRONGLY flagged a
+# REAL 20 km drive into a real place (leg #160: origin was a mislabeled ghost, so
+# its stored max_dist looked huge, but its pings were a genuine drive) and deleted
+# it. An absolute path floor can NEVER flag a real drive — 20 km of path is real
+# travel regardless of the (mislabeled) origin distance.
+#
+# The phantom anchor = a teleport leg's place endpoint. We delete the anchor + the
+# teleport legs, but a REAL leg that merely referenced the phantom (its own pings
+# are a genuine drive) is RE-STITCHED to Home: its ghost endpoint is swapped for
+# Home and its max_dist/path recomputed from Home — so a mislabeled 'ghost ->
+# Ashdod' becomes the real 'Home -> Ashdod'. Overridable via
+# place_teleport_max_path_m.
+PLACE_TELEPORT_MAX_PATH_M = 1000
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('geo_trip_janitor')
@@ -158,7 +165,7 @@ def read_cfg(conn):
     tele_far = float(val.get('teleport_far_m') or TELEPORT_FAR_M)
     tele_inner = float(val.get('teleport_inner_m') or TELEPORT_INNER_M)
     fix_spacing_m = float(val.get('phantom_fix_spacing_m') or PHANTOM_FIX_SPACING_M)
-    place_ratio = float(val.get('place_teleport_path_ratio') or PLACE_TELEPORT_PATH_RATIO)
+    place_max_path = float(val.get('place_teleport_max_path_m') or PLACE_TELEPORT_MAX_PATH_M)
     center = val.get('center') or {}
     clat = float(center['lat']) if center.get('lat') is not None else None
     clon = float(center['lon']) if center.get('lon') is not None else None
@@ -167,7 +174,7 @@ def read_cfg(conn):
         g, dev = d.get('group_id'), d.get('device_id')
         if g and dev:
             gmap.setdefault(g, []).append(dev)
-    return far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m, place_ratio
+    return far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m, place_max_path
 
 
 def trip_good_dists(conn, device_ids, start, end, clat, clon, acc_gate):
@@ -223,63 +230,118 @@ def classify_trip(t, good_dists, cmax, far_m, tele_far, tele_inner, fix_spacing_
     return None
 
 
-def clean_place_phantoms(conn, tele_far, place_ratio, dry_run):
+def _recompute_leg_from_home(conn, dev_ids, started_at, returned_at, clat, clon):
+    """(max_home_dist_m, path_m) for a leg's span, measured from HOME over the
+    device's real pings — used after re-origining a leg to Home so its stored
+    max_dist (which had been measured from a now-deleted ghost) is corrected.
+    Returns (None, None) when there's no home center or no pings (keep stored)."""
+    if clat is None or clon is None or not dev_ids:
+        return None, None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT lat, lon FROM device_locations "
+            "WHERE device_id = ANY(%s) AND ts BETWEEN %s AND %s ORDER BY ts",
+            (dev_ids, started_at, returned_at))
+        rows = cur.fetchall()
+    if not rows:
+        return None, None
+    max_d = 0.0
+    path = 0.0
+    prev = None
+    for lat, lon in rows:
+        la, lo = float(lat), float(lon)
+        d = haversine_m(clat, clon, la, lo)
+        if d > max_d:
+            max_d = d
+        if prev is not None:
+            path += haversine_m(prev[0], prev[1], la, lo)
+        prev = (la, lo)
+    return int(max_d), int(path)
+
+
+def clean_place_phantoms(conn, tele_far, max_tele_path_m, gmap, clat, clon, dry_run):
     """Far-teleport cleanup for the PLACES layer (phone_place_trips / phone_places),
-    which the phone_trips rules never touch. See PLACE_TELEPORT_PATH_RATIO. Uses
-    stored columns only. The phantom anchor = a teleport leg's place endpoint
-    (home_to_place -> to_place_id, place_to_home -> from_place_id); we delete it +
-    EVERY leg referencing it (in and out). The closer real anchor is never a
-    home-teleport target, so it is not in the phantom set and survives."""
+    which the phone_trips rules never touch. See PLACE_TELEPORT_MAX_PATH_M. A TRUE
+    teleport = a home_to_place/place_to_home leg that reached far (max_dist_m >
+    tele_far) on an ABSOLUTELY tiny path (path_length_m < max_tele_path_m) — you
+    can't be 20+ km away having moved a few metres. The phantom anchor = that leg's
+    place endpoint. We delete the anchor + the teleport legs, but a REAL leg that
+    only *referenced* the phantom (its own pings are a genuine drive) is RE-STITCHED
+    to Home (ghost endpoint -> Home, max_dist/path recomputed from Home) so the real
+    trip survives — a mislabeled 'ghost -> Ashdod' becomes the real 'Home ->
+    Ashdod'. FK is ON DELETE SET NULL, so re-stitch/delete legs before the anchor."""
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            """SELECT id, kind, origin_name, dest_name, from_place_id, to_place_id,
-                      max_dist_m, path_length_m
+            """SELECT id, kind, from_place_id, to_place_id
                FROM phone_place_trips
                WHERE kind IN ('home_to_place', 'place_to_home')
                  AND returned_at > NOW() - make_interval(hours => %s)
-                 AND max_dist_m > %s
-                 AND path_length_m < %s * max_dist_m
-               ORDER BY started_at DESC""",
-            (RECENT_TRIPS_HOURS, tele_far, place_ratio),
+                 AND max_dist_m > %s AND path_length_m < %s""",
+            (RECENT_TRIPS_HOURS, tele_far, max_tele_path_m),
         )
-        legs = cur.fetchall()
+        tele_legs = cur.fetchall()
 
     phantom_ids = set()
-    for lg in legs:
+    for lg in tele_legs:
         aid = lg['to_place_id'] if lg['kind'] == 'home_to_place' else lg['from_place_id']
-        log.info('places: teleport leg #%s %s "%s"->"%s" (max=%sm path=%sm) => phantom anchor %s',
-                 lg['id'], lg['kind'], lg['origin_name'], lg['dest_name'],
-                 lg['max_dist_m'], lg['path_length_m'], aid)
         if aid is not None:
             phantom_ids.add(aid)
-
     if not phantom_ids:
         log.info('places: no far-teleport phantoms')
         return
-
     ids = list(phantom_ids)
+
+    # Every leg touching a phantom anchor: itself-a-teleport (delete) vs real (re-stitch).
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT id, group_id, kind, origin_name, dest_name, from_place_id, to_place_id,
+                      started_at, returned_at, max_dist_m, path_length_m
+               FROM phone_place_trips
+               WHERE from_place_id = ANY(%s) OR to_place_id = ANY(%s)
+               ORDER BY started_at""",
+            (ids, ids),
+        )
+        legs = cur.fetchall()
+        cur.execute("SELECT id, name FROM phone_places WHERE id = ANY(%s)", (ids,))
+        anchors = cur.fetchall()
+
+    delete_legs, restitch = [], []
+    for lg in legs:
+        is_tele = (lg['path_length_m'] is not None and lg['path_length_m'] < max_tele_path_m
+                   and (lg['max_dist_m'] or 0) > tele_far)
+        (delete_legs if is_tele else restitch).append(lg)
+
     if dry_run:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id, name FROM phone_places WHERE id = ANY(%s)", (ids,))
-            anchors = cur.fetchall()
-            cur.execute("SELECT id, kind, origin_name, dest_name FROM phone_place_trips "
-                        "WHERE from_place_id = ANY(%s) OR to_place_id = ANY(%s) "
-                        "ORDER BY started_at", (ids, ids))
-            leg_rows = cur.fetchall()
-        log.info('[DRY RUN] places: would delete %d anchor(s): %s + %d leg(s): %s',
-                 len(anchors), ', '.join(f'#{a["id"]}("{a["name"]}")' for a in anchors),
-                 len(leg_rows), ', '.join(f'#{l["id"]}({l["kind"]})' for l in leg_rows))
+        log.info('[DRY RUN] places: phantom anchor(s) %s | delete teleport leg(s) %s | re-stitch real leg(s)->Home %s',
+                 ', '.join(f'#{a["id"]}("{a["name"]}")' for a in anchors) or 'none',
+                 ', '.join(f'#{l["id"]}' for l in delete_legs) or 'none',
+                 ', '.join(f'#{l["id"]}("{l["origin_name"]}"->"{l["dest_name"]}")' for l in restitch) or 'none')
         return
 
     with conn.cursor() as cur:
-        # Legs first (they FK the anchor), then the anchor itself.
-        cur.execute("DELETE FROM phone_place_trips "
-                    "WHERE from_place_id = ANY(%s) OR to_place_id = ANY(%s)", (ids, ids))
-        legs_removed = cur.rowcount
+        for lg in restitch:
+            new_max, new_path = _recompute_leg_from_home(
+                conn, gmap.get(lg['group_id'], []), lg['started_at'], lg['returned_at'], clat, clon)
+            set_max = new_max if new_max is not None else lg['max_dist_m']
+            set_path = new_path if new_path is not None else lg['path_length_m']
+            if lg['from_place_id'] in phantom_ids:       # ghost was the ORIGIN
+                new_kind = 'place_to_home' if lg['to_place_id'] is None else 'home_to_place'
+                cur.execute(
+                    "UPDATE phone_place_trips SET from_place_id = NULL, origin_name = 'Home', "
+                    "kind = %s, max_dist_m = %s, path_length_m = %s WHERE id = %s",
+                    (new_kind, set_max, set_path, lg['id']))
+            else:                                         # ghost was the DEST
+                cur.execute(
+                    "UPDATE phone_place_trips SET to_place_id = NULL, dest_name = 'Home', "
+                    "kind = 'place_to_home', max_dist_m = %s, path_length_m = %s WHERE id = %s",
+                    (set_max, set_path, lg['id']))
+            log.info('places: re-stitched real leg #%s "%s"->"%s" to Home (max %sm -> %sm, path %sm)',
+                     lg['id'], lg['origin_name'], lg['dest_name'], lg['max_dist_m'], set_max, set_path)
+        if delete_legs:
+            cur.execute("DELETE FROM phone_place_trips WHERE id = ANY(%s)", ([l['id'] for l in delete_legs],))
         cur.execute("DELETE FROM phone_places WHERE id = ANY(%s)", (ids,))
-        anchors_removed = cur.rowcount
-    log.info('places: deleted %d far-teleport phantom anchor(s) %s + %d referencing leg(s)',
-             anchors_removed, ids, legs_removed)
+    log.info('places: cleaned %d phantom anchor(s) %s — deleted %d teleport leg(s), re-stitched %d real leg(s) to Home',
+             len(ids), ids, len(delete_legs), len(restitch))
 
 
 def main():
@@ -291,13 +353,13 @@ def main():
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
 
-    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m, place_ratio = read_cfg(conn)
+    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m, place_max_path = read_cfg(conn)
     log.info('close-phantom: clean_max(acc<=%.0fm) <= %.0fm (dur < %ds) | '
              'teleport: reach > %.0fm with empty band [%.0fm .. reach-%.0fm] | '
              'sparse-track: reach > %.0fm AND > %.0fm/fix (any dur) | '
-             'places-teleport: leg reach > %.0fm AND path < %.2f*reach  %s',
+             'places-teleport: leg reach > %.0fm AND path < %.0fm (re-stitch real legs)  %s',
              acc_gate, far_m, MAX_TRIP_SEC, tele_far, tele_inner, tele_inner,
-             far_m, fix_spacing_m, tele_far, place_ratio,
+             far_m, fix_spacing_m, tele_far, place_max_path,
              '[DRY RUN]' if args.dry_run else '[LIVE]')
 
     # All confirmed closed trips in the look-back — ANY duration. The close-
@@ -370,7 +432,7 @@ def main():
                          t['id'], t['max_dist_m'], ev_removed)
 
     # ── Places-layer far-teleport phantoms (phone_place_trips / phone_places) ──
-    clean_place_phantoms(conn, tele_far, place_ratio, args.dry_run)
+    clean_place_phantoms(conn, tele_far, place_max_path, gmap, clat, clon, args.dry_run)
 
 
 if __name__ == '__main__':
