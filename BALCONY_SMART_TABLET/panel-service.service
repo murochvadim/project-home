@@ -1,0 +1,15 @@
+[Unit]
+Description=Panel Service — Balcony Smart Tablet PWA (laptop-independent), port 8771
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/media-agent
+EnvironmentFile=/etc/environment
+ExecStartPre=/opt/media-agent/kill-orphan.sh panel_service.py
+ExecStart=/opt/media-agent/venv/bin/python3 /opt/media-agent/panel_service.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,26 @@
 # Balcony Smart Tablet — Galaxy Tab A7 wall panel (PWA over MQTT)
 
-> **STATUS: PLANNED — not started (plan captured 2026-07-25 for tomorrow).**
-> Nothing built yet. This is the design/index doc; no code, service, or DB rows exist.
+> **STATUS: BUILDING — milestone 1 DONE (2026-07-26).** The command path is live and
+> proven end-to-end. Remaining: the touch PWA + the dashboard "Panel" editor tab (m2).
+
+## Built — milestone 1 (2026-07-26): the command path
+The plumbing that turns a tablet tile-tap into a real device action, **laptop-independent**,
+is live and verified. **Scope decision (user):** the panel is a **fully-configurable**
+surface — every capability the OpenHASP balcony panel has (any device on/off/toggle+channel,
+scenes, Home/Away/Abroad mode = an 8-Gang channel, curtains, Alexa, Pixoo, media) — and the
+user binds each tile from a dashboard editor. So there is **no fixed "v1 control set."**
+- **Broker ACL (LXC 107):** `dashboard_browser` gained **one** grant — `topic write mur/home/device/panel/event` (it already had the `…/+/state` + `…/+/event` reads). That's the tablet's ONLY write. Reload: `systemctl reload mosquitto`. Backup at `/etc/mosquitto/acl.bak.*`.
+- **Rule `RULES/rules/panel_commands.py` (LXC 105, group `panel`, `triggers=['panel']`, priority 10):** fires on a `device_id='panel'` event, reads the tile id from `dps.tile`, resolves the tile's **bindings** from `dashboard_settings.panel` **server-side** (30 s TTL cache), and returns engine commands. `_build_command` is a **superset of `balcony_buttons.py`** — device (toggle/on/off/channel, `_resolve_toggle`, Alexa/Vacuum via `_display_chips`), `scene` (`run_scene`), `curtain` (`protocol:'curtain'`), `hasp_command`, `media`, `pixoo_preset`. Browser sends only a tile id → a rogue tablet can't inject arbitrary commands; all logic stays on the LXC. 1 s per-tile cooldown de-dupes double-publishes. Deploy = `scp … root@192.168.1.187:/opt/main-agent/project/RULES/rules/panel_commands.py` + reload (publish `{}` to `mur/home/rule-engine/reload`, or the dashboard Reload button) — **never** restart rule-engine.
+- **Service `panel_service.py` + `panel-service.service` (LXC 100:8771):** mirrors `bobo_game_service.py` exactly (same venv `/opt/media-agent/venv`, `EnvironmentFile=/etc/environment` → `DB_PASS`+`MQTT_BROWSER_PASS`, orphan-guard, `Cache-Control:no-cache`). Read-only: `GET /` (PWA) · `GET /<path>` (static) · `GET /health` · `GET /api/panel/config` (`{value:<dashboard_settings.panel>}`) · `GET /api/panel/pass` (`{value:MQTT_BROWSER_PASS}`). **No command endpoint on purpose** — the browser's single MQTT publish is the only write. Deploy: `scp panel_service.py root@192.168.1.138:/opt/media-agent/` + `scp panel/index.html root@192.168.1.138:/opt/media-agent/panel/` + `scp panel-service.service root@192.168.1.138:/etc/systemd/system/` + `systemctl daemon-reload && systemctl enable --now panel-service`.
+- **Config `dashboard_settings.panel`:** `{"pages":[{"id,name,tiles:[{id,label,bindings:[…]}]}]}` — currently `{"pages":[]}` (empty until the m2 editor). No new table, no migration.
+- **Verified end-to-end (2026-07-26):** published `{"dps":{"tile":"t_test"}}` to `mur/home/device/panel/event` **as `dashboard_browser`** (the tablet's real cred/topic) → engine log `panel: tile 't_test' → 1 command(s)` → `Rule 'Panel Commands' -> turn_on …`. The test tile was bound to a **nonexistent device** so **zero hardware** was touched. Config/pass/static all serve over the LAN (`curl http://192.168.1.138:8771/…`). `index.html` is a **placeholder smoke-test page** — the real touch UI is milestone 2.
+
+## Remaining
+- **m2:** the touch PWA (`panel/{index,panel.js,panel.css}` + manifest + vendored `mqtt.min.js`) — tile grid, live on/off from `…/state`, publishes tile-id on tap; **and** a dashboard **"Panel" editor tab** reusing `device-picker.js` so the user authors pages/tiles and binds each to any device/scene/mode/curtain (writes `dashboard_settings.panel`).
+- **m3:** mount + Fully Kiosk on the Tab A7 → `http://192.168.1.138:8771/`.
+
+---
+_Original plan below (still the reference for m2/m3)._
 
 ## Goal
 A **Samsung Galaxy Tab A7** mounted on the wall as an always-on, full-screen
