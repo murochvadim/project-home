@@ -270,7 +270,6 @@
     markDirty(); renderTiles();
   };
   window.peSetLabel = (id, v) => { const t = findTile(id); if (t) { t.label = v; markDirty(); } };
-  window.peSetIcon = (id, v) => { const t = findTile(id); if (t) { t.icon = (v || '').trim(); markDirty(); } };
   window.peSetHidden = (id, checked) => { const t = findTile(id); if (t) { t.hidden = !!checked; markDirty(); renderTiles(); } };
   window.peSetConfirm = (id, checked) => { const t = findTile(id); if (t) { t.confirm = !!checked; markDirty(); } };
 
