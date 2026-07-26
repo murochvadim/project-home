@@ -449,9 +449,19 @@
     .pe-btn.primary { background:#2d6cdf; border-color:#2d6cdf; color:#fff; font-weight:600; }
     .pe-btn.sm { padding:3px 9px; font-size:0.76rem; }
     .pe-btn[disabled] { opacity:0.4; cursor:default; }
-    .pe-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px; }
-    .pe-empty { color:#999; padding:22px; text-align:center; grid-column:1/-1; }
-    .pe-tile { border:1px solid #e0e4ea; border-radius:10px; background:#fbfcfd; padding:10px; }
+    .pe-grid { display:block; }
+    .pe-empty { color:#999; padding:22px; text-align:center; }
+    .pe-rowband { border:1px solid #e5e8ee; border-radius:8px; padding:8px 8px 10px; margin-bottom:10px; background:#fafbfc; }
+    .pe-rowband-head { font-size:0.72rem; font-weight:700; color:#8a93a0; text-transform:uppercase; margin:2px 4px 8px; }
+    .pe-rowband-tiles { display:flex; gap:12px; flex-wrap:wrap; min-height:44px; align-items:flex-start; border-radius:6px; }
+    .pe-rowband-tiles.pe-band-over { outline:2px dashed #2d6cdf; outline-offset:2px; }
+    .pe-newrow { border:2px dashed #cdd3da; border-radius:8px; padding:14px; text-align:center; color:#9aa3b0; font-size:0.8rem; }
+    .pe-newrow.pe-band-over { border-color:#2d6cdf; color:#2d6cdf; background:#f2f6fe; }
+    .pe-tile { width:240px; border:1px solid #e0e4ea; border-radius:10px; background:#fbfcfd; padding:10px; }
+    .pe-tile.dragging { opacity:0.4; }
+    .pe-tile.pe-drop-before { box-shadow:-3px 0 0 #2d6cdf; }
+    .pe-drag { cursor:grab; color:#b0b7c2; font-weight:700; padding:0 2px; user-select:none; }
+    .pe-drag:active { cursor:grabbing; }
     .pe-tile-head { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
     .pe-tile-label { flex:1; min-width:0; padding:5px 8px; border:1px solid #cdd3da; border-radius:6px; font-size:0.9rem; font-weight:600; }
     .pe-x { border:none; background:#f0d7d7; color:#b13d3d; border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:1rem; }
@@ -488,6 +498,6 @@
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/balcony.js?v=20260724b"></script>
-<script src="js/panel-editor.js?v=2"></script>
+<script src="js/panel-editor.js?v=4"></script>
 </body>
 </html>

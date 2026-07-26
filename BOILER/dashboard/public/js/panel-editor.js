@@ -145,6 +145,34 @@
   function sortTiles(page) {
     (page.tiles || []).sort((a, b) => (a.row || 1) - (b.row || 1) || (a.pos || 0) - (b.pos || 0));
   }
+  function findTile(id) { const p = cfg.pages[activePage]; return p ? (p.tiles || []).find(t => t.id === id) : null; }
+  function renumberRow(page, row) {
+    (page.tiles || []).filter(t => (t.row || 1) === row).sort((a, b) => (a.pos || 0) - (b.pos || 0))
+      .forEach((t, i) => { t.pos = i + 1; });
+  }
+  function tileCard(t, pageOpts) {
+    const binds = (t.bindings && t.bindings.length)
+      ? t.bindings.map(b => `${esc(bindingName(b))}<span class="pe-tag ${esc(bindingTag(b))}">${esc(bindingTag(b))}</span>`).join(' · ')
+      : '— tap to set what this tile does —';
+    return `
+      <div class="pe-tile" draggable="true" data-tid="${t.id}"
+           ondragstart="peDragStart(event,'${t.id}')" ondragend="peDragEnd(event)"
+           ondragover="peTileOver(event)" ondragleave="peTileLeave(event)" ondrop="peTileDrop(event,'${t.id}')">
+        <div class="pe-tile-head">
+          <span class="pe-drag" title="Drag to move">⋮⋮</span>
+          <input class="pe-tile-label" value="${esc(t.label || '')}" placeholder="Tile label"
+                 oninput="peSetLabel('${t.id}', this.value)">
+          <button class="pe-x" title="Delete tile" onclick="peDeleteTile('${t.id}')">×</button>
+        </div>
+        <div class="pe-pos">
+          <label>Page <select onchange="peMoveToPage('${t.id}', this.value)">${pageOpts}</select></label>
+          <label>Row <input type="number" min="1" value="${t.row || 1}" onchange="peSetRow('${t.id}', this.value)"></label>
+          <label>Pos <input type="number" min="1" value="${t.pos || 1}" onchange="peSetPos('${t.id}', this.value)"></label>
+        </div>
+        <div class="pe-binds ${(t.bindings && t.bindings.length) ? '' : 'empty'}" onclick="peEditTile('${t.id}')">${binds}</div>
+        <div class="pe-tile-foot"><button class="pe-btn sm" onclick="peEditTile('${t.id}')">Edit bindings</button></div>
+      </div>`;
+  }
   function renderTiles() {
     const grid = $('pe-grid'); if (!grid) return;
     const page = cfg.pages[activePage]; if (!page) return;
@@ -153,27 +181,23 @@
     if (!tiles.length) { grid.innerHTML = '<div class="pe-empty">No tiles on this page. Click “+ Add tile”.</div>'; return; }
     const pageOpts = cfg.pages.map((p, pi) =>
       `<option value="${pi}" ${pi === activePage ? 'selected' : ''}>${esc(p.name || 'Page ' + (pi + 1))}</option>`).join('');
-    grid.innerHTML = tiles.map((t, i) => `
-      <div class="pe-tile" data-ti="${i}">
-        <div class="pe-tile-head">
-          <input class="pe-tile-label" value="${esc(t.label || '')}" placeholder="Tile label"
-                 oninput="peSetLabel(${i}, this.value)">
-          <button class="pe-x" title="Delete tile" onclick="peDeleteTile(${i})">×</button>
+    // One band per row (mirrors the tablet). Drag a tile within a band to
+    // reorder, into another band to change its row, or onto the new-row drop zone.
+    const rows = {};
+    tiles.forEach(t => { const r = t.row || 1; (rows[r] = rows[r] || []).push(t); });
+    const rowNums = Object.keys(rows).map(Number).sort((a, b) => a - b);
+    let html = '';
+    for (const rn of rowNums) {
+      const rowTiles = rows[rn].sort((a, b) => (a.pos || 0) - (b.pos || 0));
+      html += `<div class="pe-rowband">
+        <div class="pe-rowband-head">Row ${rn}</div>
+        <div class="pe-rowband-tiles" ondragover="peBandOver(event)" ondragleave="peBandLeave(event)" ondrop="peBandDrop(event,${rn})">
+          ${rowTiles.map(t => tileCard(t, pageOpts)).join('')}
         </div>
-        <div class="pe-pos">
-          <label>Page <select onchange="peMoveToPage(${i}, this.value)">${pageOpts}</select></label>
-          <label>Row <input type="number" min="1" value="${t.row || 1}" onchange="peSetRow(${i}, this.value)"></label>
-          <label>Pos <input type="number" min="1" value="${t.pos || i + 1}" onchange="peSetPos(${i}, this.value)"></label>
-        </div>
-        <div class="pe-binds ${(t.bindings && t.bindings.length) ? '' : 'empty'}" onclick="peEditTile(${i})">
-          ${(t.bindings && t.bindings.length)
-            ? t.bindings.map(b => `${esc(bindingName(b))}<span class="pe-tag ${esc(bindingTag(b))}">${esc(bindingTag(b))}</span>`).join(' · ')
-            : '— tap to set what this tile does —'}
-        </div>
-        <div class="pe-tile-foot">
-          <button class="pe-btn sm" onclick="peEditTile(${i})">Edit bindings</button>
-        </div>
-      </div>`).join('');
+      </div>`;
+    }
+    html += `<div class="pe-newrow" ondragover="peBandOver(event)" ondragleave="peBandLeave(event)" ondrop="peNewRowDrop(event)">⤓ drop here to start a new row</div>`;
+    grid.innerHTML = html;
   }
 
   // ── page ops ──────────────────────────────────────────────────────
@@ -194,16 +218,70 @@
     p.tiles.push({ id: uid('t'), label: 'New tile', bindings: [], row, pos });
     markDirty(); renderTiles();
   };
-  window.peSetLabel = (i, v) => { const p = cfg.pages[activePage]; if (p && p.tiles[i]) { p.tiles[i].label = v; markDirty(); } };
-  window.peDeleteTile = (i) => { const p = cfg.pages[activePage]; if (!p) return; if (!confirm('Delete this tile?')) return; p.tiles.splice(i, 1); markDirty(); renderTiles(); };
-  window.peSetRow = (i, v) => { const p = cfg.pages[activePage]; if (p && p.tiles[i]) { p.tiles[i].row = Math.max(1, parseInt(v, 10) || 1); markDirty(); renderTiles(); } };
-  window.peSetPos = (i, v) => { const p = cfg.pages[activePage]; if (p && p.tiles[i]) { p.tiles[i].pos = Math.max(1, parseInt(v, 10) || 1); markDirty(); renderTiles(); } };
-  window.peMoveToPage = (i, v) => {
-    const src = cfg.pages[activePage]; const ti = parseInt(v, 10);
-    if (!src || ti === activePage || !cfg.pages[ti] || !src.tiles[i]) { renderTiles(); return; }
-    const t = src.tiles.splice(i, 1)[0];
+  window.peSetLabel = (id, v) => { const t = findTile(id); if (t) { t.label = v; markDirty(); } };
+  window.peDeleteTile = (id) => {
+    const p = cfg.pages[activePage]; const t = findTile(id); if (!p || !t) return;
+    if (!confirm('Delete this tile?')) return;
+    const old = t.row || 1; p.tiles.splice(p.tiles.indexOf(t), 1); renumberRow(p, old); markDirty(); renderTiles();
+  };
+  window.peSetRow = (id, v) => {
+    const p = cfg.pages[activePage]; const t = findTile(id); if (!t) return;
+    const old = t.row || 1; t.row = Math.max(1, parseInt(v, 10) || 1); renumberRow(p, old); markDirty(); renderTiles();
+  };
+  window.peSetPos = (id, v) => { const t = findTile(id); if (t) { t.pos = Math.max(1, parseInt(v, 10) || 1); markDirty(); renderTiles(); } };
+  window.peMoveToPage = (id, v) => {
+    const src = cfg.pages[activePage]; const ti = parseInt(v, 10); const t = findTile(id);
+    if (!src || ti === activePage || !cfg.pages[ti] || !t) { renderTiles(); return; }
+    src.tiles.splice(src.tiles.indexOf(t), 1);
     (cfg.pages[ti].tiles = cfg.pages[ti].tiles || []).push(t);
     markDirty(); renderTiles();
+  };
+
+  // ── drag-to-move (HTML5 DnD; ⋮⋮ handle) ───────────────────────────
+  let _dragId = null;
+  function moveTileTo(dragId, targetRow, beforeId) {
+    const p = cfg.pages[activePage]; const t = findTile(dragId); if (!p || !t) return;
+    const oldRow = t.row || 1; t.row = targetRow;
+    const rowTiles = (p.tiles || []).filter(x => x.id !== dragId && (x.row || 1) === targetRow)
+      .sort((a, b) => (a.pos || 0) - (b.pos || 0));
+    let at = beforeId ? rowTiles.findIndex(x => x.id === beforeId) : rowTiles.length;
+    if (at < 0) at = rowTiles.length;
+    rowTiles.splice(at, 0, t);
+    rowTiles.forEach((x, i) => { x.pos = i + 1; });
+    if (oldRow !== targetRow) renumberRow(p, oldRow);
+    markDirty(); renderTiles();
+  }
+  window.peDragStart = (e, id) => {
+    // Don't hijack interactions with the card's controls — drag only from the
+    // ⋮⋮ handle or the card's plain areas, not its inputs/selects/buttons/bindings.
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON' ||
+        (e.target.closest && e.target.closest('.pe-binds'))) { e.preventDefault(); return; }
+    _dragId = id; e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', id); } catch (_) {}
+    const el = e.currentTarget; setTimeout(() => el && el.classList.add('dragging'), 0);
+  };
+  window.peDragEnd = () => {
+    _dragId = null;
+    document.querySelectorAll('.dragging,.pe-drop-before,.pe-band-over')
+      .forEach(el => el.classList.remove('dragging', 'pe-drop-before', 'pe-band-over'));
+  };
+  window.peTileOver = (e) => { if (!_dragId) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (e.currentTarget.dataset.tid !== _dragId) e.currentTarget.classList.add('pe-drop-before'); };
+  window.peTileLeave = (e) => { e.currentTarget.classList.remove('pe-drop-before'); };
+  window.peTileDrop = (e, targetId) => {
+    e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('pe-drop-before');
+    if (!_dragId || _dragId === targetId) return;
+    const target = findTile(targetId); if (!target) return;
+    moveTileTo(_dragId, target.row || 1, targetId);
+  };
+  window.peBandOver = (e) => { if (!_dragId) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('pe-band-over'); };
+  window.peBandLeave = (e) => { e.currentTarget.classList.remove('pe-band-over'); };
+  window.peBandDrop = (e, rn) => { e.preventDefault(); e.currentTarget.classList.remove('pe-band-over'); if (_dragId) moveTileTo(_dragId, rn, null); };
+  window.peNewRowDrop = (e) => {
+    e.preventDefault(); e.currentTarget.classList.remove('pe-band-over'); if (!_dragId) return;
+    const p = cfg.pages[activePage];
+    const maxRow = Math.max(0, ...(p.tiles || []).map(t => t.row || 1));
+    moveTileTo(_dragId, maxRow + 1, null);
   };
 
   // ── binding picker ────────────────────────────────────────────────
@@ -226,8 +304,8 @@
   }
   function curTile() { const p = cfg.pages[activePage]; return p && pick ? p.tiles.find(t => t.id === pick.tileId) : null; }
 
-  window.peEditTile = (i) => {
-    const p = cfg.pages[activePage]; const t = p && p.tiles[i]; if (!t) return;
+  window.peEditTile = (id) => {
+    const t = findTile(id); if (!t) return;
     if (!t.bindings) t.bindings = [];
     ensureOverlay();
     pick = { tileId: t.id, snapshot: JSON.parse(JSON.stringify(t.bindings)) };
