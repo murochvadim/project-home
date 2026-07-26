@@ -10,6 +10,7 @@
   const BROKER = 'ws://192.168.1.189:9001';
   const USER = 'dashboard_browser';
   const EVENT_TOPIC = 'mur/home/device/panel/event';
+  const ALERT_TOPIC = 'mur/home/device/panel/alert';
 
   let cfg = { pages: [] };
   let activePage = 0;
@@ -183,6 +184,62 @@
     confirmEl.style.display = 'flex';
   }
 
+  // ── tablet alert (Notifications → panel_alert) ─────────────────────
+  let audioCtx = null, beepTimer = null, alertTimer = null, alertEl = null;
+  function unlockAudio() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) { /* no audio */ }
+  }
+  // Unlock the synthesized beep on the first user gesture (kiosk gets tapped).
+  document.addEventListener('touchstart', unlockAudio, { passive: true });
+  document.addEventListener('click', unlockAudio);
+  function beepOnce() {
+    if (!audioCtx || audioCtx.state !== 'running') return;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+    o.type = 'square'; o.frequency.value = 880;
+    o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+    o.start(t); o.stop(t + 0.3);
+  }
+  function startBeep() { stopBeep(); beepOnce(); beepTimer = setInterval(beepOnce, 650); }
+  function stopBeep() { if (beepTimer) { clearInterval(beepTimer); beepTimer = null; } }
+  function ensureAlert() {
+    if (alertEl) return;
+    alertEl = document.createElement('div');
+    alertEl.id = 'alert';
+    alertEl.innerHTML =
+      '<div class="alert-box"><div class="alert-icon" id="alert-icon"></div>' +
+      '<div class="alert-msg" id="alert-msg"></div><div class="alert-hint">tap to dismiss</div></div>';
+    alertEl.addEventListener('click', dismissAlert);
+    document.body.appendChild(alertEl);
+  }
+  function dismissAlert() {
+    stopBeep();
+    if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
+    if (alertEl) alertEl.style.display = 'none';
+  }
+  function showAlert(a) {
+    a = a || {};
+    ensureAlert();
+    const color = a.color || '#e5352b';
+    const name = a.icon || 'door';
+    const ic = $('alert-icon');
+    ic.innerHTML = ICONS[name] ? svgIcon(ICONS[name], color) : esc(name || '⚠️');
+    ic.style.color = color;
+    ic.className = 'alert-icon' + (a.blink === false ? '' : ' blink');
+    const msg = $('alert-msg'); msg.textContent = a.message || ''; msg.style.color = color;
+    alertEl.style.display = 'flex';
+    unlockAudio();
+    if (a.sound === false) stopBeep(); else startBeep();
+    const dur = Math.max(2, parseInt(a.duration_sec, 10) || 12);
+    if (alertTimer) clearTimeout(alertTimer);
+    alertTimer = setTimeout(dismissAlert, dur * 1000);
+  }
+
   function applyState(deviceId, dps) {
     const entries = stateMap.get(deviceId);
     if (!entries) return;
@@ -199,11 +256,16 @@
     mq.on('connect', () => {
       mqUp = true; setDot('up');
       mq.subscribe('mur/home/device/+/state', { qos: 0 });
+      mq.subscribe(ALERT_TOPIC, { qos: 0 });           // tablet alerts (Notifications)
     });
     mq.on('close',   () => { mqUp = false; setDot('down'); });
     mq.on('offline', () => { mqUp = false; setDot('down'); });
     mq.on('error',   () => { setDot('down'); });
     mq.on('message', (topic, payload) => {
+      if (topic === ALERT_TOPIC) {
+        let a; try { a = JSON.parse(payload.toString()); } catch (e) { return; }
+        showAlert(a); return;
+      }
       // mur/home/device/<id>/state
       const parts = topic.split('/');
       if (parts.length !== 5 || parts[4] !== 'state') return;

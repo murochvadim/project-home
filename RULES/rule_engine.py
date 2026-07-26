@@ -1809,6 +1809,18 @@ class RuleEngine:
             self._dispatch_ha_light(cmd, rule_name)
             return
 
+        # Tablet alert (Balcony Smart Tablet) — publish a compact alert to the
+        # panel's alert topic; the PWA renders a blinking icon + beep. Virtual at
+        # the cmd level (device_id='panel', no devices-table row, checked before the
+        # dev lookup). Published raw so the browser parses the exact payload.
+        if protocol == 'panel_alert':
+            payload = {k: v for k, v in cmd.items()
+                       if k not in {'device_id', 'protocol', 'rule', '_skip_loop_guard'}}
+            self.mqtt.publish_raw('mur/home/device/panel/alert', json.dumps(payload))
+            log.info("Rule '%s' -> panel_alert (icon=%s dur=%ss)",
+                     rule_name, payload.get('icon'), payload.get('duration_sec'))
+            return
+
         # Loop guard catches runaway automation feedback (rule → device →
         # rule → …). Rules that act on human input (panel button, wallmote)
         # can mark their commands with `_skip_loop_guard=True` so rapid

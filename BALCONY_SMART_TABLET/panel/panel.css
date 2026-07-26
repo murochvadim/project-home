@@ -79,3 +79,14 @@ body {
 .confirm-no { background: #333b4d; color: #cdd4e0; }
 .confirm-yes { background: #2d6cdf; color: #fff; }
 .confirm-yes:active, .confirm-no:active { transform: scale(.96); }
+
+/* Tablet alert (Notifications → panel_alert): full-screen blinking icon + message */
+#alert { display: none; position: fixed; inset: 0; background: rgba(12,2,2,.86);
+  z-index: 99999; align-items: center; justify-content: center; }
+.alert-box { text-align: center; padding: 24px; }
+.alert-icon { width: 42vmin; height: 42vmin; margin: 0 auto 18px; }
+.alert-icon svg { width: 100%; height: 100%; }
+.alert-icon.blink { animation: alert-blink .6s steps(1) infinite; }
+@keyframes alert-blink { 50% { opacity: .12; } }
+.alert-msg { font-size: 2.3rem; font-weight: 800; line-height: 1.2; }
+.alert-hint { margin-top: 24px; font-size: 1rem; color: #9aa3b0; }

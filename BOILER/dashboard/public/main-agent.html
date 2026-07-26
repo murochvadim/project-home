@@ -522,8 +522,13 @@
           <option value="main_door_closed">Main door closes</option>
           <option value="home_mode_changed">Home mode changes</option>
           <option value="people_count_changed">People count changes</option>
+          <option value="device_presence">Presence detected (a sensor)</option>
           <option value="scheduled_time">At a scheduled time</option>
         </select>
+        <div id="notif-f-trigparam-device" style="display:none;">
+          <label class="notif-lbl">…which presence/motion sensor?</label>
+          <select id="notif-f-trigparam-deviceval" class="notif-in"><option value="">— loading —</option></select>
+        </div>
         <div id="notif-f-trigparam-mode" style="display:none;">
           <label class="notif-lbl">…to which mode?</label>
           <select id="notif-f-trigparam-modeval" class="notif-in">
@@ -576,6 +581,24 @@
         <div style="margin-top:8px; padding:8px 10px; background:#f4f7fa; border-radius:6px;">
           <label style="font-size:0.82rem;"><input type="checkbox" id="notif-f-setpeople"> Let me <b>set the number of people at home</b> in the popup (adds an input + Save that updates the manual count)</label>
         </div>
+        <div style="margin-top:8px; padding:8px 10px; background:#fbf3f2; border:1px solid #f0d8d5; border-radius:6px;">
+          <label style="font-size:0.82rem; font-weight:600;"><input type="checkbox" id="notif-f-tablet" onchange="notifTabletToggled()"> 📟 Also flash the <b>Balcony tablet</b></label>
+          <div id="notif-f-tablet-cfg" style="display:none; flex-wrap:wrap; gap:12px; align-items:center; margin-top:8px;">
+            <label style="font-size:0.8rem;">Icon
+              <select id="notif-f-tablet-icon" class="notif-in" style="width:auto;">
+                <option value="door">door</option><option value="heater">heater</option><option value="light">light</option>
+                <option value="lamp">lamp</option><option value="fan">fan</option><option value="ac">ac</option>
+                <option value="tv">tv</option><option value="lock">lock</option><option value="curtain">curtain</option>
+                <option value="water">water</option><option value="boiler">boiler</option><option value="plug">plug</option>
+                <option value="speaker">speaker</option><option value="thermostat">thermostat</option><option value="power">power</option>
+                <option value="scene">scene</option><option value="gate">gate</option><option value="camera">camera</option><option value="music">music</option>
+              </select></label>
+            <label style="font-size:0.8rem;">Color <input type="color" id="notif-f-tablet-color" value="#e5352b" style="vertical-align:middle;"></label>
+            <label style="font-size:0.8rem;"><input type="checkbox" id="notif-f-tablet-blink" checked> Blink</label>
+            <label style="font-size:0.8rem;"><input type="checkbox" id="notif-f-tablet-sound" checked> Sound</label>
+            <label style="font-size:0.8rem;">for <input type="number" id="notif-f-tablet-dur" min="2" max="120" value="12" style="width:52px; padding:2px 4px;"> sec</label>
+          </div>
+        </div>
 
         <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:18px;">
           <button onclick="notifCloseModal()" style="background:#fff;color:#666;border:1px solid #ccc;border-radius:4px;padding:6px 14px;cursor:pointer;font-size:0.85rem;">Cancel</button>
@@ -600,6 +623,6 @@
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/main-agent.js?v=117"></script>
 <!-- after main-agent.js so its showTab wrapper chains on (not clobbered by) main-agent's -->
-<script src="js/notifications-tab.js?v=3"></script>
+<script src="js/notifications-tab.js?v=4"></script>
 </body>
 </html>

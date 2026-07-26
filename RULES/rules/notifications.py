@@ -233,6 +233,39 @@ def _deliver(state, d, ctx, today):
         _emit(state, d, ctx)
 
 
+def _tablet_cmd(state, d, ctx):
+    """Build a panel_alert command for the Balcony tablet if this def has a
+    Tablet-alert surface (`surfaces.tablet.enabled`). Honors `throttle_min` via its
+    own key so a flapping trigger can't spam the tablet. Returns a command dict or
+    None — the engine's `protocol='panel_alert'` branch publishes it to the panel."""
+    tab = ((d.get("surfaces") or {}).get("tablet")) or {}
+    if not tab.get("enabled"):
+        return None
+    did = d["id"]
+    throttle = int(d.get("throttle_min") or 0)
+    now_ts = time.time()
+    if throttle > 0:
+        last = state.shared.get(f"_notify:{did}:tablet_ts")
+        try:
+            if last is not None and (now_ts - float(last)) < throttle * 60:
+                return None
+        except Exception:
+            pass
+    state.shared[f"_notify:{did}:tablet_ts"] = now_ts
+    return {
+        "protocol": "panel_alert",
+        "device_id": "panel",
+        "icon": tab.get("icon") or "door",
+        "color": tab.get("color") or "#e5352b",
+        "blink": bool(tab.get("blink", True)),
+        "sound": bool(tab.get("sound", True)),
+        "duration_sec": int(tab.get("duration_sec") or 12),
+        "message": _subst(d.get("message") or d.get("name"), ctx),
+        "rule": "Notifications",
+        "_skip_loop_guard": True,
+    }
+
+
 def _process_pending(state, d, ctx, now_local, today):
     """Heartbeat: deliver at_time / daily notifications once their time arrives."""
     delivery = (d.get("delivery") or "immediate").lower()
@@ -305,12 +338,21 @@ def evaluate(event, state):
             sig = _signal_for(d, ctx, shared)
             if sig:
                 shared[sig[0]] = sig[1]
+            # Prime device_presence shadows from current device state so a reload
+            # never fires a spurious alert for a presence we didn't just witness.
+            if (d.get("trigger") or "").lower() == "device_presence":
+                dev = d.get("trigger_param")
+                dv = (state.devices.get(dev, {}) or {}).get("dps", {}) if dev else {}
+                shared[f"_notify:{d['id']}:presence"] = dv.get("1") in ("presence", True, "true", 1)
         _first_eval = False
         return []
 
     is_heartbeat = (event.get("device_id") == "heartbeat")
     door_src = shared.get("_last_transition_source")
+    ev_dev = event.get("device_id")
+    ev_dps = event.get("dps", {}) or {}
 
+    commands = []
     for d in defs:
         if not d.get("enabled"):
             continue
@@ -331,6 +373,18 @@ def evaluate(event, state):
                     else:  # people_count_changed
                         fired = True
                 shared[key] = cur
+        elif trig == "device_presence":
+            # Fires on a presence sensor's rising edge (none/false -> present).
+            # The sensor may double-report (tcp_push 'presence' + ha_api true); the
+            # multi-value check + rising-edge dedup collapse that to ONE fire.
+            dev = d.get("trigger_param")
+            if dev and ev_dev == dev and "1" in ev_dps:
+                cur = ev_dps.get("1") in ("presence", True, "true", 1)
+                key = f"_notify:{d['id']}:presence"
+                prev = shared.get(key)
+                if cur and prev is False:      # None = just primed → no fire yet
+                    fired = True
+                shared[key] = cur
         elif trig == "scheduled_time" and is_heartbeat:
             tp_min = _hhmm_to_min(d.get("trigger_param"))
             key = f"_notify:{d['id']}:sched_date"
@@ -340,10 +394,13 @@ def evaluate(event, state):
                 shared[key] = today
 
         if fired and _passes_gates(d.get("conditions"), ctx, now_local):
-            _deliver(state, d, ctx, today)
+            _deliver(state, d, ctx, today)       # popup (DB insert, if popup surface)
+            cmd = _tablet_cmd(state, d, ctx)      # tablet alert (if tablet surface)
+            if cmd:
+                commands.append(cmd)
 
         # time-based deliveries tick on the heartbeat
         if is_heartbeat:
             _process_pending(state, d, ctx, now_local, today)
 
-    return []
+    return commands

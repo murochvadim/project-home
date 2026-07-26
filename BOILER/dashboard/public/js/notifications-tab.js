@@ -9,13 +9,33 @@
     main_door_closed: 'Main door closes',
     home_mode_changed: 'Home mode changes',
     people_count_changed: 'People count changes',
+    device_presence: 'Presence detected',
     scheduled_time: 'At a scheduled time',
   };
   const DELIV_LABEL = { immediate: 'Immediately', at_time: 'At a set time', daily: 'Daily summary' };
 
+  // Presence/motion/door sensors — for the device_presence trigger selector.
+  let _presenceDevs = null;
+  async function loadPresenceDevices() {
+    if (_presenceDevs) return _presenceDevs;
+    try {
+      const list = await fetch('/api/devices').then(r => r.json());
+      _presenceDevs = (Array.isArray(list) ? list : []).filter(
+        d => ['presence', 'motion', 'door_sensor'].includes(d.device_type))
+        .map(d => ({ id: d.id, name: d.name })).sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) { _presenceDevs = []; }
+    const sel = $('notif-f-trigparam-deviceval');
+    if (sel) sel.innerHTML = _presenceDevs.length
+      ? _presenceDevs.map(d => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('')
+      : '<option value="">(no presence sensors found)</option>';
+    return _presenceDevs;
+  }
+  function _devName(id) { const d = (_presenceDevs || []).find(x => x.id === id); return d ? d.name : null; }
+
   // ── list ──
   window.notifLoad = async function () {
     try {
+      await loadPresenceDevices();     // device names ready for the summary line
       const defs = await fetch('/api/notifications/defs').then(r => r.json());
       const box = document.getElementById('notif-list');
       if (!box) return;
@@ -28,7 +48,10 @@
   function summarize(d) {
     let t = TRIG_LABEL[d.trigger] || d.trigger;
     if (d.trigger === 'home_mode_changed' && d.trigger_param) t += ' → ' + d.trigger_param;
+    if (d.trigger === 'device_presence' && d.trigger_param) t += ' → ' + (_devName(d.trigger_param) || 'sensor');
     if (d.trigger === 'scheduled_time' && d.trigger_param) t += ' at ' + d.trigger_param;
+    const tab = d.surfaces && d.surfaces.tablet;
+    if (tab && tab.enabled) t += ' 📟';
     const conds = (d.conditions || []).map(c => {
       if (c.field === 'home_mode') return 'home mode is ' + c.value;
       if (c.field === 'people_home') return 'people ' + c.op + ' ' + c.value;
@@ -82,6 +105,11 @@
     const t = $('notif-f-trigger').value;
     $('notif-f-trigparam-mode').style.display = (t === 'home_mode_changed') ? 'block' : 'none';
     $('notif-f-trigparam-time').style.display = (t === 'scheduled_time') ? 'block' : 'none';
+    $('notif-f-trigparam-device').style.display = (t === 'device_presence') ? 'block' : 'none';
+    if (t === 'device_presence') loadPresenceDevices();
+  };
+  window.notifTabletToggled = function () {
+    $('notif-f-tablet-cfg').style.display = $('notif-f-tablet').checked ? 'flex' : 'none';
   };
   window.notifDeliveryChanged = function () {
     const d = $('notif-f-delivery').value;
@@ -131,13 +159,15 @@
   window.notifCondFieldChanged = function (sel) { renderCondRest(sel.parentNode, {}); };
   window.notifAddCond = function () { condRow(); };
 
-  function fillForm(d) {
+  async function fillForm(d) {
     d = d || {};
+    await loadPresenceDevices();   // populate the sensor dropdown before setting its value
     $('notif-f-id').value = d.id || '';
     $('notif-f-name').value = d.name || '';
     $('notif-f-trigger').value = d.trigger || 'main_door_closed';
     $('notif-f-trigparam-modeval').value = (d.trigger === 'home_mode_changed' ? (d.trigger_param || '') : '');
     $('notif-f-trigparam-timeval').value = (d.trigger === 'scheduled_time' ? (d.trigger_param || '') : '');
+    $('notif-f-trigparam-deviceval').value = (d.trigger === 'device_presence' ? (d.trigger_param || '') : '');
     $('notif-f-message').value = d.message || '';
     $('notif-f-delivery').value = d.delivery || 'immediate';
     $('notif-f-delivtime').value = d.delivery_time || '';
@@ -146,10 +176,18 @@
     const surf = d.surfaces || { popup: true };
     $('notif-f-popup').checked = surf.popup !== false;
     $('notif-f-setpeople').checked = (d.action === 'set_people');
+    const tab = (surf && surf.tablet) || {};
+    $('notif-f-tablet').checked = !!tab.enabled;
+    $('notif-f-tablet-icon').value = tab.icon || 'door';
+    $('notif-f-tablet-color').value = tab.color || '#e5352b';
+    $('notif-f-tablet-blink').checked = tab.blink !== false;
+    $('notif-f-tablet-sound').checked = tab.sound !== false;
+    $('notif-f-tablet-dur').value = tab.duration_sec || 12;
     $('notif-f-conds').innerHTML = '';
     (d.conditions || []).forEach(condRow);
     notifTriggerChanged();
     notifDeliveryChanged();
+    notifTabletToggled();
     $('notif-modal').style.display = 'flex';
     $('notif-modal-title').textContent = d.id ? 'Edit notification' : 'New notification';
   }
@@ -166,6 +204,7 @@
     let trigParam = null;
     if (trig === 'home_mode_changed') trigParam = $('notif-f-trigparam-modeval').value || null;
     if (trig === 'scheduled_time') trigParam = $('notif-f-trigparam-timeval').value || null;
+    if (trig === 'device_presence') trigParam = $('notif-f-trigparam-deviceval').value || null;
     const conds = [];
     document.querySelectorAll('#notif-f-conds .notif-cond-row').forEach(row => {
       const g = k => { const el = row.querySelector(`[data-k="${k}"]`); return el ? el.value : null; };
@@ -181,7 +220,20 @@
       delivery_time: (($('notif-f-delivery').value === 'at_time' || $('notif-f-delivery').value === 'daily') ? ($('notif-f-delivtime').value || null) : null),
       throttle_min: parseInt($('notif-f-throttle').value) || 0,
       level: $('notif-f-level').value,
-      surfaces: { popup: $('notif-f-popup').checked, pages: 'all', phone: false },
+      surfaces: (() => {
+        const s = { popup: $('notif-f-popup').checked, pages: 'all', phone: false };
+        if ($('notif-f-tablet').checked) {
+          s.tablet = {
+            enabled: true,
+            icon: $('notif-f-tablet-icon').value || 'door',
+            color: $('notif-f-tablet-color').value || '#e5352b',
+            blink: $('notif-f-tablet-blink').checked,
+            sound: $('notif-f-tablet-sound').checked,
+            duration_sec: parseInt($('notif-f-tablet-dur').value) || 12,
+          };
+        }
+        return s;
+      })(),
       action: $('notif-f-setpeople').checked ? 'set_people' : null,
     };
     if (!body.name) { $('notif-f-name').focus(); return; }
