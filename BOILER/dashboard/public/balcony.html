@@ -116,6 +116,7 @@
     <button class="tab-btn" onclick="showTab('star-projector', this)">Star Projector</button>
     <button class="tab-btn" onclick="showTab('somfy', this)">somfy + fan</button>
     <button class="tab-btn" onclick="showTab('roborock', this)">Roborock</button>
+    <button class="tab-btn" onclick="showTab('smart-tablet', this); peInit()">Smart Tablet</button>
   </div>
 
   <div class="tab-panel active" id="tab-panel">
@@ -429,10 +430,60 @@
     </div>
   </div>
 
+  <div class="tab-panel" id="tab-smart-tablet">
+    <div class="card" style="padding:16px;">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
+        <h2 style="margin:0;font-size:1.05rem;">Smart Tablet — panel layout</h2>
+        <span style="font-size:0.8rem;color:#888;">Build the wall-tablet pages &amp; tiles. Bind each tile to any device, scene, mode (an 8-Gang channel), or curtain — the tablet at <b>192.168.1.138:8771</b> renders what you save.</span>
+      </div>
+      <div id="pe-root">Open this tab to load…</div>
+    </div>
+  </div>
+
+  <style>
+    .pe-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+    .pe-toolbar select { padding:5px 8px; border:1px solid #cdd3da; border-radius:6px; font-size:0.85rem; }
+    .pe-btn { padding:5px 12px; border:1px solid #cdd3da; border-radius:6px; background:#f6f8fa; color:#333;
+              font-size:0.82rem; cursor:pointer; text-decoration:none; display:inline-block; }
+    .pe-btn:hover { background:#eef1f5; }
+    .pe-btn.primary { background:#2d6cdf; border-color:#2d6cdf; color:#fff; font-weight:600; }
+    .pe-btn.sm { padding:3px 9px; font-size:0.76rem; }
+    .pe-btn[disabled] { opacity:0.4; cursor:default; }
+    .pe-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px; }
+    .pe-empty { color:#999; padding:22px; text-align:center; grid-column:1/-1; }
+    .pe-tile { border:1px solid #e0e4ea; border-radius:10px; background:#fbfcfd; padding:10px; }
+    .pe-tile-head { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+    .pe-tile-label { flex:1; min-width:0; padding:5px 8px; border:1px solid #cdd3da; border-radius:6px; font-size:0.9rem; font-weight:600; }
+    .pe-x { border:none; background:#f0d7d7; color:#b13d3d; border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:1rem; }
+    .pe-binds { min-height:34px; border:1px dashed #d5dae1; border-radius:7px; padding:7px 9px; font-size:0.8rem; cursor:pointer; color:#333; }
+    .pe-binds.empty { color:#9aa3b0; font-style:italic; }
+    .pe-tile-foot { display:flex; gap:6px; align-items:center; margin-top:8px; }
+    .pe-tag { display:inline-block; margin-left:5px; padding:0 6px; border-radius:8px; font-size:0.68rem; font-weight:700; vertical-align:middle; background:#e6e9ef; color:#555; }
+    .pe-tag.on,.pe-tag.open { background:#d6f0dd; color:#1f7a3d; }
+    .pe-tag.off,.pe-tag.close { background:#f3dcdc; color:#b13d3d; }
+    .pe-tag.toggle,.pe-tag.stop { background:#e2e7ef; color:#4a5568; }
+    .pe-tag.scene { background:#e7ddf6; color:#6b3fa0; }
+    #pe-picker { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:99990; align-items:center; justify-content:center; }
+    #pe-picker.show { display:flex; }
+    .pe-picker-box { background:#fff; width:min(680px,94vw); max-height:86vh; border-radius:12px; display:flex; flex-direction:column; overflow:hidden; }
+    .pe-picker-top { display:flex; gap:8px; align-items:center; padding:12px 14px; border-bottom:1px solid #eee; }
+    .pe-picker-top b { flex:0 0 auto; }
+    .pe-picker-count { font-size:0.76rem; color:#888; }
+    .pe-picker-top input { flex:1; padding:6px 9px; border:1px solid #cdd3da; border-radius:6px; }
+    .pe-picker-list { overflow-y:auto; padding:6px 0; }
+    .pe-room { padding:6px 14px; font-size:0.72rem; font-weight:700; color:#8a93a0; text-transform:uppercase; background:#f6f8fa; position:sticky; top:0; }
+    .pe-item { display:flex; align-items:center; gap:10px; padding:7px 14px; cursor:pointer; }
+    .pe-item:hover { background:#f4f7fb; }
+    .pe-item-name { flex:1; font-size:0.86rem; }
+    .pe-item-meta { font-size:0.7rem; color:#aaa; }
+    .pe-sel { padding:3px 6px; border:1px solid #cdd3da; border-radius:5px; font-size:0.78rem; }
+  </style>
+
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/balcony.js?v=20260724b"></script>
+<script src="js/panel-editor.js?v=1"></script>
 </body>
 </html>

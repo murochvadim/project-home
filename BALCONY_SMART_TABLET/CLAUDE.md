@@ -1,7 +1,15 @@
 # Balcony Smart Tablet — Galaxy Tab A7 wall panel (PWA over MQTT)
 
-> **STATUS: BUILDING — milestone 1 DONE (2026-07-26).** The command path is live and
-> proven end-to-end. Remaining: the touch PWA + the dashboard "Panel" editor tab (m2).
+> **STATUS: BUILDING — milestones 1 + 2 DONE (2026-07-26).** The command path, the touch
+> PWA, and the dashboard editor are all live and verified. Remaining: m3 = mount + Fully
+> Kiosk on the tablet.
+
+## Built — milestone 2 (2026-07-26): the touch PWA + the "Smart Tablet" editor tab
+- **PWA** (`panel/{index.html,panel.js,panel.css}` + `manifest.json` + vendored `mqtt.min.js`) — replaces the m1 placeholder. Full-screen dark **tile grid** (`grid-template-columns:auto-fill minmax(150px)`), page tabs (hidden when 1 page), a live broker dot + clock. On load it fetches `/api/panel/config` + `/api/panel/pass`, `mqtt.connect('ws://192.168.1.189:9001',{username:'dashboard_browser',password})`, **subscribes `mur/home/device/+/state`** and lights a tile green when its first device-binding is on (`isOn` mirrors the rule's `_resolve_toggle`), and on **tap publishes ONLY `{dps:{tile:<id>,event:'short'}}`** to `mur/home/device/panel/event` (never a raw device command). Re-pulls config every 60 s so dashboard edits appear without reload. PWA/kiosk-friendly (`display:fullscreen`, no-zoom viewport, add-to-home-screen).
+- **Editor** — a **"Smart Tablet" tab on the Balcony agent** (`balcony.html` + **`public/js/panel-editor.js`**, `pe*` namespace, own picker overlay so it never collides with balcony's `bc*` picker). Manages **pages → tiles → bindings**: add/rename/delete/reorder pages + tiles, per-tile label, and an **Edit-bindings picker mirroring balcony's `bc*`** (device toggle/on/off + channel, page-select, Alexa speak/play, Vacuum verbs) **plus Scenes** (a 🎬 section → `{type:'scene',target}`) **and Curtains** (`device_type='curtain'` → open/close/stop → `{type:'curtain',device_id,action}`). Reads/writes `dashboard_settings.panel` via the **generic `GET/POST /api/dashboard-settings/panel`** (no new server endpoint → stays clear of the architecture-guard hook). `● Unsaved` badge + beforeunload guard; **Open panel ↗** link to `http://192.168.1.138:8771/`. **Mode (Home/Away/Abroad)** = binding the 8-Gang Switch channels (HOME=ch4/AWAY=ch8/ABROAD=ch3) as ordinary device tiles — Mode Buttons handles mutual-ex.
+- **Config `dashboard_settings.panel`** = `{"pages":[{id,name,tiles:[{id,label,bindings:[…]}]}]}` (bindings are the balcony-panel shape). No new table/migration.
+- **Verified (2026-07-26):** editor Save (`POST /api/dashboard-settings/panel {value}`) → GET reflects it → `panel_service` serves the same to the tablet; combined with m1 (tap → `panel: tile … → N command(s)` → dispatch) the whole chain is proven. Both JS files pass `node --check`; PWA + `panel.js` + `mqtt.min.js` all serve 200 over the LAN. Config reset to `{"pages":[]}` so the user authors fresh in the editor.
+
 
 ## Built — milestone 1 (2026-07-26): the command path
 The plumbing that turns a tablet tile-tap into a real device action, **laptop-independent**,

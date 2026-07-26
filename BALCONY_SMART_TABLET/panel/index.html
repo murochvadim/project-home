@@ -2,55 +2,21 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#12151c">
+  <link rel="manifest" href="manifest.json">
   <title>Balcony Panel</title>
-  <style>
-    :root { color-scheme: dark; }
-    body { margin: 0; font-family: system-ui, sans-serif; background: #12151c; color: #e7ebf2;
-           min-height: 100vh; display: flex; flex-direction: column; align-items: center;
-           justify-content: center; gap: 14px; padding: 24px; }
-    h1 { font-size: 1.3rem; margin: 0; }
-    .sub { color: #8b93a3; font-size: .9rem; }
-    .card { background: #1b1f29; border: 1px solid #2a3040; border-radius: 12px;
-            padding: 14px 16px; min-width: min(520px, 92vw); }
-    .ok { color: #35c46b; } .bad { color: #e5604d; }
-    pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-size: .8rem; color: #b9c1d1; }
-    .row { display: flex; gap: 8px; align-items: center; }
-    .dot { width: 9px; height: 9px; border-radius: 50%; background: #555; }
-  </style>
+  <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <h1>🪟 Balcony Panel</h1>
-  <div class="sub">panel-service smoke test — the real touch UI ships in milestone 2</div>
-  <div class="card">
-    <div class="row"><span id="cfg-dot" class="dot"></span><b>&nbsp;/api/panel/config</b></div>
-    <pre id="cfg">…</pre>
-  </div>
-  <div class="card">
-    <div class="row"><span id="pass-dot" class="dot"></span><b>&nbsp;/api/panel/pass</b></div>
-    <pre id="pass">…</pre>
-  </div>
-  <script>
-    async function probe(url, dotId, outId, render) {
-      const dot = document.getElementById(dotId), out = document.getElementById(outId);
-      try {
-        const r = await fetch(url);
-        const j = await r.json();
-        dot.style.background = '#35c46b';
-        out.textContent = render(j);
-      } catch (e) {
-        dot.style.background = '#e5604d';
-        out.textContent = 'ERROR: ' + e.message;
-      }
-    }
-    probe('/api/panel/config', 'cfg-dot', 'cfg', j => {
-      const pages = (j.value && j.value.pages) || [];
-      const tiles = pages.reduce((n, p) => n + ((p.tiles || []).length), 0);
-      return pages.length + ' page(s), ' + tiles + ' tile(s)\n' + JSON.stringify(j.value, null, 2);
-    });
-    // Never print the actual secret — just confirm the endpoint returns one.
-    probe('/api/panel/pass', 'pass-dot', 'pass', j =>
-      (j.value ? ('broker password present (' + String(j.value).length + ' chars)') : 'MISSING'));
-  </script>
+  <header id="bar">
+    <div id="pages"></div>
+    <div id="status"><span id="dot" class="dot"></span><span id="clock"></span></div>
+  </header>
+  <main id="grid"><div id="empty">Loading…</div></main>
+  <script src="mqtt.min.js"></script>
+  <script src="panel.js?v=1"></script>
 </body>
 </html>
