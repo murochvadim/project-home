@@ -10,8 +10,7 @@
        packing them on the left (shared .tab-bar has no justify-content →
        flex-start). Equal-width, single row, centered labels. */
     .tab-bar { flex-wrap: nowrap; }
-    .tab-bar .tab-btn { flex: 1 1 0; text-align: center; white-space: nowrap;
-                        padding: 30px 44px; font-size: 1.4rem; font-weight: 600; border-radius: 6px; }
+    .tab-bar .tab-btn { flex: 1 1 0; text-align: center; white-space: nowrap; }
     /* Wallmote-style bindings UI — copied from living-room.html for parity */
     .wallmote-card { padding:14px; margin-bottom:16px; }
     .wallmote-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #d0cbc4; }
@@ -396,6 +395,16 @@
     </div>
   </div>
 
+  <div class="tab-panel" id="tab-smart-tablet">
+    <div class="card" style="padding:16px;">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
+        <h2 style="margin:0;font-size:1.05rem;">Smart Tablet — panel layout</h2>
+        <span style="font-size:0.8rem;color:#888;">Build the wall-tablet pages &amp; tiles. Bind each tile to any device, scene, mode (an 8-Gang channel), or curtain — the tablet at <b>192.168.1.138:8771</b> renders what you save.</span>
+      </div>
+      <div id="pe-root">Open this tab to load…</div>
+    </div>
+  </div>
+
 </main>
 
 <!-- Device picker popover (shared with bindings UI) -->
@@ -433,16 +442,6 @@
         <button class="btn-test" onclick="sfClosePair()">Close</button>
         <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;font-weight:600;" onclick="sfSendProg()">Send PROG</button>
       </div>
-    </div>
-  </div>
-
-  <div class="tab-panel" id="tab-smart-tablet">
-    <div class="card" style="padding:16px;">
-      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
-        <h2 style="margin:0;font-size:1.05rem;">Smart Tablet — panel layout</h2>
-        <span style="font-size:0.8rem;color:#888;">Build the wall-tablet pages &amp; tiles. Bind each tile to any device, scene, mode (an 8-Gang channel), or curtain — the tablet at <b>192.168.1.138:8771</b> renders what you save.</span>
-      </div>
-      <div id="pe-root">Open this tab to load…</div>
     </div>
   </div>
 
