@@ -464,9 +464,21 @@
     .pe-drag:active { cursor:grabbing; }
     .pe-tile-head { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
     .pe-tile-label { flex:1; min-width:0; padding:5px 8px; border:1px solid #cdd3da; border-radius:6px; font-size:0.9rem; font-weight:600; }
-    .pe-tile-icon { width:42px; flex:0 0 42px; text-align:center; padding:5px 4px; border:1px solid #cdd3da; border-radius:6px; font-size:1rem; }
     .pe-tile-hidden { opacity:0.5; }
     .pe-hide { gap:4px; }
+    .pe-icon-btn { width:40px; height:34px; flex:0 0 40px; display:flex; align-items:center; justify-content:center; border:1px solid #cdd3da; border-radius:6px; background:#fff; cursor:pointer; font-size:1.1rem; color:#4a5568; }
+    .pe-icon-btn:hover { border-color:#7a9ab8; }
+    .pe-icon-btn svg { width:22px; height:22px; }
+    #pe-icons { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:99991; align-items:center; justify-content:center; }
+    #pe-icons.show { display:flex; }
+    .pe-icons-box { background:#fff; width:min(560px,94vw); border-radius:12px; padding:14px; }
+    .pe-icons-top { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+    .pe-icons-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr)); gap:8px; max-height:52vh; overflow-y:auto; }
+    .pe-icon-cell { display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 6px; border:1px solid #e3e7ee; border-radius:8px; background:#fafbfc; cursor:pointer; color:#3a4658; font-size:0.68rem; }
+    .pe-icon-cell:hover { border-color:#2d6cdf; background:#f2f6fe; }
+    .pe-icon-cell svg { width:28px; height:28px; }
+    .pe-icons-emoji { margin-top:12px; font-size:0.82rem; color:#555; display:flex; align-items:center; gap:8px; }
+    .pe-icons-emoji input { width:60px; text-align:center; padding:4px 6px; border:1px solid #cdd3da; border-radius:5px; font-size:1rem; }
     .pe-x { border:none; background:#f0d7d7; color:#b13d3d; border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:1rem; }
     .pe-pos { display:flex; gap:12px; align-items:center; margin:8px 0; font-size:0.76rem; color:#555; flex-wrap:wrap; }
     .pe-pos label { display:flex; gap:4px; align-items:center; }
@@ -501,6 +513,6 @@
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/balcony.js?v=20260724b"></script>
-<script src="js/panel-editor.js?v=6"></script>
+<script src="js/panel-editor.js?v=7"></script>
 </body>
 </html>

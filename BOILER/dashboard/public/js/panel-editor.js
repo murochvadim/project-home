@@ -24,6 +24,43 @@
   const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater',
     'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player', 'vacuum']);
   const MAX_ROWS = 3, MAX_COLS = 5;   // the tablet fits at most 3 rows × 5 positions
+  // Built-in device icons (name -> inner SVG). Kept 1:1 with the tablet's panel.js.
+  const ICONS = {
+    heater: '<rect x="3.5" y="8.5" width="17" height="11" rx="1.5"/><path d="M7.5 8.5v11M12 8.5v11M16.5 8.5v11"/><path d="M7 6c.9-.8.9-1.6 0-2.4M12 6c.9-.8.9-1.6 0-2.4M17 6c.9-.8.9-1.6 0-2.4"/>',
+    light: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M8.5 14.2a5 5 0 1 1 7 0c-.7.7-1.2 1.6-1.4 2.8H9.9c-.2-1.2-.7-2.1-1.4-2.8z"/>',
+    lamp: '<path d="M8.5 3h7l2.2 6h-11.4z"/><path d="M12 9v10"/><path d="M8 21h8"/>',
+    fan: '<circle cx="12" cy="12" r="1.6"/><path d="M12 10.4c0-4 1-6 3-5.5s.5 3.5-3 5.5"/><path d="M13.6 12c4 0 6 1 5.5 3s-3.5.5-5.5-3"/><path d="M12 13.6c0 4-1 6-3 5.5s-.5-3.5 3-5.5"/><path d="M10.4 12c-4 0-6-1-5.5-3s3.5-.5 5.5 3"/>',
+    ac: '<rect x="3" y="4.5" width="18" height="9" rx="2"/><line x1="6" y1="9" x2="18" y2="9"/><path d="M6 17.5c1.6 0 1.6-1.5 3.2-1.5"/><path d="M12 17.5c1.6 0 1.6-1.5 3.2-1.5"/>',
+    tv: '<rect x="2.5" y="7" width="19" height="12.5" rx="2"/><path d="M8 3.5l4 3.5 4-3.5"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+    curtain: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M7 3c.5 6-.5 9-3 12"/><path d="M12 3v18"/><path d="M17 3c-.5 6 .5 9 3 12"/>',
+    water: '<path d="M12 3.2s6 6.4 6 10.3a6 6 0 0 1-12 0C6 9.6 12 3.2 12 3.2z"/>',
+    boiler: '<rect x="6.5" y="3" width="11" height="18" rx="3"/><line x1="6.5" y1="9" x2="17.5" y2="9"/><circle cx="12" cy="15" r="2.5"/>',
+    plug: '<path d="M9 2.5v5"/><path d="M15 2.5v5"/><path d="M6.5 7.5h11v2.5a5.5 5.5 0 0 1-11 0z"/><path d="M12 21v-5.5"/>',
+    speaker: '<rect x="6" y="3" width="12" height="18" rx="2"/><circle cx="12" cy="14.5" r="3"/><circle cx="12" cy="7" r="1"/>',
+    thermostat: '<path d="M14 14.5V5a2 2 0 1 0-4 0v9.5a4 4 0 1 0 4 0z"/>',
+    power: '<path d="M18.4 6.6a9 9 0 1 1-12.8 0"/><line x1="12" y1="2.5" x2="12" y2="12"/>',
+    scene: '<path d="M12 3l2.6 5.7 6.2.6-4.7 4.2 1.4 6.1L12 16.9 6.5 19.6l1.4-6.1L3.2 9.3l6.2-.6z"/>',
+    gate: '<rect x="4" y="7" width="16" height="13" rx="1"/><path d="M4 11h16M4 15h16M8 7v13M12 7v13M16 7v13"/>',
+    camera: '<rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="12" cy="13" r="3.2"/><path d="M8 7l1.4-2h5L16 7"/>',
+    music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
+    door: '<path d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17"/><path d="M3 21h18"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  };
+  const svgIcon = (inner) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+  function autoIcon(t) {
+    const b = (t.bindings || [])[0] || {};
+    if (b.type === 'scene') return '🎬';
+    if (b.type === 'curtain') return '🪟';
+    if (b.type === 'pixoo_preset') return '🖼️';
+    if (b.type === 'media') return '📺';
+    return '💡';
+  }
+  function iconPreview(t) {
+    const ic = (t.icon || '').trim();
+    if (ic && ICONS[ic]) return svgIcon(ICONS[ic]);
+    if (ic) return esc(ic);
+    return esc(autoIcon(t));
+  }
 
   let cfg = { pages: [] };
   let activePage = 0;
@@ -161,8 +198,7 @@
            ondragover="peTileOver(event)" ondragleave="peTileLeave(event)" ondrop="peTileDrop(event,'${t.id}')">
         <div class="pe-tile-head">
           <span class="pe-drag" title="Drag to move">⋮⋮</span>
-          <input class="pe-tile-icon" maxlength="4" value="${esc(t.icon || '')}" placeholder="🔆"
-                 title="Icon (emoji) — leave blank for auto" oninput="peSetIcon('${t.id}', this.value)">
+          <button type="button" class="pe-icon-btn" title="Choose icon" onclick="peOpenIcons('${t.id}')">${iconPreview(t)}</button>
           <input class="pe-tile-label" value="${esc(t.label || '')}" placeholder="Tile label"
                  oninput="peSetLabel('${t.id}', this.value)">
           <button class="pe-x" title="Delete tile" onclick="peDeleteTile('${t.id}')">×</button>
@@ -229,6 +265,42 @@
   window.peSetLabel = (id, v) => { const t = findTile(id); if (t) { t.label = v; markDirty(); } };
   window.peSetIcon = (id, v) => { const t = findTile(id); if (t) { t.icon = (v || '').trim(); markDirty(); } };
   window.peSetHidden = (id, checked) => { const t = findTile(id); if (t) { t.hidden = !!checked; markDirty(); renderTiles(); } };
+
+  // ── icon palette ──────────────────────────────────────────────────
+  let _iconTile = null, _iconOverlay = null;
+  function ensureIconPalette() {
+    if (_iconOverlay) return;
+    _iconOverlay = document.createElement('div');
+    _iconOverlay.id = 'pe-icons';
+    const grid = Object.keys(ICONS).map(name =>
+      `<button type="button" class="pe-icon-cell" title="${name}" onclick="pePickIcon('${name}')">${svgIcon(ICONS[name])}<span>${name}</span></button>`).join('');
+    _iconOverlay.innerHTML = `
+      <div class="pe-icons-box">
+        <div class="pe-icons-top">
+          <b>Choose an icon</b><span style="flex:1"></span>
+          <button class="pe-btn sm" onclick="pePickIcon('')">Auto (default)</button>
+          <button class="pe-btn sm" onclick="peCloseIcons()">Close</button>
+        </div>
+        <div class="pe-icons-grid">${grid}</div>
+        <div class="pe-icons-emoji">or type an emoji:
+          <input id="pe-emoji-in" maxlength="4" placeholder="🔆">
+          <button class="pe-btn sm" onclick="pePickIcon(document.getElementById('pe-emoji-in').value)">Use emoji</button>
+        </div>
+      </div>`;
+    _iconOverlay.addEventListener('click', (e) => { if (e.target === _iconOverlay) peCloseIcons(); });
+    document.body.appendChild(_iconOverlay);
+  }
+  window.peOpenIcons = (id) => {
+    _iconTile = id; ensureIconPalette();
+    const t = findTile(id); const inp = document.getElementById('pe-emoji-in');
+    if (inp) inp.value = (t && t.icon && !ICONS[t.icon]) ? t.icon : '';
+    _iconOverlay.classList.add('show');
+  };
+  window.peCloseIcons = () => { if (_iconOverlay) _iconOverlay.classList.remove('show'); _iconTile = null; };
+  window.pePickIcon = (v) => {
+    if (_iconTile) { const t = findTile(_iconTile); if (t) { t.icon = (v || '').trim(); markDirty(); } }
+    peCloseIcons(); renderTiles();
+  };
   window.peDeleteTile = (id) => {
     const p = cfg.pages[activePage]; const t = findTile(id); if (!p || !t) return;
     if (!confirm('Delete this tile?')) return;

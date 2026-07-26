@@ -55,6 +55,7 @@ body {
 .tile.on { background: #223a2c; border-color: #2f7d4a; }
 .tile.on .tile-icon { color: #46d07d; }
 .tile-icon { font-size: 2.7rem; line-height: 3rem; color: #8b93a3; }
+.tile-icon svg { width: 1em; height: 1em; display: block; }
 .tile-body { align-self: start; }
 .tile-label { font-size: 1.32rem; font-weight: 600; line-height: 1.25; word-break: break-word; }
 .tile-sub { font-size: .9rem; color: #7a8496; margin-top: 3px; }

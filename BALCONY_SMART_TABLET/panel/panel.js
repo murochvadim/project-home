@@ -40,14 +40,44 @@
     }
     return null;
   }
-  function tileIcon(tile) {
-    if (tile.icon) return tile.icon;
+  // Built-in device icons (name -> inner SVG). Shared 1:1 with panel-editor.js.
+  const ICONS = {
+    heater: '<rect x="3.5" y="8.5" width="17" height="11" rx="1.5"/><path d="M7.5 8.5v11M12 8.5v11M16.5 8.5v11"/><path d="M7 6c.9-.8.9-1.6 0-2.4M12 6c.9-.8.9-1.6 0-2.4M17 6c.9-.8.9-1.6 0-2.4"/>',
+    light: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M8.5 14.2a5 5 0 1 1 7 0c-.7.7-1.2 1.6-1.4 2.8H9.9c-.2-1.2-.7-2.1-1.4-2.8z"/>',
+    lamp: '<path d="M8.5 3h7l2.2 6h-11.4z"/><path d="M12 9v10"/><path d="M8 21h8"/>',
+    fan: '<circle cx="12" cy="12" r="1.6"/><path d="M12 10.4c0-4 1-6 3-5.5s.5 3.5-3 5.5"/><path d="M13.6 12c4 0 6 1 5.5 3s-3.5.5-5.5-3"/><path d="M12 13.6c0 4-1 6-3 5.5s-.5-3.5 3-5.5"/><path d="M10.4 12c-4 0-6-1-5.5-3s3.5-.5 5.5 3"/>',
+    ac: '<rect x="3" y="4.5" width="18" height="9" rx="2"/><line x1="6" y1="9" x2="18" y2="9"/><path d="M6 17.5c1.6 0 1.6-1.5 3.2-1.5"/><path d="M12 17.5c1.6 0 1.6-1.5 3.2-1.5"/>',
+    tv: '<rect x="2.5" y="7" width="19" height="12.5" rx="2"/><path d="M8 3.5l4 3.5 4-3.5"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+    curtain: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M7 3c.5 6-.5 9-3 12"/><path d="M12 3v18"/><path d="M17 3c-.5 6 .5 9 3 12"/>',
+    water: '<path d="M12 3.2s6 6.4 6 10.3a6 6 0 0 1-12 0C6 9.6 12 3.2 12 3.2z"/>',
+    boiler: '<rect x="6.5" y="3" width="11" height="18" rx="3"/><line x1="6.5" y1="9" x2="17.5" y2="9"/><circle cx="12" cy="15" r="2.5"/>',
+    plug: '<path d="M9 2.5v5"/><path d="M15 2.5v5"/><path d="M6.5 7.5h11v2.5a5.5 5.5 0 0 1-11 0z"/><path d="M12 21v-5.5"/>',
+    speaker: '<rect x="6" y="3" width="12" height="18" rx="2"/><circle cx="12" cy="14.5" r="3"/><circle cx="12" cy="7" r="1"/>',
+    thermostat: '<path d="M14 14.5V5a2 2 0 1 0-4 0v9.5a4 4 0 1 0 4 0z"/>',
+    power: '<path d="M18.4 6.6a9 9 0 1 1-12.8 0"/><line x1="12" y1="2.5" x2="12" y2="12"/>',
+    scene: '<path d="M12 3l2.6 5.7 6.2.6-4.7 4.2 1.4 6.1L12 16.9 6.5 19.6l1.4-6.1L3.2 9.3l6.2-.6z"/>',
+    gate: '<rect x="4" y="7" width="16" height="13" rx="1"/><path d="M4 11h16M4 15h16M8 7v13M12 7v13M16 7v13"/>',
+    camera: '<rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="12" cy="13" r="3.2"/><path d="M8 7l1.4-2h5L16 7"/>',
+    music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
+    door: '<path d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17"/><path d="M3 21h18"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  };
+  function svgIcon(inner) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+  }
+  function autoIcon(tile) {
     const b = (tile.bindings || [])[0] || {};
     if (b.type === 'scene') return '🎬';
     if (b.type === 'curtain') return '🪟';
     if (b.type === 'pixoo_preset') return '🖼️';
     if (b.type === 'media') return '📺';
     return '💡';
+  }
+  function iconHtml(tile) {
+    const ic = (tile.icon || '').trim();
+    if (ic && ICONS[ic]) return svgIcon(ICONS[ic]);   // built-in SVG
+    if (ic) return esc(ic);                            // custom emoji/text
+    return esc(autoIcon(tile));                        // auto by binding
   }
 
   function render() {
@@ -75,7 +105,7 @@
       el.className = 'tile';
       const sb = stateBinding(t);
       el.innerHTML =
-        `<div class="tile-icon">${esc(tileIcon(t))}</div>` +
+        `<div class="tile-icon">${iconHtml(t)}</div>` +
         `<div class="tile-body"><div class="tile-label">${esc(t.label || '?')}</div>` +
         (t.sub ? `<div class="tile-sub">${esc(t.sub)}</div>` : '') + `</div>` +
         (sb ? `<span class="tile-state"></span>` : '');
