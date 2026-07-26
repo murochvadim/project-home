@@ -116,6 +116,22 @@ TELEPORT_INNER_M = 1500     # band = [INNER, reach - INNER]
 # phantom >=282) — a >2x margin on each side.
 PHANTOM_FIX_SPACING_M = 150
 
+# ── Places-layer far-teleport rule (2026-07-26) ──────────────────────────────
+# The rules above act on phone_trips (Home-trips) ONLY; the Places layer
+# (phone_place_trips / phone_places) had NO phantom cleaner. A GPS cache-replay
+# can park the phone at a far ghost long enough for geo_places.py to build a
+# bogus anchor + legs — e.g. a 115 km 'الجيزة, الأردن' stay reached on a 12 m
+# path. Signal (stored columns only, no ping re-fetch): a home_to_place /
+# place_to_home leg with max_dist_m > TELEPORT_FAR_M AND path_length_m <
+# PLACE_TELEPORT_PATH_RATIO * max_dist_m — you cannot reach a point 20+ km away
+# having travelled a fraction of that distance. A REAL far leg has path >= its
+# straight-line distance, so this can only ever fire on a teleport. The phantom
+# anchor is that leg's place endpoint; delete it + EVERY leg referencing it (in
+# AND out). The real downstream anchor (a closer, non-teleport place) survives —
+# it is never itself a home-teleport target. Overridable via
+# place_teleport_path_ratio.
+PLACE_TELEPORT_PATH_RATIO = 0.5
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('geo_trip_janitor')
 
@@ -142,6 +158,7 @@ def read_cfg(conn):
     tele_far = float(val.get('teleport_far_m') or TELEPORT_FAR_M)
     tele_inner = float(val.get('teleport_inner_m') or TELEPORT_INNER_M)
     fix_spacing_m = float(val.get('phantom_fix_spacing_m') or PHANTOM_FIX_SPACING_M)
+    place_ratio = float(val.get('place_teleport_path_ratio') or PLACE_TELEPORT_PATH_RATIO)
     center = val.get('center') or {}
     clat = float(center['lat']) if center.get('lat') is not None else None
     clon = float(center['lon']) if center.get('lon') is not None else None
@@ -150,7 +167,7 @@ def read_cfg(conn):
         g, dev = d.get('group_id'), d.get('device_id')
         if g and dev:
             gmap.setdefault(g, []).append(dev)
-    return far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m
+    return far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m, place_ratio
 
 
 def trip_good_dists(conn, device_ids, start, end, clat, clon, acc_gate):
@@ -206,6 +223,65 @@ def classify_trip(t, good_dists, cmax, far_m, tele_far, tele_inner, fix_spacing_
     return None
 
 
+def clean_place_phantoms(conn, tele_far, place_ratio, dry_run):
+    """Far-teleport cleanup for the PLACES layer (phone_place_trips / phone_places),
+    which the phone_trips rules never touch. See PLACE_TELEPORT_PATH_RATIO. Uses
+    stored columns only. The phantom anchor = a teleport leg's place endpoint
+    (home_to_place -> to_place_id, place_to_home -> from_place_id); we delete it +
+    EVERY leg referencing it (in and out). The closer real anchor is never a
+    home-teleport target, so it is not in the phantom set and survives."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT id, kind, origin_name, dest_name, from_place_id, to_place_id,
+                      max_dist_m, path_length_m
+               FROM phone_place_trips
+               WHERE kind IN ('home_to_place', 'place_to_home')
+                 AND returned_at > NOW() - make_interval(hours => %s)
+                 AND max_dist_m > %s
+                 AND path_length_m < %s * max_dist_m
+               ORDER BY started_at DESC""",
+            (RECENT_TRIPS_HOURS, tele_far, place_ratio),
+        )
+        legs = cur.fetchall()
+
+    phantom_ids = set()
+    for lg in legs:
+        aid = lg['to_place_id'] if lg['kind'] == 'home_to_place' else lg['from_place_id']
+        log.info('places: teleport leg #%s %s "%s"->"%s" (max=%sm path=%sm) => phantom anchor %s',
+                 lg['id'], lg['kind'], lg['origin_name'], lg['dest_name'],
+                 lg['max_dist_m'], lg['path_length_m'], aid)
+        if aid is not None:
+            phantom_ids.add(aid)
+
+    if not phantom_ids:
+        log.info('places: no far-teleport phantoms')
+        return
+
+    ids = list(phantom_ids)
+    if dry_run:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id, name FROM phone_places WHERE id = ANY(%s)", (ids,))
+            anchors = cur.fetchall()
+            cur.execute("SELECT id, kind, origin_name, dest_name FROM phone_place_trips "
+                        "WHERE from_place_id = ANY(%s) OR to_place_id = ANY(%s) "
+                        "ORDER BY started_at", (ids, ids))
+            leg_rows = cur.fetchall()
+        log.info('[DRY RUN] places: would delete %d anchor(s): %s + %d leg(s): %s',
+                 len(anchors), ', '.join(f'#{a["id"]}("{a["name"]}")' for a in anchors),
+                 len(leg_rows), ', '.join(f'#{l["id"]}({l["kind"]})' for l in leg_rows))
+        return
+
+    with conn.cursor() as cur:
+        # Legs first (they FK the anchor), then the anchor itself.
+        cur.execute("DELETE FROM phone_place_trips "
+                    "WHERE from_place_id = ANY(%s) OR to_place_id = ANY(%s)", (ids, ids))
+        legs_removed = cur.rowcount
+        cur.execute("DELETE FROM phone_places WHERE id = ANY(%s)", (ids,))
+        anchors_removed = cur.rowcount
+    log.info('places: deleted %d far-teleport phantom anchor(s) %s + %d referencing leg(s)',
+             anchors_removed, ids, legs_removed)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true',
@@ -215,12 +291,14 @@ def main():
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
 
-    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m = read_cfg(conn)
+    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m, place_ratio = read_cfg(conn)
     log.info('close-phantom: clean_max(acc<=%.0fm) <= %.0fm (dur < %ds) | '
              'teleport: reach > %.0fm with empty band [%.0fm .. reach-%.0fm] | '
-             'sparse-track: reach > %.0fm AND > %.0fm/fix (any dur)  %s',
+             'sparse-track: reach > %.0fm AND > %.0fm/fix (any dur) | '
+             'places-teleport: leg reach > %.0fm AND path < %.2f*reach  %s',
              acc_gate, far_m, MAX_TRIP_SEC, tele_far, tele_inner, tele_inner,
-             far_m, fix_spacing_m, '[DRY RUN]' if args.dry_run else '[LIVE]')
+             far_m, fix_spacing_m, tele_far, place_ratio,
+             '[DRY RUN]' if args.dry_run else '[LIVE]')
 
     # All confirmed closed trips in the look-back — ANY duration. The close-
     # phantom rule self-limits to < MAX_TRIP_SEC; the teleport rule needs to see
@@ -264,34 +342,35 @@ def main():
             t['_reason'] = reason
             to_delete.append(t)
 
+    # ── Home-trip phantoms (phone_trips) ──
     if not to_delete:
-        log.info('nothing to delete')
-        return
-
-    if args.dry_run:
-        log.info('[DRY RUN] would delete %d trip(s): %s',
+        log.info('no home-trip phantoms to delete')
+    elif args.dry_run:
+        log.info('[DRY RUN] would delete %d home trip(s): %s',
                  len(to_delete),
                  ', '.join(f'#{t["id"]}({t["max_dist_m"]}m)' for t in to_delete))
-        return
+    else:
+        with conn.cursor() as cur:
+            for t in to_delete:
+                # Also remove the fake trip's geofence markers (the "left home" /
+                # "came home" rows in device_events), scoped to the trip's OWN span
+                # [started_at..returned_at] — by definition that span is the fake
+                # excursion, so any geofence event inside it is an artifact. The span
+                # is never wide enough to touch a genuine away/home event outside it.
+                cur.execute(
+                    """DELETE FROM device_events
+                       WHERE source = 'owntracks_ingest'
+                         AND dps->>'kind' = 'geofence'
+                         AND ts BETWEEN %s AND %s""",
+                    (t['started_at'], t['returned_at']),
+                )
+                ev_removed = cur.rowcount
+                cur.execute("DELETE FROM phone_trips WHERE id = %s", (t['id'],))
+                log.info('deleted fake trip #%d (max=%dm) + %d geofence marker(s) in its span',
+                         t['id'], t['max_dist_m'], ev_removed)
 
-    with conn.cursor() as cur:
-        for t in to_delete:
-            # Also remove the fake trip's geofence markers (the "left home" /
-            # "came home" rows in device_events), scoped to the trip's OWN span
-            # [started_at..returned_at] — by definition that span is the fake
-            # excursion, so any geofence event inside it is an artifact. The span
-            # is never wide enough to touch a genuine away/home event outside it.
-            cur.execute(
-                """DELETE FROM device_events
-                   WHERE source = 'owntracks_ingest'
-                     AND dps->>'kind' = 'geofence'
-                     AND ts BETWEEN %s AND %s""",
-                (t['started_at'], t['returned_at']),
-            )
-            ev_removed = cur.rowcount
-            cur.execute("DELETE FROM phone_trips WHERE id = %s", (t['id'],))
-            log.info('deleted fake trip #%d (max=%dm) + %d geofence marker(s) in its span',
-                     t['id'], t['max_dist_m'], ev_removed)
+    # ── Places-layer far-teleport phantoms (phone_place_trips / phone_places) ──
+    clean_place_phantoms(conn, tele_far, place_ratio, args.dry_run)
 
 
 if __name__ == '__main__':
