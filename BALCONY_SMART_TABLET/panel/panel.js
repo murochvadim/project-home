@@ -62,8 +62,15 @@
     music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
     door: '<path d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17"/><path d="M3 21h18"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/>',
   };
-  function svgIcon(inner) {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+  const ICON_COLORS = {
+    heater: '#e8663a', light: '#f2b134', lamp: '#f2b134', fan: '#2fa9a1', ac: '#3a90d8',
+    tv: '#5a6b86', lock: '#d64f4f', curtain: '#b07a4a', water: '#2f9fe0', boiler: '#e8663a',
+    plug: '#6f8f4f', speaker: '#8a5ad6', thermostat: '#e05a5a', power: '#d64f4f', scene: '#d6a93a',
+    gate: '#6f7f99', camera: '#5a6b86', music: '#8a5ad6', door: '#b07a4a',
+  };
+  function svgIcon(inner, color) {
+    const c = color ? ' style="color:' + color + '"' : '';
+    return '<svg viewBox="0 0 24 24"' + c + ' fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
   }
   function autoIcon(tile) {
     const b = (tile.bindings || [])[0] || {};
@@ -75,7 +82,7 @@
   }
   function iconHtml(tile) {
     const ic = (tile.icon || '').trim();
-    if (ic && ICONS[ic]) return svgIcon(ICONS[ic]);   // built-in SVG
+    if (ic && ICONS[ic]) return svgIcon(ICONS[ic], ICON_COLORS[ic]);   // built-in SVG (own colour)
     if (ic) return esc(ic);                            // custom emoji/text
     return esc(autoIcon(tile));                        // auto by binding
   }
