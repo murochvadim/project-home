@@ -259,7 +259,7 @@ def _recompute_leg_from_home(conn, dev_ids, started_at, returned_at, clat, clon)
     return int(max_d), int(path)
 
 
-def clean_place_phantoms(conn, tele_far, max_tele_path_m, gmap, clat, clon, dry_run):
+def clean_place_phantoms(conn, tele_far, max_tele_path_m, gmap, clat, clon, dry_run, only_group=None):
     """Far-teleport cleanup for the PLACES layer (phone_place_trips / phone_places),
     which the phone_trips rules never touch. See PLACE_TELEPORT_MAX_PATH_M. A TRUE
     teleport = a home_to_place/place_to_home leg that reached far (max_dist_m >
@@ -276,8 +276,9 @@ def clean_place_phantoms(conn, tele_far, max_tele_path_m, gmap, clat, clon, dry_
                FROM phone_place_trips
                WHERE kind IN ('home_to_place', 'place_to_home')
                  AND returned_at > NOW() - make_interval(hours => %s)
-                 AND max_dist_m > %s AND path_length_m < %s""",
-            (RECENT_TRIPS_HOURS, tele_far, max_tele_path_m),
+                 AND max_dist_m > %s AND path_length_m < %s
+                 AND (%s::text IS NULL OR group_id = %s)""",
+            (RECENT_TRIPS_HOURS, tele_far, max_tele_path_m, only_group, only_group),
         )
         tele_legs = cur.fetchall()
 

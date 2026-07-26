@@ -195,7 +195,7 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 - Persistent log: `/var/log/test-geolocation-filters.log`
 - Ephemeral progress JSON: `/tmp/geolocation-test-progress.json`
 
-**How it works:** the 20 A/B/C/D scenarios publish synthetic OwnTracks MQTT messages to the production broker over ~90 sec; the live daemon processes them through the actual filter chain; the script then queries DB to verify outcomes. Time control is via `tst` field forward-dating (a "60-second time_fallback" assertion completes in ~2 sec wall-clock). **The 5 P (Places) scenarios test a DIFFERENT component** — `geo_places.py`, the away-base cron — which reads `device_locations` rather than MQTT. A far away-base journey can't go through the daemon (its anti-teleport-from-home guard rejects it by design), so P scenarios insert a controlled `device_locations` stream directly and call `geo_places.process_group` on the sandbox group (with `reverse_geocode` monkeypatched → hermetic, no Nominatim call), asserting `phone_places` (Stays) + `phone_place_trips` (legs). They run in ~2 sec total. `cleanup()` also wipes `phone_places`/`phone_place_trips`/`geo_place_state` for the sandbox group.
+**How it works:** the 20 A/B/C/D scenarios publish synthetic OwnTracks MQTT messages to the production broker over ~90 sec; the live daemon processes them through the actual filter chain; the script then queries DB to verify outcomes. Time control is via `tst` field forward-dating (a "60-second time_fallback" assertion completes in ~2 sec wall-clock). **The 5 P (Places) scenarios test a DIFFERENT component** — `geo_places.py`, the away-base cron — which reads `device_locations` rather than MQTT. A far away-base journey can't go through the daemon (its anti-teleport-from-home guard rejects it by design), so P scenarios insert a controlled `device_locations` stream directly and call `geo_places.process_group` on the sandbox group (with `reverse_geocode` monkeypatched → hermetic, no Nominatim call), asserting `phone_places` (Stays) + `phone_place_trips` (legs). They run in ~2 sec total. `cleanup()` also wipes `phone_places`/`phone_place_trips`/`geo_place_state` for the sandbox group. **The 6 J (Janitor) scenarios test the phantom cleaner** `geo_trip_janitor.py` by importing the DEPLOYED `/opt/geo_trip_janitor.py` and running its real functions: J1–J4 insert a sandbox `phone_trips` row + pings and call `classify_trip` (rules 1–3, J2 = negative control); **J5–J6 test the Places-layer far-teleport rule (rule 4)** — J5 inserts a sandbox `Home→ghost(teleport)→realplace` chain and calls `clean_place_phantoms(..., only_group=<sandbox>)`, asserting the ghost anchor + its teleport leg are DELETED while the real leg is RE-STITCHED to Home and the real place survives (this test would have caught the ratio-version regression that deleted real leg #160); J6 is the negative control (a real 20 km `Home→place` drive is kept). `clean_place_phantoms` gained an `only_group` param purely so the test can scope it to the sandbox group and never touch real phone data (production passes `None` = all groups).
 
 **Test isolation:** all pings use sandbox `device_id='owntracks_test_filtertest'` (not in `tracked_devices`). Production phone data is never touched. Try/finally cleanup wipes every sandbox row at end (also runs at start to clear leftover from a crashed prior run).
 
@@ -204,7 +204,7 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 - No rule has `triggers` matching the sandbox device_id.
 - MQTT topic `owntracks/+/+` is consumed only by the daemon.
 
-**Scenarios (25 total, ~90 sec runtime):**
+**Scenarios (31 total, ~90 sec runtime):**
 
 | ID | Category | What it tests |
 |---|---|---|
@@ -233,6 +233,12 @@ Dashboard-triggered regression test for every filter + state-machine branch.
 | P3 | Places | Mid-stay jitter ping (167 m out) absorbed by the departure debounce — no spurious loop leg, stay not truncated |
 | P4 | Places | Home excursion with no dwell → 0 places, 0 legs (dropped; phone_trips owns that trip) |
 | P5 | Places | Out-and-back to the same anchor → a `place_loop` leg |
+| J1 | Janitor | Rule 3 sparse-track ~1 km ghost (282 m/fix) → deleted |
+| J2 | Janitor | Real dense ~1 km trip (26 m/fix) → kept (negative control) |
+| J3 | Janitor | Rule 1 close-phantom (clean_max ≤ 250 m) → deleted |
+| J4 | Janitor | Rule 2 far-teleport (30 km, empty band) → deleted |
+| J5 | Janitor | Rule 4 Places teleport `Home→ghost→realplace`: ghost + teleport leg deleted, real leg re-stitched to Home, real place kept |
+| J6 | Janitor | Rule 4 negative control — real 20 km `Home→place` drive kept |
 
 **Invocation:**
 - **Dashboard UI** (preferred): Project General → Geolocation tab → Settings card → "▶ Run filter test" button. Live progress bar + pass/fail counts. End-of-run state shown inline.

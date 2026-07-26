@@ -978,7 +978,7 @@ def _janitor_verdict(conn, ctx, dur, max_dist, path_len, outside, pings):
                (TEST_DEVICE_ID, started, returned, dur, max_dist, path_len, outside))
     t = db_query(conn, "SELECT * FROM phone_trips WHERE group_id=%s ORDER BY id DESC LIMIT 1",
                  (TEST_DEVICE_ID,))[0]
-    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m = jan.read_cfg(conn)
+    far_m, clat, clon, acc_gate, gmap, tele_far, tele_inner, fix_spacing_m, _place_max = jan.read_cfg(conn)
     good, _total = jan.trip_good_dists(conn, [TEST_DEVICE_ID], started, returned, clat, clon, acc_gate)
     cmax = good[-1] if good else float(t['max_dist_m'] or 0)
     return jan.classify_trip(t, good, cmax, far_m, tele_far, tele_inner, fix_spacing_m)
@@ -1016,6 +1016,64 @@ def scenario_j4(conn, ctx):
         else ('FAIL', f'Expected teleport; got {r!r}')
 
 
+def scenario_j5(conn, ctx):
+    """Janitor Rule 4 — Places far-teleport + RE-STITCH. Sandbox chain
+    Home→ghost(teleport 115 km reach / 12 m path)→realplace(20 km real drive). The
+    ghost anchor + its teleport leg are DELETED; the REAL leg is RE-STITCHED to Home
+    (NOT deleted — the exact regression the ratio version caused, deleting real leg
+    #160); the real place SURVIVES. Scoped to the sandbox group only (hermetic)."""
+    jan = _load_janitor()
+    _f, clat, clon, _ag, gmap, tele_far, _ti, _fs, place_max = jan.read_cfg(conn)
+    g = TEST_DEVICE_ID
+    db_execute(conn,
+        "INSERT INTO phone_places (group_id,name,lat,lon,radius_m,arrived_at,left_at) VALUES "
+        "(%s,'TESTGHOST',31.70,36.00,50, now()-interval '55 min', now()-interval '50 min'),"
+        "(%s,'TESTREAL', 31.79,34.64,120,now()-interval '30 min', now()-interval '10 min')",
+        (g, g))
+    ghost = db_query(conn, "SELECT id FROM phone_places WHERE group_id=%s AND name='TESTGHOST'", (g,))[0]['id']
+    real  = db_query(conn, "SELECT id FROM phone_places WHERE group_id=%s AND name='TESTREAL'",  (g,))[0]['id']
+    db_execute(conn,
+        "INSERT INTO phone_place_trips (group_id,device_label,kind,origin_name,dest_name,"
+        "from_place_id,to_place_id,started_at,returned_at,duration_sec,max_dist_m,path_length_m,outside_pings) VALUES "
+        "(%s,'FilterTest','home_to_place','Home','TESTGHOST',NULL,%s, now()-interval '60 min', now()-interval '55 min',300,115000,12,3),"
+        "(%s,'FilterTest','place_to_place','TESTGHOST','TESTREAL',%s,%s, now()-interval '50 min', now()-interval '30 min',1200,128000,20000,180)",
+        (g, ghost, g, ghost, real))
+    jan.clean_place_phantoms(conn, tele_far, place_max, gmap, clat, clon, False, only_group=g)
+    ghost_gone = db_query(conn, "SELECT count(*) n FROM phone_places WHERE id=%s", (ghost,))[0]['n'] == 0
+    real_kept  = db_query(conn, "SELECT count(*) n FROM phone_places WHERE id=%s", (real,))[0]['n'] == 1
+    legs = db_query(conn, "SELECT kind,origin_name,dest_name,from_place_id "
+                          "FROM phone_place_trips WHERE group_id=%s", (g,))
+    restitched = (len(legs) == 1 and legs[0]['origin_name'] == 'Home'
+                  and legs[0]['from_place_id'] is None and legs[0]['dest_name'] == 'TESTREAL')
+    if ghost_gone and real_kept and restitched:
+        return ('PASS', 'ghost+teleport-leg deleted; real leg re-stitched Home→TESTREAL; real place kept')
+    return ('FAIL', f'ghost_gone={ghost_gone} real_kept={real_kept} restitched={restitched} legs={legs}')
+
+
+def scenario_j6(conn, ctx):
+    """Janitor Rule 4 negative control — a REAL Home→place drive (20 km reach, 20 km
+    path) must be KEPT: 20 km of path is genuine travel, never a teleport (path is
+    not < 1 km), so the rule must not touch it or its place."""
+    jan = _load_janitor()
+    _f, clat, clon, _ag, gmap, tele_far, _ti, _fs, place_max = jan.read_cfg(conn)
+    g = TEST_DEVICE_ID
+    db_execute(conn,
+        "INSERT INTO phone_places (group_id,name,lat,lon,radius_m,arrived_at,left_at) VALUES "
+        "(%s,'TESTREAL2',31.79,34.64,120, now()-interval '30 min', now()-interval '10 min')", (g,))
+    real = db_query(conn, "SELECT id FROM phone_places WHERE group_id=%s AND name='TESTREAL2'", (g,))[0]['id']
+    db_execute(conn,
+        "INSERT INTO phone_place_trips (group_id,device_label,kind,origin_name,dest_name,"
+        "from_place_id,to_place_id,started_at,returned_at,duration_sec,max_dist_m,path_length_m,outside_pings) VALUES "
+        "(%s,'FilterTest','home_to_place','Home','TESTREAL2',NULL,%s, now()-interval '40 min', now()-interval '30 min',600,20000,20000,150)",
+        (g, real))
+    jan.clean_place_phantoms(conn, tele_far, place_max, gmap, clat, clon, False, only_group=g)
+    place_kept = db_query(conn, "SELECT count(*) n FROM phone_places WHERE id=%s", (real,))[0]['n'] == 1
+    leg_kept   = db_query(conn, "SELECT count(*) n FROM phone_place_trips WHERE group_id=%s AND to_place_id=%s",
+                          (g, real))[0]['n'] == 1
+    return ('PASS', 'real 20 km Home→place drive kept (path 20 km, not a teleport)') if (place_kept and leg_kept) \
+        else ('FAIL', f'real drive wrongly deleted: place_kept={place_kept} leg_kept={leg_kept}')
+
+
 # ─── Scenario registry ─────────────────────────────────────────────
 
 SCENARIOS = [
@@ -1051,6 +1109,10 @@ SCENARIOS = [
     ('J2', 'Janitor: real dense trip kept',            scenario_j2),
     ('J3', 'Janitor: close-phantom (<=250m) deleted',  scenario_j3),
     ('J4', 'Janitor: far-teleport (>20km) deleted',    scenario_j4),
+    # Places-layer far-teleport rule (clean_place_phantoms) — J5 positive + re-stitch,
+    # J6 negative control. Scoped to the sandbox group so real phone data is untouched.
+    ('J5', 'Janitor: Places teleport deleted + real leg re-stitched', scenario_j5),
+    ('J6', 'Janitor: real Places drive kept',          scenario_j6),
 ]
 
 
