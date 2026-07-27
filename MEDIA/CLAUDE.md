@@ -174,6 +174,45 @@ The Player tab shows **two** playlist cards — **🎵 Audio Playlists** and **�
 - **`media.js`:** `loadPlaylists()` fetches once, partitions by `kind`, renders both grids (`#playlists-grid` / `#video-playlists-grid`) via one shared `renderPlaylistGrid()`. **Video cards are a distinct colour** (`#e8f0fb` blue vs audio cream `#faf8f5`), stored per-card as `data-default-bg` so `paintPlayingPlaylistCard()` (the 5 s play-highlight repaint) restores the RIGHT colour instead of flattening video to cream. Drag-reorder carries `data-kind` + a same-kind guard so audio and video can't be mixed in one reorder. `createPlaylist(kind)` stamps the kind. Playback (`playPlaylist` → `/api/playlists/<id>/play`) already handles video per-item + the TV target — unchanged.
 - **Additive-safe:** other `/api/playlists` consumers (Balcony panel picker, `_dispatch_media` play) read only `id`/`items`/play — the extra `kind` field breaks nothing.
 
+## 85" video playlists + audio-on-TV (2026-07-28) — ⚠ WIP, known gap
+Video playlists (`kind='video'`) now **play on the 85"** and the 85"'s **audio was moved off the
+soundbar cast onto the TV (DLNA)** at the user's request ("play on the TV, not the soundbar").
+This is a **working-but-imperfect** state — a documented TV limitation remains (below) and there's
+a plan to finish it.
+
+**Playback wiring (`player_service.py`, all 85"-only via `target=='tv'` / item type):**
+- `playlist_play` no longer blindly casts the soundbar for a `tv` playlist. It runs the Cast
+  preset **only when the item being started is AUDIO** (`_start_is_audio`), and starts the DLNA
+  advance watcher when the playlist **contains any video** (`_has_video`) — so a video playlist
+  no longer launches the soundbar's Chromecast (which had been **stealing the 85"'s screen +
+  sound**). Verified: 85" transport reaches `PLAYING` for a video playlist.
+- `_dlna_queue_watch_loop` was generalized to advance **video items on ANY target** (not just
+  audio-on-DLNA); audio-on-cast items are still left to the Cast `FINISHED` listener.
+- `TV_TARGETS['tv'].audio_sink` flipped **`cast → dlna`** → 85" music now plays through the TV's
+  own DLNA renderer (each track a fresh `_wake_and_play`), like the 55".
+
+**⚠ Known limitation (the whole reason 85" audio was on the soundbar):** the **85" TV's DLNA
+*music* track-switching is slow** — documented above/below ("the 85" TV's UPnP music app is broken
+for mid-queue switching"). **Video** track-switching on the 85" is **fast**; only **audio** has a
+multi-second gap between tracks. This is a **TV hardware quirk, not tunable** (a poll/verify "trim"
+was tried and did nothing — the delay is the TV taking its time to START each music stream).
+**Fix planned but NOT done:** revert 85" audio → **soundbar Cast** (gapless, as originally
+designed) while keeping video on the TV — sequence + measurement in
+[`.claude/plans/media-85-audio-gapless.md`]. Only the "audio after a video" case is genuinely
+new/unmeasured (video playlists didn't exist before).
+
+**85" volume (now-playing bar):** HA volume for the 85" is **DEAD** (commands return 200 but
+`volume_level` is frozen at 0 — same failure as the tv55 HA volume). The TV's own UPnP
+`RenderingControl` also reads 0 (its speaker volume is bypassed for eARC→soundbar). The **only**
+channel that moves the 85"'s sound in software is the TV's **remote keys**. So the bar is a
+**relative slider** whose drag sends `KEY_VOLUP/KEY_VOLDOWN` presses via the Tizen WebSocket —
+new **`vol_keys`** command in `tv_control.py` (85"-only `entity=='tv'` branch: sends |value|
+presses in ONE WS session). `media.js` tracks the bar position client-side (`window._tv85SliderPct`)
+since there's no readable level. `/api/cast/volume` routes by queue: **DLNA queue → HA
+`volume_set` (dead for the 85")**, **Cast queue → `cast.set_volume` (works)** — so **when audio
+goes back to Cast (the plan), the ordinary cast slider will drive 85"-audio volume for free**, and
+only video needs the remote-key bar. **55" volume + playback untouched throughout.**
+
 ## TV Playback
 
 ### Devices controlled

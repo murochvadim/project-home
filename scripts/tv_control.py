@@ -248,8 +248,20 @@ async def media_command(req):
                 elif command == 'turn_off':   await ha_post(s, '/api/services/switch/turn_off', {'entity_id': TV_SWITCH})
                 elif command == 'volume_up':  await ha_post(s, '/api/services/media_player/volume_up',   {'entity_id': TV_PLAYER})
                 elif command == 'volume_down':await ha_post(s, '/api/services/media_player/volume_down', {'entity_id': TV_PLAYER})
+                elif command == 'volume_set': await ha_post(s, '/api/services/media_player/volume_set',  {'entity_id': TV_PLAYER, 'volume_level': max(0.0, min(1.0, (value or 0) / 100.0))})
                 elif command == 'mute':       await ha_post(s, '/api/services/media_player/volume_mute', {'entity_id': TV_PLAYER, 'is_volume_muted': value})
                 elif command == 'source':     await ha_post(s, '/api/services/media_player/select_source', {'entity_id': TV_PLAYER, 'source': value})
+                elif command == 'vol_keys':
+                    # 85" HA volume is dead — the only working control is the TV's own
+                    # remote keys. Send |value| KEY_VOLUP/DOWN presses in ONE WS session
+                    # (the dashboard 85" volume bar drives this by its drag delta).
+                    n = int(value or 0)
+                    key = 'KEY_VOLUP' if n > 0 else 'KEY_VOLDOWN'
+                    tv_ws = get_ws()
+                    async with tv_ws:
+                        for _ in range(min(abs(n), 40)):
+                            await tv_ws.send_command(SendRemoteKey.click(key))
+                            await asyncio.sleep(0.05)
                 else:
                     tv_ws = get_ws()
                     async with tv_ws:

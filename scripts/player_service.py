@@ -50,9 +50,13 @@ MEDIA_LXC_IP    = '192.168.1.138'
 # matters for music (single tracks + playlists).
 TV_TARGETS = {
     'tv':   {'name': 'Samsung 85" QLED',
+             # Play audio through the TV itself (DLNA), exactly like the balcony
+             # 55" — NOT cast to the soundbar. The soundbar's Chromecast switches
+             # inputs unreliably (music-after-video went silent, no HA control),
+             # so per user: play everything on the TV. 2026-07-27.
              'av_url': TV_URL,
              'wake_entity': 'tv',
-             'audio_sink': 'cast'},
+             'audio_sink': 'dlna'},
     'tv55': {'name': 'Balcony 55" Neo QLED',
              # DLNA cast target. TV is DHCP-RESERVED at .199 (2026-06-26) — WiFi DHCP
              # had drifted .194→.199, silently breaking casts (power still worked via
@@ -2689,14 +2693,16 @@ def _dlna_queue_watch_loop(mygen):
             target = _play_queue.get('video_target', 'tv')
             idx    = _play_queue['current_idx']
             items  = _play_queue['items']
-        if _audio_sink(target) != 'dlna':
-            return  # queue is no longer a DLNA-audio queue
         cur_item = items[idx] if 0 <= idx < len(items) else None
         if not cur_item:
             return
-        ext_dot = os.path.splitext(cur_item.get('path', ''))[1].lower()
-        if ext_dot not in AUDIO_EXTS:
-            continue  # video items advance via their own path; keep watching
+        ext_dot  = os.path.splitext(cur_item.get('path', ''))[1].lower()
+        is_audio = ext_dot in AUDIO_EXTS
+        if is_audio and _audio_sink(target) == 'cast':
+            # Native Cast listener owns advancing this track — don't double-drive.
+            saw_playing_idx = None
+            continue
+        # Video (any target) or audio-on-DLNA → watch that TV's UPnP transport.
         state = _get_transport_state(tv_url=_av_url(target))  # poll THIS TV explicitly
         if state == 'PLAYING':
             saw_playing_idx = idx
@@ -2838,23 +2844,31 @@ def playlist_play(pid):
                 'current_path':  play_items[start_idx].get('path', ''),
                 'video_target':  video_target,
             }
-        if _audio_sink(video_target) == 'dlna':
-            # Balcony: audio plays on the TV's own speakers via UPnP. The TV has
-            # no Chromecast, so a server-side watcher advances tracks. Don't
-            # touch the soundbar's Cast preset volume here.
-            _start_dlna_queue_watcher()
-        else:
-            # Apply preset volume before playback starts — soundbar's Cast
-            # reference level is hot, so each playlist starts at the user's
-            # preferred level instead of whatever the last session left.
+        # Only wake the soundbar's Cast when we're about to play AUDIO. For a
+        # VIDEO item the sound comes from the TV itself, and launching the
+        # soundbar's Cast stops the video from playing on the 85". The balcony
+        # 55" never touches the soundbar and plays video playlists fine — this
+        # makes the 85" behave the same for video.
+        _p_exts = [os.path.splitext((it or {}).get('path', ''))[1].lower() for it in play_items]
+        _has_video = any(e and e not in AUDIO_EXTS for e in _p_exts)
+        _start_is_audio = (0 <= start_idx < len(_p_exts)) and (_p_exts[start_idx] in AUDIO_EXTS)
+        _sink = _audio_sink(video_target)
+
+        if _sink == 'cast' and _start_is_audio:
+            # Apply preset volume before casting — the soundbar's Cast reference
+            # level is hot, so each playlist starts at the user's preferred level.
             try:
                 preset = _get_cast_preset_volume()
                 cast = _get_cast()
                 cast.set_volume(preset)
             except Exception:
                 log.exception('cast preset volume apply')
-            # No watcher needed — Cast's media-status listener handles
-            # end-of-track and triggers _cast_advance_queue() natively.
+
+        # Watcher advances items the native Cast listener CAN'T: VIDEO items (any
+        # target) + AUDIO on a DLNA target (balcony 55").
+        if _sink == 'dlna' or _has_video:
+            _start_dlna_queue_watcher()
+
         _play_queue_item_cast(start_idx)
         return jsonify({
             'ok':           True,

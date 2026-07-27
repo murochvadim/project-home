@@ -70,6 +70,9 @@ async function refreshState() {
     const tv = s.tv;
     document.getElementById('tv-status').innerHTML = statusDot(tv.power);
     document.getElementById('tv-volume').textContent = tv.volume != null ? tv.volume + '%' : '—';
+    // Stash the 85" TV volume so the now-playing bar's slider can drive it
+    // (the 85" plays audio through the TV now, not the Chromecast cast). 55" unaffected.
+    if (tv.volume != null) window._tv85Vol = tv.volume;
     _tvMuted = tv.muted;
     document.getElementById('tv-mute-btn').style.opacity = _tvMuted ? '1' : '0.4';
     const tvSrcSel = document.getElementById('tv-source-select');
@@ -1891,6 +1894,11 @@ function renderQueueStrip(q) {
   const vol = q.cast_volume == null ? 0.3 : q.cast_volume;
   const volPct = Math.round(vol * 100);
   const dragging = strip && strip.dataset.volDragging === '1';
+  // 85" (target 'tv'): its Home-Assistant volume is DEAD (frozen at 0, commands are
+  // no-ops), so a slider can't work. The ONLY channel that moves the 85" volume is
+  // the TV's own remote keys (KEY_VOLUP/KEY_VOLDOWN over its WebSocket) — so show
+  // Vol−/Vol+ buttons for the 85". The 55" ('tv55') is left EXACTLY as-is (cast slider).
+  const is85 = (q.target !== 'tv55');
   // Stash position + duration on the strip so the interpolation timer can
   // read them and advance the bar between server polls. Only adopt the
   // server's position if it's MEANINGFULLY ahead of where the client is
@@ -1944,12 +1952,18 @@ function renderQueueStrip(q) {
       </div>
       <span id="cast-dur-label" style="font-size:0.78rem; opacity:0.85; min-width:42px; text-align:right; font-variant-numeric:tabular-nums;">${_fmtMMSS(dur)}</span>
     </div>
+    ${is85 ? `
+    <div style="display:flex; align-items:center; gap:12px; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.12);">
+      <span style="font-size:1.1rem; flex-shrink:0;" title="Volume">🔊</span>
+      <input id="tv85-vol-slider" type="range" min="0" max="100" step="1" value="${window._tv85SliderPct == null ? 30 : window._tv85SliderPct}" style="flex:1; cursor:pointer; height:6px;" title="Samsung 85&quot; volume — drag to raise/lower">
+      <span style="font-size:0.78rem; opacity:0.7; flex-shrink:0;">85&quot;</span>
+    </div>` : `
     <div style="display:flex; align-items:center; gap:12px; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.12);">
       <span style="font-size:1.1rem; flex-shrink:0;" title="Volume">🔉</span>
       <input id="cast-vol-slider" type="range" min="0" max="100" step="1" value="${volPct}" style="flex:1; cursor:pointer; height:6px;" title="Cast volume on soundbar">
       <span id="cast-vol-label" style="font-size:0.9rem; opacity:0.9; min-width:44px; text-align:right; font-weight:600;">${volPct}%</span>
       <button onclick="saveCastVolumePreset()" title="Save current volume as preset (used at start of next playlist)" style="background:rgba(255,255,255,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3); padding:6px 12px; font-size:0.82rem; border-radius:6px; cursor:pointer; flex-shrink:0;">💾 Save preset</button>
-    </div>
+    </div>`}
   `;
   // 1-s interpolation tick so the progress bar advances smoothly between
   // 5-s server polls. Re-uses position+duration we just stashed on the strip.
@@ -1958,6 +1972,7 @@ function renderQueueStrip(q) {
   }
   // Wire the slider — POST cast volume on every change. Mark dragging so
   // the 5-s status poll doesn't snap the slider back mid-drag.
+  // 55" (cast) slider — unchanged.
   const sl = document.getElementById('cast-vol-slider');
   const lbl = document.getElementById('cast-vol-label');
   if (sl) {
@@ -1974,7 +1989,29 @@ function renderQueueStrip(q) {
           body:    JSON.stringify({ level }),
         });
       } catch (_) {}
-      // Release the drag-lock after a moment so the next poll can update.
+      setTimeout(() => { delete strip.dataset.volDragging; }, 1500);
+    });
+  }
+  // 85" volume bar — RELATIVE: the TV's volume has no readable/settable level, so
+  // dragging sends the matching number of TV remote key presses (KEY_VOLUP/DOWN).
+  // The bar position is tracked client-side (window._tv85SliderPct).
+  const vsl85 = document.getElementById('tv85-vol-slider');
+  if (vsl85) {
+    vsl85.addEventListener('input', () => { strip.dataset.volDragging = '1'; });
+    vsl85.addEventListener('change', async () => {
+      const newPct = parseInt(vsl85.value, 10);
+      const oldPct = (window._tv85SliderPct == null) ? 30 : window._tv85SliderPct;
+      const delta = newPct - oldPct;
+      window._tv85SliderPct = newPct;
+      if (delta !== 0) {
+        try {
+          await fetch(`${MEDIA_API}/api/media/command`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ entity: 'tv', command: 'vol_keys', value: delta }),
+          });
+        } catch (_) {}
+      }
       setTimeout(() => { delete strip.dataset.volDragging; }, 1500);
     });
   }
