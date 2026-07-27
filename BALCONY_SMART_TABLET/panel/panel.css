@@ -48,7 +48,7 @@ body {
   background: #1c2130; border: 1px solid #2a3142;
   /* fixed rows: icon band (constant height) + label band → every device name
      starts at the SAME vertical position across all tiles, 1-line or 2-line. */
-  display: grid; grid-template-rows: 3rem 1fr; row-gap: 12px;
+  display: grid; grid-template-rows: 3rem 1fr; row-gap: 20px;
   padding: 20px 22px; transition: transform .08s, background .2s, border-color .2s;
 }
 .tile:active { transform: scale(.96); }
@@ -57,7 +57,7 @@ body {
 .tile-icon { font-size: 2.7rem; line-height: 3rem; color: #8b93a3; }
 .tile-icon svg { width: 1em; height: 1em; display: block; }
 .tile-body { align-self: start; }
-.tile-label { font-size: 1.32rem; font-weight: 600; line-height: 1.25; word-break: break-word; }
+.tile-label { font-size: 1.5rem; font-weight: 600; line-height: 1.25; word-break: break-word; }
 .tile-sub { font-size: .9rem; color: #7a8496; margin-top: 3px; }
 .tile-state {
   position: absolute; top: 16px; right: 17px; width: 15px; height: 15px; border-radius: 50%;
