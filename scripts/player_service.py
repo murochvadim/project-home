@@ -2421,6 +2421,7 @@ def playlists_list():
         rows = db_query(
             "SELECT id, name, description, items, "
             "  jsonb_array_length(items) AS item_count, "
+            "  COALESCE(kind, 'audio') AS kind, "
             "  created_at, updated_at "
             "FROM media_playlists "
             "ORDER BY sort_order ASC NULLS LAST, updated_at DESC, id ASC"
@@ -2440,11 +2441,19 @@ def playlists_reorder():
     if not isinstance(order, list) or not all(isinstance(x, int) for x in order):
         return jsonify({'error': 'order must be a list of playlist ids'}), 400
     try:
-        # Wipe all positions first so a re-order that drops a row from the
-        # list properly demotes it back to "auto" instead of keeping a
-        # stale index. fetch=False because UPDATE without RETURNING has
-        # no result set — calling fetchall() on it raises ProgrammingError.
-        db_query("UPDATE media_playlists SET sort_order = NULL", fetch=False)
+        # Wipe positions first so a re-order that drops a row from the list
+        # properly demotes it back to "auto" instead of keeping a stale index.
+        # SCOPED to the reordered set's kind (audio/video) — the dashboard
+        # sends only one card-type's ids, so wiping ALL rows would erase the
+        # OTHER card's manual order. fetch=False because UPDATE without
+        # RETURNING has no result set.
+        if order:
+            db_query(
+                "UPDATE media_playlists SET sort_order = NULL "
+                "WHERE COALESCE(kind, 'audio') = "
+                "  (SELECT COALESCE(kind, 'audio') FROM media_playlists WHERE id = %s)",
+                (order[0],), fetch=False,
+            )
         for idx, pid in enumerate(order):
             db_query(
                 "UPDATE media_playlists SET sort_order = %s WHERE id = %s",
@@ -2467,11 +2476,14 @@ def playlists_create():
     items = body.get('items') or []
     if not isinstance(items, list):
         return jsonify({'error': 'items must be an array'}), 400
+    kind = body.get('kind') or 'audio'
+    if kind not in ('audio', 'video'):
+        kind = 'audio'
     try:
         rows = db_query(
-            "INSERT INTO media_playlists (name, description, items) "
-            "VALUES (%s, %s, %s::jsonb) RETURNING id, name, items, created_at",
-            (name, description, json.dumps(items)),
+            "INSERT INTO media_playlists (name, description, items, kind) "
+            "VALUES (%s, %s, %s::jsonb, %s) RETURNING id, name, items, kind, created_at",
+            (name, description, json.dumps(items), kind),
         )
         if not rows:
             return jsonify({'error': 'insert returned no rows'}), 500

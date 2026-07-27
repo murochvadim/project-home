@@ -1702,6 +1702,7 @@ function _savePlaylistMode(pid, mode, on) {
 
 // Drag-and-drop reordering for playlist cards.
 let _plDragId = null;            // playlist id being dragged (string)
+let _plDragKind = null;          // kind of the dragged card (audio/video)
 let _plDragInProgress = false;   // suppresses the synthetic click after drop
 
 function wirePlaylistDragReorder(grid) {
@@ -1712,6 +1713,7 @@ function wirePlaylistDragReorder(grid) {
       handle.addEventListener('mousedown', (e) => e.stopPropagation());
       handle.addEventListener('dragstart', (e) => {
         _plDragId = card.dataset.pid;
+        _plDragKind = card.dataset.kind || 'audio';
         _plDragInProgress = true;
         card.style.opacity = '0.4';
         e.dataTransfer.effectAllowed = 'move';
@@ -1720,12 +1722,14 @@ function wirePlaylistDragReorder(grid) {
       handle.addEventListener('dragend', () => {
         card.style.opacity = '';
         _plDragId = null;
+        _plDragKind = null;
         // Clear right after the event loop so the click handler still sees true.
         setTimeout(() => { _plDragInProgress = false; }, 50);
       });
     }
     card.addEventListener('dragover', (e) => {
       if (!_plDragId) return;
+      if (_plDragKind && card.dataset.kind !== _plDragKind) return;  // no cross-grid (audio↔video) drop
       e.preventDefault();
       if (card.dataset.pid === _plDragId) return;
       card.style.outline = '3px solid #6c4f9f';
@@ -1740,6 +1744,7 @@ function wirePlaylistDragReorder(grid) {
       card.style.outline = '';
       card.style.outlineOffset = '';
       if (!_plDragId || card.dataset.pid === _plDragId) return;
+      if (_plDragKind && card.dataset.kind !== _plDragKind) return;  // never mix audio + video in one reorder
       const targetPid = card.dataset.pid;
       // Compute the new order by walking the current DOM order and
       // moving _plDragId to immediately before targetPid.
@@ -1857,7 +1862,7 @@ function paintPlayingPlaylistCard(playingId) {
       card.style.borderColor = '#e6c200';
       card.style.boxShadow = '0 0 0 2px rgba(230,194,0,0.45)';
     } else {
-      card.style.background = '#faf8f5';                  // default card bg
+      card.style.background = card.dataset.defaultBg || '#faf8f5';  // per-kind default bg
       card.style.borderColor = '';
       card.style.boxShadow = '';
     }
@@ -2081,75 +2086,94 @@ async function tvCommand(cmd) {
 // All calls go to player_service.py on LXC 100:8766 directly. Phase 1 covers
 // list/create/delete; Phase 2 will add play/queue endpoints; Phase 3 will
 // hook into the QNAP Media browser for add-to-playlist from selected items.
+// Default card background per playlist kind — audio = warm cream, video = cool
+// blue, so the two cards are visually distinct. Stored on each card as
+// data-default-bg so paintPlayingPlaylistCard restores the RIGHT colour (the
+// play-highlight repaint runs every 5 s and would otherwise flatten video to
+// the audio colour).
+const PLAYLIST_BG = { audio: '#faf8f5', video: '#e8f0fb' };
+
 async function loadPlaylists() {
-  const grid = document.getElementById('playlists-grid');
-  if (!grid) return;
+  const audioGrid = document.getElementById('playlists-grid');
+  const videoGrid = document.getElementById('video-playlists-grid');
+  if (!audioGrid && !videoGrid) return;
   try {
     const r = await fetch(`${MEDIA_API}/api/playlists`);
     const data = await r.json();
-    if (!Array.isArray(data) || data.length === 0) {
-      grid.innerHTML = '<div style="color:#aaa; font-size:0.85rem; padding:14px;">No playlists yet — click "+ New Playlist" to create one.</div>';
-      return;
-    }
-    const btnStyle = 'color:#fff; border:none; padding:10px 8px; font-size:0.85rem; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:4px; border-radius:6px; cursor:pointer; white-space:nowrap;';
-    const statusLabel = 'font-size:0.7rem; font-weight:600; text-align:center; padding-bottom:2px; color:#999;';
-    grid.innerHTML = data.map(p => {
-      const empty = p.item_count === 0;
-      const playColor = empty ? '#aaa' : '#27ae60';
-      const shufColor = empty ? '#aaa' : '#1565c0';
-      const repColor  = empty ? '#aaa' : '#8e44ad';
-      return `
-      <div class="card playlist-card" data-pid="${p.id}" data-shuffle="0" data-repeat="0" style="margin:0; padding:14px; background:#faf8f5; cursor:pointer; position:relative;" title="Click to view items">
-        <span data-pl-drag-handle="1" draggable="true" title="Drag to reorder" style="position:absolute; top:6px; right:8px; cursor:grab; color:#aaa; font-size:0.95rem; user-select:none; line-height:1; padding:2px 4px;">⋮⋮</span>
-        <div style="font-weight:700; font-size:1.05rem; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:18px;">${escapeHtml(p.name)}</div>
-        <div style="font-size:0.82rem; color:#888; margin-bottom:10px;">${p.item_count} item${p.item_count === 1 ? '' : 's'}</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;" onclick="event.stopPropagation()">
-          <div></div>
-          <div data-state-for="shuffle" style="${statusLabel}">OFF</div>
-          <div data-state-for="repeat" style="${statusLabel}">OFF</div>
-          <button onclick="playPlaylistFromCard(this)" ${empty ? 'disabled' : ''} title="Play with current Shuffle/Repeat settings" style="${btnStyle} background:${playColor};"><span style="font-size:1.05rem;">▶</span> Play</button>
-          <button data-toggle="shuffle" onclick="togglePlaylistMode(this, 'shuffle')" ${empty ? 'disabled' : ''} title="Toggle shuffle" style="${btnStyle} background:${shufColor};"><span style="font-size:1.05rem;">🔀</span> Shuffle</button>
-          <button data-toggle="repeat" onclick="togglePlaylistMode(this, 'repeat')" ${empty ? 'disabled' : ''} title="Toggle repeat (loop playlist)" style="${btnStyle} background:${repColor};"><span style="font-size:1.05rem;">🔁</span> Repeat</button>
-        </div>
-      </div>
-    `;}).join('');
-    // Whole-card click also opens the detail modal (Items button shortcut).
-    // Stop a click from firing right after a drag (Chrome dispatches a stray
-    // synthetic click on dragend for the drop target).
-    grid.querySelectorAll('.playlist-card').forEach(card => {
-      card.addEventListener('click', (ev) => {
-        if (_plDragInProgress) return;
-        if (ev.target.closest('[data-pl-drag-handle]')) return;
-        const pid = parseInt(card.dataset.pid, 10);
-        if (!Number.isNaN(pid)) openPlaylistDetail(pid);
-      });
-    });
-    // Drag-to-reorder. Handle = the ⋮⋮ chip; drop target = whole card.
-    // Mirrors the rule-card pattern in main-agent.js. Server persists the
-    // new order via POST /api/playlists/reorder.
-    wirePlaylistDragReorder(grid);
-    // Restore per-card Shuffle / Repeat preferences from localStorage so
-    // the toggles survive page navigation.
+    if (!Array.isArray(data)) throw new Error('bad response');
+    // Keep the server's global sort order within each kind (partition preserves it).
+    const audio = data.filter(p => (p.kind || 'audio') !== 'video');
+    const video = data.filter(p => (p.kind || 'audio') === 'video');
+    if (audioGrid) renderPlaylistGrid(audioGrid, audio, 'audio');
+    if (videoGrid) renderPlaylistGrid(videoGrid, video, 'video');
+    // Restore per-card Shuffle/Repeat + playing highlight across BOTH grids.
     applyStoredPlaylistModes();
-    // Re-paint the currently-playing highlight on top of the fresh render.
     try {
       const qr = await fetch(`${MEDIA_API}/api/queue/status`);
       const q  = await qr.json();
       paintPlayingPlaylistCard((q && q.active) ? q.playlist_id : null);
     } catch (_) { /* highlight is best-effort */ }
   } catch (e) {
-    grid.innerHTML = `<div style="color:#c0392b; font-size:0.85rem; padding:14px;">Failed to load playlists: ${escapeHtml(String(e.message || e))}</div>`;
+    const err = `<div style="color:#c0392b; font-size:0.85rem; padding:14px;">Failed to load playlists: ${escapeHtml(String(e.message || e))}</div>`;
+    if (audioGrid) audioGrid.innerHTML = err;
+    if (videoGrid) videoGrid.innerHTML = err;
   }
 }
 
-async function createPlaylist() {
-  const name = prompt('Playlist name:');
+// Render one grid of playlist cards. Shared by the Audio + Video cards so their
+// behaviour is IDENTICAL (Play / Shuffle / Repeat / drag / detail modal); only
+// the default card colour differs by kind.
+function renderPlaylistGrid(grid, list, kind) {
+  const bg = PLAYLIST_BG[kind] || PLAYLIST_BG.audio;
+  if (!list.length) {
+    grid.innerHTML = `<div style="color:#aaa; font-size:0.85rem; padding:14px;">No ${kind} playlists yet — click "+ New Playlist" to create one.</div>`;
+    return;
+  }
+  const btnStyle = 'color:#fff; border:none; padding:10px 8px; font-size:0.85rem; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:4px; border-radius:6px; cursor:pointer; white-space:nowrap;';
+  const statusLabel = 'font-size:0.7rem; font-weight:600; text-align:center; padding-bottom:2px; color:#999;';
+  grid.innerHTML = list.map(p => {
+    const empty = p.item_count === 0;
+    const playColor = empty ? '#aaa' : '#27ae60';
+    const shufColor = empty ? '#aaa' : '#1565c0';
+    const repColor  = empty ? '#aaa' : '#8e44ad';
+    return `
+    <div class="card playlist-card" data-pid="${p.id}" data-kind="${kind}" data-default-bg="${bg}" data-shuffle="0" data-repeat="0" style="margin:0; padding:14px; background:${bg}; cursor:pointer; position:relative;" title="Click to view items">
+      <span data-pl-drag-handle="1" draggable="true" title="Drag to reorder" style="position:absolute; top:6px; right:8px; cursor:grab; color:#aaa; font-size:0.95rem; user-select:none; line-height:1; padding:2px 4px;">⋮⋮</span>
+      <div style="font-weight:700; font-size:1.05rem; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:18px;">${escapeHtml(p.name)}</div>
+      <div style="font-size:0.82rem; color:#888; margin-bottom:10px;">${p.item_count} item${p.item_count === 1 ? '' : 's'}</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;" onclick="event.stopPropagation()">
+        <div></div>
+        <div data-state-for="shuffle" style="${statusLabel}">OFF</div>
+        <div data-state-for="repeat" style="${statusLabel}">OFF</div>
+        <button onclick="playPlaylistFromCard(this)" ${empty ? 'disabled' : ''} title="Play with current Shuffle/Repeat settings" style="${btnStyle} background:${playColor};"><span style="font-size:1.05rem;">▶</span> Play</button>
+        <button data-toggle="shuffle" onclick="togglePlaylistMode(this, 'shuffle')" ${empty ? 'disabled' : ''} title="Toggle shuffle" style="${btnStyle} background:${shufColor};"><span style="font-size:1.05rem;">🔀</span> Shuffle</button>
+        <button data-toggle="repeat" onclick="togglePlaylistMode(this, 'repeat')" ${empty ? 'disabled' : ''} title="Toggle repeat (loop playlist)" style="${btnStyle} background:${repColor};"><span style="font-size:1.05rem;">🔁</span> Repeat</button>
+      </div>
+    </div>
+  `;}).join('');
+  // Whole-card click opens the detail modal (except a click on the drag handle,
+  // or the synthetic click Chrome fires right after a drop).
+  grid.querySelectorAll('.playlist-card').forEach(card => {
+    card.addEventListener('click', (ev) => {
+      if (_plDragInProgress) return;
+      if (ev.target.closest('[data-pl-drag-handle]')) return;
+      const pid = parseInt(card.dataset.pid, 10);
+      if (!Number.isNaN(pid)) openPlaylistDetail(pid);
+    });
+  });
+  // Drag-to-reorder within this grid (server persists via /api/playlists/reorder).
+  wirePlaylistDragReorder(grid);
+}
+
+async function createPlaylist(kind) {
+  kind = (kind === 'video') ? 'video' : 'audio';
+  const name = prompt(kind === 'video' ? 'Video playlist name:' : 'Playlist name:');
   if (!name || !name.trim()) return;
   try {
     const r = await fetch(`${MEDIA_API}/api/playlists`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), items: [] }),
+      body: JSON.stringify({ name: name.trim(), items: [], kind }),
     });
     const data = await r.json();
     if (!r.ok || data.error) {

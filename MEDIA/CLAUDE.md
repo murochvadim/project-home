@@ -168,6 +168,12 @@ The QNAP `Media` share is mounted **NFS on LXC 100 as root** but the Windows/SMB
 
 ---
 
+## Playlist kinds — separate Audio + Video cards (added 2026-07-27)
+The Player tab shows **two** playlist cards — **🎵 Audio Playlists** and **🎬 Video Playlists** — each with its own **+ New Playlist** button. Backed by a `kind TEXT NOT NULL DEFAULT 'audio'` column on `media_playlists` (migration `MEDIA/migrations/001_playlist_kind.sql`; existing rows → `audio`). `kind` is purely organizational — it decides which card a playlist shows in; playlists themselves are format-agnostic (an item is played as audio or video per its extension, unchanged), so you still **add items the same way for both**: QNAP Media → ☑ Select → pick the playlist in the dropdown → + Add.
+- **`player_service.py`:** `GET /api/playlists` returns `COALESCE(kind,'audio')`; `POST /api/playlists` accepts `kind` (`audio`|`video`, default `audio`); `POST /api/playlists/reorder` **scopes the sort_order wipe to the reordered set's `kind`** (the dashboard sends only one card's ids, so a global wipe would erase the other card's manual order).
+- **`media.js`:** `loadPlaylists()` fetches once, partitions by `kind`, renders both grids (`#playlists-grid` / `#video-playlists-grid`) via one shared `renderPlaylistGrid()`. **Video cards are a distinct colour** (`#e8f0fb` blue vs audio cream `#faf8f5`), stored per-card as `data-default-bg` so `paintPlayingPlaylistCard()` (the 5 s play-highlight repaint) restores the RIGHT colour instead of flattening video to cream. Drag-reorder carries `data-kind` + a same-kind guard so audio and video can't be mixed in one reorder. `createPlaylist(kind)` stamps the kind. Playback (`playPlaylist` → `/api/playlists/<id>/play`) already handles video per-item + the TV target — unchanged.
+- **Additive-safe:** other `/api/playlists` consumers (Balcony panel picker, `_dispatch_media` play) read only `id`/`items`/play — the extra `kind` field breaks nothing.
+
 ## TV Playback
 
 ### Devices controlled

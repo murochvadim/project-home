@@ -565,10 +565,21 @@
          from the browser above. -->
     <div class="card">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
-        <h2 style="margin:0;">Playlists</h2>
-        <button class="btn btn-secondary btn-sm" onclick="createPlaylist()" style="background:#27ae60; color:#fff;">+ New Playlist</button>
+        <h2 style="margin:0;">🎵 Audio Playlists</h2>
+        <button class="btn btn-secondary btn-sm" onclick="createPlaylist('audio')" style="background:#27ae60; color:#fff;">+ New Playlist</button>
       </div>
       <div id="playlists-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:10px;">
+        <div style="color:#aaa; font-size:0.85rem; padding:14px;">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Video playlists — separate card, distinct color; same behaviour as audio. -->
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">🎬 Video Playlists</h2>
+        <button class="btn btn-secondary btn-sm" onclick="createPlaylist('video')" style="background:#1565c0; color:#fff;">+ New Playlist</button>
+      </div>
+      <div id="video-playlists-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:10px;">
         <div style="color:#aaa; font-size:0.85rem; padding:14px;">Loading…</div>
       </div>
     </div>
@@ -910,6 +921,6 @@
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/scroll-stabilizer.js"></script>
-<script src="js/media.js?v=130"></script>
+<script src="js/media.js?v=131"></script>
 </body>
 </html>
