@@ -790,7 +790,7 @@ async function ytPollStatus() {
                        : '#888';
           return `<div style="display:flex; align-items:center; gap:8px; font-size:0.82rem;">
             <span style="background:${pillBg}; color:#fff; padding:1px 6px; border-radius:8px; font-size:0.72rem; font-weight:600; min-width:74px; text-align:center;">${t.status}</span>
-            <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(t.name || '').replace(/"/g,'&quot;')}">${t.name || '?'}</span>
+            <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escHtmlSafe(t.name || '')}">${escHtmlSafe(t.name || '?')}</span>
           </div>`;
         }).join('');
       }

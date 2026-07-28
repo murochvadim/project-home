@@ -204,32 +204,32 @@ module.exports = (app, db) => {
 
   app.put('/api/water/settings', async (req, res) => {
     const body = req.body || {};
-    const existing = await db.query("SELECT value FROM dashboard_settings WHERE key = 'water.billing' LIMIT 1");
-    const existingBilling = existing.rows[0]?.value || {};
-    const cleanedBilling = {
-      start_day:     Math.min(28, Math.max(1, parseInt(body?.billing?.start_day, 10) || _WATER_BILLING_DEFAULTS.start_day)),
-      length_months: Math.min(12, Math.max(1, parseInt(body?.billing?.length_months, 10) || _WATER_BILLING_DEFAULTS.length_months)),
-      current_period_start_date: body?.billing?.current_period_start_date || existingBilling.current_period_start_date || _WATER_BILLING_DEFAULTS.current_period_start_date,
-    };
-    const tt = body?.tariff || {};
-    const _num = (v, dflt, { min = 0 } = {}) => {
-      const x = Number(v);
-      if (!Number.isFinite(x)) return dflt;
-      return Math.max(min, x);
-    };
-    const cleanedTariff = {
-      persons_in_household:         Math.min(20, Math.max(1, parseInt(tt.persons_in_household, 10) || _WATER_TARIFF_DEFAULTS.persons_in_household)),
-      low_tier_rate_ils_per_m3:     _num(tt.low_tier_rate_ils_per_m3,     _WATER_TARIFF_DEFAULTS.low_tier_rate_ils_per_m3),
-      low_tier_quota_base_m3:       _num(tt.low_tier_quota_base_m3,       _WATER_TARIFF_DEFAULTS.low_tier_quota_base_m3),
-      low_tier_quota_per_person_m3: _num(tt.low_tier_quota_per_person_m3, _WATER_TARIFF_DEFAULTS.low_tier_quota_per_person_m3),
-      high_tier_rate_ils_per_m3:    _num(tt.high_tier_rate_ils_per_m3,    _WATER_TARIFF_DEFAULTS.high_tier_rate_ils_per_m3),
-      sewage_mode:                  ['bundled','separate'].includes(tt.sewage_mode) ? tt.sewage_mode : _WATER_TARIFF_DEFAULTS.sewage_mode,
-      sewage_rate_ils_per_m3:       _num(tt.sewage_rate_ils_per_m3,       _WATER_TARIFF_DEFAULTS.sewage_rate_ils_per_m3),
-      fixed_charge_ils:             _num(tt.fixed_charge_ils,             _WATER_TARIFF_DEFAULTS.fixed_charge_ils),
-      vat_pct:                      Math.max(0, Math.min(100, Number(tt.vat_pct) || _WATER_TARIFF_DEFAULTS.vat_pct)),
-      currency_symbol:              String(tt.currency_symbol || _WATER_TARIFF_DEFAULTS.currency_symbol).slice(0, 4),
-    };
     try {
+      const existing = await db.query("SELECT value FROM dashboard_settings WHERE key = 'water.billing' LIMIT 1");
+      const existingBilling = existing.rows[0]?.value || {};
+      const cleanedBilling = {
+        start_day:     Math.min(28, Math.max(1, parseInt(body?.billing?.start_day, 10) || _WATER_BILLING_DEFAULTS.start_day)),
+        length_months: Math.min(12, Math.max(1, parseInt(body?.billing?.length_months, 10) || _WATER_BILLING_DEFAULTS.length_months)),
+        current_period_start_date: body?.billing?.current_period_start_date || existingBilling.current_period_start_date || _WATER_BILLING_DEFAULTS.current_period_start_date,
+      };
+      const tt = body?.tariff || {};
+      const _num = (v, dflt, { min = 0 } = {}) => {
+        const x = Number(v);
+        if (!Number.isFinite(x)) return dflt;
+        return Math.max(min, x);
+      };
+      const cleanedTariff = {
+        persons_in_household:         Math.min(20, Math.max(1, parseInt(tt.persons_in_household, 10) || _WATER_TARIFF_DEFAULTS.persons_in_household)),
+        low_tier_rate_ils_per_m3:     _num(tt.low_tier_rate_ils_per_m3,     _WATER_TARIFF_DEFAULTS.low_tier_rate_ils_per_m3),
+        low_tier_quota_base_m3:       _num(tt.low_tier_quota_base_m3,       _WATER_TARIFF_DEFAULTS.low_tier_quota_base_m3),
+        low_tier_quota_per_person_m3: _num(tt.low_tier_quota_per_person_m3, _WATER_TARIFF_DEFAULTS.low_tier_quota_per_person_m3),
+        high_tier_rate_ils_per_m3:    _num(tt.high_tier_rate_ils_per_m3,    _WATER_TARIFF_DEFAULTS.high_tier_rate_ils_per_m3),
+        sewage_mode:                  ['bundled','separate'].includes(tt.sewage_mode) ? tt.sewage_mode : _WATER_TARIFF_DEFAULTS.sewage_mode,
+        sewage_rate_ils_per_m3:       _num(tt.sewage_rate_ils_per_m3,       _WATER_TARIFF_DEFAULTS.sewage_rate_ils_per_m3),
+        fixed_charge_ils:             _num(tt.fixed_charge_ils,             _WATER_TARIFF_DEFAULTS.fixed_charge_ils),
+        vat_pct:                      Math.max(0, Math.min(100, Number(tt.vat_pct) || _WATER_TARIFF_DEFAULTS.vat_pct)),
+        currency_symbol:              String(tt.currency_symbol || _WATER_TARIFF_DEFAULTS.currency_symbol).slice(0, 4),
+      };
       const writes = [
         ['water.billing', cleanedBilling],
         ['water.tariff',  cleanedTariff],

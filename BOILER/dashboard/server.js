@@ -1788,7 +1788,7 @@ app.get('/api/consumptions/today', async (req, res) => {
         ROUND(AVG(drop_c)::numeric, 1)                             AS avg_drop,
         MAX(start_ts)                                              AS last_ts
       FROM boiler_consumptions
-      WHERE start_ts >= (NOW() AT TIME ZONE 'Asia/Jerusalem')::date
+      WHERE (start_ts AT TIME ZONE 'Asia/Jerusalem')::date = (NOW() AT TIME ZONE 'Asia/Jerusalem')::date
     `);
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
