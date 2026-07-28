@@ -21,6 +21,16 @@
   const CURTAIN_ACTIONS = [
     { v: 'open', label: 'Open' }, { v: 'close', label: 'Close' }, { v: 'stop', label: 'Stop' },
   ];
+  // Media / TV controls — Balcony TV (tv55). Dispatched by the Panel Commands rule
+  // (LXC 105) → rule_engine._dispatch_media → media agent, exactly like the balcony panel.
+  const MEDIA_API = 'http://192.168.1.138:8766';   // player service (same as balcony.js)
+  const MEDIA_TARGET = 'tv55';
+  const MEDIA_CONTROLS = [
+    { v: 'tv_on', label: 'TV On', tag: 'on' }, { v: 'tv_off', label: 'TV Off', tag: 'off' },
+    { v: 'vol_up', label: 'Vol +', tag: 'vol+' }, { v: 'vol_down', label: 'Vol −', tag: 'vol−' },
+    { v: 'pause', label: 'Pause', tag: 'pause' }, { v: 'stop', label: 'Stop', tag: 'stop' },
+    { v: 'prev', label: 'Prev', tag: 'prev' }, { v: 'next', label: 'Next', tag: 'next' },
+  ];
   const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater',
     'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player', 'vacuum']);
   const MAX_ROWS = 3, MAX_COLS = 5;   // the tablet fits at most 3 rows × 5 positions
@@ -74,6 +84,7 @@
   let loaded = false;
   let controllable = [];
   let scenes = [], alexaAnns = [], alexaStations = [];
+  let mediaPlaylists = [];
   let pick = null;             // {tileId, snapshot}
   let overlay = null;
 
@@ -86,6 +97,11 @@
   function parseAlexaVal(v) { const i = v.indexOf(':'); return i < 0 ? { action: v } : { action: v.slice(0, i), name: v.slice(i + 1) }; }
   function actionTag(v) { const a = ACTIONS.find(x => x.v === v); return a ? a.tag : 'toggle'; }
   function bindingTag(b) {
+    if (b.type === 'media') {
+      const mc = MEDIA_CONTROLS.find(m => m.v === b.media_action);
+      if (mc) return mc.tag;
+      return b.media_action === 'play_video' ? 'video' : 'playlist';
+    }
     if (b.type === 'scene') return 'scene';
     if (b.type === 'curtain') return b.action || 'stop';
     if (b.page_num != null) return `P${b.page_num}`;
@@ -95,6 +111,7 @@
     return actionTag(b.action);
   }
   function bindingName(b) {
+    if (b.type === 'media') return '📺 ' + (b.label || b.media_action || '?');
     if (b.type === 'scene') return '🎬 ' + (b.target || '?');
     return b.label ? `${b.name}:${b.label}` : (b.name || '?');
   }
@@ -105,15 +122,19 @@
   async function loadControllable() {
     if (controllable.length) return;
     try {
-      const [devs, anns, stations, scn] = await Promise.all([
+      const [devs, anns, stations, scn, plr] = await Promise.all([
         fetch('/api/devices').then(r => r.json()),
         fetch('/api/dashboard-settings/media-agents.alexa_announcements').then(r => r.json()).catch(() => ({ value: [] })),
         fetch('/api/dashboard-settings/media-agents.alexa_quick_music').then(r => r.json()).catch(() => ({ value: [] })),
         fetch('/api/dashboard-settings/apartment.scenes').then(r => r.json()).catch(() => ({ value: [] })),
+        // Media agent (LXC 100) directly — dashboard stays UI-only (same as balcony.js).
+        // Playlists carry kind='audio'|'video'; both play on tv55 via play_playlist.
+        fetch(`${MEDIA_API}/api/playlists`).then(r => r.json()).catch(() => []),
       ]);
       alexaAnns = Array.isArray(anns && anns.value) ? anns.value : [];
       alexaStations = Array.isArray(stations && stations.value) ? stations.value : [];
       scenes = Array.isArray(scn && scn.value) ? scn.value.filter(s => s && s.name && s.active !== false) : [];
+      mediaPlaylists = Array.isArray(plr) ? plr : ((plr && plr.playlists) || []);
       const list = Array.isArray(devs) ? devs : (devs.devices || []);
       controllable = [];
       for (const d of list) {
@@ -419,7 +440,10 @@
     pick = null; renderTiles();
   };
 
-  function bindKey(b) { return b.type === 'scene' ? 'scene:' + b.target : (b.type === 'curtain' ? 'curtain:' + b.device_id : b.device_id + ':' + (b.channel || '')); }
+  function bindKey(b) {
+    if (b.type === 'media') return 'media:' + (b.media_action || '');
+    return b.type === 'scene' ? 'scene:' + b.target : (b.type === 'curtain' ? 'curtain:' + b.device_id : b.device_id + ':' + (b.channel || ''));
+  }
   function updateCount() { const t = curTile(); const el = $('pe-picker-count'); if (el) el.textContent = `${t && t.bindings ? t.bindings.length : 0} selected`; }
 
   function renderPicker(filter) {
@@ -440,6 +464,48 @@
         const cb = item.querySelector('input');
         item.addEventListener('click', (e) => { if (e.target !== cb) cb.checked = !cb.checked; toggleScene(s.name, cb.checked); });
         list.appendChild(item);
+      }
+    }
+
+    // Media / TV section — Balcony TV (tv55). Fixed control actions + a playlist
+    // selector (audio or video playlists). Same binding shape the balcony panel uses.
+    {
+      const fMedia = !f || 'media tv playlist audio video volume vol pause stop next prev turn on off'.includes(f);
+      const plList = mediaPlaylists.filter(p => fMedia || (p.name || '').toLowerCase().includes(f));
+      if (fMedia || plList.length) {
+        const h = document.createElement('div'); h.className = 'pe-room';
+        h.textContent = '📺 Media / TV — Balcony TV (tv55)'; list.appendChild(h);
+        if (fMedia) {
+          for (const mc of MEDIA_CONTROLS) {
+            const existing = selBy.get('media:' + mc.v);
+            const item = document.createElement('div'); item.className = 'pe-item';
+            item.innerHTML = `<input type="checkbox" ${existing ? 'checked' : ''}><div class="pe-item-name">${esc(mc.label)}</div><div class="pe-item-meta">tv55</div>`;
+            const cb = item.querySelector('input');
+            item.addEventListener('click', (e) => { if (e.target !== cb) cb.checked = !cb.checked; toggleMedia(mc.v, cb.checked, { label: mc.label }); });
+            list.appendChild(item);
+          }
+        }
+        if (plList.length) {
+          const existing = selBy.get('media:play_playlist');
+          const cur = existing && existing.playlist_id != null ? String(existing.playlist_id) : '';
+          const audio = plList.filter(p => (p.kind || 'audio') !== 'video');
+          const video = plList.filter(p => (p.kind || 'audio') === 'video');
+          const opts = (arr) => arr.map(p => `<option value="${esc(String(p.id))}" ${String(p.id) === cur ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+          const grp = (label, arr) => arr.length ? `<optgroup label="${label}">${opts(arr)}</optgroup>` : '';
+          const item = document.createElement('div'); item.className = 'pe-item';
+          item.innerHTML = `<input type="checkbox" ${existing ? 'checked' : ''}><div class="pe-item-name">▶ Play playlist</div><select class="pe-sel"><option value="">— pick —</option>${grp('🎵 Audio playlists', audio)}${grp('🎬 Video playlists', video)}</select><div class="pe-item-meta">tv55</div>`;
+          const cb = item.querySelector('input'), sel = item.querySelector('select');
+          const apply = () => {
+            const pid = sel.value ? parseInt(sel.value, 10) : null;
+            if (!cb.checked || pid == null) { toggleMedia('play_playlist', false); return; }
+            const pl = mediaPlaylists.find(p => String(p.id) === sel.value);
+            toggleMedia('play_playlist', true, { playlist_id: pid, label: pl ? pl.name : ('Playlist ' + pid) });
+          };
+          item.addEventListener('click', (e) => { if (e.target === sel || sel.contains(e.target)) return; if (e.target !== cb) cb.checked = !cb.checked; apply(); });
+          sel.addEventListener('change', (e) => { e.stopPropagation(); if (sel.value) cb.checked = true; apply(); });
+          sel.addEventListener('click', (e) => e.stopPropagation());
+          list.appendChild(item);
+        }
       }
     }
 
@@ -489,6 +555,20 @@
     updateCount();
   }
 
+  function toggleMedia(mediaAction, checked, extra) {
+    const t = curTile(); if (!t) return; if (!t.bindings) t.bindings = [];
+    const key = 'media:' + mediaAction, idx = t.bindings.findIndex(b => bindKey(b) === key);
+    if (!checked) { if (idx >= 0) t.bindings.splice(idx, 1); updateCount(); return; }
+    const b = { type: 'media', media_action: mediaAction, target: MEDIA_TARGET };
+    if (extra) {
+      if (extra.playlist_id != null) { b.playlist_id = extra.playlist_id; b.shuffle = false; b.repeat = false; }
+      if (extra.rel_path) b.rel_path = extra.rel_path;
+      if (extra.label) b.label = extra.label;
+    }
+    if (!b.label) b.label = mediaAction;
+    if (idx >= 0) t.bindings[idx] = b; else t.bindings.push(b);
+    updateCount();
+  }
   function toggleScene(name, checked) {
     const t = curTile(); if (!t) return; if (!t.bindings) t.bindings = [];
     const key = 'scene:' + name, idx = t.bindings.findIndex(b => bindKey(b) === key);
