@@ -156,6 +156,18 @@ def _build_commands(slot, state, slot_key):
     """Resolve bindings into command dicts (same shape rule engine expects)."""
     commands = []
     for b in slot:
+        if b.get("type") == "scene":
+            # Run a named Scene (Main Agent → Scenes). Emit ONE command; the
+            # engine expands + dispatches it on a daemon thread (run_scene).
+            # Mirrors wallmote_handler.py. Must come BEFORE the device_id check
+            # since a scene binding carries device_id='scene:<Name>' (truthy).
+            tgt = b.get("target")
+            if tgt:
+                commands.append({"action": "run_scene", "scene": tgt,
+                                 "rule": "My BathRoom Smart Switch Handler"})
+            else:
+                log.warning("scene binding in %s missing target — skipped", slot_key)
+            continue
         device_id = b.get("device_id")
         if not device_id:
             continue

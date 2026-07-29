@@ -199,6 +199,7 @@
   // Render-helper for binding chips: page-select bindings show `P<n>`;
   // Alexa speak/play show the template/station name appended.
   function bcBindingTag(b) {
+    if (b && b.type === 'scene') return 'scene';
     if (b && b.page_num != null) return `P${b.page_num}`;
     if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
     if (b && b.action === 'play'  && b.station_name)  return `play:${b.station_name}`;
@@ -939,6 +940,7 @@
 
   let _swButtons = [];          // [{id:'btn1:single', button:1, event:'single', label:'Button 1', bindings:[]}]
   let _swActivePicker = null;   // {rowId, snapshot}
+  let _swScenes = [];           // Main Agent scenes (dashboard_settings.apartment.scenes)
 
   // Build the 8 fixed slots (button × event), seeding from saved bindings.
   function swBuildButtons(saved) {
@@ -965,6 +967,10 @@
       _swButtons = swBuildButtons({});
     }
     await bcLoadControllableDevices();   // re-use the bc devices cache
+    try {
+      const sr = await fetch('/api/dashboard-settings/apartment.scenes').then(r => r.json());
+      _swScenes = (Array.isArray(sr && sr.value) ? sr.value : []).filter(s => s && s.name && s.active !== false);
+    } catch (_) { _swScenes = []; }
     swRender();
   }
 
@@ -1041,6 +1047,38 @@
     list.innerHTML = '';
     let currentRoom = null;
     const defAct = 'toggle';
+
+    // ★ Scenes — run a Main Agent Scene (apartment.scenes) from this button.
+    // Checkbox-only rows (no action select); binding shape mirrors the Wallmote.
+    const sceneMatches = (_swScenes || []).filter(sc =>
+      !f || (sc.name || '').toLowerCase().includes(f) || 'scene'.includes(f));
+    if (sceneMatches.length) {
+      const rl = document.createElement('div');
+      rl.className = 'picker-room-label';
+      rl.textContent = '★ Scenes';
+      list.appendChild(rl);
+      for (const sc of sceneMatches) {
+        const nm = sc.name;
+        const sceneDevId = 'scene:' + nm;
+        const sceneSel = selByKey.get(sceneDevId + ':');
+        const item = document.createElement('div');
+        item.className = 'picker-item';
+        item.innerHTML = `
+          <input type="checkbox" ${sceneSel ? 'checked' : ''} data-sw-item="${escHtml(sceneDevId + ':')}">
+          <span class="picker-item-name">🎬 ${escHtml(nm)}</span>
+          <span class="picker-item-meta">scene</span>
+        `;
+        const cb = item.querySelector('input[type=checkbox]');
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            row.bindings.push({ type: 'scene', target: nm, device_id: sceneDevId, channel: null, name: nm, label: null });
+          } else {
+            row.bindings = row.bindings.filter(s => s.device_id !== sceneDevId);
+          }
+        });
+        list.appendChild(item);
+      }
+    }
 
     for (const d of _controllable) {
       const rowKey = d.device_id + ':' + (d.channel || '');
@@ -1192,6 +1230,10 @@
         // template / station lookup at fire-time.
         if (b.template_name) out.template_name = b.template_name;
         if (b.station_name)  out.station_name  = b.station_name;
+        // Preserve scene bindings ({type:'scene', target}) — the handler reads
+        // these to emit run_scene; without this they'd be silently dropped.
+        if (b.type)   out.type   = b.type;
+        if (b.target) out.target = b.target;
         return out;
       });
     }
