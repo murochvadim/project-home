@@ -81,6 +81,26 @@ Pure front-end + config (no DB/schema change; `people_relations` already holds t
 - **v1 limits:** Groups cluster by the person's single `category` (one group per person — a many-to-many
   groups layer was the alternative, not taken); aggregated group lines join box centroids (can cross a
   box). Cache-bust `privacy-people.js?v=9`. **Phases 3–4** (birthday reminders + origins map, legacy) still planned.
+- **Overlap fix (2026-07-31, `?v=26`):** the layout had **zero collision avoidance**, so figures could
+  stack. Dominant cause (confirmed on live data — 58 of 99 people had `pos_x/pos_y=null`): the Network
+  auto-flow (`gi` counter) tiled unplaced people from the top-left cell, blind to the cells already held
+  by placed people, dropping them **on top** of the placed figures. Fix in `pvPeopleRender()`'s Network
+  branch = a **unique-cell pass**: an occupied-cell `Set`, placed people claim their snapped cell first
+  (nudged to the next free cell only on a real clash — **no PATCH**, so real drag layout is preserved),
+  then unplaced people fill the first free cells. `_groupLayout()` got the analogous fix for Group view:
+  saved boxes claim their spot first, auto-flowed boxes advance past any already-placed box (`_hits`
+  rect-overlap test), so an auto-flowed category cluster can no longer sit on a dragged one. Pure
+  front-end; no DB write, no server/LXC change.
+- **Auto-arrange (2026-07-31, `?v=28`):** two Network-toolbar buttons — **🎨 By color** and **▦ By
+  groups** — that lay out ALL people and **save** the positions (user chose persist). `pvPeopleArrange(mode)`
+  computes a `pos_x/pos_y` for every person and bulk-saves via **`POST /api/people/positions`**
+  (`{positions:[{id,pos_x,pos_y}]}` → one `UPDATE … FROM (VALUES …)` in `routes-people.js`, registered
+  BEFORE `/:id`), then forces Network view + re-renders. **By color** = one dense grid sorted so
+  same-category (same-color) people are contiguous. **By groups** = each category laid out as its own
+  separated cluster (islands) flowing left→right, wrapping on canvas width. (Both key on `category` —
+  there are 0 relations + 25 categories in live data, so relationship-cluster arrangement is moot for now.)
+  Confirms before overwriting positions; **clears any active category-filter/search first** so the full
+  arranged layout is shown (not a filtered subset). **Added a server endpoint → needed a `pm2 delete + start`.**
 - **Categories** default to the 4 buckets client-side (`PPL_DEFAULT_CATS`: 🔵 My family / 🟣 Wife's
   family / 🟢 Friends / ⚪ People I know) with per-bucket colors; overridable later via
   `dashboard_settings.people.categories`.

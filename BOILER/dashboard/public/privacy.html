@@ -257,6 +257,9 @@
         <button id="ppl-view-group" onclick="pvPeopleSetView('group')" style="border:none; padding:5px 12px; cursor:pointer; font-size:0.82rem; background:#eee; color:#555;">Groups</button>
       </div>
       <label title="In Groups view, gray out people with no connection outside their group" style="font-size:0.78rem; color:#555; display:inline-flex; align-items:center; gap:4px; cursor:pointer;"><input type="checkbox" id="ppl-dim-unconn" onchange="pvPeopleToggleDim(this.checked)"> gray unconnected</label>
+      <span style="font-size:0.78rem; color:#555;">Auto-arrange:</span>
+      <button onclick="pvPeopleArrange('color')" title="Lay everyone out in one tidy grid, grouped by category color" style="border:1px solid #cbd5e1; border-radius:6px; padding:5px 10px; cursor:pointer; font-size:0.82rem; background:#f1f5f9; color:#334155;">🎨 By color</button>
+      <button onclick="pvPeopleArrange('groups')" title="Lay each category out as its own separated cluster (islands)" style="border:1px solid #cbd5e1; border-radius:6px; padding:5px 10px; cursor:pointer; font-size:0.82rem; background:#f1f5f9; color:#334155;">▦ By groups</button>
       <span style="font-size:0.72rem; color:#aaa; margin-left:auto;">drag to arrange · click icon = open · click name = highlight</span>
     </div>
     <div style="position:relative;">
@@ -661,7 +664,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="js/privacy.js?v=84"></script>
 <script src="js/privacy-places.js?v=11"></script>
-<script src="js/privacy-people.js?v=25"></script>
+<script src="js/privacy-people.js?v=28"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
 <script src="vendor/doccreate/html-docx.js"></script>
 <script src="js/privacy-doccreate.js?v=18"></script>

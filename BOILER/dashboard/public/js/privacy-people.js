@@ -52,6 +52,7 @@
   const catBy = (id) => _cats.find(c => c.id === id) || { id: id || 'other', name: id || '—', color: '#9ca3af' };
   const relTypeBy = (id) => _relTypes.find(r => r.id === id) || { id: id, name: id, color: '#9ca3af', style: 'dotted' };
   const nameOf = (p) => ([p.given_name, p.family_name].filter(Boolean).join(' ') || p.maiden_name || ('#' + p.id));
+  const _byName = (a, b) => nameOf(a).localeCompare(nameOf(b));
   const _svg = (tag, attrs) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
 
   window.pvPeopleOnShow = async function () {
@@ -126,12 +127,29 @@
     // origins: saved positions win; the remainder auto-flow in reading order
     // snap EVERY box origin to the current grid (GPAD, COLW/ROWH) so all groups align uniformly —
     // saved positions may have been snapped to an older cell size, so re-snap them here too.
-    const origin = {}; let cx = GPAD, cy = GPAD, rowH = 0;
-    keys.forEach(k => {
-      if (_groupPos[k]) { origin[k] = { x: _snap(_groupPos[k].x, GPAD, GRID.COLW), y: _snap(_groupPos[k].y, GPAD, GRID.ROWH) }; return; }
+    // Boxes never overlap: saved boxes claim their spot first, then auto-flowed boxes are advanced
+    // past any already-placed box (fixes an auto-flowed cluster stacking on a dragged one).
+    const origin = {}; const placed = [];
+    const _hits = (x, y, w, h) => placed.some(r => x < r.x + r.w + GGAP && x + w + GGAP > r.x && y < r.y + r.h + GGAP && y + h + GGAP > r.y);
+    keys.forEach(k => {   // pass 1: saved-position boxes claim their (nudged-if-clashing) spot
+      if (!_groupPos[k]) return;
+      const w = dims[k].w, h = dims[k].h;
+      let x = _snap(_groupPos[k].x, GPAD, GRID.COLW), y = _snap(_groupPos[k].y, GPAD, GRID.ROWH);
+      while (_hits(x, y, w, h)) y = _snap(y + GRID.ROWH, GPAD, GRID.ROWH);
+      origin[k] = { x, y }; placed.push({ x, y, w, h });
+    });
+    let cx = GPAD, cy = GPAD, rowH = 0;
+    keys.forEach(k => {   // pass 2: the rest auto-flow, skipping cells any placed box occupies
+      if (_groupPos[k]) return;
       const w = dims[k].w, h = dims[k].h;
       if (cx + w > (canvasW - GPAD) && cx > GPAD) { cx = GPAD; cy += rowH + GGAP; rowH = 0; }
-      origin[k] = { x: _snap(cx, GPAD, GRID.COLW), y: _snap(cy, GPAD, GRID.ROWH) }; cx += w + GGAP; rowH = Math.max(rowH, h);
+      let x = _snap(cx, GPAD, GRID.COLW), y = _snap(cy, GPAD, GRID.ROWH);
+      while (_hits(x, y, w, h)) {
+        cx += GRID.COLW;
+        if (cx + w > (canvasW - GPAD) && cx > GPAD) { cx = GPAD; cy += rowH + GGAP; rowH = 0; }
+        x = _snap(cx, GPAD, GRID.COLW); y = _snap(cy, GPAD, GRID.ROWH);
+      }
+      origin[k] = { x, y }; placed.push({ x, y, w, h }); cx += w + GGAP; rowH = Math.max(rowH, h);
     });
     const pos = {}, regions = [], members = {};
     keys.forEach(k => {
@@ -142,6 +160,50 @@
     });
     return { pos, regions, members };
   }
+
+  // ── auto-arrange: recompute EVERY person's grid position, save, show in Network view ──
+  // 'color'  = one dense grid, sorted so same-category (same-color) people are contiguous.
+  // 'groups' = each category laid out as its own separated cluster (islands) that flow left→right.
+  window.pvPeopleArrange = async function (mode) {
+    if (!_people.length) return;
+    const box = document.getElementById('ppl-canvas');
+    const canvasW = (box && box.clientWidth) || 900;
+    const label = mode === 'groups' ? 'group (a cluster per category)' : 'color (category)';
+    if (!confirm(`Arrange all ${_people.length} people by ${label}?\nThis overwrites their current positions.`)) return;
+    const order = _cats.map(c => c.id);
+    const catIdx = (k) => { const i = order.indexOf(k || 'other'); return i < 0 ? 999 : i; };
+    const pos = {};
+    if (mode === 'groups') {
+      const groups = {}; _people.forEach(p => { const k = p.category || 'other'; (groups[k] = groups[k] || []).push(p); });
+      const keys = Object.keys(groups).sort((a, b) => catIdx(a) - catIdx(b) || String(a).localeCompare(b));
+      const GAPX = GRID.COLW, GAPY = GRID.ROWH;   // gap between islands
+      let cx = GRID.PAD, cy = GRID.PAD_TOP, rowH = 0;
+      keys.forEach(k => {
+        const mem = groups[k].slice().sort(_byName);
+        const n = mem.length, cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+        const blockW = cols * GRID.COLW, blockH = Math.ceil(n / cols) * GRID.ROWH;
+        if (cx + blockW > (canvasW - GRID.PAD) && cx > GRID.PAD) { cx = GRID.PAD; cy += rowH + GAPY; rowH = 0; }
+        mem.forEach((p, j) => { pos[p.id] = { x: cx + (j % cols) * GRID.COLW, y: cy + Math.floor(j / cols) * GRID.ROWH }; });
+        cx += blockW + GAPX; rowH = Math.max(rowH, blockH);
+      });
+    } else {
+      const cols = Math.max(1, Math.floor((canvasW - GRID.PAD) / GRID.COLW)) || 6;
+      const sorted = _people.slice().sort((a, b) => catIdx(a.category) - catIdx(b.category) || _byName(a, b));
+      sorted.forEach((p, i) => { pos[p.id] = { x: GRID.PAD + (i % cols) * GRID.COLW, y: GRID.PAD_TOP + Math.floor(i / cols) * GRID.ROWH }; });
+    }
+    _people.forEach(p => { const q = pos[p.id]; if (q) { p.pos_x = q.x; p.pos_y = q.y; } });
+    // clear any active filter/search so the full arranged layout is visible (not a filtered subset)
+    const _fc = document.getElementById('ppl-filter-cat'); if (_fc) _fc.value = '';
+    const _fq = document.getElementById('ppl-filter-q'); if (_fq) _fq.value = '';
+    _view = 'network'; localStorage.setItem('people.view', 'network'); _focusId = null; _syncViewButtons();
+    pvPeopleRender();
+    try {
+      await fetch(`${API}/positions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ positions: _people.map(p => ({ id: p.id, pos_x: p.pos_x, pos_y: p.pos_y })) })
+      });
+    } catch (e) { /* positions are applied in-memory already; any manual drag will re-persist */ }
+  };
 
   // ── main render: SVG line layer + draggable figures ──
   window.pvPeopleRender = function () {
@@ -160,13 +222,26 @@
     const posMap = {}; let regions = [], groupMembers = {};
     if (isGroup) { const g = _groupLayout(rows, box.clientWidth || 900); Object.assign(posMap, g.pos); regions = g.regions; groupMembers = g.members; _regionById = {}; regions.forEach(r => _regionById[r.id] = r); }
     else {
+      // Collision-free grid: every figure gets a UNIQUE cell. Saved-position people claim their
+      // cell first (nudged to the next free cell only on a real clash — no PATCH, so real drag
+      // layout is untouched); unplaced people then fill the first free cells instead of tiling
+      // blindly on top of placed figures (the dominant overlap cause). See PEOPLE/CLAUDE.md.
       const cols = Math.max(1, Math.floor((box.clientWidth - GRID.PAD) / GRID.COLW)) || 6;
-      let gi = 0;
-      rows.forEach(p => {
-        let x = p.pos_x, y = p.pos_y;
-        if (x == null || y == null) { x = GRID.PAD + (gi % cols) * GRID.COLW; y = GRID.PAD_TOP + Math.floor(gi / cols) * GRID.ROWH; gi++; }
-        else { x = _snap(x, GRID.PAD, GRID.COLW); y = _snap(y, GRID.PAD_TOP, GRID.ROWH); }
-        posMap[p.id] = { x, y };
+      const taken = new Set();
+      const cellX = (c) => GRID.PAD + c * GRID.COLW, cellY = (r) => GRID.PAD_TOP + r * GRID.ROWH;
+      const claimFrom = (c, r) => {
+        while (taken.has(c + ',' + r)) { c++; if (c >= cols) { c = 0; r++; } }
+        taken.add(c + ',' + r); return { x: cellX(c), y: cellY(r) };
+      };
+      rows.forEach(p => {   // pass 1: placed people keep their cell
+        if (p.pos_x == null || p.pos_y == null) return;
+        const c = Math.max(0, Math.round((_snap(p.pos_x, GRID.PAD, GRID.COLW) - GRID.PAD) / GRID.COLW));
+        const r = Math.max(0, Math.round((_snap(p.pos_y, GRID.PAD_TOP, GRID.ROWH) - GRID.PAD_TOP) / GRID.ROWH));
+        posMap[p.id] = claimFrom(c, r);
+      });
+      rows.forEach(p => {   // pass 2: unplaced people fill the first free cells
+        if (p.pos_x != null && p.pos_y != null) return;
+        posMap[p.id] = claimFrom(0, 0);
       });
     }
     const visible = new Set(rows.map(p => p.id));

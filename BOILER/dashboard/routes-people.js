@@ -113,6 +113,23 @@ module.exports = (app, db) => {
     catch (e) { _err(res, e); }
   });
 
+  // ── Bulk position save (auto-arrange) — one UPDATE for the whole set ──
+  // Registered BEFORE /:id so 'positions' isn't parsed as an id.
+  app.post('/api/people/positions', async (req, res) => {
+    try {
+      const list = Array.isArray((req.body || {}).positions) ? req.body.positions : [];
+      const rows = list.map(p => ({ id: _int(p.id), px: _num(p.pos_x), py: _num(p.pos_y) }))
+                       .filter(p => p.id != null && p.px != null && p.py != null);
+      if (!rows.length) return res.json({ ok: true, updated: 0 });
+      const vals = [], ph = [];
+      rows.forEach((p, i) => { const b = i * 3; ph.push(`($${b + 1}::int,$${b + 2}::numeric,$${b + 3}::numeric)`); vals.push(p.id, p.px, p.py); });
+      await db.query(
+        `UPDATE people AS t SET pos_x = v.px, pos_y = v.py, updated_at = now()
+           FROM (VALUES ${ph.join(',')}) AS v(id, px, py) WHERE t.id = v.id`, vals);
+      res.json({ ok: true, updated: rows.length });
+    } catch (e) { _err(res, e); }
+  });
+
   // ── Create a person ──
   app.post('/api/people', async (req, res) => {
     try {
