@@ -143,6 +143,12 @@ class HAApiAdapter(DeviceAdapter):
         'media_player.samsung_soundbar_2': [('media_player.samsung_soundbar_2', 'state')],
         'media_player.alexa_maya_bedroom': [('media_player.alexa_maya_bedroom', 'state')],
         'media_player.alexa_my_bathroom':  [('media_player.alexa_my_bathroom',  'state')],
+        # HCT-636 wireless water timer (2 zones), Tuya Sub-GHz behind the
+        # HCG-003 gateway → exposed by the HA Tuya cloud integration as
+        # 'valve.' entities (state open/closed). State-only here; open/close
+        # control is dispatched separately (dashboard/rule engine).
+        'valve.water_timer_valve_1': [('valve.water_timer_valve_1', 'state')],
+        'valve.water_timer_valve_2': [('valve.water_timer_valve_2', 'state')],
     }
 
     def __init__(self, devices, on_state_change):
@@ -441,7 +447,7 @@ class HAApiAdapter(DeviceAdapter):
         """Convert HA entity state to Tuya DPS value."""
         if domain in ('switch', 'light', 'fan'):
             return state == 'on'
-        if domain == 'cover':
+        if domain in ('cover', 'valve'):
             return state  # 'open', 'closed', 'opening', 'closing'
         if domain == 'binary_sensor':
             return state == 'on'

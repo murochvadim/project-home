@@ -115,6 +115,7 @@
     <button class="tab-btn" onclick="showTab('star-projector', this)">Star Projector</button>
     <button class="tab-btn" onclick="showTab('somfy', this)">somfy + fan</button>
     <button class="tab-btn" onclick="showTab('roborock', this)">Roborock</button>
+    <button class="tab-btn" onclick="showTab('irrigation', this)">Irrigation</button>
     <button class="tab-btn" onclick="showTab('smart-tablet', this); peInit()">Smart Tablet</button>
   </div>
 
@@ -364,6 +365,17 @@
     </div>
   </div>
 
+  <div class="tab-panel" id="tab-irrigation">
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <h2 style="margin:0 0 4px;font-size:1.05rem;">💧 Irrigation — HCT-636 Water Timer</h2>
+      <div style="font-size:0.78rem;color:#777;">
+        2-zone wireless water timer · HA-mediated (Tuya Sub-GHz gateway) · control via
+        <code>/api/valve/&lt;entity&gt;/&lt;open|close&gt;</code>. Cloud-routed, so a state change can take a few seconds.
+      </div>
+    </div>
+    <div id="irr-list"></div>
+  </div>
+
   <div class="tab-panel" id="tab-smart-tablet">
     <div class="card" style="padding:16px;">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
@@ -486,7 +498,7 @@
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=6"></script>
 <script src="js/notify-toast.js?v=12"></script>
-<script src="js/balcony.js?v=20260726"></script>
+<script src="js/balcony.js?v=20260731d"></script>
 <script src="js/panel-editor.js?v=12"></script>
 </body>
 </html>

@@ -1891,3 +1891,243 @@
   };
 })();
 
+// ─── Irrigation tab (HCT-636 water timer, 2 zones; HA-mediated valves) ────────
+// Frontend-only: state from GET /api/devices/states, control via
+// POST /api/valve/:entity/:action. Same pattern as the Roborock tab.
+(function () {
+  'use strict';
+
+  const VALVES = [
+    { id: 'valve.water_timer_valve_1', key: 'v1', label: 'Water Valve 1' },
+    { id: 'valve.water_timer_valve_2', key: 'v2', label: 'Water Valve 2' },
+  ];
+  const IRR_CFG_KEY = 'balcony.irrigation';   // dashboard_settings key (read by the Balcony Irrigation rule)
+  // day-of-week chips: index 0=Sunday … 6=Saturday (matches JS getDay / Python %w)
+  const IRR_DOW = [['S', 'Sunday'], ['M', 'Monday'], ['T', 'Tuesday'], ['W', 'Wednesday'], ['T', 'Thursday'], ['F', 'Friday'], ['S', 'Saturday']];
+  function irrSetDayBtn(btn, on) {
+    if (!btn) return;
+    btn.dataset.on = on ? '1' : '0';
+    btn.style.background = on ? '#3a7d44' : '#eee';
+    btn.style.color = on ? '#fff' : '#888';
+    btn.style.borderColor = on ? '#3a7d44' : '#d0cbc4';
+  }
+  window.irrDayToggle = function (btn) { irrSetDayBtn(btn, btn.dataset.on !== '1'); };
+  // one S/M/T/W/T/F/S chip for a schedule row (on = that weekday is watered)
+  function irrDayChipHTML(d, on) {
+    return `<button type="button" class="irr-s-day" data-d="${d}" data-on="${on ? 1 : 0}" onclick="irrDayToggle(this)" title="${IRR_DOW[d][1]}"
+      style="width:26px;height:26px;padding:0;font-size:0.75rem;border-radius:5px;cursor:pointer;border:1px solid ${on ? '#3a7d44' : '#d0cbc4'};background:${on ? '#3a7d44' : '#eee'};color:${on ? '#fff' : '#888'};">${IRR_DOW[d][0]}</button>`;
+  }
+  const IRR_SCHED = { v1: [], v2: [] };   // per-zone schedule model (source of truth for the editor)
+  let _irrSeq = 0;
+  function irrDefaultSched() { return { id: 's' + (++_irrSeq) + '_' + (Date.now() % 100000), enabled: true, start_hm: '07:00', duration_min: 10, days: [0, 1, 2, 3, 4, 5, 6] }; }
+  let IRR_STATE = {};   // id -> {last_state, last_seen}
+  let IRR_TIMER = null;
+  let IRR_INITED = false;
+
+  // valve state → chip style
+  const IRR_STATE_STYLE = {
+    open:    { label: 'open',    bg: '#2b7de0', fg: '#fff' },
+    closed:  { label: 'closed',  bg: '#6b7a8f', fg: '#fff' },
+    opening: { label: 'opening', bg: '#e6a23c', fg: '#fff' },
+    closing: { label: 'closing', bg: '#e6a23c', fg: '#fff' },
+  };
+
+  function irrBuildCards() {
+    const box = document.getElementById('irr-list');
+    if (!box || box.dataset.built === '1') return;
+    box.innerHTML = VALVES.map(v => `
+      <div class="card" style="padding:14px;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <h2 style="margin:0;font-size:1rem;">${v.label}
+            <span id="irr-dot-${v.key}" title="freshness" style="font-size:0.85rem;color:#aaa;">●</span>
+            <span id="irr-online-${v.key}" style="font-size:0.72rem;color:#888;font-weight:normal;">loading…</span>
+          </h2>
+          <span id="irr-chip-${v.key}" style="font-size:0.82rem;font-weight:600;padding:2px 12px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">state: —</span>
+          <span style="font-size:0.82rem;color:#666;">Last seen: <b id="irr-seen-${v.key}">—</b></span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+          <button class="btn-test" style="border-color:#2b7de0;color:#2b7de0;" onclick="irrCmd('${v.id}','open')">💧 Open</button>
+          <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="irrCmd('${v.id}','close')">⏹ Close</button>
+        </div>
+        <div id="irr-status-${v.key}" style="font-size:0.78rem;color:#888;margin-top:8px;min-height:1.1em;"></div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid #eee;">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:2px;">
+            <span style="font-size:0.8rem;color:#555;font-weight:600;">⏰ Schedules</span>
+            <button class="btn-test" style="border-color:#2b7de0;color:#2b7de0;" onclick="irrAddSched('${v.key}')">＋ Add schedule</button>
+            <button class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="irrSaveSchedule()">💾 Save schedules</button>
+            <span id="irr-sched-status-${v.key}" style="font-size:0.78rem;color:#888;"></span>
+          </div>
+          <div id="irr-scheds-${v.key}"></div>
+        </div>
+      </div>`).join('');
+    box.dataset.built = '1';
+  }
+
+  async function irrFetch() {
+    const ids = VALVES.map(v => v.id).join(',');
+    const r = await fetch('/api/devices/states?ids=' + encodeURIComponent(ids));
+    if (!r.ok) throw new Error('GET /api/devices/states ' + r.status);
+    const list = await r.json();
+    IRR_STATE = {};
+    (Array.isArray(list) ? list : []).forEach(d => { IRR_STATE[d.id] = d; });
+    return list;
+  }
+
+  // Open/close a valve via the dedicated endpoint (routes-valve.js).
+  window.irrCmd = async function (id, action) {
+    const v = VALVES.find(x => x.id === id);
+    const st = v && document.getElementById('irr-status-' + v.key);
+    if (st) { st.textContent = '· ' + action + '…'; st.style.color = '#888'; }
+    try {
+      const r = await fetch('/api/valve/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (st) { st.textContent = '✓ ' + action + ' sent'; st.style.color = '#3a7d44'; }
+      setTimeout(() => { irrFetch().then(irrRender).catch(() => {}); }, 1500);  // let the cloud settle
+    } catch (e) {
+      if (st) { st.textContent = '✗ ' + action + ' failed: ' + e.message; st.style.color = '#c0392b'; }
+    }
+  };
+
+  function irrFmtAge(iso) {
+    if (!iso) return '—';
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  }
+
+  function irrRender() {
+    VALVES.forEach(v => {
+      const dev = IRR_STATE[v.id] || {};
+      const ls = dev.last_state || {};
+      const seen = dev.last_seen || null;
+      // Valves push sparsely via HA (Tuya cloud) — 30 min freshness window.
+      const fresh = seen && (Date.now() - new Date(seen).getTime()) < 30 * 60 * 1000;
+      const dot = document.getElementById('irr-dot-' + v.key);
+      const txt = document.getElementById('irr-online-' + v.key);
+      const sn  = document.getElementById('irr-seen-' + v.key);
+      const chip = document.getElementById('irr-chip-' + v.key);
+      if (dot) dot.style.color = fresh ? '#3a7d44' : '#c0392b';
+      if (txt) { txt.textContent = fresh ? 'online' : 'offline'; txt.style.color = fresh ? '#3a7d44' : '#c0392b'; }
+      if (sn) sn.textContent = irrFmtAge(seen);
+      const state = String(ls.state || '').toLowerCase();
+      if (chip) {
+        const s = IRR_STATE_STYLE[state];
+        if (s) { chip.textContent = 'state: ' + s.label; chip.style.background = s.bg; chip.style.color = s.fg; chip.style.borderColor = s.bg; }
+        else   { chip.textContent = 'state: ' + (state || '—'); chip.style.background = '#eee'; chip.style.color = '#888'; chip.style.borderColor = '#d0cbc4'; }
+      }
+    });
+  }
+
+  // ── Schedules: N per zone, each {enabled, start_hm, duration_min, days[]} ──
+  //    IRR_SCHED[vk] is the source of truth; rows render from it.
+  function irrSchedRowHTML(vk, s) {
+    const days = Array.isArray(s.days) ? s.days : [0, 1, 2, 3, 4, 5, 6];
+    return `<div class="irr-sched-row" data-vk="${vk}" data-id="${s.id}" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:7px 0;border-top:1px dashed #e5e0d8;">
+      <label style="font-size:0.82rem;color:#555;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="irr-s-en" ${s.enabled ? 'checked' : ''}> on</label>
+      <label style="font-size:0.82rem;color:#555;">Start <input type="time" class="irr-s-start" value="${s.start_hm || '07:00'}" style="font-size:0.82rem;padding:3px 5px;"></label>
+      <label style="font-size:0.82rem;color:#555;">for <input type="number" class="irr-s-dur" min="1" max="720" value="${s.duration_min != null ? s.duration_min : 10}" style="width:58px;font-size:0.82rem;padding:3px 5px;"> min</label>
+      <span style="display:inline-flex;gap:3px;align-items:center;"><span style="font-size:0.78rem;color:#888;margin-right:2px;">Days</span>${[0, 1, 2, 3, 4, 5, 6].map(d => irrDayChipHTML(d, days.includes(d))).join('')}</span>
+      <button class="btn-test" style="border-color:#c0392b;color:#c0392b;padding:2px 8px;" onclick="irrRemoveSched('${vk}','${s.id}')" title="remove this schedule">✕</button>
+    </div>`;
+  }
+  function irrRenderScheds(vk) {
+    const box = document.getElementById('irr-scheds-' + vk);
+    if (!box) return;
+    const list = IRR_SCHED[vk] || [];
+    box.innerHTML = list.length
+      ? list.map(s => irrSchedRowHTML(vk, s)).join('')
+      : '<div style="font-size:0.78rem;color:#aaa;padding:6px 0;">No schedules — click ＋ Add schedule.</div>';
+  }
+  // read DOM rows back into the model (call before add/remove/save so edits survive a re-render)
+  function irrSyncFromDom(vk) {
+    const box = document.getElementById('irr-scheds-' + vk);
+    if (!box) return;
+    const out = [];
+    box.querySelectorAll('.irr-sched-row').forEach(row => {
+      const en = row.querySelector('.irr-s-en');
+      const st = row.querySelector('.irr-s-start');
+      const du = row.querySelector('.irr-s-dur');
+      const days = [];
+      row.querySelectorAll('.irr-s-day').forEach(b => { if (b.dataset.on === '1') days.push(parseInt(b.dataset.d, 10)); });
+      out.push({
+        id: row.dataset.id,
+        enabled: !!(en && en.checked),
+        start_hm: (st && st.value) || '',
+        duration_min: Math.max(0, Math.min(720, parseInt((du && du.value) || '0', 10) || 0)),
+        days,
+      });
+    });
+    IRR_SCHED[vk] = out;
+  }
+  window.irrAddSched = function (vk) {
+    irrSyncFromDom(vk);
+    (IRR_SCHED[vk] = IRR_SCHED[vk] || []).push(irrDefaultSched());
+    irrRenderScheds(vk);
+  };
+  window.irrRemoveSched = function (vk, id) {
+    irrSyncFromDom(vk);
+    IRR_SCHED[vk] = (IRR_SCHED[vk] || []).filter(s => s.id !== id);
+    irrRenderScheds(vk);
+  };
+
+  async function irrLoadSchedule() {
+    let cfg = {};
+    try {
+      const r = await fetch('/api/dashboard-settings/' + IRR_CFG_KEY).then(x => x.json());
+      if (r && r.value && typeof r.value === 'object') cfg = r.value;
+    } catch (e) { /* defaults */ }
+    VALVES.forEach(v => {
+      const zone = cfg[v.key] || {};
+      const list = Array.isArray(zone.schedules) ? zone.schedules
+                 : (zone.start_hm ? [zone] : []);   // back-compat: a lone {start_hm,…} = one schedule
+      IRR_SCHED[v.key] = list.map(s => ({
+        id: s.id || ('s' + (++_irrSeq) + '_' + Math.floor(Math.random() * 1e5)),
+        enabled: s.enabled !== false,
+        start_hm: s.start_hm || '07:00',
+        duration_min: (s.duration_min != null ? s.duration_min : 10),
+        days: Array.isArray(s.days) ? s.days : [0, 1, 2, 3, 4, 5, 6],
+      }));
+      irrRenderScheds(v.key);
+    });
+  }
+
+  window.irrSaveSchedule = async function () {
+    const cfg = {};
+    VALVES.forEach(v => { irrSyncFromDom(v.key); cfg[v.key] = { schedules: IRR_SCHED[v.key] || [] }; });
+    const setStatus = (txt, col) => VALVES.forEach(v => { const s = document.getElementById('irr-sched-status-' + v.key); if (s) { s.textContent = txt; s.style.color = col; } });
+    setStatus('· saving…', '#888');
+    try {
+      const r = await fetch('/api/dashboard-settings/' + IRR_CFG_KEY, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: cfg }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      setStatus('✓ saved — the rule picks it up within ~30 s', '#3a7d44');
+    } catch (e) {
+      setStatus('✗ save failed: ' + e.message, '#c0392b');
+    }
+  };
+
+  async function irrInit() {
+    irrBuildCards();
+    if (IRR_INITED) { irrFetch().then(irrRender).catch(() => {}); return; }
+    IRR_INITED = true;
+    irrLoadSchedule().catch(() => {});   // load schedules ONCE — re-loading on every tab show would wipe unsaved edits
+    try { await irrFetch(); irrRender(); }
+    catch (e) {
+      console.error('[irrigation] init failed:', e);
+      VALVES.forEach(v => { const t = document.getElementById('irr-online-' + v.key); if (t) { t.textContent = 'init failed'; t.style.color = '#c0392b'; } });
+    }
+    if (!IRR_TIMER) IRR_TIMER = setInterval(() => { irrFetch().then(irrRender).catch(() => {}); }, 5000);
+  }
+
+  const _prevShowTabIrr = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTabIrr === 'function') _prevShowTabIrr(name, btn);
+    if (name === 'irrigation') irrInit();
+  };
+})();
+

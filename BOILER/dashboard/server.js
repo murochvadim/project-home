@@ -115,6 +115,8 @@ require('./routes-cellular')(app, db);
 // Media Agents → CD Player tab. Own module (gets callHA, a hoisted function).
 require('./routes-media-cd')(app, callHA);
 require('./routes-vacuum')(app, callHA);
+// Water valve open/close (HCT-636 irrigation zones) → HA valve.* services.
+require('./routes-valve')(app, callHA);
 
 // Privacy page — Sites CRM + per-site documents (client-side encrypted or
 // plain). Own module; file bytes on QNAP, server stays blind to plaintext.

@@ -1590,6 +1590,38 @@ class RuleEngine:
         except Exception as e:
             log.warning("Rule '%s' curtain %s cover.%s failed: %s", rule_name, device_id, service, e)
 
+    def _dispatch_valve(self, cmd, device_id, rule_name):
+        """Dispatch a water-valve open/close via HA valve.* services.
+
+        device_id IS the HA entity_id (e.g. 'valve.water_timer_valve_1'); action
+        maps 'open'/'close'/'stop' → valve.open_valve/close_valve/stop_valve.
+        Same urllib-to-HA pattern as _dispatch_curtain. Failures logged, never
+        raised (an unattended valve must never crash the engine).
+        """
+        action  = cmd.get('action', '')
+        service = {'open': 'open_valve', 'close': 'close_valve',
+                   'stop': 'stop_valve'}.get(action)
+        if not service:
+            log.warning("Rule '%s' valve %s: unknown action '%s'", rule_name, device_id, action)
+            return
+        if not HA_TOKEN:
+            log.warning("Rule '%s' valve %s: HA_TOKEN not set", rule_name, device_id)
+            return
+        try:
+            req = urllib.request.Request(
+                f'{HA_URL}/api/services/valve/{service}',
+                data=json.dumps({'entity_id': device_id}).encode('utf-8'),
+                headers={'Authorization': f'Bearer {HA_TOKEN}',
+                         'Content-Type':  'application/json'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(f'HA returned {resp.status}')
+            log.info("Rule '%s' -> valve %s valve.%s", rule_name, device_id, service)
+        except Exception as e:
+            log.warning("Rule '%s' valve %s valve.%s failed: %s", rule_name, device_id, service, e)
+
     def _dispatch_ha_light(self, cmd, rule_name):
         """Dispatch a light control via HA light.* services. The device's local
         Tuya link is unreliable (sleeps / flaky write listener), so control is
@@ -1807,6 +1839,13 @@ class RuleEngine:
         # optional data (brightness_pct / hs_color / color_temp_kelvin).
         if protocol == 'ha_light':
             self._dispatch_ha_light(cmd, rule_name)
+            return
+
+        # Water valve (HCT-636 irrigation zones) via HA valve.* services. The
+        # device_id IS the HA entity_id (valve.water_timer_valve_N); action is
+        # 'open'|'close'|'stop'. cmd-level protocol like curtain/ha_light.
+        if protocol == 'valve':
+            self._dispatch_valve(cmd, device_id, rule_name)
             return
 
         # Tablet alert (Balcony Smart Tablet) — publish a compact alert to the
