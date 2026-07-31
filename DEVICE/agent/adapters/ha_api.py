@@ -133,6 +133,7 @@ class HAApiAdapter(DeviceAdapter):
         ],
         'media_player.samsung_q60ba_50_tv_2': [('media_player.samsung_q60ba_50_tv_2', 'state')],
         'media_player.samsung_q49_ba_tv':     [('media_player.samsung_q49_ba_tv',     'state')],
+        'media_player.balcony_55_neo_qled':   [('media_player.balcony_55_neo_qled',   'state')],
         # Alexa Echo devices + Samsung soundbar (built-in Alexa). devices
         # rows already exist (protocol='alexa', identity-only); adding here
         # so their HA media_player state flows into last_state for power

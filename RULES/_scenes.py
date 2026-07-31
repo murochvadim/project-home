@@ -126,6 +126,27 @@ def expand_scene(state, scene, rule_name):
     for seg in (scene.get('devices') or []):
         if not isinstance(seg, dict):
             continue
+
+        # Media / TV item (e.g. Balcony TV play_playlist) — a STRUCTURED entry
+        # {t:'media', media_action, target, playlist_id?}, NOT an @-token. Emit
+        # the media command the engine's _dispatch_media consumes (same shape
+        # panel_commands / balcony_buttons build). Must run BEFORE the @-token
+        # check below since a media entry has no 'v'. _run_scene adds
+        # _skip_loop_guard on every command.
+        if seg.get('t') == 'media':
+            ma = seg.get('media_action')
+            if ma:
+                cmd = {'device_id': 'media', 'protocol': 'media', 'media_action': ma,
+                       'target': seg.get('target') or 'tv55', 'rule': rule_name}
+                for k in ('playlist_id', 'rel_path', 'shuffle', 'repeat'):
+                    if seg.get(k) is not None:
+                        cmd[k] = seg[k]
+                cmds.append(cmd)
+            else:
+                log.info("_scenes: scene '%s' media entry missing media_action — skipped",
+                         scene.get('name'))
+            continue
+
         tok = (seg.get('v') or '').strip()
         if not tok or not tok.startswith('@'):
             continue

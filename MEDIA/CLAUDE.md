@@ -227,6 +227,9 @@ only video needs the remote-key bar. **55" volume + playback untouched throughou
 ### TV 85 (Living Room, `tv`) vs TV 55 (Balcony, `tv55`) — control differences
 Both are Samsung TVs driven by the media agent (LXC 100), but via DIFFERENT paths — **don't assume one behaves like the other** (this bit us on volume + off). Code: `tv_control.py` (`tv` branch) + `player_service.py` `media_command()` (`tv55` intercepts).
 
+### TVs in Main Agent Scenes (2026-07-31)
+All 4 Samsung TVs are now on/off-able from **scenes** via `+Dev` — the Balcony 55" was registered as a `devices` row (`media_player.balcony_55_neo_qled`, `device_type='tv'`, `protocol='ha_api'`) and the device agent's on/off resolver was widened to allow `media_player` (see DEVICE/CLAUDE.md "`_resolve_entity` allows `media_player`"; that also fixed Guy/Bedroom TVs' previously-silent scene on/off). Scenes also gained a **📺 TV media** dropdown to **play a playlist on `tv` or `tv55`** (the only 2 playback `TV_TARGETS`; Guy/Bedroom are power-only) or **⏹ Stop** (global — one TV plays at a time). Play → `/api/playlists/<id>/play {target}`, stop → `/api/queue/stop`. The dashboard emits structured `{t:'media', media_action, target, playlist_id?}` scene entries → `RULES/_scenes.py` (media branch) → `rule_engine._dispatch_media` — no engine change.
+
 | Aspect | **TV 85 — Living Room** (`tv`) | **TV 55 — Balcony** (`tv55`) |
 |---|---|---|
 | Model | Samsung 85" QLED | Samsung 55" Neo QLED (2024) |

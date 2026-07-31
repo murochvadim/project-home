@@ -490,7 +490,7 @@ class DeviceAgent:
         # Filter out non-actionable entities (sensors, child_lock, etc.)
         candidates = [
             e for e in entities
-            if e['domain'] in ('switch', 'light', 'fan', 'cover')
+            if e['domain'] in ('switch', 'light', 'fan', 'cover', 'media_player')
             and not any(e['entity_id'].endswith(s) for s in self._SKIP_SUFFIXES)
         ]
         if not candidates:

@@ -1682,6 +1682,7 @@
   const SCENES_STORAGE_KEY = 'apartment.scenes';
   let scenesList = [];
   let scenesDirty = false;
+  let _scenesPlaylists = [];   // media-agent playlists for the Balcony-TV playlist picker
 
   function scenesNewId(p) { return p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
   function scenesEsc(s) { return (s || '').replace(/"/g, '&quot;'); }
@@ -1704,6 +1705,32 @@
     m = t.match(_SCENES_XPORT_RE);
     if (m) return { base: t.slice(0, m.index).trim(), action: null, special: m[1].toLowerCase() };
     return { base: t, action: null, special: null };
+  }
+  // Media-agent playlists for the Balcony-TV playlist picker (loaded once).
+  async function scenesLoadPlaylists() {
+    if (_scenesPlaylists.length) return;
+    try {
+      const pr = await fetch('http://192.168.1.138:8766/api/playlists', { signal: AbortSignal.timeout(5000) }).then(r => r.json());
+      _scenesPlaylists = Array.isArray(pr) ? pr : ((pr && pr.playlists) || []);
+    } catch (_) { _scenesPlaylists = []; }
+  }
+  // The only media-playback TV targets (player_service TV_TARGETS). Guy/Bedroom
+  // TVs can't play media (no cast/AVTransport target) — power on/off only.
+  const _SCENES_MEDIA_TARGETS = [
+    { key: 'tv55', label: 'Balcony 55"' },
+    { key: 'tv',   label: 'Living Room 85"' },
+  ];
+  // Options for the scene TV-media dropdown: a global Stop + per-target playlists.
+  function scenesMediaOpts() {
+    const audio = _scenesPlaylists.filter(p => (p.kind || 'audio') !== 'video');
+    const video = _scenesPlaylists.filter(p => (p.kind || 'audio') === 'video');
+    let out = '<option value="stop">⏹ Stop media (any TV)</option>';
+    for (const t of _SCENES_MEDIA_TARGETS) {
+      const opt = p => `<option value="play|${t.key}|${scenesEsc(String(p.id))}">${scenesEscText(p.name)}</option>`;
+      if (audio.length) out += `<optgroup label="▶ ${scenesEsc(t.label)} — 🎵 Audio">${audio.map(opt).join('')}</optgroup>`;
+      if (video.length) out += `<optgroup label="▶ ${scenesEsc(t.label)} — 🎬 Video">${video.map(opt).join('')}</optgroup>`;
+    }
+    return out;
   }
   function scenesFmtDate(iso) {
     if (!iso) return '—';
@@ -1736,6 +1763,10 @@
       const collapsed = scenesCollapsed(s.id);
       const devs = Array.isArray(s.devices) ? s.devices : [];
       const chips = collapsed ? '' : devs.map((seg, di) => {
+        if (seg && seg.t === 'media') {
+          const lbl = seg.label || ('📺 ' + (seg.media_action || 'media'));
+          return `<span style="display:inline-flex;align-items:center;gap:4px;background:#e6f0f5;border:1px solid #bcd6e6;border-radius:12px;padding:2px 6px 2px 9px;margin:2px;font-size:0.78rem;">${scenesEscText(lbl)}<button onclick="scenesRemoveDevice(${i},${di})" title="Remove" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.95rem;line-height:1;padding:0 0 0 2px;">×</button></span>`;
+        }
         const p = scenesParseChip(seg && seg.v);
         const baseTxt = (p.base || '').replace(/^@/, '') || '(device)';
         const onSel = p.action === 'on', offSel = p.action === 'off';
@@ -1758,6 +1789,8 @@
           ${chips || '<span style="font-size:0.74rem;color:#bbb;">none yet</span>'}
           <button onclick="scenesAddDevice(${i})" title="Add devices (multi-select — check several, then Add selected)"
                   style="background:#fff;color:#6c4f9f;border:1px solid #cfc1e6;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;margin-left:4px;">+ Dev</button>
+          ${_scenesPlaylists.length ? `<select onchange="scenesAddMedia(${i}, this.value); this.value='';" title="Play a playlist on a TV, or stop TV media, in this scene"
+                  style="background:#fff;color:#2a6b86;border:1px solid #bcd6e6;border-radius:4px;padding:2px 6px;font-size:0.74rem;cursor:pointer;margin-left:4px;"><option value="">📺 + TV media…</option>${scenesMediaOpts()}</select>` : ''}
           ${devs.length ? `<button onclick="scenesSetAllActions(${i},'on')" title="Set ALL devices on"
                   style="background:#fff;color:#3a7d44;border:1px solid #bcdcc2;border-radius:4px;padding:2px 9px;font-size:0.74rem;cursor:pointer;margin-left:6px;">All on</button>
           <button onclick="scenesSetAllActions(${i},'off')" title="Set ALL devices off"
@@ -1861,6 +1894,29 @@
       scenesRender();
     }, { multi: true, exclude: exclude });
   };
+  // Add a TV-media item to the scene: play a playlist on a chosen TV, or Stop.
+  // Structured entry {t:'media',…} — expanded server-side by _scenes.py → _dispatch_media.
+  // val: 'stop'  |  'play|<target>|<playlist_id>'
+  window.scenesAddMedia = function (i, val) {
+    if (!val || !scenesList[i]) return;
+    if (!Array.isArray(scenesList[i].devices)) scenesList[i].devices = [];
+    if (val === 'stop') {
+      scenesList[i].devices.push({ t: 'media', media_action: 'stop', label: '⏹ Stop media' });
+    } else if (val.indexOf('play|') === 0) {
+      const parts = val.split('|');           // ['play', target, pid]
+      const target = parts[1];
+      const pid = parseInt(parts[2], 10);
+      if (isNaN(pid)) return;
+      const tinfo = _SCENES_MEDIA_TARGETS.find(t => t.key === target);
+      const tlabel = tinfo ? tinfo.label : target;
+      const pl = _scenesPlaylists.find(p => String(p.id) === String(parts[2]));
+      const name = pl ? pl.name : ('Playlist ' + pid);
+      scenesList[i].devices.push({ t: 'media', media_action: 'play_playlist', target: target, playlist_id: pid, label: '📺 ' + tlabel + ' — Play: ' + name });
+    } else { return; }
+    scenesList[i].updated_at = new Date().toISOString();
+    scenesMarkDirty();
+    scenesRender();
+  };
   window.scenesRemoveDevice = function (i, di) {
     if (!scenesList[i] || !Array.isArray(scenesList[i].devices)) return;
     scenesList[i].devices.splice(di, 1);
@@ -1873,7 +1929,7 @@
   // action (push/Page/say/…) is replaced — a scene is an on/off state list.
   window.scenesSetDeviceAction = function (i, di, action) {
     const seg = scenesList[i] && scenesList[i].devices && scenesList[i].devices[di];
-    if (!seg) return;
+    if (!seg || seg.t === 'media') return;
     const p = scenesParseChip(seg.v);
     seg.v = (p.action === action) ? p.base : ((p.base || '') + ' ' + action);
     scenesList[i].updated_at = new Date().toISOString();
@@ -1885,7 +1941,7 @@
   window.scenesSetAllActions = function (i, action) {
     const s = scenesList[i];
     if (!s || !Array.isArray(s.devices) || !s.devices.length) return;
-    s.devices.forEach(seg => { const p = scenesParseChip(seg.v); seg.v = (p.base || '') + ' ' + action; });
+    s.devices.forEach(seg => { if (seg.t === 'media') return; const p = scenesParseChip(seg.v); seg.v = (p.base || '') + ' ' + action; });
     s.updated_at = new Date().toISOString();
     scenesMarkDirty();
     scenesRender();
@@ -1910,6 +1966,9 @@
   };
 
   async function scenesLoad() {
+    // Load playlists in the BACKGROUND — never block the scenes render on the
+    // media agent's reachability; re-render to add the 📺 dropdown when they arrive.
+    scenesLoadPlaylists().then(() => scenesRender());
     try {
       const r = await fetch('/api/dashboard-settings/' + encodeURIComponent(SCENES_STORAGE_KEY));
       if (!r.ok) { scenesList = []; scenesClearDirty(); scenesRender(); return; }
