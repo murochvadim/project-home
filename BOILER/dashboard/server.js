@@ -119,6 +119,8 @@ require('./routes-vacuum')(app, callHA);
 require('./routes-valve')(app, callHA);
 // LetPot hydroponic control (switch/number/select/time) → HA services.
 require('./routes-letpot')(app, callHA);
+// Irrigation watering history (read-only) → irrigation_log.
+require('./routes-irrigation')(app, db);
 
 // Privacy page — Sites CRM + per-site documents (client-side encrypted or
 // plain). Own module; file bytes on QNAP, server stays blind to plaintext.
@@ -2296,7 +2298,7 @@ const DBV_GROUPS = [
   ['Orchestrator & System', ['orchestrator_log','system_alerts','agents','agent_settings','manual_requests','retention_policies','dashboard_settings']],
   ['Voice',                 ['voice_token_log','voice_devices','voice_device_settings','voice_intent_phrases','voice_device_entities']],
   ['Media & Faces',         ['media_library','media_playlists','face_registry','face_crops','person_embeddings','documents','pixoo_presets','pixoo_log','analyzer_settings','analyzer_log']],
-  ['Devices & Rooms',       ['devices','device_events','device_agent_log','device_blocklist','rooms','room_device_placements','manual_people_log']],
+  ['Devices & Rooms',       ['devices','device_events','device_agent_log','device_blocklist','rooms','room_device_placements','manual_people_log','irrigation_log']],
   ['Network',               ['net_devices','net_ports','net_scans','cellular_antennas']],
   ['Rule Engine',           ['rule_events','rule_engine_state','rule_engine_log']],
   ['Panels & Boards',       ['hasp_panels','hasp_buttons','hasp_displays','esp_boards']],
@@ -2331,6 +2333,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       media_library: 'added_at', media_playlists: 'updated_at', face_registry: 'added_at',
       backup_storages: 'created_at', backup_jobs: 'created_at', backup_log: 'started_at',
       devices: 'last_seen', device_events: 'ts', device_agent_log: 'ts',
+      irrigation_log: 'opened_at',
       device_blocklist: 'blocked_at', rooms: null, net_devices: 'last_seen',
       net_ports: null, net_scans: 'ts',
       rule_events: 'ts', rule_engine_state: 'updated_at', rule_engine_log: 'ts',

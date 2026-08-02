@@ -2350,3 +2350,75 @@
   };
 })();
 
+// ─── Watering history card (Irrigation tab) — reads irrigation_log ───────────
+(function () {
+  'use strict';
+  let IH_LIMIT = 10;
+
+  function ihBuild() {
+    const box = document.getElementById('irr-history');
+    if (!box || box.dataset.built === '1') return;
+    box.innerHTML = `
+      <div class="card" style="padding:14px;margin-top:4px;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <h2 style="margin:0;font-size:1.05rem;">🗒 Watering history</h2>
+          <label style="font-size:0.82rem;color:#555;">Last
+            <select id="ih-limit" onchange="ihLoad()" style="font-size:0.82rem;padding:3px 5px;">
+              <option value="10">10</option><option value="30">30</option><option value="60">60</option>
+            </select> sessions</label>
+          <button class="btn-test" onclick="ihLoad()">↻ Refresh</button>
+          <span id="ih-status" style="font-size:0.78rem;color:#888;"></span>
+        </div>
+        <div style="overflow-x:auto;margin-top:10px;">
+          <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+            <thead><tr style="text-align:left;color:#666;border-bottom:1px solid #d0cbc4;">
+              <th style="padding:5px 8px;">Valve</th><th style="padding:5px 8px;">Date</th>
+              <th style="padding:5px 8px;">Start</th><th style="padding:5px 8px;">Duration</th>
+              <th style="padding:5px 8px;">Source</th></tr></thead>
+            <tbody id="ih-tbody"><tr><td colspan="5" style="padding:8px;color:#aaa;">loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    box.dataset.built = '1';
+  }
+
+  const _fmtDur = (s) => { s = Math.max(0, parseInt(s, 10) || 0); const m = Math.floor(s / 60), r = s % 60; return m ? `${m}m ${r}s` : `${r}s`; };
+  const _fmtDate = (iso) => { if (!iso) return '—'; return new Date(iso).toLocaleDateString('en-GB'); };
+  const _fmtTime = (iso) => { if (!iso) return '—'; return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); };
+  const _esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  window.ihLoad = async function () {
+    const sel = document.getElementById('ih-limit');
+    IH_LIMIT = sel ? (parseInt(sel.value, 10) || 10) : IH_LIMIT;
+    const st = document.getElementById('ih-status'); if (st) { st.textContent = '· loading…'; st.style.color = '#888'; }
+    try {
+      const rows = await fetch('/api/irrigation/log?limit=' + IH_LIMIT).then(r => r.json());
+      const tb = document.getElementById('ih-tbody'); if (!tb) return;
+      if (!Array.isArray(rows) || !rows.length) {
+        tb.innerHTML = '<tr><td colspan="5" style="padding:8px;color:#aaa;">No watering sessions recorded yet.</td></tr>';
+      } else {
+        tb.innerHTML = rows.map(r => {
+          const src = r.source === 'schedule' ? '⏰ schedule' : (r.source === 'manual' ? '👆 manual' : '—');
+          return `<tr style="border-bottom:1px solid #eee;">
+            <td style="padding:5px 8px;font-weight:600;">${_esc(r.valve_name || r.valve_id)}</td>
+            <td style="padding:5px 8px;">${_fmtDate(r.opened_at)}</td>
+            <td style="padding:5px 8px;">${_fmtTime(r.opened_at)}</td>
+            <td style="padding:5px 8px;">${_fmtDur(r.duration_sec)}</td>
+            <td style="padding:5px 8px;color:#666;">${src}</td></tr>`;
+        }).join('');
+      }
+      if (st) st.textContent = '';
+    } catch (e) {
+      if (st) { st.textContent = '✗ ' + e.message; st.style.color = '#c0392b'; }
+    }
+  };
+
+  function ihInit() { ihBuild(); ihLoad(); }
+
+  const _prevShowTabIh = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTabIh === 'function') _prevShowTabIh(name, btn);
+    if (name === 'irrigation') ihInit();
+  };
+})();
+
