@@ -1936,7 +1936,7 @@
     const box = document.getElementById('irr-list');
     if (!box || box.dataset.built === '1') return;
     box.innerHTML = VALVES.map(v => `
-      <div class="card" style="padding:14px;margin-bottom:12px;">
+      <div class="card" style="padding:14px;flex:1 1 320px;">
         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
           <h2 style="margin:0;font-size:1rem;">${v.label}
             <span id="irr-dot-${v.key}" title="freshness" style="font-size:0.85rem;color:#aaa;">●</span>
@@ -2128,6 +2128,218 @@
   window.showTab = function (name, btn) {
     if (typeof _prevShowTabIrr === 'function') _prevShowTabIrr(name, btn);
     if (name === 'irrigation') irrInit();
+  };
+})();
+
+// ─── LetPot Max card (Irrigation tab) — HA-mediated hydroponic garden ─────────
+// State from GET /api/devices/states?ids=lph_max_a687 (device agent ingests all
+// 12 entities). Control via POST /api/letpot/set {entity_id, value} (routes-letpot.js).
+(function () {
+  'use strict';
+
+  const DEV_ID = 'lph_max_a687';
+  const P = 'lph_max_a687';   // entity prefix
+  const SWITCHES = [
+    { key: 'power',        entity: `switch.${P}_power`,        label: '⏻ Power' },
+    { key: 'pump_cycling', entity: `switch.${P}_pump_cycling`, label: '💧 Pump cycling' },
+    { key: 'auto_mode',    entity: `switch.${P}_auto_mode`,    label: '🤖 Auto mode' },
+    { key: 'alarm_sound',  entity: `switch.${P}_alarm_sound`,  label: '🔔 Alarm' },
+  ];
+  const E = {
+    brightness: `number.${P}_light_brightness`,
+    age:        `number.${P}_plants_age`,
+    mode:       `select.${P}_light_mode`,
+    unit:       `select.${P}_temperature_unit_on_display`,
+    lon:        `time.${P}_light_on`,
+    loff:       `time.${P}_light_off`,
+  };
+  let LP_STATE = {}, LP_SEEN = null, LP_TIMER = null, LP_INITED = false;
+  const _touch = {};   // elId -> ts; suppress live-repaint of an input the user is editing
+  const touched = (id) => _touch[id] && (Date.now() - _touch[id] < 3000);
+  const mark = (id) => { _touch[id] = Date.now(); };
+  const hhmm = (v) => String(v || '').slice(0, 5);            // "07:00:00" -> "07:00"
+  const hhmmss = (v) => (/^\d{2}:\d{2}$/.test(v) ? v + ':00' : v);
+
+  function lpBuild() {
+    const box = document.getElementById('irr-letpot');
+    if (!box || box.dataset.built === '1') return;
+    const swBtns = SWITCHES.map(s =>
+      `<button class="btn-test" id="lp-sw-${s.key}" onclick="lpToggle('${s.key}','${s.entity}')">${s.label}</button>`).join('');
+    box.innerHTML = `
+      <div class="card" style="padding:14px;">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <h2 style="margin:0;font-size:1.05rem;">🌱 LetPot Max
+            <span id="lp-dot" title="freshness" style="font-size:0.85rem;color:#aaa;">●</span>
+            <span id="lp-online" style="font-size:0.72rem;color:#888;font-weight:normal;">loading…</span>
+          </h2>
+          <span id="lp-power-chip" style="font-size:0.78rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">power: —</span>
+          <span id="lp-light-chip" style="font-size:0.78rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">💡 Light: —</span>
+          <span style="font-size:0.82rem;color:#666;">💧 Water <b id="lp-water">—</b></span>
+          <span style="font-size:0.82rem;color:#666;">🌡 <b id="lp-temp">—</b></span>
+          <span style="font-size:0.72rem;color:#999;">Last seen: <b id="lp-seen">—</b></span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">${swBtns}</div>
+        <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;align-items:center;">
+          <label style="font-size:0.82rem;color:#555;display:inline-flex;align-items:center;gap:6px;">💡 Brightness
+            <input type="range" id="lp-bri" min="1" max="9" step="1" style="width:120px;" oninput="lpMark('lp-bri');document.getElementById('lp-bri-val').textContent=this.value" onchange="lpSet('${E.brightness}', this.value)">
+            <b id="lp-bri-val" style="width:1.2em;text-align:center;">—</b></label>
+          <label style="font-size:0.82rem;color:#555;">🌿 Light mode
+            <select id="lp-mode" style="font-size:0.82rem;padding:3px 5px;" onchange="lpSet('${E.mode}', this.value)">
+              <option value="flower">flower</option><option value="vegetable">vegetable</option></select></label>
+          <label style="font-size:0.82rem;color:#555;">🌡 Unit
+            <select id="lp-unit" style="font-size:0.82rem;padding:3px 5px;" onchange="lpSet('${E.unit}', this.value)">
+              <option value="celsius">celsius</option><option value="fahrenheit">fahrenheit</option></select></label>
+        </div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;align-items:center;">
+          <button class="btn-test" style="border-color:#e0a020;color:#b8830f;" onclick="lpLightOn()">💡 Light On</button>
+          <button class="btn-test" style="border-color:#6b7a8f;color:#6b7a8f;" onclick="lpLightOff()">⭘ Light Off</button>
+          <span style="font-size:0.72rem;color:#999;">(Light On powers the unit on + starts the light now; the device has no instant light switch)</span>
+        </div>
+        <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:12px;align-items:center;">
+          <label style="font-size:0.82rem;color:#555;">🌅 Light on
+            <input type="time" id="lp-on" style="font-size:0.82rem;padding:3px 5px;" onfocus="lpMark('lp-on')" onchange="lpSet('${E.lon}', this.value)"></label>
+          <label style="font-size:0.82rem;color:#555;">🌆 Light off
+            <input type="time" id="lp-off" style="font-size:0.82rem;padding:3px 5px;" onfocus="lpMark('lp-off')" onchange="lpSet('${E.loff}', this.value)"></label>
+          <label style="font-size:0.82rem;color:#555;">🌱 Plants age
+            <input type="number" id="lp-age" min="0" max="999" style="width:66px;font-size:0.82rem;padding:3px 5px;" onfocus="lpMark('lp-age')" onchange="lpSet('${E.age}', this.value)"> days</label>
+        </div>
+        <div id="lp-status" style="font-size:0.78rem;color:#888;margin-top:10px;min-height:1.1em;"></div>
+      </div>`;
+    box.dataset.built = '1';
+  }
+
+  window.lpMark = mark;
+
+  async function lpFetch() {
+    const r = await fetch('/api/devices/states?ids=' + encodeURIComponent(DEV_ID));
+    if (!r.ok) throw new Error('GET /api/devices/states ' + r.status);
+    const list = await r.json();
+    const dev = Array.isArray(list) ? list.find(d => d.id === DEV_ID) : null;
+    LP_STATE = (dev && dev.last_state) || {};
+    LP_SEEN  = (dev && dev.last_seen) || null;
+    return dev;
+  }
+
+  function lpFmtAge(iso) {
+    if (!iso) return '—';
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  }
+  const isOn = (v) => v === true || v === 1 || v === '1' || v === 'on' || v === 'true';
+
+  function lpRender() {
+    const fresh = LP_SEEN && (Date.now() - new Date(LP_SEEN).getTime()) < 30 * 60 * 1000;
+    const dot = document.getElementById('lp-dot'), on = document.getElementById('lp-online');
+    if (dot) dot.style.color = fresh ? '#3a7d44' : '#c0392b';
+    if (on) { on.textContent = fresh ? 'online' : 'offline'; on.style.color = fresh ? '#3a7d44' : '#c0392b'; }
+    const seen = document.getElementById('lp-seen'); if (seen) seen.textContent = lpFmtAge(LP_SEEN);
+    const pw = isOn(LP_STATE.power);
+    const chip = document.getElementById('lp-power-chip');
+    if (chip) { chip.textContent = 'power: ' + (pw ? 'ON' : 'OFF'); chip.style.background = pw ? '#3a7d44' : '#eee'; chip.style.color = pw ? '#fff' : '#888'; chip.style.borderColor = pw ? '#3a7d44' : '#d0cbc4'; }
+    const w = document.getElementById('lp-water'); if (w) w.textContent = (LP_STATE.water_level != null ? LP_STATE.water_level + '%' : '—');
+    const t = document.getElementById('lp-temp'); if (t) t.textContent = (LP_STATE.temperature != null ? LP_STATE.temperature + '°' : '—');
+    // switch buttons
+    SWITCHES.forEach(s => {
+      const b = document.getElementById('lp-sw-' + s.key); if (!b) return;
+      const active = isOn(LP_STATE[s.key]);
+      b.style.background = active ? '#3a7d44' : '#f1f5f9';
+      b.style.color = active ? '#fff' : '#334155';
+      b.style.borderColor = active ? '#3a7d44' : '#cbd5e1';
+    });
+    // inputs (skip while the user is editing)
+    const bri = document.getElementById('lp-bri'), briV = document.getElementById('lp-bri-val');
+    if (bri && !touched('lp-bri') && LP_STATE.light_brightness != null) { bri.value = LP_STATE.light_brightness; if (briV) briV.textContent = LP_STATE.light_brightness; }
+    const md = document.getElementById('lp-mode'); if (md && LP_STATE.light_mode) md.value = LP_STATE.light_mode;
+    const un = document.getElementById('lp-unit'); if (un && LP_STATE.temp_unit) un.value = LP_STATE.temp_unit;
+    const lo = document.getElementById('lp-on'); if (lo && !touched('lp-on') && LP_STATE.light_on) lo.value = hhmm(LP_STATE.light_on);
+    const lf = document.getElementById('lp-off'); if (lf && !touched('lp-off') && LP_STATE.light_off) lf.value = hhmm(LP_STATE.light_off);
+    const lc = document.getElementById('lp-light-chip');
+    if (lc) { const lightNow = lightIsOn(); lc.textContent = '💡 Light: ' + (lightNow ? 'ON' : 'OFF'); lc.style.background = lightNow ? '#e0a020' : '#eee'; lc.style.color = lightNow ? '#fff' : '#888'; lc.style.borderColor = lightNow ? '#e0a020' : '#d0cbc4'; }
+    const ag = document.getElementById('lp-age'); if (ag && !touched('lp-age') && LP_STATE.plants_age != null) ag.value = LP_STATE.plants_age;
+  }
+
+  function lpStatus(txt, col) { const s = document.getElementById('lp-status'); if (s) { s.textContent = txt; s.style.color = col; } }
+
+  window.lpToggle = function (key, entity) { lpSet(entity, isOn(LP_STATE[key]) ? 0 : 1); };
+
+  // The LetPot light has no instant switch — it follows the on/off schedule
+  // (on == off => off). These buttons drive the schedule non-destructively:
+  // Light Off sets light_off = light_on (keeps your on-time) and remembers the
+  // real off-time; Light On restores it (fallback 23:00).
+  // Light state NOW: the light only runs when the unit is powered AND the clock
+  // is inside the on->off schedule window (on==off => disabled; on>off wraps midnight).
+  const _nowHM = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const lightIsOn = () => {
+    if (!isOn(LP_STATE.power)) return false;
+    const on = hhmm(LP_STATE.light_on), off = hhmm(LP_STATE.light_off);
+    if (!on || !off || on === off) return false;
+    const now = _nowHM();
+    return (on < off) ? (now >= on && now < off) : (now >= on || now < off);
+  };
+  window.lpLightOff = function () {
+    const on = hhmm(LP_STATE.light_on) || '00:00', off = hhmm(LP_STATE.light_off);
+    if (off && off !== on) { try { localStorage.setItem('letpot.light_off', off); } catch (e) {} }
+    lpSet(E.loff, on);   // off == on => light off (unit power/pump left on)
+  };
+  window.lpLightOn = async function () {
+    lpStatus('· turning light on…', '#888');
+    try {
+      if (!isOn(LP_STATE.power)) await _lpPost('switch.' + P + '_power', 1);   // the light only runs when the unit is powered on
+      const now = _nowHM();
+      let off = '23:59'; try { off = localStorage.getItem('letpot.light_off') || off; } catch (e) {}
+      if (off <= now) off = '23:59';               // window must extend past now
+      if (off === now) off = '00:00';              // 23:59 edge: wrap so on != off (window stays open)
+      await _lpPost(E.lon, now);                    // start the window NOW so the light comes on immediately
+      await _lpPost(E.loff, off);
+      lpStatus('✓ light on (' + now + '–' + off + ', power on)', '#3a7d44');
+      setTimeout(() => { lpFetch().then(lpRender).catch(() => {}); }, 1500);
+    } catch (e) {
+      lpStatus('✗ light on failed: ' + e.message, '#c0392b');
+    }
+  };
+
+  async function _lpPost(entity, value) {
+    if (String(entity).startsWith('time.')) value = hhmmss(String(value));
+    const r = await fetch('/api/letpot/set', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entity_id: entity, value }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  }
+
+  window.lpSet = async function (entity, value) {
+    const nm = entity.split('.').pop();
+    lpStatus('· setting ' + nm + '…', '#888');
+    try {
+      await _lpPost(entity, value);
+      lpStatus('✓ ' + nm + ' set', '#3a7d44');
+      setTimeout(() => { lpFetch().then(lpRender).catch(() => {}); }, 1500);  // let the cloud settle
+    } catch (e) {
+      lpStatus('✗ ' + nm + ' failed: ' + e.message, '#c0392b');
+    }
+  };
+
+  async function lpInit() {
+    lpBuild();
+    if (LP_INITED) { lpFetch().then(lpRender).catch(() => {}); return; }
+    LP_INITED = true;
+    try { await lpFetch(); lpRender(); }
+    catch (e) {
+      console.error('[letpot] init failed:', e);
+      const on = document.getElementById('lp-online'); if (on) { on.textContent = 'init failed'; on.style.color = '#c0392b'; }
+    }
+    if (!LP_TIMER) LP_TIMER = setInterval(() => { lpFetch().then(lpRender).catch(() => {}); }, 5000);
+  }
+
+  const _prevShowTabLp = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTabLp === 'function') _prevShowTabLp(name, btn);
+    if (name === 'irrigation') lpInit();
   };
 })();
 

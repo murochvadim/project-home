@@ -149,6 +149,25 @@ class HAApiAdapter(DeviceAdapter):
         # control is dispatched separately (dashboard/rule engine).
         'valve.water_timer_valve_1': [('valve.water_timer_valve_1', 'state')],
         'valve.water_timer_valve_2': [('valve.water_timer_valve_2', 'state')],
+        # LetPot LPH-Max (A687) hydroponic garden — official HA LetPot cloud
+        # integration exposes 12 entities across switch/number/select/time/sensor.
+        # State-only projection here (switch→bool, sensor→float, number/select/time
+        # → raw value via the default branch); control is HA-mediated in the
+        # dashboard (routes-letpot.js → switch/number/select/time HA services).
+        'lph_max_a687': [
+            ('switch.lph_max_a687_power',                     'power'),
+            ('switch.lph_max_a687_pump_cycling',             'pump_cycling'),
+            ('switch.lph_max_a687_auto_mode',                'auto_mode'),
+            ('switch.lph_max_a687_alarm_sound',              'alarm_sound'),
+            ('number.lph_max_a687_light_brightness',         'light_brightness'),
+            ('number.lph_max_a687_plants_age',               'plants_age'),
+            ('select.lph_max_a687_light_mode',               'light_mode'),
+            ('select.lph_max_a687_temperature_unit_on_display', 'temp_unit'),
+            ('time.lph_max_a687_light_on',                   'light_on'),
+            ('time.lph_max_a687_light_off',                  'light_off'),
+            ('sensor.lph_max_a687_temperature',              'temperature'),
+            ('sensor.lph_max_a687_water_level',              'water_level'),
+        ],
     }
 
     def __init__(self, devices, on_state_change):

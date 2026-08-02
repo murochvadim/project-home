@@ -188,6 +188,8 @@ function isOnline(dev) {
   if (dev.protocol === 'vacuum') return dev.last_state ? true : ageSec < 600;
   // Water valve (HCT-636 zones) — HA WS push (Tuya cloud), sparse like vacuum/ring.
   if (dev.protocol === 'valve')  return dev.last_state ? true : ageSec < 600;
+  // LetPot hydroponic (HA LetPot cloud integration) — HA WS push, sparse.
+  if (dev.protocol === 'letpot') return dev.last_state ? true : ageSec < 600;
   // External network devices (Pixoo, Awtrix, HASP panels) — last_seen comes
   // from net_devices via the ARP scan (5-min cadence). 600s threshold covers
   // 5-min scan + margin so a single missed scan doesn't flip them offline.
