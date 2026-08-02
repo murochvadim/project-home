@@ -109,7 +109,9 @@ site's Docs window. `store:"row"` (default) just writes the generic `email_extra
   slash-format dates (`19/06/26`) and invoice numbers are fine. Capture the swapped number normally
   (`([\d]+\s*\.\s*[\d]+)\s*\{?\s*<label>`; `{` = the ₪ glyph) and let `swap_decimal` fix it.
 - **Extract field extras:** `source:"pdf"` (first PDF attachment), `as:"amount"|"date"|"vendor"|"invoice_no"`
-  (maps the field to a receipt column), `date_format` (e.g. `DD/MM/YY` → ISO), **`swap_decimal:true`**
+  (maps the field to a receipt column), `date_format` (e.g. `DD/MM/YY` → ISO; **month names supported since
+  2026-08-02** — `MMMM`→`%B` / `MMM`→`%b`, e.g. `MMMM DD, YYYY` parses `July 31, 2026`, for English/USD
+  receipts like **Anthropic**; `_parse_date` replaces `MMMM`/`MMM` before `MM`), **`swap_decimal:true`**
   (un-swap an RTL `A.B`→`B.A`, e.g. Partner `86.100`→`100.86`; opt-in per field, in `_run_extract`). Vendor =
   rule `vendor` else derived from the sender domain (`aviem-evm.co.il` → `Aviem`).
 - **On live fire** (`_apply_rules`): writes the `email_extractions` audit row **and** upserts

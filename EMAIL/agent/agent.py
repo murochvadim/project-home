@@ -436,8 +436,10 @@ def _parse_date(s, fmt=None):
     if not s:
         return None
     fmts = []
-    if fmt:  # friendly tokens → strptime (e.g. DD/MM/YY → %d/%m/%y)
-        fmts.append(fmt.replace("DD", "%d").replace("MM", "%m")
+    if fmt:  # friendly tokens → strptime (DD/MM/YY → %d/%m/%y; MMMM DD, YYYY → %B %d, %Y).
+             # Month names (MMMM/MMM) MUST be replaced before MM so the "MM" inside them survives.
+        fmts.append(fmt.replace("MMMM", "%B").replace("MMM", "%b")
+                       .replace("DD", "%d").replace("MM", "%m")
                        .replace("YYYY", "%Y").replace("YY", "%y"))
     fmts += _DATE_FMTS_DEFAULT
     for f in fmts:
