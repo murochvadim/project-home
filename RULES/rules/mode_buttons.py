@@ -382,8 +382,22 @@ def evaluate(event, state):
     # ── Write only on transition ──
     prev = state.shared.get('home_mode')
     if prev != active_mode:
+        # Record how long the mode that JUST ENDED lasted, so arrival rules can
+        # ignore a transient flip (e.g. the nightly 04:00 Tuya reload briefly
+        # flipping home->away->home in ~1 s). Consumed by morning_lights /
+        # evening_lights via the min-arrival-dwell guard.
+        _now_ts = time.time()
+        _since = state.shared.get('mode_buttons.mode_since_ts')
+        if _since is not None:
+            state.shared['mode_buttons.prev_mode'] = prev or ''
+            try:
+                state.shared['mode_buttons.prev_mode_sec'] = round(_now_ts - float(_since), 1)
+            except (TypeError, ValueError):
+                state.shared['mode_buttons.prev_mode_sec'] = 99999
+        state.shared['mode_buttons.mode_since_ts'] = _now_ts
         state.shared['home_mode'] = active_mode
-        log.info("mode_buttons: home_mode %s -> %s", prev or '(unset)', active_mode)
+        log.info("mode_buttons: home_mode %s -> %s (prev lasted %ss)",
+                 prev or '(unset)', active_mode, state.shared.get('mode_buttons.prev_mode_sec', '?'))
 
     # ── Mutual exclusivity ──
     # Whenever a button is currently ON that is NOT the active mode, turn it

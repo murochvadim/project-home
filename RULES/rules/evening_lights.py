@@ -104,6 +104,11 @@ _SCENE_RE = re.compile(r'evening\s+lights:\s*scene\s+is\s+(.+)', re.IGNORECASE)
 # waiting up to 60 s for the heartbeat. Mode Buttons (depends_on) runs first and
 # sets home_mode. Scenario A (sunset anchor) stays HEARTBEAT-ONLY — see evaluate().
 _MODE_BUTTON_DEVICE_ID = 'bf85e819855d686918q6hz'
+# Ignore a Scenario-B "arrival" whose preceding away lasted less than this — a
+# transient mode-flip blip (e.g. the nightly 04:00 Tuya reload flipping
+# home->away->home in ~1 s), not a real arrival. Read from Mode Buttons'
+# `mode_buttons.prev_mode_sec`.
+_MIN_ARRIVAL_DWELL_SEC = 60
 
 
 RULE = {
@@ -451,6 +456,18 @@ def evaluate(event, state):
                          and prev_home
                          and prev_home != home_gate_value
                          and home_mode == home_gate_value)
+    # Dwell guard (same as morning_lights): skip a Scenario-B arrival if the away
+    # we just returned from lasted less than _MIN_ARRIVAL_DWELL_SEC — a transient
+    # mode flip (nightly Tuya reload), not a real arrival.
+    if home_just_arrived:
+        try:
+            _away_sec = float(state.shared.get('mode_buttons.prev_mode_sec', 99999))
+        except (TypeError, ValueError):
+            _away_sec = 99999
+        if _away_sec < _MIN_ARRIVAL_DWELL_SEC:
+            log.info("evening_lights: arrival IGNORED — previous away only %.1fs (< %ds), transient mode flip",
+                     _away_sec, _MIN_ARRIVAL_DWELL_SEC)
+            home_just_arrived = False
     late_arrival_hit  = home_just_arrived and time_mode in active_modes
 
     # Sentence-driven gates (s_el3). All gates AND-combined. If no gate
