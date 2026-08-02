@@ -1898,8 +1898,10 @@
   'use strict';
 
   const VALVES = [
-    { id: 'valve.water_timer_valve_1', key: 'v1', label: 'Water Valve 1' },
-    { id: 'valve.water_timer_valve_2', key: 'v2', label: 'Water Valve 2' },
+    { id: 'valve.water_timer_valve_1',      key: 'v1', label: 'Water Valve A' },
+    { id: 'valve.water_timer_valve_2',      key: 'v2', label: 'Water Valve B' },
+    { id: 'valve.rf_water_timer_3_valve_1', key: 'v3', label: 'Water Valve C' },
+    { id: 'valve.rf_water_timer_3_valve_2', key: 'v4', label: 'Water Valve D' },
   ];
   const IRR_CFG_KEY = 'balcony.irrigation';   // dashboard_settings key (read by the Balcony Irrigation rule)
   // day-of-week chips: index 0=Sunday … 6=Saturday (matches JS getDay / Python %w)
@@ -2068,9 +2070,14 @@
     irrRenderScheds(vk);
   };
   window.irrRemoveSched = function (vk, id) {
+    const v = VALVES.find(x => x.key === vk);
+    const sc = (IRR_SCHED[vk] || []).find(s => s.id === id);
+    const desc = sc ? `${sc.start_hm} for ${sc.duration_min} min` : 'this schedule';
+    if (!confirm(`Delete ${(v && v.label) || vk} schedule (${desc})?`)) return;
     irrSyncFromDom(vk);
     IRR_SCHED[vk] = (IRR_SCHED[vk] || []).filter(s => s.id !== id);
     irrRenderScheds(vk);
+    irrSaveSchedule();   // persist the deletion immediately — else it reappears on reload
   };
 
   async function irrLoadSchedule() {

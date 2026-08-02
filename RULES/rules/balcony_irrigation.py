@@ -47,8 +47,10 @@ log = logging.getLogger("rule.balcony_irrigation")
 
 # zone key -> HA valve entity id (which is also the devices-table id)
 VALVES = {
-    "v1": "valve.water_timer_valve_1",
-    "v2": "valve.water_timer_valve_2",
+    "v1": "valve.water_timer_valve_1",          # Water Valve A
+    "v2": "valve.water_timer_valve_2",          # Water Valve B
+    "v3": "valve.rf_water_timer_3_valve_1",     # Water Valve C (2nd timer, Zone C.D)
+    "v4": "valve.rf_water_timer_3_valve_2",     # Water Valve D
 }
 _SK          = "irrigation"          # state.shared key prefix
 _CONFIG_KEY  = "balcony.irrigation"  # dashboard_settings key

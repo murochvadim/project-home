@@ -147,8 +147,10 @@ class HAApiAdapter(DeviceAdapter):
         # HCG-003 gateway → exposed by the HA Tuya cloud integration as
         # 'valve.' entities (state open/closed). State-only here; open/close
         # control is dispatched separately (dashboard/rule engine).
-        'valve.water_timer_valve_1': [('valve.water_timer_valve_1', 'state')],
-        'valve.water_timer_valve_2': [('valve.water_timer_valve_2', 'state')],
+        'valve.water_timer_valve_1': [('valve.water_timer_valve_1', 'state')],          # Zone A
+        'valve.water_timer_valve_2': [('valve.water_timer_valve_2', 'state')],          # Zone B
+        'valve.rf_water_timer_3_valve_1': [('valve.rf_water_timer_3_valve_1', 'state')],  # Zone C (2nd timer)
+        'valve.rf_water_timer_3_valve_2': [('valve.rf_water_timer_3_valve_2', 'state')],  # Zone D
         # LetPot LPH-Max (A687) hydroponic garden — official HA LetPot cloud
         # integration exposes 12 entities across switch/number/select/time/sensor.
         # State-only projection here (switch→bool, sensor→float, number/select/time
