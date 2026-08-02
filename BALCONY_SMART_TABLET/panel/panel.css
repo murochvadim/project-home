@@ -64,6 +64,32 @@ body {
   background: #3a4152;
 }
 .tile.on .tile-state { background: #46d07d; box-shadow: 0 0 8px #46d07d88; }
+
+/* Live gate/barrier progress (from mur/home/esp/<id>/status). The corner badge
+   shows "N%" and a bottom fill bar tracks --pct while a sequence runs; both are
+   hidden when idle (the tile has no .running class). Same idea as the HASP panel
+   corner label. */
+.tile-prog {
+  position: absolute; top: 14px; right: 14px;
+  padding: 3px 10px; border-radius: 999px;
+  background: #2d6cdf; color: #fff;
+  font-size: 1.05rem; font-weight: 700; line-height: 1.15;
+  display: none;
+}
+.tile.running .tile-prog { display: block; }
+.tile.running { background: #1a2740; border-color: #2d6cdf; }
+.tile.running .tile-icon { color: #6aa0ff; }
+.tile-progbar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 7px;
+  border-radius: 0 0 20px 20px; overflow: hidden;
+  background: transparent;
+}
+.tile.running .tile-progbar { background: #223049; }
+.tile-progbar::after {
+  content: ""; display: block; height: 100%;
+  width: var(--pct, 0%);
+  background: #2d6cdf; transition: width .3s ease;
+}
 .tile.pressed { animation: flash .5s; }
 @keyframes flash { 0% { border-color: #2d6cdf; } 100% { border-color: #2a3142; } }
 

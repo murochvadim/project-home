@@ -17,6 +17,9 @@
   let mq = null, mqUp = false;
   // deviceId -> [{tile element, channel}] for live-state updates
   const stateMap = new Map();
+  // deviceId -> [{el, field}] for live gate/barrier progress from
+  // `mur/home/esp/<id>/status` (e.g. gates_progress / barrier_progress 0..100).
+  const progMap = new Map();
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
@@ -91,6 +94,7 @@
 
   function render() {
     stateMap.clear();
+    progMap.clear();
     const pages = cfg.pages || [];
     // page tabs (hidden when only one page)
     const pagesEl = $('pages');
@@ -113,13 +117,23 @@
       const el = document.createElement('div');
       el.className = 'tile';
       const sb = stateBinding(t);
+      // A pulse-trigger channel (e.g. gates_trigger / barrier_trigger on the
+      // Home Gates ESP board) has a matching `<prefix>_progress` field in the
+      // board's /status → show the live % on the tile, like the HASP panel.
+      const progField = (sb && sb.channel && /_trigger$/.test(sb.channel))
+        ? sb.channel.replace(/_trigger$/, '_progress') : null;
       el.innerHTML =
         `<div class="tile-icon">${iconHtml(t)}</div>` +
         `<div class="tile-body"><div class="tile-label">${esc(t.label || '?')}</div>` +
         (t.sub ? `<div class="tile-sub">${esc(t.sub)}</div>` : '') + `</div>` +
-        (sb ? `<span class="tile-state"></span>` : '');
+        (progField ? `<span class="tile-prog"></span><div class="tile-progbar"></div>`
+                   : (sb ? `<span class="tile-state"></span>` : ''));
       el.addEventListener('click', () => tap(t, el));
-      if (sb && sb.device_id) {
+      if (progField && sb.device_id) {
+        // progress tiles track esp status, not device on/off — no stateMap entry
+        if (!progMap.has(sb.device_id)) progMap.set(sb.device_id, []);
+        progMap.get(sb.device_id).push({ el, field: progField });
+      } else if (sb && sb.device_id) {
         if (!stateMap.has(sb.device_id)) stateMap.set(sb.device_id, []);
         stateMap.get(sb.device_id).push({ el, channel: sb.channel || null });
       }
@@ -249,6 +263,28 @@
     }
   }
 
+  // Live gate/barrier progress from `mur/home/esp/<id>/status`. A value 0..100
+  // means a sequence is running → show "N%" + fill bar; -1/absent = idle → clear.
+  function applyProgress(deviceId, dps) {
+    const entries = progMap.get(deviceId);
+    if (!entries || !dps || typeof dps !== 'object') return;
+    for (const { el, field } of entries) {
+      const raw = dps[field];
+      const n = (raw == null) ? -1 : Number(raw);
+      const badge = el.querySelector('.tile-prog');
+      if (!Number.isFinite(n) || n < 0) {
+        el.classList.remove('running');
+        if (badge) badge.textContent = '';
+        el.style.removeProperty('--pct');
+        continue;
+      }
+      const p = Math.max(0, Math.min(100, Math.round(n)));
+      el.classList.add('running');
+      if (badge) badge.textContent = p + '%';
+      el.style.setProperty('--pct', p + '%');
+    }
+  }
+
   function connectMqtt(pass) {
     mq = mqtt.connect(BROKER, {
       username: USER, password: pass,
@@ -257,6 +293,7 @@
     mq.on('connect', () => {
       mqUp = true; setDot('up');
       mq.subscribe('mur/home/device/+/state', { qos: 0 });
+      mq.subscribe('mur/home/esp/+/status', { qos: 0 });  // gate/barrier live progress
       mq.subscribe(ALERT_TOPIC, { qos: 0 });           // tablet alerts (Notifications)
     });
     mq.on('close',   () => { mqUp = false; setDot('down'); });
@@ -267,8 +304,16 @@
         let a; try { a = JSON.parse(payload.toString()); } catch (e) { return; }
         showAlert(a); return;
       }
-      // mur/home/device/<id>/state
       const parts = topic.split('/');
+      // mur/home/esp/<id>/status → gate/barrier live progress
+      if (parts.length === 5 && parts[2] === 'esp' && parts[4] === 'status') {
+        const espId = parts[3];
+        if (!progMap.has(espId)) return;
+        let sm; try { sm = JSON.parse(payload.toString()); } catch (e) { return; }
+        applyProgress(espId, (sm && sm.dps) ? sm.dps : sm);
+        return;
+      }
+      // mur/home/device/<id>/state
       if (parts.length !== 5 || parts[4] !== 'state') return;
       const deviceId = parts[3];
       if (!stateMap.has(deviceId)) return;
