@@ -38,7 +38,7 @@ The Alexa Devices tab on the same Media Agents page is **NOT served by LXC 100**
 
 | Script | Role |
 |--------|------|
-| `/opt/media-agent/scan_library.py` | Called by ingest_service to walk MEDIA_MOUNT, hash files, return new-file list |
+| `/opt/media-agent/scan_library.py` | **Legacy since 2026-08-05** — full-tree walk+SHA256. `ingest_service.scan()` no longer calls it (it does an inline incremental walk instead); kept only because the dead `media_service.py` still references it. See "Incremental ingest" below. |
 | `/opt/media-agent/gen_results.py` | Generates search result image (JPEG) for TV display via DLNA |
 | `/opt/media-agent/face_register.py` | Extracts 512-dim ArcFace embedding from a photo; server.js spawns it and inserts result into `face_registry` |
 | `/opt/media-agent/face_recognize.py` | Matches faces in image/video against `face_registry`; cosine similarity ≥ 0.5; 1 frame/120s for video |
@@ -412,6 +412,23 @@ The same-day commit `f479ac9` added `_soundbar_off()` to `/api/queue/stop` so "S
 | `/api/media/upload` | POST | Upload file to MEDIA_MOUNT (multipart, max 20GB) |
 | `/api/media/library` | PATCH | Edit metadata (person, event, year, location, search_text) |
 | `/api/media/library` | DELETE | Delete file + cascade cleanup |
+
+### ⚠ Incremental ingest — the stall fix (2026-08-05)
+**Symptom:** nothing new registered into `media_library` from **2026-07-04** onward, despite `auto_scan`
+running every minute; journal photos/videos (and all new media) never appeared in the library/analyzer.
+**Root cause (evidence in `journalctl -u ingest`):** the old `scan()` shelled out to `scan_library.py`,
+which **SHA256-hashes the ENTIRE `/mnt/media` (~97 GB) every run** → exceeded `subprocess.run(timeout=600)`
+→ `POST /api/media/scan` **500**, so 0 files queued. Worse, `_ingest_running` was set True only *after* the
+subprocess, so cron re-POSTed every minute → **~10 concurrent scans** stuck on NFS I/O.
+**Fix (single file, `ingest_service.py` only — `scan_library.py` left untouched for the dead `media_service`):**
+`scan()` now (1) sets `_ingest_running=True` **first** (stops the pileup — the existing `if _ingest_running`
+early-return now actually guards), (2) does a cheap inline **`os.walk`+`getsize`** (~0.6 s, NO hashing),
+(3) **diffs by PATH** against `media_library` (path is the PK) → queues only NEW paths, (4) the background
+`run_ingest_worker` **hashes only those new files** (added `sha256()` helper) then `ingest_file()`. So a scan
+returns in ~1 s and **can never hit the 600 s timeout**; only the small backlog is hashed. Verified: `POST
+/scan → 200` in ms, no `TimeoutExpired`, 69-file backlog ingested 0 errors. **Trade-off:** "known" is keyed
+on path — a file replaced *in place* with same-size different content won't re-ingest (rare); content-dedup
+across paths preserved via `ingest_file`'s `ON CONFLICT (file_hash)`. See [[incident_media_ingest_stall]].
 
 ---
 

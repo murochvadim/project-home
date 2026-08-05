@@ -6,7 +6,7 @@ Inserts new files as status='pending' — analyzer picks them up.
 Runs as systemd service: ingest.service
 Port: 8767
 """
-import os, json, logging, subprocess, threading, time
+import os, json, logging, subprocess, threading, time, hashlib
 from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import unquote
@@ -98,6 +98,21 @@ _ingest_lock     = threading.Lock()
 _ingest_progress = {'total': 0, 'done': 0, 'errors': 0, 'running': False, 'current': None}
 
 
+# ── SHA256 of a file (only computed for NEW files, in the worker) ──
+def sha256(path, chunk=1048576):
+    h = hashlib.sha256()
+    try:
+        with open(path, 'rb') as f:
+            while True:
+                data = f.read(chunk)
+                if not data:
+                    break
+                h.update(data)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
 # ── Ingest one file — insert as pending, analyzer does the rest ───
 def ingest_file(full_path, file_hash, size_bytes):
     rows = db_query('SELECT path FROM media_library WHERE file_hash = %s', (file_hash,))
@@ -116,6 +131,9 @@ def ingest_file(full_path, file_hash, size_bytes):
 
 
 # ── Ingest worker ─────────────────────────────────────────────────
+# Hashes each NEW file here (off the request thread) then registers it. Only new
+# files reach the queue — see scan() — so the expensive SHA256 runs on the small
+# backlog, never the whole 97 GB library. This is what un-stalls the pipeline.
 def run_ingest_worker():
     global _ingest_running
     # _ingest_running already set True by caller before thread start
@@ -128,9 +146,12 @@ def run_ingest_worker():
                 item = _ingest_queue.pop(0)
             _ingest_progress['current'] = Path(item['path']).name
             try:
-                ingest_file(item['path'], item['file_hash'], item['size_bytes'])
+                h = sha256(item['path'])
+                if not h:
+                    raise IOError('hash failed (unreadable/vanished)')
+                ingest_file(item['path'], h, item['size_bytes'])
             except Exception as e:
-                log.error(f'ingest_file error: {e}')
+                log.error(f'ingest_file error for {item.get("path")}: {e}')
                 _ingest_progress['errors'] += 1
             _ingest_progress['done'] += 1
     finally:
@@ -156,25 +177,43 @@ def health():
 
 
 # ── POST /api/media/scan ─────────────────────────────────────────
+# INCREMENTAL scan (2026-08-05 rewrite). The old path shelled out to
+# scan_library.py which SHA256-hashed the ENTIRE ~97 GB library on every run —
+# that exceeded the 600 s subprocess timeout, so POST /scan 500'd and NOTHING was
+# ingested after 2026-07-04 (and cron stacked ~10 concurrent scans because the
+# "running" flag was set only AFTER the slow subprocess). Now: set the guard
+# FIRST, do a cheap walk+stat (~0.6 s, NO hashing), diff by PATH against
+# media_library (path is the PK), queue only NEW paths, and hash them in the
+# background worker. A scan returns in ~1 s and can never hit the timeout.
 @app.route('/api/media/scan', methods=['POST'])
 def scan():
     global _ingest_running
     if _ingest_running:
         return jsonify({'ok': False, 'message': 'Scan already running', 'progress': _ingest_progress})
+    _ingest_running = True   # GUARD FIRST — before any slow work — so cron re-POSTs can't stack scans
     try:
-        r = subprocess.run(
-            [VENV_PY, '/opt/media-agent/scan_library.py', MEDIA_MOUNT],
-            capture_output=True, text=True, timeout=600
-        )
-        files = json.loads(r.stdout or '[]')
+        # Cheap discovery: walk + stat only (no hashing). Same excludes as scan_library.py.
+        found = {}   # path -> size_bytes
+        for root, dirs, files in os.walk(MEDIA_MOUNT):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in EXCLUDED_DIRS]
+            for fname in files:
+                if fname.startswith('.'):
+                    continue
+                if os.path.splitext(fname)[1].lower() not in SUPPORTED_EXTS:
+                    continue
+                full = os.path.join(root, fname)
+                try:
+                    sz = os.path.getsize(full)
+                except OSError:
+                    continue
+                if sz == 0:
+                    continue
+                found[full] = sz
 
-        hashes = [f['file_hash'] for f in files if f.get('file_hash')]
-        known  = set()
-        if hashes:
-            rows  = db_query('SELECT file_hash FROM media_library WHERE file_hash = ANY(%s)', (hashes,))
-            known = {row['file_hash'] for row in rows}
+        # Diff by PATH (path is the media_library PK). New path -> ingest; known path -> skip.
+        known = {row['path'] for row in db_query('SELECT path FROM media_library')}
+        new_files = [{'path': p, 'size_bytes': s} for p, s in found.items() if p not in known]
 
-        new_files = [f for f in files if f.get('file_hash') and f['file_hash'] not in known]
         with _ingest_lock:
             _ingest_queue.clear()
             _ingest_queue.extend(new_files)
@@ -183,10 +222,14 @@ def scan():
         _ingest_progress['errors']  = 0
         _ingest_progress['current'] = None
 
-        _ingest_running = True  # set before thread starts to close the race window
-        threading.Thread(target=run_ingest_worker, daemon=True).start()
-        return jsonify({'ok': True, 'found': len(files), 'queued': len(new_files), 'progress': _ingest_progress})
+        if new_files:
+            # Worker hashes each new file then registers it; its finally clears _ingest_running.
+            threading.Thread(target=run_ingest_worker, daemon=True).start()
+        else:
+            _ingest_running = False   # nothing to do — release the guard now
+        return jsonify({'ok': True, 'found': len(found), 'queued': len(new_files), 'progress': _ingest_progress})
     except Exception as e:
+        _ingest_running = False       # release the guard on any failure before the worker starts
         log.error(f'scan error: {e}', exc_info=True)
         return jsonify({'error': 'scan failed — check server logs'}), 500
 
