@@ -26,7 +26,7 @@
   const thumbUrl  = (p) => MEDIA_PLAYER + '/api/media/thumb?path=' + encodeURIComponent(relOf(p));
   const streamUrl = (p) => MEDIA_PLAYER + '/api/media/stream/' + relEnc(p);
 
-  // Upload one file to the QNAP media library under Journal/<date>/ with a UNIQUE
+  // Upload one file to the QNAP media library under Daily Journal/<date>/ with a UNIQUE
   // name (upload does f.save() → same-name would overwrite). Returns the full path.
   async function jUpload(file, dateStr) {
     const uni = Date.now() + '_' + Math.random().toString(36).slice(2, 7) + '_' +
@@ -34,7 +34,7 @@
     const fd = new FormData();
     fd.append('file', file, file.name);
     fd.append('relativePath', uni);
-    fd.append('targetPath', 'Journal/' + dateStr);
+    fd.append('targetPath', 'Daily Journal/' + dateStr);
     const r = await fetch(MEDIA_INGEST + '/api/media/upload', { method: 'POST', body: fd });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.path) throw new Error(j.error || 'upload failed');

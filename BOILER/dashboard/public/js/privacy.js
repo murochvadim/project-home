@@ -1026,7 +1026,7 @@ async function pvjUpload(file, dateStr) {
   const fd = new FormData();
   fd.append('file', file, file.name);
   fd.append('relativePath', uni);
-  fd.append('targetPath', 'Journal/' + dateStr);
+  fd.append('targetPath', 'Daily Journal/' + dateStr);
   const r = await fetch(PVJ_MEDIA_INGEST + '/api/media/upload', { method: 'POST', body: fd });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.path) throw new Error(j.error || 'upload failed');
