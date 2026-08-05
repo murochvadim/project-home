@@ -310,7 +310,7 @@
       <div class="card" style="padding:4px 8px; display:flex; flex-direction:column;">
         <div style="display:flex; align-items:center; justify-content:space-between; min-height:28px; margin-bottom:3px;">
           <div style="display:flex; align-items:center; gap:8px;">
-            <h2 style="margin:0; font-size:1rem;">Auto Run Status</h2>
+            <h2 style="margin:0; font-size:1rem; cursor:help;" title="The AUTOMATIC face finder. When the badge is green (ON), it looks through new photos and videos by itself and finds the faces in them. The 'Overall' numbers show how many of your media files are already done (ready) or still waiting, and the 'Current Run' bar shows the progress of the automatic pass happening right now. When the badge is red (OFF), it does nothing until you turn it on.">Auto Run Status</h2>
             <span id="az-auto-badge" title="Face analyzer auto mode (Media Settings → Auto Mode)" style="font-size:0.68rem; font-weight:700; letter-spacing:0.4px; padding:2px 9px; border-radius:10px; background:#bbb; color:#fff;">—</span>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="loadAnalyzer(true)">↺</button>
@@ -334,7 +334,7 @@
       <!-- Manual Run Status card -->
       <div class="card" style="padding:4px 8px; display:flex; flex-direction:column;">
         <div style="display:flex; align-items:center; justify-content:space-between; min-height:28px; margin-bottom:3px;">
-          <h2 style="margin:0; font-size:1rem;">Manual Run Status</h2>
+          <h2 style="margin:0; font-size:1rem; cursor:help;" title="Run the face finder YOURSELF, on demand — handy when Auto is off. '↺ Re-run' analyzes your media for faces now; '↺ Run' re-groups (clusters) the faces it already found so look-alikes get bundled together. The 'Faces' numbers show how many faces were detected and how many are known vs unknown, and the bar shows the progress of the batch running right now.">Manual Run Status</h2>
           <div style="display:flex; gap:4px; align-items:center;">
             <span id="az-rerun-msg" style="font-size:0.72rem; color:#888;"></span>
             <button class="btn btn-secondary btn-sm" onclick="rerunAnalyzer(this)">↺ Re-run</button>
