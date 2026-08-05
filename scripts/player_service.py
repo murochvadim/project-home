@@ -1501,6 +1501,14 @@ def stream_file(rel_path):
     mime = {
         'mp3': 'audio/mpeg', 'flac': 'audio/flac', 'wav': 'audio/wav',
         'ogg': 'audio/ogg', 'aac': 'audio/aac', 'm4a': 'audio/mp4', 'wma': 'audio/x-ms-wma',
+        # video (so an inline <video> in the Daily Journal plays; browsers only
+        # actually decode mp4/webm — others still serve but won't play inline):
+        'mp4': 'video/mp4', 'webm': 'video/webm', 'mov': 'video/quicktime',
+        'mkv': 'video/x-matroska', 'avi': 'video/x-msvideo', 'm4v': 'video/x-m4v',
+        'ts': 'video/mp2t', 'flv': 'video/x-flv', 'wmv': 'video/x-ms-wmv',
+        # image (so <img>/lightbox can render the full file via this serve):
+        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+        'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
     }.get(ext, 'application/octet-stream')
     size = os.path.getsize(full_path)
     range_header = request.headers.get('Range')

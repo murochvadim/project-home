@@ -16,6 +16,93 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  // Media agent (LXC 100) — journal photo/video attachments go straight to the
+  // QNAP media library via these (same host media.js uses). Bytes never touch the
+  // dashboard host; Postgres stores only the /mnt/media path (journal_media).
+  const MEDIA_INGEST = 'http://192.168.1.138:8767';   // POST /api/media/upload
+  const MEDIA_PLAYER = 'http://192.168.1.138:8766';   // /api/media/thumb + /stream
+  const relOf  = (p) => String(p || '').replace(/^\/mnt\/media\//, '');
+  const relEnc = (p) => relOf(p).split('/').map(encodeURIComponent).join('/');
+  const thumbUrl  = (p) => MEDIA_PLAYER + '/api/media/thumb?path=' + encodeURIComponent(relOf(p));
+  const streamUrl = (p) => MEDIA_PLAYER + '/api/media/stream/' + relEnc(p);
+
+  // Upload one file to the QNAP media library under Journal/<date>/ with a UNIQUE
+  // name (upload does f.save() → same-name would overwrite). Returns the full path.
+  async function jUpload(file, dateStr) {
+    const uni = Date.now() + '_' + Math.random().toString(36).slice(2, 7) + '_' +
+      String(file.name || 'file').replace(/[^\w.\-]+/g, '_');
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    fd.append('relativePath', uni);
+    fd.append('targetPath', 'Journal/' + dateStr);
+    const r = await fetch(MEDIA_INGEST + '/api/media/upload', { method: 'POST', body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.path) throw new Error(j.error || 'upload failed');
+    return j.path;
+  }
+  // A thumbnail chip (image preview or 🎬) with an ✕ that DETACHES (keeps the file).
+  function jMediaChip(m) {
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'position:relative;display:inline-block;';
+    let inner;
+    if (m.media_type === 'image') {
+      inner = document.createElement('img');
+      inner.src = thumbUrl(m.media_path);
+      inner.style.cssText = 'height:44px;width:44px;object-fit:cover;border-radius:5px;display:block;background:#0b3b37;';
+    } else {
+      inner = document.createElement('span');
+      inner.textContent = '🎬';
+      inner.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;height:44px;width:44px;background:#0b3b37;border-radius:5px;font-size:1.3rem;';
+    }
+    inner.title = m.orig_name || '';
+    inner.style.cursor = 'pointer';
+    inner.addEventListener('click', () => window.open(streamUrl(m.media_path), '_blank'));
+    const x = document.createElement('button');
+    x.textContent = '✕'; x.title = 'Remove from journal (keeps the file)';
+    x.style.cssText = 'position:absolute;top:-6px;right:-6px;background:#c0392b;color:#fff;border:none;border-radius:50%;width:16px;height:16px;line-height:14px;font-size:0.65rem;cursor:pointer;padding:0;';
+    x.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!m.id) { wrap.remove(); return; }
+      if (!confirm('הסר תמונה/וידאו מהיומן? הקובץ יישאר בספריית המדיה.')) return;
+      try { await fetch('/api/journal/media/' + m.id, { method: 'DELETE' }); wrap.remove(); } catch (e) { /* ignore */ }
+    });
+    wrap.appendChild(inner); wrap.appendChild(x);
+    return wrap;
+  }
+  // Upload + link each picked file, appending a chip as each finishes.
+  async function jAttach(el, files) {
+    const box = el.querySelector('.jrn-media'); if (!box) return;
+    const dateStr = el.dataset.date;
+    for (const f of files) {
+      const type = (f.type || '').startsWith('video') ? 'video' : 'image';
+      const ph = document.createElement('span');
+      ph.textContent = '⏳'; ph.style.cssText = 'font-size:1.1rem;';
+      box.appendChild(ph);
+      try {
+        const path = await jUpload(f, dateStr);
+        const lr = await fetch('/api/journal/media', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: el.dataset.uid, entry_date: dateStr, slot_id: el.dataset.sid,
+            media_path: path, media_type: type, orig_name: f.name }),
+        });
+        const lj = await lr.json().catch(() => ({}));
+        box.removeChild(ph);
+        box.appendChild(jMediaChip({ id: lj.id, media_path: path, media_type: type, orig_name: f.name }));
+      } catch (e) { ph.textContent = '✗'; ph.title = e.message || 'failed'; }
+    }
+  }
+  // Load existing attachments for this capture (user+date+slot) into its chip row.
+  async function jLoadMedia(el) {
+    const box = el.querySelector('.jrn-media'); if (!box) return;
+    try {
+      const r = await fetch('/api/journal/media?user_id=' + encodeURIComponent(el.dataset.uid) +
+        '&from=' + el.dataset.date + '&to=' + el.dataset.date);
+      const rows = await r.json();
+      box.innerHTML = '';
+      (rows || []).filter(m => m.slot_id === el.dataset.sid).forEach(m => box.appendChild(jMediaChip(m)));
+    } catch (e) { /* ignore */ }
+  }
+
   // Two INDEPENDENT fixed elements — the red badge stays exactly where it always
   // sits (top:10px right:14px); the journal panel is positioned a MEASURED
   // distance to its LEFT each render, so they can never overlap.
@@ -79,6 +166,12 @@
           ${MOODS.map((m, i) => `<button type="button" data-mood="${i + 1}" title="${i + 1}/5"
             style="font-size:1.35rem;line-height:1;background:rgba(255,255,255,.12);border:2px solid transparent;border-radius:8px;cursor:pointer;padding:2px 5px;">${m}</button>`).join('')}
         </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0;">
+          <label style="cursor:pointer;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.4);border-radius:5px;padding:3px 9px;font-size:0.78rem;white-space:nowrap;">📎 תמונה/וידאו
+            <input type="file" accept="image/*,video/*" multiple data-jrn-file style="display:none;">
+          </label>
+          <div class="jrn-media" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;"></div>
+        </div>
         <div style="display:flex;gap:6px;margin-top:2px;">
           <button data-jact="save"  style="flex:1;background:#fff;color:#0f766e;border:none;border-radius:5px;cursor:pointer;font-weight:700;font-size:0.8rem;padding:5px 0;">💾 שמור</button>
           <button data-jact="skip"  style="background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:5px;cursor:pointer;font-size:0.78rem;padding:5px 9px;">דלג</button>
@@ -95,6 +188,9 @@
       el.querySelector('[data-jact="save"]').addEventListener('click', () => jSave(el));
       el.querySelector('[data-jact="skip"]').addEventListener('click', () => act('clear', el.dataset.rk));
       el.querySelector('[data-jact="later"]').addEventListener('click', () => act('snooze', el.dataset.rk));
+      const fi = el.querySelector('[data-jrn-file]');
+      if (fi) fi.addEventListener('change', () => { if (fi.files && fi.files.length) jAttach(el, Array.from(fi.files)); fi.value = ''; });
+      jLoadMedia(el);
     });
   }
 

@@ -1009,6 +1009,111 @@ async function pvJournalCfgSave() {
 function pvjTodayJeru() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
 }
+// ── Daily Journal media attachments (photos/videos on the QNAP media library) ──
+// Bytes go browser → media agent (LXC 100) → /mnt/media (QNAP) ONLY; Postgres
+// (journal_media) stores just the path. Detach removes the link, keeps the file.
+const PVJ_MEDIA_INGEST = 'http://192.168.1.138:8767';   // POST /api/media/upload
+const PVJ_MEDIA_PLAYER = 'http://192.168.1.138:8766';   // /api/media/thumb + /stream
+let pvjMediaMap = {};                                   // "<date>|<slot>" → [rows]
+const pvjMediaKey = (d, s) => d + '|' + s;
+const pvjRelOf  = (p) => String(p || '').replace(/^\/mnt\/media\//, '');
+const pvjRelEnc = (p) => pvjRelOf(p).split('/').map(encodeURIComponent).join('/');
+const pvjThumb  = (p) => PVJ_MEDIA_PLAYER + '/api/media/thumb?path=' + encodeURIComponent(pvjRelOf(p));
+
+async function pvjUpload(file, dateStr) {
+  const uni = Date.now() + '_' + Math.random().toString(36).slice(2, 7) + '_' +
+    String(file.name || 'file').replace(/[^\w.\-]+/g, '_');
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  fd.append('relativePath', uni);
+  fd.append('targetPath', 'Journal/' + dateStr);
+  const r = await fetch(PVJ_MEDIA_INGEST + '/api/media/upload', { method: 'POST', body: fd });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.path) throw new Error(j.error || 'upload failed');
+  return j.path;
+}
+async function pvJournalLoadMedia(from, to, merge) {
+  let rows = [];
+  try {
+    const p = new URLSearchParams({ user_id: PVJ_UID });
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    rows = await (await fetch('/api/journal/media?' + p)).json();
+  } catch (e) { rows = []; }
+  if (!merge) pvjMediaMap = {};
+  (rows || []).forEach(m => {
+    const k = pvjMediaKey(m.entry_date, m.slot_id);
+    (pvjMediaMap[k] = pvjMediaMap[k] || []);
+    if (!pvjMediaMap[k].some(x => x.id === m.id)) pvjMediaMap[k].push(m);
+  });
+}
+// Thumbnail row (HTML string) for a capture — used by Today, History, and Search.
+function pvjMediaChipsHtml(date, slot) {
+  const list = pvjMediaMap[pvjMediaKey(date, slot)] || [];
+  if (!list.length) return '';
+  return list.map(m => {
+    const rel = pvjRelEnc(m.media_path);
+    const thumb = m.media_type === 'image'
+      ? `<img src="${pvjThumb(m.media_path)}" style="height:52px;width:52px;object-fit:cover;border-radius:6px;display:block;background:#0b3b37;">`
+      : `<span style="display:inline-flex;align-items:center;justify-content:center;height:52px;width:52px;background:#0b3b37;color:#fff;border-radius:6px;font-size:1.4rem;">🎬</span>`;
+    return `<span style="position:relative;display:inline-block;">
+      <span style="cursor:pointer;" title="${pvjEsc(m.orig_name || '')}" onclick="pvjLightbox('${rel}','${m.media_type}')">${thumb}</span>
+      <button title="Remove from journal (keeps the file)" onclick="pvJournalDetach(${m.id})"
+        style="position:absolute;top:-7px;right:-7px;background:#c0392b;color:#fff;border:none;border-radius:50%;width:18px;height:18px;line-height:16px;font-size:0.7rem;cursor:pointer;padding:0;">✕</button>
+    </span>`;
+  }).join('');
+}
+async function pvJournalAttach(input, slotId) {
+  if (!input.files || !input.files.length) return;
+  const D = document.getElementById('pvj-date')?.value || pvjTodayJeru();
+  const files = Array.from(input.files); input.value = '';
+  const box = document.querySelector(`.pvj-media[data-slot="${slotId}"]`);
+  for (const f of files) {
+    const type = (f.type || '').startsWith('video') ? 'video' : 'image';
+    let ph = null;
+    if (box) { ph = document.createElement('span'); ph.textContent = '⏳'; ph.style.cssText = 'font-size:1.3rem;'; box.appendChild(ph); }
+    try {
+      const path = await pvjUpload(f, D);
+      await fetch('/api/journal/media', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: PVJ_UID, entry_date: D, slot_id: slotId, media_path: path, media_type: type, orig_name: f.name }),
+      });
+    } catch (e) { if (ph) { ph.textContent = '✗'; ph.title = e.message || 'failed'; } }
+  }
+  await pvJournalLoadMedia(D, D, true);
+  const b2 = document.querySelector(`.pvj-media[data-slot="${slotId}"]`);
+  if (b2) b2.innerHTML = pvjMediaChipsHtml(D, slotId);
+  await pvJournalLoadEntries(); pvJournalRenderTimeline();
+}
+async function pvJournalDetach(id) {
+  if (!confirm('Remove this photo/video from the journal? The file stays in your media library.')) return;
+  try { await fetch('/api/journal/media/' + id, { method: 'DELETE' }); } catch (e) { /* ignore */ }
+  const D = document.getElementById('pvj-date')?.value || pvjTodayJeru();
+  await pvJournalLoadMedia(_pvjFrom(90));
+  await pvJournalLoadMedia(D, D, true);
+  document.querySelectorAll('.pvj-media[data-slot]').forEach(el => { el.innerHTML = pvjMediaChipsHtml(D, el.dataset.slot); });
+  pvJournalRenderTimeline();
+  const sr = document.getElementById('pvj-search-results');
+  if (sr && sr.innerHTML.includes('pvjLightbox')) pvJournalSearch();
+}
+function pvjLightbox(relEnc, type) {
+  let m = document.getElementById('pvj-lightbox');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'pvj-lightbox';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100000;display:none;align-items:center;justify-content:center;';
+    m.addEventListener('click', (e) => { if (e.target === m || e.target.dataset.close) pvjLightboxClose(); });
+    document.body.appendChild(m);
+  }
+  const url = PVJ_MEDIA_PLAYER + '/api/media/stream/' + relEnc;
+  m.innerHTML = (type === 'video'
+    ? `<video src="${url}" controls autoplay playsinline style="max-width:92vw;max-height:88vh;border-radius:8px;background:#000;"></video>`
+    : `<img src="${url}" style="max-width:92vw;max-height:88vh;border-radius:8px;object-fit:contain;">`)
+    + `<button data-close="1" style="position:absolute;top:14px;right:18px;background:#fff;border:none;border-radius:6px;font-size:1.1rem;cursor:pointer;padding:4px 12px;">✕</button>`;
+  m.style.display = 'flex';
+}
+function pvjLightboxClose() { const m = document.getElementById('pvj-lightbox'); if (m) { m.style.display = 'none'; m.innerHTML = ''; } }
+
 async function pvJournalOnShow() {
   await pvJournalLoadCfg();
   pvJournalSearchCats();
@@ -1033,6 +1138,7 @@ async function pvJournalRenderToday() {
   }
   let today = [];
   try { today = await (await fetch(`/api/journal?user_id=${PVJ_UID}&from=${D}&to=${D}`)).json(); } catch (e) { today = []; }
+  await pvJournalLoadMedia(D, D, true);   // attachments for this day (merge — keeps history map)
   // key existing entries by slot → category
   const byId = {}; (today || []).forEach(e => { (byId[e.slot_id] = byId[e.slot_id] || {})[e.category_id] = e; });
   if (!pvjCfg.slots.length) { box.innerHTML = '<div style="font-size:0.86rem;color:#888;">No journal reminders configured — set them in <b>Settings → 📓 Daily Journal reminders</b>.</div>'; return; }
@@ -1058,6 +1164,12 @@ async function pvJournalRenderToday() {
         </div>
         <button onclick="pvJournalSaveToday(this)" class="btn btn-sm" style="background:#0f766e; color:#fff; margin-left:auto;">💾 Save</button>
         <span class="pvj-slot-status" style="font-size:0.8rem; color:#2e7d32;"></span>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:8px;">
+        <label style="cursor:pointer; background:#f0fdfa; color:#0f766e; border:1px solid #99f6e4; border-radius:6px; padding:4px 10px; font-size:0.82rem; white-space:nowrap;">📎 Photo/Video
+          <input type="file" accept="image/*,video/*" multiple style="display:none;" onchange="pvJournalAttach(this,'${pvjEsc(s.id)}')">
+        </label>
+        <div class="pvj-media" data-slot="${pvjEsc(s.id)}" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">${pvjMediaChipsHtml(D, s.id)}</div>
       </div>
     </div>`;
   }).join('');
@@ -1105,6 +1217,7 @@ async function pvJournalSaveToday(btn) {
 async function pvJournalLoadEntries() {
   try { pvjEntries = await (await fetch(`/api/journal?user_id=${PVJ_UID}&from=${_pvjFrom(90)}`)).json(); }
   catch (e) { pvjEntries = []; }
+  await pvJournalLoadMedia(_pvjFrom(90));   // attachments for the same 90-day history window
 }
 // Shared renderer (History + Search): group Day → Reminder(slot). The mood is
 // shown ONCE per reminder (it's a single value for the whole capture), with its
@@ -1123,12 +1236,14 @@ function _pvjEntryList(rows) {
         <span dir="rtl" style="flex:1; text-align:right;">${pvjEsc(e.comment || '')}</span>
         <button onclick="pvJournalDelEntry(${e.id})" title="Delete" style="border:none;background:none;color:#c0392b;cursor:pointer;font-size:0.8rem;">✕</button>
       </div>`).join('');
+      const mediaHtml = pvjMediaChipsHtml(d, sid);
       return `<div style="margin:4px 0 8px;">
         <div style="display:flex; gap:8px; align-items:center; margin-bottom:2px;">
           <span style="font-size:1.15rem;" title="mood for this reminder">${mood ? PVJ_MOODS[mood - 1] : '·'}</span>
           <span style="font-size:0.78rem; color:#999;">${pvjEsc(es[0].slot_name || '')}</span>
         </div>
         <div style="padding-left:28px;">${lines}</div>
+        ${mediaHtml ? `<div style="padding-left:28px; margin-top:6px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">${mediaHtml}</div>` : ''}
       </div>`;
     }).join('');
     return `<div style="border-top:1px solid #f0eee8; padding:8px 0;">
@@ -1160,6 +1275,8 @@ async function pvJournalSearch() {
   box.innerHTML = '<div style="color:#aaa;">Searching…</div>';
   let rows = [];
   try { rows = await (await fetch(`/api/journal/search?${p}`)).json(); } catch (e) { rows = []; }
+  // Load attachments for the searched range so thumbnails show under matched entries.
+  await pvJournalLoadMedia(from || _pvjFrom(365), to || '', true);
   box.innerHTML = _pvjEntryList(Array.isArray(rows) ? rows : []);
 }
 function pvJournalSearchClear() {

@@ -93,4 +93,53 @@ module.exports = (app, db) => {
     try { await db.query('DELETE FROM journal_entries WHERE id = $1', [parseInt(req.params.id)]); res.json({ ok: true }); }
     catch (e) { err(res, e); }
   });
+
+  // ── Media attachments (journal_media) ────────────────────────────────
+  // Photos/videos attached to a capture (user+day+slot). The BYTES live only on
+  // the QNAP NAS media library (/mnt/media, uploaded via the media agent :8767);
+  // here we store just the QNAP path so the journal can show + detach it. Detach
+  // removes the link only — the file stays in the media library (analyzer/faces).
+
+  // List attachments in a date range (default: last 30 days), for the tab + history.
+  app.get('/api/journal/media', async (req, res) => {
+    try {
+      const uid = parseInt(req.query.user_id) || 1;
+      const r = await db.query(
+        `SELECT id, to_char(entry_date,'YYYY-MM-DD') AS entry_date, slot_id,
+                media_path, media_type, orig_name,
+                to_char(created_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS created_local
+           FROM journal_media
+          WHERE user_id = $1
+            AND entry_date >= COALESCE($2::date, ${TODAY} - INTERVAL '30 days')
+            AND entry_date <= COALESCE($3::date, ${TODAY})
+          ORDER BY entry_date DESC, slot_id, id`,
+        [uid, req.query.from || null, req.query.to || null]);
+      res.json(r.rows);
+    } catch (e) { err(res, e); }
+  });
+
+  // Attach a media file (already uploaded to /mnt/media via the media agent).
+  app.post('/api/journal/media', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const uid = parseInt(b.user_id) || 1;
+      const slotId = (b.slot_id || '').toString().trim();
+      const mediaPath = (b.media_path || '').toString().trim();
+      const mediaType = (b.media_type || '').toString().trim();
+      if (!slotId) return res.status(400).json({ error: 'slot_id required' });
+      if (!mediaPath.startsWith('/mnt/media/')) return res.status(400).json({ error: 'media_path must be under /mnt/media/' });
+      if (mediaType !== 'image' && mediaType !== 'video') return res.status(400).json({ error: "media_type must be 'image' or 'video'" });
+      const r = await db.query(
+        `INSERT INTO journal_media (user_id, entry_date, slot_id, media_path, media_type, orig_name)
+         VALUES ($1, COALESCE($2::date, ${TODAY}), $3, $4, $5, $6) RETURNING id`,
+        [uid, b.entry_date || null, slotId, mediaPath, mediaType, (b.orig_name || null)]);
+      res.json({ ok: true, id: r.rows[0].id });
+    } catch (e) { err(res, e); }
+  });
+
+  // Detach (delete the link row ONLY — file stays in the QNAP media library).
+  app.delete('/api/journal/media/:id', async (req, res) => {
+    try { await db.query('DELETE FROM journal_media WHERE id = $1', [parseInt(req.params.id)]); res.json({ ok: true }); }
+    catch (e) { err(res, e); }
+  });
 };
