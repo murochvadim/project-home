@@ -325,6 +325,29 @@
         <button class="btn-test" onclick="fanCmd(382)">💡 Light</button>
       </div>
     </div>
+
+    <div class="card" style="padding:14px;">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.0rem;">Mangal (BBQ)</h2>
+        <span style="margin-left:auto;font-size:0.72rem;color:#999;">433.92 MHz RF · fire-and-forget (no state feedback)</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button id="mangal-fan-btn" class="btn-test" style="border-color:#3a7d44;color:#3a7d44;" onclick="mangalCmd('mangal_fan_on')">🔥 Fan On</button>
+        <button id="mangal-light-btn" class="btn-test" style="border-color:#c99a00;color:#a67c00;" onclick="mangalCmd('mangal_light_on')">💡 Light On</button>
+        <button class="btn-test" style="border-color:#c0392b;color:#c0392b;" onclick="mangalCmd('mangal_off')">⭘ Off (fan + light)</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:14px;">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:1.0rem;">Wall Fan</h2>
+        <span style="margin-left:auto;font-size:0.72rem;color:#999;">433.92 MHz RF · each speed button toggles on/off</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button class="btn-test" onclick="wallCmd('wallfan_s1')">Speed 1</button>
+        <button class="btn-test" onclick="wallCmd('wallfan_s2')">Speed 2</button>
+      </div>
+    </div>
   </div>
 
   <div class="tab-panel" id="tab-roborock">
@@ -501,7 +524,7 @@
 <script src="js/alerts-monitor.js?v=11"></script>
 <script src="js/reminders-badge.js?v=9"></script>
 <script src="js/notify-toast.js?v=12"></script>
-<script src="js/balcony.js?v=20260802d"></script>
-<script src="js/panel-editor.js?v=12"></script>
+<script src="js/balcony.js?v=20260805c"></script>
+<script src="js/panel-editor.js?v=13"></script>
 </body>
 </html>

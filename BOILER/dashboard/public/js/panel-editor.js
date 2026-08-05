@@ -154,7 +154,8 @@
           for (const ch of zig) controllable.push({ device_id: d.id, channel: ch, name: d.name, label: dpsLabels[ch] || ch, room: d.room || '', protocol: d.protocol, curtain: isCurtain });
         } else if (esp.length) {
           for (const ch of esp) { const cc = dpsCfg[ch] || {};
-            controllable.push({ device_id: d.id, channel: ch, name: d.name, label: cc.name || ch, room: cc.room || d.room || '', protocol: d.protocol,
+            // name the entry after the CHANNEL (e.g. "Mangal Fan On"), not the shared board ("BoBo").
+            controllable.push({ device_id: d.id, channel: ch, name: cc.name || ch, label: '', room: cc.room || d.room || '', protocol: d.protocol,
               chan_meta: cc.type ? { type: cc.type, min: cc.min, max: cc.max } : null, has_on: !!cc.action_on, has_off: !!cc.action_off }); }
         } else {
           controllable.push({ device_id: d.id, channel: null, name: d.name, label: '', room: d.room || '', protocol: d.protocol, curtain: isCurtain, dps_config: dpsCfg });

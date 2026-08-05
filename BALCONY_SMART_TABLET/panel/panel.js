@@ -21,6 +21,27 @@
   // `mur/home/esp/<id>/status` (e.g. gates_progress / barrier_progress 0..100).
   const progMap = new Map();
 
+  // Mangal (BBQ) has NO RF state feedback, so its on/off is tracked OPTIMISTICALLY on the
+  // tablet (persisted): the Fan / Light tiles go green on tap and stay green until the Off
+  // tile is tapped. Kept OUT of stateMap so a live device `/state` message can't clear them.
+  // Mirrors the dashboard Mangal card. Off (mangal_off) clears both.
+  const MANGAL_DEV = 'balcony_bridge';
+  const MANGAL_ON_CH = new Set(['mangal_fan', 'mangal_light']);
+  const optiMap = new Map();          // channel -> [tile elements]
+  const OPTI_LS = 'panel.mangalState';
+  function optiState() { try { return JSON.parse(localStorage.getItem(OPTI_LS)) || {}; } catch (_) { return {}; } }
+  function paintOpti() { const s = optiState(); for (const [ch, els] of optiMap) { const on = !!s[ch]; els.forEach(el => el.classList.toggle('on', on)); } }
+  function bumpOpti(sb) {
+    if (!sb || sb.device_id !== MANGAL_DEV) return;
+    const s = optiState();
+    if      (sb.channel === 'mangal_fan')   s.mangal_fan = true;
+    else if (sb.channel === 'mangal_light') s.mangal_light = true;
+    else if (sb.channel === 'mangal_off') { s.mangal_fan = false; s.mangal_light = false; }
+    else return;
+    localStorage.setItem(OPTI_LS, JSON.stringify(s));
+    paintOpti();
+  }
+
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -95,6 +116,7 @@
   function render() {
     stateMap.clear();
     progMap.clear();
+    optiMap.clear();
     const pages = cfg.pages || [];
     // page tabs (hidden when only one page)
     const pagesEl = $('pages');
@@ -133,6 +155,10 @@
         // progress tiles track esp status, not device on/off — no stateMap entry
         if (!progMap.has(sb.device_id)) progMap.set(sb.device_id, []);
         progMap.get(sb.device_id).push({ el, field: progField });
+      } else if (sb && sb.device_id === MANGAL_DEV && MANGAL_ON_CH.has(sb.channel)) {
+        // Mangal Fan/Light — no RF feedback → optimistic, painted from localStorage (not stateMap).
+        if (!optiMap.has(sb.channel)) optiMap.set(sb.channel, []);
+        optiMap.get(sb.channel).push(el);
       } else if (sb && sb.device_id) {
         if (!stateMap.has(sb.device_id)) stateMap.set(sb.device_id, []);
         stateMap.get(sb.device_id).push({ el, channel: sb.channel || null });
@@ -165,6 +191,7 @@
       }
       grid.appendChild(rowEl);
     }
+    paintOpti();   // restore Mangal Fan/Light green from persisted optimistic state
   }
 
   function tap(tile, el) {
@@ -176,6 +203,7 @@
     if (mq && mqUp) {
       mq.publish(EVENT_TOPIC, JSON.stringify({ dps: { tile: tile.id, event: 'short' } }), { qos: 0 });
     }
+    bumpOpti(stateBinding(tile));   // optimistic green for Mangal Fan/Light (no RF feedback)
   }
   let confirmEl = null;
   function ensureConfirm() {

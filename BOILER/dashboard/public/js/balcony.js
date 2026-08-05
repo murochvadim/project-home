@@ -267,7 +267,10 @@
             // page-number dropdown (1..max) instead of the usual
             // toggle/turn_on/turn_off action dropdown.
             const meta = (cc.type ? { type: cc.type, min: cc.min, max: cc.max } : null);
-            _controllable.push({ device_id: d.id, channel: ch, name: d.name, label: cc.name || ch,
+            // Name the entry after the CHANNEL (e.g. "Mangal Fan On"), NOT the shared board
+            // ("BoBo") — the balcony_bridge board hosts many RF functions, so a board-name
+            // prefix is noise. label:'' so every surface (picker + saved binding) shows just the channel.
+            _controllable.push({ device_id: d.id, channel: ch, name: cc.name || ch, label: '',
                                  room: cc.room || d.room || '', protocol: d.protocol,
                                  chan_meta: meta,
                                  // Pulse-only channels (action_on without action_off,
@@ -1640,6 +1643,37 @@
   // ── Balcony fan (RF via balcony_bridge) — fan_tx:<value> (needs v18 firmware) ──
   async function fanCmd(value) { await sfPublish(`fan_tx:${value}`); }
   window.fanCmd = fanCmd;
+
+  // ── Mangal (BBQ) + Wall Fan (RF via balcony_bridge, v29) — bare action keys ──
+  // Mangal has NO state feedback (fire-and-forget RF), so track an OPTIMISTIC on/off per
+  // button in localStorage: Fan On / Light On go green when pressed, and stay green until
+  // Off is pressed (survives page reloads). Not authoritative — the physical remote can't be seen.
+  const _MANGAL_LS = 'balcony.mangalState';
+  function _mangalState() { try { return JSON.parse(localStorage.getItem(_MANGAL_LS)) || {}; } catch (_) { return {}; } }
+  function _mangalPaintBtn(btn, on, offBorder, offText) {
+    if (!btn) return;
+    if (on) { btn.style.background = '#2e7d32'; btn.style.borderColor = '#2e7d32'; btn.style.color = '#fff'; }
+    else    { btn.style.background = '';        btn.style.borderColor = offBorder;  btn.style.color = offText; }
+  }
+  function mangalPaint() {
+    const s = _mangalState();
+    _mangalPaintBtn(document.getElementById('mangal-fan-btn'),   s.fan,   '#3a7d44', '#3a7d44');
+    _mangalPaintBtn(document.getElementById('mangal-light-btn'), s.light, '#c99a00', '#a67c00');
+  }
+  async function mangalCmd(key) {
+    await sfPublish(key);                                   // mangal_fan_on / mangal_light_on / mangal_off
+    const s = _mangalState();
+    if      (key === 'mangal_fan_on')   s.fan = true;
+    else if (key === 'mangal_light_on') s.light = true;
+    else if (key === 'mangal_off')    { s.fan = false; s.light = false; }
+    localStorage.setItem(_MANGAL_LS, JSON.stringify(s));
+    mangalPaint();
+  }
+  window.mangalCmd = mangalCmd;
+  async function wallCmd(key)   { await sfPublish(key); }   // wallfan_s1 / wallfan_s2 (each toggles on/off)
+  window.wallCmd = wallCmd;
+  if (document.readyState !== 'loading') mangalPaint();
+  else document.addEventListener('DOMContentLoaded', mangalPaint);
 
   // ── auto-stop: dashboard holds open/close + sec; the board holds up/down + sec ──
   function sfAstopCsv() {   // map each motor's open/close→up(1)/down(2) via invert
