@@ -512,6 +512,11 @@ def search_session():
 @app.route('/api/media/library/<path:encoded_path>')
 def library_single(encoded_path):
     file_path = unquote(encoded_path)
+    # encodeURIComponent turns the leading '/' of the absolute path into %2F; Werkzeug
+    # decodes it to '//' and merge-slashes 308-redirects, dropping the leading slash.
+    # Restore it so the lookup matches media_library.path ('/mnt/media/...').
+    if not file_path.startswith('/'):
+        file_path = '/' + file_path
     try:
         rows = db_query(
             'SELECT path, title, type, person, event, year, location, '
