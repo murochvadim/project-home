@@ -1562,10 +1562,24 @@ async function uploadFiles(files) {
 }
 
 // ── Tab loaders ───────────────────────────────────────────────────
+// Red/green pill next to "Auto Run Status" reflecting the face analyzer's auto mode
+// (analyzer_settings.auto_enabled). Green = ENABLED, red = DISABLED, grey = unknown.
+function setAzAutoBadge(v) {
+  const b = document.getElementById('az-auto-badge');
+  if (!b) return;
+  if (v == null || v === '') { b.textContent = '—'; b.style.background = '#bbb'; return; }
+  const on = String(v) === '1' || v === 1 || v === true;
+  b.textContent = on ? 'ENABLED' : 'DISABLED';
+  b.style.background = on ? '#27ae60' : '#c0392b';
+}
+
 async function loadAnalyzer(force) {
   if (!force && window._analyzerLoaded) return;
   window._analyzerLoaded = true;
   loadAnalyzerStatus();
+  // reflect the analyzer's on/off state in the Auto Run Status badge
+  fetch(`${MEDIA_API}/api/analyzer/settings`).then(r => r.json())
+    .then(d => setAzAutoBadge(d && d.auto_enabled)).catch(() => {});
   await loadFacePeople();   // populate _knownPeopleNames first
   loadFaceClusters();       // cluster cards now render with "Same as…" dropdown
   loadUnmatchedFaces();
@@ -1600,6 +1614,7 @@ async function loadMediaSettings() {
     // Auto mode fields
     const autoEnabled = document.getElementById('ms-auto_enabled');
     if (autoEnabled && d.auto_enabled != null) autoEnabled.value = String(d.auto_enabled);
+    setAzAutoBadge(d.auto_enabled);
 
     for (const k of ['auto_frame_interval', 'auto_cluster_every']) {
       const el = document.getElementById(`ms-${k}`);
@@ -1663,6 +1678,7 @@ async function saveMediaSettings(event, mode) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Failed');
+    if (mode === 'auto' && body.auto_enabled != null) setAzAutoBadge(body.auto_enabled);
     msg.style.color = '#2ecc71'; msg.textContent = '✓ Saved';
     setTimeout(() => { msg.textContent = ''; }, 3000);
   } catch (e) {
