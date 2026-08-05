@@ -648,6 +648,28 @@
   </div>
 </div>
 
+<!-- Daily Journal media metadata prompt (per-file, shown after attach) -->
+<div id="pvj-media-meta" class="pv-modal" style="display:none;">
+  <div class="pv-modal-box" style="max-width:440px;">
+    <h3 style="margin:0 0 4px;font-size:1.02rem;">📸 Add details</h3>
+    <div id="pvjmm-file" style="font-size:0.78rem;color:#888;margin-bottom:12px;word-break:break-all;"></div>
+    <div class="pv-form-grid">
+      <label style="grid-column:1 / -1;">Event
+        <input id="pvjmm-event" type="text" placeholder="wedding / birthday / vacation…"></label>
+      <label>Year
+        <input id="pvjmm-year" type="number" min="1900" max="2100" placeholder="2024"></label>
+      <label>Location
+        <input id="pvjmm-location" type="text" placeholder="city / place"></label>
+      <label style="grid-column:1 / -1;">People
+        <input id="pvjmm-person" type="text" placeholder="name1, name2…"></label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+      <button id="pvjmm-skip" style="padding:6px 14px;border:1px solid #ccc;background:#f4f4f4;border-radius:5px;cursor:pointer;">Skip</button>
+      <button id="pvjmm-save" style="padding:6px 16px;border:none;background:#2b7a4b;color:#fff;border-radius:5px;cursor:pointer;font-weight:600;">Save</button>
+    </div>
+  </div>
+</div>
+
 <style>
   #pvof-xs { border:1px solid #d0d0d0; border-radius:6px; overflow:hidden; }
   #pvof-xs .x-spreadsheet-bottombar { border-radius:0 0 6px 6px; }
@@ -659,10 +681,10 @@
 </style>
 
 <script src="js/alerts-monitor.js?v=11"></script>
-<script src="js/reminders-badge.js?v=9"></script>
+<script src="js/reminders-badge.js?v=12"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/privacy.js?v=87"></script>
+<script src="js/privacy.js?v=90"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="js/privacy-people.js?v=28"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>

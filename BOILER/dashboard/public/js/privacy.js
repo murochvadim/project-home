@@ -1021,12 +1021,19 @@ const pvjRelEnc = (p) => pvjRelOf(p).split('/').map(encodeURIComponent).join('/'
 const pvjThumb  = (p) => PVJ_MEDIA_PLAYER + '/api/media/thumb?path=' + encodeURIComponent(pvjRelOf(p));
 
 async function pvjUpload(file, dateStr) {
-  const uni = Date.now() + '_' + Math.random().toString(36).slice(2, 7) + '_' +
-    String(file.name || 'file').replace(/[^\w.\-]+/g, '_');
+  // Date-led name so the item reads as the journal day (e.g. 2026-08-04_193502_g5r.mp4).
+  // Keep it unique — upload does f.save() which OVERWRITES a same-name file.
+  const _now = new Date();
+  const _hms = String(_now.getHours()).padStart(2, '0') + String(_now.getMinutes()).padStart(2, '0') + String(_now.getSeconds()).padStart(2, '0');
+  const _ext = (/(\.[a-z0-9]+)$/i.exec(file.name || '') || ['', ''])[1].toLowerCase();
+  const _MO = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const _dm = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
+  const _dname = _dm ? (_dm[1] + '-' + (_MO[+_dm[2] - 1] || _dm[2]) + '-' + _dm[3]) : String(dateStr || '');
+  const uni = _dname + '_' + _hms + '_' + Math.random().toString(36).slice(2, 5) + _ext;
   const fd = new FormData();
   fd.append('file', file, file.name);
   fd.append('relativePath', uni);
-  fd.append('targetPath', 'Daily Journal/' + dateStr);
+  fd.append('targetPath', 'Daily Journal/' + _dname);
   const r = await fetch(PVJ_MEDIA_INGEST + '/api/media/upload', { method: 'POST', body: fd });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.path) throw new Error(j.error || 'upload failed');
@@ -1068,6 +1075,7 @@ async function pvJournalAttach(input, slotId) {
   const D = document.getElementById('pvj-date')?.value || pvjTodayJeru();
   const files = Array.from(input.files); input.value = '';
   const box = document.querySelector(`.pvj-media[data-slot="${slotId}"]`);
+  const uploaded = [];
   for (const f of files) {
     const type = (f.type || '').startsWith('video') ? 'video' : 'image';
     let ph = null;
@@ -1078,12 +1086,71 @@ async function pvJournalAttach(input, slotId) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: PVJ_UID, entry_date: D, slot_id: slotId, media_path: path, media_type: type, orig_name: f.name }),
       });
+      uploaded.push({ file: f, path });
+      if (ph) ph.remove();
     } catch (e) { if (ph) { ph.textContent = '✗'; ph.title = e.message || 'failed'; } }
   }
+  // Show the attached chips now; the metadata prompt runs after.
   await pvJournalLoadMedia(D, D, true);
   const b2 = document.querySelector(`.pvj-media[data-slot="${slotId}"]`);
   if (b2) b2.innerHTML = pvjMediaChipsHtml(D, slotId);
   await pvJournalLoadEntries(); pvJournalRenderTimeline();
+
+  // Per-file metadata prompt (Event/Year/Location/People). Kick a media scan first so the
+  // library rows register (async), then prompt + PATCH each. Skip leaves it date-named only.
+  if (uploaded.length) {
+    try { await fetch(PVJ_MEDIA_INGEST + '/api/media/scan', { method: 'POST' }); } catch (_) {}
+    for (const u of uploaded) {
+      const meta = await pvjMediaMetaPrompt(u.file.name, D);
+      if (meta) await pvjApplyMediaMeta(u.path, meta);
+    }
+  }
+}
+
+// Per-file metadata prompt for a just-attached journal item. Resolves the metadata object
+// on Save, or null on Skip. Reuses the same fields as the analyzer's edit modal.
+function pvjMediaMetaPrompt(fileName, dateStr) {
+  return new Promise((resolve) => {
+    const ov = document.getElementById('pvj-media-meta');
+    if (!ov) { resolve(null); return; }
+    document.getElementById('pvjmm-file').textContent     = fileName || '';
+    document.getElementById('pvjmm-event').value          = '';
+    document.getElementById('pvjmm-year').value           = (String(dateStr || '').slice(0, 4)) || '';
+    document.getElementById('pvjmm-location').value       = '';
+    document.getElementById('pvjmm-person').value         = '';
+    ov.style.display = 'flex';
+    const saveBtn = document.getElementById('pvjmm-save');
+    const skipBtn = document.getElementById('pvjmm-skip');
+    const done = (val) => { ov.style.display = 'none'; saveBtn.onclick = null; skipBtn.onclick = null; resolve(val); };
+    saveBtn.onclick = () => {
+      const event    = document.getElementById('pvjmm-event').value.trim()    || null;
+      const yr       = document.getElementById('pvjmm-year').value.trim();
+      const year     = yr ? parseInt(yr, 10) : null;
+      const location = document.getElementById('pvjmm-location').value.trim() || null;
+      const pr       = document.getElementById('pvjmm-person').value.trim();
+      const person   = pr ? pr.split(',').map(s => s.trim()).filter(Boolean) : null;
+      done({ event, year, location, person });
+    };
+    skipBtn.onclick = () => done(null);
+    setTimeout(() => document.getElementById('pvjmm-event').focus(), 50);
+  });
+}
+
+// Wait for the media_library row (registered async by the scan) then PATCH the metadata.
+// Uses the exact endpoints the analyzer edit modal uses: GET (player :8766), PATCH (ingest :8767).
+async function pvjApplyMediaMeta(path, meta) {
+  for (let i = 0; i < 8; i++) {
+    try {
+      const g = await fetch(PVJ_MEDIA_PLAYER + '/api/media/library/' + encodeURIComponent(path));
+      if (g.ok) break;
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  try {
+    await fetch(PVJ_MEDIA_INGEST + '/api/media/library?path=' + encodeURIComponent(path), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(meta),
+    });
+  } catch (_) { /* metadata will apply after the next scan */ }
 }
 async function pvJournalDetach(id) {
   if (!confirm('Remove this photo/video from the journal? The file stays in your media library.')) return;
