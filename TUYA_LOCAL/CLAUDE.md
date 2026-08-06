@@ -1,10 +1,37 @@
 # Tuya Local Migration — eliminate the HA Tuya cloud dependency
 
-**Status: PLANNED** (investigated + planned 2026-08-05; **not executed**). This folder is the design doc /
-index for moving **all** Tuya devices to local control so the HA Tuya *cloud* integration (and its recurring
-**IoT Core** subscription) can be dropped. No code here yet — the working artifacts will land in
-`DEVICE/agent/`, `RULES/`, and `BOILER/dashboard/server.js` when built. Live planning notes also in the
-scratch plan file `.claude/plans/focun-on-privacy-people-dazzling-seal.md`.
+**Status: Phase 1 EXECUTED 2026-08-06 — 22 of 45 switch-like local Tuya devices now dispatch on/off
+LOCALLY (cloud-independent); 15 are FIRMWARE-LOCKED (stay on HA cloud); rest deferred.** This folder is the
+design doc / index for moving **all** Tuya devices to local control so the HA Tuya *cloud* integration (and its
+recurring **IoT Core** subscription) can be dropped. Live planning notes in the scratch plan file
+`.claude/plans/focun-on-privacy-people-dazzling-seal.md`.
+
+## Phase 1 outcome (2026-08-06) — what actually happened
+- **Mechanism (verified end-to-end, incl. the Dressroom pilot):** a local Tuya device with a
+  `dps_config.<ch>.dps_on/dps_off` **recipe** dispatches on/off over local TCP (`tinytuya set_multiple_values`)
+  with NO cloud. The **rule engine already** rewrites `turn_on/off`→`set_dps` (`_resolve_local_dps`); the
+  **device agent** now resolves the recipe locally in `_handle_command` (`_resolve_local_recipe` +
+  `self._dps_onoff` cache built in `_load_devices`); the **dashboard `/toggle`** publishes to
+  `mur/home/device/<id>/command` for any local device **with a recipe** (else keeps the HA path).
+- **Recipes derived + written by** `scripts/tuya_local_phase1_derive.py` (dry-run → `--commit`; per-channel
+  boolean validation; skips ch 7/8, DPS 41 decoy, cloud_authoritative_dps; single→DPS 1, light→DPS 20; flags
+  ambiguous for manual). 36 auto-written; then the 15 firmware-locked ones had their recipes **removed** (revert
+  to `dps_config={}` → HA path) once found unreachable.
+- **✅ 22 devices are now local** (cloud-immune): most single lights + Corridor, Entrance Monitor, My Room
+  Stereo, RemoteXY, Tv Wall, Dressroom, Star Projector-style.
+- **❌ 15 multi-gang wall switches are FIRMWARE-LOCKED** — correct key (cloud-confirmed) + open port 6668 +
+  ping OK, yet the local Tuya handshake fails `Err 914/901` on every version and they don't broadcast. Two
+  hardware types only: `jzQA5vi0nxwAK1Hd` (3-gang ×9) + `igrmQHvAQLDY6uzc` (2-gang ×6). Opened one → module is
+  **`TYWE3S` = ESP8266** (not BK7231) → flashable with **ESPHome/Tasmota** (tuya-convert OTA long-shot on 2020
+  patched fw, else serial via the exposed TYWE3S pins VCC/GND/TXD0/RXD0/GPIO0/EN). Until flashed they stay on the
+  **HA cloud** path (work as before).
+- **Cloud state note:** the HA Tuya integration OAuth (Smart Life login) is separate from the **developer IoT
+  Core** API (`adapters/tuya_config.py` `tinytuya.Cloud`). During this work the gateway-poll API returned "No
+  permissions" but the **developer device-details + commands APIs still worked** (fetched keys, controlled the 15
+  via cloud) — so the 15 are NOT lost on Oct-6 as long as the HA Smart Life login is re-authable. A developer-cloud
+  control fallback was prototyped in the agent then **reverted** (user chose not to lean on the cloud).
+- **Deferred (not touched):** 6 MANUAL devices (8-Gang mode/cloud-auth, Boiler Valve+Switch [safety], Table lamp
+  DPS-mismatch, Pentagon DPS 1-vs-20, Smart Toilet multi-bool) + Star Projector (no local ip/key in DB).
 
 ## Why
 The Tuya **IoT Core** subscription (Tuya IoT Platform, project "Project Home") is a **once-per-account free

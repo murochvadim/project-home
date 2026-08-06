@@ -84,6 +84,7 @@ class DeviceAgent:
         self._device_states = {}        # device_id → merged last_state dict (cache, filtered)
         self._allowed_dps = {}          # device_id → set of allowed DPS keys (None = all allowed)
         self._cloud_authoritative_dps = {}  # device_id → set of DPS keys that ONLY cloud/HA sources may write
+        self._dps_onoff = {}            # device_id → {channel: {'on': dps_dict, 'off': dps_dict}} — Phase 1 local on/off recipes
         self._device_net_info = {}      # device_id → (mac, ip) for local Tuya devices
         self._net_update_throttle = {}  # mac → last_update_timestamp
         self._connect_db()
@@ -165,6 +166,23 @@ class DeviceAgent:
                 ca = (row.get('dps_config') or {}).get('cloud_authoritative_dps')
                 if isinstance(ca, list) and ca:
                     self._cloud_authoritative_dps[row['id']] = {str(x) for x in ca}
+
+                # Phase 1 local on/off recipes: dps_config.<channel>.dps_on /
+                # dps_off = the raw dps dict to write over local TCP for
+                # turn_on / turn_off, bypassing the HA -> Tuya-cloud roundtrip.
+                onoff = {}
+                for k, cfg in (row.get('dps_config') or {}).items():
+                    if not isinstance(cfg, dict):
+                        continue
+                    on = cfg.get('dps_on')
+                    off = cfg.get('dps_off')
+                    if isinstance(on, dict) or isinstance(off, dict):
+                        onoff[str(k)] = {
+                            'on': on if isinstance(on, dict) else None,
+                            'off': off if isinstance(off, dict) else None,
+                        }
+                if onoff:
+                    self._dps_onoff[row['id']] = onoff
 
             return devices
 
@@ -516,6 +534,23 @@ class DeviceAgent:
                 return e
         return candidates[0]
 
+    def _resolve_local_recipe(self, device_id, channel, action):
+        """Return the raw dps dict to write for a turn_on/turn_off from this
+        device's Phase-1 dps_on/dps_off recipes, or None if it has none.
+        A given channel -> that channel only; channel-less -> the first channel
+        that has a recipe (mirrors rule_engine._resolve_local_dps)."""
+        recipes = self._dps_onoff.get(device_id)
+        if not recipes:
+            return None
+        key = 'on' if action == 'turn_on' else 'off'
+        if channel is not None:
+            cfg = recipes.get(str(channel))
+            return cfg.get(key) if cfg else None
+        for cfg in recipes.values():
+            if cfg.get(key):
+                return cfg.get(key)
+        return None
+
     def _handle_command(self, device_id: str, payload: dict):
         """Execute a device command via HA API. Runs in a daemon thread."""
         rule = payload.get('rule', '')
@@ -553,6 +588,23 @@ class DeviceAgent:
                 return
 
             channel = payload.get('channel')
+
+            # Local-TCP recipe path (Phase 1): if this device declares a
+            # dps_on/dps_off recipe for the channel, write it directly over the
+            # LAN instead of the HA -> Tuya-cloud roundtrip. channel-less ->
+            # first channel with a recipe (mirrors rule_engine._resolve_local_dps).
+            # Falls through to the HA path if no recipe / local adapter missing.
+            if action in ('turn_on', 'turn_off'):
+                recipe = self._resolve_local_recipe(device_id, channel, action)
+                if recipe is not None:
+                    tuya_local = self.adapters.get('tuya')
+                    if tuya_local:
+                        ok = tuya_local.set_state(device_id, recipe)
+                        log.info(f'cmd LOCAL(recipe) {device_id} {recipe} ok={ok} rule={rule}')
+                        self._mqtt.publish(resp_topic, {
+                            'ok': ok, 'dps': recipe, 'rule': rule, 'local': True,
+                        })
+                        return
 
             # Local-TCP fast path (allowlist): write the channel's DPS directly
             # over the LAN instead of the HA -> Tuya-cloud roundtrip. channel ==

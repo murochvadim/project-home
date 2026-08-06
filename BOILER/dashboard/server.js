@@ -7780,6 +7780,23 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
       return res.json({ ok: true, entity_id: id, service: `media_player.${service}` });
     }
 
+    // Local Tuya WITH a Phase-1 on/off recipe → route to the device agent
+    // (LXC 103), which writes the channel's dps_on/dps_off over local TCP (no
+    // cloud). Un-migrated local devices (no recipe) + smartthings/zwave keep the
+    // proven HA path below. Dispatch logic stays on the LXC — this just publishes.
+    const dcfg = dev.dps_config || {};
+    const hasRecipe = channel
+      ? !!(dcfg[channel] && dcfg[channel].dps_on)
+      : Object.values(dcfg).some(c => c && typeof c === 'object' && c.dps_on);
+    if (protocol === 'local' && hasRecipe) {
+      mqttClient.publish(`mur/home/device/${id}/command`, JSON.stringify({
+        action: state ? 'turn_on' : 'turn_off',
+        channel: channel || undefined,
+        rule: 'dashboard',
+      }));
+      return res.json({ ok: true, id, service: state ? 'turn_on' : 'turn_off', local: true });
+    }
+
     // Look up HA entity for this device via template.
     // Matches both `tuya` (local-discovered) and `smartthings` (zwave via SmartThings hub) identifiers.
     const tpl = `{% for s in states %}{% set ids = device_attr(s.entity_id,"identifiers") %}{% if ids %}{% for i in ids %}{% if (i[0] == "tuya" or i[0] == "smartthings") and i[1] == "${id}" %}{{ s.entity_id }}|{{ s.state }}\n{% endif %}{% endfor %}{% endif %}{% endfor %}`;
