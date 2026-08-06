@@ -24,7 +24,8 @@ recurring **IoT Core** subscription) can be dropped. Live planning notes in the 
   hardware types only: `jzQA5vi0nxwAK1Hd` (3-gang ×9) + `igrmQHvAQLDY6uzc` (2-gang ×6). Opened one → module is
   **`TYWE3S` = ESP8266** (not BK7231) → flashable with **ESPHome/Tasmota** (tuya-convert OTA long-shot on 2020
   patched fw, else serial via the exposed TYWE3S pins VCC/GND/TXD0/RXD0/GPIO0/EN). Until flashed they stay on the
-  **HA cloud** path (work as before).
+  **HA cloud** path (work as before). **Full flashing reference (chip, device list + ids, OTA + serial steps,
+  wiring, ESPHome/MQTT re-integration, safety): [`TUYA_LOCAL/FLASHING.md`](FLASHING.md).**
 - **Cloud state note:** the HA Tuya integration OAuth (Smart Life login) is separate from the **developer IoT
   Core** API (`adapters/tuya_config.py` `tinytuya.Cloud`). During this work the gateway-poll API returned "No
   permissions" but the **developer device-details + commands APIs still worked** (fetched keys, controlled the 15
