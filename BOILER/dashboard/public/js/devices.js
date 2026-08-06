@@ -1361,11 +1361,13 @@ async function loadHistory() {
     document.getElementById('history-toggle-status').textContent = '';
     if (dev && switchTypes.includes(dev.device_type)) {
       const chanKeys = getChannelKeys(dev);
-      const channels = chanKeys.length > 1 ? chanKeys : ['1'];
+      const isZb = dev.protocol === 'zigbee';
+      const zbKey = (dev.last_state && dev.last_state.state !== undefined) ? 'state' : 'state_l1';
+      const channels = chanKeys.length > 1 ? chanKeys : (isZb ? [zbKey] : ['1']);
       const cfg = dev.channel_config || {};
       togglesEl.innerHTML = channels.map(ch => {
         const label = channels.length > 1 ? (cfg[ch]?.name || `Ch.${ch}`) : '';
-        const isOn = dev.last_state && (dev.last_state[ch] === true || dev.last_state[ch] === 1);
+        const isOn = dev.last_state && (dev.last_state[ch] === true || dev.last_state[ch] === 1 || dev.last_state[ch] === 'ON');
         return `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;">`
           + (label ? `<span style="font-size:0.78rem;color:#666;">${escHtml(label)}</span>` : '')
           + `<button onclick="historyToggle(true,'${ch}')" style="padding:3px 10px;border:1px solid #27ae60;background:${isOn ? '#27ae60' : '#fff'};color:${isOn ? '#fff' : '#27ae60'};border-radius:4px;cursor:pointer;font-size:0.78rem;font-weight:600;">ON</button>`

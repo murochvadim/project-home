@@ -7694,7 +7694,7 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
     // Pull row with dps_config — needed by the per-protocol branches below
     // that resolve channel → MQTT action key via action_on / action_off
     // aliases (same pattern the rule engine uses in _dispatch_command).
-    const devR = await db.query('SELECT name, protocol, dps_config FROM devices WHERE id = $1', [id]);
+    const devR = await db.query('SELECT name, protocol, dps_config, last_state, device_type FROM devices WHERE id = $1', [id]);
     const dev = devR.rows[0] || {};
     const protocol = dev.protocol;
     const channel = req.body.channel || '';
@@ -7704,7 +7704,22 @@ app.post('/api/devices/:id/toggle', async (req, res) => {
 
     // Zigbee devices: toggle via Z2M MQTT (not HA API)
     if (protocol === 'zigbee') {
-      const key = req.body.channel || 'state_l1';
+      // Sirens (NAS-AB02B2 etc.) sound via a boolean 'alarm' property, not a
+      // switch state key. Melody/volume/duration come from the device's own
+      // last-set values; alarm:false stops it immediately.
+      if (dev.device_type === 'siren') {
+        mqttClient.publish(`zigbee2mqtt/${dev.name}/set`, JSON.stringify({ alarm: !!state }));
+        return res.json({ ok: true, entity_id: `z2m:${dev.name}`, service: state ? 'alarm on' : 'alarm off' });
+      }
+      // Resolve the Z2M property key. Multi-gang switches expose state_l1/l2/l3
+      // (the UI passes those directly). Single switches expose 'state', but the
+      // single-channel UI default passes Tuya-style '1' — remap anything that
+      // isn't a real key on this device to 'state' (fallback state_l1).
+      const ls = dev.last_state || {};
+      let key = req.body.channel;
+      if (!key || ls[key] === undefined) {
+        key = (ls.state !== undefined) ? 'state' : 'state_l1';
+      }
       const payload = JSON.stringify({ [key]: state ? 'ON' : 'OFF' });
       mqttClient.publish(`zigbee2mqtt/${dev.name}/set`, payload);
       return res.json({ ok: true, entity_id: `z2m:${dev.name}`, service: state ? 'ON' : 'OFF' });
