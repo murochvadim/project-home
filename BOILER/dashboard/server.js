@@ -7079,7 +7079,7 @@ app.post('/api/vacuum/:entity/:verb', async (req, res) => {
 app.get('/api/curtains', async (_req, res) => {
   try {
     const r = await db.query(`
-      SELECT id, name, room, protocol, dps_config
+      SELECT id, name, room, protocol, dps_config, last_state
       FROM devices
       WHERE device_type = 'curtain'
         AND dps_config->'direction' IS NOT NULL
@@ -7097,7 +7097,12 @@ app.get('/api/curtains', async (_req, res) => {
       // string codes — they never produce SCS-shaped events. Skip the
       // motion-pair logic for them and let the gateway HA-fallback
       // branch below do all the work.
-      const evs = dev.protocol === 'gateway'
+      // Gateway (Tuya-gateway string codes) AND zigbee (Z2M, reports a
+      // live `position` in last_state) curtains never emit the SCS-shaped
+      // numeric events — skip the motion-pair query for them and let their
+      // dedicated branches below sync position.
+      const skipScs = dev.protocol === 'gateway' || dev.protocol === 'zigbee';
+      const evs = skipScs
         ? { rows: [] }
         : await db.query(
             `SELECT ts, dps->>'1' AS code
@@ -7108,7 +7113,7 @@ app.get('/api/curtains', async (_req, res) => {
               ORDER BY ts ASC`,
             [dev.id],
           );
-      if (!evs.rows.length && dev.protocol !== 'gateway') continue;
+      if (!evs.rows.length && !skipScs) continue;
 
       const lastProcessed = cfg.last_motion_ts
         ? new Date(cfg.last_motion_ts).getTime()
@@ -7246,6 +7251,29 @@ app.get('/api/curtains', async (_req, res) => {
           }
         } catch (e) { /* non-fatal */ }
       }
+
+      // Zigbee (Z2M) roller motors — e.g. Guy Room Curtain (Zemismart
+      // ZM16EL). The motor's own reported `position` is unreliable (stuck),
+      // so we derive position from the TIMED Full Open/Close runs instead:
+      // ramp run_start_pct → target (100 open / 0 close) over open_sec/
+      // close_sec, then settle at the target. See _curtainTimedPct().
+      if (dev.protocol === 'zigbee') {
+        const ls = dev.last_state || {};
+        const tp = _curtainTimedPct(cfg);
+        if (tp.moving) dev.is_moving = true;
+        dev.dps_config.direction.position_pct = tp.pct;
+        if (!tp.moving && Number(cfg.position_pct) !== tp.pct) {
+          await db.query(
+            `UPDATE devices SET dps_config = jsonb_set(dps_config::jsonb,
+               '{direction,position_pct}', $1::jsonb)
+             WHERE id = $2`,
+            [JSON.stringify(tp.pct), dev.id],
+          );
+        }
+        dev.battery = (ls.battery !== undefined) ? Number(ls.battery) : null;
+        dev.motor_state = ls.state || null;   // motor's OWN reported state (OPEN/CLOSE/STOP), any source
+        dev.zigbee  = true;
+      }
     }
 
     res.json(r.rows);
@@ -7284,6 +7312,24 @@ app.patch('/api/curtain/:id/settings', async (req, res) => {
       params.push(new Date().toISOString());
       updates.push(`'{direction,last_motion_ts}', to_jsonb($${pIdx}::text)`);
     }
+    if (req.body && req.body.open_sec !== undefined) {
+      const v = Number(req.body.open_sec);
+      if (!Number.isFinite(v) || v < 1 || v > 300) {
+        return res.status(400).json({ error: 'open_sec must be 1..300' });
+      }
+      pIdx += 1;
+      params.push(Math.round(v));
+      updates.push(`'{direction,open_sec}', to_jsonb($${pIdx}::int)`);
+    }
+    if (req.body && req.body.close_sec !== undefined) {
+      const v = Number(req.body.close_sec);
+      if (!Number.isFinite(v) || v < 1 || v > 300) {
+        return res.status(400).json({ error: 'close_sec must be 1..300' });
+      }
+      pIdx += 1;
+      params.push(Math.round(v));
+      updates.push(`'{direction,close_sec}', to_jsonb($${pIdx}::int)`);
+    }
     if (!updates.length) return res.status(400).json({ error: 'nothing to update' });
 
     let expr = 'dps_config::jsonb';
@@ -7303,6 +7349,94 @@ app.patch('/api/curtain/:id/settings', async (req, res) => {
 // Device-agent owns local-TCP state stream; commands go via HA's cover.* services.
 // dps_config.direction.{ha_entity, action_open|stop|close} drives the mapping
 // so each device id maps to the right HA cover entity.
+// In-memory pending timed-stop timers, keyed by device id. A timed run
+// (Full Open / Full Close) publishes ONE state:OPEN/CLOSE then schedules ONE
+// state:STOP after the calibrated seconds. Any new command or manual Stop
+// cancels the pending stop first, so runs can't overlap. (One open + one
+// stop, never a re-send — so the motor can't toggle off mid-run.)
+const _curtainRunTimers = new Map();   // id -> { timer, dir, deadline }
+function _clearCurtainRunTimer(id) {
+  const e = _curtainRunTimers.get(id);
+  if (e) { clearTimeout(e.timer); _curtainRunTimers.delete(id); }
+}
+
+// Timed position for a zigbee curtain (Guy Room). The motor's reported
+// position is unreliable, so position is derived from the timed Full Open/
+// Close runs: during a run it ramps `run_start_pct` → target (100 open / 0
+// close) over open_sec/close_sec; after the run it settles at the target;
+// otherwise it's the last stored value. Returns {pct, moving}.
+function _curtainTimedPct(cfg) {
+  const stored = Number.isFinite(Number(cfg.position_pct)) ? Number(cfg.position_pct) : 0;
+  const st   = cfg.assumed_state;
+  const stTs = cfg.assumed_state_ts ? new Date(cfg.assumed_state_ts).getTime() : 0;
+  if ((st === 'open' || st === 'close') && stTs) {
+    const runSec = st === 'open' ? Number(cfg.open_sec) : Number(cfg.close_sec);
+    if (Number.isFinite(runSec) && runSec > 0) {
+      const elapsed  = (Date.now() - stTs) / 1000;
+      const startPct = Number.isFinite(Number(cfg.run_start_pct)) ? Number(cfg.run_start_pct) : stored;
+      const target   = st === 'open' ? 100 : 0;
+      if (elapsed < runSec) {
+        const prog = Math.max(0, Math.min(1, elapsed / runSec));
+        return { pct: Math.round(startPct + (target - startPct) * prog), moving: true };
+      }
+      return { pct: target, moving: false };
+    }
+  }
+  return { pct: stored, moving: false };
+}
+
+// POST /api/curtain/:id/run/:dir  (dir = open|close) — timed "soft limit"
+// run: publish state:OPEN/CLOSE, then publish state:STOP after the device's
+// calibrated open_sec/close_sec. Zigbee-only. Declared BEFORE /:id/:action.
+app.post('/api/curtain/:id/run/:dir', async (req, res) => {
+  try {
+    const dir = String(req.params.dir || '').toLowerCase();
+    if (dir !== 'open' && dir !== 'close') {
+      return res.status(400).json({ error: `unknown dir '${dir}' (allowed: open,close)` });
+    }
+    const r = await db.query("SELECT name, protocol, dps_config FROM devices WHERE id = $1", [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'device not found' });
+    if (r.rows[0].protocol !== 'zigbee') {
+      return res.status(400).json({ error: 'timed run is zigbee-only' });
+    }
+    const cfg = (r.rows[0].dps_config || {}).direction || {};
+    const sec = Number(dir === 'open' ? cfg.open_sec : cfg.close_sec);
+    if (!Number.isFinite(sec) || sec < 1 || sec > 300) {
+      return res.status(400).json({ error: `${dir} time not set — save the seconds first` });
+    }
+    const id   = req.params.id;
+    const name = r.rows[0].name;
+    // Guard: if a run in the SAME direction is already in progress, IGNORE
+    // this one — do NOT restart/extend the timer. A double-fire or rapid
+    // re-clicks would otherwise stack the run (one Full Close ran ~20s
+    // instead of the set 10s). One run = exactly the set seconds.
+    const existing = _curtainRunTimers.get(id);
+    if (existing && existing.dir === dir && existing.deadline > Date.now()) {
+      return res.json({ ok: true, dir, sec, ignored: true, ms_left: existing.deadline - Date.now() });
+    }
+    _clearCurtainRunTimer(id);   // cancel any pending (opposite-direction) stop
+    // Snapshot the CURRENT (possibly mid-ramp) position as this run's start,
+    // so the position ramp is correct even if a previous run was interrupted.
+    const startPct = _curtainTimedPct(cfg).pct;
+    const state = dir === 'open' ? 'OPEN' : 'CLOSE';
+    mqttClient.publish(`zigbee2mqtt/${name}/set`, JSON.stringify({ state }));
+    await db.query(
+      `UPDATE devices SET dps_config = jsonb_set(jsonb_set(
+         jsonb_set(dps_config::jsonb, '{direction,assumed_state}',    $1::jsonb),
+                                       '{direction,assumed_state_ts}', to_jsonb(NOW()::text)),
+                                       '{direction,run_start_pct}',    $3::jsonb)
+       WHERE id = $2`,
+      [JSON.stringify(dir), id, JSON.stringify(startPct)]
+    );
+    const timer = setTimeout(() => {
+      try { mqttClient.publish(`zigbee2mqtt/${name}/set`, JSON.stringify({ state: 'STOP' })); } catch (e) {}
+      _curtainRunTimers.delete(id);
+    }, sec * 1000);
+    _curtainRunTimers.set(id, { timer, dir, deadline: Date.now() + sec * 1000 });
+    res.json({ ok: true, dir, sec });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 const _CURTAIN_ACTION_TO_DEFAULT_SERVICE = {
   open:  'open_cover',
   stop:  'stop_cover',
@@ -7315,23 +7449,52 @@ app.post('/api/curtain/:id/:action', async (req, res) => {
     if (!_CURTAIN_ACTION_TO_DEFAULT_SERVICE[action]) {
       return res.status(400).json({ error: `unknown action '${action}' (allowed: open,stop,close)` });
     }
-    const r = await db.query("SELECT dps_config FROM devices WHERE id = $1", [req.params.id]);
+    const r = await db.query("SELECT name, protocol, dps_config FROM devices WHERE id = $1", [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'device not found' });
+    const protocol = r.rows[0].protocol;
     const cfg = (r.rows[0].dps_config || {}).direction || {};
-    const entity_id = cfg.ha_entity;
-    if (!entity_id) return res.status(400).json({ error: 'dps_config.direction.ha_entity not set' });
-    const service = cfg[`action_${action}`] || _CURTAIN_ACTION_TO_DEFAULT_SERVICE[action];
-    await callHA('cover', service, { entity_id });
-    // Persist assumed state — this hardware doesn't report position,
-    // so the last button click is the only position signal we have.
-    // Survives page reload + visible to rules via /api/devices.
-    await db.query(
+
+    // Persist assumed state — hardware without live position reporting
+    // needs the last button click as its position signal. Written for
+    // BOTH the zigbee and HA paths (survives reload; visible to rules).
+    const persistAssumed = () => db.query(
       `UPDATE devices SET dps_config = jsonb_set(
          jsonb_set(dps_config::jsonb, '{direction,assumed_state}',    $1::jsonb),
                                        '{direction,assumed_state_ts}', to_jsonb(NOW()::text))
        WHERE id = $2`,
       [JSON.stringify(action), req.params.id]
     );
+
+    // Zigbee (Z2M) roller motors — publish the cover state directly to
+    // the device's Z2M topic. Reported-position convention is handled by
+    // dps_config.direction.position_inverted — so we map open→OPEN as-is
+    // (no HA-specific action_open/close swap on this path).
+    if (protocol === 'zigbee') {
+      _clearCurtainRunTimer(req.params.id);   // a manual command cancels a pending timed-stop
+      const stateMap = { open: 'OPEN', close: 'CLOSE', stop: 'STOP' };
+      mqttClient.publish(`zigbee2mqtt/${r.rows[0].name}/set`, JSON.stringify({ state: stateMap[action] }));
+      if (action === 'stop') {
+        // Freeze the position at wherever the timed ramp currently is.
+        const curPct = _curtainTimedPct(cfg).pct;
+        await db.query(
+          `UPDATE devices SET dps_config = jsonb_set(jsonb_set(jsonb_set(dps_config::jsonb,
+             '{direction,assumed_state}',    $1::jsonb),
+             '{direction,assumed_state_ts}', to_jsonb(NOW()::text)),
+             '{direction,position_pct}',     $3::jsonb)
+           WHERE id = $2`,
+          [JSON.stringify('stop'), req.params.id, JSON.stringify(curPct)]
+        );
+        return res.json({ ok: true, state: 'STOP', zigbee: true, assumed_state: 'stop', pos: curPct });
+      }
+      await persistAssumed();
+      return res.json({ ok: true, state: stateMap[action], zigbee: true, assumed_state: action });
+    }
+
+    const entity_id = cfg.ha_entity;
+    if (!entity_id) return res.status(400).json({ error: 'dps_config.direction.ha_entity not set' });
+    const service = cfg[`action_${action}`] || _CURTAIN_ACTION_TO_DEFAULT_SERVICE[action];
+    await callHA('cover', service, { entity_id });
+    await persistAssumed();
     res.json({ ok: true, service, entity_id, assumed_state: action });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

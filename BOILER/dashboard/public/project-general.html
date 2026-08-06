@@ -633,6 +633,9 @@ async function loadCurtains() {
 }
 
 function _renderCurtainRow(d) {
+      // Zigbee (Z2M) roller motors get a dedicated card with battery,
+      // motor-fault status, and a travel-limit setup panel.
+      if (d.zigbee) return _renderCurtainRowZigbee(d);
       const dirCfg = (d.dps_config || {}).direction || {};
       // position_pct is the single source of truth; only set on devices
       // that have full_run_sec calibrated (currently MyRoom only). Falls
@@ -698,6 +701,112 @@ function _renderCurtainRow(d) {
                   style="padding:3px 8px; font-size:0.7rem; border:1px solid #5a8ed1; background:#fff; color:#5a8ed1; border-radius:3px; cursor:pointer;">apply</button>
           <span id="curtain-msg-${pgEsc(d.id)}" style="font-size:0.75rem; color:#888; min-width:80px;"></span>
         </div>`;
+}
+
+// Dedicated card for a Zigbee (Z2M) roller motor — Guy Room Curtain.
+// Live position from last_state.position (synced server-side into
+// position_pct); battery chip; Open/Stop/Close via the
+// zigbee-aware /:action endpoint.
+function _renderCurtainRowZigbee(d) {
+      const dirCfg = (d.dps_config || {}).direction || {};
+      const rawPct = Number(dirCfg.position_pct);
+      const havePct = Number.isFinite(rawPct);
+      const pct = havePct ? Math.max(0, Math.min(100, Math.round(rawPct))) : 0;
+      const shift = (pct / 100) * 92;
+      const label = havePct ? (pct === 0 ? 'Closed 100%' : `Open ${pct}%`) : '— (unknown)';
+      const isOpenBtn   = havePct && pct >= 95;
+      const isClosedBtn = havePct && pct <= 5;
+      const fullRunSec  = Number(dirCfg.full_run_sec) || '';
+      const openSec     = Number(dirCfg.open_sec)  || '';
+      const closeSec    = Number(dirCfg.close_sec) || '';
+      const moving      = !!d.is_moving;
+      const labelColor  = moving ? '#c0392b' : '#888';
+      const labelText   = moving ? `${label} · moving` : label;
+      const room = d.room ? ` · ${pgEsc(d.room)}` : '';
+      const eid = pgEsc(d.id);
+
+      const battTxt = (d.battery === null || d.battery === undefined || !Number.isFinite(Number(d.battery)))
+        ? '' : `<span title="battery" style="font-size:0.72rem; color:#666; padding:2px 6px; background:#eef3ee; border-radius:10px;">🔋 ${Math.round(Number(d.battery))}%</span>`;
+      const _ms = (d.motor_state || '').toUpperCase();
+      const _msColor = _ms === 'OPEN' ? '#27ae60' : _ms === 'CLOSE' ? '#c0392b' : '#888';
+      const motorTxt = _ms
+        ? `<span title="Motor's own reported state (any source)" style="font-size:0.72rem; color:#fff; padding:2px 6px; background:${_msColor}; border-radius:10px;">motor: ${pgEsc(_ms)}</span>`
+        : '';
+      return `
+        <div class="status-item" style="display:flex; align-items:center; gap:14px; padding:10px 14px; background:#fbf9f5; border-radius:6px;">
+          <div class="curtain-vis" data-state="${havePct ? 'tracked' : 'unknown'}" title="${pgEsc(labelText)}">
+            <div class="curtain-pane curtain-left"  style="transform: translateX(-${shift}%);"></div>
+            <div class="curtain-pane curtain-right" style="transform: translateX( ${shift}%);"></div>
+          </div>
+          <div style="flex:1 1 auto; min-width:160px;">
+            <div style="font-weight:600; display:flex; align-items:center; gap:8px;">${pgEsc(d.name)}<span style="color:#888; font-weight:400;">${room}</span>${battTxt}${motorTxt}</div>
+            <div style="font-size:0.78rem; color:${labelColor}; font-weight:${moving ? 600 : 400};">${pgEsc(labelText)}</div>
+          </div>
+          <button onclick="curtainRun('${eid}', 'open')"
+                  style="padding:6px 14px; border:1px solid #27ae60; background:#fff; color:#27ae60; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">▲ Full Open</button>
+          <button onclick="curtainRun('${eid}', 'close')"
+                  style="padding:6px 14px; border:1px solid #c0392b; background:#fff; color:#c0392b; border-radius:4px; cursor:pointer; font-size:0.82rem; font-weight:600;">▼ Full Close</button>
+          <label style="font-size:0.7rem; color:#888; display:flex; align-items:center; gap:4px;">
+            open
+            <input type="number" min="1" max="300" value="${openSec}" placeholder="s" id="curtain-opensec-${eid}"
+                   style="width:46px; padding:3px 5px; font-size:0.78rem; border:1px solid #ccc; border-radius:3px;">s
+          </label>
+          <label style="font-size:0.7rem; color:#888; display:flex; align-items:center; gap:4px;">
+            close
+            <input type="number" min="1" max="300" value="${closeSec}" placeholder="s" id="curtain-closesec-${eid}"
+                   style="width:46px; padding:3px 5px; font-size:0.78rem; border:1px solid #ccc; border-radius:3px;">s
+          </label>
+          <button onclick="curtainSaveRunTimes('${eid}')"
+                  style="padding:3px 8px; font-size:0.7rem; border:1px solid #5a8ed1; background:#fff; color:#5a8ed1; border-radius:3px; cursor:pointer;">save</button>
+          <span id="curtain-runmsg-${eid}" style="font-size:0.75rem; color:#888; min-width:80px;"></span>
+        </div>`;
+}
+
+// Timed "soft-limit" run for the zigbee curtain: server sends ONE open/close
+// then ONE stop after the saved seconds. Single command from here — no
+// interval, no re-send.
+async function curtainRun(id, dir) {
+  const msg = document.getElementById('curtain-runmsg-' + id);
+  if (msg) { msg.textContent = '…'; msg.style.color = '#888'; }
+  try {
+    const r = await fetch(`/api/curtain/${encodeURIComponent(id)}/run/${dir}`, { method: 'POST' });
+    const data = await r.json();
+    if (msg) {
+      msg.textContent = data.ok ? `${dir === 'open' ? '▲' : '▼'} running ${data.sec}s…` : (data.error || 'failed');
+      msg.style.color = data.ok ? '#c0392b' : '#c0392b';
+    }
+    if (data.ok) setTimeout(loadCurtains, (data.sec + 1) * 1000);
+  } catch (e) {
+    if (msg) { msg.textContent = e.message; msg.style.color = '#c0392b'; }
+  }
+}
+
+async function curtainSaveRunTimes(id) {
+  const oi = document.getElementById('curtain-opensec-' + id);
+  const ci = document.getElementById('curtain-closesec-' + id);
+  const msg = document.getElementById('curtain-runmsg-' + id);
+  const body = {};
+  if (oi && oi.value !== '') body.open_sec  = Number(oi.value);
+  if (ci && ci.value !== '') body.close_sec = Number(ci.value);
+  if (!('open_sec' in body) && !('close_sec' in body)) {
+    if (msg) { msg.textContent = 'enter seconds'; msg.style.color = '#c0392b'; }
+    return;
+  }
+  if (msg) { msg.textContent = '…'; msg.style.color = '#888'; }
+  try {
+    const r = await fetch(`/api/curtain/${encodeURIComponent(id)}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (msg) {
+      msg.textContent = data.ok ? '✓ saved' : (data.error || 'failed');
+      msg.style.color = data.ok ? '#27ae60' : '#c0392b';
+    }
+  } catch (e) {
+    if (msg) { msg.textContent = e.message; msg.style.color = '#c0392b'; }
+  }
 }
 
 async function curtainSaveTiming(id) {
