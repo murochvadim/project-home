@@ -156,9 +156,15 @@
         if (!progMap.has(sb.device_id)) progMap.set(sb.device_id, []);
         progMap.get(sb.device_id).push({ el, field: progField });
       } else if (sb && sb.device_id === MANGAL_DEV && MANGAL_ON_CH.has(sb.channel)) {
-        // Mangal Fan/Light — no RF feedback → optimistic, painted from localStorage (not stateMap).
+        // Mangal Fan/Light — no RF feedback. Instant optimistic paint on tap
+        // (optiMap) AND reconciled from the rule engine's commanded-state publish
+        // on mur/home/device/balcony_bridge/state (stateMap) so a scene run / a
+        // tap on another surface reflects here too. (Was optiMap-only before
+        // Option A, 2026-08-07.)
         if (!optiMap.has(sb.channel)) optiMap.set(sb.channel, []);
         optiMap.get(sb.channel).push(el);
+        if (!stateMap.has(sb.device_id)) stateMap.set(sb.device_id, []);
+        stateMap.get(sb.device_id).push({ el, channel: sb.channel });
       } else if (sb && sb.device_id) {
         if (!stateMap.has(sb.device_id)) stateMap.set(sb.device_id, []);
         stateMap.get(sb.device_id).push({ el, channel: sb.channel || null });
@@ -286,8 +292,21 @@
   function applyState(deviceId, dps) {
     const entries = stateMap.get(deviceId);
     if (!entries) return;
+    const obj = (dps && typeof dps === 'object') ? dps : {};
     for (const { el, channel } of entries) {
-      el.classList.toggle('on', isOn(dps, channel));
+      // Only reconcile a tile whose channel is present in THIS message, so a
+      // partial /state (e.g. the engine's Mangal-only commanded snapshot) can't
+      // clear unrelated tiles on the same board. Null-channel tiles always apply
+      // (device-agent /state messages carry the full merged state).
+      if (channel && !(channel in obj)) continue;
+      el.classList.toggle('on', isOn(obj, channel));
+    }
+    // Keep the Mangal optimistic cache in sync with the authoritative /state so
+    // a later re-render's paintOpti() agrees (no RF feedback → /state is truth).
+    if (deviceId === MANGAL_DEV) {
+      const s = optiState();
+      for (const ch of MANGAL_ON_CH) if (ch in obj) s[ch] = isOn(obj, ch);
+      try { localStorage.setItem(OPTI_LS, JSON.stringify(s)); } catch (_) {}
     }
   }
 

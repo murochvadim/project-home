@@ -1781,6 +1781,21 @@
       }
       if (fsl) fsl.innerHTML = 'speed: <b>' + (ls.fan_speed != null ? ls.fan_speed : '—') + '</b>';
       if (cards) { cards.style.opacity = online ? '1' : '0.45'; cards.style.pointerEvents = online ? '' : 'none'; }
+      // Mangal Fan/Light have NO RF feedback, so the rule engine records the
+      // commanded state (from ANY surface — dashboard tap, smart tablet, or a
+      // scene) into devices.last_state. Sync our optimistic cache from that
+      // shared truth so a scene run elsewhere is reflected on this card too.
+      try {
+        const ds = await fetch('/api/devices/states?ids=' + BOARD).then(r => r.json());
+        const st = (Array.isArray(ds) && ds[0] && ds[0].last_state) || {};
+        if ('mangal_fan' in st || 'mangal_light' in st) {
+          const s = _mangalState();
+          if ('mangal_fan' in st)   s.fan   = !!st.mangal_fan;
+          if ('mangal_light' in st) s.light = !!st.mangal_light;
+          localStorage.setItem(_MANGAL_LS, JSON.stringify(s));
+          mangalPaint();
+        }
+      } catch (_) { /* keep last-known mangal paint */ }
     } catch (e) { /* keep last-known */ }
   }
 

@@ -206,12 +206,17 @@ class MqttClient:
         """
         self.publish(topic, payload, retain=False, qos=1)
 
-    def publish_raw(self, topic: str, payload_str: str):
-        """Publish a raw string payload (no json.dumps). For HASP commands."""
+    def publish_raw(self, topic: str, payload_str: str, retain: bool = False):
+        """Publish a raw string payload (no json.dumps). For HASP commands.
+
+        retain=True is used for feedback-less commanded-state snapshots (e.g.
+        Mangal on mur/home/device/balcony_bridge/state) so a fresh subscriber
+        gets the current state on connect.
+        """
         if not self._enabled or self._client is None:
             return
         try:
-            info = self._client.publish(topic, payload_str, qos=1, retain=False)
+            info = self._client.publish(topic, payload_str, qos=1, retain=retain)
             if info.rc != mqtt.MQTT_ERR_SUCCESS:
                 log.warning('MQTT raw pub %s rc=%s (%s)',
                             topic, info.rc, _rc_name(info.rc))

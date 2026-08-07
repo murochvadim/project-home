@@ -889,7 +889,56 @@ class RuleEngine:
                 })
             return
 
+        if suffix == 'command':
+            # One-shot RF loads with NO board feedback (Mangal): every command
+            # source converges on this topic (dashboard/scene/panel all publish
+            # it, and the engine's own dispatch loops back here via esp/+/+), so
+            # record the commanded state once here → all surfaces reflect it.
+            cmd_map = self._ESP_CMD_STATE.get(board_id)
+            if cmd_map:
+                try:
+                    cmd_str = (raw_payload or b'').decode('utf-8', errors='replace').strip()
+                except Exception:
+                    cmd_str = ''
+                delta = cmd_map.get(cmd_str)
+                if delta:
+                    self._apply_esp_commanded_state(board_id, delta)
+            return
+
         log.debug('ESP message: unknown suffix %s for board %s', suffix, board_id)
+
+    def _apply_esp_commanded_state(self, board_id, delta):
+        """Record + broadcast the commanded state of a feedback-less RF ESP
+        channel so ALL surfaces reflect it (Option A, 2026-08-07).
+
+        These fixed-code 433 MHz loads (Mangal) can't report their state, so the
+        command itself is the truth: merge the implied booleans into
+        devices.last_state (+ in-memory state.devices) and publish a COMPLETE
+        retained snapshot on mur/home/device/<id>/state. The Smart Tablet reads
+        that /state stream; the dashboard polls devices.last_state over HTTP.
+        Retained → a fresh page/tablet load shows current state. The engine's own
+        ingest of this /state topic is state-only (no rule fires; no rule
+        triggers on this board id) so there is no loop.
+        """
+        self.state.db_execute(
+            """UPDATE devices SET
+                   last_state = COALESCE(last_state, '{}'::jsonb) || %s::jsonb,
+                   last_seen  = NOW()
+               WHERE id = %s""",
+            (json.dumps(delta), board_id),
+        )
+        dev = self.state.devices.get(board_id)
+        if dev is not None:
+            dev.setdefault('dps', {}).update(delta)
+        # Complete snapshot of every commanded key for this board, so the tablet
+        # always gets both mangal_fan + mangal_light and a retained read is never
+        # partial (a missing key would read as OFF and wrongly clear a tile).
+        keys = sorted({k for d in self._ESP_CMD_STATE.get(board_id, {}).values() for k in d})
+        src = (dev or {}).get('dps') or {}
+        snap = {k: (bool(delta[k]) if k in delta else bool(src.get(k, False))) for k in keys}
+        self.mqtt.publish_raw('mur/home/device/%s/state' % board_id,
+                              json.dumps(snap), retain=True)
+        log.info("ESP commanded-state %s -> %s (published retained /state)", board_id, snap)
 
     # Status fields lifted from any ESP board's `mur/home/esp/<id>/status`
     # payload into devices.last_state.dps. Each board only publishes the
@@ -932,6 +981,22 @@ class RuleEngine:
         # the Batt card's online/offline (the ESP32 itself is always up on USB).
         'ble_connected', 'bobo_battery',
     )
+
+    # Commanded-state map for one-shot RF ESP channels that have NO board
+    # feedback (fixed-code 433 MHz, e.g. Mangal BBQ — the board TXes & forgets,
+    # so /status can never report them). Every command source (dashboard tab via
+    # server.js, scene, panel) publishes to mur/home/esp/<id>/command, which the
+    # engine already receives via its esp/+/+ subscription — so mapping each
+    # command string to the last_state it implies gives ONE shared commanded
+    # state that all surfaces reflect (Option A, 2026-08-07). See
+    # [[project_balcony_somfy]].
+    _ESP_CMD_STATE = {
+        'balcony_bridge': {
+            'mangal_fan_on':   {'mangal_fan': True},
+            'mangal_light_on': {'mangal_light': True},
+            'mangal_off':      {'mangal_fan': False, 'mangal_light': False},
+        },
+    }
 
     def _update_esp_device_dps(self, board_id, status_payload):
         """Project ESP status fields into devices.last_state for rule/dashboard use.
