@@ -56,7 +56,7 @@ def parse_dev_chip(chip_value, devices_by_name_desc):
     """'@Name' or '@Name Channel' → (device_id, dps_key_or_None); None if no match.
     Channel is resolved first against the device's dps_labels (multi-gang chips),
     then — as a fallback — against the dps_config channel's `name`/key, so ESP
-    action-channel chips (e.g. '@BoBo Left Roof Open', which aren't in dps_labels)
+    action-channel chips (e.g. '@Balcony_bridge Left Roof Open', not in dps_labels)
     resolve to their channel instead of collapsing to None."""
     if not chip_value or not chip_value.startswith('@'):
         return None
@@ -165,7 +165,19 @@ def expand_scene(state, scene, rule_name):
             cmds.append({**disp, 'rule': rule_name})
             continue
 
-        # 2. plain device: trailing on/off → turn_on/turn_off on its channel
+        # 2a. ESP action channel (one-shot action_on). Its channel NAME often
+        # ends in "On"/"Off" (e.g. "Mangal Fan On", "Balcony Fan Off"), which the
+        # _ONOFF_RE strip below would eat, breaking the channel match and firing
+        # the first action_on channel instead. So FIRST try to resolve the WHOLE
+        # "@Device Channel Name" against the channels — if it matches a real
+        # channel, fire it directly as turn_on (its action_on IS the command).
+        full = parse_dev_chip(tok, devices_by_name_desc)
+        if full and full[1] is not None:
+            cmds.append({'device_id': full[0], 'action': 'turn_on',
+                         'channel': full[1], 'rule': rule_name})
+            continue
+
+        # 2b. plain device: trailing on/off → turn_on/turn_off on its channel
         m = _ONOFF_RE.search(tok)
         if not m:
             log.info("_scenes: scene '%s' chip %r has no on/off — skipped",
