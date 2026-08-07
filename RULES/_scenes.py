@@ -54,8 +54,10 @@ def build_devices_by_name_desc(state_devices):
 
 def parse_dev_chip(chip_value, devices_by_name_desc):
     """'@Name' or '@Name Channel' → (device_id, dps_key_or_None); None if no match.
-    Channel is resolved against the device's dps_labels (the same source the
-    device-picker used to author multi-gang channel chips)."""
+    Channel is resolved first against the device's dps_labels (multi-gang chips),
+    then — as a fallback — against the dps_config channel's `name`/key, so ESP
+    action-channel chips (e.g. '@BoBo Left Roof Open', which aren't in dps_labels)
+    resolve to their channel instead of collapsing to None."""
     if not chip_value or not chip_value.startswith('@'):
         return None
     text = chip_value[1:].strip()
@@ -70,6 +72,12 @@ def parse_dev_chip(chip_value, devices_by_name_desc):
             for dps_key, dps_label in dps_labels.items():
                 if dps_label == label:
                     return (dev['id'], dps_key)
+            # Fallback: match the label against a dps_config channel's name or key
+            # (ESP action channels aren't in dps_labels — the picker inserts ch.name).
+            dps_config = dev.get('dps_config') or {}
+            for ch_key, ch in dps_config.items():
+                if isinstance(ch, dict) and (ch.get('name') == label or ch_key == label):
+                    return (dev['id'], ch_key)
             return (dev['id'], None)
     return None
 
