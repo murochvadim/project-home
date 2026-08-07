@@ -1314,14 +1314,33 @@ function _pvjEntryList(rows) {
       </div>`;
     }).join('');
     return `<div style="border-top:1px solid #f0eee8; padding:8px 0;">
-      <div style="font-weight:700; color:#0f766e; margin-bottom:4px;">${pvjEsc(d)}</div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+        <span style="font-weight:700; color:#0f766e;">${pvjEsc(d)}</span>
+        <button onclick="pvJournalEditDay('${pvjEsc(d)}')" title="Load this day into the entry card above to edit" style="border:1px solid #0f766e; background:#fff; color:#0f766e; border-radius:5px; cursor:pointer; font-size:0.72rem; padding:1px 7px;">✎ Edit</button>
+      </div>
       ${blocks}
     </div>`;
   }).join('');
 }
+const PVJ_HIST_DAYS = 10;   // history shows only the last N days (older → use Search)
 function pvJournalRenderTimeline() {
   const box = document.getElementById('pvj-timeline'); if (!box) return;
-  box.innerHTML = _pvjEntryList(pvjEntries || []);
+  const rows = pvjEntries || [];
+  const allDays = [...new Set(rows.map(e => e.entry_date))].sort().reverse();
+  const keep = new Set(allDays.slice(0, PVJ_HIST_DAYS));
+  const shown = rows.filter(e => keep.has(e.entry_date));
+  box.innerHTML = _pvjEntryList(shown)
+    + (allDays.length > PVJ_HIST_DAYS
+        ? `<div style="color:#999; font-size:0.8rem; padding:8px 0; border-top:1px solid #f0eee8;">Showing the last ${PVJ_HIST_DAYS} days. For older entries use <b>Search</b> above.</div>`
+        : '');
+}
+// Load a history/search day into the editable Entry card above (back-date + reload).
+function pvJournalEditDay(dateStr) {
+  const dp = document.getElementById('pvj-date');
+  if (dp) dp.value = dateStr;
+  pvJournalRenderToday();
+  const card = document.getElementById('pvj-today');
+  if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 // ── Search: by category + words + date range (full history, server-side) ──
 function pvJournalSearchCats() {
