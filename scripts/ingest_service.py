@@ -113,7 +113,25 @@ def sha256(path, chunk=1048576):
         return None
 
 
-# ── Ingest one file — insert as pending, analyzer does the rest ───
+def _analyzer_auto_on():
+    """True when the analyzer's Auto Mode is enabled (analyzer_settings.auto_enabled=1).
+
+    When Auto Mode is OFF, ingest marks new files 'ready' instead of 'pending' so
+    the analyzer skips them entirely and the pipeline panel stays green — mirrors
+    the analyzer's own master switch (analyzer.py: `if not auto_enabled: idle`).
+    ⚠ Consequence: a file ingested while Auto is off is NOT queued, so turning Auto
+    back on later will NOT retro-analyze it — it needs a manual Re-run to requeue.
+    Fail-safe: on any read error, behave as before (auto ON → 'pending')."""
+    try:
+        rows = db_query("SELECT value FROM analyzer_settings WHERE key = 'auto_enabled'")
+        if not rows:
+            return True
+        return str(rows[0]['value']).strip() not in ('0', '', 'false', 'False')
+    except Exception:
+        return True
+
+
+# ── Ingest one file — 'ready' when Auto Mode off (skip analyzer), else 'pending' ─
 def ingest_file(full_path, file_hash, size_bytes):
     rows = db_query('SELECT path FROM media_library WHERE file_hash = %s', (file_hash,))
     if rows:
@@ -121,10 +139,12 @@ def ingest_file(full_path, file_hash, size_bytes):
     ext       = Path(full_path).suffix.lower()
     raw_title = Path(full_path).stem
     file_type = 'audio' if ext in AUDIO_EXTS else ('image' if ext in IMAGE_EXTS else 'video')
+    # Auto Mode OFF → 'ready' (skip the analyzer); ON → 'pending' (analyzer picks it up).
+    status = 'pending' if _analyzer_auto_on() else 'ready'
     db_query(
         'INSERT INTO media_library (path, title, type, size_bytes, file_hash, status) '
         'VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (file_hash) DO NOTHING',
-        (full_path, raw_title, file_type, size_bytes, file_hash, 'pending'),
+        (full_path, raw_title, file_type, size_bytes, file_hash, status),
         fetch=False
     )
     return {'ok': True, 'path': full_path}
