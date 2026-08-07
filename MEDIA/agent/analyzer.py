@@ -519,8 +519,15 @@ def main():
                 frame_interval = int(cfg['auto_frame_interval'])
                 face_score_min = float(cfg['auto_face_score_min'])
 
-            # if auto mode is disabled and batch_size=0, skip picking new files
-            if not auto_enabled and batch_size == 0:
+            # Auto Mode is the MASTER switch (2026-08-07): when OFF the analyzer
+            # idles completely — NO ingested file (auto-scan / YouTube download)
+            # is analyzed, and a non-zero manual batch_size is ignored too. Turn
+            # Auto Mode ON to run anything (including a manual Re-run, which just
+            # requeues files to 'pending'). Previously this also required
+            # batch_size==0, so a leftover batch_size=5 kept processing ingest
+            # even with Auto off — the exact "why do YouTube videos still get
+            # analyzed" surprise.
+            if not auto_enabled:
                 write_log('idle — auto mode disabled')
                 time.sleep(SLEEP_SEC)
                 continue
