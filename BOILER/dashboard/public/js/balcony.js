@@ -1954,6 +1954,7 @@
       style="width:26px;height:26px;padding:0;font-size:0.75rem;border-radius:5px;cursor:pointer;border:1px solid ${on ? '#3a7d44' : '#d0cbc4'};background:${on ? '#3a7d44' : '#eee'};color:${on ? '#fff' : '#888'};">${IRR_DOW[d][0]}</button>`;
   }
   const IRR_SCHED = { v1: [], v2: [] };   // per-zone schedule model (source of truth for the editor)
+  const IRR_NOTE = {};   // per-zone short free-text note (what the valve waters)
   let _irrSeq = 0;
   function irrDefaultSched() { return { id: 's' + (++_irrSeq) + '_' + (Date.now() % 100000), enabled: true, start_hm: '07:00', duration_min: 10, days: [0, 1, 2, 3, 4, 5, 6] }; }
   let IRR_STATE = {};   // id -> {last_state, last_seen}
@@ -1974,10 +1975,15 @@
     box.innerHTML = VALVES.map(v => `
       <div class="card" style="padding:14px;flex:1 1 320px;">
         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-          <h2 style="margin:0;font-size:1rem;">${v.label}
-            <span id="irr-dot-${v.key}" title="freshness" style="font-size:0.85rem;color:#aaa;">●</span>
-            <span id="irr-online-${v.key}" style="font-size:0.72rem;color:#888;font-weight:normal;">loading…</span>
-          </h2>
+          <div>
+            <h2 style="margin:0;font-size:1rem;">${v.label}
+              <span id="irr-dot-${v.key}" title="freshness" style="font-size:0.85rem;color:#aaa;">●</span>
+              <span id="irr-online-${v.key}" style="font-size:0.72rem;color:#888;font-weight:normal;">loading…</span>
+            </h2>
+            <input id="irr-note-${v.key}" placeholder="what it waters…" maxlength="28" onblur="irrSaveNote('${v.key}')"
+                   title="short note — what this valve waters (auto-saves)"
+                   style="display:block;width:120px;margin-top:1px;font-size:0.72rem;color:#666;border:none;border-bottom:1px dashed #ccc;background:transparent;padding:1px 0;">
+          </div>
           <span id="irr-chip-${v.key}" style="font-size:0.82rem;font-weight:600;padding:2px 12px;border-radius:10px;background:#eee;color:#888;border:1px solid #d0cbc4;">state: —</span>
           <span style="font-size:0.82rem;color:#666;">Last seen: <b id="irr-seen-${v.key}">—</b></span>
         </div>
@@ -2131,13 +2137,38 @@
         duration_min: (s.duration_min != null ? s.duration_min : 10),
         days: Array.isArray(s.days) ? s.days : [0, 1, 2, 3, 4, 5, 6],
       }));
+      IRR_NOTE[v.key] = zone.note || '';
+      const _ni = document.getElementById('irr-note-' + v.key);
+      if (_ni) _ni.value = IRR_NOTE[v.key];
       irrRenderScheds(v.key);
     });
   }
 
+  // Auto-save a valve's short note on blur. Read-merge-write the config so
+  // it only touches this zone's `note` and never clobbers the schedules.
+  window.irrSaveNote = async function (vk) {
+    const inp = document.getElementById('irr-note-' + vk);
+    if (!inp) return;
+    const note = (inp.value || '').trim().slice(0, 28);
+    IRR_NOTE[vk] = note;
+    try {
+      const cur = await fetch('/api/dashboard-settings/' + IRR_CFG_KEY).then(r => r.json()).then(d => (d && d.value) || {});
+      cur[vk] = Object.assign({}, cur[vk], { note });
+      const r = await fetch('/api/dashboard-settings/' + IRR_CFG_KEY, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: cur }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      inp.style.borderBottomColor = '#3a7d44';
+      setTimeout(() => { inp.style.borderBottomColor = '#ccc'; }, 1000);
+    } catch (e) {
+      inp.style.borderBottomColor = '#c0392b';
+    }
+  };
+
   window.irrSaveSchedule = async function () {
     const cfg = {};
-    VALVES.forEach(v => { irrSyncFromDom(v.key); cfg[v.key] = { schedules: IRR_SCHED[v.key] || [] }; });
+    VALVES.forEach(v => { irrSyncFromDom(v.key); cfg[v.key] = { schedules: IRR_SCHED[v.key] || [], note: IRR_NOTE[v.key] || '' }; });
     const setStatus = (txt, col) => VALVES.forEach(v => { const s = document.getElementById('irr-sched-status-' + v.key); if (s) { s.textContent = txt; s.style.color = col; } });
     setStatus('· saving…', '#888');
     try {
