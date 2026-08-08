@@ -76,6 +76,7 @@
         r.lxc104?.ok,
         r.lxc105?.ok,
         r.lxc106?.ok,
+        r.rp01?.ok,   // RP01 — Raspberry Pi (multi-purpose infra node)
         // Server
         r.pm2?.ok,
         // Scripts (data freshness — DB queries)

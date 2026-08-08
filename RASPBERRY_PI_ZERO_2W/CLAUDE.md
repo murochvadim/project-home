@@ -94,6 +94,24 @@ dnsmasq**, no lingering processes, 8.9 G free. ⚠ The flashed image is the **De
 - **Gotcha log:** `ssh` wasn't on the laptop's PowerShell PATH (fixed: added `C:\Windows\System32\OpenSSH` to
   User PATH). mDNS `flasher.local` never resolved — find the Pi by IP / MAC `2c:cf:67:ca:26:e5` instead.
 
+## ✅ Infra‑node integration (2026-08-08) — treated as first‑class infrastructure like an LXC
+Per user: the Pi is a **permanent, multi‑purpose** node (flashing now, camera/etc. later), so it's monitored +
+backed up exactly like the LXCs / HA VM — **not** shoehorned into `esp_boards` (that's for microcontrollers).
+- **Reserved IP:** `192.168.1.217` (eth0 MAC `00:e0:4c:36:15:13`) — DHCP‑reserved so the probe is stable even
+  during a flash session (when `wlan0` becomes the AP, `eth0` stays up).
+- **Monitoring (like an LXC):** dashboard **Project Health → System Status** row **`RP01 — Raspberry Pi`**
+  (`svc-rp01`) via a **TCP:22 probe** to 192.168.1.217 (`server.js /api/health/status` → `r.rp01`,
+  `health.html`/`health.js`), **and counted in the sidebar Status badge** (`alerts-monitor.js`) so a down Pi
+  turns it red — same treatment as `lxc100`–`lxc106` + the HA VM. (LXCs have no separate reachability watchdog,
+  so probe+badge IS the full "like an LXC" treatment.)
+- **Backup (like the backup jobs):** `backup_jobs` **id 10 "Raspberry Pi RP01"** — `source_host
+  rp01_project@192.168.1.217`, `source_path /home/rp01_project` → QNAP `Claude_Data/RaspberryPi_RP01/`
+  (storage 6), daily (`max_age_hours 24`), keep 7. Runs from the **LXC‑104 backup orchestration**
+  (`/opt/backup-script.sh`). ⚠ **The script was generalized** to honor a **per‑job `source_host`** (was
+  hardcoded to the laptop) — empty `source_host` still defaults to the laptop, so jobs 4/5 are unchanged; the
+  reachability check is now per‑job. **LXC‑104's root key (`root@Servers`) was authorized on the Pi** for the
+  scp. Verified: job 10 = `ok` (30 KB), laptop jobs still `ok`.
+
 ## Next steps (not yet done — PAUSED per user)
 - **Step 2 — Install the flash tools** (on the Pi):
   ```bash

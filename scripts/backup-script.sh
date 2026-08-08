@@ -18,7 +18,7 @@ $PSQL -c "UPDATE backup_log SET status='failed', finished_at=NOW(), message='int
 
 # ── Fetch all enabled jobs ────────────────────────────────────────
 JOBS=$($PSQL -c "
-  SELECT j.id, j.name, j.source_path, j.dest_subdir,
+  SELECT j.id, j.name, j.source_path, j.source_host, j.dest_subdir,
          j.max_age_hours, j.retention, j.run_now,
          s.share, s.smb_user, s.host
   FROM backup_jobs j
@@ -30,15 +30,10 @@ if [ -z "$JOBS" ]; then
     exit 0
 fi
 
-# ── Check laptop reachable (once) ────────────────────────────────
-LAPTOP_OK=0
-if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-       "${LAPTOP_USER}@${LAPTOP_IP}" "echo ok" &>/dev/null; then
-    LAPTOP_OK=1
-fi
-
 # ── Process each job ─────────────────────────────────────────────
-echo "$JOBS" | while IFS='|' read -r JOB_ID JOB_NAME SOURCE_PATH DEST_SUBDIR MAX_AGE RETENTION RUN_NOW SHARE SMB_USER SMB_HOST; do
+# Reachability is checked per-job against the job's source host (below), since
+# jobs can now pull from different hosts (laptop, Raspberry Pi, …).
+echo "$JOBS" | while IFS='|' read -r JOB_ID JOB_NAME SOURCE_PATH SRC_HOST DEST_SUBDIR MAX_AGE RETENTION RUN_NOW SHARE SMB_USER SMB_HOST; do
     [ -z "$JOB_ID" ] && continue
 
     # Check if backup is due
@@ -68,11 +63,12 @@ echo "$JOBS" | while IFS='|' read -r JOB_ID JOB_NAME SOURCE_PATH DEST_SUBDIR MAX
     fi
     log "Job [$JOB_NAME] log_id=$LOG_ID"
 
-    # Check laptop reachable
-    if [ "$LAPTOP_OK" -eq 0 ]; then
-        log "Job [$JOB_NAME] SKIP — laptop unreachable"
+    # Resolve source host — per-job source_host; default to the laptop for back-compat
+    SRC="${SRC_HOST:-${LAPTOP_USER}@${LAPTOP_IP}}"
+    if ! ssh -o ConnectTimeout=8 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$SRC" "echo ok" &>/dev/null; then
+        log "Job [$JOB_NAME] SKIP — source $SRC unreachable"
         $PSQL -c "
-          UPDATE backup_log SET finished_at=NOW(), status='unreachable', message='laptop not reachable'
+          UPDATE backup_log SET finished_at=NOW(), status='unreachable', message='source host not reachable'
           WHERE id=$LOG_ID
         " &>/dev/null
         continue
@@ -101,9 +97,9 @@ echo "$JOBS" | while IFS='|' read -r JOB_ID JOB_NAME SOURCE_PATH DEST_SUBDIR MAX
     DEST_PATH="${DEST_DIR}/${TIMESTAMP}"
     mkdir -p "$DEST_PATH"
 
-    log "Job [$JOB_NAME] copying ${LAPTOP_USER}@${LAPTOP_IP}:${SOURCE_PATH} → $DEST_PATH"
+    log "Job [$JOB_NAME] copying ${SRC}:${SOURCE_PATH} → $DEST_PATH"
     scp -o StrictHostKeyChecking=accept-new -o BatchMode=yes -r \
-        "${LAPTOP_USER}@${LAPTOP_IP}:${SOURCE_PATH}" \
+        "${SRC}:${SOURCE_PATH}" \
         "$DEST_PATH/" >> "$LOG" 2>&1
     SCP_RC=$?
 
