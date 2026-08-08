@@ -75,8 +75,11 @@ sudo apt update && sudo apt full-upgrade -y && sudo reboot
 ---
 
 ## ✅ Provisioned + verified live (2026-08-08)
-The Pi is flashed, on the LAN, and I have passwordless key access — but **no flash tools installed yet**
-(installs paused per user).
+The Pi is flashed, on the LAN, and I have passwordless key access — **no flash tooling is actually set up**
+(installs paused per user). ⚠ Audit note (2026-08-08): `~/tuya-convert` **source is git-cloned** but its
+`install_prereq.sh` was **NOT run** (no `hostapd`/`mosquitto`/`dnsmasq` — zero system packages added, no
+Docker); it's just source, harmless/removable. ⚠ The flashed image is the **Desktop** variant, **not Lite**
+(has an X session; heavier on 512 MB — Lite is still the recommendation above for a rebuild).
 - **Identity:** hostname `RP01`, user **`rp01_project`** (⚠ not `rp01` — that tripped up the first login).
 - **Network (dual‑homed, as designed):** **`eth0` = 192.168.1.217** (USB **Realtek RTL8152** adapter, wired,
   internet OK — this is the **management path**) · **`wlan0` = 192.168.1.111** (Broadcom **BCM43430/1**
