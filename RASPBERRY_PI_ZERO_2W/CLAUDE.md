@@ -112,6 +112,24 @@ backed up exactly like the LXCs / HA VM — **not** shoehorned into `esp_boards`
   reachability check is now per‑job. **LXC‑104's root key (`root@Servers`) was authorized on the Pi** for the
   scp. Verified: job 10 = `ok` (30 KB), laptop jobs still `ok`.
 
+## Camera purpose — GoPro HERO3+ Black Edition (POSSIBLE, not built — investigated 2026-08-08)
+The Pi can drive a **GoPro HERO3+ Black Edition** as a project camera. What was established:
+- **USB = file transfer ONLY.** Over USB the Hero 3/3+ enumerates as a **WPD/MTP** device (SD-card access +
+  charging) — **no camera control over USB** on this generation. (Detected on the laptop as `HERO3+ Black
+  Edition` WPD / `E:` drive + a `Camera DFU Device`.) So the USB cable can copy media off it, not operate it.
+- **Wi-Fi = full control.** The Hero 3+ has a reverse-engineered **HTTP API**:
+  `http://10.5.5.9/camera/<CMD>?t=<pwd>&p=<param>` → start/stop record, photo, mode, power, status, + a live
+  preview stream. It's plain **HTTP GET → NO install needed** for a basic test (`curl`); the Python lib
+  **`goprocam`** (KonradIT/gopro-py-api, legacy Hero-3 mode) is only for a fuller integration.
+- **⭐ The dual-homed Pi is the natural bridge:** `wlan0` joins the **GoPro's own Wi-Fi AP** while `eth0` stays on
+  the home LAN → the Pi controls the camera AND stays reachable / can relay to the project (MQTT/dashboard).
+  Connect: `nmcli device wifi connect <GoPro-SSID> password <pwd> ifname wlan0`, then `curl http://10.5.5.9/...`.
+  ⚠ Using `wlan0` for the GoPro **conflicts with the flashing-AP role** — pick per use.
+- **Credentials:** the **SSID** shows in the Wi-Fi list once the GoPro Wi-Fi is on (side button, blue blink); the
+  **password** = whatever was set via the GoPro app, or reset on-camera (Settings → **Wi-Fi RESET** → default
+  `goprohero`). ⚠ NOT readable over the USB/`E:` file connection. Next step is a quick Wi-Fi control test once the
+  SSID+password are supplied.
+
 ## Next steps (not yet done — PAUSED per user)
 - **Step 2 — Install the flash tools** (on the Pi):
   ```bash
