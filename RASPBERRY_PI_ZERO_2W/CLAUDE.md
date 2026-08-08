@@ -130,6 +130,30 @@ The Pi can drive a **GoPro HERO3+ Black Edition** as a project camera. What was 
   `goprohero`). ⚠ NOT readable over the USB/`E:` file connection. Next step is a quick Wi-Fi control test once the
   SSID+password are supplied.
 
+## OS upgrade + ⚠ chromium kernel-deadlock (2026-08-08)
+Ran the first `apt full-upgrade` (image was the June build, never upgraded — 155 pending). **Now fully up to
+date: kernel 6.18.34 → 6.18.39, 0 pending, dpkg clean.** But it hit a real incident worth remembering:
+- **⚠⚠ Unpacking `chromium` DEADLOCKED the kernel.** On the Pi Zero 2 W (512 MB RAM), dpkg unpacking the huge
+  chromium package thrashed swap so hard it tripped a **kernel hung-task / mutex deadlock** — `dmesg`:
+  `task dpkg-deb blocked on a mutex likely owned by task dpkg`, with dpkg spinning (state R, 99% CPU, **0 disk
+  writes, 0 iowait**) and dpkg-deb stuck **uninterruptible (`D`)**. It sat wedged ~30 min; a `D`-state process
+  **can't be killed** — only a reboot clears it.
+- **Recovery that worked:** (1) **verify the reboot is safe FIRST** — the kernel pkgs were still the old `ii`
+  version and `/boot/firmware/*.img` untouched (chromium is userspace, unpacked *before* the kernel pkgs), so
+  the running kernel/boot were never at risk. (2) Reboot via **`sync; echo b > /proc/sysrq-trigger`** (the
+  reliable way to reboot a wedged box; ⚠ the reboot SSH will HANG on the dead connection — use a keepalive /
+  short timeout and just poll for the box to come back). (3) `dpkg --purge --force-all chromium*` (delete-only,
+  no heavy unpack) → `dpkg --configure -a` → `apt-get -f install -y` → **clean**. (4) Resume `full-upgrade` for
+  the rest (kernel + EEPROM) — completed rc=0, reboot into 6.18.39. Post-reboot chromium reinstalled fine via
+  `-f install` (the hang was a **transient** memory-pressure event, not deterministic).
+- **Aftermath: removed chromium + firefox** (`apt purge` + `autoremove --purge`, 6 pkgs, ~700 MB reclaimed) —
+  useless on a headless SSH-managed node AND the exact thing that deadlocked. The desktop GUI itself is still
+  installed (only the browsers were stripped).
+- **Lessons:** on a 512 MB Pi, a single huge-package unpack (chromium) can hang the kernel under swap pressure →
+  keep browsers/heavy desktop pkgs off it; if a future unpack wedges, verify kernel/boot untouched → reboot →
+  purge the offender → resume. EEPROM note: the Zero 2 W boots from SD (no SPI EEPROM), so `rpi-eeprom` updates
+  are inert on this model.
+
 ## Next steps (not yet done — PAUSED per user)
 - **Step 2 — Install the flash tools** (on the Pi):
   ```bash
