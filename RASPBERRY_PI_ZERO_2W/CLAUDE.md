@@ -130,6 +130,38 @@ The Pi can drive a **GoPro HERO3+ Black Edition** as a project camera. What was 
   `goprohero`). ⚠ NOT readable over the USB/`E:` file connection. Next step is a quick Wi-Fi control test once the
   SSID+password are supplied.
 
+## AdGuard Home — IoT egress DNS sinkhole (DECIDED, not built — 2026-08-08)
+The Pi's next purpose: run **AdGuard Home** (self-hosted network-wide DNS server, single lightweight ARM
+binary ~40–60 MB — fine on 424 MB) as the **first layer for blocking Chinese IoT devices from phoning home**,
+the natural complement to [[project_tuya_local_phase1]] (local control **+** blocked cloud). Point the whole
+LAN's DNS at it → it sinkholes Tuya/vendor-cloud domains for **every** device (Wi-Fi or wired) with no
+per-device setup, and its **query log shows exactly what each device tries to reach**. Chosen over Pi-hole
+(single binary + built-in encrypted upstream + cleaner UI, lighter on the Zero 2 W) and over NextDNS (no
+cloud dependency / no query-privacy tradeoff).
+
+**⚠ Network facts that shaped this (verified live 2026-08-08 — don't re-derive):**
+- **Gateway / real router = Technicolor ISP box at `192.168.1.1`** (MAC `20:b0:01:cf:68:68`). The only true
+  internet-egress point — but an ISP router, so likely **no per-device egress firewall**.
+- **The "Aruba" = Aruba Instant On 1960 24G (JL806A, InstantOn fw 2.6.0.0), `192.168.1.215`** — a
+  **smart-managed SWITCH, NOT the gateway**. It *can* do VLANs + ACLs on **wired** ports, but (a) it's not the
+  egress point and (b) the Chinese IoT is almost all **Wi-Fi** (Tuya/Espressif on the Deco), so that traffic
+  **never traverses the Aruba** → a switch ACL can't even see it. **The Aruba is the wrong enforcement point.**
+- So DNS-layer (AGH) is the right first move; Wi-Fi-client blocks on the **TP-Link Deco** are the manual
+  hammer for stragglers.
+
+**Known limitation (honest):** a device that hardcodes its own DNS (8.8.8.8), uses DoH, or dials a raw IP
+walks past AGH. To catch *those* you need enforcement on actual traffic, which the Technicolor can't do
+per-device → the clean escalation is a **Firewalla** appliance (per-device egress incl. raw-IP, no rewire),
+**not** OPNsense/replacing the gateway. Sequence: AGH first → read the query log → escalate only if devices
+bypass DNS.
+
+**Deploy sketch (when built):** AGH on the Pi (`eth0` 192.168.1.217:53) → set as the LAN DNS via the
+Technicolor DHCP (or push via the Deco) → block-lists for Tuya/Chinese-cloud domains, allow the local-control
+paths. ⚠ **Shares the Pi with the future flashing-AP role** — sequence the two (AGH is always-on and network-
+critical; a flash session takes `wlan0`, not `eth0`/DNS, so they can coexist, but confirm before a flash).
+⚠ **A DNS server that dies takes the LAN's internet with it** — that's exactly why it lives on the always-on
+Pi, not the Wi-Fi laptop. See [[project_agent_raspberry_pi]].
+
 ## OS upgrade + ⚠ chromium kernel-deadlock (2026-08-08)
 Ran the first `apt full-upgrade` (image was the June build, never upgraded — 155 pending). **Now fully up to
 date: kernel 6.18.34 → 6.18.39, 0 pending, dpkg clean.** But it hit a real incident worth remembering:
