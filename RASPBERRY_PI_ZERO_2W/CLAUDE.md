@@ -74,7 +74,23 @@ sudo apt update && sudo apt full-upgrade -y && sudo reboot
 
 ---
 
-## Next steps (not yet done)
+## ✅ Provisioned + verified live (2026-08-08)
+The Pi is flashed, on the LAN, and I have passwordless key access — but **no flash tools installed yet**
+(installs paused per user).
+- **Identity:** hostname `RP01`, user **`rp01_project`** (⚠ not `rp01` — that tripped up the first login).
+- **Network (dual‑homed, as designed):** **`eth0` = 192.168.1.217** (USB **Realtek RTL8152** adapter, wired,
+  internet OK — this is the **management path**) · **`wlan0` = 192.168.1.111** (Broadcom **BCM43430/1**
+  brcmfmac, **AP mode CONFIRMED** via `iw list` → reserved for the flashing AP). ⚠ Wi‑Fi WAS configured in
+  the imager (that's how it first came up) — before flashing, disconnect `wlan0` from the router so it's free.
+- **OS:** Raspberry Pi OS / **Debian 13 "trixie"** (⚠ **NetworkManager** — the tuya‑convert AP gotcha applies),
+  **armv7l** 32‑bit, **~424 MB RAM** (tight for cloudcutter Docker), **8.9 G free**.
+- **Access:** the laptop's `~/.ssh/id_ed25519` (**claude-code**) is in `rp01_project`'s `authorized_keys` →
+  `ssh -i ~/.ssh/id_ed25519 rp01_project@192.168.1.217`. Bootstrapped once via LXC‑104 `sshpass` (password
+  auth), then key‑only. `iw` installed; `apt update` done. Nothing else changed.
+- **Gotcha log:** `ssh` wasn't on the laptop's PowerShell PATH (fixed: added `C:\Windows\System32\OpenSSH` to
+  User PATH). mDNS `flasher.local` never resolved — find the Pi by IP / MAC `2c:cf:67:ca:26:e5` instead.
+
+## Next steps (not yet done — PAUSED per user)
 - **Step 2 — Install the flash tools** (on the Pi):
   ```bash
   # tuya-convert (ESP8266 switches)
