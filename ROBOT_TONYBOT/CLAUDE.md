@@ -36,16 +36,28 @@ Browsers can't play RTSP, and hitting the camera's RTSP from every consumer risk
 - **RTSP republish** `rtsp://192.168.1.249:8554/routecam` → the **vision/processing** pipeline reads this
   (`cv2.VideoCapture(...)`), one camera pull, no re-encode. *(Verified with ffprobe: hevc 1920×1080.)*
 - **MJPEG** `http://192.168.1.249:1984/api/stream.mjpeg?src=routecam` + single frame `…/api/frame.jpeg?src=routecam`
-  → the dashboard card. *(Verified: pulled a real 1920×1080 JPEG, 71 KB.)*
+  → the dashboard card. ⚠ **Continuous MJPEG from H.265 needs an explicit transcode branch** in `go2rtc.yaml`
+  (`- ffmpeg:routecam#video=mjpeg` as a 2nd source of `routecam`) — without it `stream.mjpeg` returns 200 then errors
+  `codecs not matched: H265 => JPEG` (single `frame.jpeg` works without it, which masked the bug). The branch is
+  lazy: it only spins up for MJPEG consumers; RTSP consumers still get native H.265.
 - **Deploy/update:** edit the repo `go2rtc.yaml`, `scp` to `/opt/go2rtc/`, `systemctl restart go2rtc`.
   Service: `systemctl {status,restart} go2rtc`; streams API `curl http://192.168.1.249:1984/api/streams`.
 
 ## Dashboard — **Living Room → "Robot" tab** (BUILT 2026-08-09)
-A **Robot** tab on `living-room.html` (after IRobot) with a **Camera card**: a live **`<img>` MJPEG** feed from the
-go2rtc relay. Pure static (no `server.js` route). `js/living-room.js` `showTab` gained a `robot` branch +
-`startRobotCam()`/`stopRobotCam()` — the `<img>.src` is set only while the tab is open (leaving the tab drops the
-MJPEG session so the camera isn't pulled needlessly), with connecting/online/offline states on a status dot.
-Cache-bust `living-room.js?v=61→v=62`. The card also prints the **processing RTSP URL** for reference.
+A **Robot** tab on `living-room.html` (after IRobot), a **two-card row** (`align-items:stretch` → equal height):
+- **Camera card** (compact): a live **`<img>` MJPEG** feed from the go2rtc relay. `js/living-room.js` `showTab`
+  gained a `robot` branch + `startRobotCam()`/`stopRobotCam()` — the `<img>.src` is set only while the tab is open
+  (leaving drops the MJPEG session so the camera isn't pulled needlessly); connecting/online/offline on a status
+  dot; **onerror retries ~4× 1.5 s** (the H.265→MJPEG transcode takes ~1-2 s to spin up) before showing offline.
+- **Camera Settings card** (live, ONVIF imaging): data-driven **sliders** (Brightness/Contrast/Saturation/Sharpness,
+  0-255) + **dropdowns** (WDR OFF/ON, Exposure AUTO/MANUAL, White-balance AUTO/MANUAL). Loaded on tab open, each
+  change **applies to the camera in real time**. Because the MJPEG feed buffers, a change **reconnects the stream
+  700 ms later** so the effect shows immediately.
+- Backend **`routes-robotcam.js`** (own module, one `require()` past the architecture hook, like `routes-cast.js`):
+  `GET /api/robotcam/settings` (values + ranges) + `POST` (schema-ordered `SetImagingSettings`), a thin ONVIF proxy
+  to `192.168.1.10:8000/onvif/imaging_service`. ⚠ **The camera's ONVIF ENCODER config is broken** (misreports
+  H264/30 vs the real H265/60, empty `GetVideoEncoderConfigurations`) — so resolution/codec/fps are NOT settable
+  here; only the **imaging** service works (read+write, **anonymous**, verified). Cache-bust `living-room.js` → `v=65`.
 
 ## Architecture (overhead-camera localization — the chosen approach)
 - **Ceiling camera + a small ArUco/AprilTag marker on the robot's head** → a stationary service on LXC 111 computes
