@@ -6,7 +6,13 @@
 # The camera actually streams HEVC (H.265) 1080p60 (its ONVIF profile misreports H264/30).
 # go2rtc transcodes to MJPEG via the LXC's system ffmpeg (required — not passthrough for H.265).
 streams:
-  routecam: rtsp://192.168.1.10:5005/routecam
+  routecam:
+    - rtsp://192.168.1.10:5005/routecam
+    # Transcode branch so the browser MJPEG card works: the camera is H.265, and
+    # go2rtc can't stream MJPEG directly from H.265 (only single frame.jpeg). This
+    # ffmpeg branch (H265->MJPEG) is spun up lazily ONLY when an MJPEG consumer
+    # connects; RTSP consumers (the vision pipeline) still get native H.265.
+    - ffmpeg:routecam#video=mjpeg
 api:
   listen: ":1984"
 rtsp:

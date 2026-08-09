@@ -82,18 +82,33 @@
   // (and the camera pull behind it) stops when you leave the tab. The go2rtc relay
   // also republishes RTSP (rtsp://192.168.1.249:8554/routecam) for the vision pipeline.
   const ROBOT_CAM_MJPEG = 'http://192.168.1.249:1984/api/stream.mjpeg?src=routecam';
+  let _robotCamRetry = null;
   function startRobotCam() {
     const img = document.getElementById('robot-cam');
     const msg = document.getElementById('robot-cam-msg');
     const dot = document.getElementById('robot-cam-dot');
     if (!img) return;
+    clearTimeout(_robotCamRetry);
+    let tries = 0;
     if (msg) { msg.style.display = ''; msg.textContent = 'Connecting to camera…'; }
     if (dot) dot.style.color = '#e0a72e';                 // amber while connecting
+    const connect = () => { img.src = ROBOT_CAM_MJPEG + '&_=' + Date.now(); };  // cache-bust so a re-show reconnects
     img.onload = () => { img.style.display = 'block'; if (msg) msg.style.display = 'none'; if (dot) dot.style.color = '#3a7d44'; };
-    img.onerror = () => { img.style.display = 'none'; if (msg) { msg.style.display = ''; msg.textContent = '⚠ camera offline'; } if (dot) dot.style.color = '#c0392b'; };
-    img.src = ROBOT_CAM_MJPEG + '&_=' + Date.now();       // cache-bust so a re-show reconnects
+    img.onerror = () => {
+      // The H.265->MJPEG transcode branch can take ~1-2s to spin up; retry before giving up.
+      if (++tries <= 4) {
+        if (msg) { msg.style.display = ''; msg.textContent = 'Connecting to camera… (' + tries + ')'; }
+        _robotCamRetry = setTimeout(connect, 1500);
+        return;
+      }
+      img.style.display = 'none';
+      if (msg) { msg.style.display = ''; msg.textContent = '⚠ camera offline'; }
+      if (dot) dot.style.color = '#c0392b';
+    };
+    connect();
   }
   function stopRobotCam() {
+    clearTimeout(_robotCamRetry);
     const img = document.getElementById('robot-cam');
     if (!img) return;
     img.onload = img.onerror = null;
