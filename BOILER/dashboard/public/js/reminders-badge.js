@@ -37,11 +37,14 @@
     const _MO = ['January','February','March','April','May','June','July','August','September','October','November','December'];
     const _dm = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
     const _dname = _dm ? (_dm[1] + '-' + (_MO[+_dm[2] - 1] || _dm[2]) + '-' + _dm[3]) : String(dateStr || '');
+    // Folder is per-MONTH (e.g. "2026-August") — filename stays day-stamped so each
+    // item still reads as its exact day, but all of a month share one folder.
+    const _mname = _dm ? (_dm[1] + '-' + (_MO[+_dm[2] - 1] || _dm[2])) : String(dateStr || '');
     const uni = _dname + '_' + _hms + '_' + Math.random().toString(36).slice(2, 5) + _ext;
     const fd = new FormData();
     fd.append('file', file, file.name);
     fd.append('relativePath', uni);
-    fd.append('targetPath', 'Daily Journal/' + _dname);
+    fd.append('targetPath', 'Daily Journal/' + _mname);
     const r = await fetch(MEDIA_INGEST + '/api/media/upload', { method: 'POST', body: fd });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.path) throw new Error(j.error || 'upload failed');
