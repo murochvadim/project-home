@@ -131,6 +131,9 @@ require('./routes-restore')(app, db);
 // Cast laptop screen -> TV (Windows-host action; spawns PowerShell on this host).
 require('./routes-cast')(app);
 
+// Robot camera (e-con RouteCAM) ONVIF imaging settings for the Robot tab.
+require('./routes-robotcam')(app);
+
 // Phone Link recovery (Windows-host action; spawns PowerShell on this host) +
 // single-alert dismiss. Buttons on Project Health -> System Alerts.
 require('./routes-phonelink')(app, db);

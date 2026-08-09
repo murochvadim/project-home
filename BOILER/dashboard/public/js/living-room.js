@@ -106,6 +106,7 @@
       if (dot) dot.style.color = '#c0392b';
     };
     connect();
+    loadRobotCamSettings();
   }
   function stopRobotCam() {
     clearTimeout(_robotCamRetry);
@@ -120,6 +121,64 @@
     if (dot) dot.style.color = '#aaa';
   }
   window.startRobotCam = startRobotCam; window.stopRobotCam = stopRobotCam;
+
+  // ── Robot camera settings (ONVIF imaging, live-adjustable via /api/robotcam) ──
+  async function loadRobotCamSettings() {
+    const box = document.getElementById('robotcam-settings');
+    const st  = document.getElementById('robotcam-set-status');
+    if (!box) return;
+    try {
+      const d = await (await fetch('/api/robotcam/settings')).json();
+      if (!d.ok) throw new Error(d.error || 'error');
+      const esc = (s) => String(s).replace(/'/g, '&#39;');
+      const slider = (key, label) => `
+        <div style="margin-bottom:11px;">
+          <div style="display:flex;justify-content:space-between;font-size:0.8rem;color:#555;margin-bottom:3px;">
+            <span>${label}</span><span id="rc-${key}-val" style="font-weight:600;color:#333;">${d[key]}</span>
+          </div>
+          <input type="range" min="${d.ranges[key][0]}" max="${d.ranges[key][1]}" value="${d[key]}" style="width:100%;"
+            oninput="document.getElementById('rc-${key}-val').textContent=this.value"
+            onchange="setRobotCamSetting('${key}', this.value)">
+        </div>`;
+      const sel = (key, label) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:11px;">
+          <span style="font-size:0.8rem;color:#555;">${label}</span>
+          <select onchange="setRobotCamSetting('${key}', this.value)" style="padding:3px 6px;font-size:0.8rem;">
+            ${d.ranges[key].map(o => `<option value="${esc(o)}" ${d[key] === o ? 'selected' : ''}>${o}</option>`).join('')}
+          </select>
+        </div>`;
+      box.innerHTML =
+        slider('brightness', 'Brightness') +
+        slider('contrast', 'Contrast') +
+        slider('saturation', 'Saturation') +
+        slider('sharpness', 'Sharpness') +
+        sel('wdr', 'WDR (dynamic range)') +
+        sel('exposure', 'Exposure') +
+        sel('whitebalance', 'White balance');
+      if (st) st.textContent = '';
+    } catch (e) {
+      box.innerHTML = '<div style="font-size:0.8rem;color:#c0392b;">⚠ couldn\'t read camera settings</div>';
+    }
+  }
+  async function setRobotCamSetting(key, value) {
+    const st = document.getElementById('robotcam-set-status');
+    if (st) { st.style.color = '#e0a72e'; st.textContent = 'saving…'; }
+    try {
+      const d = await (await fetch('/api/robotcam/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: value }),
+      })).json();
+      if (!d.ok) throw new Error(d.error || 'error');
+      if (st) { st.style.color = '#3a7d44'; st.textContent = 'saved ✓'; setTimeout(() => { if (st.textContent === 'saved ✓') st.textContent = ''; }, 1500); }
+      // The MJPEG feed buffers, so a change won't show promptly — reconnect the
+      // stream (after the camera applies it) so the effect is visible immediately.
+      const img = document.getElementById('robot-cam');
+      if (img && img.style.display !== 'none') setTimeout(() => { img.src = ROBOT_CAM_MJPEG + '&_=' + Date.now(); }, 700);
+    } catch (e) {
+      if (st) { st.style.color = '#c0392b'; st.textContent = '✗ ' + e.message; }
+    }
+  }
+  window.setRobotCamSetting = setRobotCamSetting;
 
   // ─── Jura tab (read-only view of jura stats) ───────────────────
   let _juraTimer = null;

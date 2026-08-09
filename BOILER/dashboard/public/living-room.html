@@ -459,21 +459,36 @@
   </div>
 
   <div class="tab-panel" id="tab-robot">
-    <div class="card" style="padding:14px;">
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px;">
-        <h2 style="margin:0;font-size:1.05rem;">Robot Camera
-          <span id="robot-cam-dot" title="stream" style="font-size:0.85rem;color:#aaa;">●</span>
-        </h2>
-        <span id="robot-cam-status" style="font-size:0.78rem;color:#888;">e-con RouteCAM · overhead localization</span>
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:stretch;">
+
+      <!-- Camera card (compact) -->
+      <div class="card" style="padding:14px; flex:1 1 440px; min-width:300px; max-width:600px;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+          <h2 style="margin:0;font-size:1.05rem;">Robot Camera
+            <span id="robot-cam-dot" title="stream" style="font-size:0.85rem;color:#aaa;">●</span>
+          </h2>
+          <span id="robot-cam-status" style="font-size:0.75rem;color:#888;">e-con RouteCAM</span>
+        </div>
+        <div style="background:#000;border-radius:6px;overflow:hidden;min-height:120px;display:flex;align-items:center;justify-content:center;">
+          <img id="robot-cam" alt="camera stream" style="max-width:100%;max-height:56vh;display:none;">
+          <span id="robot-cam-msg" style="color:#888;font-size:0.82rem;padding:22px;">Open this tab to load the stream…</span>
+        </div>
+        <div style="font-size:0.72rem;color:#888;margin-top:8px;">
+          go2rtc relay (LXC 111 · 192.168.1.249) · processing feed
+          <code>rtsp://192.168.1.249:8554/routecam</code> · HEVC 1080p.
+        </div>
       </div>
-      <div style="background:#000;border-radius:6px;overflow:hidden;min-height:140px;display:flex;align-items:center;justify-content:center;">
-        <img id="robot-cam" alt="camera stream" style="max-width:100%;max-height:72vh;display:none;">
-        <span id="robot-cam-msg" style="color:#888;font-size:0.82rem;padding:24px;">Open this tab to load the stream…</span>
+
+      <!-- Camera settings card (ONVIF imaging, live) -->
+      <div class="card" style="padding:14px; flex:1 1 300px; min-width:280px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;">
+          <h2 style="margin:0;font-size:1.05rem;">Camera Settings</h2>
+          <span id="robotcam-set-status" style="font-size:0.72rem;color:#888;"></span>
+        </div>
+        <div id="robotcam-settings"><div style="font-size:0.8rem;color:#888;">Open this tab to load settings…</div></div>
+        <div style="font-size:0.7rem;color:#999;margin-top:8px;">ONVIF imaging · changes apply to the camera live.</div>
       </div>
-      <div style="font-size:0.75rem;color:#777;margin-top:8px;">
-        Live via the go2rtc relay (LXC 111 <code>robot</code> · 192.168.1.249). Processing feed for vision:
-        <code>rtsp://192.168.1.249:8554/routecam</code> · HEVC 1080p.
-      </div>
+
     </div>
   </div>
 
@@ -506,6 +521,6 @@
 <script src="js/device-picker.js?v=16"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/living-room.js?v=63"></script>
+<script src="js/living-room.js?v=65"></script>
 </body>
 </html>
