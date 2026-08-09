@@ -1516,6 +1516,11 @@ def stream_file(rel_path):
         'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
     }.get(ext, 'application/octet-stream')
     size = os.path.getsize(full_path)
+    # ?dl=1 => force a browser "save" instead of inline play/render (Download button
+    # in the Media page's Select mode). Every existing caller (playback / DLNA / Daily
+    # Journal inline) omits it, so the inline path is byte-for-byte unchanged.
+    as_attach = request.args.get('dl') == '1'
+    base = os.path.basename(full_path)
     range_header = request.headers.get('Range')
     if range_header:
         import re as _re
@@ -1535,12 +1540,16 @@ def stream_file(rel_path):
                         break
                     remaining -= len(chunk)
                     yield chunk
-        return Response(generate(), 206, headers={
+        headers = {
             'Content-Range': f'bytes {start}-{end}/{size}',
             'Accept-Ranges': 'bytes', 'Content-Length': str(length),
             'Content-Type': mime,
-        })
-    return send_from_directory(os.path.dirname(full_path), os.path.basename(full_path), mimetype=mime)
+        }
+        if as_attach:
+            headers['Content-Disposition'] = f'attachment; filename="{base}"'
+        return Response(generate(), 206, headers=headers)
+    return send_from_directory(os.path.dirname(full_path), base,
+                               mimetype=mime, as_attachment=as_attach)
 
 
 # ── GET /api/media/thumb ──────────────────────────────────────────

@@ -368,8 +368,37 @@ function selectionUpdated() {
   if (addBtn) addBtn.disabled = (n === 0 || !target || !target.value);
   const moveBtn = document.getElementById('media-move-btn');
   if (moveBtn) moveBtn.disabled = (n === 0);
+  const dlBtn = document.getElementById('media-dl-btn');
+  if (dlBtn) dlBtn.disabled = (n === 0);
   const delBtn = document.getElementById('media-del-btn');
   if (delBtn) delBtn.disabled = (n === 0);
+}
+
+// ── Download selected files to the browser ──
+// Each selected file is pulled from the media agent's stream endpoint with ?dl=1
+// (which sets Content-Disposition: attachment server-side, so the browser SAVES
+// instead of playing). No blob/createObjectURL — the browser streams straight to
+// disk, so multi-GB videos don't blow up memory. Multiple files are staggered so
+// the browser doesn't drop concurrent downloads (it prompts once to allow them).
+function downloadSelected() {
+  const paths = Array.from(_selectedPaths);
+  if (!paths.length) return;
+  paths.forEach((full, i) => {
+    // _selectedPaths holds absolute /mnt/media/... paths; the stream route wants
+    // the path relative to /mnt/media, with each segment URL-encoded (slashes kept).
+    const rel = full.replace(/^\/mnt\/media\//, '');
+    const encRel = rel.split('/').map(encodeURIComponent).join('/');
+    const url = `${MEDIA_API}/api/media/stream/${encRel}?dl=1`;
+    const name = rel.split('/').pop() || 'download';
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;      // filename hint; server's attachment header forces the save
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }, i * 800);
+  });
 }
 
 // ── Move-to-folder + Delete (organize files; backed by LXC 100 — this
