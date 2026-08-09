@@ -69,11 +69,29 @@ A **Robot** tab on `living-room.html` (after IRobot), a **two-card row** (`align
   over RS-232/TTL** — ⚠ confirm the board's serial level (true ±12V RS-232 needs a MAX3232 / USB-RS232 adapter;
   many "RS-232"-labelled Hiwonder boards are actually 3.3/5V TTL = direct).
 
-## Phases
-1. ✅ **Stream relay + viewing card** (this) — camera is live + processing-ready.
-2. **Localization service** (LXC 111): OpenCV reads `rtsp://192.168.1.249:8554/routecam`, ArUco pose → robot X/Y/θ.
-   (VAAPI HEVC decode via a `/dev/dri` bind-mount if CPU decode is too heavy.)
-3. **Navigation/waypoint engine** + command dispatch to the robot.
-4. **Robot-side serial control** to the Hiwonder board.
+## Vision stack — INSTALLED on LXC 111 (2026-08-09), Phase-2-ready
+- **venv `/opt/robot-vision/venv`** — **OpenCV 5.0.0** (headless) + **numpy 2.4.6**, aruco present with the modern
+  **`cv2.aruco.ArucoDetector`** API (`getPredefinedDictionary`). Installed via `apt python3-venv` +
+  `pip opencv-contrib-python-headless numpy`.
+- **Verified it reads the relay:** `cv2.VideoCapture('rtsp://127.0.0.1:8554/routecam', cv2.CAP_FFMPEG)` with
+  `OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp` → real **1080×1920** frames. (Startup logs a few
+  `hevc … Error constructing the frame RPS` lines — harmless: it joins the H.265 stream mid-GOP, clears on the
+  next keyframe.) Not repo-tracked (LXC install); re-create with the two commands above if the LXC is rebuilt.
+
+## Phases / next steps (for future days)
+1. ✅ **Stream relay + viewing card + live camera settings** — camera live, processing-ready, vision stack installed.
+2. ⏭ **PHYSICAL (user) — the gate for everything vision:** **ceiling-mount the camera + PoE injector**, then open
+   the Robot card to confirm the lens covers the 9.5×6 m room (the desk-view black region should vanish; else swap
+   to a wider M12 lens). PoE injector = **GlobTek GT96300-3656-T3-AP** (dumb brick, 56V/36W, **no LAN control** —
+   for a real camera on/off, plug its AC into a **Tuya smart plug** → then add an On/Off toggle to the Robot card).
+3. ⏭ **Generate + print an ArUco marker** for the robot's head (~15 cm, one ID from `4x4_50`; a one-time
+   checkerboard calibrates pixels→metres — no floor/wall tags).
+4. ⏭ **Localization service** (`/opt/robot-vision/`, LXC 111): OpenCV reads the RTSP → detect the marker → robot
+   **X/Y/θ**; testable NOW by holding the printed marker in front of the desk camera (room calibration waits for the
+   ceiling mount). VAAPI HEVC decode via a `/dev/dri` bind-mount only if CPU decode is too heavy.
+5. ⏭ **Navigation/waypoint engine** + command dispatch to the robot (WiFi/MQTT).
+6. ⏭ **Robot-side serial control** to the Hiwonder servo board — ⚠ first confirm the board's serial level (true
+   ±12V RS-232 needs a MAX3232 / USB-RS232 adapter; many "RS-232"-labelled Hiwonder boards are 3.3/5V TTL = direct).
+   Open question to resolve then: is the Hiwonder robot assembled + does it have its own small onboard board yet?
 
 See [[project_agent_tonybot_robot]].
