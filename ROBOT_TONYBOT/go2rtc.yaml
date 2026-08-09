@@ -1,0 +1,15 @@
+# go2rtc camera stream relay — deployed to LXC 111 "robot" at /opt/go2rtc/go2rtc.yaml
+# Pulls the e-con RouteCAM's RTSP ONCE and re-serves it to every consumer:
+#   - RTSP republish  rtsp://192.168.1.249:8554/routecam   (vision/processing reads this)
+#   - MJPEG           http://192.168.1.249:1984/api/stream.mjpeg?src=routecam  (dashboard card)
+#   - single frame    http://192.168.1.249:1984/api/frame.jpeg?src=routecam
+# The camera actually streams HEVC (H.265) 1080p60 (its ONVIF profile misreports H264/30).
+# go2rtc transcodes to MJPEG via the LXC's system ffmpeg (required — not passthrough for H.265).
+streams:
+  routecam: rtsp://192.168.1.10:5005/routecam
+api:
+  listen: ":1984"
+rtsp:
+  listen: ":8554"
+log:
+  level: info

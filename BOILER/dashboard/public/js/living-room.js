@@ -73,8 +73,38 @@
     document.getElementById('tab-' + name).classList.add('active');
     btn.classList.add('active');
     if (name === 'jura') startJura(); else stopJura();
+    if (name === 'robot') startRobotCam(); else stopRobotCam();
   }
   window.showTab = showTab;
+
+  // ── Robot camera (MJPEG via the go2rtc relay on LXC 111 robot) ──
+  // The <img> src is set only while the Robot tab is open, so the MJPEG session
+  // (and the camera pull behind it) stops when you leave the tab. The go2rtc relay
+  // also republishes RTSP (rtsp://192.168.1.249:8554/routecam) for the vision pipeline.
+  const ROBOT_CAM_MJPEG = 'http://192.168.1.249:1984/api/stream.mjpeg?src=routecam';
+  function startRobotCam() {
+    const img = document.getElementById('robot-cam');
+    const msg = document.getElementById('robot-cam-msg');
+    const dot = document.getElementById('robot-cam-dot');
+    if (!img) return;
+    if (msg) { msg.style.display = ''; msg.textContent = 'Connecting to camera…'; }
+    if (dot) dot.style.color = '#e0a72e';                 // amber while connecting
+    img.onload = () => { img.style.display = 'block'; if (msg) msg.style.display = 'none'; if (dot) dot.style.color = '#3a7d44'; };
+    img.onerror = () => { img.style.display = 'none'; if (msg) { msg.style.display = ''; msg.textContent = '⚠ camera offline'; } if (dot) dot.style.color = '#c0392b'; };
+    img.src = ROBOT_CAM_MJPEG + '&_=' + Date.now();       // cache-bust so a re-show reconnects
+  }
+  function stopRobotCam() {
+    const img = document.getElementById('robot-cam');
+    if (!img) return;
+    img.onload = img.onerror = null;
+    img.src = '';                                         // drop the MJPEG session
+    img.style.display = 'none';
+    const msg = document.getElementById('robot-cam-msg');
+    if (msg) { msg.style.display = ''; msg.textContent = 'Open this tab to load the stream…'; }
+    const dot = document.getElementById('robot-cam-dot');
+    if (dot) dot.style.color = '#aaa';
+  }
+  window.startRobotCam = startRobotCam; window.stopRobotCam = stopRobotCam;
 
   // ─── Jura tab (read-only view of jura stats) ───────────────────
   let _juraTimer = null;

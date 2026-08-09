@@ -1,0 +1,17 @@
+# Deployed to LXC 111 "robot" at /etc/systemd/system/go2rtc.service
+# Binary /opt/go2rtc/go2rtc (go2rtc_linux_amd64, NOT repo-tracked) + /opt/go2rtc/go2rtc.yaml.
+# Deploy: scp go2rtc.yaml + this unit to the LXC, systemctl daemon-reload && enable --now go2rtc.
+[Unit]
+Description=go2rtc camera stream relay (ROBOT_TONYBOT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/go2rtc/go2rtc -config /opt/go2rtc/go2rtc.yaml
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
