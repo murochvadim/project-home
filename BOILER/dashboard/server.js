@@ -2054,6 +2054,10 @@ async function sshCheck(host, commands) {
 }
 
 async function runHealthChecks() {
+  // Per-node monitoring toggles (dashboard_settings.health.node_monitoring, e.g.
+  // { rp01: false } = paused → probe skipped + dropped from the badge). Default {}.
+  const mon = (await db.query("SELECT value FROM dashboard_settings WHERE key='health.node_monitoring'")
+    .then(r => r.rows[0]?.value).catch(() => null)) || {};
   const [
     pgResult, haResult, pm2Result,
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
@@ -2119,7 +2123,7 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.195', 22),    // LXC 108 — NetBird gateway
     tcpCheck('192.168.1.196', 22),    // LXC 109 — Privacy
     tcpCheck('192.168.1.162', 22),    // LXC 110 — Email
-    tcpCheck('192.168.1.217', 22),    // RP01 — Raspberry Pi (multi-purpose infra node: flashing station, camera, …)
+    (mon.rp01 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.217', 22)),  // RP01 — probe skipped when monitoring is paused (health.node_monitoring)
     tcpCheck('192.168.1.249', 22),    // LXC 111 — Robot (ROBOT_TONYBOT: go2rtc relay + future vision/nav)
     // Link to Windows (Phone Link) health — derived from phonelink_watchdog
     // alerts on LXC 104 (laptop-side: process up + not crash-looping).
@@ -2143,7 +2147,7 @@ async function runHealthChecks() {
   r.lxc108 = { ok: lxc108Result.ok };
   r.lxc109 = { ok: lxc109Result.ok };
   r.lxc110 = { ok: lxc110Result.ok };
-  r.rp01   = { ok: rp01Result.ok };
+  r.rp01   = { ok: rp01Result.ok, monitored: mon.rp01 !== false };
   r.robot  = { ok: robotResult.ok };
   // Server
   r.pm2 = pm2Result;

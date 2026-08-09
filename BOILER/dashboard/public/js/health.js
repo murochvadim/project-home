@@ -167,7 +167,13 @@ function renderStatus(r) {
   document.getElementById('svc-lxc108').innerHTML = dot(r.lxc108?.ok);
   document.getElementById('svc-lxc109').innerHTML = dot(r.lxc109?.ok);
   document.getElementById('svc-lxc110').innerHTML = dot(r.lxc110?.ok);
-  document.getElementById('svc-rp01').innerHTML   = dot(r.rp01?.ok);
+  // RP01 cell + checkbox. Skipped briefly right after a toggle (server status is
+  // cached ~60s) so a fresh toggle isn't reverted by stale data before it recomputes.
+  if (Date.now() >= _rp01Grace) {
+    document.getElementById('svc-rp01').innerHTML = (r.rp01?.monitored === false)
+      ? '<span style="color:#aaa;">⏸ monitoring off</span>' : dot(r.rp01?.ok);
+    const _mcb = document.getElementById('mon-rp01'); if (_mcb) _mcb.checked = (r.rp01?.monitored !== false);
+  }
   document.getElementById('svc-robot').innerHTML  = dot(r.robot?.ok);
 
   const htp = r.ha_to_pg;
@@ -616,6 +622,27 @@ async function protectTable(name, prot) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     await loadRetention();
   } catch (e) { showCleanupResult('✗ Protect failed: ' + escHtml(e.message), true); }
+}
+
+// RP01 monitoring toggle — unchecked pauses its health probe + drops it from the
+// Status badge (dashboard_settings.health.node_monitoring map, merged so other
+// nodes aren't clobbered). On the server, paused RP01 returns ok:null.
+let _rp01Grace = 0;   // suppress renderStatus overriding the RP01 cell until the server recomputes
+async function toggleRp01Monitor(checked) {
+  _rp01Grace = Date.now() + 90000;   // ~90s: covers the server's ≤60s status recompute
+  const cell = document.getElementById('svc-rp01');   // optimistic immediate feedback
+  if (cell) cell.innerHTML = checked ? '<span style="color:#aaa;">…</span>' : '<span style="color:#aaa;">⏸ monitoring off</span>';
+  try {
+    const cur = await fetch('/api/dashboard-settings/health.node_monitoring').then(r => r.json()).catch(() => ({}));
+    const map = (cur && cur.value && typeof cur.value === 'object') ? cur.value : {};
+    map.rp01 = !!checked;
+    await fetch('/api/dashboard-settings/health.node_monitoring', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: map }),
+    });
+    // no loadStatus() here — the cached status is still stale; the grace window lets
+    // the optimistic state hold until the next recompute reconciles it.
+  } catch (e) { _rp01Grace = 0; /* on failure, let the next poll re-sync from the server */ }
 }
 
 function showCleanupResult(msg, isError = false) {
