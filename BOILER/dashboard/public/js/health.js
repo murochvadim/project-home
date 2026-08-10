@@ -177,6 +177,15 @@ function renderStatus(r) {
       ? '<span style="color:#aaa;">⏸ monitoring off</span>' : dot(r.rp01?.ok) + _tStr;
     const _mcb = document.getElementById('mon-rp01'); if (_mcb) _mcb.checked = (r.rp01?.monitored !== false);
   }
+  // RP02 cell + checkbox — same treatment as RP01 (grace guard + Temp render + checkbox sync).
+  if (Date.now() >= _rp02Grace) {
+    const _t2 = r.rp02?.temp_c;
+    const _t2Str = (typeof _t2 === 'number')
+      ? `<span style="margin-left:14px; font-size:0.8rem; color:${_t2 >= 80 ? '#c0392b' : _t2 >= 70 ? '#c08a3a' : '#5a8f3a'};">Temp - ${_t2}°C</span>` : '';
+    document.getElementById('svc-rp02').innerHTML = (r.rp02?.monitored === false)
+      ? '<span style="color:#aaa;">⏸ monitoring off</span>' : dot(r.rp02?.ok) + _t2Str;
+    const _mcb2 = document.getElementById('mon-rp02'); if (_mcb2) _mcb2.checked = (r.rp02?.monitored !== false);
+  }
   document.getElementById('svc-robot').innerHTML  = dot(r.robot?.ok);
   // AdGuard runs on RP01 — if RP01 monitoring is paused, show that instead of a false red.
   { const _agh = document.getElementById('svc-adguard');
@@ -333,7 +342,7 @@ async function loadStatus() {
     renderStatus(r);
     try { localStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(r)); } catch (e) {}
   } catch (e) {
-    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-lxc109','svc-lxc110','svc-rp01','svc-robot','svc-adguard','svc-vm101',
+    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-lxc109','svc-lxc110','svc-rp01','svc-rp02','svc-robot','svc-adguard','svc-vm101',
      'svc-agent','svc-media-agents','svc-voice-agent','svc-phonelink','svc-auto-scan','svc-ha-to-pg','svc-pm2',
      'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs','svc-ups'
     ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });
@@ -650,6 +659,23 @@ async function toggleRp01Monitor(checked) {
     // no loadStatus() here — the cached status is still stale; the grace window lets
     // the optimistic state hold until the next recompute reconciles it.
   } catch (e) { _rp01Grace = 0; /* on failure, let the next poll re-sync from the server */ }
+}
+
+// RP02 monitoring toggle — identical to RP01, keyed on map.rp02 / cell svc-rp02.
+let _rp02Grace = 0;
+async function toggleRp02Monitor(checked) {
+  _rp02Grace = Date.now() + 90000;
+  const cell = document.getElementById('svc-rp02');
+  if (cell) cell.innerHTML = checked ? '<span style="color:#aaa;">…</span>' : '<span style="color:#aaa;">⏸ monitoring off</span>';
+  try {
+    const cur = await fetch('/api/dashboard-settings/health.node_monitoring').then(r => r.json()).catch(() => ({}));
+    const map = (cur && cur.value && typeof cur.value === 'object') ? cur.value : {};
+    map.rp02 = !!checked;
+    await fetch('/api/dashboard-settings/health.node_monitoring', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: map }),
+    });
+  } catch (e) { _rp02Grace = 0; /* on failure, let the next poll re-sync from the server */ }
 }
 
 function showCleanupResult(msg, isError = false) {

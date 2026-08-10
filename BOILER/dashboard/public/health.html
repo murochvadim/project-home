@@ -261,6 +261,12 @@
           <div class="value small" id="svc-rp01">—</div>
         </div>
         <div class="status-item">
+          <label>RP02 — Raspberry Pi
+            <input type="checkbox" id="mon-rp02" onchange="toggleRp02Monitor(this.checked)" title="Monitor this node — uncheck to pause its health check + badge alert (e.g. while it's powered off on purpose)" style="margin-left:6px; vertical-align:middle; cursor:pointer;">
+          </label>
+          <div class="value small" id="svc-rp02">—</div>
+        </div>
+        <div class="status-item">
           <label>LXC 111 — Robot</label>
           <div class="value small" id="svc-robot">—</div>
         </div>
@@ -1053,11 +1059,11 @@ async function deploy() {
   }
 }
 </script>
-<script src="js/alerts-monitor.js?v=12"></script>
+<script src="js/alerts-monitor.js?v=13"></script>
 <script src="js/reminders-badge.js?v=13"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=71"></script>
+<script src="js/health.js?v=72"></script>
 </body>
 </html>

@@ -1,7 +1,9 @@
-# Raspberry Pi Zero 2 W — Tuya Flashing Station
+# RP01 — Raspberry Pi Zero 2 W (flashing station + AdGuard DNS)
 
-A dedicated **Raspberry Pi Zero 2 W** used as a **local flashing station** on the LAN to de‑cloud
-Tuya devices — running open firmware over MQTT into this project instead of the Tuya cloud.
+A dedicated **Raspberry Pi Zero 2 W** (hostname `RP01`, user `rp01_project`, eth0 `192.168.1.217`). Two roles:
+a **local flashing station** to de‑cloud Tuya devices (open firmware over MQTT), and the **AdGuard Home DNS**
+server for the whole LAN. Its sibling **RP02** (the camera/mic node) has its own doc:
+[../RP02/CLAUDE.md](../RP02/CLAUDE.md).
 
 ## Why this exists
 Two flashing jobs need a Linux box with an **AP‑capable Wi‑Fi adapter** (the Windows dashboard laptop
@@ -151,7 +153,7 @@ AGH first (they'd conflict on that one port).
 (~162, TV telemetry) + **Phishing Army Extended** (~156k, phishing/scam) + **URLhaus** (abuse.ch malware) —
 plus **Safe Browsing ON** (`safebrowsing_enabled`, real-time cloud threat lookup, ~0 RAM). AGH's own DHCP is
 OFF. ⚠ RAM is TIGHT (~180 MB free, ~70 MB swap) — the Zero 2 W is a one-heavy-job box; **keep it DNS-only,
-do NOT add camera/audio** (put A/V on RP02/another Pi). Lever if RAM tightens: OISD Big → OISD Small (~40 MB).
+do NOT add camera/audio** (put A/V on **RP02** — [../RP02/CLAUDE.md](../RP02/CLAUDE.md) — or another Pi). Lever if RAM tightens: OISD Big → OISD Small (~40 MB).
 Future headroom items (need RAM): a DoH *server* for the house (encrypted DNS + home filtering on the go via
 NetBird; free cert = self-signed or Let's Encrypt+free domain), a log-based threat-hunter (runs on an LXC, not
 RP01), a link-reputation checker (dashboard).

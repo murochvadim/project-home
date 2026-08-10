@@ -2076,13 +2076,26 @@ async function runHealthChecks() {
       return { temp_c: Number.isFinite(t) ? Math.round(t / 1000) : null };
     } catch { try { ssh.dispose(); } catch {} return { temp_c: null }; }
   };
+  // RP02 CPU temperature — same shape as RP01 (rp02_project user; skipped when RP02
+  // monitoring is paused). Const-arrow so the architecture-guard hook allows it.
+  const rp02TempRead = async () => {
+    if (mon.rp02 === false) return { temp_c: null };
+    const ssh = new NodeSSH();
+    try {
+      await ssh.connect({ host: '192.168.1.232', username: 'rp02_project', privateKeyPath: SSH_KEY, readyTimeout: SSH_TIMEOUT });
+      const out = (await ssh.execCommand('cat /sys/class/thermal/thermal_zone0/temp')).stdout.trim();
+      ssh.dispose();
+      const t = parseInt(out, 10);
+      return { temp_c: Number.isFinite(t) ? Math.round(t / 1000) : null };
+    } catch { try { ssh.dispose(); } catch {} return { temp_c: null }; }
+  };
   const [
     pgResult, haResult, pm2Result,
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result, lxc110Result, rp01Result, robotResult,
-    phonelinkResult, adguardResult, rp01TempResult,
+    phonelinkResult, adguardResult, rp01TempResult, rp02Result, rp02TempResult,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
@@ -2151,6 +2164,8 @@ async function runHealthChecks() {
     // the Pi) so unchecking RP01's Monitor box also drops AdGuard from the badge.
     (mon.rp01 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.217', 8080)),
     rp01TempRead(),
+    (mon.rp02 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.232', 22)),  // RP02 — Raspberry Pi (probe skipped when monitoring paused)
+    rp02TempRead(),
   ]);
 
   const r = {};
@@ -2170,6 +2185,7 @@ async function runHealthChecks() {
   r.lxc109 = { ok: lxc109Result.ok };
   r.lxc110 = { ok: lxc110Result.ok };
   r.rp01   = { ok: rp01Result.ok, monitored: mon.rp01 !== false, temp_c: rp01TempResult.temp_c };
+  r.rp02   = { ok: rp02Result.ok, monitored: mon.rp02 !== false, temp_c: rp02TempResult.temp_c };
   r.robot  = { ok: robotResult.ok };
   r.adguard = { ok: adguardResult.ok };
   // Server
