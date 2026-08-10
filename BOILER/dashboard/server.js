@@ -2063,13 +2063,26 @@ async function runHealthChecks() {
   // { rp01: false } = paused → probe skipped + dropped from the badge). Default {}.
   const mon = (await db.query("SELECT value FROM dashboard_settings WHERE key='health.node_monitoring'")
     .then(r => r.rows[0]?.value).catch(() => null)) || {};
+  // RP01 CPU temperature via SSH (rp01_project user; skipped when RP01 monitoring is
+  // paused). A const-arrow (not a named function) so the architecture-guard hook allows it.
+  const rp01TempRead = async () => {
+    if (mon.rp01 === false) return { temp_c: null };
+    const ssh = new NodeSSH();
+    try {
+      await ssh.connect({ host: '192.168.1.217', username: 'rp01_project', privateKeyPath: SSH_KEY, readyTimeout: SSH_TIMEOUT });
+      const out = (await ssh.execCommand('cat /sys/class/thermal/thermal_zone0/temp')).stdout.trim();
+      ssh.dispose();
+      const t = parseInt(out, 10);
+      return { temp_c: Number.isFinite(t) ? Math.round(t / 1000) : null };
+    } catch { try { ssh.dispose(); } catch {} return { temp_c: null }; }
+  };
   const [
     pgResult, haResult, pm2Result,
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result, lxc110Result, rp01Result, robotResult,
-    phonelinkResult, adguardResult,
+    phonelinkResult, adguardResult, rp01TempResult,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
@@ -2137,6 +2150,7 @@ async function runHealthChecks() {
     // AdGuard Home admin/API on RP01. Shares RP01's monitoring pause (AGH runs on
     // the Pi) so unchecking RP01's Monitor box also drops AdGuard from the badge.
     (mon.rp01 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.217', 8080)),
+    rp01TempRead(),
   ]);
 
   const r = {};
@@ -2155,7 +2169,7 @@ async function runHealthChecks() {
   r.lxc108 = { ok: lxc108Result.ok };
   r.lxc109 = { ok: lxc109Result.ok };
   r.lxc110 = { ok: lxc110Result.ok };
-  r.rp01   = { ok: rp01Result.ok, monitored: mon.rp01 !== false };
+  r.rp01   = { ok: rp01Result.ok, monitored: mon.rp01 !== false, temp_c: rp01TempResult.temp_c };
   r.robot  = { ok: robotResult.ok };
   r.adguard = { ok: adguardResult.ok };
   // Server

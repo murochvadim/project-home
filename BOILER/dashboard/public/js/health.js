@@ -170,8 +170,11 @@ function renderStatus(r) {
   // RP01 cell + checkbox. Skipped briefly right after a toggle (server status is
   // cached ~60s) so a fresh toggle isn't reverted by stale data before it recomputes.
   if (Date.now() >= _rp01Grace) {
+    const _t = r.rp01?.temp_c;
+    const _tStr = (typeof _t === 'number')
+      ? `<span style="margin-left:14px; font-size:0.8rem; color:${_t >= 80 ? '#c0392b' : _t >= 70 ? '#c08a3a' : '#5a8f3a'};">Temp - ${_t}°C</span>` : '';
     document.getElementById('svc-rp01').innerHTML = (r.rp01?.monitored === false)
-      ? '<span style="color:#aaa;">⏸ monitoring off</span>' : dot(r.rp01?.ok);
+      ? '<span style="color:#aaa;">⏸ monitoring off</span>' : dot(r.rp01?.ok) + _tStr;
     const _mcb = document.getElementById('mon-rp01'); if (_mcb) _mcb.checked = (r.rp01?.monitored !== false);
   }
   document.getElementById('svc-robot').innerHTML  = dot(r.robot?.ok);
