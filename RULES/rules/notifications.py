@@ -22,6 +22,7 @@ Conditions (AND-ed gates) — list of {field, op, value}
   people_home >= / <= / == / > / <  <N>
   time_window between "HH:MM-HH:MM"   (wraps past midnight)
   day         is weekday | weekend    (Israel weekend = Fri/Sat)
+  main_door   is open | closed        (current Main Door state)
 
 Delivery
   immediate — fire the moment the trigger+gates pass (throttle_min optional)
@@ -159,6 +160,11 @@ def _passes_gates(conditions, ctx, now_local):
             v = str(val).lower()
             if v == "weekend" and not is_weekend: return False
             if v == "weekday" and is_weekend: return False
+        elif field == "main_door":
+            # ctx["main_door"] is 'open'/'closed'/None (from state.shared['door:Main Door']).
+            # Unknown (None) never equals 'open'/'closed' -> condition not met -> suppressed.
+            if str(ctx.get("main_door")) != str(val):
+                return False
     return True
 
 
@@ -326,6 +332,7 @@ def evaluate(event, state):
 
     shared = state.shared
     ctx = {"people_home": shared.get("people_home"), "home_mode": shared.get("home_mode")}
+    ctx["main_door"] = shared.get("door:Main Door")   # 'open' / 'closed' / None
     now_local = _now_local()
     ctx["time"] = now_local.strftime("%H:%M")
     ctx["date"] = now_local.strftime("%d/%m/%Y")

@@ -57,6 +57,7 @@
       if (c.field === 'people_home') return 'people ' + c.op + ' ' + c.value;
       if (c.field === 'time_window') return 'between ' + c.value;
       if (c.field === 'day') return 'on ' + c.value;
+      if (c.field === 'main_door') return 'main door is ' + c.value;
       return c.field;
     });
     let when = DELIV_LABEL[d.delivery] || d.delivery;
@@ -125,7 +126,8 @@
       <option value="home_mode">home mode</option>
       <option value="people_home">people home</option>
       <option value="time_window">time window</option>
-      <option value="day">day</option></select>`;
+      <option value="day">day</option>
+      <option value="main_door">main door</option></select>`;
     wrap.innerHTML = fieldSel + '<span data-slot="rest" style="display:flex;gap:6px;flex:1;"></span>' +
       '<button onclick="this.parentNode.remove()" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:0.9rem;">✕</button>';
     $('notif-f-conds').appendChild(wrap);
@@ -154,6 +156,11 @@
         <input data-k="op" type="hidden" value="is">
         <select data-k="value"><option value="weekday">weekday</option><option value="weekend">weekend</option></select>`;
       slot.querySelector('[data-k="value"]').value = c.value || 'weekday';
+    } else if (field === 'main_door') {
+      slot.innerHTML = `<span style="align-self:center;font-size:0.8rem;">is</span>
+        <select data-k="op" style="display:none;"><option value="is">is</option></select>
+        <select data-k="value"><option value="open">open</option><option value="closed">closed</option></select>`;
+      slot.querySelector('[data-k="value"]').value = c.value || 'open';
     }
   }
   window.notifCondFieldChanged = function (sel) { renderCondRest(sel.parentNode, {}); };
