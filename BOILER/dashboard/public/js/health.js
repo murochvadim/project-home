@@ -2177,3 +2177,71 @@ async function loadAdguard() {
     });
   }
 }
+
+// "Check Devices" — opens a popup with a health checklist fed by the server-side
+// /api/adguard/impact report (per-device blocked-log analysis + a live
+// check_host of every device-control cloud). All logic on the server; the popup
+// just renders each checked parameter as a green/red row.
+function aghCloseImpact() {
+  const m = document.getElementById('agh-impact-modal');
+  if (m) m.style.display = 'none';
+}
+window.aghCloseImpact = aghCloseImpact;
+
+function _aghRow(icon, label, value, color) {
+  return `<div style="display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid #eee;">`
+    + `<span style="font-size:1.1rem; width:22px; text-align:center;">${icon}</span>`
+    + `<span style="flex:1; color:#333;">${label}</span>`
+    + `<b style="color:${color || '#444'}; white-space:nowrap;">${value}</b></div>`;
+}
+
+async function adguardCheckDevices(btn) {
+  const modal = document.getElementById('agh-impact-modal');
+  const body  = document.getElementById('agh-impact-body');
+  if (modal) modal.style.display = 'flex';
+  if (body)  body.innerHTML = '<div style="color:#888; padding:6px 0;">Checking devices + control clouds…</div>';
+  if (btn) btn.disabled = true;
+  try {
+    const d = await fetch('/api/adguard/impact').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
+    const GREEN = '#5a8f3a', RED = '#c0392b', GREY = '#777';
+    let rows = '';
+
+    // 1 — the headline the user asked for
+    rows += _aghRow(d.devices_losing === 0 ? '✅' : '⛔', 'Devices losing communication',
+      d.devices_losing, d.devices_losing === 0 ? GREEN : RED);
+    if (d.devices_losing > 0) rows += `<div style="font-size:0.8rem; color:${RED}; padding:0 0 8px 34px;">`
+      + (d.devices_losing_list || []).map(x => `<div><b>${_aghEsc(x.device)}</b>: ${(x.domains || []).map(_aghEsc).join(', ')}</div>`).join('')
+      + `<div style="color:#999; margin-top:2px;">These are custom rules you added — whitelist in AdGuard → Filters if one is a device’s cloud.</div></div>`;
+
+    // 2 — device control clouds reachable (live check_host)
+    const cloudsOk = d.control_blocked === 0;
+    rows += _aghRow(cloudsOk ? '✅' : '⛔', 'Device control clouds reachable',
+      `${d.control_tested - d.control_blocked}/${d.control_tested}`, cloudsOk ? GREEN : RED);
+    if (!cloudsOk) rows += `<div style="font-size:0.8rem; color:${RED}; padding:0 0 8px 34px;">Blocked: ${(d.control_blocked_list || []).map(_aghEsc).join(', ')}</div>`;
+
+    // 3 — protection on
+    rows += _aghRow(d.protection ? '✅' : '⛔', 'AdGuard protection', d.protection ? 'ON' : 'OFF', d.protection ? GREEN : RED);
+
+    // 4 — security saves (informative)
+    rows += _aghRow('🛡️', 'Phishing / malware blocked', d.security_blocks, d.security_blocks ? '#b06a2a' : GREY);
+    if (d.security_blocks > 0) rows += `<div style="font-size:0.8rem; color:#b06a2a; padding:0 0 8px 34px;">`
+      + (d.security_list || []).map(s => `<div><b>${_aghEsc(s.device)}</b> → ${_aghEsc(s.domain)}</div>`).join('') + `</div>`;
+
+    // 5-6 — context
+    rows += _aghRow('📡', 'Devices monitored', d.monitored, GREY);
+    rows += _aghRow('🚫', 'Blocked (24 h)', `${(d.blocked_24h || 0).toLocaleString()} (${d.block_pct}%)`, GREY);
+
+    const allGood = d.devices_losing === 0 && cloudsOk && d.protection;
+    const banner = allGood
+      ? `<div style="background:#eaf5e1; color:${GREEN}; border:1px solid #cfe6bd; border-radius:6px; padding:9px 11px; margin-bottom:10px; font-weight:600;">✅ All good — no device loses communication.</div>`
+      : `<div style="background:#fdecea; color:${RED}; border:1px solid #f5c6c0; border-radius:6px; padding:9px 11px; margin-bottom:10px; font-weight:600;">⚠ Review the flagged item(s) below.</div>`;
+    body.innerHTML = banner + rows
+      + `<div style="text-align:right; margin-top:14px;"><button class="tab-btn" onclick="aghCloseImpact()" style="cursor:pointer;">OK</button></div>`;
+  } catch (e) {
+    if (body) body.innerHTML = `<div style="color:#c0392b;">Check failed: ${_aghEsc(e.message)} — is RP01 up?</div>`
+      + `<div style="text-align:right; margin-top:12px;"><button class="tab-btn" onclick="aghCloseImpact()" style="cursor:pointer;">Close</button></div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+window.adguardCheckDevices = adguardCheckDevices;

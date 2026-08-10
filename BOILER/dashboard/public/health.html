@@ -872,8 +872,10 @@
       <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <h2 style="margin:0;">🛡️ AdGuard — DNS Egress Monitor</h2>
         <span id="agh-health" style="font-size:0.85rem; color:#888;">Loading…</span>
+        <button class="tab-btn" onclick="adguardCheckDevices(this)" style="margin-left:auto; cursor:pointer; color:#2c7fb8; border-color:#2c7fb8; background:#fff;"
+           title="Run a health check: are any devices losing communication, are control clouds reachable, etc.">🩺&nbsp;Check&nbsp;Devices</button>
         <a class="tab-btn" href="http://192.168.1.217:8080" target="_blank" rel="noopener"
-           style="margin-left:auto; display:inline-block; vertical-align:middle; line-height:normal; text-decoration:none; color:#2c7fb8; border-color:#2c7fb8;"
+           style="display:inline-block; vertical-align:middle; line-height:normal; text-decoration:none; color:#2c7fb8; border-color:#2c7fb8;"
            title="Open the full AdGuard Home admin (runs on RP01)">AdGuard&nbsp;admin&nbsp;↗</a>
       </div>
       <div style="font-size:0.78rem; color:#999; margin-top:6px;">
@@ -929,6 +931,17 @@
     </div>
 
   </div><!-- /tab-adguard -->
+
+  <!-- Device Impact Check — popup -->
+  <div id="agh-impact-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:9999; align-items:center; justify-content:center;" onclick="if(event.target===this)aghCloseImpact()">
+    <div style="background:#fff; border-radius:10px; max-width:540px; width:92%; max-height:86vh; overflow:auto; box-shadow:0 12px 44px rgba(0,0,0,0.35);">
+      <div style="background:#5b3a8e; color:#fff; padding:12px 16px; border-radius:10px 10px 0 0; display:flex; align-items:center; justify-content:space-between;">
+        <b style="font-size:1rem;">🩺 Device Impact Check</b>
+        <span style="cursor:pointer; font-size:1.15rem; line-height:1;" onclick="aghCloseImpact()" title="Close">✕</span>
+      </div>
+      <div id="agh-impact-body" style="padding:14px 18px;">Checking…</div>
+    </div>
+  </div>
 
 </main>
 
@@ -1045,6 +1058,6 @@ async function deploy() {
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=66"></script>
+<script src="js/health.js?v=68"></script>
 </body>
 </html>

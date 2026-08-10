@@ -142,10 +142,19 @@ log, 24h stats) + an **`svc-adguard` System-tab cell + sidebar badge** (shares R
 **What's installed (on RP01):** `/opt/AdGuardHome` + systemd `AdGuardHome` (enabled, survives reboot).
 **DNS on `0.0.0.0:53`**, **admin UI on `:8080`** (`http://192.168.1.217:8080`, user `admin` — password in
 the dashboard `.env` `ADGUARD_PASS`, also in the AGH config). Upstream = **encrypted DoH (Quad9
-`dns10.quad9.net`)**; filtering ON = **AdGuard DNS filter (~154k rules)**; **query log + statistics both 90
-days**; client IPs **not anonymized** (LAN-only → per-device attribution). Configured headlessly via the
-install API (`POST /control/install/configure`), not the web wizard. ⚠ binds `0.0.0.0:53` incl. `wlan0` — if
-a future flashing-AP session needs `wlan0:53`, stop AGH first (they'd conflict on that one port).
+`dns10.quad9.net`)**; **query log + statistics both 90 days**; client IPs **not anonymized** (LAN-only →
+per-device attribution). Configured headlessly via the install API (`POST /control/install/configure`), not
+the web wizard. ⚠ binds `0.0.0.0:53` incl. `wlan0` — if a future flashing-AP session needs `wlan0:53`, stop
+AGH first (they'd conflict on that one port).
+**Protection stack (managed in the AGH admin, NOT repo — ~562k rules total, added 2026-08-10):** 5 blocklists —
+**AdGuard DNS filter** (~154k, ads/trackers) + **OISD Big** (~252k, ads/trackers) + **Perflyst SmartTV**
+(~162, TV telemetry) + **Phishing Army Extended** (~156k, phishing/scam) + **URLhaus** (abuse.ch malware) —
+plus **Safe Browsing ON** (`safebrowsing_enabled`, real-time cloud threat lookup, ~0 RAM). AGH's own DHCP is
+OFF. ⚠ RAM is TIGHT (~180 MB free, ~70 MB swap) — the Zero 2 W is a one-heavy-job box; **keep it DNS-only,
+do NOT add camera/audio** (put A/V on RP02/another Pi). Lever if RAM tightens: OISD Big → OISD Small (~40 MB).
+Future headroom items (need RAM): a DoH *server* for the house (encrypted DNS + home filtering on the go via
+NetBird; free cert = self-signed or Let's Encrypt+free domain), a log-based threat-hunter (runs on an LXC, not
+RP01), a link-reputation checker (dashboard).
 
 **Dashboard wiring (laptop):** `BOILER/dashboard/routes-adguard.js` (own module, one `require('./routes-adguard')(app)`
 line — proxies AGH's API with Basic-auth from `ADGUARD_URL/USER/PASS` env, past the architecture guard) →
