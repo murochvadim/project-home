@@ -8,20 +8,22 @@ SSH-key managed, on Project Health, backed up.
 
 ## Identity / access
 - **hostname `RP02`**, user **`rp02_project`**.
-- **Ethernet-only, `192.168.1.232`** (`eth0`; MAC `50:91:e3:c4:7c:68`) via a **Waveshare ETH/USB HUB HAT**
+- **Ethernet `192.168.1.232` (primary / management path)** (`eth0`; MAC `50:91:e3:c4:7c:68`) via a **Waveshare
+  ETH/USB HUB HAT** — plus **WiFi `192.168.1.233`** (`wlan0`, currently ON; both coexist via the ARP-flux fix below).
   (USB → RTL8153 Ethernet). ⚠ **reserve `.232`** in the router DHCP (like RP01's `.217`).
 - **Key-managed** (was password-only, `sshpass -p '13_aRp_77_Ud'` via LXC 104): the laptop's
   `~/.ssh/id_ed25519` (claude-code) **and** LXC-104's `root@Servers` key are in `rp02_project`'s
   `authorized_keys`. Reach it: `ssh -i ~/.ssh/id_ed25519 rp02_project@192.168.1.232` (or via LXC 104).
 
-## ⚠ WiFi DISABLED (Ethernet-only) — ARP-flux fix
-RP02 was dual-homed: `eth0` `.232` + `wlan0` `.233` **on the same `192.168.1.0/24`**. Linux's default ARP
-behaviour let either interface answer for either IP → the ARP scanner filed **both MACs under one IP** and the
-dashboard device list flip-flopped .232/.233. Fixed 2026-08-10:
-- **WiFi off:** `nmcli radio wifi off` (persisted; `wlan0` DOWN, `.233` released).
-- **ARP-flux guard (persisted):** `/etc/sysctl.d/99-arp-flux.conf` = `net.ipv4.conf.all.arp_ignore=1` +
-  `arp_announce=2` (each interface answers only for its own IP) — so WiFi *could* be re-enabled cleanly
-  (`sudo nmcli radio wifi on`) without the flux, but for a wired node keep it off.
+## WiFi + Ethernet both active — ARP-flux fix
+RP02 is **dual-homed**: `eth0` `.232` **and** `wlan0` `.233` **on the same `192.168.1.0/24`**. Linux's default
+ARP behaviour let either interface answer for either IP → the ARP scanner filed **both MACs under one IP** and
+the dashboard device list flip-flopped .232/.233. **Fixed 2026-08-10 with a persisted ARP guard** so both
+coexist cleanly: `/etc/sysctl.d/99-arp-flux.conf` = `net.ipv4.conf.all.arp_ignore=1` + `arp_announce=2` (each
+interface answers only for its own IP). WiFi was briefly turned **off** during debugging (`nmcli radio wifi
+off`) then **re-enabled** per user request (`nmcli radio wifi on`), so **WiFi is currently ON**. **Ethernet
+`.232` is the management path** (`svc-rp02` probes it, temp reads over it). To make it wired-only later:
+`sudo nmcli radio wifi off` (the ARP guard makes either choice clean).
 
 ## Hardware — the ETH/USB HUB HAT
 Waveshare **ETH/USB HUB HAT** stacks on the Pi Zero's **40-pin header** (power + mount) **+ a USB bridge**
