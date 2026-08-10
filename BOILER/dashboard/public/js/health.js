@@ -175,6 +175,10 @@ function renderStatus(r) {
     const _mcb = document.getElementById('mon-rp01'); if (_mcb) _mcb.checked = (r.rp01?.monitored !== false);
   }
   document.getElementById('svc-robot').innerHTML  = dot(r.robot?.ok);
+  // AdGuard runs on RP01 — if RP01 monitoring is paused, show that instead of a false red.
+  { const _agh = document.getElementById('svc-adguard');
+    if (_agh) _agh.innerHTML = (r.rp01?.monitored === false)
+      ? '<span style="color:#aaa;">⏸ (RP01 paused)</span>' : dot(r.adguard?.ok); }
 
   const htp = r.ha_to_pg;
   if (htp) {
@@ -326,7 +330,7 @@ async function loadStatus() {
     renderStatus(r);
     try { localStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(r)); } catch (e) {}
   } catch (e) {
-    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-lxc109','svc-lxc110','svc-rp01','svc-robot','svc-vm101',
+    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-lxc109','svc-lxc110','svc-rp01','svc-robot','svc-adguard','svc-vm101',
      'svc-agent','svc-media-agents','svc-voice-agent','svc-phonelink','svc-auto-scan','svc-ha-to-pg','svc-pm2',
      'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs','svc-ups'
     ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });
@@ -2065,3 +2069,111 @@ function upsTriggerDryRun(btn) {
   upsRunTest('dryrun', btn);
 }
 window.upsTriggerDryRun = upsTriggerDryRun;
+
+// ============================================================
+// AdGuard tab — read-only view of AdGuard Home running on RP01.
+// Data comes via the routes-adguard.js proxy (/api/adguard/*).
+// ALL the DNS logic + logging lives on the Pi; this only displays it.
+// ============================================================
+let _aghTimer = null;
+
+function adguardOnTabShow() {
+  loadAdguard();
+  if (_aghTimer) clearInterval(_aghTimer);
+  _aghTimer = setInterval(() => {
+    if (!document.getElementById('tab-adguard')?.classList.contains('active')) return;
+    if (document.hidden) return;
+    loadAdguard();
+  }, 10000);
+}
+window.adguardOnTabShow = adguardOnTabShow;
+
+function _aghEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+}
+
+function _aghClientNames(clients) {
+  // ip/id -> friendly name, from persistent clients + auto (ARP/rDNS) clients.
+  const map = {};
+  (clients?.auto_clients || []).forEach(c => { if (c.ip && c.name) map[c.ip] = c.name; });
+  (clients?.clients || []).forEach(c => (c.ids || []).forEach(id => { if (c.name) map[id] = c.name; }));
+  return map;
+}
+
+async function loadAdguard() {
+  const health = document.getElementById('agh-health');
+  try {
+    const [summary, qlog] = await Promise.all([
+      fetch('/api/adguard/summary').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))),
+      fetch('/api/adguard/querylog?limit=400').then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] })),
+    ]);
+    const st = summary.status || {}, stats = summary.stats || {};
+    const names = _aghClientNames(summary.clients);
+
+    const prot = st.protection_enabled;
+    health.innerHTML =
+      `<b style="color:${prot ? '#5a8f3a' : '#b55e5e'};">${prot ? '● protection ON' : '● protection OFF'}</b>` +
+      ` · v${_aghEsc(st.version || '?')} · DNS :${st.dns_port || 53}`;
+
+    // Overview tiles (24 h)
+    const q = stats.num_dns_queries || 0;
+    const b = stats.num_blocked_filtering || 0;
+    const pct = q ? (100 * b / q) : 0;
+    const avgMs = stats.avg_processing_time != null ? (stats.avg_processing_time * 1000) : null;
+    const nClients = (stats.top_clients || []).length;
+    const tile = (label, val, color) =>
+      `<div style="min-width:110px;"><div style="font-size:1.5rem; font-weight:600; color:${color||'#444'};">${val}</div>` +
+      `<div style="font-size:0.72rem; color:#888; text-transform:uppercase; letter-spacing:.03em;">${label}</div></div>`;
+    document.getElementById('agh-overview').innerHTML =
+      tile('DNS queries', q.toLocaleString()) +
+      tile('Blocked', b.toLocaleString(), '#b55e5e') +
+      tile('Block %', pct.toFixed(1) + '%', '#b55e5e') +
+      tile('Avg resp', avgMs == null ? '—' : avgMs.toFixed(1) + ' ms') +
+      tile('Active devices', nClients);
+
+    // Per-device egress — aggregate the recent query log by client.
+    const agg = {};
+    (qlog.data || []).forEach(e => {
+      const cip = e.client || '?';
+      const dom = e.question?.name || '';
+      const blocked = /^Filtered/.test(e.reason || '');
+      const a = agg[cip] || (agg[cip] = { count: 0, blocked: 0, domains: {} });
+      a.count++; if (blocked) a.blocked++;
+      if (dom) a.domains[dom] = (a.domains[dom] || 0) + 1;
+    });
+    const devRows = Object.entries(agg).sort((x, y) => y[1].count - x[1].count).slice(0, 30).map(([ip, a]) => {
+      const label = names[ip] ? `${_aghEsc(names[ip])} <span style="color:#aaa;">${_aghEsc(ip)}</span>` : _aghEsc(ip);
+      const top = Object.entries(a.domains).sort((m, n) => n[1] - m[1]).slice(0, 4).map(d => _aghEsc(d[0])).join(', ');
+      return `<tr><td>${label}</td><td>${a.count}</td><td style="color:${a.blocked ? '#b55e5e' : '#888'};">${a.blocked}</td><td style="font-size:0.8rem; color:#666;">${top}</td></tr>`;
+    });
+    document.getElementById('agh-devices').innerHTML = devRows.length ? devRows.join('') :
+      '<tr><td colspan="4" style="color:#aaa;">No queries yet — point a device’s DNS at 192.168.1.217 to populate this.</td></tr>';
+
+    // Top domains
+    const domRows = (arr) => ((arr || []).slice(0, 12).map(o => {
+      const [d, c] = Object.entries(o)[0] || ['', 0];
+      return `<tr><td style="font-size:0.82rem;">${_aghEsc(d)}</td><td>${c}</td></tr>`;
+    }).join('') || '<tr><td colspan="2" style="color:#aaa;">—</td></tr>');
+    document.getElementById('agh-top-blocked').innerHTML = domRows(stats.top_blocked_domains);
+    document.getElementById('agh-top-queried').innerHTML = domRows(stats.top_queried_domains);
+
+    // Recent lookups
+    const logRows = (qlog.data || []).slice(0, 40).map(e => {
+      const t = e.time ? new Date(e.time).toLocaleTimeString('en-GB', { hour12: false }) : '';
+      const cip = e.client || '';
+      const cname = names[cip] || cip;
+      const dom = e.question?.name || '';
+      const blocked = /^Filtered/.test(e.reason || '');
+      const res = blocked ? '<span style="color:#b55e5e;">blocked</span>' : '<span style="color:#5a8f3a;">allowed</span>';
+      return `<tr><td style="color:#888; font-size:0.78rem;">${t}</td><td style="font-size:0.8rem;">${_aghEsc(cname)}</td><td style="font-size:0.8rem;">${_aghEsc(dom)}</td><td>${res}</td></tr>`;
+    }).join('');
+    document.getElementById('agh-log').innerHTML = logRows || '<tr><td colspan="4" style="color:#aaa;">No lookups yet.</td></tr>';
+
+  } catch (e) {
+    if (health) health.innerHTML = `<span style="color:#b55e5e;">⚠ AdGuard unavailable — ${_aghEsc(e.message)} (is RP01 up?)</span>`;
+    const ov = document.getElementById('agh-overview'); if (ov) ov.innerHTML = '<span style="color:#aaa;">unavailable</span>';
+    [['agh-devices',4],['agh-top-blocked',2],['agh-top-queried',2],['agh-log',4]].forEach(([id, cols]) => {
+      const el = document.getElementById(id); if (el) el.innerHTML = `<tr><td colspan="${cols}" style="color:#aaa;">unavailable</td></tr>`;
+    });
+  }
+}

@@ -77,6 +77,7 @@
         r.lxc105?.ok,
         r.lxc106?.ok,
         r.rp01?.ok,   // RP01 — Raspberry Pi (multi-purpose infra node)
+        r.adguard?.ok,   // AdGuard Home on RP01 (shares RP01's pause -> null when paused)
         // Server
         r.pm2?.ok,
         // Scripts (data freshness — DB queries)

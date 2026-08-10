@@ -138,6 +138,11 @@ require('./routes-robotcam')(app);
 // single-alert dismiss. Buttons on Project Health -> System Alerts.
 require('./routes-phonelink')(app, db);
 
+// AdGuard Home proxy — GET /api/adguard/* for the Project Health -> AdGuard tab.
+// Read-only passthrough to AGH's API on RP01 (192.168.1.217:8080); all DNS logic
+// lives on the Pi. Own module for the same architecture-guard reason as above.
+require('./routes-adguard')(app);
+
 // Travel map — visited_places CRUD (Privacy > Places tab).
 require('./routes-places')(app, db);
 require('./routes-people')(app, db);
@@ -2064,7 +2069,7 @@ async function runHealthChecks() {
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result, lxc110Result, rp01Result, robotResult,
-    phonelinkResult,
+    phonelinkResult, adguardResult,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
@@ -2129,6 +2134,9 @@ async function runHealthChecks() {
     // alerts on LXC 104 (laptop-side: process up + not crash-looping).
     db.query("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND alert_type LIKE 'phonelink:%'")
       .then(r => ({ ok: parseInt(r.rows[0]?.n) === 0 })).catch(() => ({ ok: null })),
+    // AdGuard Home admin/API on RP01. Shares RP01's monitoring pause (AGH runs on
+    // the Pi) so unchecking RP01's Monitor box also drops AdGuard from the badge.
+    (mon.rp01 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.217', 8080)),
   ]);
 
   const r = {};
@@ -2149,6 +2157,7 @@ async function runHealthChecks() {
   r.lxc110 = { ok: lxc110Result.ok };
   r.rp01   = { ok: rp01Result.ok, monitored: mon.rp01 !== false };
   r.robot  = { ok: robotResult.ok };
+  r.adguard = { ok: adguardResult.ok };
   // Server
   r.pm2 = pm2Result;
   // Services — boiler_agent status from orchestrator's system_alerts

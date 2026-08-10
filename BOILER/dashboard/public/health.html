@@ -72,6 +72,7 @@
        style="display:inline-block;vertical-align:middle;line-height:normal;text-decoration:none;color:#2c7fb8;border-color:#2c7fb8;"
        title="Open the QNAP admin (192.168.1.155) in a new browser tab">QNAP&nbsp;↗</a>
     <button class="tab-btn" onclick="showHealthTab('ups', this)">UPS</button>
+    <button class="tab-btn" onclick="showHealthTab('adguard', this)">AdGuard</button>
     <button class="tab-btn" onclick="showHealthTab('settings', this)">Settings</button>
   </div>
 
@@ -262,6 +263,10 @@
         <div class="status-item">
           <label>LXC 111 — Robot</label>
           <div class="value small" id="svc-robot">—</div>
+        </div>
+        <div class="status-item">
+          <label>AdGuard (RP01 DNS)</label>
+          <div class="value small" id="svc-adguard" style="cursor:pointer;" onclick="document.querySelectorAll('.tab-bar .tab-btn').forEach(b => { if (b.textContent.trim() === 'AdGuard') b.click(); })" title="Click to open the AdGuard tab">—</div>
         </div>
       </div>
 
@@ -857,6 +862,74 @@
     <div id="rst-result" style="display:none; margin-top:4px; padding:10px 12px; border-radius:6px; font-size:0.84rem;"></div>
   </div><!-- /tab-restore -->
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB: AdGuard (DNS egress monitor — logic lives on RP01)     -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-adguard">
+
+    <!-- Header / health -->
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <h2 style="margin:0;">🛡️ AdGuard — DNS Egress Monitor</h2>
+        <span id="agh-health" style="font-size:0.85rem; color:#888;">Loading…</span>
+        <a class="tab-btn" href="http://192.168.1.217:8080" target="_blank" rel="noopener"
+           style="margin-left:auto; display:inline-block; vertical-align:middle; line-height:normal; text-decoration:none; color:#2c7fb8; border-color:#2c7fb8;"
+           title="Open the full AdGuard Home admin (runs on RP01)">AdGuard&nbsp;admin&nbsp;↗</a>
+      </div>
+      <div style="font-size:0.78rem; color:#999; margin-top:6px;">
+        All DNS logic + logging runs on <b>RP01</b> (192.168.1.217); this tab is a read-only view of AdGuard's own data.
+      </div>
+    </div>
+
+    <!-- Traffic overview (24 h) -->
+    <div class="card">
+      <h2>Traffic — last 24 h</h2>
+      <div id="agh-overview" style="display:flex; flex-wrap:wrap; gap:18px;">
+        <span style="color:#aaa;">Loading…</span>
+      </div>
+    </div>
+
+    <!-- Per-device egress (aggregated client-side from the query log) -->
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <h2 style="margin:0;">Per-device egress</h2>
+        <span style="font-size:0.78rem; color:#888;">from the recent query log — what each device looked up (and what got blocked)</span>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Device</th><th style="width:80px;">Lookups</th><th style="width:80px;">Blocked</th><th>Top domains reached</th></tr></thead>
+        <tbody id="agh-devices"><tr><td colspan="4" style="color:#aaa;">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Top domains -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px;">
+      <div class="card">
+        <h2>Top blocked domains (24 h)</h2>
+        <table class="data-table">
+          <thead><tr><th>Domain</th><th style="width:80px;">Count</th></tr></thead>
+          <tbody id="agh-top-blocked"><tr><td colspan="2" style="color:#aaa;">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Top queried domains (24 h)</h2>
+        <table class="data-table">
+          <thead><tr><th>Domain</th><th style="width:80px;">Count</th></tr></thead>
+          <tbody id="agh-top-queried"><tr><td colspan="2" style="color:#aaa;">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Recent lookups -->
+    <div class="card">
+      <h2>Recent lookups</h2>
+      <table class="data-table">
+        <thead><tr><th style="width:70px;">Time</th><th>Device</th><th>Domain</th><th style="width:90px;">Result</th></tr></thead>
+        <tbody id="agh-log"><tr><td colspan="4" style="color:#aaa;">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+  </div><!-- /tab-adguard -->
+
 </main>
 
 <script>
@@ -927,6 +1000,8 @@ function showHealthTab(name, btn) {
     window._settingsTabLoaded = true;
     loadDeployAgents();
   }
+  // AdGuard tab: load on show + poll while visible (defined in health.js)
+  if (name === 'adguard' && typeof adguardOnTabShow === 'function') adguardOnTabShow();
 }
 
 async function loadDeployAgents() {
@@ -970,6 +1045,6 @@ async function deploy() {
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=65"></script>
+<script src="js/health.js?v=66"></script>
 </body>
 </html>

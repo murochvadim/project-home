@@ -130,37 +130,48 @@ The Pi can drive a **GoPro HERO3+ Black Edition** as a project camera. What was 
   `goprohero`). ⚠ NOT readable over the USB/`E:` file connection. Next step is a quick Wi-Fi control test once the
   SSID+password are supplied.
 
-## AdGuard Home — IoT egress DNS sinkhole (DECIDED, not built — 2026-08-08)
-The Pi's next purpose: run **AdGuard Home** (self-hosted network-wide DNS server, single lightweight ARM
-binary ~40–60 MB — fine on 424 MB) as the **first layer for blocking Chinese IoT devices from phoning home**,
-the natural complement to [[project_tuya_local_phase1]] (local control **+** blocked cloud). Point the whole
-LAN's DNS at it → it sinkholes Tuya/vendor-cloud domains for **every** device (Wi-Fi or wired) with no
-per-device setup, and its **query log shows exactly what each device tries to reach**. Chosen over Pi-hole
-(single binary + built-in encrypted upstream + cleaner UI, lighter on the Zero 2 W) and over NextDNS (no
-cloud dependency / no query-privacy tradeoff).
+## AdGuard Home — IoT egress DNS monitor + sinkhole (✅ BUILT on RP01 2026-08-10)
+Runs **AdGuard Home v0.107.78** (single ARM binary, ~40–60 MB — fine on 424 MB) on the Pi as the
+network-wide DNS server: the **first layer for seeing + blocking Chinese IoT phone-home**, the natural
+complement to [[project_tuya_local_phase1]] (local control **+** blocked cloud). Every device (Wi-Fi or
+wired) that uses the Pi for DNS shows in the query log with exactly which domains it reaches, and Tuya/
+vendor-cloud domains get sinkholed. Chosen over Pi-hole (lighter single binary + built-in DoH) / NextDNS
+(no cloud dep). Surface = a **Project Health → AdGuard tab** (per-device egress, top blocked/queried, query
+log, 24h stats) + an **`svc-adguard` System-tab cell + sidebar badge** (shares RP01's Monitor-checkbox pause).
 
-**⚠ Network facts that shaped this (verified live 2026-08-08 — don't re-derive):**
-- **Gateway / real router = Technicolor ISP box at `192.168.1.1`** (MAC `20:b0:01:cf:68:68`). The only true
-  internet-egress point — but an ISP router, so likely **no per-device egress firewall**.
-- **The "Aruba" = Aruba Instant On 1960 24G (JL806A, InstantOn fw 2.6.0.0), `192.168.1.215`** — a
-  **smart-managed SWITCH, NOT the gateway**. It *can* do VLANs + ACLs on **wired** ports, but (a) it's not the
-  egress point and (b) the Chinese IoT is almost all **Wi-Fi** (Tuya/Espressif on the Deco), so that traffic
-  **never traverses the Aruba** → a switch ACL can't even see it. **The Aruba is the wrong enforcement point.**
-- So DNS-layer (AGH) is the right first move; Wi-Fi-client blocks on the **TP-Link Deco** are the manual
-  hammer for stragglers.
+**What's installed (on RP01):** `/opt/AdGuardHome` + systemd `AdGuardHome` (enabled, survives reboot).
+**DNS on `0.0.0.0:53`**, **admin UI on `:8080`** (`http://192.168.1.217:8080`, user `admin` — password in
+the dashboard `.env` `ADGUARD_PASS`, also in the AGH config). Upstream = **encrypted DoH (Quad9
+`dns10.quad9.net`)**; filtering ON = **AdGuard DNS filter (~154k rules)**; **query log + statistics both 90
+days**; client IPs **not anonymized** (LAN-only → per-device attribution). Configured headlessly via the
+install API (`POST /control/install/configure`), not the web wizard. ⚠ binds `0.0.0.0:53` incl. `wlan0` — if
+a future flashing-AP session needs `wlan0:53`, stop AGH first (they'd conflict on that one port).
 
-**Known limitation (honest):** a device that hardcodes its own DNS (8.8.8.8), uses DoH, or dials a raw IP
-walks past AGH. To catch *those* you need enforcement on actual traffic, which the Technicolor can't do
-per-device → the clean escalation is a **Firewalla** appliance (per-device egress incl. raw-IP, no rewire),
-**not** OPNsense/replacing the gateway. Sequence: AGH first → read the query log → escalate only if devices
-bypass DNS.
+**Dashboard wiring (laptop):** `BOILER/dashboard/routes-adguard.js` (own module, one `require('./routes-adguard')(app)`
+line — proxies AGH's API with Basic-auth from `ADGUARD_URL/USER/PASS` env, past the architecture guard) →
+`GET /api/adguard/summary` + `/querylog`. Tab + `svc-adguard` cell in `public/health.html` + `js/health.js`
+(`adguardOnTabShow()`); badge in `alerts-monitor.js`. **All DNS logic lives on the Pi; the dashboard only
+displays it** (Pi down → tab shows "unavailable", cell red).
 
-**Deploy sketch (when built):** AGH on the Pi (`eth0` 192.168.1.217:53) → set as the LAN DNS via the
-Technicolor DHCP (or push via the Deco) → block-lists for Tuya/Chinese-cloud domains, allow the local-control
-paths. ⚠ **Shares the Pi with the future flashing-AP role** — sequence the two (AGH is always-on and network-
-critical; a flash session takes `wlan0`, not `eth0`/DNS, so they can coexist, but confirm before a flash).
-⚠ **A DNS server that dies takes the LAN's internet with it** — that's exactly why it lives on the always-on
-Pi, not the Wi-Fi laptop. See [[project_agent_raspberry_pi]].
+**⚠ TOPOLOGY CORRECTION (live Aruba SNMP FDB re-check 2026-08-10 — the 2026-08-08 assumption was WRONG):**
+the **Aruba Instant On 1960 SWITCH `192.168.1.215` IS in the path of ALL traffic.** FDB walk (community
+`public`): **Technicolor gateway on Aruba port 1/1**, and **all 6 TP-Link Deco units are WIRED into the Aruba**
+(ports 1/13/1/14/1/15/1/17 = Ethernet backhaul, NOT wireless). So every device — incl. Wi-Fi IoT — egresses
+`device → Deco AP → Aruba → uplink 1/1 → Technicolor → internet` (switch has learned 144 MACs). The old
+"Wi-Fi IoT never traverses the switch" claim is retracted. The Aruba still can't DPI/log-domains/block-per-device
+itself (Instant On) — it can only mirror/count/ACL.
+
+**Honest blind spot (Wi-Fi + wired alike):** a device that hardcodes DNS (8.8.8.8) / uses DoH / dials a raw IP
+walks past AGH. **Corrected escalation (cheaper than a Firewalla):** because all traffic crosses Aruba **port
+1/1**, a **SPAN mirror of 1/1 → a sniffer box** (Zeek/ntopng on a spare LXC) catches even the bypassers at the
+packet level, **using existing hardware**. A **Firewalla** is only needed for *inline per-device BLOCKING* of
+raw-IP egress. Order: AGH (name+block) → Aruba mirror→sniffer (deep watch) → Firewalla (inline block, last).
+
+**Phase 2 — LAN cutover (user action, NOT yet done):** point the LAN's DNS at `192.168.1.217` via the
+Technicolor DHCP (or the Deco app). Recommend **AGH primary + a fallback DNS** (Technicolor self / `1.1.1.1`)
+so a Pi outage doesn't kill LAN name resolution. Test one device first, then whole-LAN.
+⚠ **A DNS server that dies takes the LAN's internet with it** — why it lives on the always-on Pi. Shares the
+Pi with the future flashing-AP role (`wlan0`); confirm before a flash. See [[project_agent_raspberry_pi]].
 
 ## OS upgrade + ⚠ chromium kernel-deadlock (2026-08-08)
 Ran the first `apt full-upgrade` (image was the June build, never upgraded — 155 pending). **Now fully up to
