@@ -117,7 +117,7 @@ check_mains_or_abort "post-WoL"
 
 # ---- 2. Start QNAP-independent guests ----
 echo "[2/4] starting QNAP-independent guests in parallel"
-for pair in "102:Postgres" "107:MQTT" "103:Agents" "105:MainAgent" "106:Voice" "108:NetBird" "109:Privacy" "110:Email"; do
+for pair in "102:Postgres" "107:MQTT" "103:Agents" "105:MainAgent" "106:Voice" "108:NetBird" "109:Privacy" "110:Email" "111:Robot"; do
   VMID="${pair%%:*}"; NAME="${pair##*:}"
   if should_act "$VMID"; then
     pct_start_if_stopped "$VMID" "$NAME"

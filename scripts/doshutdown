@@ -5,7 +5,7 @@
 # rolled back when Postgres or MQTT die while clients are still mid-write:
 #
 #   [1] QNAP halt (CGI) — issued first, has its own boot-down sequence
-#   [2] Phase A — clients sequential, 60 s each: 100, 101, 103, 104, 105, 106, 108, 109, 110
+#   [2] Phase A — clients sequential, 60 s each: 100, 101, 103, 104, 105, 106, 108, 109, 110, 111
 #       things that write to Postgres / MQTT must finish before services die
 #   [3] Phase B — services sequential, 30 s each: 102 (Postgres), 107 (MQTT)
 #       safe to halt now — nobody is writing
@@ -32,7 +32,7 @@ set +e
 # Phase classification — see UPS/CLAUDE.md "Phased shutdown"
 # Format: "<id>:<type>" so we can keep numerical order with mixed LXCs / VMs.
 # Phase A iteration is in numerical order so logs read 100 → 101 → 103 …
-PHASE_A_CLIENTS=(100:lxc 101:vm 103:lxc 104:lxc 105:lxc 106:lxc 108:lxc 109:lxc 110:lxc)
+PHASE_A_CLIENTS=(100:lxc 101:vm 103:lxc 104:lxc 105:lxc 106:lxc 108:lxc 109:lxc 110:lxc 111:lxc)
 PHASE_B_SERVICES=(102:lxc 107:lxc)
 
 is_running_lxc() { pct status "$1" 2>/dev/null | grep -q running; }
@@ -70,7 +70,7 @@ timeout 12 /etc/apcupsd/qnap_halt.sh \
   && echo "  QNAP halt issued (CGI)" \
   || echo "  QNAP halt failed / unreachable (continuing)"
 
-# ---- [2] Phase A — CLIENTS sequential (100 → 101 → 103 → 104 → 105 → 106 → 108 → 109 → 110) ----
+# ---- [2] Phase A — CLIENTS sequential (100 → 101 → 103 → 104 → 105 → 106 → 108 → 109 → 110 → 111) ----
 echo "[2/4] Phase A — clients (sequential, 60 s per guest max)"
 for entry in "${PHASE_A_CLIENTS[@]}"; do
   shutdown_one "$entry" 60

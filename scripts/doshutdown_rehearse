@@ -16,8 +16,8 @@ echo "================================================================"
 set +e
 
 # Phase classification — keep in sync with /etc/apcupsd/doshutdown.
-# Numerical order across mixed LXCs / VMs: 100, 101, 103, 104, 105, 106, 108, 109, 110.
-PHASE_A_CLIENTS=(100:lxc 101:vm 103:lxc 104:lxc 105:lxc 106:lxc 108:lxc 109:lxc 110:lxc)
+# Numerical order across mixed LXCs / VMs: 100, 101, 103, 104, 105, 106, 108, 109, 110, 111.
+PHASE_A_CLIENTS=(100:lxc 101:vm 103:lxc 104:lxc 105:lxc 106:lxc 108:lxc 109:lxc 110:lxc 111:lxc)
 PHASE_B_SERVICES=(102:lxc 107:lxc)
 
 is_running_lxc() { pct status "$1" 2>/dev/null | grep -q running; }
@@ -52,7 +52,7 @@ timeout 12 /etc/apcupsd/qnap_halt.sh \
   && echo "  QNAP halt issued (CGI)" \
   || echo "  QNAP halt failed / unreachable (continuing)"
 
-# ---- [2] Phase A — CLIENTS sequential (100 → 101 → 103 → 104 → 105 → 106 → 108 → 109 → 110) ----
+# ---- [2] Phase A — CLIENTS sequential (100 → 101 → 103 → 104 → 105 → 106 → 108 → 109 → 110 → 111) ----
 echo "[2/4] Phase A — clients (sequential, 60 s per guest max)"
 for entry in "${PHASE_A_CLIENTS[@]}"; do
   shutdown_one "$entry" 60
