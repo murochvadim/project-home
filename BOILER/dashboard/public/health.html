@@ -433,6 +433,26 @@
   <!-- ══════════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-win-backup">
 
+    <!-- Ext Disk Backup -->
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px; flex-wrap:wrap;">
+        <h2 style="margin:0;">💽 Ext Disk Backup</h2>
+        <span id="extdisk-status" style="font-size:0.82rem; color:#999; margin-left:auto;">…</span>
+      </div>
+      <p style="font-size:0.78rem; color:#888; margin:0 0 12px;">One-session full spare copy of the whole project — all guest images + every QNAP share (repo, memory, media, privacy, medical) + a live DB dump, Vaultwarden data, PVE host config &amp; the backup passphrase — onto an external disk plugged into the Proxmox mini-PC.</p>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+        <button id="extdisk-start" class="btn btn-success btn-sm" onclick="extdiskStart()" disabled>▶ Start Backup</button>
+        <button id="extdisk-stop" class="btn btn-danger btn-sm" onclick="extdiskStop()" disabled>■ Stop</button>
+        <span id="extdisk-msg" style="font-size:0.8rem; color:#666;"></span>
+      </div>
+      <div id="extdisk-progwrap" style="display:none;">
+        <div style="background:#e8e4de; border-radius:6px; height:20px; overflow:hidden;">
+          <div id="extdisk-bar" style="height:100%; width:0%; background:#3a8f4f; transition:width .5s ease;"></div>
+        </div>
+        <div id="extdisk-progtext" style="font-size:0.78rem; color:#555; margin-top:5px;"></div>
+      </div>
+    </div>
+
     <!-- Storages -->
     <div class="card">
       <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
@@ -1065,6 +1085,6 @@ async function deploy() {
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=74"></script>
+<script src="js/health.js?v=75"></script>
 </body>
 </html>

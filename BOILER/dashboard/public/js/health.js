@@ -744,7 +744,7 @@ async function refreshAll() {
   if (orchLogActive)      { tasks.push(loadOrchLog()); }
   if (dbTabActive)        { tasks.push(loadVolumes().then(loadMiniDlna), loadRetention()); }
   if (backupsTabActive)   { tasks.push(loadBackups()); }
-  if (winBackupTabActive) { tasks.push(loadWinStorages(), loadWinJobs(), loadWinLog()); }
+  if (winBackupTabActive) { tasks.push(loadWinStorages(), loadWinJobs(), loadWinLog(), loadExtDisk()); }
   await Promise.all(tasks);
   document.getElementById('last-refresh').textContent =
     'Refreshed: ' + new Date().toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem' });
@@ -1423,6 +1423,70 @@ async function loadWinLog() {
       `<tr><td colspan="6" style="color:#b55e5e;">Failed: ${escHtml(e.message)}</td></tr>`;
   }
 }
+
+// ── Ext Disk Backup (Backup tab) ─────────────────────────────
+async function loadExtDisk() {
+  const st = document.getElementById('extdisk-status');
+  if (!st) return;
+  let d;
+  try { d = await fetch('/api/usb-backup/status').then(r => r.json()); } catch (_) { return; }
+  const disk = (d && d.disk) || {}, job = (d && d.job) || { state: 'idle' };
+  const startBtn = document.getElementById('extdisk-start');
+  const stopBtn  = document.getElementById('extdisk-stop');
+  const pw   = document.getElementById('extdisk-progwrap');
+  const bar  = document.getElementById('extdisk-bar');
+  const ptxt = document.getElementById('extdisk-progtext');
+  if (disk.connected) {
+    st.innerHTML = '🟢 Disk connected — <b>' + (disk.model || 'disk') + '</b>, ' + (disk.size || '?') + ', ' + (disk.fstype || '?');
+    st.style.color = '#2e7d32';
+  } else {
+    st.textContent = '⚪ No external disk detected';
+    st.style.color = '#999';
+  }
+  const running = job.state === 'running';
+  if (startBtn) startBtn.disabled = !disk.connected || running;
+  if (stopBtn)  stopBtn.disabled  = !running;
+  const gb = b => ((b || 0) / 1e9).toFixed(1);
+  if (running) {
+    pw.style.display = 'block';
+    const pct = job.pct || 0;
+    bar.style.width = pct + '%'; bar.style.background = '#3a8f4f';
+    const eta = job.eta_sec ? (Math.floor(job.eta_sec / 60) + 'm ' + (job.eta_sec % 60) + 's') : '—';
+    ptxt.textContent = (job.phase || '') + ' · ' + pct + '% · ' + gb(job.bytes_done) + '/' + gb(job.bytes_total) + ' GB · ETA ' + eta;
+  } else if (job.state === 'done') {
+    pw.style.display = 'block'; bar.style.width = '100%'; bar.style.background = '#3a8f4f';
+    ptxt.textContent = '✓ Done — ' + gb(job.bytes_done) + ' GB · ' + (job.message || '');
+  } else if (job.state === 'stopped') {
+    pw.style.display = 'block'; bar.style.background = '#c0392b';
+    ptxt.textContent = '■ Stopped — ' + (job.message || 'cancelled');
+  } else if (job.state === 'error') {
+    pw.style.display = 'block'; bar.style.width = '100%'; bar.style.background = '#c0392b';
+    ptxt.textContent = '✕ ' + (job.message || 'error');
+  } else {
+    pw.style.display = 'none';
+  }
+}
+async function extdiskStart() {
+  if (!confirm('Start a FULL backup to the external disk?\n\nCopies all guest images + every QNAP share + a live DB/Vaultwarden/host-config pull. Reads everything; the first run can take a while. You can Stop it any time.')) return;
+  const msg = document.getElementById('extdisk-msg');
+  msg.textContent = 'Starting…';
+  try {
+    const r = await fetch('/api/usb-backup/start', { method: 'POST' }).then(r => r.json());
+    msg.textContent = r && r.ok ? 'Started.' : ('Error: ' + ((r && r.error) || 'failed'));
+  } catch (e) { msg.textContent = 'Error: ' + e.message; }
+  setTimeout(() => { document.getElementById('extdisk-msg').textContent = ''; loadExtDisk(); }, 1200);
+}
+async function extdiskStop() {
+  if (!confirm('Stop the running backup? The partial copy is kept, and the next run resumes from where it left off.')) return;
+  const msg = document.getElementById('extdisk-msg');
+  msg.textContent = 'Stopping…';
+  try { await fetch('/api/usb-backup/stop', { method: 'POST' }); } catch (_) {}
+  setTimeout(() => { document.getElementById('extdisk-msg').textContent = ''; loadExtDisk(); }, 1200);
+}
+// Live poll while the Backup tab is visible (disk indicator + progress bar).
+setInterval(() => {
+  if (document.getElementById('tab-win-backup')?.classList.contains('active')) loadExtDisk();
+}, 3000);
 
 // Initial load — System tab only
 loadAlerts();

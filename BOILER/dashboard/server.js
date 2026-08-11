@@ -134,6 +134,9 @@ require('./routes-cast')(app);
 // Robot camera (e-con RouteCAM) ONVIF imaging settings for the Robot tab.
 require('./routes-robotcam')(app);
 
+// Ext Disk Backup — full-project backup to a USB disk on the PVE host (status/start/stop).
+require('./routes-usbbackup')(app);
+
 // Phone Link recovery (Windows-host action; spawns PowerShell on this host) +
 // single-alert dismiss. Buttons on Project Health -> System Alerts.
 require('./routes-phonelink')(app, db);
