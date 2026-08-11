@@ -16,7 +16,7 @@ PASSFILE="/etc/privacy-project-backup.pass"
 PBS="/mnt/pbs"
 REMOTE="gdrive_sheets:Guest_Images"
 JOB_NAME="Guest Images (Drive)"
-GUESTS="100 101 102 103 104 105 106 107 108 109 110"
+GUESTS="100 101 102 103 104 105 106 107 108 109 110 111"
 [ -n "$1" ] && GUESTS="$1"
 
 # HARDENING vs the shared rclone client_id rate limit (Error 403 "Queries per
@@ -28,11 +28,10 @@ RC_OPTS="--drive-chunk-size 128M --tpslimit 6 --low-level-retries 20"
 [ -r "$PASSFILE" ] || { echo "$(date '+%F %T') passphrase missing — abort"; exit 1; }
 mountpoint -q "$PBS" || { echo "$(date '+%F %T') $PBS not mounted — abort"; exit 1; }
 
-# retention weeks → days
-WEEKS=$($PSQL -c "SELECT value->>'guests_weeks' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
-case "$WEEKS" in ''|*[!0-9]*) WEEKS=4 ;; esac
-[ "$WEEKS" -lt 1 ] && WEEKS=1
-DAYS=$((WEEKS*7))
+# retention (COPIES per guest) — clamp >= 1, default 4
+GKEEP=$($PSQL -c "SELECT value->>'guests_copies' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
+case "$GKEEP" in ''|*[!0-9]*) GKEEP=4 ;; esac
+[ "$GKEEP" -lt 1 ] && GKEEP=4
 
 # open a 'running' Recent-Backup-Log row
 LOG_ID=""
@@ -60,7 +59,7 @@ for id in $GUESTS; do
   done
   [ "$up_ok" = 1 ] || { echo "$(date '+%F %T') guest $id FAILED after 3 attempts — skip"; continue; }
   rclone copyto "$REMOTE/$id/${base}.gpg" "$REMOTE/$id/latest.gpg"
-  rclone delete "$REMOTE/$id" --min-age ${DAYS}d --include "vzdump-*.gpg" 2>/dev/null || true
+  rclone lsf "$REMOTE/$id" --include "vzdump-*.gpg" 2>/dev/null | sort | head -n -${GKEEP} | while read -r f; do rclone deletefile "$REMOTE/$id/$f" 2>/dev/null || true; done
   TOTAL=$((TOTAL+sz)); DONE=$((DONE+1))
   echo "guest $id: $((sz/1024/1024)) MB -> $REMOTE/$id"
 done

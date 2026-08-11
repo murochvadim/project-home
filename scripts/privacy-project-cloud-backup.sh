@@ -51,11 +51,11 @@ tar czf - --exclude=node_modules --exclude=.git -C "$NEWEST" project_home \
 rclone copyto "$TMP" "$REMOTE/project_home_${STAMP}.tar.gz.gpg"
 rclone copyto "$TMP" "$REMOTE/project_home_latest.tar.gz.gpg"
 
-# prune dated copies older than RETAIN_DAYS (from settings; never touches '_latest')
-RETAIN_DAYS=$($PSQL -c "SELECT value->>'project_days' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
-case "$RETAIN_DAYS" in ''|*[!0-9]*) RETAIN_DAYS=14 ;; esac
-[ "$RETAIN_DAYS" -lt 1 ] && RETAIN_DAYS=1
-rclone delete "$REMOTE" --min-age ${RETAIN_DAYS}d --include "project_home_2*.tar.gz.gpg" 2>/dev/null || true
+# prune to newest N COPIES (count-based; from settings; never touches '_latest')
+KEEP=$($PSQL -c "SELECT value->>'project_copies' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
+case "$KEEP" in ''|*[!0-9]*) KEEP=4 ;; esac
+[ "$KEEP" -lt 1 ] && KEEP=4
+rclone lsf "$REMOTE" --include "project_home_2*.tar.gz.gpg" 2>/dev/null | sort | head -n -${KEEP} | while read -r f; do rclone deletefile "$REMOTE/$f" 2>/dev/null || true; done
 
 # record success time for the dashboard status
 psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -q -c \
@@ -69,4 +69,36 @@ SIZE_BYTES=$(stat -c%s "$TMP" 2>/dev/null || echo 0)
 
 SZ="$(du -h "$TMP" | awk '{print $1}')"
 rm -f "$TMP"
+
+# ---- Claude memory dir (tiny, high-value; snapshotted to QNAP by the 'Claude Memory' job) ----
+# Reads the newest QNAP Claude_Memory snapshot (laptop-asleep-safe), encrypts + uploads it to the same
+# Drive remote with a distinct prefix, count-prunes to newest N, and logs to the 'Claude Memory (Drive)' job.
+MEM_BASE="/mnt/qnap-claude/Claude_Memory"
+MEM_NEWEST="$(ls -1dt "$MEM_BASE"/*/ 2>/dev/null | head -1)"
+MEM_KEEP=$($PSQL -c "SELECT value->>'memory_copies' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
+case "$MEM_KEEP" in ''|*[!0-9]*) MEM_KEEP=4 ;; esac
+[ "$MEM_KEEP" -lt 1 ] && MEM_KEEP=4
+MJOB=$($PSQL -c "SELECT id FROM backup_jobs WHERE name='Claude Memory (Drive)' LIMIT 1" | tr -d '[:space:]')
+MLOG=""
+[ -n "$MJOB" ] && MLOG=$($PSQL -c "INSERT INTO backup_log(job_id,started_at,status,message) VALUES ($MJOB, now(), 'running', 'started') RETURNING id" | tr -d '[:space:]')
+if [ -n "$MEM_NEWEST" ] && [ -d "${MEM_NEWEST}memory" ]; then
+  MEM_TMP="/tmp/claude_memory_${STAMP}.tar.gz.gpg"
+  tar czf - -C "$MEM_NEWEST" memory \
+    | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase-file "$PASSFILE" -o "$MEM_TMP"
+  if [ -s "$MEM_TMP" ]; then
+    rclone copyto "$MEM_TMP" "$REMOTE/claude_memory_${STAMP}.tar.gz.gpg"
+    rclone copyto "$MEM_TMP" "$REMOTE/claude_memory_latest.tar.gz.gpg"
+    rclone lsf "$REMOTE" --include "claude_memory_2*.tar.gz.gpg" 2>/dev/null | sort | head -n -${MEM_KEEP} | while read -r f; do rclone deletefile "$REMOTE/$f" 2>/dev/null || true; done
+    MSZ=$(stat -c%s "$MEM_TMP" 2>/dev/null || echo 0)
+    [ -n "$MLOG" ] && $PSQL -c "UPDATE backup_log SET status='ok', finished_at=now(), size_bytes=$MSZ, message='success' WHERE id=$MLOG" >/dev/null 2>&1
+    echo "$(date '+%F %T') claude memory cloud backup OK ($(du -h "$MEM_TMP" | awk '{print $1}')) -> $REMOTE"
+  else
+    [ -n "$MLOG" ] && $PSQL -c "UPDATE backup_log SET status='failed', finished_at=now(), message='encryption produced empty file' WHERE id=$MLOG" >/dev/null 2>&1
+    echo "$(date '+%F %T') claude memory encryption produced empty file — skip"
+  fi
+  rm -f "$MEM_TMP"
+else
+  [ -n "$MLOG" ] && $PSQL -c "UPDATE backup_log SET status='failed', finished_at=now(), message='no Claude_Memory QNAP snapshot yet' WHERE id=$MLOG" >/dev/null 2>&1
+  echo "$(date '+%F %T') no Claude_Memory snapshot yet — skip memory upload"
+fi
 echo "$(date '+%F %T') privacy project cloud backup OK ($SZ) -> $REMOTE"

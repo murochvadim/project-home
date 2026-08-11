@@ -17,10 +17,10 @@ JOB_NAME="Database (Drive)"
 
 [ -r "$PASSFILE" ] || { echo "$(date '+%F %T') passphrase missing — abort"; exit 1; }
 
-# retention (days) — clamp to >= 1, default 30
-KEEP=$($PSQL -c "SELECT value->>'db_days' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
-case "$KEEP" in ''|*[!0-9]*) KEEP=30 ;; esac
-[ "$KEEP" -lt 1 ] && KEEP=1
+# retention (COPIES) — clamp to >= 1, default 4
+KEEP=$($PSQL -c "SELECT value->>'db_copies' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
+case "$KEEP" in ''|*[!0-9]*) KEEP=4 ;; esac
+[ "$KEEP" -lt 1 ] && KEEP=4
 
 # open a 'running' Recent-Backup-Log row
 LOG_ID=""
@@ -51,9 +51,9 @@ for attempt in 1 2 3; do
 done
 [ "$up_ok" = 1 ] || { echo "$(date '+%F %T') DB cloud backup FAILED after 3 attempts (shared client_id quota — set a personal client_id)"; exit 1; }
 
-# refresh 'latest' (server-side copy on Drive) + prune dated > KEEP days
+# refresh 'latest' (server-side copy on Drive) + prune to newest KEEP COPIES (never touches '_latest')
 rclone copyto "$REMOTE/home_data_${STAMP}.dump.gpg" "$REMOTE/home_data_latest.dump.gpg"
-rclone delete "$REMOTE" --min-age ${KEEP}d --include "home_data_2*.dump.gpg" 2>/dev/null || true
+rclone lsf "$REMOTE" --include "home_data_2*.dump.gpg" 2>/dev/null | sort | head -n -${KEEP} | while read -r f; do rclone deletefile "$REMOTE/$f" 2>/dev/null || true; done
 
 SZ=$(rclone size "$REMOTE/home_data_${STAMP}.dump.gpg" --json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("bytes",0))' 2>/dev/null || echo 0)
 

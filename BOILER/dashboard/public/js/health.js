@@ -848,10 +848,11 @@ async function loadCloudRetention() {
   try {
     const j = await fetch('/api/dashboard-settings/privacy.cloud_retention').then(r => r.json());
     const v = (j && j.value) || {};
-    document.getElementById('cr-project').value = v.project_days ?? 14;
-    document.getElementById('cr-budget').value = v.budget_days ?? 30;
-    document.getElementById('cr-db').value = v.db_days ?? 30;
-    document.getElementById('cr-guests').value = v.guests_weeks ?? 4;
+    document.getElementById('cr-project').value = v.project_copies ?? 4;
+    document.getElementById('cr-budget').value = v.budget_copies ?? 4;
+    document.getElementById('cr-db').value = v.db_copies ?? 4;
+    document.getElementById('cr-guests').value = v.guests_copies ?? 4;
+    document.getElementById('cr-memory').value = v.memory_copies ?? 4;
   } catch (_) {}
 }
 async function saveCloudRetention() {
@@ -863,10 +864,11 @@ async function saveCloudRetention() {
     return n;
   };
   const value = {
-    project_days: clamp('cr-project', 14, 3650),
-    budget_days: clamp('cr-budget', 30, 3650),
-    db_days: clamp('cr-db', 30, 3650),
-    guests_weeks: clamp('cr-guests', 4, 520),
+    project_copies: clamp('cr-project', 4, 60),
+    budget_copies: clamp('cr-budget', 4, 60),
+    db_copies: clamp('cr-db', 4, 60),
+    guests_copies: clamp('cr-guests', 4, 60),
+    memory_copies: clamp('cr-memory', 4, 60),
   };
   const st = document.getElementById('cr-status');
   try {

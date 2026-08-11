@@ -46,11 +46,11 @@ JOB_ID=$($PSQL -c "SELECT id FROM backup_jobs WHERE name='$JOB_NAME' LIMIT 1" | 
 rclone copyto "$TMP" "$REMOTE/privacy_budget_${STAMP}.json"
 rclone copyto "$TMP" "$REMOTE/privacy_budget_latest.json"
 
-# 3. Prune dated copies older than 30 days (never touches '_latest')
-BKEEP=$($PSQL -c "SELECT value->>'budget_days' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
-case "$BKEEP" in ''|*[!0-9]*) BKEEP=30 ;; esac
-[ "$BKEEP" -lt 1 ] && BKEEP=1
-rclone delete "$REMOTE" --min-age ${BKEEP}d --include "privacy_budget_2*.json" 2>/dev/null || true
+# 3. Prune to newest BKEEP COPIES (count-based; never touches '_latest')
+BKEEP=$($PSQL -c "SELECT value->>'budget_copies' FROM dashboard_settings WHERE key='privacy.cloud_retention'" 2>/dev/null | tr -d '[:space:]')
+case "$BKEEP" in ''|*[!0-9]*) BKEEP=4 ;; esac
+[ "$BKEEP" -lt 1 ] && BKEEP=4
+rclone lsf "$REMOTE" --include "privacy_budget_2*.json" 2>/dev/null | sort | head -n -${BKEEP} | while read -r f; do rclone deletefile "$REMOTE/$f" 2>/dev/null || true; done
 
 # 4. Record the success time for the dashboard's Backups status (fast DB read).
 psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -q -c \

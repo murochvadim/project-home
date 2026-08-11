@@ -607,12 +607,13 @@
     <!-- Cloud Backup Retention -->
     <div class="card">
       <h2 style="margin:0 0 6px;">☁️ Cloud Backup Retention</h2>
-      <p style="font-size:0.8rem; color:#888; margin:0 0 12px;">How many off-site (Google Drive) copies of each backup to keep. Older ones are auto-pruned each run. Minimum 1 — a typo can never wipe everything.</p>
+      <p style="font-size:0.8rem; color:#888; margin:0 0 12px;">How many off-site (Google Drive) copies of each backup to keep. Older ones are auto-pruned each run (the stable "latest" copy is always kept). Minimum 1 — a typo can never wipe everything.</p>
       <div style="display:flex; gap:20px; flex-wrap:wrap; align-items:flex-end;">
-        <label style="font-size:0.78rem; color:#555;">Project folder<br><input id="cr-project" type="number" min="1" max="3650" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">days</span></label>
-        <label style="font-size:0.78rem; color:#555;">Budget<br><input id="cr-budget" type="number" min="1" max="3650" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">days</span></label>
-        <label style="font-size:0.78rem; color:#555;">Database<br><input id="cr-db" type="number" min="1" max="3650" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">days</span></label>
-        <label style="font-size:0.78rem; color:#555;">Guest images<br><input id="cr-guests" type="number" min="1" max="520" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">weeks</span></label>
+        <label style="font-size:0.78rem; color:#555;">Project folder<br><input id="cr-project" type="number" min="1" max="60" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">copies</span></label>
+        <label style="font-size:0.78rem; color:#555;">Budget<br><input id="cr-budget" type="number" min="1" max="60" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">copies</span></label>
+        <label style="font-size:0.78rem; color:#555;">Database<br><input id="cr-db" type="number" min="1" max="60" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">copies</span></label>
+        <label style="font-size:0.78rem; color:#555;">Guest images<br><input id="cr-guests" type="number" min="1" max="60" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">copies</span></label>
+        <label style="font-size:0.78rem; color:#555;">Claude memory<br><input id="cr-memory" type="number" min="1" max="60" style="width:74px; font-size:0.85rem; padding:5px 7px; border:1px solid #d0cbc4; border-radius:4px; margin-top:3px;"> <span style="color:#999;">copies</span></label>
         <button class="btn btn-success btn-sm" onclick="saveCloudRetention()">Save</button>
         <span id="cr-status" style="font-size:0.8rem; color:#2e7d32;"></span>
       </div>
@@ -1064,6 +1065,6 @@ async function deploy() {
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/scroll-stabilizer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/health.js?v=73"></script>
+<script src="js/health.js?v=74"></script>
 </body>
 </html>
