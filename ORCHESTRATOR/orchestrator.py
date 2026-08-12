@@ -321,12 +321,12 @@ def check_backup_freshness(cur):
     cur.execute("SAVEPOINT check_backup_freshness")
     try:
         cur.execute("""
-            SELECT j.id, j.name, j.max_age_hours,
+            SELECT j.id, j.name, j.max_age_hours, j.source_host,
                    MAX(l.started_at) FILTER (WHERE l.status = 'ok') AS last_ok
             FROM backup_jobs j
             LEFT JOIN backup_log l ON l.job_id = j.id
             WHERE j.enabled = TRUE
-            GROUP BY j.id, j.name, j.max_age_hours
+            GROUP BY j.id, j.name, j.max_age_hours, j.source_host
         """)
         jobs = cur.fetchall()
         cur.execute("RELEASE SAVEPOINT check_backup_freshness")
@@ -336,8 +336,27 @@ def check_backup_freshness(cur):
         write_log(cur, 'warn', f'Backup freshness check failed: {e}')
         return
 
+    # Nodes whose Project Health "Monitor" checkbox is OFF are intentionally
+    # powered down a lot (e.g. RP02) — suppress their backup-overdue alerts too,
+    # matching the health-probe pause. Map a job to a node by substring of its
+    # name/source_host (e.g. 'rp02' in 'Raspberry Pi RP02' / 'rp02_project@...').
+    paused_nodes = set()
+    try:
+        cur.execute("SELECT value FROM dashboard_settings WHERE key = 'health.node_monitoring'")
+        _r = cur.fetchone()
+        _nm = _r['value'] if _r else None
+        if isinstance(_nm, dict):
+            paused_nodes = {k.lower() for k, v in _nm.items() if v is False}
+    except Exception:
+        paused_nodes = set()
+
     for job in jobs:
         agent_name = f"backup:{job['name']}"
+        if paused_nodes:
+            hay = f"{job['name']} {job.get('source_host') or ''}".lower()
+            if any(k in hay for k in paused_nodes):
+                resolve_alert(cur, 'backup_overdue', agent_name)
+                continue
         threshold_h = job['max_age_hours'] + BACKUP_GRACE_HOURS
         last_ok = job['last_ok']
 

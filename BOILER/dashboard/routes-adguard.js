@@ -41,7 +41,7 @@ function _authHeader() {
   return 'Basic ' + Buffer.from(`${AGH_USER}:${AGH_PASS}`).toString('base64');
 }
 
-async function _agh(path) {
+async function _agh(path, timeoutMs = 6000) {
   if (!AGH_USER || !AGH_PASS) {
     const e = new Error('ADGUARD_USER/ADGUARD_PASS not configured');
     e.status = 503;
@@ -51,7 +51,7 @@ async function _agh(path) {
   try {
     r = await fetch(`${AGH_URL}${path}`, {
       headers: { Authorization: _authHeader(), Accept: 'application/json' },
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     const e = new Error(`AdGuard unreachable: ${err.message}`);
@@ -116,7 +116,7 @@ module.exports = function (app) {
         _agh('/control/status'),
         _agh('/control/stats'),
         _agh('/control/filtering/status'),
-        _agh('/control/querylog?response_status=blocked&limit=4000'),
+        _agh('/control/querylog?response_status=blocked&limit=2000', 25000),
         _agh('/control/clients'),
       ]);
       const secRe = /phish|malware|threat|urlhaus|abuse|scam|ransom|botnet|c2/i;

@@ -1447,23 +1447,25 @@ async function loadExtDisk() {
   if (startBtn) startBtn.disabled = !disk.connected || running;
   if (stopBtn)  stopBtn.disabled  = !running;
   const gb = b => ((b || 0) / 1e9).toFixed(1);
+  const barwrap = document.getElementById('extdisk-barwrap');
   if (running) {
+    // progress bar visible only while a backup is actively running
     pw.style.display = 'block';
+    if (barwrap) barwrap.style.display = '';
     const pct = job.pct || 0;
     bar.style.width = pct + '%'; bar.style.background = '#3a8f4f';
     const eta = job.eta_sec ? (Math.floor(job.eta_sec / 60) + 'm ' + (job.eta_sec % 60) + 's') : '—';
     ptxt.textContent = (job.phase || '') + ' · ' + pct + '% · ' + gb(job.bytes_done) + '/' + gb(job.bytes_total) + ' GB · ETA ' + eta;
-  } else if (job.state === 'done') {
-    pw.style.display = 'block'; bar.style.width = '100%'; bar.style.background = '#3a8f4f';
-    ptxt.textContent = '✓ Done — ' + gb(job.bytes_done) + ' GB · ' + (job.message || '');
-  } else if (job.state === 'stopped') {
-    pw.style.display = 'block'; bar.style.background = '#c0392b';
-    ptxt.textContent = '■ Stopped — ' + (job.message || 'cancelled');
-  } else if (job.state === 'error') {
-    pw.style.display = 'block'; bar.style.width = '100%'; bar.style.background = '#c0392b';
-    ptxt.textContent = '✕ ' + (job.message || 'error');
+  } else if (job.state === 'done' || job.state === 'stopped' || job.state === 'error') {
+    // finished: show ONLY the result line, no progress bar; card is ready for the next run
+    pw.style.display = 'block';
+    if (barwrap) barwrap.style.display = 'none';
+    if (job.state === 'done')      ptxt.textContent = '✓ Done — ' + gb(job.bytes_done) + ' GB · ' + ((job.finished_at || '').replace('_', ' ').slice(0, 16) || '?') + ' · ' + (job.message || '');
+    else if (job.state === 'stopped') ptxt.textContent = '■ Stopped — ' + (job.message || 'cancelled');
+    else                            ptxt.textContent = '✕ ' + (job.message || 'error');
   } else {
     pw.style.display = 'none';
+    if (barwrap) barwrap.style.display = '';
   }
 }
 async function extdiskStart() {

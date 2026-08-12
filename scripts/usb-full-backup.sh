@@ -93,8 +93,15 @@ mkdir -p "$DEST_MIRROR" "$DEST_LIVE" || fail "Cannot write to the USB disk (read
 # ---- 3. pre-flight size vs free ---------------------------------------------
 set_phase "Calculating size"
 write_status running 0 0 0 "calculating total size"
-BYTES_TOTAL=$(du -sbc "${SOURCES[@]}" 2>/dev/null | tail -1 | awk '{print $1}')
-[ -z "${BYTES_TOTAL:-}" ] || [ "$BYTES_TOTAL" -le 0 ] && BYTES_TOTAL=1
+# per-source byte sizes read from the (fast) NFS sources — NOT the slow exFAT dest —
+# so the manifest can report real sizes even when a dest `du` would stall.
+declare -A SRC_BYTES=()
+BYTES_TOTAL=0
+for _s in "${SOURCES[@]}"; do
+  _b=$(du -sb "$_s" 2>/dev/null | awk '{print $1}'); _b=${_b:-0}
+  SRC_BYTES["$_s"]=$_b; BYTES_TOTAL=$(( BYTES_TOTAL + _b ))
+done
+[ "$BYTES_TOTAL" -le 0 ] && BYTES_TOTAL=1
 FREE=$(df -B1 --output=avail "$MP" 2>/dev/null | tail -1 | tr -d ' ')
 # add ~2% headroom for the live pulls
 NEED=$(( BYTES_TOTAL + BYTES_TOTAL/50 ))
@@ -164,12 +171,13 @@ set_phase "Writing manifest"
   echo "PROJECT FULL BACKUP — $TS"
   echo "Host: $(hostname)  Disk: /dev/$PART ($FS)"
   echo
-  echo "== Sizes =="
-  du -sh "$DEST_MIRROR"/* 2>/dev/null
-  du -sh "$DEST_LIVE" 2>/dev/null
+  echo "== Sizes (mirrored, measured at source) =="
+  _hr() { numfmt --to=iec "${1:-0}" 2>/dev/null || echo "${1:-0}"; }
+  for _s in "${SOURCES[@]}"; do printf "  %-14s %s\n" "${DESTS[$_s]}" "$(_hr "${SRC_BYTES[$_s]:-0}")"; done
+  printf "  %-14s %s\n" "TOTAL" "$(_hr "$BYTES_TOTAL")"
   echo
-  echo "== Guest images (newest per guest) =="
-  find "$DEST_MIRROR/PBS_Data" -name "vzdump-*.tar.zst" -o -name "vzdump-*.vma.zst" 2>/dev/null | sort
+  echo "== Guest images (size · path) =="
+  timeout 90 find "$DEST_MIRROR/PBS_Data" \( -name "vzdump-*.tar.zst" -o -name "vzdump-*.vma.zst" \) -printf "  %10s  %P\n" 2>/dev/null | sort -k2
   echo
   echo "== Live pulls =="
   ls -la "$DEST_LIVE/db" "$DEST_LIVE/vaultwarden" "$DEST_LIVE/pve_host" "$DEST_LIVE/secrets" 2>/dev/null
@@ -184,7 +192,10 @@ set_phase "Writing manifest"
 
 kill "$MON_PID" 2>/dev/null; MON_PID=""
 sync
-FINAL=$(du -sb "$MP/PROJECT_BACKUP" 2>/dev/null | awk '{print $1}'); FINAL=${FINAL:-0}
+# report the copied size; the final du can be empty/slow on exFAT-FUSE, so fall
+# back to the computed total (the run reached 100%) rather than showing 0.
+FINAL=$(timeout 60 du -sb "$MP/PROJECT_BACKUP" 2>/dev/null | awk '{print $1}')
+{ [ -z "$FINAL" ] || [ "$FINAL" -le 0 ] 2>/dev/null; } && FINAL="$BYTES_TOTAL"
 DUR=$(( $(date +%s) - T0 ))
 set_phase "Done"
 write_status done 100 "$FINAL" "$BYTES_TOTAL" "completed in $((DUR/60))m $((DUR%60))s"
