@@ -324,6 +324,55 @@ def _signal_for(d, ctx, shared):
     return None
 
 
+# ── Deferred door re-check — fixes the fast-presence / slow-zwave-door race ───────
+# A device_presence notification with a main_door condition is racy: the fast local
+# presence sensor fires a fraction of a second BEFORE the slow z-wave Main Door reports
+# 'open', so a point-in-time door check always sees 'closed'. We hold the decision a few
+# seconds, then re-check whether the Main Door opened AROUND the presence (via People
+# Home's _main_door_open_ts timer) and suppress if so.
+_HOLD_SEC = 6   # wait this long for the Main Door to register 'open' before deciding
+_DOOR_PRE = 4   # also suppress if the door opened up to this many seconds BEFORE the presence
+
+
+def _needs_door_hold(d):
+    if (d.get("trigger") or "").lower() != "device_presence":
+        return False
+    return any((c.get("field") or "").lower() == "main_door" for c in (d.get("conditions") or []))
+
+
+def _process_holds(state, defs, ctx, now_local, today):
+    """Deliver or suppress held device_presence notifications once the Main Door state
+    has had time to settle. Suppress when the door opened around the presence moment."""
+    shared = state.shared
+    now = time.time()
+    by_id = {str(d.get("id")): d for d in defs}
+    out = []
+    for key in [k for k in list(shared.keys()) if k.startswith("_notify_hold:")]:
+        deliver_at = shared.get(key)
+        if not deliver_at or now < deliver_at:
+            continue
+        shared[key] = None            # consume (upsert-only store never DELETEs; None is skipped)
+        d = by_id.get(key.split(":", 1)[1])
+        if not d or not d.get("enabled"):
+            continue
+        # non-door conditions must still hold at delivery time
+        conds_nondoor = [c for c in (d.get("conditions") or []) if (c.get("field") or "").lower() != "main_door"]
+        if not _passes_gates(conds_nondoor, ctx, now_local):
+            continue
+        # race-proof door check: was the Main Door opened around the presence?
+        door_cond = next((c for c in (d.get("conditions") or []) if (c.get("field") or "").lower() == "main_door"), {})
+        want = str(door_cond.get("value") or "closed").lower()
+        opened_recently = state.get_timer("_main_door_open_ts") <= (_HOLD_SEC + _DOOR_PRE)
+        door_ok = (not opened_recently) if want == "closed" else (opened_recently or str(ctx.get("main_door")) == "open")
+        if not door_ok:
+            continue
+        _deliver(state, d, ctx, today)
+        cmd = _tablet_cmd(state, d, ctx)
+        if cmd:
+            out.append(cmd)
+    return out
+
+
 def evaluate(event, state):
     global _first_eval
     defs = _load_defs(state)
@@ -360,6 +409,7 @@ def evaluate(event, state):
     ev_dps = event.get("dps", {}) or {}
 
     commands = []
+    commands += _process_holds(state, defs, ctx, now_local, today)
     for d in defs:
         if not d.get("enabled"):
             continue
@@ -400,7 +450,14 @@ def evaluate(event, state):
                 fired = True
                 shared[key] = today
 
-        if fired and _passes_gates(d.get("conditions"), ctx, now_local):
+        if fired and _needs_door_hold(d):
+            # Racy: the fast presence sensor beats the slow z-wave Main Door. Hold the
+            # decision _HOLD_SEC and re-check the door (in _process_holds) so opening the
+            # door reliably suppresses this. Require the non-door conditions up front.
+            conds_nondoor = [c for c in (d.get("conditions") or []) if (c.get("field") or "").lower() != "main_door"]
+            if _passes_gates(conds_nondoor, ctx, now_local):
+                shared[f"_notify_hold:{d['id']}"] = time.time() + _HOLD_SEC
+        elif fired and _passes_gates(d.get("conditions"), ctx, now_local):
             _deliver(state, d, ctx, today)       # popup (DB insert, if popup surface)
             cmd = _tablet_cmd(state, d, ctx)      # tablet alert (if tablet surface)
             if cmd:
