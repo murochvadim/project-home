@@ -1675,3 +1675,421 @@
     if (name === 'irobot') irStart(); else irStop();
   };
 })();
+
+// ════════════════════════════════════════════════════════════════════════
+// ─── Living Room Smart Switch (Tuya TS0044) — bindings UI ────────────────
+// SELF-CONTAINED IIFE. Faithful clone of the My BathRoom Smart Switch card.
+// It cannot live in the main IIFE's scope from out here, so it re-declares
+// the few helpers it needs (device cache loader, escHtml, bindingTag, alexa
+// option encode/decode, ACTIONS) locally instead of borrowing the main
+// IIFE's — and drives the shared #picker-overlay + window.showTab via window.
+// 4 buttons × single-press = 4 binding slots, multi-device per slot.
+// Storage: dashboard_settings.living-room.smart_switch_bindings.
+// ════════════════════════════════════════════════════════════════════════
+(function () {
+  const SMART_SWITCH_TAB = 'smart-switch';
+  const ACTIONS = [
+    { v: 'turn_on',  label: 'Turn On',  tag: 'on'     },
+    { v: 'turn_off', label: 'Turn Off', tag: 'off'    },
+    { v: 'toggle',   label: 'Toggle',   tag: 'toggle' },
+  ];
+  const CONTROLLABLE_TYPES = new Set(['switch', 'light', 'circuit_breaker', 'water_heater', 'curtain', 'valve', 'esp_board', 'panel', 'display', 'media_player', 'vacuum']);
+  function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function alexaOptionValue(action, name) { return name ? `${action}:${name}` : action; }
+  function parseAlexaOptionValue(v) {
+    const i = v.indexOf(':');
+    return i < 0 ? { action: v } : { action: v.slice(0, i), name: v.slice(i + 1) };
+  }
+  function bindingTag(b) {
+    if (b && b.type === 'scene') return `scene:${b.target || '?'}`;
+    if (b && b.type === 'pixoo_preset') return `preset:${b.target || '?'}`;
+    if (b && b.page_num != null) return `P${b.page_num}`;
+    if (b && b.action === 'speak' && b.template_name) return `say:${b.template_name}`;
+    if (b && b.action === 'play'  && b.station_name)  return `play:${b.station_name}`;
+    if (b && (b.action === 'stop' || b.action === 'start'
+              || b.action === 'dock' || b.action === 'locate')) return b.action;
+    const a = ACTIONS.find(x => x.v === (b ? b.action : 'on'));
+    return a ? a.tag : 'on';
+  }
+
+  let controllableDevices = [];
+  let _alexaAnnouncements = [];
+  let _alexaStations      = [];
+  let _scenes             = [];
+
+  // Build the device cache + scenes + alexa lists independently of the main
+  // IIFE (which the Wallmote tab owns). Same shape the main loadData builds.
+  async function swLoadControllableDevices() {
+    try {
+      const [devs, anns, stations, scenes] = await Promise.all([
+        fetch('/api/devices').then(r => r.json()),
+        fetch('/api/dashboard-settings/media-agents.alexa_announcements').then(r => r.json()).catch(() => ({ value: [] })),
+        fetch('/api/dashboard-settings/media-agents.alexa_quick_music').then(r => r.json()).catch(() => ({ value: [] })),
+        fetch('/api/dashboard-settings/apartment.scenes').then(r => r.json()).catch(() => ({ value: [] })),
+      ]);
+      _alexaAnnouncements = Array.isArray(anns && anns.value) ? anns.value : [];
+      _alexaStations      = Array.isArray(stations && stations.value) ? stations.value : [];
+      _scenes             = (Array.isArray(scenes && scenes.value) ? scenes.value : [])
+                              .filter(s => s && s.name && s.active !== false);
+      controllableDevices = [];
+      for (const d of devs) {
+        if (d.enabled === false) continue;
+        if (!CONTROLLABLE_TYPES.has(d.device_type)) continue;
+        const chanCfg = d.channel_config || {};
+        const dpsLabels = d.dps_labels || {};
+        const dpsCfg = d.dps_config || {};
+        const tuyaChans = Object.keys(chanCfg).filter(k => k && !isNaN(parseInt(k))).sort();
+        const zigbeeChans = Object.keys(dpsLabels).filter(k => /^state_l\d+$/i.test(k))
+          .sort((a, b) => parseInt(a.replace(/\D/g, '')) - parseInt(b.replace(/\D/g, '')));
+        const actionChans = (d.protocol === 'esp' || d.protocol === 'hasp' || d.protocol === 'awtrix')
+          ? Object.keys(dpsCfg).filter(k => (dpsCfg[k] || {}).action_on)
+          : [];
+        if (tuyaChans.length > 1) {
+          for (const ch of tuyaChans) {
+            const chInfo = chanCfg[ch] || {};
+            controllableDevices.push({ device_id: d.id, channel: ch, name: d.name,
+              label: chInfo.name || `Ch.${ch}`, room: chInfo.room || d.room || '', protocol: d.protocol });
+          }
+        } else if (zigbeeChans.length > 1) {
+          for (const ch of zigbeeChans) {
+            controllableDevices.push({ device_id: d.id, channel: ch, name: d.name,
+              label: dpsLabels[ch] || ch, room: d.room || '', protocol: d.protocol });
+          }
+        } else if (actionChans.length) {
+          for (const ch of actionChans) {
+            const cc = dpsCfg[ch] || {};
+            controllableDevices.push({ device_id: d.id, channel: ch, name: d.name,
+              label: cc.name || ch, room: cc.room || d.room || '', protocol: d.protocol,
+              has_on: !!cc.action_on, has_off: !!cc.action_off });
+          }
+        } else {
+          controllableDevices.push({ device_id: d.id, channel: null, name: d.name,
+            label: '', room: d.room || '', protocol: d.protocol, dps_config: d.dps_config || {} });
+        }
+      }
+      controllableDevices.sort((a, b) => {
+        const rc = (a.room || 'zzz').localeCompare(b.room || 'zzz');
+        return rc !== 0 ? rc : a.name.localeCompare(b.name);
+      });
+    } catch (e) {
+      console.error('[smart-switch] device load failed:', e);
+    }
+  }
+
+  const SW_STORAGE_KEY = 'living-room.smart_switch_bindings';
+  // Single-press only (decided 2026-05-03). Hold doesn't work on this MOES
+  // TS0044 firmware; double-click causes a visible on→off flicker. Cleanest
+  // UX: one row per button — user picks per-binding whether the action is
+  // `toggle`, `turn_on`, or `turn_off`. Multi-device per slot still supported.
+  const SW_EVENTS = ['single'];
+
+  let _swButtons = [];          // [{id:'btn1:single', button:1, event:'single', label:'Button 1', bindings:[]}]
+  let _swActivePicker = null;   // {rowId, snapshot}
+
+  // Build the 4 fixed slots (button × single), seeding from saved bindings.
+  function swBuildButtons(saved) {
+    const out = [];
+    for (let n = 1; n <= 4; n++) {
+      for (const ev of SW_EVENTS) {
+        const id = `btn${n}:${ev}`;
+        out.push({
+          id, button: n, event: ev,
+          label: `Button ${n}`,
+          bindings: Array.isArray(saved[id]) ? saved[id] : [],
+        });
+      }
+    }
+    return out;
+  }
+
+  async function swLoadBindings() {
+    try {
+      const r = await fetch('/api/dashboard-settings/' + encodeURIComponent(SW_STORAGE_KEY)).then(r => r.json());
+      const saved = (r && typeof r.value === 'object' && r.value) ? r.value : {};
+      _swButtons = swBuildButtons(saved);
+    } catch (_) {
+      _swButtons = swBuildButtons({});
+    }
+    await swLoadControllableDevices();   // populates controllableDevices + _scenes + alexa lists
+    swRender();
+  }
+
+  function swRender() {
+    const host = document.getElementById('sw-buttons-list');
+    if (!host) return;
+    const html = [1, 2, 3, 4].map(n => {
+      const rowsForButton = _swButtons.filter(r => r.button === n);
+      return swRenderButtonCard(rowsForButton[0], rowsForButton);
+    }).join('');
+    host.innerHTML = html || '<div style="padding:8px;color:#888;font-size:0.85rem;">no buttons</div>';
+  }
+
+  function swRenderButtonCard(headerRow, allRowsForButton) {
+    return `
+      <div class="button-row" data-sw-btn="${headerRow.button}">
+        <div class="button-label">
+          ${escHtml(headerRow.label)}
+          <div style="font-weight:normal;color:#aaa;font-size:0.72rem;">btn${headerRow.button}</div>
+        </div>
+        <div class="event-rows">
+          ${allRowsForButton.map(r => `
+            <div class="event-row">
+              <span class="event-type ${r.event}">${r.event}</span>
+              <div class="device-picker ${(r.bindings && r.bindings.length) ? '' : 'empty'}"
+                   data-sw-picker="${escHtml(r.id)}"
+                   onclick="swOpenPicker('${escHtml(r.id)}')">
+                ${(r.bindings && r.bindings.length)
+                    ? r.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bindingTag(s)}">${bindingTag(s)}</span>`).join(' · ')
+                    : '— select devices —'}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  function swRenderPickerDisplay(rowId) {
+    const row = _swButtons.find(r => r.id === rowId);
+    const el = document.querySelector(`[data-sw-picker="${rowId}"]`);
+    if (!row || !el) return;
+    el.classList.toggle('empty', !(row.bindings && row.bindings.length));
+    el.innerHTML = (row.bindings && row.bindings.length)
+      ? row.bindings.map(s => `${escHtml(s.label ? s.name + ':' + s.label : (s.name || '?'))}<span class="action-tag ${bindingTag(s)}">${bindingTag(s)}</span>`).join(' · ')
+      : '— select devices —';
+  }
+
+  window.swOpenPicker = function (rowId) {
+    const row = _swButtons.find(r => r.id === rowId);
+    if (!row) return;
+    if (!row.bindings) row.bindings = [];
+    _swActivePicker = { rowId, snapshot: JSON.parse(JSON.stringify(row.bindings)) };
+    document.getElementById('picker-title').textContent = `${row.label} · ${row.event}`;
+    document.getElementById('picker-search-input').value = '';
+    swRenderPickerList('');
+    document.getElementById('picker-overlay').classList.add('show');
+    // Route the shared overlay's close/filter handlers to the smart-switch
+    // helpers for the duration of this picker session; restored on close.
+    window._swPickerActive = true;
+  };
+
+  function swRenderPickerList(filter) {
+    if (!_swActivePicker) return;
+    const row = _swButtons.find(r => r.id === _swActivePicker.rowId);
+    if (!row) return;
+    if (!row.bindings) row.bindings = [];
+    const selByKey = new Map(row.bindings.map(s => [s.device_id + ':' + (s.channel || ''), s]));
+    const f = (filter || '').toLowerCase();
+    const list = document.getElementById('picker-list');
+    list.innerHTML = '';
+    let currentRoom = null;
+    const defAct = 'toggle';
+
+    // ★ Scenes — run a Main Agent Scene (apartment.scenes) from this button.
+    const sceneMatches = (_scenes || []).filter(sc =>
+      !f || (sc.name || '').toLowerCase().includes(f) || 'scene'.includes(f));
+    if (sceneMatches.length) {
+      const rl = document.createElement('div');
+      rl.className = 'picker-room-label';
+      rl.textContent = '★ Scenes';
+      list.appendChild(rl);
+      for (const sc of sceneMatches) {
+        const nm = sc.name;
+        const sceneDevId = 'scene:' + nm;
+        const sceneSel = selByKey.get(sceneDevId + ':');
+        const item = document.createElement('div');
+        item.className = 'picker-item';
+        item.innerHTML = `
+          <input type="checkbox" ${sceneSel ? 'checked' : ''} data-sw-item="${escHtml(sceneDevId + ':')}">
+          <span class="picker-item-name">🎬 ${escHtml(nm)}</span>
+          <span class="picker-item-meta">scene</span>
+        `;
+        const cb = item.querySelector('input[type=checkbox]');
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            row.bindings.push({ type: 'scene', target: nm, device_id: sceneDevId, channel: null, name: nm, label: null });
+          } else {
+            row.bindings = row.bindings.filter(s => s.device_id !== sceneDevId);
+          }
+        });
+        list.appendChild(item);
+      }
+    }
+
+    for (const d of controllableDevices) {
+      const rowKey = d.device_id + ':' + (d.channel || '');
+      const displayName = d.label ? `${d.name} — ${d.label}` : d.name;
+      const blob = `${d.name} ${d.label || ''} ${d.room || ''}`.toLowerCase();
+      if (f && !blob.includes(f)) continue;
+
+      if (d.room !== currentRoom) {
+        currentRoom = d.room;
+        const rl = document.createElement('div');
+        rl.className = 'picker-room-label';
+        rl.textContent = d.room || '(no room)';
+        list.appendChild(rl);
+      }
+
+      const sel = selByKey.get(rowKey);
+      const isAlexa  = d.protocol === 'alexa';
+      const isVacuum = d.protocol === 'vacuum';
+      let actionSelectHtml;
+      if (isVacuum) {
+        const verbs = Object.values(d.dps_config || {})
+          .filter(cfg => cfg && cfg.action_on)
+          .map(cfg => cfg.action_on);
+        const curVal = sel ? sel.action : (verbs[0] || 'start');
+        const verbOpts = verbs.map(verb =>
+          `<option value="${verb}" ${verb === curVal ? 'selected' : ''}>${verb}</option>`
+        ).join('');
+        actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
+          <optgroup label="Vacuum">${verbOpts}</optgroup>
+        </select>`;
+      } else if (isAlexa) {
+        const curVal = sel
+          ? alexaOptionValue(sel.action, sel.template_name || sel.station_name || null)
+          : 'speak:' + ((_alexaAnnouncements[0] && _alexaAnnouncements[0].name) || '');
+        const speakOpts = (_alexaAnnouncements || []).map(t => {
+          const v = alexaOptionValue('speak', t.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(t.name)}</option>`;
+        }).join('');
+        const playOpts = (_alexaStations || []).map(s2 => {
+          const v = alexaOptionValue('play', s2.name);
+          return `<option value="${escHtml(v)}" ${v === curVal ? 'selected' : ''}>${escHtml(s2.name)}</option>`;
+        }).join('');
+        actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
+          ${speakOpts ? `<optgroup label="Speak">${speakOpts}</optgroup>` : ''}
+          ${playOpts  ? `<optgroup label="Play music">${playOpts}</optgroup>` : ''}
+          <optgroup label="Stop"><option value="stop" ${'stop' === curVal ? 'selected' : ''}>stop</option></optgroup>
+        </select>`;
+      } else {
+        const allowedActions = (d.has_on !== undefined || d.has_off !== undefined)
+          ? ACTIONS.filter(a =>
+              (a.v === 'turn_on'  && d.has_on) ||
+              (a.v === 'turn_off' && d.has_off) ||
+              (a.v === 'toggle'   && d.has_on && d.has_off)
+            )
+          : ACTIONS;
+        actionSelectHtml = `<select class="picker-action-select" data-sw-action="${escHtml(rowKey)}" ${sel ? '' : 'disabled'}>
+          ${allowedActions.map(a => `<option value="${a.v}" ${(sel?.action || defAct) === a.v ? 'selected' : ''}>${a.label}</option>`).join('')}
+        </select>`;
+      }
+      const item = document.createElement('div');
+      item.className = 'picker-item';
+      const checked = sel ? 'checked' : '';
+      item.innerHTML = `
+        <input type="checkbox" ${checked} data-sw-item="${escHtml(rowKey)}">
+        <span class="picker-item-name">${escHtml(displayName)}</span>
+        <span class="picker-item-meta">${escHtml(d.protocol || '')}</span>
+        ${actionSelectHtml}
+      `;
+      const cb = item.querySelector('input[type=checkbox]');
+      const selEl = item.querySelector('select.picker-action-select');
+      function bindingFromSelect() {
+        if (isAlexa) {
+          const parsed = parseAlexaOptionValue(selEl.value);
+          const out = { action: parsed.action };
+          if (parsed.action === 'speak') out.template_name = parsed.name || '';
+          if (parsed.action === 'play')  out.station_name  = parsed.name || '';
+          return out;
+        }
+        return { action: selEl.value || defAct };
+      }
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          const bindFields = bindingFromSelect();
+          row.bindings.push({
+            device_id: d.device_id, channel: d.channel, name: d.name,
+            label: d.label || '', ...bindFields,
+          });
+          selEl.disabled = false;
+        } else {
+          row.bindings = row.bindings.filter(s => !(s.device_id === d.device_id && (s.channel || '') === (d.channel || '')));
+          selEl.disabled = true;
+        }
+      });
+      selEl.addEventListener('change', () => {
+        const b = row.bindings.find(s => s.device_id === d.device_id && (s.channel || '') === (d.channel || ''));
+        if (!b) return;
+        const fields = bindingFromSelect();
+        b.action = fields.action;
+        if (isAlexa) {
+          if (fields.template_name) b.template_name = fields.template_name; else delete b.template_name;
+          if (fields.station_name)  b.station_name  = fields.station_name;  else delete b.station_name;
+        }
+      });
+      list.appendChild(item);
+    }
+  }
+
+  // Override the shared picker close + filter while a smart-switch picker is
+  // active so the same overlay routes to the right state. Falls through to the
+  // Wallmote picker behavior when _swPickerActive is not set.
+  const _origClosePicker = window.closePicker;
+  window.closePicker = function (save) {
+    if (window._swPickerActive) {
+      document.getElementById('picker-overlay').classList.remove('show');
+      if (!save && _swActivePicker) {
+        const row = _swButtons.find(r => r.id === _swActivePicker.rowId);
+        if (row) row.bindings = _swActivePicker.snapshot;
+      }
+      if (_swActivePicker) swRenderPickerDisplay(_swActivePicker.rowId);
+      _swActivePicker = null;
+      window._swPickerActive = false;
+      return;
+    }
+    return _origClosePicker.apply(this, arguments);
+  };
+  const _origFilterPicker = window.filterPicker;
+  window.filterPicker = function () {
+    if (window._swPickerActive) {
+      swRenderPickerList(document.getElementById('picker-search-input').value);
+      return;
+    }
+    return _origFilterPicker.apply(this, arguments);
+  };
+
+  window.swSaveAllBindings = async function () {
+    const payload = {};
+    for (const r of _swButtons) {
+      payload[r.id] = (r.bindings || []).map(b => {
+        const out = {
+          device_id: b.device_id,
+          channel:   b.channel,
+          action:    b.action,
+          name:      b.name,
+          label:     b.label || '',
+        };
+        if (b.template_name) out.template_name = b.template_name;
+        if (b.station_name)  out.station_name  = b.station_name;
+        if (b.type)   out.type   = b.type;
+        if (b.target) out.target = b.target;
+        return out;
+      });
+    }
+    try {
+      const resp = await fetch('/api/dashboard-settings/' + encodeURIComponent(SW_STORAGE_KEY), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: payload }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      alert('Saved.');
+    } catch (e) {
+      alert('Save failed: ' + e.message);
+    }
+  };
+
+  // Lazy-load on first Smart Switch tab activation. Chains the current
+  // window.showTab (the IRobot wrapper above), keeping every other tab hook.
+  const _origShowTabSw = window.showTab;
+  let _swInitialized = false;
+  window.showTab = function (name, btn) {
+    if (typeof _origShowTabSw === 'function') _origShowTabSw(name, btn);
+    if (name === 'smart-switch' && !_swInitialized) {
+      _swInitialized = true;
+      swLoadBindings();
+    }
+  };
+})();
