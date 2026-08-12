@@ -330,7 +330,10 @@ def _signal_for(d, ctx, shared):
 # 'open', so a point-in-time door check always sees 'closed'. We hold the decision a few
 # seconds, then re-check whether the Main Door opened AROUND the presence (via People
 # Home's _main_door_open_ts timer) and suppress if so.
-_HOLD_SEC = 6   # wait this long for the Main Door to register 'open' before deciding
+_HOLD_SEC = 3   # wait this long for the Main Door to register 'open' before deciding.
+                # The door 'open' event lands in the SAME second as the presence (sub-second
+                # race) and People Home sets _main_door_open_ts within ~1-2s, so 3s is ample
+                # margin while keeping the notification snappy. Below ~2s risks the race back.
 _DOOR_PRE = 4   # also suppress if the door opened up to this many seconds BEFORE the presence
 
 
