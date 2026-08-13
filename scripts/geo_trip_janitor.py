@@ -41,6 +41,7 @@ Flags:
              cron runs without the flag.)
 """
 import argparse
+import json
 import logging
 import math
 import os
@@ -341,8 +342,42 @@ def clean_place_phantoms(conn, tele_far, max_tele_path_m, gmap, clat, clon, dry_
         if delete_legs:
             cur.execute("DELETE FROM phone_place_trips WHERE id = ANY(%s)", ([l['id'] for l in delete_legs],))
         cur.execute("DELETE FROM phone_places WHERE id = ANY(%s)", (ids,))
+    _scrub_state_place_ids(conn, ids)   # keep geo_places.py's cursor from dangling
     log.info('places: cleaned %d phantom anchor(s) %s — deleted %d teleport leg(s), re-stitched %d real leg(s) to Home',
              len(ids), ids, len(delete_legs), len(restitch))
+
+
+def _scrub_state_place_ids(conn, gone_ids):
+    """After deleting phantom phone_places rows, strip every reference to them from
+    the Places-layer cursor (geo_place_state.state JSON) — anchors[], pending_origin,
+    at_anchor. Without this the cursor keeps naming a deleted place and geo_places.py's
+    record_leg() FK-crashes every run (the 2026-08 "trip won't finish" incident).
+    Mirrors _scrub_dangling_places() in geo_places.py, applied at the delete source."""
+    gone = set(gone_ids)
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT group_id, state FROM geo_place_state")
+        rows = cur.fetchall()
+    for row in rows:
+        st = row['state'] or {}
+        changed = False
+        anchors = st.get('anchors') or []
+        kept = [a for a in anchors if a.get('place_id') not in gone]
+        if len(kept) != len(anchors):
+            st['anchors'] = kept
+            changed = True
+        for key in ('pending_origin', 'at_anchor'):
+            v = st.get(key)
+            if v and v.get('kind') == 'place' and v.get('place_id') in gone:
+                st[key] = None
+                changed = True
+        if changed:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE geo_place_state SET state = %s::jsonb, updated_at = NOW() "
+                    "WHERE group_id = %s",
+                    (json.dumps(st), row['group_id']))
+            log.info('places: scrubbed cursor group=%s of deleted place id(s) %s',
+                     row['group_id'], sorted(gone))
 
 
 def main():

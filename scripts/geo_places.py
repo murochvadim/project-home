@@ -210,6 +210,22 @@ def record_leg(group_id, label, kind, origin, dest, started_at, returned_at, sib
                  group_id, origin['name'], dest['name'], dur, path)
         return
     conn = get_conn()
+    # FK guard: from_place_id / to_place_id both REFERENCE phone_places ON DELETE SET
+    # NULL, but a fresh INSERT naming a since-deleted place still violates the FK. If
+    # the janitor deleted an endpoint's place mid-run (after _scrub_dangling_places ran
+    # this tick), insert NULL for that column instead of crashing — keep the *_name.
+    o_pid, d_pid = origin.get('place_id'), dest.get('place_id')
+    check = [p for p in (o_pid, d_pid) if p is not None]
+    if check:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM phone_places WHERE id = ANY(%s)", (check,))
+            alive = {r[0] for r in cur.fetchall()}
+        if o_pid is not None and o_pid not in alive:
+            log.warning('record_leg: origin place %s gone — from_place_id NULL', o_pid)
+            o_pid = None
+        if d_pid is not None and d_pid not in alive:
+            log.warning('record_leg: dest place %s gone — to_place_id NULL', d_pid)
+            d_pid = None
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO phone_place_trips
@@ -218,7 +234,7 @@ def record_leg(group_id, label, kind, origin, dest, started_at, returned_at, sib
                 duration_sec, max_dist_m, path_length_m, outside_pings)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (group_id, label, kind, origin['name'], dest['name'],
-             origin.get('place_id'), dest.get('place_id'),
+             o_pid, d_pid,
              started_at, returned_at, dur, max_dist, path, outside),
         )
     log.info('leg group=%s %s: %s -> %s dur=%ds max=%dm path=%dm',
@@ -254,6 +270,43 @@ def latest_ping_ts(siblings):
                     (siblings,))
         r = cur.fetchone()
         return r[0] if r else None
+
+
+def _scrub_dangling_places(state):
+    """Self-heal: drop cursor references to phone_places rows that no longer exist.
+
+    The trip janitor's phantom cleaner DELETEs phantom `phone_places` rows but can't
+    touch this opaque state JSON, so a deleted place_id can linger in anchors /
+    pending_origin / at_anchor. record_leg() then INSERTs a phone_place_trips row with
+    that place_id as from_/to_place_id and the FK rejects it → the run crashes EVERY
+    tick (and re-promotes duplicate stays). Removing the dangling refs here, once per
+    run, breaks that loop no matter how the place got deleted. Mutates + returns state."""
+    referenced = set()
+    for a in state.get('anchors') or []:
+        if a.get('place_id') is not None:
+            referenced.add(a['place_id'])
+    for key in ('pending_origin', 'at_anchor'):
+        v = state.get(key)
+        if v and v.get('kind') == 'place' and v.get('place_id') is not None:
+            referenced.add(v['place_id'])
+    if not referenced:
+        return state
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM phone_places WHERE id = ANY(%s)", (list(referenced),))
+        alive = {r[0] for r in cur.fetchall()}
+    gone = referenced - alive
+    if not gone:
+        return state
+    log.warning('scrubbing %d dangling place ref(s) %s from cursor (deleted from phone_places)',
+                len(gone), sorted(gone))
+    state['anchors'] = [a for a in (state.get('anchors') or [])
+                        if a.get('place_id') not in gone]
+    for key in ('pending_origin', 'at_anchor'):
+        v = state.get(key)
+        if v and v.get('kind') == 'place' and v.get('place_id') in gone:
+            state[key] = None
+    return state
 
 
 # ─── The state machine ───────────────────────────────────────────────
@@ -460,6 +513,7 @@ def process_group(cfg, gid, siblings, label):
     last_ts = row['last_ts']
     state = row['state'] or {'at_anchor': None, 'anchors': [],
                              'pending_origin': None, 'dwell': None}
+    _scrub_dangling_places(state)   # self-heal any janitor-deleted place refs
     conn = get_conn()
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         if last_ts is not None:
