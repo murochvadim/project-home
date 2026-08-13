@@ -1,0 +1,12 @@
+[Unit]
+Description=go2rtc balcony camera relay (Logitech C925e)
+After=network.target
+
+[Service]
+ExecStart=/opt/go2rtc/go2rtc -config /opt/go2rtc/go2rtc.yaml
+WorkingDirectory=/opt/go2rtc
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

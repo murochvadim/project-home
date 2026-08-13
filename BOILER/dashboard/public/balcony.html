@@ -117,6 +117,7 @@
     <button class="tab-btn" onclick="showTab('roborock', this)">Roborock</button>
     <button class="tab-btn" onclick="showTab('irrigation', this)">Irrigation</button>
     <button class="tab-btn" onclick="showTab('smart-tablet', this); peInit()">Smart Tablet</button>
+    <button class="tab-btn" onclick="showTab('camera', this)">Camera</button>
   </div>
 
   <div class="tab-panel active" id="tab-panel">
@@ -412,6 +413,52 @@
     </div>
   </div>
 
+  <!-- ════════════════════════════════════════════════════ -->
+  <!-- TAB: Camera — Logitech C925e (USB on Proxmox host) via go2rtc + v4l2 controls -->
+  <!-- ════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-camera">
+
+    <!-- 📹 Video -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">📹 Balcony Camera</h2>
+        <span id="cam-status" style="font-size:0.75rem;color:#888;">Logitech C925e</span>
+      </div>
+      <div style="background:#000;border-radius:8px;overflow:hidden;min-height:200px;display:flex;align-items:center;justify-content:center;position:relative;">
+        <img id="cam-mjpeg" alt="camera" style="max-width:100%;max-height:62vh;display:none;">
+        <video id="cam-webrtc" playsinline style="max-width:100%;max-height:62vh;display:none;background:#000;"></video>
+        <span id="cam-msg" style="color:#888;font-size:0.82rem;padding:26px;">Open this tab to load the stream…</span>
+      </div>
+      <div style="font-size:0.72rem;color:#888;margin-top:8px;">go2rtc on the Proxmox host (192.168.1.101) · MJPEG live; switches to WebRTC audio+video when you Listen.</div>
+    </div>
+
+    <!-- 🔊 Audio -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">🔊 Audio (Listen)</h2>
+        <span id="cam-audio-status" style="font-size:0.72rem;color:#888;"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <button id="cam-listen-btn" class="btn" onclick="camToggleListen()">🔊 Listen</button>
+        <label style="font-size:0.82rem;color:#555;display:flex;align-items:center;gap:6px;">Volume
+          <input id="cam-vol" type="range" min="0" max="100" value="80" oninput="camSetVol(this.value)" style="width:130px;">
+        </label>
+        <canvas id="cam-meter" width="300" height="54" style="background:#111;border-radius:6px;"></canvas>
+      </div>
+      <div style="font-size:0.72rem;color:#888;margin-top:8px;">Streams the balcony mic over WebRTC. Muted until you press Listen (browser autoplay rule). The scope shows the live audio waveform.</div>
+    </div>
+
+    <!-- 🎛 Controls -->
+    <div class="card" style="padding:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">🎛 Camera Controls</h2>
+        <button class="btn btn-secondary btn-sm" onclick="camResetControls()">↺ Reset to defaults</button>
+      </div>
+      <div id="cam-controls" style="font-size:0.85rem;color:#888;">Open this tab to load controls…</div>
+    </div>
+
+  </div>
+
 </main>
 
 <!-- Device picker popover (shared with bindings UI) -->
@@ -524,7 +571,7 @@
 <script src="js/alerts-monitor.js?v=12"></script>
 <script src="js/reminders-badge.js?v=13"></script>
 <script src="js/notify-toast.js?v=12"></script>
-<script src="js/balcony.js?v=20260807b"></script>
+<script src="js/balcony.js?v=20260813cam2"></script>
 <script src="js/panel-editor.js?v=13"></script>
 </body>
 </html>

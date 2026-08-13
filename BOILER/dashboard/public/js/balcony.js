@@ -2502,3 +2502,153 @@
   };
 })();
 
+// ════════════════════════════════════════════════════════════════════════
+// ─── Camera tab — Logitech C925e (USB on the Proxmox host) ───────────────
+// Own self-contained IIFE (balcony.js has several IIFEs). Video = MJPEG from
+// go2rtc on the host (zero transcode); Listen switches to WebRTC (video+audio,
+// lazy transcode on the host). Controls proxied via /api/balconycam/*.
+// ════════════════════════════════════════════════════════════════════════
+(function () {
+  const GO2RTC = 'http://192.168.1.101:1984';
+  const SRC = 'balcony_cam';
+  let _pc = null, _actx = null, _meterRAF = null, _listening = false, _reloadT = null;
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function label(n) { return n.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); }
+  function $(id) { return document.getElementById(id); }
+
+  function mjpeg(on) {
+    const img = $('cam-mjpeg'), msg = $('cam-msg');
+    if (!img) return;
+    if (on) {
+      img.onload = () => { if (msg) msg.style.display = 'none'; };
+      img.onerror = () => { if (msg) { msg.style.display = 'block'; msg.textContent = 'stream unavailable — is go2rtc up on the host?'; } };
+      img.src = GO2RTC + '/api/stream.mjpeg?src=' + SRC + '&_=' + Date.now();
+      img.style.display = 'block';
+    } else { img.src = ''; img.style.display = 'none'; }
+  }
+
+  async function loadControls() {
+    const host = $('cam-controls'); if (!host) return;
+    try {
+      const r = await fetch('/api/balconycam/controls').then(r => r.json());
+      if (!r.ok) { host.innerHTML = '<div style="color:#c0392b;">controls unavailable: ' + esc(r.error || 'error') + '</div>'; return; }
+      host.innerHTML = (r.controls || []).map(row).join('') || '<div style="color:#888;">no controls</div>';
+    } catch (e) { host.innerHTML = '<div style="color:#c0392b;">controls error: ' + esc(e.message) + '</div>'; }
+  }
+  function row(c) {
+    const dim = c.inactive ? 'opacity:0.45;' : '';
+    let ctrl = '';
+    if (c.type === 'int') {
+      ctrl = `<input type="range" min="${c.min}" max="${c.max}" step="${c.step || 1}" value="${c.value}" ${c.inactive ? 'disabled' : ''}
+                oninput="camSet('${c.name}',this.value);this.nextElementSibling.textContent=this.value;" style="width:170px;vertical-align:middle;">
+              <span style="display:inline-block;min-width:46px;text-align:right;font:12px monospace;">${c.value}</span>`;
+    } else if (c.type === 'bool') {
+      ctrl = `<input type="checkbox" ${c.value ? 'checked' : ''} onchange="camSet('${c.name}',this.checked?1:0)">`;
+    } else if (c.type === 'menu') {
+      ctrl = `<select onchange="camSet('${c.name}',this.value)" ${c.inactive ? 'disabled' : ''}>
+                ${(c.menu || []).map(m => `<option value="${m.value}" ${m.value === c.value ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}
+              </select>`;
+    } else return '';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0;${dim}">
+              <span style="min-width:190px;">${esc(label(c.name))}</span>${ctrl}</div>`;
+  }
+  window.camSet = async function (name, value) {
+    try { await fetch('/api/balconycam/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, value: parseInt(value, 10) }) }); }
+    catch (e) {}
+    // auto-* toggles enable/disable their manual slider → refresh shortly after
+    clearTimeout(_reloadT); _reloadT = setTimeout(loadControls, 450);
+  };
+  window.camResetControls = async function () {
+    try { await fetch('/api/balconycam/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) }); } catch (e) {}
+    setTimeout(loadControls, 300);
+  };
+
+  async function startWebRTC() {
+    const v = $('cam-webrtc');
+    const pc = new RTCPeerConnection({ iceServers: [] });   // LAN only, no STUN
+    _pc = pc;
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+    const ms = new MediaStream();
+    pc.ontrack = (e) => { ms.addTrack(e.track); v.srcObject = ms; if (e.track.kind === 'audio') meter(ms); };
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise(res => { if (pc.iceGatheringState === 'complete') return res(); const t = setTimeout(res, 1500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }); });
+    const resp = await fetch(GO2RTC + '/api/webrtc?src=' + SRC, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp }) });
+    if (!resp.ok) throw new Error('go2rtc ' + resp.status);
+    let ans = await resp.json();
+    if (typeof ans === 'string') ans = { type: 'answer', sdp: ans };
+    await pc.setRemoteDescription(ans);
+    v.muted = false; v.volume = (($('cam-vol') || {}).value || 80) / 100;
+    await v.play().catch(() => {});
+  }
+  function stopWebRTC() {
+    if (_pc) { try { _pc.close(); } catch (e) {} _pc = null; }
+    const v = $('cam-webrtc'); if (v) { v.srcObject = null; v.style.display = 'none'; }
+    if (_meterRAF) { cancelAnimationFrame(_meterRAF); _meterRAF = null; }
+    if (_actx) { try { _actx.close(); } catch (e) {} _actx = null; }
+  }
+  function meter(ms) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      _actx = new AC();
+      if (_actx.state === 'suspended') _actx.resume().catch(() => {});
+      const an = _actx.createAnalyser(); an.fftSize = 1024;
+      _actx.createMediaStreamSource(ms).connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      const cvs = $('cam-meter'), ctx = cvs && cvs.getContext('2d');
+      if (!ctx) return;
+      const draw = () => {
+        an.getByteTimeDomainData(buf);
+        const W = cvs.width, H = cvs.height;
+        ctx.fillStyle = '#111'; ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = '#1f6f43'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke(); // baseline
+        let peak = 0;
+        ctx.lineWidth = 1.6; ctx.strokeStyle = '#2ecc71'; ctx.beginPath();
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;                 // -1..1
+          if (Math.abs(v) > peak) peak = Math.abs(v);
+          const x = (i / (buf.length - 1)) * W;
+          const y = H / 2 - v * (H / 2 - 2);
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        // peak bar on the right, turns red when hot
+        ctx.fillStyle = peak > 0.9 ? '#e74c3c' : '#2ecc71';
+        ctx.fillRect(W - 5, H - Math.max(2, peak * H), 4, Math.max(2, peak * H));
+        _meterRAF = requestAnimationFrame(draw);
+      };
+      draw();
+    } catch (e) {}
+  }
+  window.camToggleListen = async function () {
+    const btn = $('cam-listen-btn'), img = $('cam-mjpeg'), v = $('cam-webrtc'), msg = $('cam-msg');
+    if (!_listening) {
+      if (msg) { msg.style.display = 'block'; msg.textContent = 'connecting audio…'; }
+      try {
+        await startWebRTC();
+        if (img) img.style.display = 'none';
+        if (v) v.style.display = 'block';
+        if (msg) msg.style.display = 'none';
+        _listening = true; btn.textContent = '🔇 Stop listening';
+      } catch (e) {
+        if (msg) { msg.style.display = 'block'; msg.textContent = 'audio failed: ' + e.message + ' — video stays MJPEG.'; }
+        stopWebRTC(); mjpeg(true);
+      }
+    } else {
+      stopWebRTC(); mjpeg(true);
+      _listening = false; btn.textContent = '🔊 Listen';
+    }
+  };
+  window.camSetVol = function (val) { const v = $('cam-webrtc'); if (v) v.volume = (val || 0) / 100; };
+
+  function camStart() { mjpeg(true); loadControls(); }
+  function camStop() { if (_listening) window.camToggleListen(); mjpeg(false); }
+
+  const _prevShowTabCam = window.showTab;
+  window.showTab = function (name, btn) {
+    if (typeof _prevShowTabCam === 'function') _prevShowTabCam(name, btn);
+    if (name === 'camera') camStart(); else camStop();
+  };
+})();
+

@@ -137,6 +137,10 @@ require('./routes-robotcam')(app);
 // Ext Disk Backup — full-project backup to a USB disk on the PVE host (status/start/stop).
 require('./routes-usbbackup')(app);
 
+// Balcony camera (Logitech C925e USB on the PVE host) — v4l2 control proxy for the
+// Camera tab. Live video/audio is served by go2rtc on the host (:1984), not here.
+require('./routes-balconycam')(app);
+
 // Phone Link recovery (Windows-host action; spawns PowerShell on this host) +
 // single-alert dismiss. Buttons on Project Health -> System Alerts.
 require('./routes-phonelink')(app, db);
