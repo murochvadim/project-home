@@ -1724,7 +1724,8 @@
   function scenesMediaOpts() {
     const audio = _scenesPlaylists.filter(p => (p.kind || 'audio') !== 'video');
     const video = _scenesPlaylists.filter(p => (p.kind || 'audio') === 'video');
-    let out = '<option value="stop">⏹ Stop media (any TV)</option>';
+    let out = '<option value="pause">⏯ Play/Pause (current)</option>'
+            + '<option value="stop">⏹ Stop media (any TV)</option>';
     for (const t of _SCENES_MEDIA_TARGETS) {
       const opt = p => `<option value="play|${t.key}|${scenesEsc(String(p.id))}">${scenesEscText(p.name)}</option>`;
       if (audio.length) out += `<optgroup label="▶ ${scenesEsc(t.label)} — 🎵 Audio">${audio.map(opt).join('')}</optgroup>`;
@@ -1896,12 +1897,16 @@
   };
   // Add a TV-media item to the scene: play a playlist on a chosen TV, or Stop.
   // Structured entry {t:'media',…} — expanded server-side by _scenes.py → _dispatch_media.
-  // val: 'stop'  |  'play|<target>|<playlist_id>'
+  // val: 'pause'  |  'stop'  |  'play|<target>|<playlist_id>'
   window.scenesAddMedia = function (i, val) {
     if (!val || !scenesList[i]) return;
     if (!Array.isArray(scenesList[i].devices)) scenesList[i].devices = [];
     if (val === 'stop') {
       scenesList[i].devices.push({ t: 'media', media_action: 'stop', label: '⏹ Stop media' });
+    } else if (val === 'pause') {
+      // Play/Pause the CURRENT media (toggle) — queue-aware, no playlist needed.
+      // Engine _dispatch_media already maps 'pause' -> /api/queue/pause (toggle).
+      scenesList[i].devices.push({ t: 'media', media_action: 'pause', label: '⏯ Play/Pause (current)' });
     } else if (val.indexOf('play|') === 0) {
       const parts = val.split('|');           // ['play', target, pid]
       const target = parts[1];
