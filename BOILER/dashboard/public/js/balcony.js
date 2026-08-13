@@ -2511,6 +2511,8 @@
 (function () {
   const GO2RTC = 'http://192.168.1.101:1984';
   const SRC = 'balcony_cam';
+  const LIGHT_ID = '321046412cf43237c3d9';   // "Balcony Device Switch"
+  const LIGHT_CH = '2';                        // ch2 = Balcony Roof Right Light
   let _pc = null, _actx = null, _meterRAF = null, _listening = false, _reloadT = null;
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -2642,7 +2644,33 @@
   };
   window.camSetVol = function (val) { const v = $('cam-webrtc'); if (v) v.volume = (val || 0) / 100; };
 
-  function camStart() { mjpeg(true); loadControls(); }
+  // 💡 Balcony Roof Right Light — ch2 of the "Balcony Device Switch" multi-gang.
+  // ⚠ Driven via the HA toggle path, NOT a local set_dps: this firmware-locked
+  // multi-gang switch ACKs local OFF writes (ok=True) but does NOT apply them —
+  // only HA switch.turn_on/off works (verified 2026-08-13). State read from last_state.
+  function paintLight(on) {
+    const dot = $('cam-light-dot');
+    if (dot) dot.style.background = on === true ? '#27ae60' : (on === false ? '#bbb' : '#e0c341');
+  }
+  async function camLightRead() {
+    try {
+      const ds = await fetch('/api/devices/states?ids=' + LIGHT_ID).then(r => r.json());
+      const ls = (Array.isArray(ds) && ds[0] && ds[0].last_state) || {};
+      paintLight(ls[LIGHT_CH] === true || ls[LIGHT_CH] === 1);
+    } catch (e) {}
+  }
+  window.camLightSet = async function (on) {
+    paintLight(on);   // optimistic
+    try {
+      await fetch('/api/devices/' + LIGHT_ID + '/toggle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: !!on, channel: LIGHT_CH }),
+      });
+    } catch (e) {}
+    setTimeout(camLightRead, 900);   // confirm from real last_state (HA roundtrip)
+  };
+
+  function camStart() { mjpeg(true); loadControls(); camLightRead(); }
   function camStop() { if (_listening) window.camToggleListen(); mjpeg(false); }
 
   const _prevShowTabCam = window.showTab;

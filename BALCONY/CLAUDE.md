@@ -155,8 +155,18 @@ runs `v4l2-ctl`:
 - `POST /api/balconycam/control` `{name,value}` (strict-validated → no shell injection) or `{reset:true}`.
 - `GET /api/balconycam/status` → `{go2rtc, camera}`.
 
+**💡 Balcony Roof Right Light on/off (2026-08-13)** — a light control lives in the **top-right corner of the
+video card header** (the "Logitech C925e" label was removed). It toggles **channel `"2"`** of the
+"Balcony Device Switch" (`321046412cf43237c3d9`; ch1 = Left Roof Light, ch2 = Right Roof Light). **⚠ Driven
+via the HA toggle path (`POST /api/devices/:id/toggle {state,channel:'2'}` → `switch.turn_on/off`), NOT a
+local `set_dps`:** this **firmware-locked multi-gang switch ACKs a local OFF write (`ok=True`) but silently
+does NOT apply it** — only HA actually switches it (verified 2026-08-13 by polling `last_state`; ON via
+local looked fine but OFF never stuck; the HA path holds `false`). State dot reads `last_state["2"]`. This is
+the same un-local-controllable multi-gang class the TUYA_LOCAL work flagged. The 🎛 Controls card is
+**half-height + scrolls** (`#cam-controls max-height:260px`). Cache-bust `?v=20260813cam4`.
+
 **Dashboard = `balcony.html` Camera tab + a self-contained `cam*` IIFE in `js/balcony.js`** (balcony.js has
-several IIFEs; the camera code is its own, `?v=20260813cam2`). Video card = MJPEG `<img>` by default;
+several IIFEs; the camera code is its own, `?v=20260813cam4`). Video card = MJPEG `<img>` by default;
 **Listen** switches to a WebRTC `<video>` (go2rtc HTTP `/api/webrtc?src=` offer/answer, `RTCPeerConnection`
 recvonly video+audio), unmutes it, and drives the **waveform oscilloscope** (Web Audio `AnalyserNode`,
 `getByteTimeDomainData`) + volume. Controls render dynamically (slider/checkbox/dropdown by type),

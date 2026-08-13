@@ -422,7 +422,12 @@
     <div class="card" style="padding:14px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
         <h2 style="margin:0;font-size:1.05rem;">📹 Balcony Camera</h2>
-        <span id="cam-status" style="font-size:0.75rem;color:#888;">Logitech C925e</span>
+        <div style="display:flex;align-items:center;gap:6px;font-size:0.8rem;">
+          <span id="cam-light-dot" style="width:9px;height:9px;border-radius:50%;background:#bbb;display:inline-block;" title="light state"></span>
+          <span style="color:#555;">💡 Roof Right Light</span>
+          <button class="btn btn-sm" onclick="camLightSet(true)" style="padding:2px 10px;">On</button>
+          <button class="btn btn-secondary btn-sm" onclick="camLightSet(false)" style="padding:2px 10px;">Off</button>
+        </div>
       </div>
       <div style="background:#000;border-radius:8px;overflow:hidden;min-height:200px;display:flex;align-items:center;justify-content:center;position:relative;">
         <img id="cam-mjpeg" alt="camera" style="max-width:100%;max-height:62vh;display:none;">
@@ -454,7 +459,7 @@
         <h2 style="margin:0;font-size:1.05rem;">🎛 Camera Controls</h2>
         <button class="btn btn-secondary btn-sm" onclick="camResetControls()">↺ Reset to defaults</button>
       </div>
-      <div id="cam-controls" style="font-size:0.85rem;color:#888;">Open this tab to load controls…</div>
+      <div id="cam-controls" style="font-size:0.85rem;color:#888;max-height:260px;overflow-y:auto;">Open this tab to load controls…</div>
     </div>
 
   </div>
@@ -571,7 +576,7 @@
 <script src="js/alerts-monitor.js?v=12"></script>
 <script src="js/reminders-badge.js?v=13"></script>
 <script src="js/notify-toast.js?v=12"></script>
-<script src="js/balcony.js?v=20260813cam2"></script>
+<script src="js/balcony.js?v=20260813cam4"></script>
 <script src="js/panel-editor.js?v=13"></script>
 </body>
 </html>
