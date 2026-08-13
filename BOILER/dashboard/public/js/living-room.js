@@ -478,8 +478,11 @@
         bindings = {};
       }
 
-      // Populate all picker displays from saved state
-      document.querySelectorAll('.device-picker').forEach(p => {
+      // Populate the WALLMOTE picker displays from saved state. Scope to
+      // [data-wallmote] so this never touches the Smart Switch tab's pickers
+      // (data-sw-picker) — those manage their own load; an unscoped selector
+      // wiped them to "— select devices —" on every Refresh.
+      document.querySelectorAll('.device-picker[data-wallmote]').forEach(p => {
         updatePickerDisplay(p, p.dataset.wallmote, p.dataset.button, p.dataset.event);
       });
     } catch (e) {
@@ -2020,6 +2023,44 @@
         }
       });
       list.appendChild(item);
+    }
+
+    // ⚠ Bound-but-missing: a binding whose target scene/device was renamed or
+    // deleted has no checkbox above (the loops only render CURRENT scenes/devices),
+    // so it can't be removed — the rename dead-end. Surface such bindings as checked
+    // rows here so ANY binding is always removable (uncheck to drop it).
+    const knownSceneKeys = new Set((_scenes || []).map(sc => 'scene:' + sc.name + ':'));
+    const knownDevKeys = new Set(controllableDevices.map(d => d.device_id + ':' + (d.channel || '')));
+    const orphans = row.bindings.filter(s => {
+      const k = s.device_id + ':' + (s.channel || '');
+      return !knownSceneKeys.has(k) && !knownDevKeys.has(k);
+    }).filter(s => !f || (s.name || '').toLowerCase().includes(f) || (s.label || '').toLowerCase().includes(f));
+    if (orphans.length) {
+      const rl = document.createElement('div');
+      rl.className = 'picker-room-label';
+      rl.textContent = '⚠ Bound but missing (renamed/deleted — uncheck to remove)';
+      list.appendChild(rl);
+      for (const s of orphans) {
+        const k = s.device_id + ':' + (s.channel || '');
+        const nm = s.label ? (s.name + ':' + s.label) : (s.name || s.device_id || '?');
+        const kind = s.type === 'scene' ? 'scene' : (s.channel ? 'device ch' : 'device');
+        const item = document.createElement('div');
+        item.className = 'picker-item';
+        item.innerHTML = `
+          <input type="checkbox" checked data-sw-item="${escHtml(k)}">
+          <span class="picker-item-name">⚠ ${escHtml(nm)}</span>
+          <span class="picker-item-meta">${escHtml(kind)} (missing)</span>
+        `;
+        const cb = item.querySelector('input[type=checkbox]');
+        cb.addEventListener('change', () => {
+          if (!cb.checked) {
+            row.bindings = row.bindings.filter(x => (x.device_id + ':' + (x.channel || '')) !== k);
+          } else if (!row.bindings.some(x => (x.device_id + ':' + (x.channel || '')) === k)) {
+            row.bindings.push(s);
+          }
+        });
+        list.appendChild(item);
+      }
     }
   }
 
