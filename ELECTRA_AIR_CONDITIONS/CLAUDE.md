@@ -1,0 +1,71 @@
+# ELECTRA_AIR_CONDITIONS — Agent Index
+
+**Status: PLANNED (scoped 2026-08-14). Not built yet — hardware pending.**
+
+Local control of **two Electra 2.5 HP A/C units** over **Modbus RTU / RS-485**, from our own hardware —
+**NOT** Home Assistant, **NOT** the Electra cloud (the official `electrasmart` HA integration is
+cloud-only and is rejected). Each unit's main board is an **Electra GEMINI PCB-1P0200 Ver001**, which
+exposes a native RS-485 port and a DIP selector for **MODBUS** mode (vs the `RCW` proprietary wall-remote
+mode, which uses A/B + CLK + OUT). Both boards share **one RS-485 multi-drop bus** with distinct slave
+addresses, driven by a single wired **ESP32 + W5500 + RS-485** bridge in the existing `esp_boards`
+framework. Control surfaces on a new **"Air Conditions" tab on Project General**.
+
+## 📐 Wiring diagram
+Graphical connection + board-interconnection diagram (2 panels: A/C↔bridge bus, and inside-the-bridge
+board wiring): **https://claude.ai/code/artifact/f44dd1dc-29eb-41fe-8d68-99b4ff258f28**
+— source committed here as [wiring.html](wiring.html).
+
+## Hardware (decided)
+- **ESP32 + W5500 (wired Ethernet)** — the `kazir_15` board pattern; **wired only, no WiFi** (MQTT + OTA +
+  control all ride the Ethernet cable — more reliable than WiFi in a utility spot).
+- **RS-485 converter** — auto-direction module preferred (removes the DE/RE wire); else MAX3485 + one
+  DE/RE GPIO.
+- Both GEMINI boards → **one RS-485 bus** (A↔A, B↔B, GND↔GND↔bridge). Each board's DIP set to **MODBUS
+  mode** + a **unique address** (unit-1 = addr 1, unit-2 = addr 2). **120 Ω** termination at the two
+  physical bus ends.
+- ⚠ Do **NOT** wire the board's `CLK`/`OUT` pins (RCW wall-remote mode only). **Shared GND is mandatory.**
+- ⚠ Mains: power each unit **off at the breaker** before wiring (A/B/GND/12 V pins are low-voltage).
+
+## The gating unknown — the register map
+Electra publishes no Modbus register map and none is public → **Phase 1 discovers it** (read/correlate
+holding+input registers, or sniff the wall-controller traffic; approach as in the Actron485 / Midea-XYE
+reverse-engineering projects).
+
+## Plan — two phases
+
+### Phase 1 — Prove the connection (ONE unit)
+Wire one board's `A/B/GND` to a Modbus master (fastest: a **USB-RS485 dongle** on the laptop with
+`modpoll`/`mbpoll`; or the ESP32 in a discovery firmware mode). Bring up the link (try **9600 8N1** first,
+then 9600-8E1 / 19200; use the DIP address).
+- **Read proof:** identify + read the **room-temperature** register — must track a real thermometer.
+- **Map the key registers:** room temp, setpoint, mode, fan, on/off, error — with scale (temp ×1 or ×10)
+  and enums (mode cool/heat/fan/dry/auto; fan low/med/high/auto).
+- **Write proof:** write one control (power or setpoint) and confirm the **unit physically reacts**.
+- Also settle: Modbus params (baud/parity/addr), and **whether MODBUS mode disables the wall
+  thermostat** (the DIP looks mutually exclusive).
+- **Success = one unit readable AND one command works. Stop + confirm before Phase 2.**
+
+### Phase 2 — Both A/C units (full build)
+One ESP32+W5500+RS-485 bridge on the multi-drop bus to both units. New **`electra_ac`** firmware
+(esp_boards framework, reusing the `kazir_15` Ethernet+MQTT+OTA base + eModbus/ModbusMaster RTU master):
+- Poll both slaves (~3–5 s) → publish `/status` with per-unit rounded fields `u1_power`, `u1_mode`,
+  `u1_set_temp`, `u1_fan`, `u1_room_temp`, `u1_error`, and `u2_*`.
+- `/command` (plain-string, namespaced + `:value` suffix like `balcony_bridge`): `u1_power_on` /
+  `u1_power_off`, `u1_mode:cool`, `u1_fan:high`, `u1_set_temp:24`, and `u2_*` — write then re-read + republish.
+- **DB:** one `esp_boards` row + one `devices` row (`protocol='esp'`, `u1_*`/`u2_*` channels like
+  `balcony_bridge`); add the new status keys to `_ESP_STATUS_DPS_FIELDS` in `RULES/rule_engine.py` →
+  `systemctl restart rule-engine`.
+- **Dashboard:** new **Air Conditions** tab on `project-general.html` + `js/aircon.js` (two cards —
+  power / mode / target-temp slider / fan / live room-temp), all via the existing
+  `/api/esp/boards/:id/{command,parameters}` — **no new server endpoint**.
+
+## Files (when built)
+- Firmware: `C:\Users\muroc\Arduino_Projects\electra_ac\{electra_ac.ino,Main.h,Esp_Base.ino}` (not in git — bakes creds).
+- Rule engine: `RULES/rule_engine.py` — `_ESP_STATUS_DPS_FIELDS` (+ optional `_ESP_CMD_STATE['electra_ac']`).
+- Dashboard: `BOILER/dashboard/public/project-general.html` + `js/aircon.js`.
+- DB: `esp_boards` + `devices` rows (LXC 102).
+
+## Reference
+- Wiring diagram: [wiring.html](wiring.html) / https://claude.ai/code/artifact/f44dd1dc-29eb-41fe-8d68-99b4ff258f28
+- Board pattern reused: `KAZIR_15_NETWORK/CLAUDE.md` (ESP32 + W5500 wired-Ethernet), `esp_boards`
+  framework docs `BOILER/dashboard/docs/esp_boards.md`, and `BALCONY/` `balcony_bridge` (multi-channel ESP).

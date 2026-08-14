@@ -1,0 +1,287 @@
+<title>Electra A/C — Modbus/RS-485 Wiring</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#eef1f5; --surface:#ffffff; --ink:#1b2530; --muted:#5c6a79;
+    --line:#c7d1dc; --board:#e7edf3; --accent:#2f6f8f;
+    --wire-a:#df8a1e;   /* A  */
+    --wire-b:#2f8fb0;   /* B  */
+    --wire-gnd:#6b7583; /* GND */
+    --wire-eth:#2e9e6b; /* Ethernet */
+    --wire-pwr:#c8483c; /* power / VCC */
+    --sig:#5566c4;      /* logic signal (SPI / UART) */
+  }
+  :root:not([data-theme="light"]){}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f141a; --surface:#171f28; --ink:#e7edf3; --muted:#93a1b0;
+      --line:#33414f; --board:#1e2832; --accent:#63b6d6;
+      --wire-a:#f0a53d; --wire-b:#54b8dc; --wire-gnd:#93a1b0;
+      --wire-eth:#45c68b; --wire-pwr:#e46b5f; --sig:#8e9bf0;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f141a; --surface:#171f28; --ink:#e7edf3; --muted:#93a1b0;
+    --line:#33414f; --board:#1e2832; --accent:#63b6d6;
+    --wire-a:#f0a53d; --wire-b:#54b8dc; --wire-gnd:#93a1b0;
+    --wire-eth:#45c68b; --wire-pwr:#e46b5f; --sig:#8e9bf0;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    line-height:1.55; padding:32px 20px 64px;
+  }
+  .wrap{max-width:940px;margin:0 auto}
+  header{margin-bottom:8px}
+  .eyebrow{
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:.72rem; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 6px;
+  }
+  h1{font-size:1.5rem;margin:0 0 4px;text-wrap:balance;letter-spacing:-.01em}
+  .lede{color:var(--muted);margin:0 0 26px;max-width:62ch;font-size:.95rem}
+
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:20px 20px 16px; margin-bottom:26px;
+  }
+  .card h2{
+    font-size:1.02rem;margin:0 0 2px;display:flex;align-items:baseline;gap:10px
+  }
+  .card h2 .n{
+    font-family:ui-monospace,Menlo,monospace;font-size:.78rem;color:var(--surface);
+    background:var(--accent);border-radius:6px;padding:2px 8px;letter-spacing:.04em;
+  }
+  .card p.cap{color:var(--muted);font-size:.86rem;margin:2px 0 14px}
+  .svg-scroll{overflow-x:auto}
+  svg{display:block;width:100%;height:auto;min-width:560px}
+
+  /* diagram element styles */
+  .box{fill:var(--board);stroke:var(--line);stroke-width:1.5}
+  .pad{fill:var(--surface);stroke:var(--ink);stroke-width:1.1}
+  .dot{fill:var(--ink)}
+  .wire{fill:none;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+  .wa{stroke:var(--wire-a)} .wb{stroke:var(--wire-b)} .wg{stroke:var(--wire-gnd)}
+  .we{stroke:var(--wire-eth)} .wp{stroke:var(--wire-pwr)} .ws{stroke:var(--sig)}
+  .term{fill:none;stroke:var(--muted);stroke-width:2}
+  .t-title{fill:var(--ink);font:600 15px system-ui,sans-serif}
+  .t-sub{fill:var(--muted);font:500 11.5px system-ui,sans-serif}
+  .t-pin{fill:var(--ink);font:12px ui-monospace,Menlo,monospace}
+  .t-pinm{fill:var(--muted);font:11px ui-monospace,Menlo,monospace}
+  .t-lbl{fill:var(--muted);font:11px ui-monospace,Menlo,monospace;letter-spacing:.03em}
+  .t-a{fill:var(--wire-a)} .t-b{fill:var(--wire-b)} .t-g{fill:var(--wire-gnd)}
+  .t-e{fill:var(--wire-eth)}
+
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:12px;
+    font-family:ui-monospace,Menlo,monospace;font-size:.78rem;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .legend i{width:20px;height:3px;border-radius:2px;display:inline-block}
+
+  .notes{margin:10px 0 0;padding-left:18px}
+  .notes li{margin:3px 0;font-size:.88rem;color:var(--muted)}
+  .notes b{color:var(--ink);font-weight:600}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:.82em;
+    background:var(--board);padding:1px 5px;border-radius:4px}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Local control · Modbus RTU / RS-485</p>
+    <h1>Electra A/C — connection wiring</h1>
+    <p class="lede">Two Electra GEMINI boards driven over one RS-485 bus by a single wired
+      ESP32 + W5500 bridge. No Home Assistant, no cloud — control rides the Ethernet cable to MQTT
+      and the dashboard's Air&nbsp;Conditions tab.</p>
+  </header>
+
+  <!-- ========================= DIAGRAM 1 ========================= -->
+  <section class="card">
+    <h2><span class="n">1</span> A/C units ↔ bridge (the RS-485 bus)</h2>
+    <p class="cap">Both A/C boards share the same three wires — A, B, GND. They're told apart by the
+      Modbus <b>address</b> set on each board's DIP.</p>
+    <div class="svg-scroll">
+      <svg viewBox="0 0 900 470" role="img" aria-label="RS-485 bus wiring between two Electra A/C boards and the bridge">
+        <!-- ===== A/C Unit 1 ===== -->
+        <rect class="box" x="34" y="118" width="196" height="150" rx="11"/>
+        <text class="t-title" x="52" y="150">Electra A/C #1</text>
+        <text class="t-sub"   x="52" y="170">GEMINI PCB-1P0200</text>
+        <text class="t-sub"   x="52" y="246">DIP: MODBUS · addr 1</text>
+        <!-- right-edge terminal -->
+        <rect class="pad" x="222" y="182" width="16" height="16" rx="3"/>
+        <rect class="pad" x="222" y="217" width="16" height="16" rx="3"/>
+        <rect class="pad" x="222" y="252" width="16" height="16" rx="3"/>
+        <text class="t-pin" x="196" y="195" text-anchor="end">A</text>
+        <text class="t-pin" x="196" y="230" text-anchor="end">B</text>
+        <text class="t-pin" x="188" y="265" text-anchor="end">GND</text>
+
+        <!-- ===== A/C Unit 2 ===== -->
+        <rect class="box" x="670" y="118" width="196" height="150" rx="11"/>
+        <text class="t-title" x="688" y="150">Electra A/C #2</text>
+        <text class="t-sub"   x="688" y="170">GEMINI PCB-1P0200</text>
+        <text class="t-sub"   x="688" y="246">DIP: MODBUS · addr 2</text>
+        <rect class="pad" x="662" y="182" width="16" height="16" rx="3"/>
+        <rect class="pad" x="662" y="217" width="16" height="16" rx="3"/>
+        <rect class="pad" x="662" y="252" width="16" height="16" rx="3"/>
+        <text class="t-pin" x="704" y="195">A</text>
+        <text class="t-pin" x="704" y="230">B</text>
+        <text class="t-pin" x="704" y="265">GND</text>
+
+        <!-- ===== the bus (3 lines) ===== -->
+        <line class="wire wa" x1="238" y1="190" x2="662" y2="190"/>
+        <line class="wire wb" x1="238" y1="225" x2="662" y2="225"/>
+        <line class="wire wg" x1="238" y1="260" x2="662" y2="260"/>
+        <text class="t-lbl t-a" x="450" y="182" text-anchor="middle">A</text>
+        <text class="t-lbl t-b" x="450" y="217" text-anchor="middle">B</text>
+        <text class="t-lbl t-g" x="450" y="284" text-anchor="middle">GND (shared)</text>
+
+        <!-- 120Ω terminators at the two ends -->
+        <path class="term" d="M262,190 v6 l6,4 l-12,6 l12,6 l-12,6 l6,4 v3" transform="translate(0,-4)"/>
+        <text class="t-lbl" x="272" y="212">120Ω</text>
+        <path class="term" d="M638,190 v6 l6,4 l-12,6 l12,6 l-12,6 l6,4 v3" transform="translate(0,-4)"/>
+        <text class="t-lbl" x="600" y="212" text-anchor="end">120Ω</text>
+
+        <!-- ===== Bridge ===== -->
+        <rect class="box" x="352" y="352" width="196" height="86" rx="11"/>
+        <text class="t-title" x="450" y="392" text-anchor="middle">Bridge</text>
+        <text class="t-sub"   x="450" y="411" text-anchor="middle">ESP32 + W5500 + RS-485</text>
+        <!-- top terminal pads -->
+        <rect class="pad" x="399" y="344" width="16" height="16" rx="3"/>
+        <rect class="pad" x="434" y="344" width="16" height="16" rx="3"/>
+        <rect class="pad" x="469" y="344" width="16" height="16" rx="3"/>
+        <text class="t-pinm" x="407" y="336" text-anchor="middle">A</text>
+        <text class="t-pinm" x="442" y="336" text-anchor="middle">B</text>
+        <text class="t-pinm" x="477" y="336" text-anchor="middle">GND</text>
+        <!-- risers from bus into bridge -->
+        <line class="wire wa" x1="407" y1="190" x2="407" y2="344"/>
+        <line class="wire wb" x1="442" y1="225" x2="442" y2="344"/>
+        <line class="wire wg" x1="477" y1="260" x2="477" y2="344"/>
+
+        <!-- junction dots (real connections) -->
+        <circle class="dot" cx="238" cy="190" r="3.4"/><circle class="dot" cx="238" cy="225" r="3.4"/><circle class="dot" cx="238" cy="260" r="3.4"/>
+        <circle class="dot" cx="662" cy="190" r="3.4"/><circle class="dot" cx="662" cy="225" r="3.4"/><circle class="dot" cx="662" cy="260" r="3.4"/>
+        <circle class="dot" cx="407" cy="190" r="3.4"/><circle class="dot" cx="442" cy="225" r="3.4"/><circle class="dot" cx="477" cy="260" r="3.4"/>
+
+        <!-- Ethernet out -->
+        <line class="wire we" x1="450" y1="438" x2="450" y2="456"/>
+        <polygon class="dot" points="450,462 445,453 455,453" fill="var(--wire-eth)"/>
+        <text class="t-lbl t-e" x="466" y="460">→ Ethernet → LAN → MQTT → Dashboard (Air Conditions)</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--wire-a)"></i>A (D+)</span>
+      <span><i style="background:var(--wire-b)"></i>B (D−)</span>
+      <span><i style="background:var(--wire-gnd)"></i>GND (common)</span>
+      <span><i style="background:var(--wire-eth)"></i>Ethernet</span>
+    </div>
+  </section>
+
+  <!-- ========================= DIAGRAM 2 ========================= -->
+  <section class="card">
+    <h2><span class="n">2</span> Inside the bridge — board interconnections</h2>
+    <p class="cap">How the three modules wire together: W5500 on SPI, the RS-485 converter on a UART.
+      Exact ESP32 GPIOs come from the kazir_15 board wiring — typical VSPI/UART pins shown.</p>
+    <div class="svg-scroll">
+      <svg viewBox="0 0 900 520" role="img" aria-label="Internal wiring of the ESP32, W5500 and RS-485 converter">
+        <!-- ===== W5500 ===== -->
+        <rect class="box" x="24" y="150" width="176" height="250" rx="11"/>
+        <text class="t-title" x="112" y="180" text-anchor="middle">W5500</text>
+        <text class="t-sub"   x="112" y="199" text-anchor="middle">Ethernet (SPI)</text>
+        <!-- RJ45 out left -->
+        <rect class="pad" x="8" y="250" width="16" height="34" rx="3"/>
+        <line class="wire we" x1="8" y1="267" x2="-2" y2="267"/>
+        <text class="t-lbl t-e" x="30" y="240">RJ45 → LAN</text>
+        <!-- right pins -->
+        <g class="t-pin" text-anchor="end">
+          <text x="192" y="228">SCK</text>
+          <text x="192" y="256">MISO</text>
+          <text x="192" y="284">MOSI</text>
+          <text x="192" y="312">CS</text>
+          <text x="192" y="340">3V3</text>
+          <text x="192" y="368">GND</text>
+        </g>
+
+        <!-- ===== ESP32 ===== -->
+        <rect class="box" x="360" y="96" width="180" height="330" rx="11"/>
+        <text class="t-title" x="450" y="126" text-anchor="middle">ESP32</text>
+        <text class="t-sub"   x="450" y="145" text-anchor="middle">kazir_15 board</text>
+        <!-- left pins (to W5500) -->
+        <g class="t-pin">
+          <text x="368" y="228">18 SCK</text>
+          <text x="368" y="256">19 MISO</text>
+          <text x="368" y="284">23 MOSI</text>
+          <text x="368" y="312">5  CS</text>
+          <text x="368" y="340">3V3</text>
+          <text x="368" y="368">GND</text>
+        </g>
+        <!-- right pins (to RS-485) -->
+        <g class="t-pin" text-anchor="end">
+          <text x="532" y="238">17 TX</text>
+          <text x="532" y="278">16 RX</text>
+          <text x="532" y="318">4  DE/RE</text>
+          <text x="532" y="358">3V3</text>
+          <text x="532" y="392">GND</text>
+        </g>
+
+        <!-- ===== RS-485 converter ===== -->
+        <rect class="box" x="700" y="150" width="176" height="250" rx="11"/>
+        <text class="t-title" x="788" y="180" text-anchor="middle">RS-485 conv.</text>
+        <text class="t-sub"   x="788" y="199" text-anchor="middle">MAX3485 / auto-dir</text>
+        <!-- left pins (to ESP32) -->
+        <g class="t-pin">
+          <text x="708" y="238">DI</text>
+          <text x="708" y="278">RO</text>
+          <text x="708" y="318">DE/RE</text>
+          <text x="708" y="358">VCC</text>
+          <text x="708" y="392">GND</text>
+        </g>
+        <!-- right pins (to bus) -->
+        <g class="t-pin" text-anchor="end">
+          <text x="868" y="250">A</text>
+          <text x="868" y="290">B</text>
+          <text x="868" y="330">GND</text>
+        </g>
+
+        <!-- ===== W5500 <-> ESP32 wires (SPI) ===== -->
+        <line class="wire ws" x1="200" y1="224" x2="360" y2="224"/>
+        <line class="wire ws" x1="200" y1="252" x2="360" y2="252"/>
+        <line class="wire ws" x1="200" y1="280" x2="360" y2="280"/>
+        <line class="wire ws" x1="200" y1="308" x2="360" y2="308"/>
+        <line class="wire wp" x1="200" y1="336" x2="360" y2="336"/>
+        <line class="wire wg" x1="200" y1="364" x2="360" y2="364"/>
+        <text class="t-lbl" x="280" y="216" text-anchor="middle">SPI</text>
+
+        <!-- ===== ESP32 <-> RS-485 wires (UART) ===== -->
+        <line class="wire ws" x1="540" y1="234" x2="700" y2="234"/>
+        <line class="wire ws" x1="540" y1="274" x2="700" y2="274"/>
+        <line class="wire ws" x1="540" y1="314" x2="700" y2="314"/>
+        <line class="wire wp" x1="540" y1="354" x2="700" y2="354"/>
+        <line class="wire wg" x1="540" y1="388" x2="700" y2="388"/>
+        <text class="t-lbl" x="620" y="226" text-anchor="middle">TX→DI</text>
+        <text class="t-lbl" x="620" y="266" text-anchor="middle">RX←RO</text>
+
+        <!-- ===== RS-485 -> A/C bus ===== -->
+        <line class="wire wa" x1="876" y1="246" x2="898" y2="246"/>
+        <line class="wire wb" x1="876" y1="286" x2="898" y2="286"/>
+        <line class="wire wg" x1="876" y1="326" x2="898" y2="326"/>
+        <text class="t-lbl" x="820" y="430" text-anchor="middle">→ to the A/C bus (diagram 1)</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--sig)"></i>logic (SPI / UART)</span>
+      <span><i style="background:var(--wire-pwr)"></i>3V3 / VCC</span>
+      <span><i style="background:var(--wire-gnd)"></i>GND</span>
+      <span><i style="background:var(--wire-a)"></i>A</span>
+      <span><i style="background:var(--wire-b)"></i>B</span>
+      <span><i style="background:var(--wire-eth)"></i>Ethernet</span>
+    </div>
+  </section>
+
+  <ul class="notes">
+    <li><b>Shared GND is mandatory</b> — the A/C boards and the bridge must share a common ground, or RS-485 won't communicate reliably.</li>
+    <li><b>120&nbsp;Ω terminators</b> go across A–B at the <b>two physical ends</b> of the bus (the two A/C units). Many RS-485 modules have a jumper for this.</li>
+    <li><b>Set each board's DIP to MODBUS mode</b> with a <b>unique address</b> (1 and 2). Do <b>not</b> wire the board's <code>CLK</code>/<code>OUT</code> pins — those are RCW wall-remote mode only.</li>
+    <li><b>Auto-direction RS-485 module</b> removes the <code>DE/RE</code> wire (ESP32 GPIO 4); a plain MAX3485 needs it.</li>
+    <li>Wired only — <b>no WiFi</b>. MQTT, OTA and control all ride the Ethernet cable.</li>
+  </ul>
+</div>
