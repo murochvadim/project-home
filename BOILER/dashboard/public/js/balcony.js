@@ -2530,40 +2530,106 @@
     } else { img.src = ''; img.style.display = 'none'; }
   }
 
+  // Short labels so controls pack into a compact grid (full name kept as tooltip).
+  const SHORT = {
+    white_balance_automatic: 'Auto WB', white_balance_temperature: 'WB Temp',
+    power_line_frequency: 'Anti-flicker', backlight_compensation: 'Backlight',
+    auto_exposure: 'Auto Exp', exposure_time_absolute: 'Exposure',
+    exposure_dynamic_framerate: 'Dyn FPS', pan_absolute: 'Pan', tilt_absolute: 'Tilt',
+    focus_absolute: 'Focus', focus_automatic_continuous: 'Auto Focus', zoom_absolute: 'Zoom',
+  };
   async function loadControls() {
     const host = $('cam-controls'); if (!host) return;
+    const full = (m) => '<div style="grid-column:1/-1;color:#c0392b;">' + m + '</div>';
     try {
       const r = await fetch('/api/balconycam/controls').then(r => r.json());
-      if (!r.ok) { host.innerHTML = '<div style="color:#c0392b;">controls unavailable: ' + esc(r.error || 'error') + '</div>'; return; }
-      host.innerHTML = (r.controls || []).map(row).join('') || '<div style="color:#888;">no controls</div>';
-    } catch (e) { host.innerHTML = '<div style="color:#c0392b;">controls error: ' + esc(e.message) + '</div>'; }
+      if (!r.ok) { host.innerHTML = full('controls unavailable: ' + esc(r.error || 'error')); return; }
+      host.innerHTML = (r.controls || []).map(row).join('') || '<div style="grid-column:1/-1;color:#888;">no controls</div>';
+      window.camGatePanTilt();   // lock pan/tilt if zoom is at minimum
+    } catch (e) { host.innerHTML = full('controls error: ' + esc(e.message)); }
   }
+  // Positional controls with coarse steps → − / + buttons (a tiny slider can't hit
+  // their 21 discrete positions reliably). Everything else stays a slider.
+  const STEPPER = new Set();   // all controls (incl. pan/tilt/zoom) render as sliders
   function row(c) {
     const dim = c.inactive ? 'opacity:0.45;' : '';
+    const nm = SHORT[c.name] || label(c.name);
+    const dis = c.inactive ? 'disabled' : '';
     let ctrl = '';
-    if (c.type === 'int') {
-      ctrl = `<input type="range" min="${c.min}" max="${c.max}" step="${c.step || 1}" value="${c.value}" ${c.inactive ? 'disabled' : ''}
-                oninput="camSet('${c.name}',this.value);this.nextElementSibling.textContent=this.value;" style="width:170px;vertical-align:middle;">
-              <span style="display:inline-block;min-width:46px;text-align:right;font:12px monospace;">${c.value}</span>`;
+    if (c.type === 'int' && STEPPER.has(c.name)) {
+      const st = c.step || 1;
+      ctrl = `<div style="display:flex;align-items:center;gap:4px;">
+                <button ${dis} onclick="camStep('${c.name}',${-st},${c.min},${c.max})" style="width:30px;padding:3px 0;cursor:pointer;font-size:1rem;line-height:1;">−</button>
+                <span id="cv_${c.name}" style="flex:1;text-align:center;font:11px monospace;color:#555;">${c.value}</span>
+                <button ${dis} onclick="camStep('${c.name}',${st},${c.min},${c.max})" style="width:30px;padding:3px 0;cursor:pointer;font-size:1rem;line-height:1;">+</button>
+              </div>`;
+    } else if (c.type === 'int') {
+      const oi = c.name === 'zoom_absolute'
+        ? "this.nextElementSibling.textContent=this.value;camGatePanTilt();"   // live-gate pan/tilt as you drag zoom
+        : "this.nextElementSibling.textContent=this.value;";
+      ctrl = `<div style="display:flex;align-items:center;gap:6px;">
+                <input id="cc_${c.name}" type="range" min="${c.min}" max="${c.max}" step="${c.step || 1}" value="${c.value}" ${dis}
+                  oninput="${oi}" onchange="camSet('${c.name}',this.value);" style="flex:1;">
+                <span style="min-width:30px;text-align:right;font:11px monospace;color:#555;">${c.value}</span>
+              </div>`;
     } else if (c.type === 'bool') {
-      ctrl = `<input type="checkbox" ${c.value ? 'checked' : ''} onchange="camSet('${c.name}',this.checked?1:0)">`;
+      ctrl = `<label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:#444;cursor:pointer;">
+                <input type="checkbox" ${c.value ? 'checked' : ''} onchange="camSet('${c.name}',this.checked?1:0)"> ${c.value ? 'On' : 'Off'}</label>`;
     } else if (c.type === 'menu') {
-      ctrl = `<select onchange="camSet('${c.name}',this.value)" ${c.inactive ? 'disabled' : ''}>
+      ctrl = `<select onchange="camSet('${c.name}',this.value)" ${dis} style="width:100%;font-size:0.72rem;">
                 ${(c.menu || []).map(m => `<option value="${m.value}" ${m.value === c.value ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}
               </select>`;
     } else return '';
-    return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0;${dim}">
-              <span style="min-width:190px;">${esc(label(c.name))}</span>${ctrl}</div>`;
+    // Label ABOVE the control so the slider/stepper gets the full cell width.
+    return `<div style="display:flex;flex-direction:column;gap:2px;${dim}" title="${esc(label(c.name))}">
+              <span id="lbl_${c.name}" style="font-size:0.72rem;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(nm)}</span>${ctrl}</div>`;
   }
+  // C925e pan/tilt are DIGITAL — they only crop-shift a zoomed-in image, so they do
+  // nothing at zoom=100. Lock them (with a hint) until the user zooms in, so they
+  // never look "broken". Called after render + live while dragging the zoom slider.
+  window.camGatePanTilt = function () {
+    const z = document.getElementById('cc_zoom_absolute');
+    if (!z) return;
+    const zoomed = parseInt(z.value, 10) > parseInt(z.min || '0', 10);
+    ['pan_absolute', 'tilt_absolute'].forEach(n => {
+      const s = document.getElementById('cc_' + n);
+      const lbl = document.getElementById('lbl_' + n);
+      if (s) s.disabled = !zoomed;
+      if (lbl) { lbl.textContent = (SHORT[n] || label(n)) + (zoomed ? '' : ' · zoom in ↑'); lbl.style.color = zoomed ? '#555' : '#c08a2a'; }
+    });
+  };
+  window.camStep = function (name, delta, min, max) {
+    const el = document.getElementById('cv_' + name);
+    let cur = el ? parseInt(el.textContent, 10) : 0;
+    if (isNaN(cur)) cur = 0;
+    const nv = Math.max(min, Math.min(max, cur + delta));
+    if (el) el.textContent = nv;
+    camSet(name, nv);
+  };
   window.camSet = async function (name, value) {
-    try { await fetch('/api/balconycam/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, value: parseInt(value, 10) }) }); }
-    catch (e) {}
-    // auto-* toggles enable/disable their manual slider → refresh shortly after
-    clearTimeout(_reloadT); _reloadT = setTimeout(loadControls, 450);
+    const dbg = document.getElementById('cam-dbg');
+    const v = parseInt(value, 10);
+    if (dbg) dbg.textContent = name + '=' + v + ' … sending';
+    try {
+      const r = await fetch('/api/balconycam/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, value: v }) }).then(x => x.json());
+      if (dbg) { dbg.textContent = name + '=' + v + (r && r.ok ? '  ✓ applied' : '  ✗ ' + ((r && r.error) || 'rejected')); dbg.style.color = (r && r.ok) ? '#2e7d32' : '#c0392b'; }
+    } catch (e) { if (dbg) { dbg.textContent = name + '=' + v + '  ✗ ' + e.message; dbg.style.color = '#c0392b'; } }
+    // Only the auto-* toggles gate a manual sibling (e.g. Auto Exposure ↔ Exposure
+    // Time), so ONLY re-read the control list for those — never after a plain slider
+    // (a re-fetch per nudge is a wasteful SSH round-trip that also rebuilds the grid).
+    if (/^(auto_exposure|focus_automatic_continuous|white_balance_automatic)$/.test(name)) {
+      clearTimeout(_reloadT); _reloadT = setTimeout(loadControls, 500);
+    }
+    if (name === 'zoom_absolute') window.camGatePanTilt();   // enable/lock pan+tilt on zoom change
   };
   window.camResetControls = async function () {
-    try { await fetch('/api/balconycam/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) }); } catch (e) {}
-    setTimeout(loadControls, 300);
+    const dbg = document.getElementById('cam-dbg');
+    if (dbg) { dbg.textContent = 'resetting to defaults…'; dbg.style.color = '#888'; }
+    try {
+      const r = await fetch('/api/balconycam/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) }).then(x => x.json());
+      if (dbg) { dbg.textContent = (r && r.ok) ? ('reset ' + (r.reset || 0) + ' controls  ✓') : ('reset  ✗ ' + ((r && r.error) || '')); dbg.style.color = (r && r.ok) ? '#2e7d32' : '#c0392b'; }
+    } catch (e) { if (dbg) { dbg.textContent = 'reset  ✗ ' + e.message; dbg.style.color = '#c0392b'; } }
+    setTimeout(loadControls, 400);   // re-render sliders at their new default positions
   };
 
   async function startWebRTC() {
@@ -2629,7 +2695,7 @@
       if (msg) { msg.style.display = 'block'; msg.textContent = 'connecting audio…'; }
       try {
         await startWebRTC();
-        if (img) img.style.display = 'none';
+        mjpeg(false);   // tear down the MJPEG stream (not just hide it) so we don't run two streams
         if (v) v.style.display = 'block';
         if (msg) msg.style.display = 'none';
         _listening = true; btn.textContent = '🔇 Stop listening';

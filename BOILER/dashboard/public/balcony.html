@@ -459,7 +459,8 @@
         <h2 style="margin:0;font-size:1.05rem;">🎛 Camera Controls</h2>
         <button class="btn btn-secondary btn-sm" onclick="camResetControls()">↺ Reset to defaults</button>
       </div>
-      <div id="cam-controls" style="font-size:0.85rem;color:#888;max-height:260px;overflow-y:auto;">Open this tab to load controls…</div>
+      <div id="cam-controls" style="font-size:0.85rem;color:#888;max-height:260px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 14px;align-items:start;">Open this tab to load controls…</div>
+      <div id="cam-dbg" style="margin-top:8px;font:11px monospace;color:#888;min-height:14px;">controls cam13 — click a control to see the camera's response here</div>
     </div>
 
   </div>
@@ -576,7 +577,7 @@
 <script src="js/alerts-monitor.js?v=12"></script>
 <script src="js/reminders-badge.js?v=13"></script>
 <script src="js/notify-toast.js?v=12"></script>
-<script src="js/balcony.js?v=20260813cam4"></script>
+<script src="js/balcony.js?v=20260813cam13"></script>
 <script src="js/panel-editor.js?v=13"></script>
 </body>
 </html>

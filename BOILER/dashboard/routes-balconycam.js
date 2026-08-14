@@ -76,13 +76,21 @@ module.exports = function (app) {
     if (body.reset) {
       const lr = await pve(`v4l2-ctl -d ${VIDEO} --list-ctrls-menus`);
       if (!lr.ok) return res.status(502).json({ ok: false, error: lr.error });
-      const sets = parseControls(lr.stdout)
-        .filter((c) => c.default != null && (c.type === 'int' || c.type === 'bool' || c.type === 'menu'))
-        .map((c) => `${c.name}=${c.default}`);
-      if (!sets.length) return res.json({ ok: true, reset: 0 });
-      const sr = await pve(`v4l2-ctl -d ${VIDEO} ${sets.map((s) => `--set-ctrl=${s}`).join(' ')}`);
+      const ctrls = parseControls(lr.stdout)
+        .filter((c) => c.default != null && (c.type === 'int' || c.type === 'bool' || c.type === 'menu'));
+      if (!ctrls.length) return res.json({ ok: true, reset: 0 });
+      // Reset each control in its OWN v4l2-ctl call (';'-joined, errors suppressed) so an
+      // inactive/rejected control (e.g. exposure-time while auto-exposure is on) can't abort
+      // the rest of the batch — a single combined --set-ctrl silently dropped zoom/pan/tilt.
+      // auto_* master toggles reset LAST so they re-gate their manual siblings correctly.
+      const order = (c) => (/^(auto_exposure|focus_automatic_continuous|white_balance_automatic)$/.test(c.name) ? 1 : 0);
+      const cmd = ctrls
+        .slice().sort((a, b) => order(a) - order(b))
+        .map((c) => `v4l2-ctl -d ${VIDEO} --set-ctrl=${c.name}=${c.default} 2>/dev/null`)
+        .join('; ');
+      const sr = await pve(cmd);
       if (!sr.ok) return res.status(502).json({ ok: false, error: sr.error });
-      return res.json({ ok: true, reset: sets.length });
+      return res.json({ ok: true, reset: ctrls.length });
     }
     // Single control set — strict validation guards against shell injection.
     const name = String(body.name || '');
