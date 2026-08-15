@@ -1963,6 +1963,25 @@ def _yt_sanitize_folder(name):
     return s or 'YouTube_Download'
 
 
+def _yt_strip_radio_list(url):
+    """A YouTube `list=RD…` is an auto-generated Radio/Mix (infinite, seeded from ONE
+    song) — never a real playlist to download. If present, drop list/index/start_radio
+    so a pasted `watch?v=X&list=RD…` resolves to the single video X, not the mix.
+    Real `list=PL…` / `OLAK…` playlists are left untouched."""
+    if 'list=RD' not in url:
+        return url
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        p = urlparse(url)
+        q = parse_qsl(p.query, keep_blank_values=True)
+        if not dict(q).get('list', '').startswith('RD'):
+            return url
+        q = [(k, v) for (k, v) in q if k not in ('list', 'index', 'start_radio')]
+        return urlunparse(p._replace(query=urlencode(q)))
+    except Exception:
+        return url
+
+
 @app.route('/api/media/yt-dlp/probe', methods=['POST'])
 def yt_dlp_probe():
     """Return {type, title, track_count, suggested_folder} without downloading.
@@ -1970,6 +1989,7 @@ def yt_dlp_probe():
     url = (request.get_json(silent=True) or {}).get('url', '').strip()
     if not url or not url.startswith(('http://', 'https://')):
         return jsonify({'error': 'invalid url'}), 400
+    url = _yt_strip_radio_list(url)   # ignore YouTube Radio/Mix (list=RD…) — probe the actual video
     try:
         out = subprocess.check_output(
             _YT_CMD + ['--flat-playlist', '--skip-download',
@@ -2151,9 +2171,13 @@ def _yt_reader(job_id):
     the target dir."""
     job  = _yt_jobs[job_id]
     proc = job['process']
+    tail = []   # rolling recent output — used to surface the REAL error on failure
     try:
         for raw in iter(proc.stdout.readline, ''):
             line = raw.rstrip('\n')
+            tail.append(line)
+            if len(tail) > 20:
+                tail.pop(0)
             log.debug('yt-dlp[%s] %s', job_id[:8], line)
             m = _YT_DEST_RE.search(line)
             if m:
@@ -2193,7 +2217,12 @@ def _yt_reader(job_id):
                 job['error'] = None
             elif rc != 0:
                 job['state'] = 'error'
-                job['error'] = f'yt-dlp exited with rc={rc}'
+                # Surface the REAL reason (stderr is merged into stdout), not a bare rc.
+                picked = [l for l in tail if l.strip().upper().startswith('ERROR')
+                          or l.strip().startswith('WARNING: [')]
+                detail = ' | '.join((picked or tail)[-3:]).strip()
+                job['error'] = (f'yt-dlp rc={rc}: ' + detail)[:500] if detail \
+                    else f'yt-dlp exited with rc={rc}'
             elif job.get('mode') == 'video':
                 # NOT 'done' yet — the rescan runs next (below) and flips it to
                 # 'done'. Setting 'rescanning' here (not 'done') avoids a 'done'
@@ -2283,6 +2312,7 @@ def yt_dlp_start():
     if not url or not url.startswith(('http://', 'https://')):
         return jsonify({'error': 'invalid url'}), 400
     folder = _yt_sanitize_folder(folder_raw)
+    url    = _yt_strip_radio_list(url)   # ignore YouTube Radio/Mix (list=RD…) — act on the single video
 
     if mode == 'video':
         # Reject LIVE streams BEFORE spawning — a 24/7 live URL makes yt-dlp
@@ -2312,6 +2342,7 @@ def yt_dlp_start():
                    'b[vcodec^=avc1][height<=1080]/b[ext=mp4]'),
             '--merge-output-format', 'mp4',
             '--no-playlist',
+            '--retries', '5', '--fragment-retries', '5', '--extractor-retries', '3',
             '--newline',
             '-o', out_template,
             url,
@@ -2328,6 +2359,7 @@ def yt_dlp_start():
         cmd = _YT_CMD + [
             '-f', 'bestaudio[ext=m4a]/bestaudio',
             '--extract-audio', '--audio-format', 'm4a',
+            '--retries', '5', '--fragment-retries', '5', '--extractor-retries', '3',
             '--newline',
             '-o', out_template,
             url,
