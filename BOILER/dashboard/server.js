@@ -141,6 +141,10 @@ require('./routes-usbbackup')(app);
 // Camera tab. Live video/audio is served by go2rtc on the host (:1984), not here.
 require('./routes-balconycam')(app);
 
+// Living Room camera (2nd Logitech C925e on the same PVE host) — v4l2 control proxy for the
+// Living Room agent's Camera tab. go2rtc stream `living_room_cam`; mirror of the balcony cam.
+require('./routes-livingroomcam')(app);
+
 // Phone Link recovery (Windows-host action; spawns PowerShell on this host) +
 // single-alert dismiss. Buttons on Project Health -> System Alerts.
 require('./routes-phonelink')(app, db);

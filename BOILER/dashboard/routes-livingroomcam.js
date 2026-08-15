@@ -1,24 +1,23 @@
-// routes-balconycam.js — Balcony Logitech C925e camera controls (UVC via v4l2-ctl).
+// routes-livingroomcam.js — Living Room Logitech C925e camera controls (UVC via v4l2-ctl).
 //
-// The camera is a USB webcam on the Proxmox host (192.168.1.101, /dev/video0). The
-// live video/audio is served by go2rtc on the host (:1984) straight to the browser —
-// this module NEVER proxies media bytes. It only proxies the CONTROL surface: read +
-// set v4l2 controls over SSH, same shape as routes-robotcam.js / routes-usbbackup.js
-// (own module → one require() line in server.js, past the architecture-guard hook).
+// The camera is a 2nd USB webcam on the Proxmox host (192.168.1.101), served by go2rtc as the
+// `living_room_cam` stream. This module NEVER proxies media bytes — it only proxies the CONTROL
+// surface (read + set v4l2 controls over SSH). Exact mirror of routes-balconycam.js; the ONLY
+// difference is the target VIDEO device (this camera's by-id path) + the /api/livingroomcam/* prefix.
 //
 // Endpoints:
-//   GET  /api/balconycam/controls  -> [{name,type,min,max,step,default,value,inactive,group,menu[]}]
-//   POST /api/balconycam/control   -> body { name, value }  OR  { reset:true }
-//   GET  /api/balconycam/status    -> { go2rtc:bool, camera:bool }
+//   GET  /api/livingroomcam/controls  -> [{name,type,min,max,step,default,value,inactive,group,menu[]}]
+//   POST /api/livingroomcam/control   -> body { name, value }  OR  { reset:true }
+//   GET  /api/livingroomcam/status    -> { go2rtc:bool, camera:bool }
 
 const { NodeSSH } = require('node-ssh');
 const os = require('os');
 
 const PVE_HOST = '192.168.1.101';
 const SSH_KEY = process.env.SSH_KEY_PATH || os.homedir() + '/.ssh/id_ed25519';
-// Address the camera by its stable per-serial by-id path, NOT /dev/video0 — two identical
-// C925e's can swap /dev/videoN on reboot. (Balcony cam serial EC3D11DF.)
-const VIDEO = '/dev/v4l/by-id/usb-046d_Logitech_Webcam_C925e_EC3D11DF-video-index0';
+// Address the camera by its stable per-serial by-id path, NOT /dev/videoN — two identical
+// C925e's can swap /dev/videoN on reboot. (Living Room cam serial CD1B11DF.)
+const VIDEO = '/dev/v4l/by-id/usb-046d_Logitech_Webcam_C925e_CD1B11DF-video-index0';
 
 async function pve(cmd) {
   const ssh = new NodeSSH();
@@ -65,14 +64,14 @@ function parseControls(out) {
 }
 
 module.exports = function (app) {
-  app.get('/api/balconycam/controls', async (req, res) => {
+  app.get('/api/livingroomcam/controls', async (req, res) => {
     const r = await pve(`v4l2-ctl -d ${VIDEO} --list-ctrls-menus`);
     if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
     if (r.code !== 0 && !r.stdout) return res.status(502).json({ ok: false, error: r.stderr || 'v4l2-ctl failed' });
     res.json({ ok: true, device: VIDEO, controls: parseControls(r.stdout) });
   });
 
-  app.post('/api/balconycam/control', async (req, res) => {
+  app.post('/api/livingroomcam/control', async (req, res) => {
     const body = req.body || {};
     // Reset: set every control to its parsed default.
     if (body.reset) {
@@ -83,8 +82,7 @@ module.exports = function (app) {
       if (!ctrls.length) return res.json({ ok: true, reset: 0 });
       // Reset each control in its OWN v4l2-ctl call (';'-joined, errors suppressed) so an
       // inactive/rejected control (e.g. exposure-time while auto-exposure is on) can't abort
-      // the rest of the batch — a single combined --set-ctrl silently dropped zoom/pan/tilt.
-      // auto_* master toggles reset LAST so they re-gate their manual siblings correctly.
+      // the rest of the batch. auto_* master toggles reset LAST so they re-gate their siblings.
       const order = (c) => (/^(auto_exposure|focus_automatic_continuous|white_balance_automatic)$/.test(c.name) ? 1 : 0);
       const cmd = ctrls
         .slice().sort((a, b) => order(a) - order(b))
@@ -105,7 +103,7 @@ module.exports = function (app) {
     res.json({ ok: true, name, value });
   });
 
-  app.get('/api/balconycam/status', async (req, res) => {
+  app.get('/api/livingroomcam/status', async (req, res) => {
     const r = await pve(
       `systemctl is-active go2rtc 2>/dev/null; echo ---; ` +
       `v4l2-ctl --list-devices 2>/dev/null | grep -c C925e`);

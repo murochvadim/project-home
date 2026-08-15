@@ -1,23 +1,30 @@
-# go2rtc camera relay for the balcony Logitech C925e — deployed to the PROXMOX HOST
-# (192.168.1.101) at /opt/go2rtc/go2rtc.yaml (the USB webcam is plugged into the host,
-# which sits near the balcony). Started by go2rtc.service. Consumed by the dashboard's
-# Balcony agent -> Camera tab.
+# go2rtc camera relay on the PROXMOX HOST (192.168.1.101) at /opt/go2rtc/go2rtc.yaml.
+# Serves TWO Logitech C925e USB webcams plugged into the host (via a self-powered hub):
+#   - balcony_cam      -> Balcony agent    -> Camera tab
+#   - living_room_cam  -> Living Room agent -> Camera tab
+# Started by go2rtc.service. The dashboard consumes these streams directly (no proxy).
 #
-# The C925e has NO H.264 (verified: MJPG/YUY2 only) and its mic is an odd 32 kHz stereo
-# USB-audio (card 0). Three separate producers keep video reliable + audio clean:
-#   1) RAW video device (MJPEG) -> served straight to the <img> card (ZERO transcode):
-#        http://192.168.1.101:1984/api/stream.mjpeg?src=balcony_cam
-#   2) ALSA mic (plughw:0) -> mono + high-pass(85Hz) + FFT denoise -> Opus (for WebRTC "Listen").
-#   3) LAZY H.264 transcode of the stream -> spun up ONLY when a WebRTC client needs video.
-# ⚠ Combining video+audio in ONE ffmpeg:device source silently DROPPED the mic — that is
-#   why audio is a SEPARATE producer. And do NOT add #video=mjpeg#video=h264 hints to the
-#   raw video source — that breaks the MJPEG passthrough (blank picture).
-# ⚠ /dev/video0 + hw:0 assume the C925e is the only USB cam/audio on the host.
+# ⚠ Two IDENTICAL C925e's can swap /dev/videoN + ALSA card numbers on reboot, so each camera is
+#   addressed by its UNIQUE SERIAL, never by video0/card0:
+#   - VIDEO: /dev/v4l/by-id/usb-046d_Logitech_Webcam_C925e_<SERIAL>-video-index0  (serial-based symlink)
+#   - AUDIO: plughw:CARD=<id> where <id> is set by /etc/udev/rules.d/89-usb-audio-cams.rules,
+#            which keys ATTR{id} on the USB serial (balconycam=EC3D11DF, livingroomcam=CD1B11DF).
+#
+# The C925e has NO H.264 (MJPG/YUY2 only) and an odd 32 kHz stereo mic. Three producers per camera:
+#   1) RAW MJPEG video -> served straight to the <img> card (ZERO transcode)
+#   2) ALSA mic -> mono + high-pass(85Hz) + FFT denoise -> Opus (WebRTC "Listen")
+#   3) LAZY H.264 transcode -> only when a WebRTC client needs video
+# ⚠ Do NOT combine video+audio in one ffmpeg:device source (silently drops the mic) and do NOT add
+#   #video=mjpeg#video=h264 hints to the raw video source (breaks MJPEG passthrough / blank picture).
 streams:
   balcony_cam:
-    - "ffmpeg:device?video=/dev/video0&input_format=mjpeg&video_size=1280x720&framerate=30"
-    - "ffmpeg:device?audio=plughw:0#audio=opus#raw=-ac 1 -af highpass=f=85,afftdn=nf=-25"
+    - "ffmpeg:device?video=/dev/v4l/by-id/usb-046d_Logitech_Webcam_C925e_EC3D11DF-video-index0&input_format=mjpeg&video_size=1280x720&framerate=30"
+    - "ffmpeg:device?audio=plughw:CARD=balconycam#audio=opus#raw=-ac 1 -af highpass=f=85,afftdn=nf=-25"
     - "ffmpeg:balcony_cam#video=h264"
+  living_room_cam:
+    - "ffmpeg:device?video=/dev/v4l/by-id/usb-046d_Logitech_Webcam_C925e_CD1B11DF-video-index0&input_format=mjpeg&video_size=1280x720&framerate=30"
+    - "ffmpeg:device?audio=plughw:CARD=livingroomcam#audio=opus#raw=-ac 1 -af highpass=f=85,afftdn=nf=-25"
+    - "ffmpeg:living_room_cam#video=h264"
 api:
   origin: "*"          # so the dashboard (different origin) can do the WebRTC offer/answer fetch
   listen: ":1984"

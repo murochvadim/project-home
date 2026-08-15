@@ -108,6 +108,7 @@
     <button class="tab-btn" onclick="showTab('jura', this)">Jura</button>
     <button class="tab-btn" onclick="showTab('irobot', this)">IRobot</button>
     <button class="tab-btn" onclick="showTab('robot', this)">Robot</button>
+    <button class="tab-btn" onclick="showTab('camera', this)">Camera</button>
     <button class="tab-btn" onclick="showTab('smart-switch', this)">Smart Switch</button>
   </div>
 
@@ -494,6 +495,58 @@
   </div>
 
   <!-- ════════════════════════════════════════════════════ -->
+  <!-- TAB: Camera — 2nd Logitech C925e on the PVE host (go2rtc `living_room_cam`); mirrors Balcony -->
+  <!-- ════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-camera">
+
+    <!-- 📹 Video -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">📹 Living Room Camera</h2>
+        <div style="display:flex;align-items:center;gap:6px;font-size:0.8rem;">
+          <span id="cam-light-dot" style="width:9px;height:9px;border-radius:50%;background:#bbb;display:inline-block;" title="light state"></span>
+          <span style="color:#555;">💡 Main Light</span>
+          <button class="btn btn-sm" onclick="camLightSet(true)" style="padding:2px 10px;">On</button>
+          <button class="btn btn-secondary btn-sm" onclick="camLightSet(false)" style="padding:2px 10px;">Off</button>
+        </div>
+      </div>
+      <div style="background:#000;border-radius:8px;overflow:hidden;min-height:200px;display:flex;align-items:center;justify-content:center;position:relative;">
+        <img id="cam-mjpeg" alt="camera" style="max-width:100%;max-height:62vh;display:none;">
+        <video id="cam-webrtc" playsinline style="max-width:100%;max-height:62vh;display:none;background:#000;"></video>
+        <span id="cam-msg" style="color:#888;font-size:0.82rem;padding:26px;">Open this tab to load the stream…</span>
+      </div>
+      <div style="font-size:0.72rem;color:#888;margin-top:8px;">go2rtc on the Proxmox host (192.168.1.101) · MJPEG live; switches to WebRTC audio+video when you Listen.</div>
+    </div>
+
+    <!-- 🔊 Audio -->
+    <div class="card" style="padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">🔊 Audio (Listen)</h2>
+        <span id="cam-audio-status" style="font-size:0.72rem;color:#888;"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <button id="cam-listen-btn" class="btn" onclick="camToggleListen()">🔊 Listen</button>
+        <label style="font-size:0.82rem;color:#555;display:flex;align-items:center;gap:6px;">Volume
+          <input id="cam-vol" type="range" min="0" max="100" value="80" oninput="camSetVol(this.value)" style="width:130px;">
+        </label>
+        <canvas id="cam-meter" width="300" height="54" style="background:#111;border-radius:6px;"></canvas>
+      </div>
+      <div style="font-size:0.72rem;color:#888;margin-top:8px;">Streams the living-room mic over WebRTC. Muted until you press Listen (browser autoplay rule). The scope shows the live audio waveform.</div>
+    </div>
+
+    <!-- 🎛 Controls -->
+    <div class="card" style="padding:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:1.05rem;">🎛 Camera Controls</h2>
+        <button class="btn btn-secondary btn-sm" onclick="camResetControls()">↺ Reset to defaults</button>
+      </div>
+      <div id="cam-controls" style="font-size:0.85rem;color:#888;max-height:260px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 14px;align-items:start;">Open this tab to load controls…</div>
+      <div id="cam-dbg" style="margin-top:8px;font:11px monospace;color:#888;min-height:14px;">controls — click a control to see the camera's response here</div>
+    </div>
+
+  </div>
+
+  <!-- ════════════════════════════════════════════════════ -->
   <!-- TAB: Living Room Smart Switch — Tuya TS0044 4-button bindings -->
   <!-- ════════════════════════════════════════════════════ -->
   <div class="tab-panel" id="tab-smart-switch">
@@ -547,6 +600,6 @@
 <script src="js/device-picker.js?v=16"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/living-room.js?v=68"></script>
+<script src="js/living-room.js?v=69"></script>
 </body>
 </html>
