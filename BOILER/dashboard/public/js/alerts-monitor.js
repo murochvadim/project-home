@@ -78,6 +78,7 @@
         r.lxc106?.ok,
         r.rp01?.ok,   // RP01 — Raspberry Pi (multi-purpose infra node)
         r.rp02?.ok,   // RP02 — Raspberry Pi (camera node; paused -> null auto-drops)
+        r.rp03?.ok,   // RP03 — Raspberry Pi (paused -> null auto-drops)
         r.adguard?.ok,   // AdGuard Home on RP01 (shares RP01's pause -> null when paused)
         // Server
         r.pm2?.ok,
