@@ -25,11 +25,17 @@ Cloned from RP01/RP02's footprint, **minus the AdGuard tab** (DNS is RP01-only):
   `Temp - NN°C`, green <70 / amber ≥70 / red ≥80 (blank until the laptop SSH key is authorized — see above).
 - **Sidebar badge** — counted (`r.rp03?.ok` in `alerts-monitor.js`); paused → `null` auto-drops.
 
+## Backup job (added 2026-08-16 — currently RED, by design)
+- **`backup_jobs` id 14** — `rp03_project@192.168.1.169:/home/rp03_project` → QNAP
+  `Claude_Data/RaspberryPi_RP03/`, storage 6, retention 4, `max_age_hours` 24 (same shape as RP01 id 10 /
+  RP02 id 11), **enabled**. Runs via LXC-104's `backup-script.sh` (per-job `source_host`).
+- ⚠ **It will FAIL (red) until LXC-104's `root@Servers` key is authorized** on `rp03_project` — the
+  backup scp's *from* LXC 104, so that key must be in RP03's `authorized_keys`. Expected/accepted for now;
+  the red job surfaces in the Recent Backup Log + the `svc-backup-jobs` Health cell.
+
 ## Follow-ups (not done yet)
-- **Authorize the laptop + LXC-104 SSH keys** on `rp03_project` → unlocks the temp read.
-- **Backup job** — add a `backup_jobs` row (next free id, `rp03_project@192.168.1.169:/home/rp03_project`
-  → QNAP `Claude_Data/RaspberryPi_RP03/`, retention 4, daily) once key auth works — same shape as RP01
-  (id 10) / RP02 (id 11).
+- **Authorize the laptop + LXC-104 SSH keys** on `rp03_project` → unlocks the CPU-temp read **and** turns
+  the backup job green.
 - **Scope the purpose** — then document it here.
 
 ## References
