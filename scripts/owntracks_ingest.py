@@ -299,19 +299,23 @@ def _confirm_trip(trip_id):
 
 def _commit_away_atomic(trip_id, device_id, lat, lon, ts):
     """Atomically: UPDATE trip to confirmed AND INSERT the geofence:away
-    event row. Both in the same transaction so a crash between them can't
-    leave a confirmed trip without its paired away event (which rules would
-    see as an unpaired home event next inside ping).
+    event row, in ONE transaction on a DEDICATED short-lived connection.
 
-    Necessary because `get_conn()` returns the daemon's connection with
-    `autocommit=True` — each cursor.execute commits independently. This
-    helper temporarily flips autocommit off, runs both writes, commits,
-    then restores autocommit so the rest of on_message keeps its
-    statement-at-a-time commit semantics.
+    ⚠ 2026-08-17 root-cause fix (Fix 1). The previous version toggled
+    `autocommit` False/True on the SHARED daemon connection (`get_conn()`).
+    A transient failure in that explicit-transaction path could leave the
+    shared connection unable to run further explicit transactions, so every
+    subsequent commit-away silently threw (swallowed in on_message) while
+    plain autocommit inserts kept working — a trip opened a provisional but
+    NEVER confirmed, invisible until a process restart (the Herzliya-trip
+    incident: 87 outside pings, 0 `away`, provisional deleted on return).
+    A throwaway connection is opened + committed + closed here, so a failed
+    commit can neither inherit a poisoned shared-connection state nor create
+    one. Exceptions propagate (caught + recorded by on_message); closing a
+    connection with an open transaction rolls it back, so no partial write.
+    Commits happen only a few times a day, so per-commit connect cost is nil.
     """
-    conn = get_conn()
-    prev_ac = conn.autocommit
-    conn.autocommit = False
+    conn = psycopg2.connect(**DB_CONFIG)   # own connection; autocommit=False by default
     try:
         with conn.cursor() as cur:
             cur.execute("UPDATE phone_trips SET confirmed = TRUE WHERE id = %s", (trip_id,))
@@ -323,11 +327,8 @@ def _commit_away_atomic(trip_id, device_id, lat, lon, ts):
                 (ts, device_id, payload),
             )
         conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
     finally:
-        conn.autocommit = prev_ac
+        conn.close()
 
 
 def should_commit(trip_row, ping_ts, cfg):
@@ -422,6 +423,37 @@ def get_last_event_ts(device_id):
         )
         r = cur.fetchone()
         return r[0] if r else None
+
+
+def _record_ingest_error(exc):
+    """Fix 3 (2026-08-17): persist an on_message exception to system_alerts so
+    a silent ingest failure surfaces on Project Health. journald rotates away
+    (which is why the 2026-08-17 commit-wedge was invisible for a day). Best
+    effort — never raises. Uses its OWN connection (the shared one may have
+    just been reset by Fix 2) and dedupes to one open alert per 10 min."""
+    import traceback
+    try:
+        detail = (repr(exc) + ' | ' + traceback.format_exc())[:1000]
+        c = psycopg2.connect(**DB_CONFIG)
+        c.autocommit = True
+        try:
+            with c.cursor() as cur:
+                cur.execute(
+                    """SELECT 1 FROM system_alerts
+                       WHERE alert_type = 'owntracks_ingest_error' AND resolved_at IS NULL
+                         AND ts > NOW() - INTERVAL '10 minutes' LIMIT 1""")
+                if cur.fetchone() is None:
+                    cur.execute(
+                        """INSERT INTO system_alerts
+                               (ts, source, severity, alert_type, affected_agent, message)
+                           VALUES (NOW(), 'owntracks-ingest', 'warn',
+                                   'owntracks_ingest_error', 'owntracks-ingest', %s)""",
+                        (detail,),
+                    )
+        finally:
+            c.close()
+    except Exception as e2:
+        log.warning('failed to record ingest error to system_alerts: %s', e2)
 
 
 def on_message(client, userdata, msg):
@@ -640,6 +672,17 @@ def on_message(client, userdata, msg):
 
     except Exception as e:
         log.exception('on_message error: %s', e)
+        # Fix 2 (2026-08-17): drop a possibly-poisoned shared connection so the
+        # NEXT ping reconnects fresh — a DB fault can't persist across pings.
+        global _db_conn
+        try:
+            if _db_conn is not None and not _db_conn.closed:
+                _db_conn.close()
+        except Exception:
+            pass
+        _db_conn = None
+        # Fix 3 (2026-08-17): surface the error durably (journald rotates).
+        _record_ingest_error(e)
 
 
 def on_connect(client, userdata, flags, rc):
