@@ -179,92 +179,97 @@
   <!-- ========================= DIAGRAM 2 ========================= -->
   <section class="card">
     <h2><span class="n">2</span> Inside the bridge — board interconnections</h2>
-    <p class="cap">How the three modules wire together: W5500 on SPI, the RS-485 converter on a UART.
-      Exact ESP32 GPIOs come from the kazir_15 board wiring — typical VSPI/UART pins shown.</p>
+    <p class="cap">W5500 on VSPI, the RS-485 transceiver on UART2. Every GPIO here is boot- &amp; OTA-safe;
+      the SPI half matches the proven kazir_15 board. RST on GPIO13 (a plain pin, not a boot strap), INT optional.</p>
     <div class="svg-scroll">
-      <svg viewBox="0 0 900 520" role="img" aria-label="Internal wiring of the ESP32, W5500 and RS-485 converter">
+      <svg viewBox="0 0 900 500" role="img" aria-label="Internal wiring of the ESP32-WROOM, W5500 on VSPI and the RS-485 transceiver on UART2, with GPIO numbers">
         <!-- ===== W5500 ===== -->
-        <rect class="box" x="24" y="150" width="176" height="250" rx="11"/>
-        <text class="t-title" x="112" y="180" text-anchor="middle">W5500</text>
-        <text class="t-sub"   x="112" y="199" text-anchor="middle">Ethernet (SPI)</text>
+        <rect class="box" x="24" y="118" width="176" height="348" rx="11"/>
+        <text class="t-title" x="112" y="146" text-anchor="middle">W5500</text>
+        <text class="t-sub"   x="112" y="165" text-anchor="middle">Ethernet · VSPI</text>
         <!-- RJ45 out left -->
-        <rect class="pad" x="8" y="250" width="16" height="34" rx="3"/>
-        <line class="wire we" x1="8" y1="267" x2="-2" y2="267"/>
-        <text class="t-lbl t-e" x="30" y="240">RJ45 → LAN</text>
+        <rect class="pad" x="8" y="270" width="16" height="34" rx="3"/>
+        <line class="wire we" x1="8" y1="287" x2="0" y2="287"/>
+        <text class="t-lbl t-e" x="30" y="258">RJ45 → LAN</text>
         <!-- right pins -->
         <g class="t-pin" text-anchor="end">
-          <text x="192" y="228">SCK</text>
-          <text x="192" y="256">MISO</text>
-          <text x="192" y="284">MOSI</text>
-          <text x="192" y="312">CS</text>
-          <text x="192" y="340">3V3</text>
-          <text x="192" y="368">GND</text>
+          <text x="192" y="204">SCK</text>
+          <text x="192" y="238">MISO</text>
+          <text x="192" y="272">MOSI</text>
+          <text x="192" y="306">CS</text>
+          <text x="192" y="340">RST</text>
+          <text x="192" y="374">INT</text>
+          <text x="192" y="408">3V3</text>
+          <text x="192" y="442">GND</text>
         </g>
 
         <!-- ===== ESP32 ===== -->
-        <rect class="box" x="360" y="96" width="180" height="330" rx="11"/>
-        <text class="t-title" x="450" y="126" text-anchor="middle">ESP32</text>
-        <text class="t-sub"   x="450" y="145" text-anchor="middle">kazir_15 board</text>
+        <rect class="box" x="360" y="100" width="180" height="372" rx="11"/>
+        <text class="t-title" x="450" y="128" text-anchor="middle">ESP32-WROOM</text>
+        <text class="t-sub"   x="450" y="147" text-anchor="middle">kazir_15 pattern</text>
         <!-- left pins (to W5500) -->
         <g class="t-pin">
-          <text x="368" y="228">18 SCK</text>
-          <text x="368" y="256">19 MISO</text>
-          <text x="368" y="284">23 MOSI</text>
-          <text x="368" y="312">5  CS</text>
-          <text x="368" y="340">3V3</text>
-          <text x="368" y="368">GND</text>
+          <text x="368" y="204">18 SCK</text>
+          <text x="368" y="238">19 MISO</text>
+          <text x="368" y="272">23 MOSI</text>
+          <text x="368" y="306">5  CS</text>
+          <text x="368" y="340">13 RST</text>
+          <text x="368" y="374">4  INT</text>
+          <text x="368" y="408">3V3</text>
+          <text x="368" y="442">GND</text>
         </g>
         <!-- right pins (to RS-485) -->
         <g class="t-pin" text-anchor="end">
-          <text x="532" y="238">17 TX</text>
-          <text x="532" y="278">16 RX</text>
-          <text x="532" y="318">4  DE/RE</text>
-          <text x="532" y="358">3V3</text>
-          <text x="532" y="392">GND</text>
+          <text x="532" y="218">17 TX</text>
+          <text x="532" y="260">16 RX</text>
+          <text x="532" y="302">25 DE/RE</text>
+          <text x="532" y="344">3V3</text>
+          <text x="532" y="386">GND</text>
         </g>
 
-        <!-- ===== RS-485 converter ===== -->
-        <rect class="box" x="700" y="150" width="176" height="250" rx="11"/>
-        <text class="t-title" x="788" y="180" text-anchor="middle">RS-485 conv.</text>
-        <text class="t-sub"   x="788" y="199" text-anchor="middle">MAX3485 / auto-dir</text>
+        <!-- ===== RS-485 transceiver ===== -->
+        <rect class="box" x="700" y="150" width="176" height="290" rx="11"/>
+        <text class="t-title" x="788" y="178" text-anchor="middle">RS-485</text>
+        <text class="t-sub"   x="788" y="197" text-anchor="middle">3.3 V · MAX3485 / auto-dir</text>
         <!-- left pins (to ESP32) -->
         <g class="t-pin">
-          <text x="708" y="238">DI</text>
-          <text x="708" y="278">RO</text>
-          <text x="708" y="318">DE/RE</text>
-          <text x="708" y="358">VCC</text>
-          <text x="708" y="392">GND</text>
+          <text x="708" y="218">DI</text>
+          <text x="708" y="260">RO</text>
+          <text x="708" y="302">DE/RE</text>
+          <text x="708" y="344">VCC</text>
+          <text x="708" y="386">GND</text>
         </g>
         <!-- right pins (to bus) -->
         <g class="t-pin" text-anchor="end">
-          <text x="868" y="250">A</text>
-          <text x="868" y="290">B</text>
-          <text x="868" y="330">GND</text>
+          <text x="868" y="236">A</text>
+          <text x="868" y="278">B</text>
+          <text x="868" y="320">GND</text>
         </g>
 
-        <!-- ===== W5500 <-> ESP32 wires (SPI) ===== -->
-        <line class="wire ws" x1="200" y1="224" x2="360" y2="224"/>
-        <line class="wire ws" x1="200" y1="252" x2="360" y2="252"/>
-        <line class="wire ws" x1="200" y1="280" x2="360" y2="280"/>
-        <line class="wire ws" x1="200" y1="308" x2="360" y2="308"/>
-        <line class="wire wp" x1="200" y1="336" x2="360" y2="336"/>
-        <line class="wire wg" x1="200" y1="364" x2="360" y2="364"/>
-        <text class="t-lbl" x="280" y="216" text-anchor="middle">SPI</text>
+        <!-- ===== W5500 <-> ESP32 wires (VSPI) ===== -->
+        <line class="wire ws" x1="200" y1="200" x2="360" y2="200"/>
+        <line class="wire ws" x1="200" y1="234" x2="360" y2="234"/>
+        <line class="wire ws" x1="200" y1="268" x2="360" y2="268"/>
+        <line class="wire ws" x1="200" y1="302" x2="360" y2="302"/>
+        <line class="wire ws" x1="200" y1="336" x2="360" y2="336"/>
+        <line class="wire ws" x1="200" y1="370" x2="360" y2="370"/>
+        <line class="wire wp" x1="200" y1="404" x2="360" y2="404"/>
+        <line class="wire wg" x1="200" y1="438" x2="360" y2="438"/>
+        <text class="t-lbl" x="280" y="192" text-anchor="middle">VSPI</text>
 
-        <!-- ===== ESP32 <-> RS-485 wires (UART) ===== -->
-        <line class="wire ws" x1="540" y1="234" x2="700" y2="234"/>
-        <line class="wire ws" x1="540" y1="274" x2="700" y2="274"/>
-        <line class="wire ws" x1="540" y1="314" x2="700" y2="314"/>
-        <line class="wire wp" x1="540" y1="354" x2="700" y2="354"/>
-        <line class="wire wg" x1="540" y1="388" x2="700" y2="388"/>
-        <text class="t-lbl" x="620" y="226" text-anchor="middle">TX→DI</text>
-        <text class="t-lbl" x="620" y="266" text-anchor="middle">RX←RO</text>
+        <!-- ===== ESP32 <-> RS-485 wires (UART2) ===== -->
+        <line class="wire ws" x1="540" y1="214" x2="700" y2="214"/>
+        <line class="wire ws" x1="540" y1="256" x2="700" y2="256"/>
+        <line class="wire ws" x1="540" y1="298" x2="700" y2="298"/>
+        <line class="wire wp" x1="540" y1="340" x2="700" y2="340"/>
+        <line class="wire wg" x1="540" y1="382" x2="700" y2="382"/>
+        <text class="t-lbl" x="620" y="206" text-anchor="middle">UART2</text>
 
         <!-- ===== RS-485 -> A/C bus ===== -->
-        <line class="wire wa" x1="876" y1="246" x2="898" y2="246"/>
-        <line class="wire wb" x1="876" y1="286" x2="898" y2="286"/>
-        <line class="wire wg" x1="876" y1="326" x2="898" y2="326"/>
-        <text class="t-lbl" x="820" y="430" text-anchor="middle">→ to the A/C bus (diagram 1)</text>
+        <line class="wire wa" x1="876" y1="236" x2="898" y2="236"/>
+        <line class="wire wb" x1="876" y1="278" x2="898" y2="278"/>
+        <line class="wire wg" x1="876" y1="320" x2="898" y2="320"/>
+        <text class="t-lbl" x="788" y="424" text-anchor="middle">→ to the A/C bus (diagram 1)</text>
       </svg>
     </div>
     <div class="legend">
@@ -281,7 +286,9 @@
     <li><b>Shared GND is mandatory</b> — the A/C boards and the bridge must share a common ground, or RS-485 won't communicate reliably.</li>
     <li><b>120&nbsp;Ω terminators</b> go across A–B at the <b>two physical ends</b> of the bus (the two A/C units). Many RS-485 modules have a jumper for this.</li>
     <li><b>Set each board's DIP to MODBUS mode</b> with a <b>unique address</b> (1 and 2). Do <b>not</b> wire the board's <code>CLK</code>/<code>OUT</code> pins — those are RCW wall-remote mode only.</li>
-    <li><b>Auto-direction RS-485 module</b> removes the <code>DE/RE</code> wire (ESP32 GPIO 4); a plain MAX3485 needs it.</li>
+    <li><b>Auto-direction RS-485 module</b> removes the <code>DE/RE</code> wire (ESP32 <code>GPIO25</code>); a plain MAX3485 needs it.</li>
+    <li><b>Boot/OTA-safe pins.</b> RST → <code>GPIO13</code> (a plain pin — lets firmware hard-reset a wedged W5500). <b>Never</b> <code>GPIO2</code>/<code>GPIO12</code>/<code>GPIO15</code>/<code>GPIO0</code> — boot straps (<code>GPIO12</code> held high at boot = the board won't boot at all). INT → <code>GPIO4</code> is <b>optional</b> (SPI is polled).</li>
+    <li><b>3.3 V logic only</b> — the ESP32 is <b>not</b> 5 V-tolerant. Use a 3.3 V RS-485 transceiver (MAX3485 / auto-dir), never a 5 V MAX485 without level-shifting; W5500 VCC = 3.3 V.</li>
     <li>Wired only — <b>no WiFi</b>. MQTT, OTA and control all ride the Ethernet cable.</li>
   </ul>
 </div>

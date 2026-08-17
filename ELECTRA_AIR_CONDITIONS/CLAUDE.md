@@ -26,6 +26,38 @@ board wiring): **https://claude.ai/code/artifact/f44dd1dc-29eb-41fe-8d68-99b4ff2
 - ⚠ Do **NOT** wire the board's `CLK`/`OUT` pins (RCW wall-remote mode only). **Shared GND is mandatory.**
 - ⚠ Mains: power each unit **off at the breaker** before wiring (A/B/GND/12 V pins are low-voltage).
 
+## Pin map (finalized — boot/OTA-safe)
+Every GPIO below is boot- & OTA-safe; the SPI half mirrors the proven `kazir_15` board (verified against
+`KAZIR_15_NETWORK/CLAUDE.md`). The only deviation from KZ15 is **RST → GPIO13 instead of GPIO2** — GPIO2
+is a download-mode strapping pin, so GPIO13 (a plain output) removes any first-USB-flash risk.
+
+**ESP32-WROOM-32 ↔ W5500 (Ethernet, VSPI)**
+| W5500 | ESP32 GPIO | Req? | Note |
+|---|---|---|---|
+| MOSI | **23** | ✅ | VSPI MOSI |
+| MISO | **19** | ✅ | VSPI MISO |
+| SCLK/SCK | **18** | ✅ | VSPI clock |
+| SCS/CS | **5** | ✅ | strap, default-HIGH = safe for CS |
+| RST | **13** | ⭐ rec. | 24/7 recovery; **not GPIO2/12** (boot straps) |
+| INT | **4** | ⚪ opt. | SPI is polled — can skip |
+| VCC | **3.3 V** | ✅ | ⚠ 3.3 V, not 5 V; add 100 nF + 10 µF |
+| GND | **GND** | ✅ | common ground |
+
+**ESP32-WROOM-32 ↔ RS-485 transceiver (Modbus, UART2)**
+| RS-485 | ESP32 GPIO | Req? | Note |
+|---|---|---|---|
+| DI | **17** (TX2) | ✅ | UART2 TX |
+| RO | **16** (RX2) | ✅ | UART2 RX |
+| DE/RE | **25** | ⚪ manual only | **skip for auto-direction module** (preferred) |
+| VCC | **3.3 V** | ✅ | ⚠ 3.3 V-logic transceiver (MAX3485/auto-dir); ESP32 is **not** 5 V-tolerant |
+| GND | **GND** | ✅ | common ground |
+
+**RS-485 bus ↔ both GEMINI boards (multi-drop):** A↔A↔A, B↔B↔B, GND↔GND↔GND (shared) · DIP=MODBUS ·
+addr 1 / addr 2 · **120 Ω** at the two physical ends · **never wire CLK/OUT** (RCW-only).
+
+**Pins to AVOID:** GPIO0/2/12/15 (boot straps — GPIO12 high at boot = won't boot) · GPIO6–11 (internal
+flash — bricks) · GPIO34–39 (input-only, can't drive outputs). No pin above lands on any of these.
+
 ## The gating unknown — the register map
 Electra publishes no Modbus register map and none is public → **Phase 1 discovers it** (read/correlate
 holding+input registers, or sniff the wall-controller traffic; approach as in the Actron485 / Midea-XYE
