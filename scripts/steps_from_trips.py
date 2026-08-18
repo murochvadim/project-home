@@ -42,7 +42,12 @@ DEFAULTS = {
     'accuracy_gate_m': 35.0,    # a segment counts only if BOTH endpoints are this accurate
     'phantom_min_m':   150.0,   # clean distance below this = GPS phantom / no real trip
     'drive_kmh':       15.0,    # vehicle-like: drives if p85 segment speed > this, OR
-    'drive_run_segs':  3,       # >= this many CONSECUTIVE segments faster than drive_kmh
+    'drive_run_segs':  3,       # >= this many CONSECUTIVE segments faster than drive_kmh, ...
+    'walk_ceiling_kmh': 10.0,   # ...but the consecutive-run rule ONLY fires when p85 is above
+                                # this. If p85 <= this the trip is clearly walking-pace overall,
+                                # so a short fast-run is GPS noise, not a car — keep it as a walk.
+                                # The p85>drive_kmh rule still catches real (moving) drives on its
+                                # own. Fixes noisy walks wrongly dropped as drives (2026-08-17).
     'glitch_kmh':      45.0,    # a segment faster than this between two ADJACENT pings is a
                                 # GPS teleport glitch (impossible on foot): its phantom distance
                                 # is dropped AND it breaks the consecutive fast-run, so a few GPS
@@ -89,6 +94,7 @@ def main():
     phantom_min = float(cfg['phantom_min_m'])
     drive_kmh  = float(cfg['drive_kmh'])
     drive_run  = int(cfg['drive_run_segs'])
+    walk_ceiling = float(cfg['walk_ceiling_kmh'])
     glitch_kmh = float(cfg['glitch_kmh'])
 
     # reconcile: drop trip-steps whose trip the geo janitor has since deleted
@@ -187,7 +193,13 @@ def main():
         if clean_m / 1000.0 > maxkm:
             sk_far += 1
             continue
-        if pctile(speeds, 0.85) > drive_kmh or max_run >= drive_run:
+        # Drive if the trip is fast OVERALL (p85), OR it has a sustained fast-run AND its
+        # overall pace isn't clearly walking. The p85 gate on the run rule stops a short
+        # burst of GPS-noise fast segments on a genuine walk (p85 <= walk_ceiling) from
+        # being mistaken for a car — a real moving drive has p85 > drive_kmh and is caught
+        # by the first clause regardless. See the 2026-08-17 audit / trip 15845.
+        p85 = pctile(speeds, 0.85)
+        if p85 > drive_kmh or (max_run >= drive_run and p85 > walk_ceiling):
             sk_drive += 1
             continue
         uid = dev2user.get((tr['device_label'] or '').strip())
@@ -205,7 +217,7 @@ def main():
     print(f"steps_from_trips: reconciled={reconciled} imported={imported} "
           f"skipped(nopts={sk_nopts} phantom={sk_phantom} drive={sk_drive} far={sk_far} nouser={sk_user}) "
           f"candidates={len(trips)} "
-          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|run>={drive_run}) glitch>{glitch_kmh}km/h cap={maxkm}km)")
+          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|run>={drive_run}&p85>{walk_ceiling}) glitch>{glitch_kmh}km/h cap={maxkm}km)")
 
 
 if __name__ == '__main__':
