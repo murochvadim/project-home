@@ -20,11 +20,37 @@ board wiring): **https://claude.ai/code/artifact/f44dd1dc-29eb-41fe-8d68-99b4ff2
   control all ride the Ethernet cable — more reliable than WiFi in a utility spot).
 - **RS-485 converter** — auto-direction module preferred (removes the DE/RE wire); else MAX3485 + one
   DE/RE GPIO.
-- Both GEMINI boards → **one RS-485 bus** (A↔A, B↔B, GND↔GND↔bridge). Each board's DIP set to **MODBUS
-  mode** + a **unique address** (unit-1 = addr 1, unit-2 = addr 2). **120 Ω** termination at the two
-  physical bus ends.
+- Both GEMINI boards → **one RS-485 bus** (A↔A, B↔B, GND↔GND↔bridge). Each board's **DIP `J2` = ON
+  (MODBUS)** (see the DIP table below) + a **unique Modbus address** (unit-1 = addr 1, unit-2 = addr 2).
+  **120 Ω** termination at the two physical bus ends.
 - ⚠ Do **NOT** wire the board's `CLK`/`OUT` pins (RCW wall-remote mode only). **Shared GND is mandatory.**
-- ⚠ Mains: power each unit **off at the breaker** before wiring (A/B/GND/12 V pins are low-voltage).
+- ⚠ Mains: power each unit **off at the breaker** before wiring (the `OUT/CLK/RS485/12V/GND` pins are the
+  board's low-voltage optional/smart-home connector).
+
+### DIP switches — CONFIRMED from the official diagram (Cat 444991/04) + real board photos (2026-08-18)
+The board's optional connector is silkscreened **`OUT · CLK · RS485(B,A) · 12V · GND`** — exactly as the
+schema assumed (the real-board photo matches pin-for-pin). The **`J2` DIP is the make-or-break setting.**
+Per the board's own DIP table (EMD+ / JAMAICA / ELD):
+
+| DIP | ON | OFF | Set to |
+|---|---|---|---|
+| **J1 Test** | Test mode | Normal operation | **OFF** |
+| **J2 Modbus/RCW** | **MODBUS** | RCW (wall remote) | **ON** ⭐ |
+| J3 CLK | B – presence sensor | A – timer | any (unused in Modbus) |
+| J4 | not used | not used | — |
+| J5 Heat-compensate | no compensate | compensate | installer choice |
+
+⚠ **With `J2` OFF the RS-485 port runs the RCW protocol, NOT Modbus** — set **J2 ON** on every unit or the
+bridge is silent. Modbus mode and the wired wall thermostat are likely **mutually exclusive** (confirm in
+Phase 1).
+
+### Powering the bridge — from the board's own 12 V (new, from the diagram)
+The `12V/GND` pins in that same connector are the board's **supply rail for the smart-home module**, so
+power the ESP32 bridge **from the A/C board's 12 V** via a small **12 V→5 V buck** — GND then doubles as the
+RS-485 signal reference. Result: **one 4-wire run per unit (`A/B/12V/GND`), no separate PSU.** ⚠ verify the
+12 V rail can source the bridge (~150 mA @12 V for ESP32+W5500); if it sags, use a separate 5 V supply (still
+tie GND↔GND for the RS-485 reference). On the shared 2-unit bus, feed the bridge from **one** unit's 12 V
+only (don't parallel the two 12 V rails) — but tie **all** GNDs together.
 
 ## Pin map (finalized — boot/OTA-safe)
 Every GPIO below is boot- & OTA-safe; the SPI half mirrors the proven `kazir_15` board (verified against

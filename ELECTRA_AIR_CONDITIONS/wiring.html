@@ -98,53 +98,57 @@
   <!-- ========================= DIAGRAM 1 ========================= -->
   <section class="card">
     <h2><span class="n">1</span> A/C units ↔ bridge (the RS-485 bus)</h2>
-    <p class="cap">Both A/C boards share the same three wires — A, B, GND. They're told apart by the
-      Modbus <b>address</b> set on each board's DIP.</p>
+    <p class="cap">Both A/C boards share the same three bus wires — A, B, GND — told apart by the Modbus
+      <b>address</b> (DIP <code>J2</code>=ON for MODBUS). The bridge is powered from <b>one</b> unit's
+      <b>12&nbsp;V</b> through a small buck (no separate PSU).</p>
     <div class="svg-scroll">
-      <svg viewBox="0 0 900 470" role="img" aria-label="RS-485 bus wiring between two Electra A/C boards and the bridge">
+      <svg viewBox="0 0 900 478" role="img" aria-label="RS-485 bus wiring between two Electra A/C boards and the bridge; the bridge is powered from unit 1's 12V through a buck converter">
         <!-- ===== A/C Unit 1 ===== -->
-        <rect class="box" x="34" y="118" width="196" height="150" rx="11"/>
-        <text class="t-title" x="52" y="150">Electra A/C #1</text>
-        <text class="t-sub"   x="52" y="170">GEMINI PCB-1P0200</text>
-        <text class="t-sub"   x="52" y="246">DIP: MODBUS · addr 1</text>
-        <!-- right-edge terminal -->
-        <rect class="pad" x="222" y="182" width="16" height="16" rx="3"/>
-        <rect class="pad" x="222" y="217" width="16" height="16" rx="3"/>
-        <rect class="pad" x="222" y="252" width="16" height="16" rx="3"/>
-        <text class="t-pin" x="196" y="195" text-anchor="end">A</text>
-        <text class="t-pin" x="196" y="230" text-anchor="end">B</text>
-        <text class="t-pin" x="188" y="265" text-anchor="end">GND</text>
+        <rect class="box" x="34" y="108" width="196" height="192" rx="11"/>
+        <text class="t-title" x="52" y="140">Electra A/C #1</text>
+        <text class="t-sub"   x="52" y="160">GEMINI PCB-1P0200</text>
+        <text class="t-sub"   x="52" y="286">DIP J2=ON (MODBUS) · addr 1</text>
+        <!-- right-edge terminal: A B GND 12V -->
+        <rect class="pad" x="222" y="172" width="16" height="16" rx="3"/>
+        <rect class="pad" x="222" y="207" width="16" height="16" rx="3"/>
+        <rect class="pad" x="222" y="242" width="16" height="16" rx="3"/>
+        <rect class="pad" x="222" y="277" width="16" height="16" rx="3"/>
+        <text class="t-pin" x="196" y="185" text-anchor="end">A</text>
+        <text class="t-pin" x="196" y="220" text-anchor="end">B</text>
+        <text class="t-pin" x="188" y="255" text-anchor="end">GND</text>
+        <text class="t-pin" x="188" y="290" text-anchor="end">12V</text>
 
         <!-- ===== A/C Unit 2 ===== -->
-        <rect class="box" x="670" y="118" width="196" height="150" rx="11"/>
-        <text class="t-title" x="688" y="150">Electra A/C #2</text>
-        <text class="t-sub"   x="688" y="170">GEMINI PCB-1P0200</text>
-        <text class="t-sub"   x="688" y="246">DIP: MODBUS · addr 2</text>
-        <rect class="pad" x="662" y="182" width="16" height="16" rx="3"/>
-        <rect class="pad" x="662" y="217" width="16" height="16" rx="3"/>
-        <rect class="pad" x="662" y="252" width="16" height="16" rx="3"/>
-        <text class="t-pin" x="704" y="195">A</text>
-        <text class="t-pin" x="704" y="230">B</text>
-        <text class="t-pin" x="704" y="265">GND</text>
+        <rect class="box" x="670" y="108" width="196" height="192" rx="11"/>
+        <text class="t-title" x="688" y="140">Electra A/C #2</text>
+        <text class="t-sub"   x="688" y="160">GEMINI PCB-1P0200</text>
+        <text class="t-sub"   x="688" y="266">12V: fed from #1 only</text>
+        <text class="t-sub"   x="688" y="286">DIP J2=ON (MODBUS) · addr 2</text>
+        <rect class="pad" x="662" y="172" width="16" height="16" rx="3"/>
+        <rect class="pad" x="662" y="207" width="16" height="16" rx="3"/>
+        <rect class="pad" x="662" y="242" width="16" height="16" rx="3"/>
+        <text class="t-pin" x="704" y="185">A</text>
+        <text class="t-pin" x="704" y="220">B</text>
+        <text class="t-pin" x="704" y="255">GND</text>
 
         <!-- ===== the bus (3 lines) ===== -->
-        <line class="wire wa" x1="238" y1="190" x2="662" y2="190"/>
-        <line class="wire wb" x1="238" y1="225" x2="662" y2="225"/>
-        <line class="wire wg" x1="238" y1="260" x2="662" y2="260"/>
-        <text class="t-lbl t-a" x="450" y="182" text-anchor="middle">A</text>
-        <text class="t-lbl t-b" x="450" y="217" text-anchor="middle">B</text>
-        <text class="t-lbl t-g" x="450" y="284" text-anchor="middle">GND (shared)</text>
+        <line class="wire wa" x1="238" y1="180" x2="662" y2="180"/>
+        <line class="wire wb" x1="238" y1="215" x2="662" y2="215"/>
+        <line class="wire wg" x1="238" y1="250" x2="662" y2="250"/>
+        <text class="t-lbl t-a" x="450" y="172" text-anchor="middle">A</text>
+        <text class="t-lbl t-b" x="450" y="207" text-anchor="middle">B</text>
+        <text class="t-lbl t-g" x="450" y="240" text-anchor="middle">GND (shared)</text>
 
         <!-- 120Ω terminators at the two ends -->
-        <path class="term" d="M262,190 v6 l6,4 l-12,6 l12,6 l-12,6 l6,4 v3" transform="translate(0,-4)"/>
-        <text class="t-lbl" x="272" y="212">120Ω</text>
-        <path class="term" d="M638,190 v6 l6,4 l-12,6 l12,6 l-12,6 l6,4 v3" transform="translate(0,-4)"/>
-        <text class="t-lbl" x="600" y="212" text-anchor="end">120Ω</text>
+        <path class="term" d="M262,180 v6 l6,4 l-12,6 l12,6 l-12,6 l6,4 v3" transform="translate(0,-4)"/>
+        <text class="t-lbl" x="272" y="202">120Ω</text>
+        <path class="term" d="M638,180 v6 l6,4 l-12,6 l12,6 l-12,6 l6,4 v3" transform="translate(0,-4)"/>
+        <text class="t-lbl" x="600" y="202" text-anchor="end">120Ω</text>
 
         <!-- ===== Bridge ===== -->
         <rect class="box" x="352" y="352" width="196" height="86" rx="11"/>
-        <text class="t-title" x="450" y="392" text-anchor="middle">Bridge</text>
-        <text class="t-sub"   x="450" y="411" text-anchor="middle">ESP32 + W5500 + RS-485</text>
+        <text class="t-title" x="450" y="388" text-anchor="middle">Bridge</text>
+        <text class="t-sub"   x="450" y="407" text-anchor="middle">ESP32 + W5500 + RS-485</text>
         <!-- top terminal pads -->
         <rect class="pad" x="399" y="344" width="16" height="16" rx="3"/>
         <rect class="pad" x="434" y="344" width="16" height="16" rx="3"/>
@@ -152,15 +156,28 @@
         <text class="t-pinm" x="407" y="336" text-anchor="middle">A</text>
         <text class="t-pinm" x="442" y="336" text-anchor="middle">B</text>
         <text class="t-pinm" x="477" y="336" text-anchor="middle">GND</text>
+        <!-- 5V power pad on the bridge's left edge -->
+        <rect class="pad" x="344" y="405" width="16" height="16" rx="3"/>
+        <text class="t-pinm" x="364" y="417">5V</text>
         <!-- risers from bus into bridge -->
-        <line class="wire wa" x1="407" y1="190" x2="407" y2="344"/>
-        <line class="wire wb" x1="442" y1="225" x2="442" y2="344"/>
-        <line class="wire wg" x1="477" y1="260" x2="477" y2="344"/>
+        <line class="wire wa" x1="407" y1="180" x2="407" y2="344"/>
+        <line class="wire wb" x1="442" y1="215" x2="442" y2="344"/>
+        <line class="wire wg" x1="477" y1="250" x2="477" y2="344"/>
+
+        <!-- ===== 12V power feed: A/C #1 12V -> buck -> bridge 5V ===== -->
+        <rect class="box" x="250" y="390" width="80" height="46" rx="8"/>
+        <text class="t-sub" x="290" y="411" text-anchor="middle" style="font-size:10.5px">12V→5V</text>
+        <text class="t-sub" x="290" y="425" text-anchor="middle" style="font-size:10.5px">buck</text>
+        <line class="wire wp" x1="238" y1="285" x2="238" y2="413"/>
+        <line class="wire wp" x1="238" y1="413" x2="250" y2="413"/>
+        <line class="wire wp" x1="330" y1="413" x2="344" y2="413"/>
+        <text class="t-lbl" x="214" y="352" style="fill:var(--wire-pwr)">12V</text>
 
         <!-- junction dots (real connections) -->
-        <circle class="dot" cx="238" cy="190" r="3.4"/><circle class="dot" cx="238" cy="225" r="3.4"/><circle class="dot" cx="238" cy="260" r="3.4"/>
-        <circle class="dot" cx="662" cy="190" r="3.4"/><circle class="dot" cx="662" cy="225" r="3.4"/><circle class="dot" cx="662" cy="260" r="3.4"/>
-        <circle class="dot" cx="407" cy="190" r="3.4"/><circle class="dot" cx="442" cy="225" r="3.4"/><circle class="dot" cx="477" cy="260" r="3.4"/>
+        <circle class="dot" cx="238" cy="180" r="3.4"/><circle class="dot" cx="238" cy="215" r="3.4"/><circle class="dot" cx="238" cy="250" r="3.4"/>
+        <circle class="dot" cx="238" cy="285" r="3.4"/>
+        <circle class="dot" cx="662" cy="180" r="3.4"/><circle class="dot" cx="662" cy="215" r="3.4"/><circle class="dot" cx="662" cy="250" r="3.4"/>
+        <circle class="dot" cx="407" cy="180" r="3.4"/><circle class="dot" cx="442" cy="215" r="3.4"/><circle class="dot" cx="477" cy="250" r="3.4"/>
 
         <!-- Ethernet out -->
         <line class="wire we" x1="450" y1="438" x2="450" y2="456"/>
@@ -172,6 +189,7 @@
       <span><i style="background:var(--wire-a)"></i>A (D+)</span>
       <span><i style="background:var(--wire-b)"></i>B (D−)</span>
       <span><i style="background:var(--wire-gnd)"></i>GND (common)</span>
+      <span><i style="background:var(--wire-pwr)"></i>12V→5V power</span>
       <span><i style="background:var(--wire-eth)"></i>Ethernet</span>
     </div>
   </section>
@@ -288,7 +306,8 @@
   <ul class="notes">
     <li><b>Shared GND is mandatory</b> — the A/C boards and the bridge must share a common ground, or RS-485 won't communicate reliably.</li>
     <li><b>120&nbsp;Ω terminators</b> go across A–B at the <b>two physical ends</b> of the bus (the two A/C units). Many RS-485 modules have a jumper for this.</li>
-    <li><b>Set each board's DIP to MODBUS mode</b> with a <b>unique address</b> (1 and 2). Do <b>not</b> wire the board's <code>CLK</code>/<code>OUT</code> pins — those are RCW wall-remote mode only.</li>
+    <li><b>DIP <code>J2</code> = ON → MODBUS</b> on <b>every</b> unit (OFF = RCW wall-remote protocol → the bridge is silent), each with a <b>unique address</b> (1 and 2). Also <code>J1</code> = OFF (normal, not test). Do <b>not</b> wire the board's <code>CLK</code>/<code>OUT</code> pins — RCW-only. <i>(Confirmed from the official Electra diagram Cat&nbsp;444991/04 + the real board.)</i></li>
+    <li><b>Power the bridge from the A/C board's 12&nbsp;V</b> — the <code>12V/GND</code> pins are the board's smart-home supply. Feed the ESP32 via a <b>12&nbsp;V→5&nbsp;V buck</b> off <b>one</b> unit (don't parallel both 12&nbsp;V rails), GND doubling as the RS-485 reference → one 4-wire run <code>A/B/12V/GND</code> per unit. ⚠ if the 12&nbsp;V rail sags under the bridge's draw (~150&nbsp;mA), use a separate 5&nbsp;V supply and still tie <code>GND↔GND</code>.</li>
     <li><b>Module = "RS485 V2.07" auto-direction</b> — it switches TX/RX itself, so there is <b>no DE/RE</b> (GPIO25 unused). Wire only <code>VCC / GND / RXD / TXD / A / B</code>, and jumper <code>EN → VCC</code> to enable.</li>
     <li><b>⚠ RXD/TXD are crossed + bench-verify.</b> Wire module <code>RXD → ESP32 TX (GPIO17)</code> and <code>TXD → ESP32 RX (GPIO16)</code>. The TXD/RXD silk on these clones is inconsistent — if there is no comms, <b>swap the two</b> (one orientation is always right).</li>
     <li><b>Boot/OTA-safe pins.</b> RST → <code>GPIO13</code> (a plain pin — lets firmware hard-reset a wedged W5500). <b>Never</b> <code>GPIO2</code>/<code>GPIO12</code>/<code>GPIO15</code>/<code>GPIO0</code> — boot straps (<code>GPIO12</code> held high at boot = the board won't boot at all). INT → <code>GPIO4</code> is <b>optional</b> (SPI is polled).</li>
