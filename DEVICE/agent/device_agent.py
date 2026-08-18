@@ -85,6 +85,8 @@ class DeviceAgent:
         self._allowed_dps = {}          # device_id → set of allowed DPS keys (None = all allowed)
         self._cloud_authoritative_dps = {}  # device_id → set of DPS keys that ONLY cloud/HA sources may write
         self._dps_onoff = {}            # device_id → {channel: {'on': dps_dict, 'off': dps_dict}} — Phase 1 local on/off recipes
+        self._analog_throttle = {}      # device_id → analog_throttle cfg (from dps_config) — suppresses sub-threshold event flood
+        self._analog_last_emit = {}     # device_id → {'vals': {k: v}, 'ts': t} last EMITTED sample (per-key hysteresis)
         self._device_net_info = {}      # device_id → (mac, ip) for local Tuya devices
         self._net_update_throttle = {}  # mac → last_update_timestamp
         self._connect_db()
@@ -167,6 +169,16 @@ class DeviceAgent:
                 if isinstance(ca, list) and ca:
                     self._cloud_authoritative_dps[row['id']] = {str(x) for x in ca}
 
+                # Analog throttle: dps_config.analog_throttle suppresses device_events
+                # for a chatty analog device (e.g. Shelly 3EM) unless a key moved by
+                # >= its threshold or the keepalive elapsed. Shape:
+                #   {"__keepalive_sec": 30, "_a": 0.1, "_w": 20, "_pf": 0.05, ...}
+                # keys match a DPS key exactly, else by longest suffix. last_state is
+                # written regardless, so ONLY the event stream (+ its MQTT event) throttles.
+                at = (row.get('dps_config') or {}).get('analog_throttle')
+                if isinstance(at, dict) and at:
+                    self._analog_throttle[row['id']] = at
+
                 # Phase 1 local on/off recipes: dps_config.<channel>.dps_on /
                 # dps_off = the raw dps dict to write over local TCP for
                 # turn_on / turn_off, bypassing the HA -> Tuya-cloud roundtrip.
@@ -216,6 +228,20 @@ class DeviceAgent:
             self._net_update_throttle[mac] = now
         except Exception as e:
             log.warning(f'net_devices upsert failed for {mac}: {e}')
+
+    @staticmethod
+    def _throttle_thr(cfg, key):
+        """Resolve the min-change threshold for a DPS key: exact match first, then the
+        longest matching suffix (e.g. 't_a' -> '_a'). None => any change counts."""
+        if key in cfg:
+            return cfg[key]
+        best = None
+        for ck, cv in cfg.items():
+            if ck.startswith('__'):
+                continue
+            if key.endswith(ck) and (best is None or len(ck) > len(best[0])):
+                best = (ck, cv)
+        return best[1] if best else None
 
     def _db_write(self, device_id: str, dps: dict, source: str):
         """Execute the DB writes for a state change event. Must be called under _db_lock."""
@@ -317,6 +343,41 @@ class DeviceAgent:
             last_same_src = self._device_last_event.get(dedup_key)
             last_any = self._device_last_event.get(device_id)
             is_dup = (not filtered_json) or (last_same_src == filtered_json) or (last_any and (now - last_any[0]) < 2 and last_any[1] == filtered_json)
+
+            # Analog throttle (config-gated per device): mark this a duplicate — so the
+            # device_event (+ its MQTT event) is suppressed — when no key moved by a
+            # meaningful amount and we're within the keepalive window. last_state (below)
+            # and the retained /state publish still run, so in-memory state stays current;
+            # ONLY the event stream throttles. Per-key last-EMITTED values accumulate
+            # because the Shelly sends ONE key per event. Stops the power-meter flood.
+            throttle_cfg = self._analog_throttle.get(device_id)
+            if throttle_cfg and filtered and not is_dup:
+                prev = self._analog_last_emit.setdefault(device_id, {'vals': {}, 'ts': 0.0})
+                significant = (now - prev['ts']) >= throttle_cfg.get('__keepalive_sec', 30)
+                if not significant:
+                    for k, v in filtered.items():
+                        pv = prev['vals'].get(k)
+                        if pv is None:
+                            significant = True
+                            break
+                        if not isinstance(v, (int, float)) or not isinstance(pv, (int, float)):
+                            if pv != v:
+                                significant = True
+                                break
+                            continue
+                        thr = self._throttle_thr(throttle_cfg, k)
+                        if thr is None:
+                            if pv != v:
+                                significant = True
+                                break
+                        elif abs(v - pv) >= thr:
+                            significant = True
+                            break
+                if significant:
+                    prev['vals'].update(filtered)
+                    prev['ts'] = now
+                else:
+                    is_dup = True
 
             # DB last_state gets ALL DPS (for Settings view).
             # RETURNING mac+local_ip: same rationale as the keepalive
