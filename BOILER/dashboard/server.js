@@ -4024,7 +4024,26 @@ app.delete('/api/geolocation/trips', async (req, res) => {
   if (!total) return res.status(400).json({ error: 'ids must contain at least one valid id' });
   const tableFor = { home: 'phone_trips', leg: 'phone_place_trips', stay: 'phone_places' };
   try {
-    let deleted = 0;
+    let deleted = 0, dotsDeleted = 0;
+    // Also clear the deleted HOME trips' GPS dots from the map — scoped to each
+    // trip's own [started_at, returned_at] window, NEVER the whole table. This
+    // makes "Delete selected" wipe a trip from the map too, so the destructive
+    // "Clear all" nuke is never needed for that. (Single-phone setup: a trip
+    // window's points are that phone's; add device scoping if a 2nd phone ever
+    // shares device_locations.)
+    if (buckets.home.length) {
+      const wins = await db.query(
+        'SELECT started_at, returned_at FROM phone_trips WHERE id = ANY($1::bigint[]) AND started_at IS NOT NULL AND returned_at IS NOT NULL',
+        [buckets.home],
+      );
+      for (const w of wins.rows) {
+        const dr = await db.query(
+          'DELETE FROM device_locations WHERE ts BETWEEN $1 AND $2',
+          [w.started_at, w.returned_at],
+        );
+        dotsDeleted += dr.rowCount;
+      }
+    }
     for (const kind of ['home', 'leg', 'stay']) {
       if (!buckets[kind].length) continue;
       const r = await db.query(
@@ -4033,7 +4052,7 @@ app.delete('/api/geolocation/trips', async (req, res) => {
       );
       deleted += r.rowCount;
     }
-    res.json({ deleted });
+    res.json({ deleted, dots_deleted: dotsDeleted });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

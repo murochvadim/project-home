@@ -424,7 +424,7 @@
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <h2 style="margin:0;">Recent geofence events</h2>
-        <button onclick="geoClearEvents()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:3px; cursor:pointer;" title="Wipe every geofence event AND every GPS ping from the DB. Empties both the table below and all dots on the map.">🗑 Clear all geolocation data</button>
+        <button onclick="geoClearEvents()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#fff; background:#c0392b; border-radius:3px; cursor:pointer;" title="DANGER: wipes your ENTIRE GPS history — every ping + every geofence event, ALL trips. This is NOT how you delete one trip — use 'Delete selected' on the Recent trips card for that.">⚠️ WIPE ALL GPS history</button>
       </div>
       <div style="overflow-y:auto; max-height:280px;">
         <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
@@ -1544,7 +1544,16 @@ async function geoFitToTrack() {
 }
 
 async function geoClearEvents() {
-  if (!confirm('Delete ALL geolocation data (every GPS ping + every geofence event)? This cannot be undone.')) return;
+  // Type-to-confirm — this wipes the ENTIRE GPS history, not one trip. A plain
+  // confirm() was too easy to click through (it was being used by mistake to
+  // "clear the last trip", silently deleting all points). To remove ONE trip
+  // from the map+list, use "Delete selected" on the Recent trips card instead.
+  const typed = prompt(
+    '⚠️ This WIPES YOUR ENTIRE GPS HISTORY — every ping AND every geofence event, ALL trips.\n\n' +
+    'This is NOT how you delete one trip. To remove a single trip (and its dots from the map), ' +
+    'use "Delete selected" on the Recent trips card.\n\n' +
+    'To wipe EVERYTHING, type   WIPE ALL   below:');
+  if (typed !== 'WIPE ALL') { if (typed !== null) alert('Not wiped (you must type exactly: WIPE ALL).'); return; }
   try {
     const r = await fetch('/api/geolocation/events', { method: 'DELETE' });
     const d = await r.json();
@@ -1689,7 +1698,7 @@ async function geoDeleteSelectedTrips() {
     .map(cb => cb.dataset.tripId)
     .filter(Boolean);
   if (!ids.length) return;
-  if (!confirm(`Delete ${ids.length} trip${ids.length>1?'s':''} from the database? This cannot be undone.`)) return;
+  if (!confirm(`Delete ${ids.length} trip${ids.length>1?'s':''} — removes them from the list AND clears their dots from the map (only these trips; the rest of your history is kept). This cannot be undone.`)) return;
   try {
     const r = await fetch('/api/geolocation/trips', {
       method: 'DELETE',
@@ -1702,8 +1711,11 @@ async function geoDeleteSelectedTrips() {
       return;
     }
     const j = await r.json();
-    // Refresh the table immediately — don't wait for the next 10 s poll.
+    // Refresh the table AND the map immediately — the server also deletes each
+    // deleted home-trip's GPS dots (scoped to that trip's window), so the map
+    // must redraw to drop them. Don't wait for the next 10 s poll.
     await geoReloadTrips();
+    await geoReloadTrail();
   } catch (e) {
     alert('Delete failed: ' + e.message);
   }
