@@ -4024,17 +4024,20 @@ app.delete('/api/geolocation/trips', async (req, res) => {
   if (!total) return res.status(400).json({ error: 'ids must contain at least one valid id' });
   const tableFor = { home: 'phone_trips', leg: 'phone_place_trips', stay: 'phone_places' };
   try {
+    const dotsOnly = !!(req.body && req.body.dots_only);
     let deleted = 0, dotsDeleted = 0;
-    // Also clear the deleted HOME trips' GPS dots from the map — scoped to each
-    // trip's own [started_at, returned_at] window, NEVER the whole table. This
-    // makes "Delete selected" wipe a trip from the map too, so the destructive
-    // "Clear all" nuke is never needed for that. (Single-phone setup: a trip
-    // window's points are that phone's; add device scoping if a 2nd phone ever
-    // shares device_locations.)
-    if (buckets.home.length) {
+    // Clear the selected trips' GPS dots from the map — scoped to each trip's own
+    // [started_at, returned_at] window, NEVER the whole table. With dots_only the
+    // trip ROWS are kept (map decluttered, trip stays in the Recent list);
+    // otherwise the rows are deleted too. Either way the destructive "Clear all"
+    // nuke is never needed. (Single-phone setup: a trip window's points are that
+    // phone's; add device scoping if a 2nd phone ever shares device_locations.)
+    const winTable = { home: 'phone_trips', leg: 'phone_place_trips' };
+    for (const kind of ['home', 'leg']) {
+      if (!buckets[kind].length) continue;
       const wins = await db.query(
-        'SELECT started_at, returned_at FROM phone_trips WHERE id = ANY($1::bigint[]) AND started_at IS NOT NULL AND returned_at IS NOT NULL',
-        [buckets.home],
+        `SELECT started_at, returned_at FROM ${winTable[kind]} WHERE id = ANY($1::bigint[]) AND started_at IS NOT NULL AND returned_at IS NOT NULL`,
+        [buckets[kind]],
       );
       for (const w of wins.rows) {
         const dr = await db.query(
@@ -4044,15 +4047,17 @@ app.delete('/api/geolocation/trips', async (req, res) => {
         dotsDeleted += dr.rowCount;
       }
     }
-    for (const kind of ['home', 'leg', 'stay']) {
-      if (!buckets[kind].length) continue;
-      const r = await db.query(
-        `DELETE FROM ${tableFor[kind]} WHERE id = ANY($1::bigint[])`,
-        [buckets[kind]],
-      );
-      deleted += r.rowCount;
+    if (!dotsOnly) {
+      for (const kind of ['home', 'leg', 'stay']) {
+        if (!buckets[kind].length) continue;
+        const r = await db.query(
+          `DELETE FROM ${tableFor[kind]} WHERE id = ANY($1::bigint[])`,
+          [buckets[kind]],
+        );
+        deleted += r.rowCount;
+      }
     }
-    res.json({ deleted, dots_deleted: dotsDeleted });
+    res.json({ deleted, dots_deleted: dotsDeleted, dots_only: dotsOnly });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

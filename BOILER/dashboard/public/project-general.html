@@ -396,6 +396,11 @@
             <option value="200">last 200</option>
           </select>
         </div>
+        <button id="geo-trips-clearmap-btn" onclick="geoClearTripDots()" disabled
+                style="padding:4px 12px; font-size:0.82rem; border:1px solid #ccc; color:#888; background:#fafafa; border-radius:3px; cursor:not-allowed;"
+                title="Tick rows below to enable">
+          🗺 Clear from map (0)
+        </button>
         <button id="geo-trips-delete-btn" onclick="geoDeleteSelectedTrips()" disabled
                 style="padding:4px 12px; font-size:0.82rem; border:1px solid #ccc; color:#888; background:#fafafa; border-radius:3px; cursor:not-allowed;"
                 title="Tick rows below to enable">
@@ -1675,19 +1680,21 @@ function geoTripsToggleAll(checked) {
 }
 
 function geoTripsUpdateDeleteBtn() {
-  const checked = document.querySelectorAll('.geo-trip-cb:checked');
+  const n = document.querySelectorAll('.geo-trip-cb:checked').length;
+  const off = 'padding:4px 12px; font-size:0.82rem; border:1px solid #ccc; color:#888; background:#fafafa; border-radius:3px; cursor:not-allowed;';
   const btn = document.getElementById('geo-trips-delete-btn');
-  if (!btn) return;
-  const n = checked.length;
-  btn.textContent = `🗑 Delete selected (${n})`;
-  if (n === 0) {
-    btn.disabled = true;
-    btn.style.cssText = 'padding:4px 12px; font-size:0.82rem; border:1px solid #ccc; color:#888; background:#fafafa; border-radius:3px; cursor:not-allowed;';
-    btn.title = 'Tick rows below to enable';
-  } else {
-    btn.disabled = false;
-    btn.style.cssText = 'padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#fff; background:#c0392b; border-radius:3px; cursor:pointer; font-weight:600;';
-    btn.title = `Delete ${n} trip${n>1?'s':''} from the database`;
+  if (btn) {
+    btn.textContent = `🗑 Delete selected (${n})`;
+    btn.disabled = n === 0;
+    btn.style.cssText = n === 0 ? off : 'padding:4px 12px; font-size:0.82rem; border:1px solid #c0392b; color:#fff; background:#c0392b; border-radius:3px; cursor:pointer; font-weight:600;';
+    btn.title = n === 0 ? 'Tick rows below to enable' : `Delete ${n} trip${n>1?'s':''} from the list AND map`;
+  }
+  const cm = document.getElementById('geo-trips-clearmap-btn');
+  if (cm) {
+    cm.textContent = `🗺 Clear from map (${n})`;
+    cm.disabled = n === 0;
+    cm.style.cssText = n === 0 ? off : 'padding:4px 12px; font-size:0.82rem; border:1px solid #2f6f8f; color:#fff; background:#2f6f8f; border-radius:3px; cursor:pointer; font-weight:600;';
+    cm.title = n === 0 ? 'Tick rows below to enable' : `Clear ${n} trip${n>1?'s':''} from the map only — keeps the trip in the list`;
   }
 }
 
@@ -1718,6 +1725,33 @@ async function geoDeleteSelectedTrips() {
     await geoReloadTrail();
   } catch (e) {
     alert('Delete failed: ' + e.message);
+  }
+}
+
+async function geoClearTripDots() {
+  // Clear ONLY the GPS dots for the checked trips (scoped to each trip's window)
+  // while KEEPING the trip row in the Recent trips list. Sends dots_only:true so
+  // the server deletes device_locations for the windows but not the trip rows.
+  const ids = [...document.querySelectorAll('.geo-trip-cb:checked')]
+    .map(cb => cb.dataset.tripId).filter(Boolean);
+  if (!ids.length) return;
+  if (!confirm(`Clear ${ids.length} trip${ids.length>1?'s':''} from the MAP only?\n\nThe trip${ids.length>1?'s':''} stay${ids.length>1?'':'s'} in the Recent trips list — only the GPS dots are removed from the map. This cannot be undone.`)) return;
+  try {
+    const r = await fetch('/api/geolocation/trips', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, dots_only: true }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+      alert('Clear-from-map failed: ' + (err.error || 'unknown error'));
+      return;
+    }
+    await r.json();
+    // Trips stay in the list — refresh ONLY the map to drop the dots.
+    await geoReloadTrail();
+  } catch (e) {
+    alert('Clear-from-map failed: ' + e.message);
   }
 }
 </script>
