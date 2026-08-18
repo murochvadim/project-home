@@ -18,7 +18,10 @@ walk look like a car (the bug that skipped trip 13212's 3.6 km walk on 2026-07-0
 Glitches are KEPT in the p85 pool, so a genuinely sustained fast drive still trips it.
 
   walking  -> insert ph_steps (steps = clean_km * steps_per_km, measured_at = returned_at)
-  driving  -> skip (a sustained fast run, or a fast 85th-percentile)
+  driving  -> skip (p85 > drive_kmh, OR a SUSTAINED fast stretch: one continuous fast run
+              lasting >= drive_sustain_sec AND covering >= drive_sustain_m). The duration+distance
+              rule (2026-08-18) replaced a count-of-consecutive-fast-segments rule that a brief
+              ~34 s GPS-noise burst on a walk could satisfy (trip 15881 misread as a drive).
   phantom  -> skip (clean movement below a floor = GPS ghost / drove-nowhere)
   no points (aged out / wiped, or trip's group not mapped) -> skip (don't guess)
 
@@ -41,13 +44,20 @@ DEFAULTS = {
     'walk_max_km':     30.0,    # hard distance cap (above this = not a walk)
     'accuracy_gate_m': 35.0,    # a segment counts only if BOTH endpoints are this accurate
     'phantom_min_m':   150.0,   # clean distance below this = GPS phantom / no real trip
-    'drive_kmh':       15.0,    # vehicle-like: drives if p85 segment speed > this, OR
-    'drive_run_segs':  3,       # >= this many CONSECUTIVE segments faster than drive_kmh, ...
-    'walk_ceiling_kmh': 10.0,   # ...but the consecutive-run rule ONLY fires when p85 is above
-                                # this. If p85 <= this the trip is clearly walking-pace overall,
-                                # so a short fast-run is GPS noise, not a car — keep it as a walk.
-                                # The p85>drive_kmh rule still catches real (moving) drives on its
-                                # own. Fixes noisy walks wrongly dropped as drives (2026-08-17).
+    'drive_kmh':       15.0,    # a segment faster than this is "fast" (vehicle-like). Drive if the
+                                # 85th-pct segment speed exceeds this, OR there is a SUSTAINED fast
+                                # stretch (see below).
+    'drive_sustain_sec': 90.0,  # DURATION-based drive test (replaces the old count-based
+    'drive_sustain_m':   400.0, # `drive_run_segs`+`walk_ceiling_kmh`, 2026-08-18). A trip is a drive
+                                # only if it has ONE CONTINUOUS run of fast segments lasting at least
+                                # `drive_sustain_sec` AND covering at least `drive_sustain_m`. A real
+                                # drive sustains speed for minutes/kilometers; a GPS-noise burst on a
+                                # walk is a brief blip (measured: trip 15881 = 34s/221m of "fast" from
+                                # a 34-second GPS tantrum, well below 90s/400m → correctly a WALK).
+                                # The count-based rule miscounted such bursts as drives because ~3
+                                # consecutive noise points + p85 nudged just over a threshold looked
+                                # like a car. Duration can't be faked by a short burst. Per-leg, so a
+                                # long stationary stay between legs never dilutes it. See 15881 audit.
     'glitch_kmh':      45.0,    # a segment faster than this between two ADJACENT pings is a
                                 # GPS teleport glitch (impossible on foot): its phantom distance
                                 # is dropped AND it breaks the consecutive fast-run, so a few GPS
@@ -93,8 +103,8 @@ def main():
     acc_gate   = float(cfg['accuracy_gate_m'])
     phantom_min = float(cfg['phantom_min_m'])
     drive_kmh  = float(cfg['drive_kmh'])
-    drive_run  = int(cfg['drive_run_segs'])
-    walk_ceiling = float(cfg['walk_ceiling_kmh'])
+    drive_sustain_sec = float(cfg['drive_sustain_sec'])
+    drive_sustain_m   = float(cfg['drive_sustain_m'])
     glitch_kmh = float(cfg['glitch_kmh'])
 
     # reconcile: drop trip-steps whose trip the geo janitor has since deleted
@@ -160,7 +170,12 @@ def main():
 
         clean_m = 0.0
         speeds = []
-        run = max_run = 0
+        # Track the longest CONTINUOUS fast stretch by DURATION (sec) and DISTANCE (m), not by a
+        # count of segments — because the GPS drops a point roughly every ~26 m, so a short time-gap
+        # between two noise points computes as a fake 20-100 km/h. A count of consecutive fast points
+        # can't tell a 34-second GPS-noise burst from a real drive; duration+distance can.
+        run_sec = run_m = 0.0
+        max_fast_sec = max_fast_m = 0.0
         prev = None
         for pt in pts:
             if prev is not None:
@@ -168,23 +183,28 @@ def main():
                 am = max(pt['accuracy_m'] if pt['accuracy_m'] is not None else 9999,
                          prev['accuracy_m'] if prev['accuracy_m'] is not None else 9999)
                 if dt > 0 and am <= acc_gate:
-                    kmh = haversine(prev['lat'], prev['lon'], pt['lat'], pt['lon']) / dt * 3.6
+                    d = haversine(prev['lat'], prev['lon'], pt['lat'], pt['lon'])
+                    kmh = d / dt * 3.6
                     if kmh > glitch_kmh:
                         # GPS teleport glitch: the dot "jumped" an impossible distance between
                         # two adjacent pings (e.g. 124 m in 4 s = 112 km/h on a walk). Its
                         # distance is phantom → don't add it to clean_m, and it can't be part
-                        # of a real fast-run → reset run. Kept in `speeds` so a genuinely
+                        # of a real fast stretch → break the run. Kept in `speeds` so a genuinely
                         # sustained drive (many real fast segments) still trips the p85 test.
                         speeds.append(kmh)
-                        run = 0
+                        run_sec = run_m = 0.0
                     else:
-                        clean_m += kmh / 3.6 * dt
+                        clean_m += d
                         speeds.append(kmh)
                         if kmh > drive_kmh:
-                            run += 1
-                            max_run = max(max_run, run)
+                            run_sec += dt
+                            run_m += d
+                            if run_sec > max_fast_sec:
+                                max_fast_sec = run_sec
+                            if run_m > max_fast_m:
+                                max_fast_m = run_m
                         else:
-                            run = 0
+                            run_sec = run_m = 0.0
             prev = pt
 
         if clean_m < phantom_min:
@@ -193,13 +213,14 @@ def main():
         if clean_m / 1000.0 > maxkm:
             sk_far += 1
             continue
-        # Drive if the trip is fast OVERALL (p85), OR it has a sustained fast-run AND its
-        # overall pace isn't clearly walking. The p85 gate on the run rule stops a short
-        # burst of GPS-noise fast segments on a genuine walk (p85 <= walk_ceiling) from
-        # being mistaken for a car — a real moving drive has p85 > drive_kmh and is caught
-        # by the first clause regardless. See the 2026-08-17 audit / trip 15845.
+        # Drive if the trip is fast OVERALL (p85 > drive_kmh), OR it has a genuinely SUSTAINED fast
+        # stretch — one continuous run of fast segments lasting >= drive_sustain_sec AND covering
+        # >= drive_sustain_m. A real drive sustains speed for minutes/km; a GPS-noise burst on a walk
+        # is a brief blip (trip 15881: 34 s / 221 m of "fast" → below 90 s / 400 m → correctly WALK).
+        # Duration+distance can't be faked by a short burst the way the old count-based rule was.
+        # Per-leg, so a long stationary stay between legs never dilutes it (umbrella-safe). 2026-08-18.
         p85 = pctile(speeds, 0.85)
-        if p85 > drive_kmh or (max_run >= drive_run and p85 > walk_ceiling):
+        if p85 > drive_kmh or (max_fast_sec >= drive_sustain_sec and max_fast_m >= drive_sustain_m):
             sk_drive += 1
             continue
         uid = dev2user.get((tr['device_label'] or '').strip())
@@ -217,7 +238,7 @@ def main():
     print(f"steps_from_trips: reconciled={reconciled} imported={imported} "
           f"skipped(nopts={sk_nopts} phantom={sk_phantom} drive={sk_drive} far={sk_far} nouser={sk_user}) "
           f"candidates={len(trips)} "
-          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|run>={drive_run}&p85>{walk_ceiling}) glitch>{glitch_kmh}km/h cap={maxkm}km)")
+          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|sustained>={drive_sustain_sec}s&{drive_sustain_m}m) glitch>{glitch_kmh}km/h cap={maxkm}km)")
 
 
 if __name__ == '__main__':
