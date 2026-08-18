@@ -171,12 +171,38 @@ slips through when the query lands on the other — *weakening* upstream blockin
 work (deterministic blocking) and Cloudflare only takes over when Quad9 errors/times-out — fixing the intermittent DoH
 `unexpected EOF` that transiently failed a list-update, WITHOUT the weakening. (3) Added **HaGeZi TIF-Mini** blocklist.
 Bootstrap set to secured IPs `9.9.9.9 / 149.112.112.9 / 1.1.1.2 / 1.0.0.2 (+IPv6)`. Rollback JSON snapshots in the
-session scratchpad (`adguard_dns_info_backup.json` = original dns10; `_pre_cloudflare.json` = Quad9-only).
-**Next (Step 3, on hold):** move query log to the 16 GB USB stick (SanDisk, `/dev/sda1`, currently FAT32 → reformat
-ext4 + fstab-mount `/mnt/usb` + set `querylog.dir_path`/`statistics.dir_path`) — only worth it AFTER the LAN's DHCP
-DNS is pointed at RP01 (today the whole data dir is ~29 MB; nothing to move). Change via **stop AGH → edit
-`AdGuardHome.yaml` → start** (AGH rewrites the yaml on shutdown, so a hot edit is lost). USB does NOT help RAM (that's
-the real ceiling) — it only spares the boot SD card once traffic + the 90-day log grow to GBs.
+session scratchpad (`adguard_dns_info_backup.json` = original dns10; `_pre_cloudflare.json` = Quad9-only). ⚠ all these
+tools are **non-Chinese by design** (Quad9 Swiss/US, Cloudflare US, lists Western, Pi UK, SanDisk US) — see
+[[feedback_no_chinese_tools]].
+
+**✅ Whole-LAN cutover (2026-08-18):** the **Technicolor gateway `192.168.1.1`** (the DHCP+DNS server — Deco units are
+AP/bridge, don't hand out DHCP) → **LAN → DHCP Settings → DNS Server = `192.168.1.217`** (single value, no public
+secondary — a public 2nd DNS would let devices bypass filtering). After a router reboot, **90+ clients flow through**
+(TVs/IoT/ESP/robots all visible by `.lan` hostname), 18% block rate on real traffic (Samsung/Netflix/Amazon-Minerva
+telemetry, ad networks, a live HaGeZi-TIF threat). ⚠ **AUDITED-SAFE blast radius:** every LXC + the PVE host is
+**static-DNS on `192.168.1.1`** (`pct config` = static IP, resolv.conf static; verified live) — they do **NOT** flip to
+the Pi, so the core stack (agents/DB/MQTT/rule-engine/media/email/backups) is **independent of RP01** — a Pi outage only
+costs *consumer/IoT* DNS, never the servers. Only **DHCP clients** flip (laptop/phones/TVs/WiFi-IoT). **Verify HA (VM
+101) separately** — its DNS is inside HAOS (SSH closed); if DHCP it'd flip to the Pi (AGH won't block its cloud domains,
+but it'd add a Pi dependency). **Blind spot:** any device with its own Private-DNS/DoH (the Fold 5) bypasses regardless
+— that's per-device, not the router. **Revert = that one field back to `192.168.1.1`.** **⚡ Power:** RP01 is
+USB-powered *by the router*, router is on a **UPS** → survives mains cuts; the Pi only reboots *with* the router (when
+there's no internet anyway), so shared power is fine (`throttled=0x0`, no undervoltage).
+
+**✅ Step 3 DONE (2026-08-18) — query log + stats moved to the 16 GB USB stick (spares the SD from continuous logging):**
+SanDisk `/dev/sda1` reformatted **FAT32 → ext4** (label `ADGUARD`, journaling matters since the Pi loses power on router
+reboots), fstab-mounted at **`/mnt/adguard-data`** by UUID with **`nofail`** (so a dead/missing stick can NEVER block
+DNS — AGH just falls back to logging on the mountpoint dir on SD). Set **`querylog.dir_path` + `statistics.dir_path` =
+`/mnt/adguard-data`** in `AdGuardHome.yaml`. ⚠ the change needs **stop AGH → cp existing `querylog.json*`+`stats.db` →
+`sed` the two `dir_path: ""` → start** (AGH rewrites the yaml on shutdown, so a hot edit is lost; ~5–8 s DNS blip, mostly
+invisible via device caches). ⚠ **`mkfs.ext4`/`blkid` live in `/sbin` — not in the non-root PATH; use `sudo /sbin/…`;**
+and after `mkfs` **`lsblk` returns the STALE FAT32 UUID from cache** → read the real one with `sudo /sbin/blkid -o value
+-s UUID /dev/sda1` before writing fstab. AGH buffers the query log in RAM (~1000 entries) and only flushes to disk in
+chunks, so `querylog.json` appears on the stick after enough traffic — `stats.db` is written continuously (open-fd
+confirmed). `filters/` + `sessions.db` stay on SD (fine). USB does NOT help RAM (that's the real ceiling) — it only
+spares the SD card. **Optional follow-up:** nightly `rsync` `/mnt/adguard-data` → QNAP for >90-day archive. ⚠ **NEVER put
+AGH's LIVE data dir on QNAP/NFS** — it would couple the whole-LAN DNS resolver to network-storage availability + SQLite-
+over-NFS corruption; QNAP is for *archive/backup* only, not the live write path.
 Future headroom items (need RAM): a DoH *server* for the house (encrypted DNS + home filtering on the go via
 NetBird; free cert = self-signed or Let's Encrypt+free domain), a log-based threat-hunter (runs on an LXC, not
 RP01), a link-reputation checker (dashboard).
