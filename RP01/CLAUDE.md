@@ -143,17 +143,40 @@ log, 24h stats) + an **`svc-adguard` System-tab cell + sidebar badge** (shares R
 
 **What's installed (on RP01):** `/opt/AdGuardHome` + systemd `AdGuardHome` (enabled, survives reboot).
 **DNS on `0.0.0.0:53`**, **admin UI on `:8080`** (`http://192.168.1.217:8080`, user `admin` — password in
-the dashboard `.env` `ADGUARD_PASS`, also in the AGH config). Upstream = **encrypted DoH (Quad9
-`dns10.quad9.net`)**; **query log + statistics both 90 days**; client IPs **not anonymized** (LAN-only →
+the dashboard `.env` `ADGUARD_PASS`, also in the AGH config). Upstream = **encrypted DoH — Quad9 *secured*
+`dns.quad9.net` PRIMARY + Cloudflare *security* `security.cloudflare-dns.com` as BACKUP/fallback** (hardened
+2026-08-18, see below; was the *unsecured* `dns10.quad9.net` until then); **query log + statistics both 90
+days**; client IPs **not anonymized** (LAN-only →
 per-device attribution). Configured headlessly via the install API (`POST /control/install/configure`), not
 the web wizard. ⚠ binds `0.0.0.0:53` incl. `wlan0` — if a future flashing-AP session needs `wlan0:53`, stop
 AGH first (they'd conflict on that one port).
-**Protection stack (managed in the AGH admin, NOT repo — ~562k rules total, added 2026-08-10):** 5 blocklists —
-**AdGuard DNS filter** (~154k, ads/trackers) + **OISD Big** (~252k, ads/trackers) + **Perflyst SmartTV**
-(~162, TV telemetry) + **Phishing Army Extended** (~156k, phishing/scam) + **URLhaus** (abuse.ch malware) —
-plus **Safe Browsing ON** (`safebrowsing_enabled`, real-time cloud threat lookup, ~0 RAM). AGH's own DHCP is
-OFF. ⚠ RAM is TIGHT (~180 MB free, ~70 MB swap) — the Zero 2 W is a one-heavy-job box; **keep it DNS-only,
-do NOT add camera/audio** (put A/V on **RP02** — [../RP02/CLAUDE.md](../RP02/CLAUDE.md) — or another Pi). Lever if RAM tightens: OISD Big → OISD Small (~40 MB).
+**Protection stack (managed in the AGH admin, NOT repo — ~775k rules total):** 6 blocklists —
+**AdGuard DNS filter** (~177k, ads/trackers) + **OISD Big** (~270k, ads/trackers) + **Perflyst SmartTV**
+(~162, TV telemetry) + **Phishing Army Extended** (~156k, phishing/scam) + **URLhaus** (abuse.ch malware) +
+**HaGeZi Threat Intelligence Feeds — Mini** (~171k malware/phishing/scam/cryptojacking/C2, `adblock/tif.mini.txt`,
+auto-updates daily; added 2026-08-18) — plus **Safe Browsing ON** (`safebrowsing_enabled`, real-time cloud threat
+lookup, ~0 RAM). AGH's own DHCP is OFF. ⚠ RAM is TIGHT (**RSS ~142 MB, ~160 MB free** after TIF-Mini) — the Zero 2 W
+is a one-heavy-job box; **keep it DNS-only, do NOT add camera/audio** (put A/V on **RP02** —
+[../RP02/CLAUDE.md](../RP02/CLAUDE.md) — or another Pi). **Do NOT upgrade TIF-Mini → full TIF** (~200k+ more rules
+would erase the headroom + start heavy swap — measured, not guessed). Lever if RAM tightens: OISD Big → OISD Small (~40 MB).
+
+**⚠ Threat-protection hardening (2026-08-18, applied LIVE via the AGH API — no repo file, no service restart, `NRestarts=0`):**
+(1) **Upstream: unsecured Quad9 `dns10` (9.9.9.10, no filtering/DNSSEC) → SECURED Quad9 `dns.quad9.net` (9.9.9.9)** as
+PRIMARY — now blocks malware at the *resolver* on top of the blocklists (proven: `www.internetbadguys.com` resolves on
+8.8.8.8 but returns **NXDOMAIN** via the Pi, while AGH's own lists report `NotFilteredNotFound` → the block is the
+upstream). (2) Added **Cloudflare `security.cloudflare-dns.com` (1.1.1.2) as BACKUP** — set as **`fallback_dns`, NOT a
+co-equal `upstream_dns`**. ⚠ **why fallback, not load-balance:** co-equal upstreams make AGH send each query to
+*whichever* server, so a domain only ONE provider blocks (e.g. Quad9 blocks the Cisco test domain, Cloudflare doesn't)
+slips through when the query lands on the other — *weakening* upstream blocking. `fallback_dns` = Quad9 does ALL normal
+work (deterministic blocking) and Cloudflare only takes over when Quad9 errors/times-out — fixing the intermittent DoH
+`unexpected EOF` that transiently failed a list-update, WITHOUT the weakening. (3) Added **HaGeZi TIF-Mini** blocklist.
+Bootstrap set to secured IPs `9.9.9.9 / 149.112.112.9 / 1.1.1.2 / 1.0.0.2 (+IPv6)`. Rollback JSON snapshots in the
+session scratchpad (`adguard_dns_info_backup.json` = original dns10; `_pre_cloudflare.json` = Quad9-only).
+**Next (Step 3, on hold):** move query log to the 16 GB USB stick (SanDisk, `/dev/sda1`, currently FAT32 → reformat
+ext4 + fstab-mount `/mnt/usb` + set `querylog.dir_path`/`statistics.dir_path`) — only worth it AFTER the LAN's DHCP
+DNS is pointed at RP01 (today the whole data dir is ~29 MB; nothing to move). Change via **stop AGH → edit
+`AdGuardHome.yaml` → start** (AGH rewrites the yaml on shutdown, so a hot edit is lost). USB does NOT help RAM (that's
+the real ceiling) — it only spares the boot SD card once traffic + the 90-day log grow to GBs.
 Future headroom items (need RAM): a DoH *server* for the house (encrypted DNS + home filtering on the go via
 NetBird; free cert = self-signed or Let's Encrypt+free domain), a log-based threat-hunter (runs on an LXC, not
 RP01), a link-reputation checker (dashboard).
