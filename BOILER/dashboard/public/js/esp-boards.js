@@ -105,6 +105,19 @@ const ACTION_GROUPS = [
     ],
     progressFields: [{ key: 'scan_progress', label: 'Sweep' }]
   },
+  // Electra_AC — Modbus/RS-485 discovery bridge (Phase 1). Discovery actions +
+  // live bus/Ethernet state. See ELECTRA_AIR_CONDITIONS/CLAUDE.md.
+  { id: 'modbus', label: 'Modbus Discovery', tab: 'simulation',
+    keys: ['scan_addr', 'read_regs', 'scan_regs'],
+    statusFields: [
+      { key: 'eth_link',   label: 'Ethernet' },
+      { key: 'eth_ip',     label: 'IP' },
+      { key: 'bus_baud',   label: 'Modbus Baud' },
+      { key: 'modbus_ok',  label: 'Bus OK' },
+      { key: 'scanning',   label: 'Scanning' },
+      { key: 'last_probe', label: 'Last Probe' }
+    ]
+  },
 ];
 
 // ─── Load + render ─────────────────────────────────────────────────────

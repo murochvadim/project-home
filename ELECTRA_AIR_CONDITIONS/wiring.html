@@ -218,27 +218,29 @@
           <text x="368" y="408">3V3</text>
           <text x="368" y="442">GND</text>
         </g>
-        <!-- right pins (to RS-485) -->
+        <!-- right pins (to RS-485 auto-dir module; RXD/TXD are crossed) -->
         <g class="t-pin" text-anchor="end">
-          <text x="532" y="218">17 TX</text>
-          <text x="532" y="260">16 RX</text>
-          <text x="532" y="302">25 DE/RE</text>
-          <text x="532" y="344">3V3</text>
-          <text x="532" y="386">GND</text>
+          <text x="532" y="252">3V3</text>
+          <text x="532" y="294">17 TX</text>
+          <text x="532" y="336">16 RX</text>
+          <text x="532" y="378">GND</text>
         </g>
 
-        <!-- ===== RS-485 transceiver ===== -->
+        <!-- ===== RS-485 auto-direction module ("RS485 V2.07") ===== -->
         <rect class="box" x="700" y="150" width="176" height="290" rx="11"/>
-        <text class="t-title" x="788" y="178" text-anchor="middle">RS-485</text>
-        <text class="t-sub"   x="788" y="197" text-anchor="middle">3.3 V · MAX3485 / auto-dir</text>
-        <!-- left pins (to ESP32) -->
+        <text class="t-title" x="788" y="176" text-anchor="middle">RS-485 module</text>
+        <text class="t-sub"   x="788" y="194" text-anchor="middle">"RS485 V2.07" · auto-dir · 3.3 V</text>
+        <!-- left pins — module silk order; EN jumpered to VCC -->
         <g class="t-pin">
-          <text x="708" y="218">DI</text>
-          <text x="708" y="260">RO</text>
-          <text x="708" y="302">DE/RE</text>
-          <text x="708" y="344">VCC</text>
-          <text x="708" y="386">GND</text>
+          <text x="712" y="214">EN</text>
+          <text x="712" y="252">VCC</text>
+          <text x="712" y="294">RXD</text>
+          <text x="712" y="336">TXD</text>
+          <text x="712" y="378">GND</text>
         </g>
+        <!-- EN jumpered to VCC (enable) -->
+        <line class="wire wp" x1="700" y1="214" x2="700" y2="252"/>
+        <text class="t-lbl" x="694" y="230" text-anchor="end">EN=VCC</text>
         <!-- right pins (to bus) -->
         <g class="t-pin" text-anchor="end">
           <text x="868" y="236">A</text>
@@ -257,13 +259,14 @@
         <line class="wire wg" x1="200" y1="438" x2="360" y2="438"/>
         <text class="t-lbl" x="280" y="192" text-anchor="middle">VSPI</text>
 
-        <!-- ===== ESP32 <-> RS-485 wires (UART2) ===== -->
-        <line class="wire ws" x1="540" y1="214" x2="700" y2="214"/>
-        <line class="wire ws" x1="540" y1="256" x2="700" y2="256"/>
-        <line class="wire ws" x1="540" y1="298" x2="700" y2="298"/>
-        <line class="wire wp" x1="540" y1="340" x2="700" y2="340"/>
-        <line class="wire wg" x1="540" y1="382" x2="700" y2="382"/>
-        <text class="t-lbl" x="620" y="206" text-anchor="middle">UART2</text>
+        <!-- ===== ESP32 <-> RS-485 module wires (UART2; RXD/TXD crossed) ===== -->
+        <line class="wire wp" x1="540" y1="252" x2="700" y2="252"/>
+        <line class="wire ws" x1="540" y1="294" x2="700" y2="294"/>
+        <line class="wire ws" x1="540" y1="336" x2="700" y2="336"/>
+        <line class="wire wg" x1="540" y1="378" x2="700" y2="378"/>
+        <text class="t-lbl" x="620" y="244" text-anchor="middle">UART2</text>
+        <text class="t-lbl" x="620" y="288" text-anchor="middle">TX→RXD</text>
+        <text class="t-lbl" x="620" y="330" text-anchor="middle">RX←TXD</text>
 
         <!-- ===== RS-485 -> A/C bus ===== -->
         <line class="wire wa" x1="876" y1="236" x2="898" y2="236"/>
@@ -286,7 +289,8 @@
     <li><b>Shared GND is mandatory</b> — the A/C boards and the bridge must share a common ground, or RS-485 won't communicate reliably.</li>
     <li><b>120&nbsp;Ω terminators</b> go across A–B at the <b>two physical ends</b> of the bus (the two A/C units). Many RS-485 modules have a jumper for this.</li>
     <li><b>Set each board's DIP to MODBUS mode</b> with a <b>unique address</b> (1 and 2). Do <b>not</b> wire the board's <code>CLK</code>/<code>OUT</code> pins — those are RCW wall-remote mode only.</li>
-    <li><b>Auto-direction RS-485 module</b> removes the <code>DE/RE</code> wire (ESP32 <code>GPIO25</code>); a plain MAX3485 needs it.</li>
+    <li><b>Module = "RS485 V2.07" auto-direction</b> — it switches TX/RX itself, so there is <b>no DE/RE</b> (GPIO25 unused). Wire only <code>VCC / GND / RXD / TXD / A / B</code>, and jumper <code>EN → VCC</code> to enable.</li>
+    <li><b>⚠ RXD/TXD are crossed + bench-verify.</b> Wire module <code>RXD → ESP32 TX (GPIO17)</code> and <code>TXD → ESP32 RX (GPIO16)</code>. The TXD/RXD silk on these clones is inconsistent — if there is no comms, <b>swap the two</b> (one orientation is always right).</li>
     <li><b>Boot/OTA-safe pins.</b> RST → <code>GPIO13</code> (a plain pin — lets firmware hard-reset a wedged W5500). <b>Never</b> <code>GPIO2</code>/<code>GPIO12</code>/<code>GPIO15</code>/<code>GPIO0</code> — boot straps (<code>GPIO12</code> held high at boot = the board won't boot at all). INT → <code>GPIO4</code> is <b>optional</b> (SPI is polled).</li>
     <li><b>3.3 V logic only</b> — the ESP32 is <b>not</b> 5 V-tolerant. Use a 3.3 V RS-485 transceiver (MAX3485 / auto-dir), never a 5 V MAX485 without level-shifting; W5500 VCC = 3.3 V.</li>
     <li>Wired only — <b>no WiFi</b>. MQTT, OTA and control all ride the Ethernet cable.</li>
