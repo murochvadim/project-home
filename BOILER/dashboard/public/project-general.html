@@ -900,6 +900,7 @@ setInterval(loadCurtains, 5000);
 // ──────────────────────────────────────────────────────────────────
 let _geoMap = null, _geoCenter = null, _geoRadiusCircle = null;
 let _geoTrailLayer = null, _geoMarkers = [];
+let _geoHighlightLayer = [];   // bright overlay for the currently-selected trip(s) — separate from the blue trail
 let _geoSettings = null;
 let _geoLastBoundsFit = false;
 let _geoPollTimer = null;
@@ -1655,7 +1656,7 @@ async function geoReloadTrips() {
             : '<span style="color:#e67e22; font-weight:600;">in progress</span>');
       return `
       <tr style="border-top:1px solid #f0eee8; ${rowBg}">
-        <td style="padding:5px 6px; text-align:center;"><input type="checkbox" class="geo-trip-cb" data-trip-id="${pgEsc(t.rid || ('home:' + t.id))}" onchange="geoTripsUpdateDeleteBtn()" /></td>
+        <td style="padding:5px 6px; text-align:center;"><input type="checkbox" class="geo-trip-cb" data-trip-id="${pgEsc(t.rid || ('home:' + t.id))}" data-start="${pgEsc(t.started_at || '')}" data-end="${pgEsc(t.returned_at || '')}" onchange="geoTripsUpdateDeleteBtn()" /></td>
         <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : 'color:#1565c0;'} font-weight:600; font-family:monospace;">${total - i}</td>
         <td style="padding:5px 12px; text-align:left; color:${routeColor}; font-weight:${routeWeight}; ${dim ? 'font-size:0.82rem;' : ''}">${pgEsc(t.route || '')}${dim ? ' <span style="font-size:0.72rem; color:#c2beb6;">(umbrella)</span>' : ''}</td>
         <td style="padding:5px 12px; text-align:center; ${muted}">${pgEsc(new Date(t.started_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
@@ -1695,6 +1696,44 @@ function geoTripsUpdateDeleteBtn() {
     cm.disabled = n === 0;
     cm.style.cssText = n === 0 ? off : 'padding:4px 12px; font-size:0.82rem; border:1px solid #2f6f8f; color:#fff; background:#2f6f8f; border-radius:3px; cursor:pointer; font-weight:600;';
     cm.title = n === 0 ? 'Tick rows below to enable' : `Clear ${n} trip${n>1?'s':''} from the map only — keeps the trip in the list`;
+  }
+  geoHighlightSelected();   // light up the selected trip(s) on the map so you can see which one
+}
+
+// Draw the checked trip(s) as a bright-red route on top of the blue trail, so you
+// can SEE exactly which trip before clearing it. Fetches each trip's own window
+// (since=start & until=end) — works for any trip regardless of the trail window.
+async function geoHighlightSelected() {
+  if (!_geoMap) return;
+  _geoHighlightLayer.forEach(l => l.remove());
+  _geoHighlightLayer = [];
+  const wins = [...document.querySelectorAll('.geo-trip-cb:checked')]
+    .map(cb => ({ start: cb.dataset.start, end: cb.dataset.end }))
+    .filter(w => w.start && w.end);
+  if (!wins.length || !_geoSettings) return;
+  const devs = _geoSettings.tracked_devices || [];
+  const allPts = [];
+  for (const w of wins) {
+    const responses = await Promise.all(devs.map(d =>
+      fetch(`/api/geolocation/locations?device_id=${encodeURIComponent(d.device_id)}&since=${encodeURIComponent(w.start)}&until=${encodeURIComponent(w.end)}&limit=10000`)
+        .then(r => r.json()).then(j => j.locations || []).catch(() => [])
+    ));
+    const pts = responses.flat()
+      .map(p => ({ ts: p.ts, lat: Number(p.lat), lon: Number(p.lon) }))
+      .filter(p => !isNaN(p.lat) && !isNaN(p.lon))
+      .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    if (pts.length >= 2) {
+      const line = pts.map(p => [p.lat, p.lon]);
+      _geoHighlightLayer.push(L.polyline(line, { color: '#e53935', weight: 5, opacity: 0.9 }).addTo(_geoMap));
+      _geoHighlightLayer.push(L.circleMarker(line[0], { radius: 6, color: '#fff', weight: 2, fillColor: '#2e7d32', fillOpacity: 1 }).bindTooltip('trip start').addTo(_geoMap));
+      _geoHighlightLayer.push(L.circleMarker(line[line.length - 1], { radius: 6, color: '#fff', weight: 2, fillColor: '#c62828', fillOpacity: 1 }).bindTooltip('trip end').addTo(_geoMap));
+    } else if (pts.length === 1) {
+      _geoHighlightLayer.push(L.circleMarker([pts[0].lat, pts[0].lon], { radius: 7, color: '#e53935', weight: 3, fillColor: '#e53935', fillOpacity: 0.6 }).addTo(_geoMap));
+    }
+    allPts.push(...pts);
+  }
+  if (allPts.length) {
+    try { _geoMap.fitBounds(L.latLngBounds(allPts.map(p => [p.lat, p.lon])), { padding: [40, 40], maxZoom: 17 }); } catch (e) {}
   }
 }
 

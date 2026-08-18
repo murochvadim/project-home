@@ -3725,12 +3725,17 @@ app.get('/api/geolocation/locations', async (req, res) => {
   if (!deviceId) return res.status(400).json({ error: 'device_id required' });
   const limit = Math.min(parseInt(req.query.limit, 10) || 5000, 10000);
   const sinceStr = req.query.since;
+  const untilStr = req.query.until;   // upper bound (ts <=) — used to fetch exactly one trip's window
   try {
     const params = [deviceId];
     let where = 'device_id = $1';
     if (sinceStr) {
       params.push(sinceStr);
       where += ` AND ts >= $${params.length}`;
+    }
+    if (untilStr) {
+      params.push(untilStr);
+      where += ` AND ts <= $${params.length}`;
     }
     params.push(limit);
     // Return the NEWEST `limit` rows in the window (inner DESC + LIMIT), then
