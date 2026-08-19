@@ -542,11 +542,16 @@ def run_agent():
 
         # ── Step 0b: Check system alerts from orchestrator ────────────────────
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Network alerts (network:*) have their own home — the Network
+            # Integration sidebar badge + Project Network page — so they're
+            # excluded here to keep the Boiler "Last Error" boiler-relevant
+            # (a GMG Light IP collision is not a boiler fault).
             cur.execute("""
                 SELECT severity, alert_type, message
                 FROM system_alerts
                 WHERE resolved_at IS NULL
                   AND (affected_agent = 'boiler' OR affected_agent IS NULL)
+                  AND alert_type NOT LIKE 'network:%'
                 ORDER BY severity DESC, ts DESC
                 LIMIT 1
             """)
