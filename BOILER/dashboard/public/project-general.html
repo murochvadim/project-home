@@ -371,6 +371,9 @@
         <h2 style="margin:0;">Map · trail</h2>
         <div style="display:flex; gap:10px; align-items:center;">
           <button onclick="geoFitToTrack()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #1565c0; color:#1565c0; background:#fff; border-radius:3px; cursor:pointer;" title="Zoom + pan the map so the entire trail is visible">🔍 Fit to track</button>
+          <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;" title="Off = clean map (tick a trip in Recent trips to view its route in red). On = draw the full live trail.">
+            <input type="checkbox" id="geo-show-trail" onchange="try{localStorage.setItem('geo.showTrail', this.checked?'1':'0')}catch(e){}; geoReloadTrail()"> Show live trail
+          </label>
           <span>Window:</span>
           <select id="geo-window" onchange="try{localStorage.setItem('geo.trailWindow', this.value)}catch(e){}; geoReloadTrail()">
             <option value="trip" selected>Last trip</option>
@@ -901,6 +904,7 @@ setInterval(loadCurtains, 5000);
 let _geoMap = null, _geoCenter = null, _geoRadiusCircle = null;
 let _geoTrailLayer = null, _geoMarkers = [];
 let _geoHighlightLayer = [];   // bright overlay for the currently-selected trip(s) — separate from the blue trail
+let _geoHighlightKey = '';     // which trips are currently highlighted — skip re-fetch/redraw when unchanged (no 10s flicker)
 let _geoSettings = null;
 let _geoLastBoundsFit = false;
 let _geoPollTimer = null;
@@ -915,6 +919,9 @@ function geoOnTabShow() {
       const sel = document.getElementById('geo-window');
       if (sel && [...sel.options].some(o => o.value === savedWin)) sel.value = savedWin;
     }
+    // "Show live trail" defaults OFF (clean map). Only restore ON if the user chose it.
+    const st = document.getElementById('geo-show-trail');
+    if (st) st.checked = localStorage.getItem('geo.showTrail') === '1';
   } catch (e) {}
   geoLoadSettings();
   geoReloadStatus();
@@ -1384,6 +1391,12 @@ async function geoReloadTrail() {
   _geoMarkers = [];
   geoUpdateCenterMarker();
 
+  // Clean-map mode (DEFAULT): when "Show live trail" is off, draw only the home
+  // marker — trips are viewed on-demand by ticking them in Recent trips (red
+  // highlight). The highlight layer (_geoHighlightLayer) is independent and is
+  // never touched here, so ticking a trip still shows its route with the trail off.
+  if (!document.getElementById('geo-show-trail')?.checked) { _geoTrailLayer = []; return; }
+
   const window = document.getElementById('geo-window')?.value || 'trip';
   const isTrip = window === 'trip';
   // 'trip' mode fetches a wide window, then trims to the last excursion below.
@@ -1625,6 +1638,9 @@ async function geoReloadTrips() {
     const trips = window.geoFilterOutTestRows ? window.geoFilterOutTestRows(d.trips) : (d.trips || []);
     const tbody = document.getElementById('geo-trips-tbody');
     if (!tbody) return;
+    // Persist per-row selection across the 10s poll re-render so a ticked trip's
+    // red map highlight doesn't blink off. Captured before re-render, restored after.
+    const prevChecked = new Set([...document.querySelectorAll('.geo-trip-cb:checked')].map(cb => cb.dataset.tripId));
     if (!trips.length) {
       tbody.innerHTML = '<tr><td colspan="8" style="padding:14px; text-align:center; color:#aaa;">No trips yet.</td></tr>';
       geoTripsUpdateDeleteBtn();
@@ -1666,9 +1682,14 @@ async function geoReloadTrips() {
         <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : 'color:#1a7a3a;'} font-weight:600;">${fmtDist(t.path_length_m)}</td>
       </tr>`;
     }).join('');
-    // Reset the select-all checkbox + button state on each re-render. Per-row
-    // selections don't persist across polls — user's expected to pick + delete
-    // in one quick action.
+    // Restore the selection captured before this re-render so a ticked trip stays
+    // ticked (and its red highlight stays) across the 10s poll — re-check rows
+    // whose trip is still present.
+    if (prevChecked.size) {
+      document.querySelectorAll('.geo-trip-cb').forEach(cb => {
+        if (prevChecked.has(cb.dataset.tripId)) cb.checked = true;
+      });
+    }
     const sa = document.getElementById('geo-trips-select-all');
     if (sa) sa.checked = false;
     geoTripsUpdateDeleteBtn();
@@ -1705,6 +1726,11 @@ function geoTripsUpdateDeleteBtn() {
 // (since=start & until=end) — works for any trip regardless of the trail window.
 async function geoHighlightSelected() {
   if (!_geoMap) return;
+  // Skip re-fetch/redraw when the selection hasn't changed (the 10s poll calls
+  // this repeatedly) — keeps the red route steady instead of blinking each tick.
+  const key = [...document.querySelectorAll('.geo-trip-cb:checked')].map(cb => cb.dataset.tripId).sort().join(',');
+  if (key === _geoHighlightKey && _geoHighlightLayer.length) return;
+  _geoHighlightKey = key;
   _geoHighlightLayer.forEach(l => l.remove());
   _geoHighlightLayer = [];
   const wins = [...document.querySelectorAll('.geo-trip-cb:checked')]
