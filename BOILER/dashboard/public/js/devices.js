@@ -79,8 +79,16 @@ function decodeStatus(dev) {
       const label = onCount > 0 ? 'on' : 'off';
       return { label, cls, text: `${onCount}/${chanKeys.length} ON` };
     }
-    // Single channel
-    const v = dps['1'] ?? dps['20'];
+    // Single channel. Zigbee single-gang switches report on/off in `state`
+    // ("ON"/"OFF"), not DPS "1" — and a stale "1" can linger after a Tuya->Z2M
+    // migration (e.g. Boidem Light: {"1":true (frozen), "state":"OFF" (live)}),
+    // so read `state` for zigbee.
+    let v;
+    if (dev.protocol === 'zigbee' && (dps.state === 'ON' || dps.state === 'OFF')) {
+      v = dps.state === 'ON';
+    } else {
+      v = dps['1'] ?? dps['20'];
+    }
     if (v === true  || v === 1 || v === 'on')  return { label: 'on',  cls: 'dot-on',  text: 'ON' };
     if (v === false || v === 0 || v === 'off') return { label: 'off', cls: 'dot-off', text: 'OFF' };
     // Scene switches (DPS 1 = "scene") — trigger only, no on/off state
@@ -415,6 +423,11 @@ function applyFilters() {
           const isOn = raw === true || raw === 1;
           dot = isOn ? 'dot-on' : 'dot-off';
           txt = isOn ? 'ON' : 'OFF';
+        } else if (raw === 'ON' || raw === 'OFF' || raw === 'on' || raw === 'off') {
+          // Zigbee (Z2M) reports on/off as strings, incl. state_lN gangs
+          const isOn = raw === 'ON' || raw === 'on';
+          dot = isOn ? 'dot-on' : 'dot-off';
+          txt = isOn ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; txt = (raw / 10).toFixed(1) + '°C';
         } else if (typeof raw === 'number' && (k.includes('RemainingProgramTime') || k.includes('ElapsedProgramTime') || k.includes('Duration'))) {
@@ -444,7 +457,7 @@ function applyFilters() {
         const name  = chanName ? `${escHtml(d.name)} — ${escHtml(chanName)}` : `${escHtml(d.name)} Ch.${k}`;
         const room  = cfg[k]?.room || d.room || '—';
         rows.push(`<tr>
-          <td><span class="status-dot ${dot}"></span>${txt}</td>
+          <td class="${dot === 'dot-off' ? 'stat-off' : ''}"><span class="status-dot ${dot}"></span>${txt}</td>
           <td>${name}</td>
           <td>${escHtml(room)}</td>
           <td><span class="type-badge">${d.device_type} ch.${k}</span></td>
@@ -481,6 +494,9 @@ function applyFilters() {
         } else if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
           const on = raw === true || raw === 1;
           dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
+        } else if (raw === 'ON' || raw === 'OFF' || raw === 'on' || raw === 'off') {
+          const on = raw === 'ON' || raw === 'on';   // Z2M string on/off
+          dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
         } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
           dot = 'dot-on'; statusTxt = (raw / 10).toFixed(1) + '°C';
         } else if (typeof raw === 'number' && (k.includes('RemainingProgramTime') || k.includes('ElapsedProgramTime') || k.includes('Duration'))) {
@@ -502,7 +518,7 @@ function applyFilters() {
           dot = 'dot-on'; statusTxt = String(raw);
         }
         rows.push(`<tr>
-          <td><span class="status-dot ${dot}"></span>${escHtml(statusTxt)}</td>
+          <td class="${dot === 'dot-off' ? 'stat-off' : ''}"><span class="status-dot ${dot}"></span>${escHtml(statusTxt)}</td>
           <td>${escHtml(d.name)} — ${escHtml(attrName)}</td>
           <td>${escHtml(attrRoom)}</td>
           <td><span class="type-badge">${d.device_type}</span></td>
@@ -518,7 +534,7 @@ function applyFilters() {
       // Normal single row
       const st = decodeStatus(d);
       rows.push(`<tr>
-        <td><span class="status-dot ${st.cls}"></span>${st.text}</td>
+        <td class="${st.cls === 'dot-off' ? 'stat-off' : ''}"><span class="status-dot ${st.cls}"></span>${st.text}</td>
         <td>${escHtml(d.name)}</td>
         <td>${escHtml(d.room || '—')}</td>
         <td><span class="type-badge">${d.device_type || '?'}</span></td>
