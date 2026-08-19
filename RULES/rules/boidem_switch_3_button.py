@@ -7,6 +7,14 @@ holds one sentence per button. Each sentence pairs a SOURCE button chip
 (@<Light>). This rule mirrors each wired button's LATCHING state onto its
 target: button ON -> target turn_on, button OFF -> target turn_off.
 
+FLIP (toggle) mode: if a sentence contains the word "flip" or "toggle" (or
+the target chip ends with " toggle"/" flip"), that button instead FLIPS its
+target on every press — reads the target's current on/off and commands the
+opposite. Use this when the target can also be operated elsewhere (its own
+switch / remote), so the gang latch drifts out of sync with the real state
+and a plain mirror needs two presses to "catch up". Per-sentence, so mirror
+buttons and flip buttons coexist. First flip use: Button 2 -> Antic Bra.
+
 The switch (Hallway Switch Zigbee, 0xa4c1386be3572ed1) is the rule's fixed
 identity, hardcoded in triggers. Its three gangs are latching relays —
 state_l1/l2/l3 hold their value (verified live 2026-08-06: Button 3 set ON
@@ -27,6 +35,7 @@ defaults state_key = channel or 'state', so a single-gang target (Boidem's
 
 import json
 import logging
+import re
 import time
 
 log = logging.getLogger('rule.boidem_switch_3_button')
@@ -43,9 +52,11 @@ _map_cache = {"data": None, "ts": 0.0}
 RULE = {
     "name": "Boidem Switch 3 Button",
     "description": (
-        "Pressing a button on the Hallway Switch turns its assigned light on or "
-        "off to match. Right now Button 3 controls the Boidem Light; Buttons 1 "
-        "and 2 are unassigned until you add a device to them in Base Rule Settings."
+        "Pressing a button on the Hallway Switch controls its assigned light. "
+        "Button 1 controls the Hallway Spot, Button 3 controls the Boidem Light "
+        "(both match the switch position). Button 2 FLIPS the Antic Bra light — "
+        "every press turns it on if it's off, or off if it's on. Assign or change "
+        "these in Base Rule Settings."
     ),
     "triggers": [_SWITCH_ID],
     "controls": [],
@@ -144,10 +155,13 @@ def _read_container(state):
 
 
 def _load_button_map(state):
-    """Return {source_dps_key: (target_id, target_channel)} from the container.
+    """Return {source_dps_key: (target_id, target_channel, is_flip)} from the container.
 
     Per sentence: the chip resolving to (switch, state_l*) is the source button;
-    the other chip is the target. Sentences with no target are skipped. 30s cache.
+    the other chip is the target. A sentence whose text carries "flip"/"toggle"
+    (or a target chip ending in " toggle"/" flip") marks that button as FLIP —
+    each press toggles the target instead of mirroring the latch. Sentences with
+    no target are skipped. 30s cache.
     """
     now = time.time()
     if _map_cache["data"] is not None and (now - _map_cache["ts"]) < _CACHE_TTL_SEC:
@@ -160,10 +174,16 @@ def _load_button_map(state):
         for s in (container.get('sentences') or []):
             if not s.get('active'):
                 continue
+            is_flip = bool(re.search(r'\b(flip|toggle)', _sentence_text(s), re.I))
             source_key = None
             target = None
             for chip in _iter_dev_chips(s):
-                parsed = _parse_dev_chip(chip, by_name)
+                raw = chip
+                m = re.search(r'\s+(toggle|flip)\s*$', raw, re.I)   # marker on the chip itself
+                if m:
+                    is_flip = True
+                    raw = raw[:m.start()]
+                parsed = _parse_dev_chip(raw, by_name)
                 if not parsed:
                     continue
                 dev_id, dps_key = parsed
@@ -172,7 +192,7 @@ def _load_button_map(state):
                 else:
                     target = (dev_id, dps_key)     # what that button controls
             if source_key and target:
-                mapping[source_key] = target
+                mapping[source_key] = (target[0], target[1], is_flip)
 
     _map_cache["data"] = mapping
     _map_cache["ts"] = now
@@ -181,6 +201,37 @@ def _load_button_map(state):
 
 def _is_on(val):
     return val in _TRUTHY
+
+
+def _ha_entity_for(tdev, target_chan):
+    """HA switch entity for a firmware-locked target, from dps_config.<ch>.ha_entity.
+    Present => the target's local write fake-ACKs, so drive it via HA (Tuya cloud)."""
+    cfg = tdev.get('dps_config') or {}
+    if target_chan is not None:
+        cc = cfg.get(target_chan)
+        if isinstance(cc, dict) and cc.get('ha_entity'):
+            return cc['ha_entity']
+    for cc in cfg.values():
+        if isinstance(cc, dict) and cc.get('ha_entity'):
+            return cc['ha_entity']
+    return None
+
+
+def _target_is_on(tdev, target_chan):
+    """Current on/off of a target device (for local flip mode)."""
+    dps = tdev.get('dps') or {}
+    if target_chan is not None:
+        return _is_on(dps.get(target_chan))
+    # bare chip: use the device's local-DPS on/off recipe key if it has one
+    cfg = tdev.get('dps_config') or {}
+    for cc in cfg.values():
+        don = (cc or {}).get('dps_on')
+        if isinstance(don, dict) and don:
+            return _is_on(dps.get(next(iter(don))))
+    for k in ('1', 'state', 'output1'):
+        if k in dps:
+            return _is_on(dps.get(k))
+    return False
 
 
 def evaluate(event, state):
@@ -197,7 +248,7 @@ def evaluate(event, state):
     new_snapshot = dict(snapshot)
     commands = []
 
-    for src_key, (target_id, target_chan) in button_map.items():
+    for src_key, (target_id, target_chan, is_flip) in button_map.items():
         # Prefer this event's payload (authoritative for what changed); fall
         # back to live merged state. Skip if this button isn't reported at all.
         if src_key in event_dps:
@@ -215,21 +266,52 @@ def evaluate(event, state):
         if prev == cur:
             continue                               # no edge for this button
 
-        cmd = {
-            'device_id':        target_id,
-            'action':           'turn_on' if cur else 'turn_off',
-            'rule':             'Boidem Switch 3 Button',
-            # Reacts to human button input — opt out of the loop guard so rapid
-            # intentional presses can't auto-disable the rule.
-            '_skip_loop_guard': True,
-        }
-        if target_chan is not None:
-            cmd['channel'] = target_chan
-        log.info(
-            "boidem_switch_3_button: %s %s -> %s %s%s",
-            src_key, 'ON' if cur else 'OFF', target_id, cmd['action'],
-            (' ch=%s' % target_chan) if target_chan else '',
-        )
+        tdev      = state.devices.get(target_id) or {}
+        ha_entity = _ha_entity_for(tdev, target_chan)
+
+        if ha_entity:
+            # Firmware-locked switch (local set_dps fake-ACKs) -> drive via HA
+            # (Tuya cloud). Flip = switch.toggle (server-side, no state read);
+            # mirror = turn_on/off from the gang latch.
+            service = 'toggle' if is_flip else ('turn_on' if cur else 'turn_off')
+            cmd = {
+                'device_id':        target_id,
+                'protocol':         'ha_switch',
+                'entity_id':        ha_entity,
+                'service':          service,
+                'rule':             'Boidem Switch 3 Button',
+                # Reacts to human button input — opt out of the loop guard.
+                '_skip_loop_guard': True,
+            }
+            log.info(
+                "boidem_switch_3_button: %s %s -> %s ha_switch.%s (%s)%s",
+                src_key, 'ON' if cur else 'OFF', target_id, service, ha_entity,
+                ' [flip]' if is_flip else '',
+            )
+        else:
+            if is_flip:
+                # FLIP: toggle the target to the opposite of its real state
+                # (survives out-of-sync gang latch vs lamp).
+                action = 'turn_off' if _target_is_on(tdev, target_chan) else 'turn_on'
+            else:
+                # MIRROR: copy the gang's latch position onto the target.
+                action = 'turn_on' if cur else 'turn_off'
+            cmd = {
+                'device_id':        target_id,
+                'action':           action,
+                'rule':             'Boidem Switch 3 Button',
+                # Reacts to human button input — opt out of the loop guard so rapid
+                # intentional presses can't auto-disable the rule.
+                '_skip_loop_guard': True,
+            }
+            if target_chan is not None:
+                cmd['channel'] = target_chan
+            log.info(
+                "boidem_switch_3_button: %s %s -> %s %s%s%s",
+                src_key, 'ON' if cur else 'OFF', target_id, action,
+                (' ch=%s' % target_chan) if target_chan else '',
+                ' [flip]' if is_flip else '',
+            )
         commands.append(cmd)
 
     # Private (_-prefixed) key → doesn't inflate the Runs counter.

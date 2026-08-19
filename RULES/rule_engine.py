@@ -1721,6 +1721,39 @@ class RuleEngine:
         except Exception as e:
             log.warning("Rule '%s' ha_light %s light.%s failed: %s", rule_name, entity, service, e)
 
+    def _dispatch_ha_switch(self, cmd, rule_name):
+        """Dispatch a switch via HA switch.* services (turn_on/turn_off/toggle).
+        For firmware-locked local Tuya switches whose local set_dps fake-ACKs
+        (ok=True but the relay never moves) — HA (Tuya cloud) is the only working
+        write path. 'toggle' flips server-side, so a flip needs no state read.
+        Same urllib-to-HA pattern as _dispatch_ha_light. Failures logged, never
+        raised."""
+        entity  = cmd.get('entity_id')
+        service = cmd.get('service') or 'toggle'
+        if service not in ('turn_on', 'turn_off', 'toggle'):
+            log.warning("Rule '%s' ha_switch: bad service %s", rule_name, service)
+            return
+        if not entity:
+            log.warning("Rule '%s' ha_switch: missing entity_id", rule_name)
+            return
+        if not HA_TOKEN:
+            log.warning("Rule '%s' ha_switch %s: HA_TOKEN not set", rule_name, entity)
+            return
+        try:
+            req = urllib.request.Request(
+                f'{HA_URL}/api/services/switch/{service}',
+                data=json.dumps({'entity_id': entity}).encode('utf-8'),
+                headers={'Authorization': f'Bearer {HA_TOKEN}',
+                         'Content-Type':  'application/json'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(f'HA returned {resp.status}')
+            log.info("Rule '%s' -> ha_switch %s switch.%s", rule_name, entity, service)
+        except Exception as e:
+            log.warning("Rule '%s' ha_switch %s switch.%s failed: %s", rule_name, entity, service, e)
+
     def _awtrix_push_preset(self, cmd, device_id, rule_name):
         preset_name = cmd.get('preset_name', '')
         if not preset_name:
@@ -1904,6 +1937,15 @@ class RuleEngine:
         # optional data (brightness_pct / hs_color / color_temp_kelvin).
         if protocol == 'ha_light':
             self._dispatch_ha_light(cmd, rule_name)
+            return
+
+        # Switch controlled via HA switch.* services (turn_on/turn_off/toggle).
+        # cmd-level protocol: the device row is protocol='local' but its local
+        # Tuya write fake-ACKs (ok=True yet the relay never moves — firmware-
+        # locked SY1/TYWE3S switch), so the only working write path is HA (Tuya
+        # cloud). Rule carries entity_id + service. First use: Antic Bra flip.
+        if protocol == 'ha_switch':
+            self._dispatch_ha_switch(cmd, rule_name)
             return
 
         # Water valve (HCT-636 irrigation zones) via HA valve.* services. The
