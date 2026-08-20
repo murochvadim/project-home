@@ -1,4 +1,7 @@
-# CUSTOM_SMARTPHONE — Galaxy A71 → de-Googled LineageOS edge node
+# FR_SMARTPHONE — Galaxy A71 → de-Googled LineageOS face-recognition camera node
+
+> Renamed from CUSTOM_SMARTPHONE (2026-08-20). Purpose: a de-Googled Galaxy A71 as an
+> **entrance face-recognition CAMERA**; the recognition itself runs on an **LXC**, not the phone.
 
 **Status: PLANNED — starting the flash tomorrow.** Repurpose an old Samsung Galaxy A71
 into a **Google-free Android device** running LineageOS, to use as a full sensor/camera/
@@ -74,12 +77,27 @@ light/proximity/accelerometer/gyro sensors), that you can put **any software** o
 
 ## Primary use-case: entrance face-recognition → door unlock
 Replace / augment the current Hi-Link TX-510 FR module (`face_01`) with the phone as the
-entrance camera. **Flow:** face appears → light face-**detect** wakes it → **recognize** →
-if an **allowed** person → publish `face_identified {name}` to MQTT → the existing
-corridor / RemoteXY **door-unlock chain opens the door** (same path the TX-510 uses today).
+entrance camera.
 
-- **Architecture (recommended = A):** phone = camera (IP-cam app → go2rtc) → FR service on an
-  **LXC brain** → MQTT. Alt **B** = fully on-device FR app (frames never leave the phone).
+**Round-trip (face → door):**
+1. Face appears → the phone **shows "Recognizing…"** on its own screen locally (instant feedback, the
+   moment it detects *a* face — no wait for the LXC).
+2. Phone sends the frame/stream **over Ethernet → the LXC** (go2rtc / RTSP).
+3. LXC face-recognition **matches the face against the faces DB** → gets the **name** + the
+   **allowed-to-enter** flag.
+4. LXC **replies to the phone** (MQTT) → the screen updates to **"Welcome, &lt;name&gt;"** (allowed) or
+   **"Not allowed"** (denied).
+5. If allowed → the LXC also fires `face_identified {name}` → the existing corridor / RemoteXY
+   **door-unlock chain opens the door** (same path the TX-510 uses today).
+
+So the phone is **both the camera AND a small status screen** — it reacts to the LXC's MQTT replies.
+
+- **Architecture — DECIDED = A (2026-08-20):** the phone is **ONLY the camera** (IP-cam app → RTSP →
+  go2rtc); **face recognition runs on an LXC** (CPU-only is plenty for periodic entrance FR — the
+  Proxmox host also has spare CPU + an unused GPU if ever needed) → publishes `face_identified` → MQTT.
+  Chosen over on-device (B) for accuracy, central enrollment/DB, reliability, and reuse of the existing
+  go2rtc/MQTT/door stack. (Alt B = fully on-device FR, frames never leave the phone — rejected: A71 is
+  mid-range and it doesn't reuse the stack.)
 - ⚠️ **Engine must be non-Chinese** ([[feedback_no_chinese_tools]]): use `dlib`/`face_recognition`
   (US) or **CompreFace** (Exadel) — **NOT InsightFace / ArcFace** (Chinese-origin).
 - **Which camera:** **FRONT (32 MP)** if mounted as a door face-panel (person faces the screen,
@@ -94,5 +112,17 @@ corridor / RemoteXY **door-unlock chain opens the door** (same path the TX-510 u
   (e.g. only unlock while you're also detected home); (2) needs **plugged-in + app-kept-alive**
   reliability vs the appliance-like module.
 
-**Open decisions for tomorrow:** front-vs-rear camera · on-device (B) vs LXC brain (A) ·
-liveness / anti-spoof approach for the lock · retire the TX-510 or run both.
+- **Faces DB (you manage):** a small table `face → name → allowed(yes/no)` + a **management screen** to
+  capture a face and **give it a name**, flip the **"allowed to enter"** toggle per person, and (later)
+  see a **recognition log** (who was recognized, when, allowed/denied). The FR engine (CompreFace) holds
+  the face embeddings; the **name + allowed flag + log live in our own DB**.
+
+**Components to build:**
+1. **LXC FR service** — pulls frames from go2rtc, recognizes, checks the faces DB, replies to the phone
+   (MQTT) + fires `face_identified` for the door chain when allowed.
+2. **Faces table + management UI** — add/name a face, per-person allowed toggle, recognition log.
+3. **Phone panel app** — camera stream + shows **Recognizing / Welcome / Denied**, driven by the LXC's
+   MQTT replies.
+
+**Open decisions:** which LXC hosts the FR service · front-vs-rear camera · liveness / anti-spoof
+approach for the lock · retire the TX-510 or run both.
