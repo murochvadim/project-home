@@ -63,6 +63,10 @@ DEFAULTS = {
                                 # is dropped AND it breaks the consecutive fast-run, so a few GPS
                                 # blips can't make a real walk look like a car. Kept in the p85
                                 # pool so a genuinely sustained fast drive still trips the p85 test.
+    'settle_min':      30.0,    # wait this many minutes after a trip CLOSES before judging it, so all
+                                # its GPS pings have arrived first (OwnTracks uploads late, in bursts).
+                                # Kills the race where a just-closed walk is seen point-less and
+                                # skipped as `nopts`. Tunable in Personal Health -> step settings.
 }
 
 
@@ -106,6 +110,7 @@ def main():
     drive_sustain_sec = float(cfg['drive_sustain_sec'])
     drive_sustain_m   = float(cfg['drive_sustain_m'])
     glitch_kmh = float(cfg['glitch_kmh'])
+    settle_min = float(cfg['settle_min'])
 
     # reconcile: drop trip-steps whose trip the geo janitor has since deleted
     cur.execute("DELETE FROM ph_steps WHERE source = 'trip' "
@@ -138,9 +143,10 @@ def main():
         SELECT t.id, t.group_id, t.device_label, t.started_at, t.returned_at, 'trip' AS src
           FROM phone_trips t
          WHERE t.confirmed = true AND t.returned_at IS NOT NULL AND t.duration_sec > 0
+           AND t.returned_at < now() - (%s * interval '1 minute')
            AND NOT EXISTS (SELECT 1 FROM ph_steps s WHERE s.trip_id = t.id AND s.source = 'trip')
            AND t.id NOT IN (SELECT trip_id FROM ph_steps_excluded_trips)
-    """)
+    """, (settle_min,))
     trips = cur.fetchall()
     # Places-layer legs (phone_place_trips) go through the SAME classifier below,
     # so driving legs (home_to_place / place_to_home) auto-skip and only genuine
@@ -149,8 +155,9 @@ def main():
         SELECT t.id, t.group_id, t.device_label, t.started_at, t.returned_at, 'place_leg' AS src
           FROM phone_place_trips t
          WHERE t.returned_at IS NOT NULL AND t.duration_sec > 0
+           AND t.returned_at < now() - (%s * interval '1 minute')
            AND NOT EXISTS (SELECT 1 FROM ph_steps s WHERE s.trip_id = t.id AND s.source = 'place_leg')
-    """)
+    """, (settle_min,))
     trips += cur.fetchall()
 
     imported = sk_nopts = sk_phantom = sk_drive = sk_far = sk_user = 0
@@ -238,7 +245,7 @@ def main():
     print(f"steps_from_trips: reconciled={reconciled} imported={imported} "
           f"skipped(nopts={sk_nopts} phantom={sk_phantom} drive={sk_drive} far={sk_far} nouser={sk_user}) "
           f"candidates={len(trips)} "
-          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|sustained>={drive_sustain_sec}s&{drive_sustain_m}m) glitch>{glitch_kmh}km/h cap={maxkm}km)")
+          f"cfg(spk={spk} acc<={acc_gate}m phantom<{phantom_min}m drive>{drive_kmh}km/h(p85|sustained>={drive_sustain_sec}s&{drive_sustain_m}m) glitch>{glitch_kmh}km/h cap={maxkm}km settle={settle_min}m)")
 
 
 if __name__ == '__main__':

@@ -595,6 +595,8 @@
         <input id="set-drive-kmh" type="number" min="5" max="60" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
         <label style="font-size:0.85rem;color:#555;">Max distance (km, cap)</label>
         <input id="set-walk-maxkm" type="number" min="0" step="0.5" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
+        <label style="font-size:0.85rem;color:#555;">Settle time (min)<br><span style="font-size:0.72rem;color:#999;">wait this long after a trip ends before counting it (lets GPS finish uploading)</span></label>
+        <input id="set-settle-min" type="number" min="0" max="180" step="5" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
         <label style="font-size:0.85rem;color:#555;">History — show last N entries</label>
         <input id="set-history-limit" type="number" min="1" step="1" style="padding:6px 9px;border:1px solid #d0cbc4;border-radius:4px;width:120px;">
       </div>
@@ -603,7 +605,7 @@
         <span id="set-status" style="font-size:0.82rem;color:#888;"></span>
       </div>
       <div style="font-size:0.78rem;color:#999;margin-top:12px;">
-        Defaults: 1300 steps/km · accuracy gate 35 m · phantom floor 150 m · driving 15 km/h · cap 30 km. Trips with no stored GPS points (aged out) are skipped, not guessed. Manual entries + trip-steps both add to the daily total.
+        Defaults: 1300 steps/km · accuracy gate 35 m · phantom floor 150 m · driving 15 km/h · cap 30 km · settle 30 min. A trip is only counted once it ended ≥ settle minutes ago, so all its GPS points have arrived first (prevents a fresh walk being skipped as "no points"). Trips with no stored GPS points (aged out) are skipped, not guessed. Manual entries + trip-steps both add to the daily total.
       </div>
     </div>
 
@@ -915,7 +917,7 @@
 <script src="js/medical-hearing.js?v=9"></script>
 <script src="js/medical-vision.js?v=4"></script>
 <script src="js/medical-cognitive.js?v=2"></script>
-<script src="js/personal-health.js?v=79"></script>
+<script src="js/personal-health.js?v=80"></script>
 <script src="/vendor/mqtt/mqtt.min.js"></script>
 <script src="js/medical-bobo.js?v=16"></script>
 <script src="js/bobo-game.js?v=12"></script>

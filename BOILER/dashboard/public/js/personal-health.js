@@ -875,7 +875,7 @@
 
   // ── Settings tab: step-counting config (dashboard_settings.medical.steps),
   // read by the LXC-104 walking-trip → steps watcher. ──
-  const STEP_DEFAULTS = { steps_per_km: 1300, accuracy_gate_m: 35, phantom_min_m: 150, drive_kmh: 15, walk_max_km: 30, history_limit: 10 };
+  const STEP_DEFAULTS = { steps_per_km: 1300, accuracy_gate_m: 35, phantom_min_m: 150, drive_kmh: 15, walk_max_km: 30, settle_min: 30, history_limit: 10 };
   window.medSettingsInit = async function () {
     let cfg = {};
     try { const j = await (await fetch('/api/dashboard-settings/medical.steps')).json(); cfg = (j && j.value) || {}; } catch (e) {}
@@ -885,6 +885,7 @@
     $('set-phantom-min').value   = cfg.phantom_min_m;
     $('set-drive-kmh').value     = cfg.drive_kmh;
     $('set-walk-maxkm').value    = cfg.walk_max_km;
+    $('set-settle-min').value    = cfg.settle_min;
     $('set-history-limit').value = cfg.history_limit;
     $('set-status').textContent = '';
   };
@@ -896,6 +897,7 @@
       phantom_min_m:   Number.isFinite(pmRaw) ? Math.max(0, pmRaw) : STEP_DEFAULTS.phantom_min_m,
       drive_kmh:       Number($('set-drive-kmh').value)     || STEP_DEFAULTS.drive_kmh,
       walk_max_km:     Number($('set-walk-maxkm').value)    || STEP_DEFAULTS.walk_max_km,
+      settle_min:      Number($('set-settle-min').value)    || STEP_DEFAULTS.settle_min,
       history_limit:   Number($('set-history-limit').value) || STEP_DEFAULTS.history_limit,
     };
     try {
