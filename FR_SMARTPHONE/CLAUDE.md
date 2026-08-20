@@ -3,10 +3,43 @@
 > Renamed from CUSTOM_SMARTPHONE (2026-08-20). Purpose: a de-Googled Galaxy A71 as an
 > **entrance face-recognition CAMERA**; the recognition itself runs on an **LXC**, not the phone.
 
-**Status: PLANNED — starting the flash tomorrow.** Repurpose an old Samsung Galaxy A71
-into a **Google-free Android device** running LineageOS, to use as a full sensor/camera/
-touch **edge node** in the home-automation project (wall panel, IP camera, sensor→MQTT,
-Termux scripts, etc.).
+**Status: FLASH BLOCKED on Samsung RMM/Knox-Guard "Prenormal" (2026-08-20) — waiting on Samsung's timer.**
+Repurpose an old Samsung Galaxy A71 into a **Google-free Android device** running LineageOS, to use as a
+full sensor/camera/touch **edge node** in the home-automation project.
+
+### ⚠️ BLOCKER (2026-08-20): RMM / KG "Prenormal" — a Samsung TIME lock, not a mistake
+Everything works EXCEPT the final gate: the bootloader **is fully unlocked** (Download-mode screen shows
+`OEM LOCK : OFF (U)`), Thor flashes recovery fine (100%), **but on boot the bootloader rejects the custom
+recovery** with **"Only official released binaries are allowed to be flashed (recovery)"**. Cause = the
+Download screen's **`KG STATUS : PRENORMAL`** + **`RMM PROVISIONED`** — Samsung's Remote-Mobile-Management /
+Knox-Guard "Prenormal" state blocks ALL custom binaries **even with an unlocked bootloader**, for a waiting
+period. No button/cable/tool skips it (only risky combination-firmware would).
+
+**The fix = wait, with the phone set up right:** boot **stock Android**, connect **WiFi** (internet is what
+makes RMM count down; a SIM helps), and turn **ON** both **OEM Unlocking + USB debugging** in Developer
+options. Leave it powered + online. Prenormal → Normal transition takes **hours up to 7 days (168 h)**.
+Keep it **plugged into the Proxmox mini-PC** (charges + adb access to re-check the state).
+
+**To resume when the timer's up (all staged on the Proxmox host `192.168.1.101`):**
+- Check state: `adb reboot download` → read the screen's `KG STATUS` (Normal = ready), or via adb props.
+- On the host, ready to go: **Thor-Linux** at `/root/Thor-Linux`, recovery tar in `/root/flashdir/recovery.tar`,
+  ROM at `/root/rom.zip` (sha256 `ce2a5d44…` verified), `adb` installed. tmux session pattern: `tmux new -d -s
+  thor 'cd /root && ./Thor-Linux'` → `connect` (Enter to pick the `04e8` device) → `begin odin` → `flashTar
+  /root/flashdir` (space to select RECOVERY, Enter, `y`). **Unload `cdc_acm` first** (`modprobe -r cdc_acm`).
+- Then boot LineageOS recovery + `adb sideload /root/rom.zip`.
+
+### Flashing tool DECISION (2026-08-20): Thor on the Proxmox host, NOT Windows
+- **Windows has no viable open-source flasher**: Thor-Windows has **no USB handler** ("supported platforms:
+  Unix"); Heimdall Windows binaries are gone. Odin is closed-source (rejected for the trust/vision reasons).
+- **Chosen: Thor (open-source, `Samsung-Loki/Thor`) on the Debian Proxmox host** (`192.168.1.101`) — native
+  USB, x86_64, self-contained binary (no .NET needed). Driven over SSH in a `tmux` session. Phone plugs into
+  the mini-PC's USB. ⚠ **NOT via WSL** — Thor explicitly refuses WSL and Samsung flashing re-enumerates USB
+  mid-flash (usbipd drops it). ⚠ Linux grabs the download-mode port with `cdc_acm` — `modprobe -r cdc_acm`
+  (safe, used-by 0) before `connect`.
+- **The a71 restores STOCK recovery on every full Android boot** (its stock ROM's install-recovery). So the
+  ONLY way to reach the freshly-flashed LineageOS recovery is to boot recovery WITHOUT booting Android — the
+  `adb reboot recovery` "race" always loses (overwrite beats adbd). Once RMM clears, boot recovery via the
+  key combo **UNPLUGGED** (Samsung routes the recovery combo to Download when USB is attached).
 
 ## The device (verified)
 - **Model: `SM-A715F`** — global Galaxy A71 4G (Snapdragon 730), codename **`a71`**.
@@ -98,6 +131,16 @@ So the phone is **both the camera AND a small status screen** — it reacts to t
   Chosen over on-device (B) for accuracy, central enrollment/DB, reliability, and reuse of the existing
   go2rtc/MQTT/door stack. (Alt B = fully on-device FR, frames never leave the phone — rejected: A71 is
   mid-range and it doesn't reuse the stack.)
+- **FR service host — DECIDED = a NEW dedicated LXC (2026-08-20, ~LXC 112 "fr").** Matches the project's
+  one-subsystem-one-LXC convention (Email→110, Privacy→109, Robot→111). Especially since the non-Chinese
+  engine **CompreFace** is a **Docker stack** (api + core + ui + its own postgres) → it wants a **privileged
+  + nesting LXC of its own** (same shape as Privacy/109), NOT squeezed onto the busy device-agent (103) or
+  rule-engine (105). Specs: Debian, ~2 cores / 4 GB, Docker. Pulls frames from go2rtc, publishes
+  `face_identified` → the existing corridor/RemoteXY door chain (no new door logic). **Faces metadata**
+  (name · allowed flag · recognition log) lives in the **main Postgres (LXC 102)** like everything else;
+  CompreFace keeps the face *embeddings* in its own Docker DB on this LXC. (A lighter `dlib`/`face_recognition`
+  Python service on the same LXC is the alternative if CompreFace is overkill.) **Build order:** flash phone
+  → phone as RTSP camera → THEN stand up LXC 112.
 - ⚠️ **Engine must be non-Chinese** ([[feedback_no_chinese_tools]]): use `dlib`/`face_recognition`
   (US) or **CompreFace** (Exadel) — **NOT InsightFace / ArcFace** (Chinese-origin).
 - **Which camera:** **FRONT (32 MP)** if mounted as a door face-panel (person faces the screen,
@@ -124,5 +167,6 @@ So the phone is **both the camera AND a small status screen** — it reacts to t
 3. **Phone panel app** — camera stream + shows **Recognizing / Welcome / Denied**, driven by the LXC's
    MQTT replies.
 
-**Open decisions:** which LXC hosts the FR service · front-vs-rear camera · liveness / anti-spoof
-approach for the lock · retire the TX-510 or run both.
+**Open decisions:** front-vs-rear camera · liveness / anti-spoof approach for the lock · retire the
+TX-510 or run both · CompreFace vs a lighter `dlib` service on LXC 112. *(FR host = a new dedicated
+LXC ~112 — DECIDED 2026-08-20, see above.)*
