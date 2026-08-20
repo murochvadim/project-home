@@ -140,6 +140,60 @@ function decodeStatus(dev) {
   return { label: 'unknown', cls: 'dot-unknown', text: '—' };
 }
 
+// Shared per-channel value decoder → { dot, txt }. Device-type-aware so the
+// channel/labeled-DPS render paths AGREE with decodeStatus (curtain/presence/
+// valve/BSH off states render grey, not green). Single source of truth — both
+// render paths call this, so they can't drift (the drift is what caused the
+// green-for-off bug). Path-specific cases (button channels, % progress) are
+// handled by the caller BEFORE calling this.
+const BSH_OFF_SEG = new Set(['Inactive', 'Off', 'Standby', 'Ready', 'Closed', 'Disabled', 'Absent']);
+function decodeChannel(d, k, raw, lbl) {
+  const type = d.device_type;
+  if (raw === undefined || raw === null) return { dot: 'dot-off', txt: '—' };
+  if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
+    const on = raw === true || raw === 1;
+    return { dot: on ? 'dot-on' : 'dot-off', txt: on ? 'ON' : 'OFF' };
+  }
+  if (raw === 'ON' || raw === 'OFF' || raw === 'on' || raw === 'off') {   // Z2M string on/off
+    const on = raw === 'ON' || raw === 'on';
+    return { dot: on ? 'dot-on' : 'dot-off', txt: on ? 'ON' : 'OFF' };
+  }
+  // Device-type-aware off/closed/clear states — mirror decodeStatus so the grid
+  // matches the single/Presence/Curtain paths (fixes green-for-off).
+  if (type === 'curtain') {
+    const s = String(raw);
+    if (s === 'open'  || s === '5') return { dot: 'dot-on',  txt: 'Open' };
+    if (s === 'close' || s === '3') return { dot: 'dot-off', txt: 'Closed' };
+    if (s === 'stop'  || s === '4') return { dot: 'dot-on',  txt: 'Stopped' };
+  }
+  if (type === 'presence' && (raw === 'none' || raw === 'no' || raw === 'clear')) {
+    return { dot: 'dot-off', txt: 'Clear' };
+  }
+  if (type === 'valve') {
+    const s = String(raw).toLowerCase();
+    if (s === 'open')                    return { dot: 'dot-on',  txt: 'Open' };
+    if (s === 'closed' || s === 'close') return { dot: 'dot-off', txt: 'Closed' };
+  }
+  if (typeof raw === 'string' && raw.startsWith('BSH.')) {
+    const seg = raw.split('.').pop();
+    return { dot: BSH_OFF_SEG.has(seg) ? 'dot-off' : 'dot-on', txt: seg };
+  }
+  // Numeric readouts (temps, durations, counts) — a present value = green.
+  if (typeof raw === 'number' && (lbl || '').includes('x0.1')) return { dot: 'dot-on', txt: (raw / 10).toFixed(1) + '°C' };
+  if (typeof raw === 'number' && (k.includes('RemainingProgramTime') || k.includes('ElapsedProgramTime') || k.includes('Duration')))
+    return { dot: 'dot-on', txt: raw > 0 ? Math.round(raw / 60) + ' min' : 'Done' };
+  if (typeof raw === 'number' && k.includes('Temperature')) return { dot: 'dot-on', txt: Math.round(raw) + '°C' };
+  if (typeof raw === 'number') return { dot: 'dot-on', txt: String(raw) };
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+    const action = raw.split(':')[0];
+    if (action === 'pushed' || action === 'held') return { dot: 'dot-on', txt: action.charAt(0).toUpperCase() + action.slice(1) };
+    return { dot: 'dot-on', txt: new Date(raw).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false }) };
+  }
+  if (typeof raw === 'string' && !isNaN(parseFloat(raw)) && /^[\d.]+$/.test(raw)) return { dot: 'dot-on', txt: parseFloat(raw).toString() };
+  if (typeof raw === 'string' && raw.includes('.') && /[a-zA-Z]/.test(raw)) return { dot: 'dot-on', txt: raw.split('.').pop() };
+  return { dot: 'dot-on', txt: String(raw) };
+}
+
 // ─── DPS details (labeled attributes) ────────────────────────────────────────
 
 function decodeDetails(dev) {
@@ -417,41 +471,9 @@ function applyFilters() {
               dot = 'dot-on'; txt = buttonVerb;                // just the verb, no relative-time suffix
             }
           }
-        } else if (raw === undefined || raw === null) {
-          dot = 'dot-off'; txt = '—';
-        } else if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
-          const isOn = raw === true || raw === 1;
-          dot = isOn ? 'dot-on' : 'dot-off';
-          txt = isOn ? 'ON' : 'OFF';
-        } else if (raw === 'ON' || raw === 'OFF' || raw === 'on' || raw === 'off') {
-          // Zigbee (Z2M) reports on/off as strings, incl. state_lN gangs
-          const isOn = raw === 'ON' || raw === 'on';
-          dot = isOn ? 'dot-on' : 'dot-off';
-          txt = isOn ? 'ON' : 'OFF';
-        } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
-          dot = 'dot-on'; txt = (raw / 10).toFixed(1) + '°C';
-        } else if (typeof raw === 'number' && (k.includes('RemainingProgramTime') || k.includes('ElapsedProgramTime') || k.includes('Duration'))) {
-          dot = 'dot-on'; txt = raw > 0 ? Math.round(raw / 60) + ' min' : 'Done';
-        } else if (typeof raw === 'number' && k.includes('Temperature')) {
-          dot = 'dot-on'; txt = Math.round(raw) + '°C';
-        } else if (typeof raw === 'number') {
-          dot = 'dot-on'; txt = String(raw);
-        } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
-          // ISO timestamp (event entities: ding, motion, button presses)
-          const action = raw.split(':')[0]; // "pushed" or "held" prefix if present
-          if (action === 'pushed' || action === 'held') {
-            dot = 'dot-on'; txt = action.charAt(0).toUpperCase() + action.slice(1);
-          } else {
-            dot = 'dot-on'; txt = new Date(raw).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
-          }
-        } else if (typeof raw === 'string' && !isNaN(parseFloat(raw)) && /^[\d.]+$/.test(raw)) {
-          // String number ("4.0", "5.0") from HA
-          dot = 'dot-on'; txt = parseFloat(raw).toString();
-        } else if (typeof raw === 'string' && raw.includes('.') && /[a-zA-Z]/.test(raw)) {
-          // Dotted enum (BSH: "BSH.Common.Status.Ready" → "Ready")
-          dot = 'dot-on'; txt = raw.split('.').pop();
         } else {
-          dot = 'dot-on'; txt = String(raw);
+          const r = decodeChannel(d, k, raw, lbl);
+          dot = r.dot; txt = r.txt;
         }
         const chanName = cfg[k]?.name || lbl.replace(/\s*\(x[\d.]+[^)]*\)/i, '').trim() || '';
         const name  = chanName ? `${escHtml(d.name)} — ${escHtml(chanName)}` : `${escHtml(d.name)} Ch.${k}`;
@@ -491,31 +513,9 @@ function applyFilters() {
           dot = 'dot-off'; statusTxt = '—';                  // idle progress
         } else if (typeof raw === 'number' && lbl.includes('%')) {
           dot = 'dot-on'; statusTxt = raw + '%';
-        } else if (typeof raw === 'boolean' || raw === 0 || raw === 1) {
-          const on = raw === true || raw === 1;
-          dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
-        } else if (raw === 'ON' || raw === 'OFF' || raw === 'on' || raw === 'off') {
-          const on = raw === 'ON' || raw === 'on';   // Z2M string on/off
-          dot = on ? 'dot-on' : 'dot-off'; statusTxt = on ? 'ON' : 'OFF';
-        } else if (typeof raw === 'number' && lbl.includes('x0.1')) {
-          dot = 'dot-on'; statusTxt = (raw / 10).toFixed(1) + '°C';
-        } else if (typeof raw === 'number' && (k.includes('RemainingProgramTime') || k.includes('ElapsedProgramTime') || k.includes('Duration'))) {
-          dot = 'dot-on'; statusTxt = raw > 0 ? Math.round(raw / 60) + ' min' : 'Done';
-        } else if (typeof raw === 'number' && k.includes('Temperature')) {
-          dot = 'dot-on'; statusTxt = Math.round(raw) + '°C';
-        } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) {
-          const action = raw.split(':')[0];
-          if (action === 'pushed' || action === 'held') {
-            dot = 'dot-on'; statusTxt = action.charAt(0).toUpperCase() + action.slice(1);
-          } else {
-            dot = 'dot-on'; statusTxt = new Date(raw).toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
-          }
-        } else if (typeof raw === 'string' && !isNaN(parseFloat(raw)) && /^[\d.]+$/.test(raw)) {
-          dot = 'dot-on'; statusTxt = parseFloat(raw).toString();
-        } else if (typeof raw === 'string' && raw.includes('.') && /[a-zA-Z]/.test(raw)) {
-          dot = 'dot-on'; statusTxt = raw.split('.').pop();
         } else {
-          dot = 'dot-on'; statusTxt = String(raw);
+          const r = decodeChannel(d, k, raw, lbl);
+          dot = r.dot; statusTxt = r.txt;
         }
         rows.push(`<tr>
           <td class="${dot === 'dot-off' ? 'stat-off' : ''}"><span class="status-dot ${dot}"></span>${escHtml(statusTxt)}</td>
