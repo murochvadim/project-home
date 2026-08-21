@@ -1,6 +1,8 @@
 # ELECTRA_AIR_CONDITIONS — Agent Index
 
-**Status: PLANNED (scoped 2026-08-14). Not built yet — hardware pending.**
+**Status: PHASE 1 IN PROGRESS (2026-08-21) — the ESP32+W5500 bridge is BUILT + ONLINE on the dashboard
+(IP 192.168.1.172, MAC `22:43:a8:65:77:5f`). Modbus register discovery is underway — the A/C isn't
+answering yet (`e0` timeout). See "Phase 1 progress" below.**
 
 Local control of **two Electra 2.5 HP A/C units** over **Modbus RTU / RS-485**, from our own hardware —
 **NOT** Home Assistant, **NOT** the Electra cloud (the official `electrasmart` HA integration is
@@ -89,6 +91,43 @@ Electra publishes no Modbus register map and none is public → **Phase 1 discov
 holding+input registers, or sniff the wall-controller traffic; approach as in the Actron485 / Midea-XYE
 reverse-engineering projects).
 
+## Phase 1 progress — bridge BUILT + ONLINE (2026-08-21)
+The ESP32-WROOM-32 + W5500 bridge is **assembled, flashed, and live on the dashboard** (Project Boards →
+"Electra A/C"). Only the Modbus link to the A/C remains.
+
+**On the network:** DHCP IP **192.168.1.172**, Ethernet MAC **`22:43:a8:65:77:5f`** (ESP32-derived → vendor
+reads "locally administered", normal), sketch `Electra_AC` v1. `esp_boards.mac` is now populated so the tab
+shows the live IP via the `net_devices` join. ⚠ **Set a DHCP reservation** for that MAC → .172.
+
+**W5500 bring-up — how the wiring was proven** (reusable for any ESP32+W5500 board):
+- A **floating ~1.8 V on a signal pin = a disconnected / cold-solder pin** (half-rail, nothing driving it).
+  RST read 1.8 V → a cold joint on the hand-soldered perfboard; re-flowing it revived the board.
+- The definitive SPI test is reading the W5500 **`VERSIONR` register (common block `0x0039`) — it ALWAYS
+  returns `0x04`** on a healthy chip. `0x00`/`0xFF`/alternating = MISO/CS/power/RST fault; `0x04` = SPI +
+  RST + power ALL good. Then **`PHYCFGR` (`0x002E`) bit0 = LNK** for the physical cable/link.
+- Diagnostic firmware **[W5500_Diag.ino](W5500_Diag.ino)** (committed here, secret-free, no libraries) —
+  hardware-resets the W5500 and loops the VERSIONR + PHYCFGR reads with plain-English pass/fail. Flash it to
+  isolate board-vs-cable in seconds.
+- `LINK=DOWN` *after* `VERSIONR=0x04` = the chip is fine, only the **cable/switch-port** link is missing.
+
+**Arduino build gotchas (ESP32 core + eModbus):**
+- Install the **eModbus** library — and **AsyncTCP too**, even for RTU-only use: Arduino compiles every
+  `.cpp` in a library's `src/`, and eModbus's `ModbusClientTCPasync.cpp` `#include`s `AsyncTCP.h`.
+  (ESP32 → **"AsyncTCP"**, NOT the ESP8266 "ESPAsyncTCP".)
+- `disableLoopTaskWdt()` doesn't exist in this core → use **`disableLoopWDT()`**.
+- **`'ModbusMessage' has not been declared`** = the Arduino multi-tab auto-prototype gotcha: the generated
+  prototype for `Modbus.ino`'s `mbRequest(..., ModbusMessage&)` is injected at the top of the combined
+  sketch *before* that tab's `#include`. Fix = `#include "ModbusClientRTU.h"` in the **main** `.ino` so the
+  type is declared first (the `#line` remap mis-reports it at `Modbus.ino:58`).
+
+**Modbus discovery status — A/C not answering yet:** `read_regs` → **`e0` = TIMEOUT** (eModbus
+`ModbusTypeDefs.h`: `TIMEOUT = 0xE0`) = **no reply at all** → a bus/mode/baud problem, NOT a wrong register.
+Error taxonomy for the debugging: **`0xE0` TIMEOUT** (nothing there) → **`0xE2` CRC_ERROR** (on the bus but
+garbled = baud/parity) → **`0x01–0x04` exception** (wired + baud correct, just the wrong register). **Next:**
+run **scan_addr** (sweeps 1..32); if silent, work the checklist — **`J2`=ON (MODBUS)** on each GEMINI (else
+it speaks RCW, never Modbus), **swap RXD/TXD** (GPIO16↔17 — the V2.07 silk is inconsistent), **swap A/B**,
+confirm **shared GND**, then **sweep baud/parity** (9600→19200, 8N1→8E1) on the Params tab.
+
 ## Plan — two phases
 
 ### Phase 1 — Prove the connection (ONE unit)
@@ -117,11 +156,15 @@ One ESP32+W5500+RS-485 bridge on the multi-drop bus to both units. New **`electr
   power / mode / target-temp slider / fan / live room-temp), all via the existing
   `/api/esp/boards/:id/{command,parameters}` — **no new server endpoint**.
 
-## Files (when built)
-- Firmware: `C:\Users\muroc\Arduino_Projects\electra_ac\{electra_ac.ino,Main.h,Esp_Base.ino}` (not in git — bakes creds).
-- Rule engine: `RULES/rule_engine.py` — `_ESP_STATUS_DPS_FIELDS` (+ optional `_ESP_CMD_STATE['electra_ac']`).
-- Dashboard: `BOILER/dashboard/public/project-general.html` + `js/aircon.js`.
-- DB: `esp_boards` + `devices` rows (LXC 102).
+## Files
+- Firmware (Phase 1, LIVE): `C:\Users\muroc\Arduino_Projects\Electra_AC\{Electra_AC.ino, Main.h,
+  Esp_Base.ino, Modbus.ino}` — **not in git** (`Main.h` bakes MQTT + OTA secrets). Sketch id `Electra_AC`,
+  esp_boards framework (Ethernet+MQTT+OTA base + eModbus RTU master + 3 discovery actions
+  `scan_addr`/`read_regs`/`scan_regs`).
+- Diagnostic (committed, secret-free): [W5500_Diag.ino](W5500_Diag.ino) — W5500 SPI/RST/link bring-up test.
+- Rule engine (Phase 2): `RULES/rule_engine.py` — add `u1_*`/`u2_*` to `_ESP_STATUS_DPS_FIELDS`.
+- Dashboard (Phase 2): `BOILER/dashboard/public/project-general.html` + `js/aircon.js`.
+- DB: `esp_boards` row LIVE (`Electra_AC`, mac `22:43:a8:65:77:5f`); `devices` row = Phase 2.
 
 ## Reference
 - Wiring diagram: [wiring.html](wiring.html) / https://claude.ai/code/artifact/f44dd1dc-29eb-41fe-8d68-99b4ff258f28
