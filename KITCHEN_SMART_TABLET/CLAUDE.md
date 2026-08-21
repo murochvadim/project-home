@@ -54,11 +54,19 @@ v1 tables (Core buy-list) — the rest land in later phases:
 - **`kitchen_shopping_items`** — `list_id FK, product_id FK (nullable), free_text, qty, checked,
   added_at, checked_at`.
 
-Later-phase tables:
+Later-phase tables + columns (for the borrowed features):
+- **`kitchen_products`** gains: `location` (fridge/freezer/pantry/shelf), `is_opened` + `opened_at`
+  (opened = shorter shelf life), `min_stock` (par level → auto-add), `qty_unit_buy` / `qty_unit_consume`
+  + `unit_factor` (pack↔piece conversion), `aisle` / `store_section` (aisle-ordered lists).
 - **`kitchen_purchase_log`** — price history + last-bought (fed by receipts).
 - **`kitchen_consumption_log`** — who ate what (`user_id FK household_users`) → Personal Health calories.
 - **`kitchen_receipts`** / **`kitchen_receipt_items`** — imported bills (email/camera), parsed
   line-items → review/confirm → purchase log + stock/price updates.
+- **`kitchen_waste_log`** — thrown-away items (`product_id, qty, reason (expired/spoiled/other),
+  cost, wasted_at`) → waste/cost insight + the Pantry Health Score.
+- **`kitchen_staples`** — regular-staples template rows (one-tap weekly-basics → new list).
+- **`kitchen_batches`** *(optional, FEFO)* — per-purchase lots of the same product with their own
+  expiry, consumed first-expires-first-out.
 
 Register all tables in Health **DB-Volumes** (`DBV_GROUPS`) + **retention_policies** (catalog =
 forever + protected).
@@ -77,16 +85,41 @@ forever + protected).
 ## Phases
 - **P1** — DB + `kitchen_service.py` + dashboard **Products** CRUD. *(no tablet yet)*
 - **P2** — PWA tile grid + **Buy mode** + shopping list + **WhatsApp send (wa.me)** + **barcode add**.
-- **P3** — **Use mode** + stock + purchase/consumption logs (low-stock auto-add to buy list).
-- **P4** — **Receipt import** (email line-item parser → camera **Tesseract** OCR + Hebrew pack,
-  with a **review/confirm** screen; imperfect thermal-receipt OCR never writes unconfirmed).
-- **P5** — Integrations: **Personal Health calories** (`ph_*`, per `household_users`), **Privacy
-  Budget** price history, **expiry → reminders/Notifications**, **allergen/health cross-check** vs
-  a member's stored conditions/allergies.
-- **P6** — Fully Kiosk deploy on the fridge tablet.
-- **Optional later:** Meta WhatsApp Cloud API (automated send), voice add ("add milk") via LXC 106,
-  visual product recognition (CLIP-enroll self-hosted, or LLM-vision cloud), "what can I make"
-  recipe suggestions from on-hand stock.
+  *(= v1 Core buy-list; everything below is a later phase.)*
+- **P3 — Inventory:** Use mode + stock + purchase/consumption logs, plus the borrowed inventory
+  features → **min-stock par levels per product → auto-add to the buy list** (precise version of
+  "low-stock"), **product location** (fridge/freezer/pantry/shelf), **opened-vs-unopened** (opened =
+  shorter shelf life), **quantity-unit conversion** (buy by pack, consume by piece).
+- **P4 — List UX (borrowed):** **aisle / store-section-ordered shopping list** (big in-store win),
+  **"already in stock" flag** while adding a product (prevents duplicate buys), **regular-staples
+  templates** (one-tap weekly basics onto a new list), **color-coded expiry alerts** (matches the
+  project's color-band UI pattern, e.g. Privacy appointments).
+- **P5 — Receipt import** (email line-item parser → camera **Tesseract** OCR + Hebrew pack, with a
+  **review/confirm** screen; imperfect thermal-receipt OCR never writes unconfirmed).
+- **P6 — Integrations:** **Personal Health calories** (`ph_*`, per `household_users`), **Privacy
+  Budget** price history, **expiry → reminders/Notifications**, **allergen/health cross-check** vs a
+  member's stored conditions/allergies, plus **waste log + "Pantry Health Score"** (a single
+  pantry-quality metric that reuses each product's `health_score`).
+- **P7 — Fully Kiosk deploy** on the fridge tablet.
+- **Optional later:** **meal-planning calendar → auto-generate a shopping list from planned meals**
+  (its own sub-system) + recipes / "what can I make" from on-hand stock; **batch/lot tracking +
+  FEFO** (first-expires-first-out consume); Meta WhatsApp Cloud API (automated send); voice add
+  ("add milk") via LXC 106; visual product recognition (CLIP-enroll self-hosted, or LLM-vision
+  cloud); AI weekly-planning cycle (cloud LLM).
+
+## Landscape & borrowed features (researched 2026-08-21)
+This is a mature category — the core design (tile tap-to-add lists, barcode → Open Food Facts,
+expiry tracking, min-stock → auto-list, receipt/nutrition, notifications) matches how the reference
+apps do it, so the plan is on-target. Features borrowed into P3–P6 above come from studying:
+- **[Grocy](https://grocy.info/)** — the open-source self-hosted "ERP beyond your fridge" (the
+  closest analog): min-stock → auto shopping list, aisle-ordered lists, product location,
+  opened-vs-unopened, quantity-unit conversion, batch/FEFO, recipes/meal-plan, Open Food Facts barcodes.
+- **KitchenPal / Pantryfy / FoodiePrep** — barcode + household sync, "flag items already in stock"
+  (no dup buys), auto-list when you run out, meal-plan → list loop.
+- **NoWaste / Eatvora** — expiry-first design, **color-coded expiry alerts**, **Pantry Health Score**,
+  waste reduction.
+
+Deliberately NOT borrowed: Grocy's chores/batteries modules (out of scope — this is food only).
 
 ## Tooling / trust notes
 - **Open Food Facts** (barcode → product data): free, open, French/global nonprofit — **not a
