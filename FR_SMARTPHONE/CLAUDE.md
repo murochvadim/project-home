@@ -26,16 +26,31 @@ clean `Install completed with status 0` via these four keys:
 Thor + all images still staged on the Proxmox host `192.168.1.101` (`/root/Thor-Linux`, `/root/losrec/`,
 `/root/los_rom.zip`) if a re-flash is ever needed.
 
-### NEXT: the FR-camera software layer (the actual goal)
-1. **Finish LineageOS setup** on the phone — **skip the Google sign-in** (it's de-Googled), set locale/WiFi.
-2. **Install F-Droid** (the open app store), then an **IP-camera app** (e.g. *IP Webcam* / *Droidcam* /
-   *libcamera-based streamer*) that serves an **MJPEG or RTSP** stream on the LAN. The phone is at the fixed
-   `192.168.1.25`, so the stream URL is stable (e.g. `http://192.168.1.25:8080/video`).
-3. **Keep-alive:** disable battery optimization / screen-off for the camera app, set it to auto-start, mount
-   the phone at the entrance on permanent USB power.
-4. **FR backend** (planned LXC ~112, `dlib`/`face_recognition` — NOT InsightFace per [[feedback_no_chinese_tools]]):
-   pull the phone's stream, run recognition, publish `face_identified` → the existing door-unlock chain. Full
-   plan in [FR_BACKEND_PLAN.md](FR_BACKEND_PLAN.md).
+### App = OUR OWN Android app (NOT a generic F-Droid IP-cam) — scaffolded 2026-08-22
+The phone runs a **proprietary app** ([fr_camera_app/](fr_camera_app/), id `com.muroch.frcamera`): front-cam
+capture → **MJPEG stream on `:8080`** (go2rtc pulls it) **+ a status screen** driven by MQTT
+("Recognizing / Welcome, &lt;name&gt; / Not allowed"). A generic IP-cam app (IP Webcam / Droidcam) can't render
+that status panel, so we build our own. Scaffold **builds + installs + launches**; feature code is filled in
+next (see the in-flight TODOs in `MainActivity.kt`): CAMERA permission → CameraX front cam → NanoHTTPD MJPEG
+`:8080` → Paho MQTT → status UI.
+
+**Offline build toolchain (installed on the laptop, `C:\android-dev`):** JDK 17 + Android SDK (android-35,
+build-tools 35.0.0, platform-tools) + Gradle 8.7, **every dependency cached in `~/.gradle`**. The full loop
+`gradlew assembleDebug --offline` → `adb install` over USB is **PROVEN with no network** (a real Kotlin
+recompile succeeds offline), so the app is developed **in-flight**. Commands in
+[fr_camera_app/README.md](fr_camera_app/README.md). Phone serial **`R58N92XXF3E`**, app id `com.muroch.frcamera`.
+Dev aid applied: `adb shell settings put global stay_on_while_plugged_in 3` (screen stays on while charging).
+`C:\android-dev` + `~/.gradle` are OUTSIDE the repo — re-run the toolchain install if the laptop is rebuilt.
+
+- **Deploy path:** **USB now** (in-flight), **Ethernet later** — a USB-C hub with Ethernet + PD passthrough
+  (RTL8153 / ASIX chipset; user to buy). Phone on static `192.168.1.25`. Mount at the entrance on permanent power.
+
+### THEN (needs the home LAN — not buildable offline)
+1. **FR backend** (planned LXC ~112, `dlib`/`face_recognition` or **CompreFace** — NOT InsightFace per
+   [[feedback_no_chinese_tools]]): pull the phone's stream, run recognition, publish `face_identified` → the
+   existing door-unlock chain. Full plan in [FR_BACKEND_PLAN.md](FR_BACKEND_PLAN.md).
+2. **go2rtc** on the PVE host (`192.168.1.101`): add a `phone_entrance_cam` source pulling the phone's
+   `:8080` MJPEG, so the FR LXC reads a stable RTSP/MJPEG endpoint like every other camera.
 
 ### Flashing tool DECISION (2026-08-20): Thor on the Proxmox host, NOT Windows
 - **Windows has no viable open-source flasher**: Thor-Windows has **no USB handler** ("supported platforms:
