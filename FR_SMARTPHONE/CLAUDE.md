@@ -3,30 +3,39 @@
 > Renamed from CUSTOM_SMARTPHONE (2026-08-20). Purpose: a de-Googled Galaxy A71 as an
 > **entrance face-recognition CAMERA**; the recognition itself runs on an **LXC**, not the phone.
 
-**Status: FLASH BLOCKED on Samsung RMM/Knox-Guard "Prenormal" (2026-08-20) — waiting on Samsung's timer.**
-Repurpose an old Samsung Galaxy A71 into a **Google-free Android device** running LineageOS, to use as a
-full sensor/camera/touch **edge node** in the home-automation project.
+**Status: ✅ LineageOS 23.2 (20260805) INSTALLED + RUNNING on the A71 (2026-08-22).** Booted to setup,
+online on WiFi at **static IP `192.168.1.25`** (the LAN `192.168.1.0/24` DHCP pool is saturated, so the phone
+kept "failing to obtain IP" — a static IP was the fix; **AdGuard/DNS was NOT the cause**, its DHCP is off).
+The de-Googled edge node is READY; only the FR-camera software layer remains (below).
 
-### ⚠️ BLOCKER (2026-08-20): RMM / KG "Prenormal" — a Samsung TIME lock, not a mistake
-Everything works EXCEPT the final gate: the bootloader **is fully unlocked** (Download-mode screen shows
-`OEM LOCK : OFF (U)`), Thor flashes recovery fine (100%), **but on boot the bootloader rejects the custom
-recovery** with **"Only official released binaries are allowed to be flashed (recovery)"**. Cause = the
-Download screen's **`KG STATUS : PRENORMAL`** + **`RMM PROVISIONED`** — Samsung's Remote-Mobile-Management /
-Knox-Guard "Prenormal" state blocks ALL custom binaries **even with an unlocked bootloader**, for a waiting
-period. No button/cable/tool skips it (only risky combination-firmware would).
+### How it was finally flashed (the winning method — full blow-by-blow in memory `project-fr-smartphone-flash`)
+Knox/RMM cleared on its own (the wait worked — no combination firmware needed). Then a 2-day fight ended in a
+clean `Install completed with status 0` via these four keys:
+1. **Use the OFFICIAL LineageOS a71 `recovery.img` + `vbmeta.img`** (flags=3), pulled live from
+   `https://download.lineageos.org/api/v2/devices/a71/builds`. ⚠ The previously-staged `flashdir/recovery.tar`
+   was the WRONG file (STOCK recovery) — the ROOT cause of every `Error verifying vbmeta image: invalid vbmeta
+   header (6)` failure. Also disable BOTH `vbmeta` AND `vbmeta_samsung`.
+2. **Boot recovery from software, NO physical combo** = flash a **FULL-SIZE (508 KB) stock `misc.bin`** with
+   ONLY the first 32 bytes overwritten to `boot-recovery\0…` (a truncated 4 KB misc → `SECURE CHECK FAIL: misc`).
+3. **⭐ CHARGE THE PHONE TO 100% BEFORE FLASHING** — a low/flat battery caused ALL the USB chaos (hard session
+   wedges, `Cannot allocate memory (12)`, the 64 MB recovery cutting off at 46%, adb dropping). At 100% the
+   USB was rock-solid and the 1.2 GB sideload ran clean. Also `echo 2000 > /sys/module/usbcore/parameters/usbfs_memory_mb`.
+4. Boot → LineageOS recovery main menu → **Apply update → Apply from ADB** (2 button taps; the main menu shows
+   a **fastbootd** `18d1:4ee0` interface — only "Apply from ADB" flips USB to the adb `sideload` state) →
+   `adb sideload /root/los_rom.zip` (run as a detached job so an SSH blip can't kill it) → status 0 → Reboot.
+Thor + all images still staged on the Proxmox host `192.168.1.101` (`/root/Thor-Linux`, `/root/losrec/`,
+`/root/los_rom.zip`) if a re-flash is ever needed.
 
-**The fix = wait, with the phone set up right:** boot **stock Android**, connect **WiFi** (internet is what
-makes RMM count down; a SIM helps), and turn **ON** both **OEM Unlocking + USB debugging** in Developer
-options. Leave it powered + online. Prenormal → Normal transition takes **hours up to 7 days (168 h)**.
-Keep it **plugged into the Proxmox mini-PC** (charges + adb access to re-check the state).
-
-**To resume when the timer's up (all staged on the Proxmox host `192.168.1.101`):**
-- Check state: `adb reboot download` → read the screen's `KG STATUS` (Normal = ready), or via adb props.
-- On the host, ready to go: **Thor-Linux** at `/root/Thor-Linux`, recovery tar in `/root/flashdir/recovery.tar`,
-  ROM at `/root/rom.zip` (sha256 `ce2a5d44…` verified), `adb` installed. tmux session pattern: `tmux new -d -s
-  thor 'cd /root && ./Thor-Linux'` → `connect` (Enter to pick the `04e8` device) → `begin odin` → `flashTar
-  /root/flashdir` (space to select RECOVERY, Enter, `y`). **Unload `cdc_acm` first** (`modprobe -r cdc_acm`).
-- Then boot LineageOS recovery + `adb sideload /root/rom.zip`.
+### NEXT: the FR-camera software layer (the actual goal)
+1. **Finish LineageOS setup** on the phone — **skip the Google sign-in** (it's de-Googled), set locale/WiFi.
+2. **Install F-Droid** (the open app store), then an **IP-camera app** (e.g. *IP Webcam* / *Droidcam* /
+   *libcamera-based streamer*) that serves an **MJPEG or RTSP** stream on the LAN. The phone is at the fixed
+   `192.168.1.25`, so the stream URL is stable (e.g. `http://192.168.1.25:8080/video`).
+3. **Keep-alive:** disable battery optimization / screen-off for the camera app, set it to auto-start, mount
+   the phone at the entrance on permanent USB power.
+4. **FR backend** (planned LXC ~112, `dlib`/`face_recognition` — NOT InsightFace per [[feedback_no_chinese_tools]]):
+   pull the phone's stream, run recognition, publish `face_identified` → the existing door-unlock chain. Full
+   plan in [FR_BACKEND_PLAN.md](FR_BACKEND_PLAN.md).
 
 ### Flashing tool DECISION (2026-08-20): Thor on the Proxmox host, NOT Windows
 - **Windows has no viable open-source flasher**: Thor-Windows has **no USB handler** ("supported platforms:
