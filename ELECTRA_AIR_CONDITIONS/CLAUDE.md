@@ -156,6 +156,28 @@ One ESP32+W5500+RS-485 bridge on the multi-drop bus to both units. New **`electr
   power / mode / target-temp slider / fan / live room-temp), all via the existing
   `/api/esp/boards/:id/{command,parameters}` — **no new server endpoint**.
 
+## Condensate drain pumps (per A/C unit — 2 total)
+Each of the two Electra units needs a **condensate (water-drain) pump ONLY if it can't drain by gravity**
+(gravity has no failure point — prefer it wherever the drain can run downhill). Where a pump IS needed, use a
+proper **mini-split condensate pump with a volt-free alarm contact** — NOT a generic or "smart"/WiFi pump
+(a networked pump phones home to a cloud; a **dumb pump + our own ESP** is the local pattern, per
+[[feedback_no_chinese_tools]]).
+
+**Recommended (both have the volt-free safety/alarm dry contact, quiet, get the 230 V version for Israel):**
+- **Aspen Silent+ Mini Orange (FP2212)** — 12 L/h @ 0 head, max lift 10 m, 21 dB, alarm **NO + NC** (wires
+  3 A, contacts rated 5 A @ 230 V). Best match for a 2.5 HP / ~24k BTU unit.
+- **Sauermann Si-30 (230 V)** — rated up to ~5.5 ton, alarm **NC 3 A/250 V**.
+
+Avoid the generic ~$87 "canne / Knocokie" Amazon pump (unknown reliability; flow/lift not even stated).
+Verify **per unit**: flow ≥ ~10–12 L/h AND max lift ≥ the actual vertical rise + margin.
+
+**Project hook — why the alarm contact matters:** the pump's **volt-free NO/NC high-water float contact**
+wires to a **spare ESP GPIO** (`INPUT_PULLUP` + GND) → publishes an **MQTT overflow alert** → project
+notification, and once the **Electra_AC board** is controlling the units it can **auto-`power_off`** the
+affected unit on overflow. So pick a model **with the alarm contact** (both above have it). Fully local,
+no cloud — the pump stays offline, the smarts are ours. (2 units → up to 2 pumps + 2 alarm inputs; the
+Phase-2 firmware can read both on spare GPIOs alongside the RS-485 bus.)
+
 ## Files
 - Firmware (Phase 1, LIVE): `C:\Users\muroc\Arduino_Projects\Electra_AC\{Electra_AC.ino, Main.h,
   Esp_Base.ino, Modbus.ino}` — **not in git** (`Main.h` bakes MQTT + OTA secrets). Sketch id `Electra_AC`,
