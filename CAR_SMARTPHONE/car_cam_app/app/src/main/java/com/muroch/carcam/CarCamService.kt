@@ -5,15 +5,18 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -133,9 +136,24 @@ class CarCamService : Service(), LifecycleOwner {
                 val imageCapture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .build()
+                // Dummy preview so the camera actually STREAMS — headless ImageCapture
+                // alone doesn't run the sensor, so auto-exposure never converges and the
+                // first frame comes out black. Feed preview to a throwaway SurfaceTexture.
+                val preview = Preview.Builder().build()
+                preview.setSurfaceProvider { request ->
+                    val tex = SurfaceTexture(0).apply {
+                        setDefaultBufferSize(request.resolution.width, request.resolution.height)
+                    }
+                    val surface = Surface(tex)
+                    request.provideSurface(surface, ContextCompat.getMainExecutor(this)) {
+                        surface.release(); tex.release()
+                    }
+                }
                 provider.unbindAll()
                 // Forward-facing = rear main camera (faces out when the screen faces the driver).
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageCapture)
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
+                // Let the sensor stream + AE/AWB settle before the shot (else black/dark frame).
+                main.postDelayed({
                 imageCapture.takePicture(ContextCompat.getMainExecutor(this),
                     object : ImageCapture.OnImageCapturedCallback() {
                         override fun onCaptureSuccess(image: ImageProxy) {
@@ -152,6 +170,7 @@ class CarCamService : Service(), LifecycleOwner {
                             publishStatus("{\"state\":\"error\",\"err\":\"capture\"}")
                         }
                     })
+                }, 1500L)
             } catch (e: Exception) {
                 capturing = false
                 Log.e(TAG, "camera bind error: ${e.message}", e)
