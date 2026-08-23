@@ -5,7 +5,7 @@
 // routes-carlocate.js: it just fires one MQTT command. The car phone's CarCam app
 // subscribes to the command topic, captures ONE JPEG (camera off between shots),
 // and uploads it to the media agent (`Car Snapshots/latest.jpg`); the dashboard
-// then shows it from `:8766/api/media/thumb`.
+// then shows it from `:8766/api/media/stream/Car Snapshots/latest.jpg`.
 //
 // No new ACL needed: server.js's MQTT user `rule_engine` already has
 // `readwrite mur/home/esp/+/#`, and the phone's `esp_boards` user reads it.
