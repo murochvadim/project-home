@@ -33,9 +33,22 @@ mosquitto_pub -h 192.168.1.189 -u esp_boards -P '<pass>' -t mur/home/esp/car_cam
 ```
 then `ls /mnt/media/Car Snapshots/latest.jpg` on LXC 100, and watch `adb logcat -s CarCam`.
 
+## Keep-alive (fixed 2026-08-23)
+The MQTT connection was dropping every ~90 s when the screen went off (WiFi power-save + Doze suspend the
+radio → keepalive misses → broker disconnects → a snapshot command is missed). Fixed by:
+- **A partial `WakeLock` + a `WIFI_MODE_FULL_HIGH_PERF` WifiLock** held for the service lifetime (keeps CPU +
+  WiFi radio awake so keepalive keeps flowing). The car phone is powered when mounted, so this is free.
+- **`MqttCallbackExtended.connectComplete` re-subscribes on EVERY (re)connect** (clean session drops the
+  broker-side subscription, so without this the phone was silent after any reconnect).
+- **`keepAliveInterval` 60 → 30 s** (faster drop-detect + reconnect, smaller miss window).
+- **Doze battery whitelist** granted on the phone via
+  `adb shell dumpsys deviceidle whitelist +com.muroch.carcam` (persists on the device). ⚠ A **fresh install on
+  a different phone needs this re-granted** (or add an in-app `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` request).
+Verified: 150 s idle with screen off → 0 drops, snapshot after idle still lands.
+
 ## Known follow-ups
-- **Keep-alive:** the service must stay alive + auto-start (BootReceiver added) — needs a battery-optimization
-  exemption on the phone for a permanent car device.
+- **Auto-start on boot:** BootReceiver is declared, but Android may not deliver `BOOT_COMPLETED` reliably
+  until the app is opened once after a reboot / is battery-exempt — verify on the mounted device.
 - **Camera choice:** currently `DEFAULT_BACK_CAMERA` (rear = "forward" when the screen faces the driver) — make
   configurable if the mount differs.
 - **Underground garage = dark image** (inherent); **needs the phone online** (WiFi/NetBird/data SIM).

@@ -83,8 +83,17 @@ car status (home-parking/away · battery% · last-seen · NetBird), a car-only m
   low power for a parked car), and uploads it to the media agent (`Car Snapshots/latest.jpg`). Dashboard:
   `routes-car-snapshot.js` publishes the command; the `<img>` loads it from the media agent
   `:8766/api/media/stream`. **No new broker user/ACL** (phone = `esp_boards` reads `mur/home/esp/+/#`; dashboard
-  `rule_engine` already writes it). Verified end-to-end. Follow-ups: keep-alive/battery-opt exemption on the
-  phone, camera-lens choice, and the dark-garage/connectivity caveats. See
+  `rule_engine` already writes it). Verified end-to-end. **⚠ Black-frame fix (2026-08-23):** headless CameraX
+  captured a black frame because ImageCapture alone never streams the sensor (AE/AWB don't converge) — fixed by
+  binding a throwaway `Preview` (dummy `SurfaceTexture`) + a 1.5 s exposure-settle delay before the shot (frame
+  went 204 KB→~2 MB). **⚠ Keep-alive fix (2026-08-23):** the MQTT connection dropped every ~90 s once the screen
+  went off (WiFi power-save + Doze) so snapshot commands were missed — fixed with a partial `WakeLock` +
+  `WIFI_MODE_FULL_HIGH_PERF` WifiLock (held for the service life), `MqttCallbackExtended.connectComplete`
+  re-subscribing on every reconnect (clean session), keepalive 60→30 s, and a Doze whitelist granted via
+  `adb … dumpsys deviceidle whitelist +com.muroch.carcam` (⚠ re-grant on a fresh install). Verified: 150 s
+  screen-off idle → 0 drops. **The app does NOT need to be on-screen** — it's a foreground *service* (persistent
+  notification) with `foregroundServiceType="camera"`, so it captures with the app closed / screen off, as long
+  as the service is alive. Follow-ups: auto-start-on-boot verification, camera-lens choice. See
   [CAR_CAMERA_SNAPSHOT_PLAN.md](CAR_CAMERA_SNAPSHOT_PLAN.md) + [car_cam_app/README.md](car_cam_app/README.md).
 
 ## Deferred / planned (was the CAR_TRACKER plan)

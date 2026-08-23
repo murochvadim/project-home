@@ -4,12 +4,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.graphics.SurfaceTexture
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import android.view.Surface
 import androidx.camera.core.CameraSelector
@@ -23,7 +26,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient
-import org.eclipse.paho.client.mqttv3.MqttCallback
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
@@ -69,14 +72,34 @@ class CarCamService : Service(), LifecycleOwner {
     private val main = Handler(Looper.getMainLooper())
     private var mqtt: MqttAsyncClient? = null
     @Volatile private var capturing = false
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate() {
         super.onCreate()
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         startForeground(NOTIF_ID, buildNotification("Car Cam ready"))
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+        acquireLocks()
         connectMqtt()
         Log.i(TAG, "service created")
+    }
+
+    // Keep CPU + WiFi radio awake so the MQTT keepalive keeps flowing when the
+    // screen is off / phone is idle — else Doze/WiFi power-save drops the socket
+    // and a snapshot command is missed. The car phone is powered when mounted.
+    private fun acquireLocks() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "carcam:mqtt").apply {
+                setReferenceCounted(false); acquire()
+            }
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "carcam:wifi").apply {
+                setReferenceCounted(false); acquire()
+            }
+            Log.i(TAG, "wake + wifi locks acquired")
+        } catch (e: Exception) { Log.w(TAG, "lock acquire: ${e.message}") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,7 +115,14 @@ class CarCamService : Service(), LifecycleOwner {
         thread(name = "carcam-mqtt") {
             try {
                 val c = MqttAsyncClient(MQTT_URL, "carcam_" + System.currentTimeMillis(), MemoryPersistence())
-                c.setCallback(object : MqttCallback {
+                c.setCallback(object : MqttCallbackExtended {
+                    override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+                        // Clean session drops subscriptions on the broker, so re-subscribe
+                        // on EVERY (re)connect — otherwise after a drop the phone is silent.
+                        try { c.subscribe(CMD_TOPIC, 1) } catch (e: Exception) { Log.w(TAG, "resub: ${e.message}") }
+                        Log.i(TAG, if (reconnect) "mqtt RECONNECTED + re-subscribed" else "mqtt connected + subscribed $CMD_TOPIC")
+                        publishStatus("{\"state\":\"ready\"}")
+                    }
                     override fun connectionLost(cause: Throwable?) { Log.w(TAG, "mqtt lost: ${cause?.message}") }
                     override fun messageArrived(topic: String?, message: MqttMessage?) {
                         Log.i(TAG, "cmd on $topic: ${message?.payload?.let { String(it) }}")
@@ -106,13 +136,10 @@ class CarCamService : Service(), LifecycleOwner {
                     isAutomaticReconnect = true
                     isCleanSession = true
                     connectionTimeout = 10
-                    keepAliveInterval = 60
+                    keepAliveInterval = 30
                 }
                 c.connect(opts).waitForCompletion(10_000)
-                c.subscribe(CMD_TOPIC, 1)
                 mqtt = c
-                Log.i(TAG, "mqtt connected + subscribed $CMD_TOPIC")
-                publishStatus("{\"state\":\"ready\"}")
             } catch (e: Exception) {
                 Log.e(TAG, "mqtt connect failed: ${e.message}", e)
                 main.postDelayed({ connectMqtt() }, 15_000)
@@ -234,6 +261,8 @@ class CarCamService : Service(), LifecycleOwner {
 
     override fun onDestroy() {
         try { mqtt?.disconnectForcibly() } catch (_: Exception) {}
+        try { wakeLock?.takeIf { it.isHeld }?.release() } catch (_: Exception) {}
+        try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Exception) {}
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         super.onDestroy()
     }
