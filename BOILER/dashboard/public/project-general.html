@@ -502,6 +502,24 @@
     </div>
 
     <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h2 style="margin:0;">📷 Car camera</h2>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button onclick="carSnapshot(this)" id="car-snap-btn" style="padding:6px 16px; font-size:0.9rem; border:none; background:#1565c0; color:#fff; border-radius:4px; cursor:pointer; font-weight:600;">📷 Snapshot</button>
+          <span id="car-snap-msg" style="font-size:0.84rem; color:#888;"></span>
+        </div>
+      </div>
+      <div style="text-align:center;">
+        <img id="car-snapshot" alt="car snapshot" onclick="carOpenSnapshot()"
+             style="display:none; max-width:100%; max-height:420px; border-radius:6px; border:1px solid #d0cbc4; cursor:pointer;"
+             onerror="this.style.display='none'; var e=document.getElementById('car-snap-none'); if(e) e.style.display='';">
+        <div id="car-snap-none" style="color:#aaa; font-size:0.86rem; padding:20px;">
+          No snapshot yet — tap <b>📷 Snapshot</b> (needs the phone online + a view; it's dark in an underground garage).
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
         <h2 style="margin:0;">Car trips</h2>
         <select id="car-trips-limit" onchange="carReloadTrips()" style="padding:3px 6px; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:4px;">
@@ -689,6 +707,7 @@ function carOnTabShow() {
   carReloadStatus();
   carReloadTrail();
   carReloadTrips();
+  carLoadSnapshot(false); // show the last snapshot if one exists (on-demand — not polled)
   if (!_carPollTimer) {
     _carPollTimer = setInterval(() => { carReloadStatus(); carReloadTrail(); carReloadTrips(); }, 10_000);
   }
@@ -809,6 +828,31 @@ async function carLocateNow(btn) {
     } else { if (msg) { msg.textContent = '✗ ' + (d.error || 'failed'); msg.style.color = '#c0392b'; } }
   } catch (e) { if (msg) { msg.textContent = '✗ error'; msg.style.color = '#c0392b'; } }
   finally { if (btn) setTimeout(() => { btn.disabled = false; }, 6500); }
+}
+
+// Car camera snapshot — the phone uploads Car Snapshots/latest.jpg; the media
+// agent serves it at :8766. <img> loads it cross-origin (fine for images).
+const CAR_SNAP_URL = 'http://192.168.1.138:8766/api/media/stream/Car%20Snapshots/latest.jpg';
+function carLoadSnapshot(bust) {
+  const img = document.getElementById('car-snapshot');
+  if (!img) return;
+  img.onload = function () { this.style.display = ''; const e = document.getElementById('car-snap-none'); if (e) e.style.display = 'none'; };
+  img.src = CAR_SNAP_URL + '?t=' + (bust ? Date.now() : Math.floor(Date.now() / 60000));
+}
+function carOpenSnapshot() { window.open(CAR_SNAP_URL + '?t=' + Date.now(), '_blank'); }
+async function carSnapshot(btn) {
+  const msg = document.getElementById('car-snap-msg');
+  if (btn) btn.disabled = true;
+  if (msg) { msg.textContent = 'asking the phone…'; msg.style.color = '#888'; }
+  try {
+    const r = await fetch('/api/car/snapshot', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok !== false) {
+      if (msg) { msg.textContent = 'capturing…'; msg.style.color = '#3a7d44'; }
+      setTimeout(() => { carLoadSnapshot(true); if (msg) { msg.textContent = 'updated'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2500); } }, 7000);
+    } else { if (msg) { msg.textContent = '✗ ' + (d.error || 'failed'); msg.style.color = '#c0392b'; } }
+  } catch (e) { if (msg) { msg.textContent = '✗ error'; msg.style.color = '#c0392b'; } }
+  finally { if (btn) setTimeout(() => { btn.disabled = false; }, 7500); }
 }
 
 function _isCurtainKind(d) {

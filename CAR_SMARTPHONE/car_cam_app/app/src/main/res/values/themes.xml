@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.CarCam" parent="Theme.AppCompat.Light.NoActionBar" />
+</resources>

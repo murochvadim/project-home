@@ -1,6 +1,8 @@
 # Plan — 📷 Car camera snapshot ("where's my car") (PLAN, not built)
 
-> **Status: PLANNED (2026-08-23) — plan only, no build. A deferred feature of the Car Geolocation tab.**
+> **Status: ✅ BUILT + verified end-to-end (2026-08-23).** App `car_cam_app` (`com.muroch.carcam`), dashboard
+> `routes-car-snapshot.js` + the 📷 card on the Car tab. This doc is now the design record. Follow-ups:
+> keep-alive/battery-opt on the phone, camera-lens choice, the dark-garage/connectivity caveats.
 
 A **📷 Snapshot** button on the **Car Geolocation** tab that grabs **one still** from the car phone's forward
 camera so you can *see* where the car is (surroundings/landmarks), not just a map dot.

@@ -131,6 +131,7 @@ require('./routes-restore')(app, db);
 // Cast laptop screen -> TV (Windows-host action; spawns PowerShell on this host).
 require('./routes-cast')(app);
 require('./routes-carlocate')(app, () => mqttClient);
+require('./routes-car-snapshot')(app, () => mqttClient);
 
 // Robot camera (e-con RouteCAM) ONVIF imaging settings for the Robot tab.
 require('./routes-robotcam')(app);

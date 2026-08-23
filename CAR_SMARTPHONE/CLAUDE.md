@@ -77,6 +77,15 @@ car status (home-parking/away · battery% · last-seen · NetBird), a car-only m
   **inert until** the phone automation app / alert rule are built (deferred).
 - Global geofence settings are intentionally NOT here (shared with the phone). Plan:
   [CAR_GEOLOCATION_TAB_PLAN.md](CAR_GEOLOCATION_TAB_PLAN.md).
+- **📷 Car camera snapshot (BUILT 2026-08-23)** — a "📷 Car camera" card on the Car tab: a **Snapshot** button
+  + a live image. The phone runs **`car_cam_app`** (`com.muroch.carcam`, CameraX foreground service) that
+  subscribes to `mur/home/esp/car_camera/command`, captures **one JPEG on command** (camera OFF between shots —
+  low power for a parked car), and uploads it to the media agent (`Car Snapshots/latest.jpg`). Dashboard:
+  `routes-car-snapshot.js` publishes the command; the `<img>` loads it from the media agent
+  `:8766/api/media/stream`. **No new broker user/ACL** (phone = `esp_boards` reads `mur/home/esp/+/#`; dashboard
+  `rule_engine` already writes it). Verified end-to-end. Follow-ups: keep-alive/battery-opt exemption on the
+  phone, camera-lens choice, and the dark-garage/connectivity caveats. See
+  [CAR_CAMERA_SNAPSHOT_PLAN.md](CAR_CAMERA_SNAPSHOT_PLAN.md) + [car_cam_app/README.md](car_cam_app/README.md).
 
 ## Deferred / planned (was the CAR_TRACKER plan)
 - **Data SIM** — Rami Levy **12 GB / 36 mo, Pelephone, nano** (₪128) → cellular so it reports **away from home**

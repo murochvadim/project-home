@@ -1,0 +1,8 @@
+build/
+.gradle/
+local.properties
+*.apk
+.idea/
+.kotlin/
+# secret — real MQTT credential, never commit (use Secrets.kt.example as template)
+app/src/main/java/com/muroch/carcam/Secrets.kt
