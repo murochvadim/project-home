@@ -458,10 +458,24 @@
   <div class="tab-panel" id="tab-car-geo">
 
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:stretch; margin-bottom:16px;">
-      <div class="card" style="flex:1 1 0; min-width:260px; margin-bottom:0;">
-        <h2>Car status</h2>
-        <div id="car-status-chips" style="margin-top:6px;">
+      <div class="card" style="flex:1 1 0; min-width:280px; margin-bottom:0; display:flex; flex-direction:column;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Car status</h2>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button onclick="carSnapshot(this)" id="car-snap-btn" style="padding:5px 12px; font-size:0.84rem; border:none; background:#1565c0; color:#fff; border-radius:4px; cursor:pointer; font-weight:600;">📷 Snapshot</button>
+            <span id="car-snap-msg" style="font-size:0.8rem; color:#888;"></span>
+          </div>
+        </div>
+        <div id="car-status-chips" style="margin-top:8px;">
           <span style="color:#aaa; font-size:0.86rem;">Loading…</span>
+        </div>
+        <div style="text-align:center; margin-top:10px; flex:1; display:flex; flex-direction:column; justify-content:center;">
+          <img id="car-snapshot" alt="car snapshot" onclick="carOpenSnapshot()"
+               style="display:none; max-width:100%; max-height:320px; border-radius:6px; border:1px solid #d0cbc4; cursor:pointer; margin:0 auto;"
+               onerror="this.style.display='none'; var e=document.getElementById('car-snap-none'); if(e) e.style.display='';">
+          <div id="car-snap-none" style="color:#aaa; font-size:0.84rem; padding:16px;">
+            No snapshot yet — tap <b>📷 Snapshot</b> (needs the phone online + a view; it's dark in an underground garage).
+          </div>
         </div>
       </div>
 
@@ -499,24 +513,6 @@
         <button onclick="carFitToTrack()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #1565c0; color:#1565c0; background:#fff; border-radius:3px; cursor:pointer;">🔍 Fit to track</button>
       </div>
       <div id="car-map">Loading map…</div>
-    </div>
-
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-        <h2 style="margin:0;">📷 Car camera</h2>
-        <div style="display:flex; gap:10px; align-items:center;">
-          <button onclick="carSnapshot(this)" id="car-snap-btn" style="padding:6px 16px; font-size:0.9rem; border:none; background:#1565c0; color:#fff; border-radius:4px; cursor:pointer; font-weight:600;">📷 Snapshot</button>
-          <span id="car-snap-msg" style="font-size:0.84rem; color:#888;"></span>
-        </div>
-      </div>
-      <div style="text-align:center;">
-        <img id="car-snapshot" alt="car snapshot" onclick="carOpenSnapshot()"
-             style="display:none; max-width:100%; max-height:420px; border-radius:6px; border:1px solid #d0cbc4; cursor:pointer;"
-             onerror="this.style.display='none'; var e=document.getElementById('car-snap-none'); if(e) e.style.display='';">
-        <div id="car-snap-none" style="color:#aaa; font-size:0.86rem; padding:20px;">
-          No snapshot yet — tap <b>📷 Snapshot</b> (needs the phone online + a view; it's dark in an underground garage).
-        </div>
-      </div>
     </div>
 
     <div class="card">
