@@ -705,14 +705,6 @@ function carInitMap() {
 }
 
 function _carEsc(s){ return String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function _carAge(sec){
-  sec = Number(sec)||0;
-  if (sec < 90) return sec + ' s ago';
-  if (sec < 5400) return Math.round(sec/60) + ' min ago';
-  if (sec < 172800) return Math.round(sec/3600) + ' h ago';
-  return Math.round(sec/86400) + ' d ago';
-}
-function _carChip(txt, bg){ return `<span style="display:inline-block; margin:3px 6px 3px 0; padding:3px 10px; border-radius:12px; font-size:0.82rem; background:${bg}; color:#fff;">${txt}</span>`; }
 
 async function carReloadStatus() {
   const box = document.getElementById('car-status-chips');
