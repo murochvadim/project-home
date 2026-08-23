@@ -1,73 +1,66 @@
-# SPARE_SMARTPHONE — Pixel 2 XL → de-Googled LineageOS (spare node)
+# CAR_SMARTPHONE — Pixel 2 XL → de-Googled LineageOS car GPS-tracker node
 
-A **Google Pixel 2 XL** flashed to de-Googled **LineageOS** as a general-purpose spare — a clean
-Android device to repurpose for any project use later (wall panel, second camera/IP-cam node,
-sensor→MQTT bridge, kiosk, test device). Sibling of [FR_SMARTPHONE](../FR_SMARTPHONE/CLAUDE.md) (the
-A71 entrance-FR phone), but this one is a **spare with no assigned role yet**.
+> Renamed from SPARE_SMARTPHONE (2026-08-23) — this phone became the **car tracker**.
 
-**Status: ✅ LineageOS 22.2 (20260806 = Android 15) INSTALLED + set up (2026-08-23).** De-Googled
-(Google sign-in skipped in setup). Ready to assign a purpose.
+A **Google Pixel 2 XL** (de-Googled LineageOS) living in the car as a **GPS tracker**: it reports its
+location into the project's existing geolocation stack and shows up as **"Car (Pixel 2 XL)"** on the map.
+Reaches the home broker over **home WiFi** when parked and over **NetBird** when away.
 
-## The device (verified from its own bootloader/fastboot)
-- **Model: Pixel 2 XL**, codename **`taimen`**.
-- **Variant SKU `G011C`** = the **unlocked / international** model (carrier `unknown`) — *not* a Verizon
-  unit, so the bootloader is fully unlockable. (Verizon `G011B` units are permanently locked → impossible.)
-- Serial **`712KPED1259460`**. UFS Samsung 64 GB, DDR Hynix, HW rev_10.
-- Shipped on **Android 8.1** (`OPM2.171026.006.H1`, bootloader `TMZ12g`) — the oldest firmware; needed a
-  firmware bump before LineageOS (below).
+**Status (2026-08-23): ✅ LIVE — tracker + NetBird working.** Camera / battery-sleep / data-SIM = deferred (below).
 
-## Why a Pixel is EASY vs the Samsung A71 ([[project-fr-smartphone-flash]])
-No Odin, no Thor, no Knox/RMM timer, no misc/vbmeta fighting. Standard **`fastboot` + `adb`** the whole
-way. LineageOS still supports `taimen` — latest **22.2** (Android 15), pulled live from the API
-(`https://download.lineageos.org/api/v2/devices/taimen/builds`), so it's a current OS on a 2017 phone.
+## Device
+- **Pixel 2 XL**, codename **`taimen`**, unlocked **G011C** variant. Serial **`712KPED1259460`**.
+- **Hardware WiFi MAC `b4:f7:a1:e4:bd:04`** (MAC randomization turned OFF for "Home" so this is stable).
 
-## How it was flashed (the working method — reuse this for any Pixel)
-Driven from the **Proxmox host / mini-PC `192.168.1.101`** over SSH (Linux `fastboot` = no Windows
-driver hassle — see the driver note below). Files staged in `/root/pixel-flash/`.
+## OS — LineageOS **20** (Android 13), NOT 22  ⚠ important
+- Running **`lineage-20.0-20231005`** (Android 13), de-Googled. **Deliberately downgraded from LineageOS 22.2.**
+- **Why:** LineageOS **22.x has a WiFi regression on taimen** (appeared ~build `20260611`, still broken through
+  `20260806`). Symptom: WiFi won't enable — the **WCN3990 firmware crashes** (`icnss: PD service down … Root PD
+  crashed` in kernel log). **Confirmed it's the ROM, not hardware:** WiFi works on stock Android 11 AND on
+  LineageOS 20; our own firmware flashed correctly. Forum-confirmed fix = run a build predating the regression.
+- **LineageOS 20 is EOL** for taimen (last build Oct 2023 — no more updates) and only lives on **archive.org**
+  (`https://archive.org/download/lineage-20.0-20231005-nightly-taimen-signed/`). Runs on the same Android-11
+  firmware base already flashed — install = flash its `boot.img` recovery + `adb sideload` the zip (see
+  [[project-pixel-flash]] for the taimen flash mechanics; done from the mini-PC's fastboot).
+- **Reversible:** when LineageOS fixes the 22.x WiFi bug, can flash back up to 22.
 
-1. **On the phone (only the phone-side steps a human must do):** enable Developer options → **OEM
-   unlocking** + **USB debugging**. (`sys.oem_unlock_allowed` must read `1`.)
-2. **Unlock bootloader** — `fastboot flashing unlock` **AND** `fastboot flashing unlock_critical`
-   (the second is REQUIRED — the bootloader partition is a "critical partition"; without `unlock_critical`
-   the firmware flash fails `Writing 'bootloader_b' FAILED: Flashing is not allowed for Critical Partitions`).
-   Each needs an on-device confirm: **Volume-Up to "Unlock the bootloader" → Power** (pressing Power on the
-   default "Do not unlock" = `canceled`). ⚠ **`fastboot getvar unlocked` misreports `no` on taimen even when
-   unlocked** — trust the phone's own **`DEVICE STATE - unlocked`** on the bootloader screen, or the fact
-   that flashing succeeds (buggy bootloader-mode USB, per the LineageOS wiki).
-3. **Firmware update 8.1 → Android 11** (LineageOS 22 requires **Android 11 firmware**): flash Google's
-   latest `taimen` stock **factory image** (`taimen-rp1a.201005.004.a1-factory-2f5c4987.zip`) via its
-   `flash-all.sh` → updates **bootloader (→`TMZ30m`) + radio + boot + dtbo + vbmeta + system**.
-   ⚠ `flash-all` **failed near the end** on `system_a` = *"Requested download size is more than max allowed"*
-   (device `max-download-size` = **512 MB**, the 2.5 GB chunk wasn't split) and stopped **before flashing
-   `vendor`**. Fix = flash the remaining critical partition directly: extract `image-taimen-*.zip`, then
-   `fastboot flash vendor vendor.img` (326 MB, fits the buffer) to the active slot. (`system_other`/inactive
-   slot is optional — skipped.) Slot **b** then had a complete Android 11.
-4. **Install LineageOS.** `fastboot flash boot boot.img` (LineageOS recovery) → boot recovery
-   (**Volume-Down to "Recovery mode" → Power** in the bootloader menu; `fastboot reboot recovery` does NOT
-   work on taimen — it bounces back to the bootloader) → in recovery: **Factory reset → Format data**, then
-   **Apply update → Apply from ADB** → `adb -d sideload lineage-22.2-…-taimen.zip` → **"install additional
-   packages?" = No** (keeps it de-Googled) → **Reboot system now**.
-   - ⚠ **If the recovery touch menu is uncooperative:** the fallback that works is `adb -d sideload` once
-     "Apply from ADB" is selected. A fully menu-free alternative was prepped and is worth knowing: extract
-     the ROM's partition images with **`payload-dumper-go`** (the zip is `payload.bin`-based → yields
-     `boot/dtbo/vbmeta/system/vendor`) and `fastboot flash` each to the active slot — bypasses recovery
-     entirely. (Not needed in the end — the sideload went through.)
-5. **First boot** 2–5 min → LineageOS Welcome → **skip Google** in setup.
+## Network identity
+- **Home LAN: `192.168.1.234`** — a **DHCP reservation** on hardware MAC `b4:f7:a1:e4:bd:04`.
+- **NetBird: `100.102.113.116`** / **`car.netbird.cloud`** — peer name **`car`** (renamed from the default
+  `lineage_taimen`), joined via **SSO login** (the mobile app uses login, not a setup key — "invalid key format"
+  if you try a setup key). 4th peer, still 1 user on the tenant.
 
-### Windows driver note (why the mini-PC, not the laptop)
-The laptop's `adb` saw the phone, but in **bootloader/fastboot mode** Windows showed it as
-`VID_18D1&PID_4EE0` **Status = Error** (missing "Android Bootloader Interface" driver) → `fastboot devices`
-empty. Linux (the mini-PC) has no such gap, so all fastboot ran there. For any future Pixel flash, use the
-mini-PC for the fastboot parts.
+## Tracker (OwnTracks → existing geolocation stack — VERIFIED working)
+- **OwnTracks** (F-Droid) publishes as device **`car`** to topic **`owntracks/owntracks_phone/car`**, **reusing
+  the `owntracks_phone` MQTT user** (ACL `readwrite owntracks/#` on LXC 107 — no new broker user/ACL).
+  Broker **`192.168.1.189:1883`**, monitoring = **significant** (report on location change). Config file
+  `car.otrc`; **⚠ the `owntracks:///config?inline=` intent needs STANDARD base64** (URL-safe base64 → "import
+  not accepted"), then a manual accept-import on the phone.
+- The **existing `owntracks-ingest.service` (LXC 104)** ingests it with **no code change** (`owntracks/+/+`),
+  auto-registers the `devices` row `owntracks_owntracks_phone_car`, writes `device_locations`, runs the trip
+  state machine. Registered in `dashboard_settings.geolocation.tracked_devices` (group `car`) so it shows on the
+  Geolocation map (the map's `/api/geolocation/status` only lists `tracked_devices`).
+- **Home fence = the GLOBAL 40 m** (`home_radius_m`) — same as the phone; the ingest geofence is one global
+  center, not per-device. "Home parking" = within 40 m of the apartment.
+- ⚠ **de-Googled = GPS-only.** No network-location provider without Google/microG (`location_providers_allowed
+  = null`) → needs **sky view** for a fix; **won't locate indoors on a desk**. Fine for a car (outdoors/moving).
+  Optional: install **microG UnifiedNlp + a WiFi-location backend** for indoor fixes (not needed for the car).
+- Apps installed via `adb install` (staged on the laptop): OwnTracks (F-Droid), NetBird v0.5.0 (GitHub).
 
-## Staged files (mini-PC `/root/`) — CLEANED UP (2026-08-23)
-All flash artifacts were deleted after the phone booted — the Pixel set (`pixel-flash/`: factory image +
-LineageOS zip + extracted images + `payload-dumper-go`) **and** the stale A71 flash data (`firmware/`,
-`stock/`, `fwflash/`, `superdir/`, `uddir/`, ROM zips, staging dirs). Freed ~38 GB; `/root` is back to
-~44 MB. **Preserved:** `zfs_qnap_backup.sh`, `100.conf.bak` (real files, not flash junk), and the small
-reusable Samsung-flash tools `Thor-Linux` + `samloader`. To re-flash, re-download from the LineageOS API +
-Google factory images (URLs/steps above).
+## Deferred / planned (was the CAR_TRACKER plan)
+- **Data SIM** — Rami Levy **12 GB / 36 mo, Pelephone, nano** (₪128) → cellular so it reports **away from home**
+  across all Israel. Not inserted yet. (⚠ this phone's own WiFi is fine, but the tracker only reaches the broker
+  off-home via NetBird over cellular.) With WiFi-at-home + cellular-only-away, 12 GB lasts easily.
+- **Alert when it leaves home parking** — a NEW rule (via `/create-rule`) on the car's `geofence:away` event →
+  Notifications / Pixoo. No existing away-alert rule (the stack only records trips today).
+- **Battery-sleep at a dashboard-set %** — an on-phone automation app (MacroDroid/Automate, F-Droid, MQTT) that,
+  when **unplugged AND battery ≤ threshold**, kills GPS/data so it dozes; threshold pushed via MQTT from the
+  dashboard. Planned.
+- **Dashcam** — ⚠ **dual-camera simultaneous recording is IMPOSSIBLE on the Pixel 2 XL** (concurrent camera only
+  on Pixel 6+). Single-camera dashcam-**while-driving** (powered — no battery conflict) is the viable option;
+  video stored locally, synced on home WiFi (can't go over the SIM). Undecided.
 
-## Next (when a purpose is chosen)
-Same options as any de-Googled node: F-Droid apps / `adb install`, Termux (Python/MQTT on-device),
-kiosk browser, IP-cam, sensor→MQTT. Static IP + note it here when assigned. Phone serial `712KPED1259460`.
+## Recap of the whole build
+Flashed taimen → (LOS 22.2, WiFi dead) → diagnosed the 22.x WCN regression → **downgraded to LOS 20 (WiFi
+works)** → OwnTracks + NetBird installed → `car` reporting on the map → DHCP reservation + NetBird peer `car`.
+Sibling of [FR_SMARTPHONE](../FR_SMARTPHONE/CLAUDE.md) (the A71 entrance-camera phone).
