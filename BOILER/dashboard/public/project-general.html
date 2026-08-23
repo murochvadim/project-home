@@ -178,7 +178,8 @@
 
   <div class="tab-bar">
     <button class="tab-btn" onclick="showTab('curtain', this)">Curtain</button>
-    <button class="tab-btn active" onclick="showTab('geolocation', this); geoOnTabShow();">Geolocation</button>
+    <button class="tab-btn active" onclick="showTab('geolocation', this); geoOnTabShow();">My Smartphone Geolocation</button>
+    <button class="tab-btn" onclick="showTab('car-geo', this); carOnTabShow();">Car Geolocation</button>
     <button class="tab-btn" onclick="showTab('weather', this); weatherOnTabShow();">Weather</button>
   </div>
 
@@ -453,6 +454,81 @@
 
   </div>
 
+  <!-- ─── Car Geolocation tab ─── -->
+  <div class="tab-panel" id="tab-car-geo">
+
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:stretch; margin-bottom:16px;">
+      <div class="card" style="flex:1 1 0; min-width:260px; margin-bottom:0;">
+        <h2>Car status</h2>
+        <div id="car-status-chips" style="margin-top:6px;">
+          <span style="color:#aaa; font-size:0.86rem;">Loading…</span>
+        </div>
+      </div>
+
+      <div class="card" style="flex:1 1 0; min-width:300px; margin-bottom:0;">
+        <h2>Settings &amp; controls</h2>
+        <div style="margin-top:8px; display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <button onclick="carLocateNow(this)" id="car-locate-btn"
+                    style="padding:7px 16px; font-size:0.9rem; border:none; background:#1565c0; color:#fff; border-radius:4px; cursor:pointer; font-weight:600;">📍 Locate now</button>
+            <span id="car-locate-msg" style="margin-left:10px; font-size:0.84rem; color:#888;"></span>
+            <div style="font-size:0.76rem; color:#999; margin-top:4px;">Asks the phone to report its GPS immediately (OwnTracks remote command).</div>
+          </div>
+          <hr style="border:none; border-top:1px solid #eee; margin:2px 0;">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <label style="font-size:0.86rem; min-width:190px;">Sleep below battery %:</label>
+            <input type="number" id="car-sleep-pct" min="0" max="100" style="width:80px;" />
+            <span style="font-size:0.76rem; color:#999;">phone dozes when unplugged &amp; below this <em>(pending phone app)</em></span>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <label style="font-size:0.86rem; min-width:190px;">Alert when it leaves home parking:</label>
+            <input type="checkbox" id="car-away-alert" style="transform:scale(1.2);" />
+            <span style="font-size:0.76rem; color:#999;"><em>(pending alert rule)</em></span>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <button onclick="carSaveSettings()" style="padding:6px 16px; background:#3a7d44; color:#fff; border:none; border-radius:3px; cursor:pointer; font-weight:600;">💾 Save</button>
+            <span id="car-settings-msg" style="font-size:0.86rem;"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h2 style="margin:0;">Car map · trail</h2>
+        <button onclick="carFitToTrack()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #1565c0; color:#1565c0; background:#fff; border-radius:3px; cursor:pointer;">🔍 Fit to track</button>
+      </div>
+      <div id="car-map">Loading map…</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+        <h2 style="margin:0;">Car trips</h2>
+        <select id="car-trips-limit" onchange="carReloadTrips()" style="padding:3px 6px; font-size:0.8rem; border:1px solid #d0cbc4; border-radius:4px;">
+          <option value="20">last 20</option>
+          <option value="50" selected>last 50</option>
+          <option value="100">last 100</option>
+        </select>
+      </div>
+      <div style="overflow-y:auto; max-height:280px;">
+        <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+          <thead><tr style="background:#fafaf6;">
+            <th style="text-align:center; padding:6px 12px; width:48px;">#</th>
+            <th style="text-align:left; padding:6px 12px;">Route</th>
+            <th style="text-align:center; padding:6px 12px;">Started</th>
+            <th style="text-align:center; padding:6px 12px;">Returned</th>
+            <th style="text-align:center; padding:6px 12px;">Duration</th>
+            <th style="text-align:center; padding:6px 12px;">Max distance</th>
+          </tr></thead>
+          <tbody id="car-trips-tbody">
+            <tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
   <!-- ─── Weather tab (migrated from former general.html) ─── -->
   <div class="tab-panel" id="tab-weather">
 
@@ -593,6 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (panel && btn) {
       showTab(hash, btn);
       if (hash === 'geolocation' && typeof geoOnTabShow === 'function') geoOnTabShow();
+      if (hash === 'car-geo'     && typeof carOnTabShow === 'function') carOnTabShow();
       if (hash === 'weather'     && typeof weatherOnTabShow === 'function') weatherOnTabShow();
       return;
     }
@@ -600,6 +677,147 @@ document.addEventListener('DOMContentLoaded', () => {
   // No (or unknown) hash → fire the default tab's onTabShow so its data loads.
   if (typeof geoOnTabShow === 'function') geoOnTabShow();
 });
+
+// ─── Car Geolocation tab ─────────────────────────────────────────────
+const CAR_DEVICE_ID = 'owntracks_owntracks_phone_car';   // raw device_id (for /locations)
+const CAR_GROUP_ID  = 'car';                             // group_id (in /status + /trips)
+let _carMap = null, _carPollTimer = null, _carTrailLayer = null, _carMarker = null;
+
+function carOnTabShow() {
+  if (!_carMap) carInitMap();
+  carLoadSettings();
+  carReloadStatus();
+  carReloadTrail();
+  carReloadTrips();
+  if (!_carPollTimer) {
+    _carPollTimer = setInterval(() => { carReloadStatus(); carReloadTrail(); carReloadTrips(); }, 10_000);
+  }
+  setTimeout(() => { if (_carMap) _carMap.invalidateSize(); }, 200);  // map sized right after tab shows
+}
+
+function carInitMap() {
+  if (!window.L) { setTimeout(carInitMap, 200); return; }
+  const el = document.getElementById('car-map');
+  if (!el) return;
+  _carMap = L.map('car-map').setView([32.1593, 34.8932], 13);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { attribution: '© OpenStreetMap contributors', maxZoom: 19 }).addTo(_carMap);
+}
+
+function _carEsc(s){ return String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _carAge(sec){
+  sec = Number(sec)||0;
+  if (sec < 90) return sec + ' s ago';
+  if (sec < 5400) return Math.round(sec/60) + ' min ago';
+  if (sec < 172800) return Math.round(sec/3600) + ' h ago';
+  return Math.round(sec/86400) + ' d ago';
+}
+function _carChip(txt, bg){ return `<span style="display:inline-block; margin:3px 6px 3px 0; padding:3px 10px; border-radius:12px; font-size:0.82rem; background:${bg}; color:#fff;">${txt}</span>`; }
+
+async function carReloadStatus() {
+  const box = document.getElementById('car-status-chips');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/geolocation/status');
+    const d = await r.json();
+    const car = (d.devices || []).find(x => x.device_id === CAR_GROUP_ID);
+    if (!car) { box.innerHTML = '<span style="color:#aaa; font-size:0.86rem;">No car data yet.</span>'; return; }
+    const st = car.status || 'unknown';
+    const stColor = st === 'home' ? '#27ae60' : (st === 'away' ? '#e67e22' : '#999');
+    const stLabel = st === 'home' ? 'At home parking' : (st === 'away' ? 'Away' : (st === 'stale' ? 'Stale (no recent fix)' : st));
+    const batt = car.battery_pct;
+    const battColor = batt == null ? '#999' : (batt < 20 ? '#c0392b' : (batt < 40 ? '#e67e22' : '#3a7d44'));
+    const nb = car.connection && car.connection.netbird_connected;
+    let html = _carChip(stLabel, stColor);
+    if (batt != null) html += _carChip('🔋 ' + batt + '%', battColor);
+    html += _carChip('⏱ ' + _carAge(car.age_sec), '#607d8b');
+    html += _carChip(nb ? 'NetBird ✓' : 'NetBird ✗', nb ? '#2b7a4b' : '#c0392b');
+    if (car.lat != null) html += `<div style="font-size:0.78rem; color:#999; margin-top:6px;">${Number(car.lat).toFixed(5)}, ${Number(car.lon).toFixed(5)} · ±${car.accuracy_m} m</div>`;
+    box.innerHTML = html;
+  } catch (e) { box.innerHTML = '<span style="color:#c0392b; font-size:0.84rem;">status error</span>'; }
+}
+
+async function carReloadTrail() {
+  if (!_carMap) return;
+  try {
+    const r = await fetch('/api/geolocation/locations?device_id=' + encodeURIComponent(CAR_DEVICE_ID) + '&limit=500');
+    const d = await r.json();
+    const pts = (d.locations || d.points || []).filter(p => !p.is_outlier)
+                  .map(p => [Number(p.lat), Number(p.lon)]).filter(a => isFinite(a[0]) && isFinite(a[1]));
+    if (_carTrailLayer) { _carMap.removeLayer(_carTrailLayer); _carTrailLayer = null; }
+    if (_carMarker) { _carMap.removeLayer(_carMarker); _carMarker = null; }
+    if (!pts.length) return;
+    _carTrailLayer = L.polyline(pts, { color: '#1565c0', weight: 3, opacity: 0.7 }).addTo(_carMap);
+    const latest = pts[0];  // /locations is newest-first
+    _carMarker = L.marker(latest).addTo(_carMap).bindPopup('Car — latest fix');
+    if (!_carFitted) { _carMap.setView(latest, 15); _carFitted = true; }
+  } catch (e) {}
+}
+let _carFitted = false;
+function carFitToTrack() {
+  if (_carMap && _carTrailLayer) { try { _carMap.fitBounds(_carTrailLayer.getBounds(), { padding: [30,30] }); } catch(e){} }
+}
+
+async function carReloadTrips() {
+  const tb = document.getElementById('car-trips-tbody');
+  if (!tb) return;
+  const lim = document.getElementById('car-trips-limit')?.value || 50;
+  try {
+    const r = await fetch('/api/geolocation/trips?limit=' + lim);
+    const d = await r.json();
+    const all = d.trips || (Array.isArray(d) ? d : []);
+    const rows = all.filter(t => t.group_id === CAR_GROUP_ID);
+    if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">No car trips yet.</td></tr>'; return; }
+    const fmtT = s => s ? new Date(s).toLocaleString('en-GB', { hour12:false, day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+    const fmtDur = s => s ? (s < 3600 ? Math.round(s/60)+' min' : (s/3600).toFixed(1)+' h') : '—';
+    const fmtDist = m => m == null ? '—' : (m < 1000 ? m+' m' : (m/1000).toFixed(1)+' km');
+    tb.innerHTML = rows.map((t,i) => `<tr style="border-top:1px solid #eee; ${t.dim?'opacity:0.5;':''}">
+      <td style="text-align:center; padding:6px 12px;">${i+1}</td>
+      <td style="padding:6px 12px;">${_carEsc(t.route || t.kind || t.row_type || '')}</td>
+      <td style="text-align:center; padding:6px 12px;">${fmtT(t.started_at)}</td>
+      <td style="text-align:center; padding:6px 12px;">${t.returned_at ? fmtT(t.returned_at) : '<span style="color:#e67e22;">open</span>'}</td>
+      <td style="text-align:center; padding:6px 12px;">${fmtDur(t.duration_sec)}</td>
+      <td style="text-align:center; padding:6px 12px;">${fmtDist(t.max_dist_m)}</td></tr>`).join('');
+  } catch (e) { tb.innerHTML = '<tr><td colspan="6" style="padding:14px; text-align:center; color:#c0392b;">trips error</td></tr>'; }
+}
+
+async function carLoadSettings() {
+  try {
+    const r = await fetch('/api/dashboard-settings/car.settings');
+    const d = await r.json();
+    const v = (d && d.value != null) ? d.value : (d || {});
+    if (document.getElementById('car-sleep-pct'))  document.getElementById('car-sleep-pct').value  = (v.sleep_pct ?? '');
+    if (document.getElementById('car-away-alert')) document.getElementById('car-away-alert').checked = !!v.away_alert;
+  } catch (e) {}
+}
+async function carSaveSettings() {
+  const msg = document.getElementById('car-settings-msg');
+  const body = {
+    value: {
+      sleep_pct:  document.getElementById('car-sleep-pct').value === '' ? null : Number(document.getElementById('car-sleep-pct').value),
+      away_alert: document.getElementById('car-away-alert').checked,
+    }
+  };
+  try {
+    const r = await fetch('/api/dashboard-settings/car.settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (msg) { msg.textContent = r.ok ? '✓ saved' : '✗ error'; msg.style.color = r.ok ? '#3a7d44' : '#c0392b'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
+  } catch (e) { if (msg) { msg.textContent = '✗ error'; msg.style.color = '#c0392b'; } }
+}
+
+async function carLocateNow(btn) {
+  const msg = document.getElementById('car-locate-msg');
+  if (btn) btn.disabled = true;
+  if (msg) { msg.textContent = 'asking the phone…'; msg.style.color = '#888'; }
+  try {
+    const r = await fetch('/api/geolocation/car/locate', { method:'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok !== false) {
+      if (msg) { msg.textContent = 'requested — refreshing…'; msg.style.color = '#3a7d44'; }
+      setTimeout(() => { carReloadStatus(); carReloadTrail(); }, 6000);
+    } else { if (msg) { msg.textContent = '✗ ' + (d.error || 'failed'); msg.style.color = '#c0392b'; } }
+  } catch (e) { if (msg) { msg.textContent = '✗ error'; msg.style.color = '#c0392b'; } }
+  finally { if (btn) setTimeout(() => { btn.disabled = false; }, 6500); }
+}
 
 function _isCurtainKind(d) {
   // Devices whose user-facing name includes "Curtain" go in the Curtains

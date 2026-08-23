@@ -47,6 +47,23 @@ Reaches the home broker over **home WiFi** when parked and over **NetBird** when
   Optional: install **microG UnifiedNlp + a WiFi-location backend** for indoor fixes (not needed for the car).
 - Apps installed via `adb install` (staged on the laptop): OwnTracks (F-Droid), NetBird v0.5.0 (GitHub).
 
+## Dashboard — "Car Geolocation" tab (BUILT 2026-08-23)
+A **Car Geolocation** tab on **Project General** (beside a renamed **"My Smartphone Geolocation"** tab —
+label-only rename, that tab still shows all devices). All in `public/project-general.html` (inline, own
+`_carMap` + `car*` loaders, filtered to `device_id='car'` / group `car`); reuses `/api/geolocation/{status,
+locations,trips}` client-side + `/api/dashboard-settings/car.settings` — **no new page, no new LXC**. Shows:
+car status (home-parking/away · battery% · last-seen · NetBird), a car-only map + trail, car trips, and a
+**Settings & Controls** card:
+- **📍 Locate now** → `POST /api/geolocation/car/locate` (module `routes-carlocate.js`) → publishes
+  `owntracks/owntracks_phone/car/cmd {"_type":"cmd","action":"reportLocation"}`. Required a **LXC-107 ACL grant**
+  (`user rule_engine` → `topic write owntracks/owntracks_phone/+/cmd`; server.js's MQTT user couldn't write it).
+  ⚠ **Still needs `cmd:true` on the phone** (OwnTracks → Preferences → Advanced → Remote commands) — without it
+  the publish succeeds but the phone ignores it.
+- **Battery-sleep threshold %** + **away-parking alert** toggle — saved to `dashboard_settings.car.settings`,
+  **inert until** the phone automation app / alert rule are built (deferred).
+- Global geofence settings are intentionally NOT here (shared with the phone). Plan:
+  [CAR_GEOLOCATION_TAB_PLAN.md](CAR_GEOLOCATION_TAB_PLAN.md).
+
 ## Deferred / planned (was the CAR_TRACKER plan)
 - **Data SIM** — Rami Levy **12 GB / 36 mo, Pelephone, nano** (₪128) → cellular so it reports **away from home**
   across all Israel. Not inserted yet. (⚠ this phone's own WiFi is fine, but the tracker only reaches the broker
