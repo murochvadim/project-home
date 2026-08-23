@@ -42,9 +42,18 @@ Reaches the home broker over **home WiFi** when parked and over **NetBird** when
   Geolocation map (the map's `/api/geolocation/status` only lists `tracked_devices`).
 - **Home fence = the GLOBAL 40 m** (`home_radius_m`) — same as the phone; the ingest geofence is one global
   center, not per-device. "Home parking" = within 40 m of the apartment.
-- ⚠ **de-Googled = GPS-only.** No network-location provider without Google/microG (`location_providers_allowed
-  = null`) → needs **sky view** for a fix; **won't locate indoors on a desk**. Fine for a car (outdoors/moving).
-  Optional: install **microG UnifiedNlp + a WiFi-location backend** for indoor fixes (not needed for the car).
+- ⚠ **de-Googled = GPS-only + the underground-garage limit.** No network-location provider without
+  Google/microG (`location_providers_allowed = null`) → needs **sky view** for a fix; won't locate indoors on a
+  desk. **⚠ GPS does NOT work in the home parking (it's -2 floors underground)** — inherent to GPS, not a
+  de-Google quirk (even Google phones only *fake* a position there via WiFi/cell). Consequences:
+  - **While parked at -2 the car has NO live fix** — the map shows the last surface fix as **"stale"**. Fine —
+    it's parked at home.
+  - **When it drives up and surfaces, GPS locks within ~1 min** → it reports the trip + fires the away alert. So
+    the tracker's real job (catch it when it moves) works, just with a short surface-lock delay.
+  - **Home WiFi won't reach -2** → the phone needs the **data SIM** to stay online while parked underground;
+    **without the SIM it's fully offline** (can't even report last-known / NetBird offline) until it drives out.
+  - Optional: **microG UnifiedNlp + a WiFi/cell backend** *might* give a parked fix if the garage has signal —
+    not required to track trips.
 - Apps installed via `adb install` (staged on the laptop): OwnTracks (F-Droid), NetBird v0.5.0 (GitHub).
 
 ## Dashboard — "Car Geolocation" tab (BUILT 2026-08-23)
@@ -57,8 +66,13 @@ car status (home-parking/away · battery% · last-seen · NetBird), a car-only m
 - **📍 Locate now** → `POST /api/geolocation/car/locate` (module `routes-carlocate.js`) → publishes
   `owntracks/owntracks_phone/car/cmd {"_type":"cmd","action":"reportLocation"}`. Required a **LXC-107 ACL grant**
   (`user rule_engine` → `topic write owntracks/owntracks_phone/+/cmd`; server.js's MQTT user couldn't write it).
-  ⚠ **Still needs `cmd:true` on the phone** (OwnTracks → Preferences → Advanced → Remote commands) — without it
-  the publish succeeds but the phone ignores it.
+  ⚠ **How Locate-now works — two conditions for it to actually return a position** (verified 2026-08-23: the
+  publish succeeds `{ok:true}` but nothing updated because both were unmet):
+  1. **`cmd:true` on the phone** (OwnTracks → Preferences → Advanced → Remote commands) — without it the phone
+     *receives* the command but ignores it. **This is the main gate; not yet enabled.**
+  2. **The phone must have a GPS fix** (sky view) to report a *fresh* position → **Locate-now returns nothing new
+     while parked in the -2 garage** (no GPS underground, see the GPS-only limit above); it works when the car is
+     outdoors/surfaced. On success a new ping lands and the status flips from "stale" to a fresh home/away.
 - **Battery-sleep threshold %** + **away-parking alert** toggle — saved to `dashboard_settings.car.settings`,
   **inert until** the phone automation app / alert rule are built (deferred).
 - Global geofence settings are intentionally NOT here (shared with the phone). Plan:

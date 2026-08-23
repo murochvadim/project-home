@@ -24,7 +24,7 @@
     .geo-chip.conn-good { background:rgba(39,174,96,0.15);  color:#1a7a3a; }
     .geo-chip.conn-mid  { background:rgba(230,126,34,0.18); color:#9c4f00; }
     .geo-chip.conn-bad  { background:rgba(192,57,43,0.18);  color:#962917; }
-    #geo-map { height:480px; border-radius:6px; border:1px solid #d0cbc4; }
+    #geo-map, #car-map { height:480px; border-radius:6px; border:1px solid #d0cbc4; }
     .geo-settings-grid { display:grid; grid-template-columns:max-content 1fr; gap:10px 18px; align-items:center; }
     .geo-settings-grid input[type="number"], .geo-settings-grid input[type="text"] { padding:5px 8px; border:1px solid #d0cbc4; border-radius:3px; font-size:0.9rem; }
     .geo-dev-table { width:100%; border-collapse:collapse; font-size:0.85rem; table-layout:fixed; }
@@ -720,20 +720,20 @@ async function carReloadStatus() {
   try {
     const r = await fetch('/api/geolocation/status');
     const d = await r.json();
-    const car = (d.devices || []).find(x => x.device_id === CAR_GROUP_ID);
-    if (!car) { box.innerHTML = '<span style="color:#aaa; font-size:0.86rem;">No car data yet.</span>'; return; }
-    const st = car.status || 'unknown';
-    const stColor = st === 'home' ? '#27ae60' : (st === 'away' ? '#e67e22' : '#999');
-    const stLabel = st === 'home' ? 'At home parking' : (st === 'away' ? 'Away' : (st === 'stale' ? 'Stale (no recent fix)' : st));
-    const batt = car.battery_pct;
-    const battColor = batt == null ? '#999' : (batt < 20 ? '#c0392b' : (batt < 40 ? '#e67e22' : '#3a7d44'));
-    const nb = car.connection && car.connection.netbird_connected;
-    let html = _carChip(stLabel, stColor);
-    if (batt != null) html += _carChip('🔋 ' + batt + '%', battColor);
-    html += _carChip('⏱ ' + _carAge(car.age_sec), '#607d8b');
-    html += _carChip(nb ? 'NetBird ✓' : 'NetBird ✗', nb ? '#2b7a4b' : '#c0392b');
-    if (car.lat != null) html += `<div style="font-size:0.78rem; color:#999; margin-top:6px;">${Number(car.lat).toFixed(5)}, ${Number(car.lon).toFixed(5)} · ±${car.accuracy_m} m</div>`;
-    box.innerHTML = html;
+    const x = (d.devices || []).find(v => v.device_id === CAR_GROUP_ID);
+    if (!x) { box.innerHTML = '<span style="color:#aaa; font-size:0.86rem;">No car data yet.</span>'; return; }
+    // Identical design to the My Smartphone status (geoReloadStatus) — geo-chip classes.
+    const battery = (x.battery_pct != null) ? ` · 🔋 ${x.battery_pct}%` : '';
+    const dist = (x.distance_m != null) ? ` · ${x.distance_m >= 1000 ? (x.distance_m/1000).toFixed(2) + ' km' : x.distance_m + ' m'}` : '';
+    const age = (x.age_sec != null) ? ` · ${x.age_sec < 60 ? x.age_sec + ' s' : (x.age_sec < 3600 ? Math.round(x.age_sec/60) + ' min' : Math.round(x.age_sec/3600) + ' h')} ago` : '';
+    const label = `${pgEsc(x.name || x.device_id)}: ${x.status}${dist}${age}${battery}`;
+    const c = x.connection || {};
+    let connClass, connLabel;
+    if (c.netbird_connected === true)       { connClass = 'conn-good'; connLabel = '🔒 NetBird ✓'; }
+    else if (c.netbird_connected === false) { connClass = 'conn-bad';  connLabel = '⚠ NetBird off'; }
+    else                                    { connClass = 'conn-mid';  connLabel = '🔒 NetBird —'; }
+    const connChip = `<span class="geo-chip ${connClass}">${connLabel}</span>`;
+    box.innerHTML = `<div class="geo-status-block" style="display:inline-block; vertical-align:top; margin:0 8px 6px 0;"><div><span class="geo-chip ${x.status}">${label}</span></div><div style="margin-top:4px;">${connChip}</div></div>`;
   } catch (e) { box.innerHTML = '<span style="color:#c0392b; font-size:0.84rem;">status error</span>'; }
 }
 
@@ -1537,7 +1537,9 @@ async function geoReloadStatus() {
   try {
     const r = await fetch('/api/geolocation/status');
     const d = await r.json();
-    const chips = (d.devices || []).map(x => {
+    // The car has its own "Car Geolocation" tab — exclude it here so this
+    // tab is just the personal phone(s).
+    const chips = (d.devices || []).filter(x => x.device_id !== 'car').map(x => {
       const battery = (x.battery_pct != null) ? ` · 🔋 ${x.battery_pct}%` : '';
       const dist = (x.distance_m != null) ? ` · ${x.distance_m >= 1000 ? (x.distance_m/1000).toFixed(2) + ' km' : x.distance_m + ' m'}` : '';
       const age = (x.age_sec != null) ? ` · ${x.age_sec < 60 ? x.age_sec + ' s' : (x.age_sec < 3600 ? Math.round(x.age_sec/60) + ' min' : Math.round(x.age_sec/3600) + ' h')} ago` : '';
