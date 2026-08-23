@@ -60,10 +60,13 @@ The laptop's `adb` saw the phone, but in **bootloader/fastboot mode** Windows sh
 empty. Linux (the mini-PC) has no such gap, so all fastboot ran there. For any future Pixel flash, use the
 mini-PC for the fastboot parts.
 
-## Staged files (mini-PC `/root/pixel-flash/`) — cleanup
-`taimen-…-factory-*.zip` (1.7 GB) + `lineage-22.2-…zip` (928 MB) + extracted `img/` + `los_imgs/` +
-`payload-dumper-go`. Safe to delete now that the phone boots — ~3–4 GB. (Separately, the A71's ~20 GB
-firmware in `/root/firmware/` is also stale — see [[project-fr-smartphone-flash]].)
+## Staged files (mini-PC `/root/`) — CLEANED UP (2026-08-23)
+All flash artifacts were deleted after the phone booted — the Pixel set (`pixel-flash/`: factory image +
+LineageOS zip + extracted images + `payload-dumper-go`) **and** the stale A71 flash data (`firmware/`,
+`stock/`, `fwflash/`, `superdir/`, `uddir/`, ROM zips, staging dirs). Freed ~38 GB; `/root` is back to
+~44 MB. **Preserved:** `zfs_qnap_backup.sh`, `100.conf.bak` (real files, not flash junk), and the small
+reusable Samsung-flash tools `Thor-Linux` + `samloader`. To re-flash, re-download from the LineageOS API +
+Google factory images (URLs/steps above).
 
 ## Next (when a purpose is chosen)
 Same options as any de-Googled node: F-Droid apps / `adb install`, Termux (Python/MQTT on-device),
