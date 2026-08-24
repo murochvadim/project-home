@@ -3,7 +3,7 @@
 A dedicated **Raspberry Pi Zero 2 W** (hostname `RP01`, user `rp01_project`, eth0 `192.168.1.217`). Two roles:
 a **local flashing station** to de‑cloud Tuya devices (open firmware over MQTT), and the **AdGuard Home DNS**
 server for the whole LAN. Its sibling **RP02** (the camera/mic node) has its own doc:
-[../RP02/CLAUDE.md](../RP02/CLAUDE.md).
+[../RP02_PTZ_CAMERA/CLAUDE.md](../RP02_PTZ_CAMERA/CLAUDE.md).
 
 ## Why this exists
 Two flashing jobs need a Linux box with an **AP‑capable Wi‑Fi adapter** (the Windows dashboard laptop
@@ -157,7 +157,7 @@ AGH first (they'd conflict on that one port).
 auto-updates daily; added 2026-08-18) — plus **Safe Browsing ON** (`safebrowsing_enabled`, real-time cloud threat
 lookup, ~0 RAM). AGH's own DHCP is OFF. ⚠ RAM is TIGHT (**RSS ~142 MB, ~160 MB free** after TIF-Mini) — the Zero 2 W
 is a one-heavy-job box; **keep it DNS-only, do NOT add camera/audio** (put A/V on **RP02** —
-[../RP02/CLAUDE.md](../RP02/CLAUDE.md) — or another Pi). **Do NOT upgrade TIF-Mini → full TIF** (~200k+ more rules
+[../RP02_PTZ_CAMERA/CLAUDE.md](../RP02_PTZ_CAMERA/CLAUDE.md) — or another Pi). **Do NOT upgrade TIF-Mini → full TIF** (~200k+ more rules
 would erase the headroom + start heavy swap — measured, not guessed). Lever if RAM tightens: OISD Big → OISD Small (~40 MB).
 
 **⚠ Threat-protection hardening (2026-08-18, applied LIVE via the AGH API — no repo file, no service restart, `NRestarts=0`):**
