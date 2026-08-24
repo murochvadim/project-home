@@ -1123,8 +1123,8 @@ async function loadWinJobs() {
         : j.last_status === 'ok' ? '✓ OK'
         : j.last_status === 'unreachable' ? '⚡ offline' : '✗ failed';
       const btnBase = 'font-size:0.8rem; padding:4px 10px; margin-right:4px; border-radius:4px; cursor:pointer; border:none; font-weight:500;';
-      return `<tr id="wj-row-${j.id}">
-        <td style="font-size:0.85rem; font-weight:500;">${j.name}</td>
+      return `<tr id="wj-row-${j.id}" style="${j.enabled ? '' : 'opacity:0.5;'}">
+        <td style="font-size:0.85rem; font-weight:500;">${j.name}${j.enabled ? '' : ' <span style="font-weight:400; font-size:0.72rem; color:#c0392b;">(disabled)</span>'}</td>
         <td style="font-size:0.72rem; color:#666; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
             title="${j.source_path}">${j.source_path}</td>
         <td style="font-size:0.78rem; color:#666;">${j.storage_name || '—'}</td>
