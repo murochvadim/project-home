@@ -5,8 +5,9 @@ meter** on the incoming cold main, feed it to MQTT → the dashboard, and reconc
 water bill**. Dashboard-only agent (no dedicated LXC) — the meter reports via an **ESP32** in the `esp_boards`
 framework, ingested by the rule engine.
 
-**Status (2026-08-24): PLANNED — meter on order.** Nothing built yet; this doc is the roadmap + the first
-commit of the home-water project. Meter ships **Sept 8–17** (to NYC), so the build starts when it arrives.
+**Status (2026-08-24): PLAN ONLY — meter on order.** Nothing built (a dashboard page + sidebar entry were
+created then **reverted at the user's request** — they wanted the plan only). This doc is the roadmap. Meter
+ships **Sept 8–17** (to NYC); the build starts when it arrives and only if the user asks.
 
 ## The measurement decision (settled 2026-08-24)
 - **Sensor: clamp-on ultrasonic (transit-time)** — non-invasive, straps onto the *outside* of the pipe, no
@@ -44,9 +45,11 @@ TS-2 clamp on the BRASS ¾″ cold main → TUF-2000M (does the ultrasonic timin
   just counts pulses on a GPIO (no Modbus). Modbus gives instant flow + totalizer + diagnostics; pulse is easier.
 - Register the board via `/create-board`; project status fields = flow (L/min) + totalizer (L).
 
-## Dashboard
-- **Water page** (`BOILER/dashboard/public/water.html`, sidebar **Agents → Water Agent**) — live flow +
-  daily/monthly liters + trend (planned). Config under `dashboard_settings.water.*`.
+## Dashboard (PLANNED — not built)
+> ⚠ This is **plan-only**. A first attempt at a `water.html` page + a sidebar entry was **reverted 2026-08-24**
+> at the user's request — no dashboard agent exists yet; only this plan doc.
+- A future **Water page** + sidebar entry would show live flow + daily/monthly liters + trend. Config under
+  `dashboard_settings.water.*`.
 - **Reconciliation:** pairs with the existing **Boiler → Water tab** (bill history + Maya Water PDF parser,
   see [[project_agent_water]]) — compare **metered actual liters** vs the billed amount.
 
