@@ -30,7 +30,7 @@ async function pve(cmd) {
 
 // Detect the USB disk + read the worker status JSON in one round-trip.
 const STATUS_CMD = `
-d=$(lsblk -ndo NAME,TRAN,TYPE 2>/dev/null | awk '$2=="usb" && $3=="disk"{print $1; exit}')
+d=$(lsblk -bndo NAME,TRAN,TYPE,SIZE 2>/dev/null | awk '$2=="usb" && $3=="disk" && $4+0>0{print $1; exit}')
 if [ -n "$d" ]; then
   echo "connected=1"
   echo "dev=$d"
