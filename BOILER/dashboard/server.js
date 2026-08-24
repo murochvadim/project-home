@@ -3203,6 +3203,7 @@ app.get('/api/gateway/peers', async (req, res) => {
         notes:        ov.notes || null,
         alert_offline_min: ov.alert_offline_min,
         alert_on_join:     ov.alert_on_join,
+        enabled:           ov.enabled !== false,   // null/undefined = enabled; only false disables
       };
     });
     res.json({ peers });
@@ -3213,7 +3214,7 @@ app.get('/api/gateway/peers', async (req, res) => {
 
 // PATCH /api/gateway/peer/:peer_id — upserts identity-overlay fields
 app.patch('/api/gateway/peer/:peer_id', async (req, res) => {
-  const allowed = ['user_name', 'role', 'device_label', 'notes', 'alert_offline_min', 'alert_on_join'];
+  const allowed = ['user_name', 'role', 'device_label', 'notes', 'alert_offline_min', 'alert_on_join', 'enabled'];
   const fields = {};
   for (const k of allowed) if (k in (req.body || {})) fields[k] = req.body[k];
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'no allowed fields in body' });

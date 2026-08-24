@@ -155,16 +155,28 @@ def run():
     trusted_set = set(trusted_peers or [])
 
     cur.execute(
-        "SELECT peer_id, alert_offline_min, user_name "
+        "SELECT peer_id, alert_offline_min, user_name, enabled "
         "FROM netbird_peers_local"
     )
-    overlay = {r[0]: {'alert_offline_min': r[1], 'user_name': r[2]} for r in cur.fetchall()}
+    overlay = {
+        r[0]: {'alert_offline_min': r[1], 'user_name': r[2], 'enabled': r[3]}
+        for r in cur.fetchall()
+    }
+
+    def peer_disabled(pid):
+        # A peer is disabled ONLY when its overlay row explicitly has
+        # enabled = False. No row / NULL / True → enabled (default).
+        return (overlay.get(pid) or {}).get('enabled') is False
 
     # ── 1. New-peer alerts ───────────────────────────────────────
     if alert_new_peer:
         for p in peers:
             pid = p.get('id')
             if not pid:
+                continue
+            if peer_disabled(pid):
+                # Disabled peer → excluded from every gateway alert; clear any active.
+                resolve_alert(cur, f'netbird:new_peer:{pid}')
                 continue
             if pid in trusted_set:
                 resolve_alert(cur, f'netbird:new_peer:{pid}')
@@ -197,6 +209,10 @@ def run():
     for p in peers:
         pid = p.get('id')
         if not pid:
+            continue
+        if peer_disabled(pid):
+            # Disabled peer → no offline alert; clear any active.
+            resolve_alert(cur, f'netbird:peer_offline:{pid}')
             continue
         threshold_min = (overlay.get(pid) or {}).get('alert_offline_min')
         if threshold_min is None:

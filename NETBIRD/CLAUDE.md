@@ -59,6 +59,7 @@ NetBird/CLAUDE.md becomes the index for a new dashboard agent: **Project Gateway
 | Sidebar slot | between Project Network and Project Boards |
 | Sidebar status sub-badge | `NetBird ✓ N/M online` / `NetBird ⚠ alert` — added to `alerts-monitor.js`, polls `/api/gateway/status` |
 | Alert namespace | `netbird:new_peer:<peer_id>` / `netbird:peer_offline:<peer_id>` / `netbird:route_dropped:<route_id>` — consistent with existing `group_stale:*` and `network:*` patterns; auto-resolve when condition clears |
+| Per-peer enable/disable (2026-08-24) | `netbird_peers_local.enabled` (BOOLEAN DEFAULT true), toggled by an **`enab` checkbox** in each peer row (beside Edit, `gwTogglePeer` → PATCH `{enabled}` → Run watchdog now). When `false`, `netbird_watchdog.py` skips the peer in BOTH peer-keyed loops (`new_peer` + `peer_offline`) and resolves its active alerts via `peer_disabled(pid)` (`enabled is False`). `route_dropped` is network-keyed and unaffected. Gateway-scoped only. First use: the Car Smartphone peer (offline by design, no SIM). |
 | Watchdog `source` in `system_alerts` | `netbird_watchdog` |
 
 **DB schemas** (LXC 102, both retention=forever via `retention_policies`):
@@ -75,6 +76,7 @@ CREATE TABLE netbird_peers_local (
   alert_on_join     boolean DEFAULT false,
   notes             text,
   bookmarks         jsonb DEFAULT '[]'::jsonb,
+  enabled           boolean DEFAULT true,   -- per-peer enable/disable (2026-08-24)
   created_at        timestamptz DEFAULT NOW(),
   updated_at        timestamptz DEFAULT NOW()
 );

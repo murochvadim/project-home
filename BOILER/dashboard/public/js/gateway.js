@@ -95,8 +95,8 @@
         return;
       }
       tbody.innerHTML = peers.map(p => `
-        <tr style="border-top:1px solid #f0eee8;">
-          <td style="padding:6px 12px; font-weight:600;">${esc(p.name)}</td>
+        <tr style="border-top:1px solid #f0eee8; ${p.enabled === false ? 'opacity:0.45;' : ''}">
+          <td style="padding:6px 12px; font-weight:600;">${esc(p.name)}${p.enabled === false ? ' <span style="font-weight:400; font-size:0.7rem; color:#c0392b;">(disabled)</span>' : ''}</td>
           <td style="padding:6px 12px; color:#666;">${esc(p.fqdn || '')}</td>
           <td style="padding:6px 12px; text-align:center; font-family:monospace; color:#444;">${esc(p.ip || '—')}</td>
           <td style="padding:6px 12px; text-align:center;">${statusDot(p.connected ? 'Connected' : 'Offline')}</td>
@@ -105,6 +105,9 @@
           <td style="padding:6px 12px;">${esc(p.role || '—')}</td>
           <td style="padding:6px 12px;">${esc(p.device_label || '—')}</td>
           <td style="padding:6px 12px; text-align:center; white-space:nowrap;">
+            <label title="Enable/disable this peer. Disabled = fully excluded from ALL NetBird alerts (offline + new-peer) and greyed here." style="font-size:0.7rem; color:#444; cursor:pointer; margin-right:8px; user-select:none;">
+              <input type="checkbox" ${p.enabled === false ? '' : 'checked'} onchange="gwTogglePeer('${esc(p.peer_id)}', this.checked, this)" style="vertical-align:middle; cursor:pointer;"> enab
+            </label>
             <button onclick="gwEditPeer('${esc(p.peer_id)}')" style="padding:2px 7px; font-size:0.7rem; background:#fff; border:1px solid #888; color:#444; border-radius:3px; cursor:pointer;">Edit</button>
           </td>
         </tr>
@@ -326,6 +329,33 @@
       }).join('');
     } catch (_) { /* transient — leave prior render */ }
   }
+
+  // ─── Enable/disable a peer (NetBird Gateway scope) ───────────────
+  // Disabled = the watchdog fully ignores this peer for ALL its alert
+  // types (peer_offline + new_peer) and resolves any active ones; the
+  // row is greyed here. Scoped to the NetBird subsystem only.
+  window.gwTogglePeer = async function (peerId, enabled, el) {
+    if (el) el.disabled = true;
+    try {
+      const r = await fetch(`/api/gateway/peer/${encodeURIComponent(peerId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !!enabled }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        alert('Failed: ' + (d.error || r.statusText));
+        if (el) { el.checked = !enabled; el.disabled = false; }
+        return;
+      }
+      // Fire the watchdog now so alerts clear/raise within seconds, not ≤5 min.
+      fetch('/api/gateway/watchdog/run', { method: 'POST' }).catch(() => {});
+      await loadPeers();
+    } catch (e) {
+      alert('Failed: ' + e.message);
+      if (el) { el.checked = !enabled; el.disabled = false; }
+    }
+  };
 
   // ─── Inline peer edit (modal opens via gwEditPeer; PATCH on save) ─
   let _editingPeer = null;
