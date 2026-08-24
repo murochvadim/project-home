@@ -60,7 +60,7 @@ set_phase "Detecting disk"
 write_status running 0 0 0 "starting"
 
 # ---- 1. detect the USB disk + its data partition ----------------------------
-mapfile -t USBDISKS < <(lsblk -ndo NAME,TRAN,TYPE 2>/dev/null | awk '$2=="usb" && $3=="disk"{print $1}')
+mapfile -t USBDISKS < <(lsblk -bndo NAME,TRAN,TYPE,SIZE 2>/dev/null | awk '$2=="usb" && $3=="disk" && $4+0>0{print $1}')
 [ "${#USBDISKS[@]}" -eq 0 ] && fail "No external USB disk detected"
 [ "${#USBDISKS[@]}" -gt 1 ] && fail "Multiple USB disks found (${USBDISKS[*]}) — connect only the backup disk"
 DISK="${USBDISKS[0]}"
