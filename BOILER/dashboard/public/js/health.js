@@ -1122,8 +1122,6 @@ async function loadWinJobs() {
       const statusText = !j.last_status ? '—'
         : j.last_status === 'ok' ? '✓ OK'
         : j.last_status === 'unreachable' ? '⚡ offline' : '✗ failed';
-      const toggleBg    = j.enabled ? '#7a9f5a' : '#b0a89e';
-      const toggleLabel = j.enabled ? '● On' : '○ Off';
       const btnBase = 'font-size:0.8rem; padding:4px 10px; margin-right:4px; border-radius:4px; cursor:pointer; border:none; font-weight:500;';
       return `<tr id="wj-row-${j.id}">
         <td style="font-size:0.85rem; font-weight:500;">${j.name}</td>
@@ -1136,10 +1134,11 @@ async function loadWinJobs() {
         <td style="text-align:center; font-size:0.8rem; font-weight:600; color:${statusColor};">${statusText}</td>
         <td style="text-align:right; font-size:0.78rem; color:#666;">${fmtBytes(j.last_size)}</td>
         <td style="text-align:center; vertical-align:middle; white-space:nowrap;">
-          <button style="${btnBase} background:${toggleBg}; color:#fff;"
-            onclick="toggleWinJob(${j.id}, ${j.enabled}, this)">${toggleLabel}</button>
           <button style="${btnBase} background:#3a5a8a; color:#fff;"
             onclick="winJobRunNow(${j.id}, this)">▶ Run</button>
+          <label title="Enable/disable this job. Disabled = it won't run AND its overdue alarm is cleared." style="font-size:0.75rem; color:#444; cursor:pointer; margin-right:6px; user-select:none;">
+            <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleWinJob(${j.id}, ${j.enabled}, this)" style="vertical-align:middle; cursor:pointer;"> enab
+          </label>
           <button style="${btnBase} background:#e8e4de; color:#2e2e2e; margin-right:0;"
             onclick="editWinJob(${j.id})">✎ Edit</button>
         </td>
@@ -1164,9 +1163,9 @@ async function toggleWinJob(id, currentEnabled, btn) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: !currentEnabled })
     }).then(r => r.json());
-    if (r.error) { alert('Error: ' + r.error); btn.disabled = false; return; }
+    if (r.error) { alert('Error: ' + r.error); btn.disabled = false; if (btn.type === 'checkbox') btn.checked = currentEnabled; return; }
     await loadWinJobs();
-  } catch (e) { alert('Failed: ' + e.message); btn.disabled = false; }
+  } catch (e) { alert('Failed: ' + e.message); btn.disabled = false; if (btn.type === 'checkbox') btn.checked = currentEnabled; }
 }
 
 async function winJobRunNow(id, btn) {
