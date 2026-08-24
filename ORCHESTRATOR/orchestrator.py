@@ -317,16 +317,17 @@ BACKUP_GRACE_HOURS = 4  # alert if last ok > max_age_hours + this grace
 
 
 def check_backup_freshness(cur):
-    """Check each enabled backup job: is last successful backup within max_age_hours + grace?"""
+    """Check each backup job: is last successful backup within max_age_hours + grace?
+    Enabled jobs are alerted when overdue; DISABLED jobs get any lingering overdue
+    alert resolved (a disabled job is intentionally not backed up → not an error)."""
     cur.execute("SAVEPOINT check_backup_freshness")
     try:
         cur.execute("""
-            SELECT j.id, j.name, j.max_age_hours, j.source_host,
+            SELECT j.id, j.name, j.max_age_hours, j.source_host, j.enabled,
                    MAX(l.started_at) FILTER (WHERE l.status = 'ok') AS last_ok
             FROM backup_jobs j
             LEFT JOIN backup_log l ON l.job_id = j.id
-            WHERE j.enabled = TRUE
-            GROUP BY j.id, j.name, j.max_age_hours, j.source_host
+            GROUP BY j.id, j.name, j.max_age_hours, j.source_host, j.enabled
         """)
         jobs = cur.fetchall()
         cur.execute("RELEASE SAVEPOINT check_backup_freshness")
@@ -352,6 +353,12 @@ def check_backup_freshness(cur):
 
     for job in jobs:
         agent_name = f"backup:{job['name']}"
+        if not job['enabled']:
+            # Disabled job → resolve any lingering overdue alert and skip. The
+            # query used to be `WHERE enabled = TRUE`, so once a job was disabled
+            # the check never saw it again and its alert stuck active forever.
+            resolve_alert(cur, 'backup_overdue', agent_name)
+            continue
         if paused_nodes:
             hay = f"{job['name']} {job.get('source_host') or ''}".lower()
             if any(k in hay for k in paused_nodes):
