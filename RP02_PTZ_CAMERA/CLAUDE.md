@@ -73,6 +73,19 @@ a separate physical `192.168.1.0/24` (same subnet as home → not directly routa
 its menu; (2) is the shot **aimed at the entrance lane**, covering **both directions**?; (3) the **RTSP URL**
 (UNV usually `rtsp://admin:Admin123%40@192.168.1.99:554/media/video1` — `@` in the pw MUST be `%40`).
 
+**Phase-0 evidence so far (2026-08-24) — the shot IS usable ✅:** the user shared 3 live snapshots; **Israeli
+yellow plates were legible** even on downscaled stills — read cleanly on the well-lit white cars (e.g.
+`161-58-003` Hyundai Tucson, `639-44-203` Škoda, `42-379-08` Honda Fit), lower confidence on a **dark car at an
+angle** (Subaru XV) — i.e. distance/angle/dark-body degrade reads, exactly as expected. **PTZ zoom confirmed** —
+the user can zoom for near-perfect plate crops (full-res + a plate-crop + per-read confidence will beat these
+stills). ⚠ **Zoom-vs-coverage trade-off for the AUTO monitor:** a tightly-zoomed PTZ view is narrow → a car
+off-center or crossing fast can slip through with no read. So the monitor needs a **dedicated PTZ "LPR preset"
+parked on the choke point** (the one lane/gate every car must pass), zoomed *just* tight enough for legibility
+but wide enough + enough frames to catch every car. **The camera must STAY on that preset** for monitoring — if
+it's panned/zoomed away, LPR pauses until it returns; if the camera has on-device ANPR, point its detection
+line/zone at that preset framing. **Still open:** (a) does the camera do on-device ANPR (menu check); (b) which
+spot is the choke point to dedicate the preset to.
+
 ### Phase 1 — RP02 relay (go2rtc + NetBird), placed on the KZ15 network
 - Move/attach RP02 to the KZ15 LAN so it can reach `192.168.1.99`.
 - **go2rtc** (`/opt/go2rtc/`, systemd) pulls the camera RTSP → serves MJPEG/WebRTC locally.
