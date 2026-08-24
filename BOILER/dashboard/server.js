@@ -3945,8 +3945,12 @@ app.get('/api/geolocation/trips', async (req, res) => {
     try {
       const g = (await db.query("SELECT value FROM dashboard_settings WHERE key='geolocation'")).rows[0]?.value || {};
       FAR_M = Number(g.real_trip_min_far_m) || 250;
+      // Only CLOSED trips can be phantoms — an OPEN (in-progress) trip has
+      // NULL duration/max_dist (→ 0), which would otherwise match the
+      // short-&-near rule and hide the ongoing trip. `t.returned_at &&` exempts
+      // open trips; no effect on the default closed-only view (returned_at always set there).
       trips = trips.filter(t =>
-        !((t.duration_sec || 0) < 3600 && (t.max_dist_m || 0) <= FAR_M));
+        !(t.returned_at && (t.duration_sec || 0) < 3600 && (t.max_dist_m || 0) <= FAR_M));
     } catch (_) { /* fall back to unfiltered home rows */ }
 
     // (2) Places layer (2026-07-03) — SEPARATE tables, additive. Merged into the

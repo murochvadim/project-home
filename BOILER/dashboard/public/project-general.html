@@ -768,7 +768,7 @@ async function carReloadTrips() {
   if (!tb) return;
   const lim = document.getElementById('car-trips-limit')?.value || 50;
   try {
-    const r = await fetch('/api/geolocation/trips?limit=' + lim);
+    const r = await fetch('/api/geolocation/trips?limit=' + lim + '&include_open=1');
     const d = await r.json();
     const all = d.trips || (Array.isArray(d) ? d : []);
     const rows = all.filter(t => t.group_id === CAR_GROUP_ID);
@@ -1882,7 +1882,9 @@ async function geoReloadEvents() {
 async function geoReloadTrips() {
   try {
     const lim = parseInt(document.getElementById('geo-trips-limit')?.value || '50', 10) || 50;
-    const r = await fetch(`/api/geolocation/trips?limit=${lim}`);
+    // include_open=1 → show the ONGOING (not-yet-returned) trip too, rendered
+    // "in progress" — so an away trip (e.g. currently abroad) is visible live.
+    const r = await fetch(`/api/geolocation/trips?limit=${lim}&include_open=1`);
     const d = await r.json();
     // Apply sandbox-row filter — strips test trips when the checkbox is unchecked.
     const trips = window.geoFilterOutTestRows ? window.geoFilterOutTestRows(d.trips) : (d.trips || []);
