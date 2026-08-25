@@ -45,8 +45,8 @@ class FaceFrameView @JvmOverloads constructor(
     var unknownGreet = "Please wait…"
     var unknownHint  = ""
     // Enrollment — driven by LXC 112; the Start FR button is the phone's "I'm ready".
-    var enrollGuideL1  = "Center your face in the frame"
-    var enrollGuideL2  = "Hold still"
+    var enrollGuideL1  = "Center your face"
+    var enrollGuideL2  = ""
     var enrollTryL1    = "Scanning…"
     var enrollTryL2    = "Keep your face in the oval"
     var enrollRetryL1  = "Trying again…"
