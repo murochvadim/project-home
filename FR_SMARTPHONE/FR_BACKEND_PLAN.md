@@ -1,8 +1,9 @@
 # FR Backend Plan (grounded) — build new · migrate · decommission old
 
-> **Status:** PLAN ONLY — nothing built. Fully grounded against the live code/DB/MQTT/infra
-> (audited 2026-08-20/21, not assumed). Phone side is parked at "revived stock, waiting on
-> Knox=Normal" (see `FR_SMARTPHONE/CLAUDE.md` + memory `project_fr_smartphone_flash`).
+> **Status:** PLAN — backend not built yet; **the PHONE side is DONE** (LineageOS + `fr_camera_app`:
+> MJPEG stream on `:8080`, all recognition + **enrollment** states, always-on kiosk — see
+> `FR_SMARTPHONE/CLAUDE.md` + `fr_camera_app/README.md` for the full MQTT state contract). Grounded
+> against the live code/DB/MQTT/infra, **re-verified side-to-side 2026-08-25**.
 >
 > **Goal:** replace the old entrance FR (Hi-Link TX-510 `face_01`) with a new engine on a dedicated
 > LXC, fed later by the de-Googled phone as the camera. Build + prove the whole backend FIRST
@@ -33,7 +34,14 @@ The physical door (RemoteXY lock) and the corridor automations are UNCHANGED —
 
 **Infra / LXC**
 - PVE host `192.168.1.101`: 16 cores, ~43 GB RAM free, 857 GB disk free — room for a new LXC.
-- New **LXC 112 "fr" @ `192.168.1.246`** — verified free by LIVE ping-scan (`.246/.247/.248` free; `.249` robot used). ⚠ `net_devices` MISSES static LXC IPs, so always ping-scan at build time, don't trust the table.
+- New **LXC 112 "fr" @ `192.168.1.246`** — **re-verified free 2026-08-25** (⚠ `.247` is now **USED** — the
+  old `.246/.247/.248` note is stale; `.246` + `.248` free, `.249` robot). `net_devices` MISSES static LXC IPs
+  → always confirm with `pct list` + a live ping at build time, don't trust the table.
+- **Orchestrator monitoring** = ONE `agents` row. Columns are `name, lxc_id, lxc_ip, service_name, data_table,
+  settings_table, enabled, deploy_path, git_branch, service_oneshot` — **there is NO `restart_cmd` column**
+  (the orchestrator's `check_service` derives the restart from `service_name`). FR row: `name='fr'`,
+  `lxc_id=112`, `lxc_ip='192.168.1.246'`, `service_name='fr-agent'`, `data_table=NULL`, `settings_table=NULL`
+  (event agent, same shape as `email`/`privacy`).
 
 **Engine (forced, not a preference)**
 - The existing media analyzer uses **InsightFace / ArcFace (`buffalo_l`)** — **Chinese-origin → BANNED** by `[[feedback_no_chinese_tools]]` (`MEDIA/agent/analyzer.py:154`, `scripts/embed_crop.py:11`, `MEDIA/CLAUDE.md:6,43`).
@@ -89,6 +97,20 @@ The physical door (RemoteXY lock) and the corridor automations are UNCHANGED —
 - ✅ recognize → `face_identified` → door fires → `fr_events` row.
 - Flip Allowed=false → recognizes but **no unlock** (`denied`). Unenrolled face → `unknown`, no unlock.
 - Done when camera → engine → faces DB (name+allowed) → MQTT → door + log all work on a real camera.
+
+### A5 — Orchestrator monitoring + backups (wire it in like every other LXC)
+- **Orchestrator:** add the `agents` row above → `check_service` SSHes + `systemctl is-active fr-agent`
+  every cycle, **auto-restarts** on failure, writes `service_down`/`service_ssh_failed` to `system_alerts`
+  (soft-fail smoothing already handles brief blips). Retention driven by the `fr_events` policy (90 d) +
+  `fr_faces` (forever + 🔒 protected).
+- **Project Health:** add a `svc-lxc112` TCP:22 cell + an `fr_agent` service dot (same pattern as `voice_agent`).
+- **Backups (identical to the LXC-111 ROBOT setup):**
+  - On-site PVE vzdump (⚠ PVE host): QNAP subfolder `/PBS_Data/FR_Data` → PVE storage `QNAP_FR_Backup` →
+    a `/etc/pve/jobs.cfg` vzdump job (keep-daily=4). *(12 per-guest jobs exist today for 100–111.)*
+  - Off-site (weekly, encrypted Drive): add `112` to `GUESTS` in `scripts/guests-cloud-backup.sh`
+    (currently `100 … 111`); retention via the global `guests_copies` (=4).
+  - **No `backup_jobs` row** (those are file-level laptop/Pi dirs) — the guest-image vzdump covers the LXC,
+    and the faces DB lives in LXC 102 (nightly dump). Decide: face photos on the LXC vs QNAP (recommend QNAP).
 
 ---
 
