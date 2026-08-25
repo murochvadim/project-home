@@ -29,11 +29,16 @@ class FaceFrameView @JvmOverloads constructor(
         color = Color.parseColor("#4CD964"); style = Paint.Style.STROKE
         strokeWidth = dp(3.5f)
     }
+    private val greet = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = sp(30f)
+        isFakeBoldText = true
+    }
     private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = sp(16f)
+        color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = sp(23f)
     }
 
     private var oval = RectF()
+    var greetText: String = "Hello Visitor 😊"      // 😊
     var hintText: String = "Align your face in the frame"
 
     init { setLayerType(LAYER_TYPE_HARDWARE, null) }
@@ -52,7 +57,9 @@ class FaceFrameView @JvmOverloads constructor(
         canvas.drawOval(oval, clear)
         canvas.restoreToCount(layer)
         canvas.drawOval(oval, outline)
-        canvas.drawText(hintText, width / 2f, oval.bottom + sp(40f), hint)
+        val gy = oval.bottom + sp(50f)
+        canvas.drawText(greetText, width / 2f, gy, greet)
+        canvas.drawText(hintText, width / 2f, gy + sp(42f), hint)
     }
 
     /** Change the oval colour (e.g. from the FR status later). */
