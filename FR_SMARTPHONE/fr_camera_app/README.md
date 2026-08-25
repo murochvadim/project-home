@@ -28,6 +28,13 @@ cd FR_SMARTPHONE\fr_camera_app
 Phone = LineageOS 23.2, `SM-A715F`, serial `R58N92XXF3E`, static IP `192.168.1.25`. App id `com.muroch.frcamera`.
 
 ## Status
-**Scaffold (2026-08-22)** — builds + installs + launches. The feature code is filled in next
-(in-flight): request CAMERA permission → CameraX front-cam preview → NanoHTTPD MJPEG server on `:8080`
-(go2rtc pulls `phone_entrance_cam`) → Paho MQTT client → status UI reacts to the FR result.
+**✅ Feature 1 DONE (2026-08-25) — front camera → MJPEG stream on `:8080`.** CAMERA permission → CameraX
+front cam (`ImageAnalysis` RGBA frames) → each frame rotated upright → JPEG → served by `MjpegServer.kt`
+(NanoHTTPD) at `http://<ip>:8080/` as `multipart/x-mixed-replace` + a local `PreviewView`. Verified live over
+USB (`adb forward tcp:8080`): ~25 fps of real JPEG frames; live preview on the phone screen. **⚠ CameraX is
+bound to the activity lifecycle, so frames only flow while the app is FOREGROUND** — a foreground Service /
+keep-alive is a later hardening step (the activity has `keepScreenOn` + `stay_on_while_plugged_in`).
+- **Next (in-flight):** Paho MQTT client → status UI (Recognizing / Welcome, &lt;name&gt; / Not allowed),
+  once **LXC 112** (the recognizer) exists to send results. Then go2rtc `phone_entrance_cam` source + LXC 112.
+
+**Scaffold (2026-08-22)** — builds + installs + launches (the base this was filled in on).

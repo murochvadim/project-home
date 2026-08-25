@@ -30,9 +30,12 @@ Thor + all images still staged on the Proxmox host `192.168.1.101` (`/root/Thor-
 The phone runs a **proprietary app** ([fr_camera_app/](fr_camera_app/), id `com.muroch.frcamera`): front-cam
 capture → **MJPEG stream on `:8080`** (go2rtc pulls it) **+ a status screen** driven by MQTT
 ("Recognizing / Welcome, &lt;name&gt; / Not allowed"). A generic IP-cam app (IP Webcam / Droidcam) can't render
-that status panel, so we build our own. Scaffold **builds + installs + launches**; feature code is filled in
-next (see the in-flight TODOs in `MainActivity.kt`): CAMERA permission → CameraX front cam → NanoHTTPD MJPEG
-`:8080` → Paho MQTT → status UI.
+that status panel, so we build our own. **✅ Feature 1 DONE (2026-08-25): front camera → MJPEG stream on `:8080`**
+— CAMERA permission → CameraX front cam (`ImageAnalysis` RGBA) → each frame rotated upright → JPEG → `MjpegServer.kt`
+(NanoHTTPD) serves `http://<ip>:8080/` (`multipart/x-mixed-replace`) + a local `PreviewView`. Verified live over
+USB (`adb forward tcp:8080`, ~25 fps of real JPEG frames + live preview on the phone). ⚠ CameraX binds to the
+ACTIVITY lifecycle → frames flow only while the app is FOREGROUND (foreground-service keep-alive = later hardening).
+**Next:** Paho MQTT → status UI (Recognizing / Welcome / Not allowed), once LXC 112 exists to send results.
 
 **Offline build toolchain (installed on the laptop, `C:\android-dev`):** JDK 17 + Android SDK (android-35,
 build-tools 35.0.0, platform-tools) + Gradle 8.7, **every dependency cached in `~/.gradle`**. The full loop

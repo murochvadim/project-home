@@ -1,27 +1,144 @@
 package com.muroch.frcamera
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.os.Bundle
+import android.util.Log
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import fi.iki.elonen.NanoHTTPD
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 
 /**
  * FR Camera — entrance face-recognition camera node (LineageOS A71).
  *
- * SCAFFOLD (2026-08-22). Builds + runs. The real logic gets filled in in-flight:
- *   - CameraX front-camera capture (32 MP door face-panel)
- *   - NanoHTTPD MJPEG server on :8080  -> go2rtc pulls it (phone_entrance_cam)
- *   - Paho MQTT client -> receive FR result -> update the status UI
- *   - Status UI: "Recognizing…" / "Welcome, <name>" / "Not allowed"
+ * FEATURE 1 (2026-08-25): front camera → MJPEG stream on :8080.
+ *   - CameraX front cam (RGBA frames via ImageAnalysis)
+ *   - each frame → rotate upright → JPEG → published as the "latest frame"
+ *   - NanoHTTPD MjpegServer serves it at http://<ip>:8080/  (go2rtc pulls it)
+ *   - local PreviewView + a status line
  *
- * Architecture A: the phone is ONLY the camera + a status screen; recognition
- * runs on LXC 112. See FR_SMARTPHONE/CLAUDE.md + FR_BACKEND_PLAN.md.
+ * NEXT: Paho MQTT client + status UI (Recognizing / Welcome / Not allowed),
+ * once LXC 112 (the recognizer) exists. Architecture A — phone = camera + screen.
  */
 class MainActivity : AppCompatActivity() {
+
+    private lateinit var status: TextView
+    private lateinit var previewView: PreviewView
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
+
+    @Volatile private var latestJpeg: ByteArray? = null
+    private var mjpeg: MjpegServer? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        findViewById<TextView>(R.id.status).text = "FR Camera — scaffold ready"
-        // TODO(in-flight): request CAMERA permission, start CameraX front cam,
-        // start MJPEG server, connect MQTT, wire status updates.
+        status = findViewById(R.id.status)
+        previewView = findViewById(R.id.preview)
+        status.text = "Starting camera…"
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED) {
+            start()
+        } else {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQ_CAM)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_CAM &&
+            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            start()
+        } else {
+            status.text = "CAMERA permission denied"
+        }
+    }
+
+    private fun start() {
+        startCamera()
+        startMjpeg()
+    }
+
+    // ─── CameraX front camera → latestJpeg ───────────────────────────────
+    private fun startCamera() {
+        val future = ProcessCameraProvider.getInstance(this)
+        future.addListener({
+            try {
+                val provider = future.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+                val analysis = ImageAnalysis.Builder()
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                analysis.setAnalyzer(analysisExecutor) { img -> onFrame(img) }
+
+                provider.unbindAll()
+                provider.bindToLifecycle(
+                    this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis
+                )
+                runOnUiThread { status.text = "● live · MJPEG :8080" }
+            } catch (e: Exception) {
+                Log.e(TAG, "camera bind failed", e)
+                runOnUiThread { status.text = "Camera failed: ${e.message}" }
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun onFrame(image: ImageProxy) {
+        try {
+            var bmp: Bitmap = image.toBitmap()
+            val rot = image.imageInfo.rotationDegrees
+            if (rot != 0) {
+                val m = Matrix().apply { postRotate(rot.toFloat()) }
+                bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+            }
+            val baos = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+            latestJpeg = baos.toByteArray()
+        } catch (e: Exception) {
+            Log.w(TAG, "frame error: ${e.message}")
+        } finally {
+            image.close()
+        }
+    }
+
+    // ─── MJPEG server on :8080 ───────────────────────────────────────────
+    private fun startMjpeg() {
+        try {
+            mjpeg = MjpegServer(8080) { latestJpeg }.also {
+                it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            }
+            Log.i(TAG, "MJPEG server started on :8080")
+        } catch (e: Exception) {
+            Log.e(TAG, "MJPEG start failed", e)
+            runOnUiThread { status.text = "MJPEG failed: ${e.message}" }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { mjpeg?.stop() } catch (_: Exception) {}
+        analysisExecutor.shutdown()
+    }
+
+    companion object {
+        const val TAG = "FRCamera"
+        const val REQ_CAM = 1
     }
 }

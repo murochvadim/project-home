@@ -4,15 +4,20 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <!-- CameraX PreviewView goes here in-flight -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
     <TextView
         android:id="@+id/status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:padding="16dp"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_margin="20dp"
+        android:background="#88000000"
+        android:padding="10dp"
         android:text="FR Camera"
         android:textColor="#FFFFFF"
-        android:textSize="24sp" />
+        android:textSize="18sp" />
 </FrameLayout>
