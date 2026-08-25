@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -90,15 +91,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Apply an FR state — from the adb test broadcast OR the LXC over MQTT.
-     *  The LXC decides presence/activity; the phone just obeys. */
+     *  The LXC decides presence/activity + enrollment steps; the phone obeys.
+     *  Enrollment states (dashboard FR tab drives these later, via LXC 112):
+     *    enroll        → ready screen: oval + [Start FR] button
+     *    enroll_guide  → "Center your face in the frame"
+     *    enroll_trying → "Scanning…"
+     *    enroll_retry  → "Trying again…"
+     *    enroll_done   → "Recorded ✓" + name (name/permissions finalised in dashboard) */
     private fun applyState(state: String, name: String) = runOnUiThread {
-        when (state.lowercase()) {
+        val s = state.lowercase()
+        btnStartFr.visibility = if (s == "enroll") View.VISIBLE else View.GONE
+        when (s) {
             "black", "sleep", "off" -> sleep()   // no presence → black
             "allowed" -> { wake(); faceFrame.setState(FaceFrameView.St.ALLOWED, name) }
             "denied"  -> { wake(); faceFrame.setState(FaceFrameView.St.DENIED, name) }
             "unknown" -> { wake(); faceFrame.setState(FaceFrameView.St.UNKNOWN, name) }
+            "enroll"        -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL) }
+            "enroll_guide"  -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_GUIDE, name) }
+            "enroll_trying" -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_TRYING, name) }
+            "enroll_retry"  -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_RETRY, name) }
+            "enroll_done"   -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_DONE, name) }
             else       -> { wake(); faceFrame.setState(FaceFrameView.St.IDLE, name) }
         }
+    }
+
+    /** Start FR = the phone-side "I'm ready": tell LXC 112 the person is set;
+     *  LXC 112 then drives enroll_guide → trying → retry → done back over MQTT. */
+    private fun onStartFr() {
+        val enrollTopic = Secrets.MQTT_TOPIC.removeSuffix("/state") + "/enroll"
+        mqtt?.publish(enrollTopic, "ready")
+        btnStartFr.visibility = View.GONE
+        faceFrame.setState(FaceFrameView.St.ENROLL_GUIDE)   // immediate feedback while LXC starts
     }
 
     // Wake/sleep is driven by the LXC (corridor presence / FR), NOT the phone.
@@ -106,6 +129,7 @@ class MainActivity : AppCompatActivity() {
     // (AMOLED → near-zero power); the camera + MJPEG stream keep running under
     // the cover so the FR backend still gets frames. wake() shows.
     private lateinit var black: View
+    private lateinit var btnStartFr: Button
 
     private fun wake() {
         black.visibility = View.GONE
@@ -134,6 +158,8 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.preview)
         faceFrame = findViewById(R.id.faceframe)
         black = findViewById(R.id.black)
+        btnStartFr = findViewById(R.id.btn_start_fr)
+        btnStartFr.setOnClickListener { onStartFr() }
         ContextCompat.registerReceiver(
             this, stateReceiver, IntentFilter(ACTION_STATE), ContextCompat.RECEIVER_EXPORTED
         )
@@ -256,8 +282,10 @@ class MainActivity : AppCompatActivity() {
         try {
             val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             if (dpm.isDeviceOwnerApp(packageName)) {
-                dpm.setLockTaskPackages(ComponentName(this, FrAdminReceiver::class.java), arrayOf(packageName))
-                Log.i(TAG, "device-owner: lock-task allowlisted")
+                val admin = ComponentName(this, FrAdminReceiver::class.java)
+                dpm.setLockTaskPackages(admin, arrayOf(packageName))
+                dpm.setKeyguardDisabled(admin, true)   // no lock screen on the panel
+                Log.i(TAG, "device-owner: lock-task allowlisted + keyguard disabled")
             } else {
                 Log.i(TAG, "not device-owner yet — kiosk inactive (adb dpm set-device-owner to enable)")
             }

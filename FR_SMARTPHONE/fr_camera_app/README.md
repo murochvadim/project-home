@@ -71,6 +71,18 @@ tunnel is only for USB testing. While the phone is away from home the connect fa
   unauthorized touch). Undo: `adb shell dpm remove-active-admin com.muroch.frcamera/.FrAdminReceiver` or factory
   reset. `FrAdminReceiver` (DeviceAdminReceiver) + `res/xml/device_admin.xml` back it; installing is always safe
   (lock stays off until you run that command).
+**✅ Face-enrollment screen DONE (2026-08-25)** — a learning-mode screen the dashboard's future **FR tab**
+turns on (over MQTT), where a person enrols their face and watches the whole capture **on the phone**:
+- **`enroll`** → the ready screen: blue oval + a **`Start FR`** button (no greeting — per request).
+- **`Start FR` = the phone-side "I'm ready"** — tapping it **publishes `mur/home/esp/fr_entrance/enroll = ready`**
+  (esp_boards user, no broker change) so **LXC 112** knows to begin; the button hides + shows "Center your face…".
+- LXC 112 then drives the steps back over the state topic: **`enroll_guide`** ("Center your face in the frame")
+  → **`enroll_trying`** ("Scanning…") → **`enroll_retry`** ("Trying again…") → **`enroll_done`** ("Recorded ✓" +
+  `name`). **Name + permissions are set in the dashboard**, not on the phone.
+- Verified live over USB (adb simulating LXC 112): all screens render; the `Start FR` tap published the ready
+  signal + advanced to the guide step. Test any step: `adb shell am broadcast -a com.muroch.frcamera.STATE --es state enroll_done --es name Vadim`.
+- **Also (2026-08-25):** the device-owner panel now **disables the lock screen** (`setKeyguardDisabled`) so it
+  never shows a keyguard, and the kiosk **re-locks after an app update** (BootReceiver `MY_PACKAGE_REPLACED`).
 - **Next:** **LXC 112** (the recogniser) to actually *publish* to the state topic — corridor-presence → `black`/`idle`,
   recognition → `allowed`/`denied`/`unknown` — plus a go2rtc `phone_entrance_cam` source. (⚠ a proper `fr` broker
   user + `mur/home/fr/#` topic can replace the reused `esp_boards`/esp-tree when LXC 112 is built — needs a

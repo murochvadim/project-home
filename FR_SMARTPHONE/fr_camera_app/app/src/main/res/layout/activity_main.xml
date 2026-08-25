@@ -28,6 +28,21 @@
         android:textSize="18sp"
         android:visibility="gone" />
 
+    <!-- Enrollment "I'm ready" button — shown only in enroll mode (above the
+         faceframe overlay, below the black cover). Tap = tell LXC 112 to start. -->
+    <Button
+        android:id="@+id/btn_start_fr"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="90dp"
+        android:paddingHorizontal="48dp"
+        android:paddingVertical="12dp"
+        android:text="Start FR"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
     <!-- black idle cover (topmost): shown after X s of no activity; tap or any
          trigger wakes it. Camera keeps streaming underneath. -->
     <View

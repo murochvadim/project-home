@@ -25,7 +25,15 @@ class FaceFrameView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
 ) : View(context, attrs) {
 
-    enum class St { IDLE, ALLOWED, DENIED, UNKNOWN }
+    enum class St {
+        IDLE, ALLOWED, DENIED, UNKNOWN,
+        // Enrollment (face-learning) mode:
+        ENROLL,          // ready screen — oval + Start FR button (no greeting)
+        ENROLL_GUIDE,    // capturing — position your face
+        ENROLL_TRYING,   // scanning
+        ENROLL_RETRY,    // couldn't capture — try again
+        ENROLL_DONE      // recorded (+ name if provided)
+    }
 
     // Settable sentences ({name} is substituted). Change here or later via settings.
     var idleGreet    = "Hello Visitor 😊"
@@ -36,6 +44,15 @@ class FaceFrameView @JvmOverloads constructor(
     var deniedHint   = "The owner will open the door for you."
     var unknownGreet = "Please wait…"
     var unknownHint  = ""
+    // Enrollment — driven by LXC 112; the Start FR button is the phone's "I'm ready".
+    var enrollGuideL1  = "Center your face in the frame"
+    var enrollGuideL2  = "Hold still"
+    var enrollTryL1    = "Scanning…"
+    var enrollTryL2    = "Keep your face in the oval"
+    var enrollRetryL1  = "Trying again…"
+    var enrollRetryL2  = "Center your face in the frame"
+    var enrollDoneL1   = "Recorded ✓"
+    var enrollDoneHint = "Name it in the dashboard"   // shown when no name is supplied
 
     private val GREEN = Color.parseColor("#4CD964")
     private val AMBER = Color.parseColor("#FF9F0A")
@@ -85,6 +102,11 @@ class FaceFrameView @JvmOverloads constructor(
             St.ALLOWED -> { line1 = allowedGreet.replace("{name}", name); line2 = allowedHint; col = GREEN }
             St.DENIED  -> { line1 = deniedGreet.replace("{name}", name); line2 = deniedHint; col = AMBER }
             St.UNKNOWN -> { line1 = unknownGreet; line2 = unknownHint; col = BLUE }
+            St.ENROLL        -> { line1 = ""; line2 = ""; col = BLUE }   // oval + Start FR button only
+            St.ENROLL_GUIDE  -> { line1 = enrollGuideL1; line2 = enrollGuideL2; col = BLUE }
+            St.ENROLL_TRYING -> { line1 = enrollTryL1; line2 = enrollTryL2; col = BLUE }
+            St.ENROLL_RETRY  -> { line1 = enrollRetryL1; line2 = enrollRetryL2; col = AMBER }
+            St.ENROLL_DONE   -> { line1 = enrollDoneL1; line2 = if (name.isNotEmpty()) name else enrollDoneHint; col = GREEN }
         }
         outline.color = col; chevron.color = col
         invalidate()

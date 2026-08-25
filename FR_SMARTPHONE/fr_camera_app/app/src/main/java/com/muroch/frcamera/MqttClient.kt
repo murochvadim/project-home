@@ -71,6 +71,16 @@ class MqttClient(
         }
     }
 
+    /** Publish (used for the enrollment "I'm ready" signal to LXC 112). Fire-and-forget. */
+    fun publish(topic: String, payload: String) {
+        thread(name = "fr-mqtt-pub") {
+            try {
+                client?.publish(topic, MqttMessage(payload.toByteArray()).apply { qos = 1 })
+                Log.i(TAG, "published $topic = $payload")
+            } catch (e: Exception) { Log.w(TAG, "publish failed: ${e.message}") }
+        }
+    }
+
     fun disconnect() {
         try { client?.disconnectForcibly() } catch (_: Exception) {}
     }
