@@ -40,7 +40,14 @@ door…") · `DENIED` 🟠 ("Welcome, {name}" / "The owner will open the door fo
 wait…"). Sentences are settable fields on `FaceFrameView`. **Test trigger over USB** (LXC 112 drives the same
 `setState` over MQTT later): `adb shell am broadcast -a com.muroch.frcamera.STATE --es state allowed --es name Vadim`
 (states: `idle`|`allowed`|`denied`|`unknown`). Verified all four on-device.
-- **Next (in-flight):** the **presence-trigger** (corridor-presence MQTT → show / black-screen-on-idle) + the
-  **Paho MQTT** feed from **LXC 112** (the recognizer) driving `setState`. Then go2rtc `phone_entrance_cam` source.
+**✅ Kiosk behaviour DONE (2026-08-25)** — **immersive fullscreen** (status + nav bars hidden) + **LXC-driven
+wake/sleep**. ⚠ **The phone does NOT decide activity itself** (no idle timer, no tap-to-wake): the **LXC** owns
+presence — it sends `state=black`/`sleep`/`off` (no presence) → the phone covers the screen with black (`#000000`
++ brightness ~0 → near-zero power on AMOLED), and any real state (`idle`/`allowed`/`denied`/`unknown`) → the phone
+`wake()`s and shows it. **The camera + MJPEG stream keep running under the black cover** (the FR backend still gets
+frames). Starts BLACK on launch. Verified over USB (mean brightness 76 lit → ~0 black → 76 woken).
+- **Next (in-flight):** the **Paho MQTT** client so **LXC 112** drives `state` (presence + FR result) over MQTT
+  instead of the adb test broadcast — corridor-presence → `black`/`idle`, recognition → `allowed`/`denied`/`unknown`.
+  Then go2rtc `phone_entrance_cam` source.
 
 **Scaffold (2026-08-22)** — builds + installs + launches (the base this was filled in on).

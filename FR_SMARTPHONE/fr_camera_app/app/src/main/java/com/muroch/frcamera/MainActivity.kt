@@ -10,6 +10,8 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Bundle
 import android.util.Log
+import android.view.View
+import android.view.WindowManager
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -20,6 +22,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import fi.iki.elonen.NanoHTTPD
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
@@ -52,25 +57,54 @@ class MainActivity : AppCompatActivity() {
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             val nm = i?.getStringExtra("name") ?: ""
-            val st = when ((i?.getStringExtra("state") ?: "idle").lowercase()) {
-                "allowed" -> FaceFrameView.St.ALLOWED
-                "denied"  -> FaceFrameView.St.DENIED
-                "unknown" -> FaceFrameView.St.UNKNOWN
-                else       -> FaceFrameView.St.IDLE
+            // The LXC decides presence/activity — the phone just obeys.
+            when ((i?.getStringExtra("state") ?: "idle").lowercase()) {
+                "black", "sleep", "off" -> sleep()   // LXC: no presence → black
+                "allowed" -> { wake(); faceFrame.setState(FaceFrameView.St.ALLOWED, nm) }
+                "denied"  -> { wake(); faceFrame.setState(FaceFrameView.St.DENIED, nm) }
+                "unknown" -> { wake(); faceFrame.setState(FaceFrameView.St.UNKNOWN, nm) }
+                else       -> { wake(); faceFrame.setState(FaceFrameView.St.IDLE, nm) }
             }
-            faceFrame.setState(st, nm)
         }
+    }
+
+    // Wake/sleep is driven by the LXC (corridor presence / FR), NOT the phone.
+    // sleep() covers the screen with black (#000000) + minimal brightness
+    // (AMOLED → near-zero power); the camera + MJPEG stream keep running under
+    // the cover so the FR backend still gets frames. wake() shows.
+    private lateinit var black: View
+
+    private fun wake() {
+        black.visibility = View.GONE
+        setBrightness(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE)  // -1 = system default
+    }
+
+    private fun sleep() {
+        black.visibility = View.VISIBLE
+        setBrightness(0.01f)
+    }
+
+    private fun setBrightness(b: Float) {
+        val lp = window.attributes; lp.screenBrightness = b; window.attributes = lp
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        // Immersive kiosk: hide status + nav bars (clean panel + fully-black idle screen).
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
         status = findViewById(R.id.status)
         previewView = findViewById(R.id.preview)
         faceFrame = findViewById(R.id.faceframe)
+        black = findViewById(R.id.black)
         ContextCompat.registerReceiver(
             this, stateReceiver, IntentFilter(ACTION_STATE), ContextCompat.RECEIVER_EXPORTED
         )
+        sleep()   // start BLACK (no presence); the LXC wakes it on presence
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED) {
