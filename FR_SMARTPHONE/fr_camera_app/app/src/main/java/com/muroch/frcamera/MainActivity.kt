@@ -65,6 +65,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Kiosk escape hatch — controllable over adb so we're NEVER stuck:
+    //   unlock  : leave lock-task (stay out until 'lock')   — screen usable again
+    //   lock    : re-enter kiosk lock-task
+    //   release : leave lock-task AND drop device-owner (full undo, no factory reset)
+    // adb shell am broadcast -a com.muroch.frcamera.KIOSK --es cmd unlock
+    @Volatile private var kioskWanted = true
+    private val kioskReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) {
+            when (i?.getStringExtra("cmd")) {
+                "unlock" -> { kioskWanted = false; try { stopLockTask() } catch (_: Exception) {}; Log.i(TAG, "kiosk UNLOCKED (adb)") }
+                "lock"   -> { kioskWanted = true; enterKioskIfOwner() }
+                "release" -> {
+                    kioskWanted = false
+                    try { stopLockTask() } catch (_: Exception) {}
+                    try {
+                        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                        @Suppress("DEPRECATION") dpm.clearDeviceOwnerApp(packageName)
+                        Log.i(TAG, "device-owner CLEARED (adb release)")
+                    } catch (e: Exception) { Log.w(TAG, "clear owner: ${e.message}") }
+                }
+            }
+        }
+    }
+
     /** Apply an FR state — from the adb test broadcast OR the LXC over MQTT.
      *  The LXC decides presence/activity; the phone just obeys. */
     private fun applyState(state: String, name: String) = runOnUiThread {
@@ -112,6 +136,9 @@ class MainActivity : AppCompatActivity() {
         black = findViewById(R.id.black)
         ContextCompat.registerReceiver(
             this, stateReceiver, IntentFilter(ACTION_STATE), ContextCompat.RECEIVER_EXPORTED
+        )
+        ContextCompat.registerReceiver(
+            this, kioskReceiver, IntentFilter(ACTION_KIOSK), ContextCompat.RECEIVER_EXPORTED
         )
         sleep()   // start BLACK (no presence); the LXC wakes it on presence
         mqtt = MqttClient(Secrets.MQTT_HOST, Secrets.MQTT_USER, Secrets.MQTT_PASS, Secrets.MQTT_TOPIC) {
@@ -214,6 +241,7 @@ class MainActivity : AppCompatActivity() {
     /** Enter Lock Task Mode (kiosk) when we're device-owner — every touch stays
      *  inside the app. No-op (no dialog) until `dpm set-device-owner` is run. */
     private fun enterKioskIfOwner() {
+        if (!kioskWanted) return   // held OUT of kiosk by an adb 'unlock'
         try {
             val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             if (dpm.isLockTaskPermitted(packageName)) {
@@ -248,6 +276,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         mqtt?.disconnect()
         try { unregisterReceiver(stateReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(kioskReceiver) } catch (_: Exception) {}
         try { mjpeg?.stop() } catch (_: Exception) {}
         analysisExecutor.shutdown()
     }
@@ -257,5 +286,6 @@ class MainActivity : AppCompatActivity() {
         const val REQ_CAM = 1
         const val REQ_NOTIF = 2
         const val ACTION_STATE = "com.muroch.frcamera.STATE"
+        const val ACTION_KIOSK = "com.muroch.frcamera.KIOSK"
     }
 }
