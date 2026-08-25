@@ -149,6 +149,11 @@ One ESP32+W5500+RS-485 bridge on the multi-drop bus to both units. New **`electr
   `u1_set_temp`, `u1_fan`, `u1_room_temp`, `u1_error`, and `u2_*`.
 - `/command` (plain-string, namespaced + `:value` suffix like `balcony_bridge`): `u1_power_on` /
   `u1_power_off`, `u1_mode:cool`, `u1_fan:high`, `u1_set_temp:24`, and `u2_*` — write then re-read + republish.
+- **Condensate alarm (living-room unit only):** read **GPIO 27** (`INPUT_PULLUP`), debounce, and publish
+  **`condensate_alarm`** (0/1) in `/status`. On a confirmed **HIGH (overflow)** the firmware **auto-sends
+  `u1_power_off`** to stop the living-room unit making water; the alert rides the normal MQTT path → project
+  notification. ONE input (the other unit gravity-drains). Add `condensate_alarm` to `_ESP_STATUS_DPS_FIELDS`
+  too so it surfaces on the dashboard + is rule-addressable.
 - **DB:** one `esp_boards` row + one `devices` row (`protocol='esp'`, `u1_*`/`u2_*` channels like
   `balcony_bridge`); add the new status keys to `_ESP_STATUS_DPS_FIELDS` in `RULES/rule_engine.py` →
   `systemctl restart rule-engine`.
@@ -175,12 +180,13 @@ Verify **per unit**: flow ≥ ~10–12 L/h AND max lift ≥ the actual vertical 
 wires to a **spare ESP GPIO** (`INPUT_PULLUP` + GND) → publishes an **MQTT overflow alert** → project
 notification, and once the **Electra_AC board** is controlling the units it can **auto-`power_off`** the
 affected unit on overflow. So pick a model **with the alarm contact** (both above have it). Fully local,
-no cloud — the pump stays offline, the smarts are ours. (2 units → up to 2 pumps + 2 alarm inputs; the
-Phase-2 firmware can read both on spare GPIOs alongside the RS-485 bus.)
+no cloud — the pump stays offline, the smarts are ours. (Final scope: **1 pump on the living-room unit → 1
+alarm input** on a spare GPIO alongside the RS-485 bus; the other unit gravity-drains — see below.)
 
 ### Alarm dry-contact → ESP32 (concrete wiring — checked against a real pump's diagram 2026-08-25)
-**Unit assignment:** this pump is earmarked for the **LIVING ROOM A/C unit** (the one needing a pump — the
-other Electra unit's drainage is TBD; prefer gravity where it can run downhill). A candidate generic silent
+**Unit assignment (DECIDED 2026-08-25):** exactly **ONE pump**, for the **LIVING ROOM A/C unit** — which is
+one of the two Electra units, so its overflow alarm ties **directly into the Electra ESP32**. The **other
+unit gravity-drains → NO pump**. Build = **1 pump + 1 alarm input**, not two. A candidate generic silent
 pump (Amazon **B0C77YK5X4**, 100–240 V, <19 dB, self-priming, wall-mount) was
 verified against its own wiring sheet — it **does** carry the required **volt-free safety switch** (⚠ but
 **no RS-485 / no data** — it's a dumb float pump, which is exactly what we want; the smarts stay ours). Its
@@ -190,10 +196,13 @@ safety contact, **normally CLOSED**, opening on a high-water alarm.
 **Bring `C/NC` to a spare ESP GPIO as an ISOLATED dry contact:**
 ```
 C  → ESP32 GND
-NC → ESP32 GPIO (INPUT_PULLUP)
+NC → ESP32 GPIO 27  (INPUT_PULLUP)   ← spare, boot-safe, HAS an internal pull-up
      normal (water OK, contact closed) → reads LOW
-     overflow alarm    (contact open)  → reads HIGH   ← publish alert / power_off the unit
+     overflow alarm    (contact open)  → reads HIGH   ← publish alert + power_off the living-room unit
 ```
+**GPIO choice:** use **GPIO 27** (free — 26/32/33 are equally fine) with `INPUT_PULLUP`. ⚠ do NOT use a
+34–39 pin — those are input-only AND have **no internal pull-up**, so a dry contact would float. GPIO 27 is
+not a boot strap and isn't used by the W5500 (23/19/18/5/13/4) or the RS-485 UART (17/16, +25 if manual DE/RE).
 ⚠ **Do NOT put mains on that GPIO pair.** The pump's sheet shows scenarios (its #2/#3) that **run mains
 through `C/NC`** to cut the A/C directly — fine for a hardwired cutoff, **never** for the ESP. The pair
 going to the GPIO must be the **bare dry contact only** (the pump's scenario-#1 "signal-line" style),
