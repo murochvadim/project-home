@@ -27,12 +27,16 @@ class FaceFrameView @JvmOverloads constructor(
 
     enum class St {
         IDLE, ALLOWED, DENIED, UNKNOWN,
-        // Enrollment (face-learning) mode:
+        // Enrollment (face-learning) mode — LXC 112 sends whichever fits:
         ENROLL,          // ready screen — oval + Start FR button (no greeting)
-        ENROLL_GUIDE,    // capturing — position your face
-        ENROLL_TRYING,   // scanning
-        ENROLL_RETRY,    // couldn't capture — try again
-        ENROLL_DONE      // recorded (+ name if provided)
+        ENROLL_GUIDE,    // "Center your face"  (not detected / off-centre)
+        ENROLL_CLOSER,   // "Move closer"       (face too small / far)
+        ENROLL_BACK,     // "Move back"         (face too big / close)
+        ENROLL_STRAIGHT, // "Look straight"     (turned / tilted)
+        ENROLL_DARK,     // "Too dark"          (low light)
+        ENROLL_TRYING,   // "Scanning…"         (all good, capturing)
+        ENROLL_RETRY,    // "Trying again…"     (generic retry)
+        ENROLL_DONE      // "Recorded ✓" + name
     }
 
     // Settable sentences ({name} is substituted). Change here or later via settings.
@@ -45,12 +49,14 @@ class FaceFrameView @JvmOverloads constructor(
     var unknownGreet = "Please wait…"
     var unknownHint  = ""
     // Enrollment — driven by LXC 112; the Start FR button is the phone's "I'm ready".
-    var enrollGuideL1  = "Center your face"
-    var enrollGuideL2  = ""
-    var enrollTryL1    = "Scanning…"
-    var enrollTryL2    = "Keep your face in the oval"
-    var enrollRetryL1  = "Trying again…"
-    var enrollRetryL2  = "Center your face in the frame"
+    // Single-line prompts (LXC 112 picks whichever matches what it sees).
+    var enrollGuide    = "Center your face"
+    var enrollCloser   = "Move closer"
+    var enrollBack     = "Move back"
+    var enrollStraight = "Look straight"
+    var enrollDark     = "Too dark"
+    var enrollTrying   = "Scanning…"
+    var enrollRetry    = "Trying again…"
     var enrollDoneL1   = "Recorded ✓"
     var enrollDoneHint = "Name it in the dashboard"   // shown when no name is supplied
 
@@ -103,10 +109,14 @@ class FaceFrameView @JvmOverloads constructor(
             St.DENIED  -> { line1 = deniedGreet.replace("{name}", name); line2 = deniedHint; col = AMBER }
             St.UNKNOWN -> { line1 = unknownGreet; line2 = unknownHint; col = BLUE }
             St.ENROLL        -> { line1 = ""; line2 = ""; col = BLUE }   // oval + Start FR button only
-            St.ENROLL_GUIDE  -> { line1 = enrollGuideL1; line2 = enrollGuideL2; col = BLUE }
-            St.ENROLL_TRYING -> { line1 = enrollTryL1; line2 = enrollTryL2; col = BLUE }
-            St.ENROLL_RETRY  -> { line1 = enrollRetryL1; line2 = enrollRetryL2; col = AMBER }
-            St.ENROLL_DONE   -> { line1 = enrollDoneL1; line2 = if (name.isNotEmpty()) name else enrollDoneHint; col = GREEN }
+            St.ENROLL_GUIDE    -> { line1 = enrollGuide;    line2 = ""; col = BLUE }
+            St.ENROLL_CLOSER   -> { line1 = enrollCloser;   line2 = ""; col = AMBER }
+            St.ENROLL_BACK     -> { line1 = enrollBack;     line2 = ""; col = AMBER }
+            St.ENROLL_STRAIGHT -> { line1 = enrollStraight; line2 = ""; col = AMBER }
+            St.ENROLL_DARK     -> { line1 = enrollDark;     line2 = ""; col = AMBER }
+            St.ENROLL_TRYING   -> { line1 = enrollTrying;   line2 = ""; col = BLUE }
+            St.ENROLL_RETRY    -> { line1 = enrollRetry;    line2 = ""; col = AMBER }
+            St.ENROLL_DONE     -> { line1 = enrollDoneL1;   line2 = if (name.isNotEmpty()) name else enrollDoneHint; col = GREEN }
         }
         outline.color = col; chevron.color = col
         invalidate()

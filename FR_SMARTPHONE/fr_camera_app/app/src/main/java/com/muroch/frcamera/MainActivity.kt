@@ -106,11 +106,15 @@ class MainActivity : AppCompatActivity() {
             "allowed" -> { wake(); faceFrame.setState(FaceFrameView.St.ALLOWED, name) }
             "denied"  -> { wake(); faceFrame.setState(FaceFrameView.St.DENIED, name) }
             "unknown" -> { wake(); faceFrame.setState(FaceFrameView.St.UNKNOWN, name) }
-            "enroll"        -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL) }
-            "enroll_guide"  -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_GUIDE, name) }
-            "enroll_trying" -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_TRYING, name) }
-            "enroll_retry"  -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_RETRY, name) }
-            "enroll_done"   -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_DONE, name) }
+            "enroll"          -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL) }
+            "enroll_guide"    -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_GUIDE) }
+            "enroll_closer"   -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_CLOSER) }
+            "enroll_back"     -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_BACK) }
+            "enroll_straight" -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_STRAIGHT) }
+            "enroll_dark"     -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_DARK) }
+            "enroll_trying"   -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_TRYING) }
+            "enroll_retry"    -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_RETRY) }
+            "enroll_done"     -> { wake(); faceFrame.setState(FaceFrameView.St.ENROLL_DONE, name) }
             else       -> { wake(); faceFrame.setState(FaceFrameView.St.IDLE, name) }
         }
     }

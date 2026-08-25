@@ -76,11 +76,27 @@ turns on (over MQTT), where a person enrols their face and watches the whole cap
 - **`enroll`** → the ready screen: blue oval + a **`Start FR`** button (no greeting — per request).
 - **`Start FR` = the phone-side "I'm ready"** — tapping it **publishes `mur/home/esp/fr_entrance/enroll = ready`**
   (esp_boards user, no broker change) so **LXC 112** knows to begin; the button hides + shows "Center your face…".
-- LXC 112 then drives the steps back over the state topic: **`enroll_guide`** ("Center your face in the frame")
-  → **`enroll_trying`** ("Scanning…") → **`enroll_retry`** ("Trying again…") → **`enroll_done`** ("Recorded ✓" +
-  `name`). **Name + permissions are set in the dashboard**, not on the phone.
-- Verified live over USB (adb simulating LXC 112): all screens render; the `Start FR` tap published the ready
-  signal + advanced to the guide step. Test any step: `adb shell am broadcast -a com.muroch.frcamera.STATE --es state enroll_done --es name Vadim`.
+- LXC 112 then drives the phone by publishing a `state` to `mur/home/esp/fr_entrance/state`. **The phone only
+  displays — it does no detection.** LXC 112 reads the phone's MJPEG stream, runs face detection (dlib/InsightFace/
+  MediaPipe/CompreFace), and picks the message that matches the face box + landmarks + brightness:
+
+  | LXC 112 sends `state` | Phone shows | LXC 112 sends it when… |
+  |---|---|---|
+  | `enroll_guide`    | "Center your face" (blue)  | no face / off-centre from the oval region |
+  | `enroll_closer`   | "Move closer" (amber)      | face box too **small** (person too far) |
+  | `enroll_back`     | "Move back" (amber)        | face box too **big** (person too close) |
+  | `enroll_straight` | "Look straight" (amber)    | landmarks say turned/tilted (non-frontal) |
+  | `enroll_dark`     | "Too dark" (amber)         | face-region brightness below threshold |
+  | `enroll_trying`   | "Scanning…" (blue)         | all checks pass — capturing frames |
+  | `enroll_retry`    | "Trying again…" (amber)    | generic: couldn't get a clean capture, retry |
+  | `enroll_done`     | "Recorded ✓" + `name` (green) | enough good embeddings collected — learned |
+
+  **The oval on the phone is just a visual guide** — it does nothing; LXC 112 must check the SAME region the oval
+  marks (oval = `w*0.66` wide, `1.28×` tall, centre at `h*0.42`) so "inside the oval" = "correct" from LXC 112's
+  view. **Name + permissions are set in the dashboard**, not on the phone.
+- Verified live over USB (adb simulating LXC 112): every screen renders (incl. Move closer / Too dark / Look
+  straight); the `Start FR` tap published the ready signal + advanced to the guide step. Test any step:
+  `adb shell am broadcast -a com.muroch.frcamera.STATE --es state enroll_closer` (or `enroll_done --es name Vadim`).
 - **Also (2026-08-25):** the device-owner panel now **disables the lock screen** (`setKeyguardDisabled`) so it
   never shows a keyguard, and the kiosk **re-locks after an app update** (BootReceiver `MY_PACKAGE_REPLACED`).
 - **Next:** **LXC 112** (the recogniser) to actually *publish* to the state topic — corridor-presence → `black`/`idle`,
