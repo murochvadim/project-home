@@ -15,10 +15,10 @@ import android.view.View
 /**
  * Face-positioning guide over the camera preview: dimmed surround with a clear
  * oval "stand here" window + bright outline, two steady hint lines, and a
- * BLINKING green up-arrow between the text and the oval that directs the
- * visitor's eye up into the frame.
+ * "swipe-up" CHEVRON stack between the text and the oval whose highlight
+ * animates UPWARD (bottom → top) to draw the visitor's eye into the frame.
  *   "Hello Visitor 😊"            (steady, big)
- *   ▲ blinking up-arrow → oval
+ *   ⌃ ⌃ ⌃  chevrons, highlight moving up → oval
  *   "Align your face in the frame" (steady)
  */
 class FaceFrameView @JvmOverloads constructor(
@@ -33,7 +33,7 @@ class FaceFrameView @JvmOverloads constructor(
         color = Color.parseColor("#4CD964"); style = Paint.Style.STROKE
         strokeWidth = dp(3.5f)
     }
-    private val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val chevron = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#4CD964"); style = Paint.Style.STROKE
         strokeWidth = dp(7f); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
@@ -49,19 +49,19 @@ class FaceFrameView @JvmOverloads constructor(
     var greetText: String = "Hello Visitor 😊"
     var hintText: String = "Align your face in the frame"
 
-    // Blink the arrow (~600 ms on / off).
+    private val CHEVRONS = 3
+    private var step = 0                    // which chevron is highlighted (advances → up)
     private val ui = Handler(Looper.getMainLooper())
-    private var arrowOn = true
-    private val blink = object : Runnable {
-        override fun run() { arrowOn = !arrowOn; invalidate(); ui.postDelayed(this, 600) }
+    private val anim = object : Runnable {
+        override fun run() { step = (step + 1) % CHEVRONS; invalidate(); ui.postDelayed(this, 260) }
     }
 
     // SOFTWARE layer: PorterDuff.CLEAR punches the oval hole AND invalidate()
-    // re-renders (a hardware layer cached the view and ignored the blink).
+    // re-renders (a hardware layer cached the view and ignored the animation).
     init { setLayerType(LAYER_TYPE_SOFTWARE, null) }
 
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); ui.postDelayed(blink, 600) }
-    override fun onDetachedFromWindow() { super.onDetachedFromWindow(); ui.removeCallbacks(blink) }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); ui.postDelayed(anim, 260) }
+    override fun onDetachedFromWindow() { super.onDetachedFromWindow(); ui.removeCallbacks(anim) }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         val ovalW = w * 0.66f
@@ -78,26 +78,29 @@ class FaceFrameView @JvmOverloads constructor(
         canvas.restoreToCount(layer)
         canvas.drawOval(oval, outline)
 
-        // blinking up-arrow just below the oval, pointing INTO it
-        if (arrowOn) drawUpArrow(canvas, width / 2f, oval.bottom + sp(66f))
+        drawChevrons(canvas, width / 2f, oval.bottom + sp(46f))
 
-        // steady text block, ~4 rows below the oval
-        val gy = oval.bottom + sp(160f)
+        val gy = oval.bottom + sp(168f)
         canvas.drawText(greetText, width / 2f, gy, greet)
         canvas.drawText(hintText, width / 2f, gy + sp(46f), hint)
     }
 
-    /** Up-arrow: head near the oval (top), stem below. */
-    private fun drawUpArrow(c: Canvas, cx: Float, baseY: Float) {
-        val len = sp(42f); val hw = sp(24f); val hh = sp(26f)
-        val top = baseY - len
-        c.drawLine(cx, baseY, cx, top, arrow)          // stem
-        c.drawLine(cx, top, cx - hw, top + hh, arrow)  // head left
-        c.drawLine(cx, top, cx + hw, top + hh, arrow)  // head right
+    /** 3 up-chevrons stacked below the oval; the highlight moves UP toward it. */
+    private fun drawChevrons(c: Canvas, cx: Float, topY: Float) {
+        val gap = sp(24f)     // vertical spacing
+        val hw = sp(26f)      // half-width
+        val hh = sp(17f)      // depth
+        for (i in 0 until CHEVRONS) {         // i = 0 top (near oval) … CHEVRONS-1 bottom
+            val activeIndex = (CHEVRONS - 1) - step   // step advances → highlight climbs up
+            chevron.alpha = if (i == activeIndex) 255 else 70
+            val y = topY + i * gap
+            c.drawLine(cx - hw, y + hh, cx, y, chevron)   // ⌃ left arm
+            c.drawLine(cx, y, cx + hw, y + hh, chevron)   // ⌃ right arm
+        }
     }
 
-    /** Change the oval + arrow colour (e.g. from the FR status later). */
-    fun setFrameColor(color: Int) { outline.color = color; arrow.color = color; invalidate() }
+    /** Change the oval + chevron colour (e.g. from the FR status later). */
+    fun setFrameColor(color: Int) { outline.color = color; chevron.color = color; invalidate() }
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
