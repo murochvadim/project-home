@@ -179,7 +179,9 @@ no cloud — the pump stays offline, the smarts are ours. (2 units → up to 2 p
 Phase-2 firmware can read both on spare GPIOs alongside the RS-485 bus.)
 
 ### Alarm dry-contact → ESP32 (concrete wiring — checked against a real pump's diagram 2026-08-25)
-A candidate generic silent pump (Amazon **B0C77YK5X4**, 100–240 V, <19 dB, self-priming, wall-mount) was
+**Unit assignment:** this pump is earmarked for the **LIVING ROOM A/C unit** (the one needing a pump — the
+other Electra unit's drainage is TBD; prefer gravity where it can run downhill). A candidate generic silent
+pump (Amazon **B0C77YK5X4**, 100–240 V, <19 dB, self-priming, wall-mount) was
 verified against its own wiring sheet — it **does** carry the required **volt-free safety switch** (⚠ but
 **no RS-485 / no data** — it's a dumb float pump, which is exactly what we want; the smarts stay ours). Its
 **4 wires**: **L (brown) / N (blue)** = mains that runs the motor + **C / NC (both black)** = the float
