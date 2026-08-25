@@ -54,9 +54,26 @@ and hands each message to the SAME `applyState()` the adb test broadcast uses. P
 **Verified live** end-to-end (phone→broker over a `adb reverse` + TCP-proxy tunnel; published `allowed`/`black`/`denied`
 → the phone woke/slept/showed each). `MQTT_HOST` = `192.168.1.189` for the entrance (home WiFi); `127.0.0.1` + the
 tunnel is only for USB testing. While the phone is away from home the connect fails + auto-retries (harmless).
-- **Next:** **LXC 112** (the recogniser) to actually *publish* to that topic — corridor-presence → `black`/`idle`,
-  recognition → `allowed`/`denied`/`unknown` — plus a go2rtc `phone_entrance_cam` source + a foreground service
-  keep-alive. (⚠ a proper `fr` broker user + `mur/home/fr/#` topic can replace the reused `esp_boards`/esp-tree
-  when LXC 112 is built — needs a broker-user add on LXC 107, i.e. explicit permission.)
+**✅ Always-on / kiosk hardening DONE (2026-08-25)** — the phone becomes a tamper-proof, self-healing appliance:
+- **Keep-alive foreground service** (`FrCameraService`) — Android won't kill a foreground service, so the app's
+  process (camera + MJPEG + MQTT) **runs always**. Holds a **CPU wake lock + a high-perf WiFi lock**, posts an
+  `IMPORTANCE_MIN` ongoing notification, `START_STICKY`. Verified live: `isForeground=true`, type `SPECIAL_USE`
+  (`0x40000000`), locks held.
+- **Auto-start on boot** (`BootReceiver`, `BOOT_COMPLETED` + `MY_PACKAGE_REPLACED`) — after a **power cut / reboot**
+  the panel comes back **by itself** (starts the service → brings the kiosk to the front). Registered; not reboot-
+  tested yet (phone remote).
+- **Battery-optimization exemption** — app added to the Doze whitelist (`dumpsys deviceidle whitelist +pkg`), so
+  Android never suspends it. `POST_NOTIFICATIONS` granted.
+- **Kiosk lock (Lock Task Mode)** — code done + **dormant until provisioned** (verified: "not device-owner yet —
+  kiosk inactive"). **To activate the tamper-proof kiosk (one-time, at home, over adb — de-Googled A71 has no
+  accounts so it's allowed):** `adb shell dpm set-device-owner com.muroch.frcamera/.FrAdminReceiver`. Then the app
+  auto-`startLockTask()`s on launch — pinned to the front, **no swipe-away / recents / home / other apps** (survives
+  unauthorized touch). Undo: `adb shell dpm remove-active-admin com.muroch.frcamera/.FrAdminReceiver` or factory
+  reset. `FrAdminReceiver` (DeviceAdminReceiver) + `res/xml/device_admin.xml` back it; installing is always safe
+  (lock stays off until you run that command).
+- **Next:** **LXC 112** (the recogniser) to actually *publish* to the state topic — corridor-presence → `black`/`idle`,
+  recognition → `allowed`/`denied`/`unknown` — plus a go2rtc `phone_entrance_cam` source. (⚠ a proper `fr` broker
+  user + `mur/home/fr/#` topic can replace the reused `esp_boards`/esp-tree when LXC 112 is built — needs a
+  broker-user add on LXC 107, i.e. explicit permission.)
 
 **Scaffold (2026-08-22)** — builds + installs + launches (the base this was filled in on).

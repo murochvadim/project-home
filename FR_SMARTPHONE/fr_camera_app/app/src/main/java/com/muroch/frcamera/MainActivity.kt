@@ -1,13 +1,16 @@
 package com.muroch.frcamera
 
 import android.Manifest
+import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -115,6 +118,10 @@ class MainActivity : AppCompatActivity() {
             s, n -> applyState(s, n)
         }.also { it.connect() }
 
+        FrCameraService.start(this)      // keep-alive: the process (camera+MJPEG+MQTT) runs always
+        requestNotifPermission()         // so the ongoing keep-alive notification can show (API 33+)
+        selfAllowlistLockTaskIfOwner()   // device-owner kiosk allowlist (no-op until provisioned)
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED) {
             start()
@@ -198,6 +205,45 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        enterKioskIfOwner()   // pin to front (kiosk) when device-owner; else harmless no-op
+    }
+
+    // ─── Kiosk / keep-alive helpers ──────────────────────────────────────
+    /** Enter Lock Task Mode (kiosk) when we're device-owner — every touch stays
+     *  inside the app. No-op (no dialog) until `dpm set-device-owner` is run. */
+    private fun enterKioskIfOwner() {
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            if (dpm.isLockTaskPermitted(packageName)) {
+                startLockTask()
+                Log.i(TAG, "kiosk lock-task engaged")
+            }
+        } catch (e: Exception) { Log.w(TAG, "lock-task: ${e.message}") }
+    }
+
+    /** If we are device-owner, allowlist ourselves so startLockTask() is silent. */
+    private fun selfAllowlistLockTaskIfOwner() {
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                dpm.setLockTaskPackages(ComponentName(this, FrAdminReceiver::class.java), arrayOf(packageName))
+                Log.i(TAG, "device-owner: lock-task allowlisted")
+            } else {
+                Log.i(TAG, "not device-owner yet — kiosk inactive (adb dpm set-device-owner to enable)")
+            }
+        } catch (e: Exception) { Log.w(TAG, "self-allowlist: ${e.message}") }
+    }
+
+    private fun requestNotifPermission() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         mqtt?.disconnect()
@@ -209,6 +255,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val TAG = "FRCamera"
         const val REQ_CAM = 1
+        const val REQ_NOTIF = 2
         const val ACTION_STATE = "com.muroch.frcamera.STATE"
     }
 }
