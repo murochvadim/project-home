@@ -1,6 +1,10 @@
 package com.muroch.frcamera
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
@@ -40,13 +44,33 @@ class MainActivity : AppCompatActivity() {
 
     @Volatile private var latestJpeg: ByteArray? = null
     private var mjpeg: MjpegServer? = null
+    private lateinit var faceFrame: FaceFrameView
+
+    // TEST/inject trigger (LXC 112 will drive the same setState over MQTT later):
+    //   adb shell am broadcast -a com.muroch.frcamera.STATE --es state allowed --es name Vadim
+    //   states: idle | allowed | denied | unknown
+    private val stateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) {
+            val nm = i?.getStringExtra("name") ?: ""
+            val st = when ((i?.getStringExtra("state") ?: "idle").lowercase()) {
+                "allowed" -> FaceFrameView.St.ALLOWED
+                "denied"  -> FaceFrameView.St.DENIED
+                "unknown" -> FaceFrameView.St.UNKNOWN
+                else       -> FaceFrameView.St.IDLE
+            }
+            faceFrame.setState(st, nm)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         previewView = findViewById(R.id.preview)
-        status.text = "Starting camera…"
+        faceFrame = findViewById(R.id.faceframe)
+        ContextCompat.registerReceiver(
+            this, stateReceiver, IntentFilter(ACTION_STATE), ContextCompat.RECEIVER_EXPORTED
+        )
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED) {
@@ -133,6 +157,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try { unregisterReceiver(stateReceiver) } catch (_: Exception) {}
         try { mjpeg?.stop() } catch (_: Exception) {}
         analysisExecutor.shutdown()
     }
@@ -140,5 +165,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val TAG = "FRCamera"
         const val REQ_CAM = 1
+        const val ACTION_STATE = "com.muroch.frcamera.STATE"
     }
 }

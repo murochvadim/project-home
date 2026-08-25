@@ -34,7 +34,13 @@ front cam (`ImageAnalysis` RGBA frames) → each frame rotated upright → JPEG 
 USB (`adb forward tcp:8080`): ~25 fps of real JPEG frames; live preview on the phone screen. **⚠ CameraX is
 bound to the activity lifecycle, so frames only flow while the app is FOREGROUND** — a foreground Service /
 keep-alive is a later hardening step (the activity has `keepScreenOn` + `stay_on_while_plugged_in`).
-- **Next (in-flight):** Paho MQTT client → status UI (Recognizing / Welcome, &lt;name&gt; / Not allowed),
-  once **LXC 112** (the recognizer) exists to send results. Then go2rtc `phone_entrance_cam` source + LXC 112.
+**✅ UI states DONE (2026-08-25)** — one screen, four states in `FaceFrameView.setState()`:
+`IDLE` 🟢 (Hello Visitor + face-oval + swipe-up chevrons) · `ALLOWED` 🟢 ("Welcome, {name}!" / "Opening the
+door…") · `DENIED` 🟠 ("Welcome, {name}" / "The owner will open the door for you.") · `UNKNOWN` 🔵 ("Please
+wait…"). Sentences are settable fields on `FaceFrameView`. **Test trigger over USB** (LXC 112 drives the same
+`setState` over MQTT later): `adb shell am broadcast -a com.muroch.frcamera.STATE --es state allowed --es name Vadim`
+(states: `idle`|`allowed`|`denied`|`unknown`). Verified all four on-device.
+- **Next (in-flight):** the **presence-trigger** (corridor-presence MQTT → show / black-screen-on-idle) + the
+  **Paho MQTT** feed from **LXC 112** (the recognizer) driving `setState`. Then go2rtc `phone_entrance_cam` source.
 
 **Scaffold (2026-08-22)** — builds + installs + launches (the base this was filled in on).
