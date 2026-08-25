@@ -34,16 +34,16 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
 /**
- * FR Camera — entrance face-recognition camera node (LineageOS A71).
+ * FR Camera — entrance face-recognition camera PANEL (de-Googled LineageOS A71).
+ * Architecture A: the phone is ONLY the camera + status screen; recognition and
+ * enrollment run on LXC 112, which drives the screen over MQTT.
  *
- * FEATURE 1 (2026-08-25): front camera → MJPEG stream on :8080.
- *   - CameraX front cam (RGBA frames via ImageAnalysis)
- *   - each frame → rotate upright → JPEG → published as the "latest frame"
- *   - NanoHTTPD MjpegServer serves it at http://<ip>:8080/  (go2rtc pulls it)
- *   - local PreviewView + a status line
- *
- * NEXT: Paho MQTT client + status UI (Recognizing / Welcome / Not allowed),
- * once LXC 112 (the recognizer) exists. Architecture A — phone = camera + screen.
+ *  - CameraX front cam → JPEG → MjpegServer on :8080 (go2rtc / LXC 112 pull it)
+ *  - MqttClient subscribes to mur/home/esp/fr_entrance/state → applyState():
+ *      black / idle / allowed / denied / unknown  +  enroll* (face-learning)
+ *  - FrCameraService keep-alive + BootReceiver auto-start + device-owner kiosk
+ *    (Lock Task Mode) make it a tamper-proof, self-healing wall panel.
+ * Test any state over adb (see applyState); LXC 112 sends the same over MQTT.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -55,9 +55,10 @@ class MainActivity : AppCompatActivity() {
     private var mjpeg: MjpegServer? = null
     private lateinit var faceFrame: FaceFrameView
 
-    // TEST/inject trigger (LXC 112 will drive the same setState over MQTT later):
+    // TEST/inject trigger (LXC 112 drives the same applyState over MQTT):
     //   adb shell am broadcast -a com.muroch.frcamera.STATE --es state allowed --es name Vadim
-    //   states: idle | allowed | denied | unknown
+    //   states: black|idle|allowed|denied|unknown|enroll|enroll_guide|enroll_closer|
+    //           enroll_back|enroll_straight|enroll_dark|enroll_trying|enroll_retry|enroll_done
     private var mqtt: MqttClient? = null
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -91,13 +92,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Apply an FR state — from the adb test broadcast OR the LXC over MQTT.
-     *  The LXC decides presence/activity + enrollment steps; the phone obeys.
-     *  Enrollment states (dashboard FR tab drives these later, via LXC 112):
-     *    enroll        → ready screen: oval + [Start FR] button
-     *    enroll_guide  → "Center your face in the frame"
-     *    enroll_trying → "Scanning…"
-     *    enroll_retry  → "Trying again…"
-     *    enroll_done   → "Recorded ✓" + name (name/permissions finalised in dashboard) */
+     *  The LXC decides presence + enrollment steps; the phone just displays.
+     *  `enroll` shows the [Start FR] ready screen; the other enroll_* states are
+     *  the face-learning steps. See the README state table for the full contract
+     *  (which LXC 112 detection condition maps to which message). */
     private fun applyState(state: String, name: String) = runOnUiThread {
         val s = state.lowercase()
         btnStartFr.visibility = if (s == "enroll") View.VISIBLE else View.GONE

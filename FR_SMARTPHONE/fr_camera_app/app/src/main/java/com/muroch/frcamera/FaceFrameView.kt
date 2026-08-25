@@ -13,13 +13,12 @@ import android.util.AttributeSet
 import android.view.View
 
 /**
- * Face-positioning guide + FR-result screen. ONE view, four states (setState):
- *   IDLE    🟢  "Hello Visitor 😊" / "Align your face in the frame" + swipe-up chevrons
- *   ALLOWED 🟢  "Welcome, <name>!" / "Opening the door…"
- *   DENIED  🟠  "Welcome, <name>"  / "The owner will open the door for you."
- *   UNKNOWN 🔵  "Please wait…"      / ""
- * The camera + oval stay live; only the colour + text change. Later the state
- * is driven by the FR backend (LXC 112) over MQTT; for now via an adb broadcast.
+ * Face-positioning guide + FR-result + enrollment screen. ONE view; setState()
+ * switches between the recognition states (IDLE / ALLOWED / DENIED / UNKNOWN) and
+ * the ENROLL* face-learning steps (see the St enum). The camera + oval stay live;
+ * only the outline colour + the two text lines change. State is driven by the FR
+ * backend (LXC 112) over MQTT — the phone does no detection itself.
+ * Colour language: blue = positioning/working, amber = adjust, green = success.
  */
 class FaceFrameView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null

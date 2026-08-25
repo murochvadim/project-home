@@ -33,9 +33,21 @@ capture → **MJPEG stream on `:8080`** (go2rtc pulls it) **+ a status screen** 
 that status panel, so we build our own. **✅ Feature 1 DONE (2026-08-25): front camera → MJPEG stream on `:8080`**
 — CAMERA permission → CameraX front cam (`ImageAnalysis` RGBA) → each frame rotated upright → JPEG → `MjpegServer.kt`
 (NanoHTTPD) serves `http://<ip>:8080/` (`multipart/x-mixed-replace`) + a local `PreviewView`. Verified live over
-USB (`adb forward tcp:8080`, ~25 fps of real JPEG frames + live preview on the phone). ⚠ CameraX binds to the
-ACTIVITY lifecycle → frames flow only while the app is FOREGROUND (foreground-service keep-alive = later hardening).
-**Next:** Paho MQTT → status UI (Recognizing / Welcome / Not allowed), once LXC 112 exists to send results.
+USB (`adb forward tcp:8080`, ~25 fps of real JPEG frames + live preview on the phone).
+**✅ Phone side COMPLETE (2026-08-25)** — everything buildable offline is done, verified over USB:
+- **MQTT** (`MqttClient.kt` → subscribes `mur/home/esp/fr_entrance/state`, **esp_boards** user, no broker change)
+  driving the recognition screens: `idle` / `allowed` / `denied` / `unknown` (+ `black` = sleep).
+- **Face-enrollment flow** the dashboard's future **FR tab** turns on: `enroll` = oval + **Start FR** button
+  (phone-side "I'm ready" → publishes `…/enroll = ready`); LXC 112 then drives the steps back —
+  `enroll_guide` "Center your face" / `enroll_closer` "Move closer" / `enroll_back` / `enroll_straight`
+  "Look straight" / `enroll_dark` "Too dark" / `enroll_trying` "Scanning…" / `enroll_retry` / `enroll_done`
+  "Recorded ✓" + name (**amber = adjust, blue = working, green = done**). Name + permissions set in the dashboard.
+- **Always-on hardening:** foreground keep-alive service + boot auto-start + Doze exemption + **device-owner
+  kiosk** (Lock Task Mode, keyguard disabled) with an adb **unlock / lock / release** escape hatch.
+Full state contract (which LXC-112 detection condition → which message) + adb test commands in
+[fr_camera_app/README.md](fr_camera_app/README.md). ⚠ CameraX binds to the ACTIVITY lifecycle (the kiosk keeps
+it foreground). **Next (needs the home LAN):** stand up **LXC 112** to drive these states from real face
+detection on the phone's stream + build the dashboard **FR tab** (enroll trigger + name/permissions).
 
 **Offline build toolchain (installed on the laptop, `C:\android-dev`):** JDK 17 + Android SDK (android-35,
 build-tools 35.0.0, platform-tools) + Gradle 8.7, **every dependency cached in `~/.gradle`**. The full loop
