@@ -178,6 +178,40 @@ affected unit on overflow. So pick a model **with the alarm contact** (both abov
 no cloud — the pump stays offline, the smarts are ours. (2 units → up to 2 pumps + 2 alarm inputs; the
 Phase-2 firmware can read both on spare GPIOs alongside the RS-485 bus.)
 
+### Alarm dry-contact → ESP32 (concrete wiring — checked against a real pump's diagram 2026-08-25)
+A candidate generic silent pump (Amazon **B0C77YK5X4**, 100–240 V, <19 dB, self-priming, wall-mount) was
+verified against its own wiring sheet — it **does** carry the required **volt-free safety switch** (⚠ but
+**no RS-485 / no data** — it's a dumb float pump, which is exactly what we want; the smarts stay ours). Its
+**4 wires**: **L (brown) / N (blue)** = mains that runs the motor + **C / NC (both black)** = the float
+safety contact, **normally CLOSED**, opening on a high-water alarm.
+
+**Bring `C/NC` to a spare ESP GPIO as an ISOLATED dry contact:**
+```
+C  → ESP32 GND
+NC → ESP32 GPIO (INPUT_PULLUP)
+     normal (water OK, contact closed) → reads LOW
+     overflow alarm    (contact open)  → reads HIGH   ← publish alert / power_off the unit
+```
+⚠ **Do NOT put mains on that GPIO pair.** The pump's sheet shows scenarios (its #2/#3) that **run mains
+through `C/NC`** to cut the A/C directly — fine for a hardwired cutoff, **never** for the ESP. The pair
+going to the GPIO must be the **bare dry contact only** (the pump's scenario-#1 "signal-line" style),
+nothing but the ESP on those two wires.
+
+**Cutoff — two schools (pick per install):**
+- **Software (simple, 1 wire pair):** dry contact → ESP; on alarm the ESP `power_off`s that unit over
+  Modbus + fires the MQTT overflow alert. Clean, but the cutoff depends on the ESP being alive.
+- **Fail-safe (belt-and-suspenders):** keep the pump's **hardwired** cutoff (its scenario #1/#4 physically
+  stops the A/C on overflow **even if the ESP is dead**) **and** also read the state on the ESP for
+  alerting. ⚠ A single contact can only be in one circuit — this generic pump exposes **only `C/NC`
+  (one contact)**, so it can do EITHER hardwired OR ESP, not both. The recommended **Aspen (NO + NC =
+  two contacts)** is the one that supports true belt-and-suspenders: one leg hardwired to the A/C, the
+  other to the ESP GPIO.
+
+So B0C77YK5X4 clears the **alarm-contact requirement** (single `C/NC`); the remaining open item on it is
+still **unstated flow / lift** (its listing gives neither) — confirm flow ≥ ~10–12 L/h AND max lift ≥ the
+real vertical rise before buying, or use the Aspen/Sauermann (specs stated + a second contact for the
+fail-safe wiring).
+
 ## Files
 - Firmware (Phase 1, LIVE): `C:\Users\muroc\Arduino_Projects\Electra_AC\{Electra_AC.ino, Main.h,
   Esp_Base.ino, Modbus.ino}` — **not in git** (`Main.h` bakes MQTT + OTA secrets). Sketch id `Electra_AC`,
