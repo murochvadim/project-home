@@ -4,3 +4,6 @@ local.properties
 *.apk
 .idea/
 .kotlin/
+
+# secret — broker credential, never commit (see Secrets.kt.example)
+app/src/main/java/com/muroch/frcamera/Secrets.kt

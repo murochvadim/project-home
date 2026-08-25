@@ -54,17 +54,23 @@ class MainActivity : AppCompatActivity() {
     // TEST/inject trigger (LXC 112 will drive the same setState over MQTT later):
     //   adb shell am broadcast -a com.muroch.frcamera.STATE --es state allowed --es name Vadim
     //   states: idle | allowed | denied | unknown
+    private var mqtt: MqttClient? = null
+
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
-            val nm = i?.getStringExtra("name") ?: ""
-            // The LXC decides presence/activity — the phone just obeys.
-            when ((i?.getStringExtra("state") ?: "idle").lowercase()) {
-                "black", "sleep", "off" -> sleep()   // LXC: no presence → black
-                "allowed" -> { wake(); faceFrame.setState(FaceFrameView.St.ALLOWED, nm) }
-                "denied"  -> { wake(); faceFrame.setState(FaceFrameView.St.DENIED, nm) }
-                "unknown" -> { wake(); faceFrame.setState(FaceFrameView.St.UNKNOWN, nm) }
-                else       -> { wake(); faceFrame.setState(FaceFrameView.St.IDLE, nm) }
-            }
+            applyState(i?.getStringExtra("state") ?: "idle", i?.getStringExtra("name") ?: "")
+        }
+    }
+
+    /** Apply an FR state — from the adb test broadcast OR the LXC over MQTT.
+     *  The LXC decides presence/activity; the phone just obeys. */
+    private fun applyState(state: String, name: String) = runOnUiThread {
+        when (state.lowercase()) {
+            "black", "sleep", "off" -> sleep()   // no presence → black
+            "allowed" -> { wake(); faceFrame.setState(FaceFrameView.St.ALLOWED, name) }
+            "denied"  -> { wake(); faceFrame.setState(FaceFrameView.St.DENIED, name) }
+            "unknown" -> { wake(); faceFrame.setState(FaceFrameView.St.UNKNOWN, name) }
+            else       -> { wake(); faceFrame.setState(FaceFrameView.St.IDLE, name) }
         }
     }
 
@@ -105,6 +111,9 @@ class MainActivity : AppCompatActivity() {
             this, stateReceiver, IntentFilter(ACTION_STATE), ContextCompat.RECEIVER_EXPORTED
         )
         sleep()   // start BLACK (no presence); the LXC wakes it on presence
+        mqtt = MqttClient(Secrets.MQTT_HOST, Secrets.MQTT_USER, Secrets.MQTT_PASS, Secrets.MQTT_TOPIC) {
+            s, n -> applyState(s, n)
+        }.also { it.connect() }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED) {
@@ -191,6 +200,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        mqtt?.disconnect()
         try { unregisterReceiver(stateReceiver) } catch (_: Exception) {}
         try { mjpeg?.stop() } catch (_: Exception) {}
         analysisExecutor.shutdown()

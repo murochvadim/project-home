@@ -46,8 +46,17 @@ presence — it sends `state=black`/`sleep`/`off` (no presence) → the phone co
 + brightness ~0 → near-zero power on AMOLED), and any real state (`idle`/`allowed`/`denied`/`unknown`) → the phone
 `wake()`s and shows it. **The camera + MJPEG stream keep running under the black cover** (the FR backend still gets
 frames). Starts BLACK on launch. Verified over USB (mean brightness 76 lit → ~0 black → 76 woken).
-- **Next (in-flight):** the **Paho MQTT** client so **LXC 112** drives `state` (presence + FR result) over MQTT
-  instead of the adb test broadcast — corridor-presence → `black`/`idle`, recognition → `allowed`/`denied`/`unknown`.
-  Then go2rtc `phone_entrance_cam` source.
+**✅ Paho MQTT client DONE (2026-08-25)** — `MqttClient.kt` connects to the home broker (**LXC 107**,
+`192.168.1.189:1883`, user **`esp_boards`** — reused, NO broker change), subscribes to **`mur/home/esp/fr_entrance/state`**,
+and hands each message to the SAME `applyState()` the adb test broadcast uses. Payload: JSON
+`{"state":"allowed","name":"Vadim"}` (or a plain `"black"`); auto-reconnect + re-subscribe. Broker creds in
+**`Secrets.kt` (gitignored)** — copy `Secrets.kt.example`, paste `ESP_BOARDS_MQTT_PASS` from `BOILER/dashboard/.env`.
+**Verified live** end-to-end (phone→broker over a `adb reverse` + TCP-proxy tunnel; published `allowed`/`black`/`denied`
+→ the phone woke/slept/showed each). `MQTT_HOST` = `192.168.1.189` for the entrance (home WiFi); `127.0.0.1` + the
+tunnel is only for USB testing. While the phone is away from home the connect fails + auto-retries (harmless).
+- **Next:** **LXC 112** (the recogniser) to actually *publish* to that topic — corridor-presence → `black`/`idle`,
+  recognition → `allowed`/`denied`/`unknown` — plus a go2rtc `phone_entrance_cam` source + a foreground service
+  keep-alive. (⚠ a proper `fr` broker user + `mur/home/fr/#` topic can replace the reused `esp_boards`/esp-tree
+  when LXC 112 is built — needs a broker-user add on LXC 107, i.e. explicit permission.)
 
 **Scaffold (2026-08-22)** — builds + installs + launches (the base this was filled in on).
