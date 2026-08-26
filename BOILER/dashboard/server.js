@@ -2179,7 +2179,7 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.189', 22),    // LXC 107 — MQTT
     tcpCheck('192.168.1.195', 22),    // LXC 108 — NetBird gateway
     tcpCheck('192.168.1.196', 22),    // LXC 109 — Privacy
-    tcpCheck('192.168.1.162', 22),    // LXC 110 — Email
+    tcpCheck('192.168.1.176', 22),    // LXC 110 — Email
     (mon.rp01 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.217', 22)),  // RP01 — probe skipped when monitoring is paused (health.node_monitoring)
     tcpCheck('192.168.1.249', 22),    // LXC 111 — Robot (ROBOT_TONYBOT: go2rtc relay + future vision/nav)
     // Link to Windows (Phone Link) health — derived from phonelink_watchdog

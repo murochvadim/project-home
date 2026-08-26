@@ -29,7 +29,7 @@ const { execFile } = require('child_process');
 
 const DOCS_ROOT  = '\\\\192.168.1.155\\Claude_Data\\Privacy_Site_Docs';
 const DOCS_LINUX = '/mnt/qnap-claude/Privacy_Site_Docs';   // LXC 104 view of same share
-const EMAIL_AGENT = process.env.EMAIL_AGENT_URL || 'http://192.168.1.162:8780';  // LXC 110 (receipt PDFs)
+const EMAIL_AGENT = process.env.EMAIL_AGENT_URL || 'http://192.168.1.176:8780';  // LXC 110 (receipt PDFs)
 const SSH_HOST = '192.168.1.227';
 const SSH_USER = 'root';
 const SSH_KEY  = process.env.SSH_KEY_PATH || os.homedir() + '/.ssh/id_ed25519';

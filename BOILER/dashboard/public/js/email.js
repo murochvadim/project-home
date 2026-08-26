@@ -1,7 +1,7 @@
 // Email — Gmail two-way client. Talks DIRECTLY to the Email Agent on LXC 110
 // (dashboard is UI-only). Full bodies are fetched + sanitized server-side.
 (function () {
-  const API = 'http://192.168.1.162:8780';
+  const API = 'http://192.168.1.176:8780';
   let _msgs = [];
   let _openId = null;
   let _mode = 'new';        // 'new' | 'reply'
