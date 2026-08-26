@@ -1,0 +1,15 @@
+[Unit]
+Description=Kitchen Service — fridge food/shopping PWA + CRUD API (LXC 113), port 8772
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kitchen
+ExecStart=/opt/kitchen/venv/bin/python3 /opt/kitchen/kitchen_service.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
