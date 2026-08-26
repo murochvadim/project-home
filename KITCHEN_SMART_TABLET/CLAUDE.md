@@ -1,6 +1,30 @@
 # KITCHEN_SMART_TABLET — Fridge Food/Shopping Tablet
 
-**STATUS: PLANNED (scoped 2026-08-21, audited 2026-08-21). Nothing built yet — plan only.**
+**STATUS: v1 BUILT + RUNNING (2026-08-24, remote/out-of-home). Backend + PWA + dashboard live over http; Caddy/HTTPS + Fully-Kiosk mount + real barcode camera deferred to home.**
+
+**Built so far (all laptop-testable, no home hardware needed):**
+- **LXC 113 "kitchen"** (`192.168.1.208`, Debian 12, DHCP-reserved BEFORE use per the IP-collision
+  lesson `[[incident_dhcp_pool_ip_collision]]`) running **`kitchen-service.py`** (Flask CRUD, port
+  **8772**, `kitchen-service.service`, trust-auth DB — no secret). Data-only: NO MQTT, no device control.
+- **DB** (LXC 102): `kitchen_products` (catalog, forever+🔒), `kitchen_shopping_lists`,
+  `kitchen_shopping_items` — migration `migrations/001_kitchen.sql`; 35 realistic **Hebrew-named**
+  products seeded (`002_seed_products.sql`). Registered in Health DB-Volumes (`DBV_GROUPS` 'Kitchen').
+- **PWA** (`kitchen/` served same-origin by the service at `http://192.168.1.208:8772/`): Hebrew-RTL
+  tile grid + 🛒 Buy mode (tap → +1 to active list) + ℹ️ Browse (detail) + Shopping-List screen
+  (check/remove/manual-add) + barcode-decode code (camera test = home). manifest = fullscreen PWA.
+- **Dashboard Kitchen Agent page** (`BOILER/dashboard/public/kitchen.html` + `js/kitchen.js`, sidebar
+  under **Agents**): Products CRUD (Hebrew name/emoji/category/price) + Shopping List (check/remove/
+  clear) + **📲 Send-to-WhatsApp** `wa.me` button. Calls LXC 113 directly (`http://192.168.1.208:8772`)
+  — architecture-guard safe (no server.js business logic). `agents` table row + orchestrator SSH key
+  authorized on 113 so the Health Services check passes.
+
+**Remaining:** Caddy internal-CA HTTPS (needed for the barcode camera secure context) + Fully Kiosk on
+the fridge tablet + real barcode camera test + install the Caddy root CA on the tablet — all **home
+steps**. Optional Step 7: `svc-lxc113` Health cell + PVE vzdump backup (needs explicit host OK).
+
+---
+
+_Original plan below (2026-08-21):_
 
 A tablet magnet-mounted on the fridge running a **PWA** whose tiles are **food products**
 (🍎 apple, 🧀 cheese…) instead of device switches — a food-shaped sibling of the
