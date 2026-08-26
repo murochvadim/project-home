@@ -2120,7 +2120,7 @@ async function runHealthChecks() {
     rawDataResult, rawWeatherResult, orchLogResult, alertsResult, boilerDecisionResult, boilerServiceAlerts, mediaServiceAlerts, voiceAgentResult, autoScanResult,
     ruleEngineHeartbeat, ruleEngineServiceAlerts,
     backupJobsResult,
-    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result, lxc110Result, rp01Result, robotResult,
+    vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result, lxc110Result, rp01Result, robotResult, kitchenResult,
     phonelinkResult, adguardResult, rp01TempResult, rp02Result, rp02TempResult, rp03Result, rp03TempResult,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
@@ -2182,6 +2182,7 @@ async function runHealthChecks() {
     tcpCheck('192.168.1.176', 22),    // LXC 110 — Email
     (mon.rp01 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.217', 22)),  // RP01 — probe skipped when monitoring is paused (health.node_monitoring)
     tcpCheck('192.168.1.249', 22),    // LXC 111 — Robot (ROBOT_TONYBOT: go2rtc relay + future vision/nav)
+    tcpCheck('192.168.1.208', 22),    // LXC 113 — Kitchen (fridge food/shopping-list PWA + CRUD)
     // Link to Windows (Phone Link) health — derived from phonelink_watchdog
     // alerts on LXC 104 (laptop-side: process up + not crash-looping).
     db.query("SELECT COUNT(*) AS n FROM system_alerts WHERE resolved_at IS NULL AND alert_type LIKE 'phonelink:%'")
@@ -2212,6 +2213,7 @@ async function runHealthChecks() {
   r.lxc108 = { ok: lxc108Result.ok };
   r.lxc109 = { ok: lxc109Result.ok };
   r.lxc110 = { ok: lxc110Result.ok };
+  r.lxc113 = { ok: kitchenResult.ok };
   r.rp01   = { ok: rp01Result.ok, monitored: mon.rp01 !== false, temp_c: rp01TempResult.temp_c };
   r.rp02   = { ok: rp02Result.ok, monitored: mon.rp02 !== false, temp_c: rp02TempResult.temp_c };
   r.rp03   = { ok: rp03Result.ok, monitored: mon.rp03 !== false, temp_c: rp03TempResult.temp_c };

@@ -196,6 +196,7 @@ function renderStatus(r) {
     const _mcb3 = document.getElementById('mon-rp03'); if (_mcb3) _mcb3.checked = (r.rp03?.monitored !== false);
   }
   document.getElementById('svc-robot').innerHTML  = dot(r.robot?.ok);
+  document.getElementById('svc-lxc113').innerHTML = dot(r.lxc113?.ok);
   // AdGuard runs on RP01 — if RP01 monitoring is paused, show that instead of a false red.
   { const _agh = document.getElementById('svc-adguard');
     if (_agh) _agh.innerHTML = (r.rp01?.monitored === false)
@@ -351,7 +352,7 @@ async function loadStatus() {
     renderStatus(r);
     try { localStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(r)); } catch (e) {}
   } catch (e) {
-    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-lxc109','svc-lxc110','svc-rp01','svc-rp02','svc-rp03','svc-robot','svc-adguard','svc-vm101',
+    ['svc-postgres','svc-ha','svc-lxc100','svc-lxc102','svc-lxc103','svc-lxc104','svc-lxc105','svc-lxc106','svc-lxc107','svc-lxc108','svc-lxc109','svc-lxc110','svc-lxc113','svc-rp01','svc-rp02','svc-rp03','svc-robot','svc-adguard','svc-vm101',
      'svc-agent','svc-media-agents','svc-voice-agent','svc-phonelink','svc-auto-scan','svc-ha-to-pg','svc-pm2',
      'svc-orch-last-run','svc-collect-weather','svc-active-alerts','svc-boiler-last','svc-backup-jobs','svc-ups'
     ].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = dot(false); });
