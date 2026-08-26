@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0f1729">
+  <link rel="manifest" href="manifest.json">
+  <title>Kitchen</title>
+  <link rel="stylesheet" href="kitchen.css?v=1">
+</head>
+<body>
+  <header id="bar">
+    <div id="modes">
+      <button id="mode-buy" class="mode active" onclick="setMode('buy')">🛒 Buy</button>
+      <button id="mode-browse" class="mode" onclick="setMode('browse')">ℹ️ Browse</button>
+    </div>
+    <div id="title">🧊 Kitchen</div>
+    <button id="listbtn" onclick="openList()">🧺 List <span id="listcount">0</span></button>
+  </header>
+
+  <main id="grid"><div id="empty">Loading…</div></main>
+
+  <!-- Shopping-list overlay -->
+  <section id="listview" class="overlay">
+    <header class="ov-bar">
+      <button class="ov-back" onclick="closeList()">‹ Back</button>
+      <div class="ov-title">🧺 Shopping List</div>
+      <button class="ov-x" onclick="closeList()">✕</button>
+    </header>
+    <div id="listitems" class="ov-body"></div>
+    <div class="ov-add">
+      <input id="manualadd" placeholder="Add an item by name…" autocomplete="off">
+      <button onclick="manualAdd()">+ Add</button>
+    </div>
+  </section>
+
+  <!-- Product detail overlay (Browse mode) -->
+  <section id="detailview" class="overlay">
+    <header class="ov-bar">
+      <button class="ov-back" onclick="closeDetail()">‹ Back</button>
+      <div class="ov-title">Product</div>
+      <button class="ov-x" onclick="closeDetail()">✕</button>
+    </header>
+    <div id="detailbody" class="ov-body"></div>
+  </section>
+
+  <script src="kitchen.js?v=1"></script>
+</body>
+</html>
