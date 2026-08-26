@@ -48,7 +48,7 @@
     tb.innerHTML = products.map(p => `
       <tr data-id="${p.id}">
         <td class="k-emoji">${p.emoji || '🍽️'}</td>
-        <td class="heb">${esc(p.name)}${p.name_en ? `<div style="font-size:0.72rem;color:#8a93a6;direction:ltr;text-align:left">${esc(p.name_en)}</div>` : ''}</td>
+        <td class="heb">${esc(p.name)}</td>
         <td>${esc(p.category || '')}</td>
         <td>${esc(p.unit || '')}</td>
         <td>${p.price != null ? '₪' + (+p.price).toFixed(2).replace(/\.00$/, '') : ''}</td>
@@ -68,7 +68,6 @@
     const p = products.find(x => x.id === id); if (!p) return;
     $('p-id').value = p.id;
     $('p-name').value = p.name || '';
-    $('p-name-en').value = p.name_en || '';
     $('p-emoji').value = p.emoji || '';
     $('p-category').value = p.category || '';
     $('p-unit').value = p.unit || '';
@@ -79,7 +78,7 @@
   }
 
   window.kResetForm = function () {
-    ['p-id', 'p-name', 'p-name-en', 'p-emoji', 'p-unit', 'p-price', 'p-barcode'].forEach(i => $(i).value = '');
+    ['p-id', 'p-name', 'p-emoji', 'p-unit', 'p-price', 'p-barcode'].forEach(i => $(i).value = '');
     $('p-category').value = '';
     $('pform-title').textContent = 'Add product';
   };
@@ -89,7 +88,6 @@
     if (!name) { alert('Name (Hebrew) is required.'); return; }
     const body = {
       name,
-      name_en: $('p-name-en').value.trim() || null,
       emoji: $('p-emoji').value.trim() || null,
       category: $('p-category').value || null,
       unit: $('p-unit').value.trim() || null,
