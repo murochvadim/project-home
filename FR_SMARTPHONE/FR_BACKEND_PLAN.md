@@ -1,9 +1,10 @@
 # FR Backend Plan (grounded) — build new · migrate · decommission old
 
-> **Status:** PLAN — backend not built yet; **the PHONE side is DONE** (LineageOS + `fr_camera_app`:
-> MJPEG stream on `:8080`, all recognition + **enrollment** states, always-on kiosk — see
-> `FR_SMARTPHONE/CLAUDE.md` + `fr_camera_app/README.md` for the full MQTT state contract). Grounded
-> against the live code/DB/MQTT/infra, **re-verified side-to-side 2026-08-25**.
+> **Status: PHASE 0 (A1 provision) DONE 2026-08-26** — LXC 112 "fr" is up + the FR engine is installed &
+> imports verified (see A1). The **PHONE side is DONE** (LineageOS + `fr_camera_app`: MJPEG on `:8080`, all
+> recognition + **enrollment** states, always-on kiosk — see `FR_SMARTPHONE/CLAUDE.md` +
+> `fr_camera_app/README.md`). **Phase 1 (A2+ — `fr_service.py`, faces DB, FR tab, door chain, orchestrator +
+> backup) to be built at home.** Grounded against live infra, re-verified 2026-08-25/26.
 >
 > **Goal:** replace the old entrance FR (Hi-Link TX-510 `face_01`) with a new engine on a dedicated
 > LXC, fed later by the de-Googled phone as the camera. Build + prove the whole backend FIRST
@@ -71,11 +72,25 @@ The physical door (RemoteXY lock) and the corridor automations are UNCHANGED —
 
 ## PART A — Build the new FR backend (phone-independent)
 
-### A1 — FR LXC + engine
-- Create **LXC 112 "fr" @ `192.168.1.246`** on PVE (verify IP free with a live ping-scan first), Debian, 2c/4GB/~20GB. Unprivileged is fine for dlib (no Docker needed).
-- venv: `pip install face_recognition dlib flask paho-mqtt opencv-python-headless numpy`.
-- `fr_service.py` (Flask + MQTT): `POST /enroll` (photo → 128-d encoding, store), `POST /recognize` (frame → best match + distance), `GET /health`. Smoke test enroll+recognize a photo. No camera/phone yet.
-- Deliverables: LXC 112 up; `FR_SMARTPHONE/lxc/` (service + systemd unit + README); root `CLAUDE.md` LXC-index row; Project Health `svc-fr` cell.
+### A1 — FR LXC + engine  ✅ DONE (Phase 0, 2026-08-26)
+- **LXC 112 "fr" @ `192.168.1.197`** (⚠ NOT `.246` — see the IP-collision note) — Debian 12, 2c/4GB/20GB,
+  **unprivileged**, `features nesting=1`, `onboot=0`, rootfs on `local-zfs`. Created from the
+  `debian-12-standard` template; SSH keys copied from LXC 110; DNS + internet verified.
+- **Engine installed** in **`/opt/fr-agent/venv`**: `face_recognition 1.2.3`, `dlib 20.0.1`, `flask`,
+  `paho-mqtt`, `opencv-python-headless`, `numpy` — **imports verified**. apt build deps:
+  `cmake build-essential python3-dev libopenblas-dev liblapack-dev git`.
+  - ⚠ **`setuptools` pinned `<81`** (`pip install "setuptools<81"`): setuptools ≥81 **removed `pkg_resources`**,
+    which `face_recognition_models/__init__.py` imports → else `ModuleNotFoundError: No module named 'pkg_resources'`.
+- ⚠⚠ **IP-COLLISION LESSON (cost hours — applies to every new LXC/device here):** `.246` (and the email
+  LXC's `.162`) were **squatted by Tuya smart devices** ("Table lamp" / "GMG Light") that had held them since
+  **April 1**. The **router's DHCP pool overlaps the static device/LXC IP range**, so an IP that's *ping-silent
+  right now* can still belong to a sleeping device. **To pick a safe IP:** check it against `net_devices`
+  (30-day history) **AND** `devices` **AND** live ping **AND** `arp-scan` — THEN **reserve it in the router's
+  DHCP** for the LXC's MAC before relying on it. `.197` is reserved for `bc:24:11:12:c8:4b`. See memory
+  `[[incident_dhcp_pool_ip_collision]]`.
+- **STILL TODO (Phase 1, at home):** `fr_service.py` (Flask+MQTT — `/enroll` photo→128-d, `/recognize`
+  frame→match+distance, `/health`), `fr-agent.service` + orphan guard, `FR_SMARTPHONE/lxc/`, the root
+  `CLAUDE.md` LXC-index row, the `agents` row + Project Health `svc-lxc112` cell (A5), and backups (A5).
 
 ### A2 — Faces DB + management UI (scaffold via `/create-agent`)
 - Migration `FR/migrations/001_fr.sql`:
