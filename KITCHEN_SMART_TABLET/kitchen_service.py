@@ -18,6 +18,7 @@ API:
   POST /api/kitchen/categories          -> upsert one category (id present = update)
   POST /api/kitchen/categories/delete   -> soft-delete (active=false)
   POST /api/kitchen/categories/reorder  -> set sort_order from an ordered id list
+  POST /api/kitchen/amounts             -> set קצת/בינוני/הרבה buy amounts on a product
   POST /api/kitchen/stock               -> set qty_on_hand / low_stock_threshold on a product
   POST /api/kitchen/stock/check-missing -> add at/below-threshold products to the active list
   GET  /api/kitchen/list                -> the active shopping list + items (+ product unit/stock/low)
@@ -112,6 +113,14 @@ def products_list():
     except Exception as e:
         return _err(e)
 
+def _amount_defaults(unit):
+    u = (unit or '').lower()
+    if u in ('kg', 'l'):
+        return (0.5, 1, 2, 3)       # weight/volume → fractional
+    if u in ('piece', 'tray'):
+        return (1, 3, 6, 10)        # תבנית counts like יחידה
+    return (1, 2, 4, 6)            # pack/bottle/etc
+
 @app.route('/api/kitchen/products', methods=['POST'])
 def products_upsert():
     try:
@@ -145,12 +154,15 @@ def products_upsert():
                        WHERE id=%(id)s RETURNING *""",
                     {**p, 'id': pid}, fetch='one')
         else:
+            p['amount_little'], p['amount_medium'], p['amount_lots'], p['amount_extra'] = _amount_defaults(p['unit'])
             row = q("""INSERT INTO kitchen_products
                          (name,name_en,category_id,emoji,unit,price,calories_per_unit,nutri_score,
-                          health_score,barcode,notes,sort_order,allergens)
+                          health_score,barcode,notes,sort_order,allergens,
+                          amount_little,amount_medium,amount_lots,amount_extra)
                        VALUES (%(name)s,%(name_en)s,%(category_id)s,%(emoji)s,%(unit)s,%(price)s,
                           %(calories_per_unit)s,%(nutri_score)s,%(health_score)s,%(barcode)s,
-                          %(notes)s,%(sort_order)s,%(allergens)s::jsonb)
+                          %(notes)s,%(sort_order)s,%(allergens)s::jsonb,
+                          %(amount_little)s,%(amount_medium)s,%(amount_lots)s,%(amount_extra)s)
                        RETURNING *""", p, fetch='one')
         return jsonify(row)
     except Exception as e:
@@ -221,6 +233,27 @@ def categories_reorder():
     except Exception as e:
         return _err(e)
 
+# ── settings (singleton config: idle-return timeout, etc.) ──────────
+@app.route('/api/kitchen/settings')
+def settings_get():
+    try:
+        row = q("SELECT config FROM kitchen_settings WHERE id=1", fetch='one')
+        return jsonify(row['config'] if row else {})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/settings', methods=['POST'])
+def settings_set():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        q("""INSERT INTO kitchen_settings (id, config, updated_at) VALUES (1, %s::jsonb, now())
+             ON CONFLICT (id) DO UPDATE SET config = kitchen_settings.config || EXCLUDED.config, updated_at=now()""",
+          (json.dumps(b),), fetch='none')
+        row = q("SELECT config FROM kitchen_settings WHERE id=1", fetch='one')
+        return jsonify(row['config'] if row else {})
+    except Exception as e:
+        return _err(e)
+
 # ── stock (qty_on_hand + low_stock_threshold, in the product's unit) ─
 @app.route('/api/kitchen/stock', methods=['POST'])
 def stock_set():
@@ -238,6 +271,25 @@ def stock_set():
             return jsonify({'error': 'nothing to set'}), 400
         row = q(f"UPDATE kitchen_products SET {','.join(sets)}, updated_at=now() "
                 f"WHERE id=%(id)s RETURNING id, qty_on_hand, low_stock_threshold", params, fetch='one')
+        return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/amounts', methods=['POST'])
+def amounts_set():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        pid = b.get('id')
+        if not pid:
+            return jsonify({'error': 'id required'}), 400
+        sets, params = [], {'id': pid}
+        for k in ('amount_little', 'amount_medium', 'amount_lots', 'amount_extra'):
+            if k in b:
+                sets.append(f'{k}=%({k})s'); params[k] = b.get(k)
+        if not sets:
+            return jsonify({'error': 'nothing to set'}), 400
+        row = q(f"UPDATE kitchen_products SET {','.join(sets)}, updated_at=now() "
+                f"WHERE id=%(id)s RETURNING id, amount_little, amount_medium, amount_lots", params, fetch='one')
         return jsonify(row)
     except Exception as e:
         return _err(e)
@@ -277,7 +329,7 @@ def list_get():
         lid = _active_list_id()
         items = q("""SELECT i.*, p.name AS product_name, p.emoji AS product_emoji,
                             p.unit AS product_unit, p.qty_on_hand AS product_stock,
-                            p.low_stock_threshold AS product_low
+                            p.low_stock_threshold AS product_low, p.price AS product_price
                        FROM kitchen_shopping_items i
                        LEFT JOIN kitchen_products p ON p.id = i.product_id
                       WHERE i.list_id=%s ORDER BY i.checked, i.added_at""", (lid,))

@@ -7,16 +7,45 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>מקרר</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="kitchen.css?v=4">
+  <link rel="stylesheet" href="kitchen.css?v=27">
 </head>
 <body>
   <div id="bar">
     <button id="backbtn" onclick="showHome()" hidden>→ חזרה</button>
     <div id="title">🧊 מקרר</div>
   </div>
+
+  <!-- floating רשימה circle — constant on every screen -->
+  <button id="listbtn" onclick="openListScreen()" title="רשימת קניות">
+    <span class="lb-cap">רשימה</span>
+    <span class="lb-count" id="lb-count">0</span>
+    <span class="lb-date" id="lb-date"></span>
+  </button>
+
   <div id="stage">
     <div id="circles"></div>
   </div>
-  <script src="kitchen.js?v=4"></script>
+
+  <!-- product panel: opens on the RIGHT of the same screen -->
+  <div id="prodpanel" hidden>
+    <div class="pp-backdrop" onclick="closeProduct()"></div>
+    <div class="pp-inner">
+      <button class="pp-close" onclick="closeProduct()">✕</button>
+      <div id="pp-stage"></div>
+      <div id="pp-toast">✓ נוסף לרשימה</div>
+    </div>
+  </div>
+
+  <!-- shopping list screen -->
+  <div id="listview" hidden>
+    <div class="lv-bar">
+      <button class="lv-back" onclick="closeListScreen()">→ חזרה</button>
+      <div class="lv-title">🧺 רשימת קניות</div>
+      <div class="lv-total" id="lv-total">₪0</div>
+    </div>
+    <div id="lv-items"></div>
+  </div>
+
+  <script src="kitchen.js?v=23"></script>
 </body>
 </html>

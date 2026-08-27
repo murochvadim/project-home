@@ -7,20 +7,47 @@ body {
 }
 
 #bar {
-  position: relative; flex: 0 0 auto; display: flex; align-items: center;
-  min-height: 58px; padding: 10px 14px;
+  position: relative; flex: 0 0 auto; min-height: 58px; padding: 10px 14px;
   background: #12203a; border-bottom: 1px solid #22304d;
 }
-#title {                                   /* absolutely centered → stays centered with/without the back button */
-  position: absolute; left: 0; right: 0; text-align: center;
-  font-size: 20px; font-weight: 800; pointer-events: none;
+#title {                                   /* absolutely centered → stays centered on every screen */
+  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+  text-align: center; font-size: 20px; font-weight: 800; pointer-events: none;
 }
 #backbtn {
-  position: relative; z-index: 1;
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%); z-index: 2;
   border: 1px solid #2c3f63; background: #16233f; color: #e8eefc;
   padding: 9px 16px; border-radius: 12px; font-size: 17px; font-weight: 700; cursor: pointer;
 }
 #backbtn[hidden] { display: none; }
+/* floating רשימה circle — constant on every screen, over the stage (top-left) */
+#listbtn {
+  position: fixed; left: 20px; top: 74px; z-index: 30;
+  width: 132px; height: 132px; border-radius: 50%; border: none; background: #000; color: #fff;
+  cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
+}
+#listbtn:active { transform: scale(.94); }
+.lb-cap { font-size: 14px; font-weight: 700; opacity: .92; line-height: 1.1; }
+.lb-count { font-size: 34px; font-weight: 800; line-height: 1.15; }
+.lb-price { font-size: 15px; font-weight: 700; opacity: .95; line-height: 1.1; }
+.lb-date { font-size: 13px; font-weight: 700; opacity: .85; line-height: 1.1; margin-top: 7px; }
+
+/* shopping-list screen */
+#listview { position: fixed; inset: 0; z-index: 45; background: #0f1729; display: flex; flex-direction: column; }
+#listview[hidden] { display: none; }
+.lv-bar { position: relative; flex: 0 0 auto; display: flex; align-items: center; min-height: 62px; padding: 10px 14px; background: #12203a; border-bottom: 1px solid #22304d; }
+.lv-title { position: absolute; left: 0; right: 0; text-align: center; font-size: 19px; font-weight: 800; pointer-events: none; }
+.lv-back { position: absolute; right: 14px; z-index: 1; border: 1px solid #2c3f63; background: #16233f; color: #e8eefc; padding: 9px 16px; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; }
+.lv-total { position: absolute; left: 90px; z-index: 1; font-size: 21px; font-weight: 800; color: #22c55e; }
+#lv-items { flex: 1; overflow-y: auto; padding: 10px 12px; }
+.lv-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid #24345a; background: #16233f; border-radius: 14px; margin-bottom: 10px; }
+.lv-emoji { font-size: 30px; }
+.lv-name { flex: 1; font-size: 19px; font-weight: 600; direction: rtl; text-align: right; }
+.lv-step { display: inline-flex; align-items: center; gap: 8px; }
+.lv-step button { width: 42px; height: 42px; border-radius: 10px; border: 1px solid #2c3f63; background: #0f1729; color: #e8eefc; font-size: 22px; font-weight: 800; cursor: pointer; }
+.lv-qty { min-width: 74px; text-align: center; font-size: 17px; font-weight: 800; }
+.lv-rm { border: none; background: transparent; color: #ef5a6a; font-size: 22px; cursor: pointer; padding: 4px 8px; }
 
 /* the animated field (both screens); nothing scrolls */
 #stage { flex: 1; min-height: 0; position: relative; overflow: hidden; }
@@ -35,7 +62,7 @@ body {
 }
 .circle.center { z-index: 2; box-shadow: 0 8px 26px rgba(0, 0, 0, .5); }
 .circle.center .c-name { font-size: calc(var(--csize, 110px) * 0.20); padding: 0 14px; }   /* name only, larger */
-.circle.prod   { z-index: 1; color: #2a2f3a; }              /* soft charcoal on the lighter product tint */
+.circle.prod   { z-index: 1; color: #000; }                 /* black + bold on the lighter product tint */
 .circle.prod .c-name { text-shadow: none; }
 
 .c-emoji { font-size: calc(var(--csize, 110px) * 0.30); line-height: 1; }
@@ -45,3 +72,33 @@ body {
 }
 
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #7f8db0; font-size: 18px; }
+
+/* product panel — opens on the RIGHT of the same screen; 4 constant circles */
+#prodpanel { position: fixed; inset: 0; z-index: 40; }
+#prodpanel[hidden] { display: none; }
+.pp-backdrop { position: absolute; inset: 0; background: rgba(6, 10, 20, .55); }
+.pp-inner { position: absolute; top: 0; bottom: 0; right: 0; width: min(50%, 560px); background: #0e1a30; border-left: 1px solid #22304d; box-shadow: -10px 0 34px rgba(0, 0, 0, .5); }
+.pp-close { position: absolute; top: 10px; right: 12px; z-index: 3; border: 1px solid #2c3f63; background: #16233f; color: #e8eefc; font-size: 18px; font-weight: 700; border-radius: 10px; padding: 6px 12px; cursor: pointer; }
+#pp-stage { position: absolute; inset: 0; }
+.ppc {
+  position: absolute; border: none; border-radius: 50%;
+  width: var(--csize, 120px); height: var(--csize, 120px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, .4); cursor: pointer; overflow: hidden;
+}
+.ppc.center { color: #fff; z-index: 2; cursor: default; }
+.ppc.center .c-name { text-shadow: 0 1px 3px rgba(0, 0, 0, .45); }
+.ppc.small { color: #2a2f3a; }
+.ppc.small.stock { color: #fff; cursor: default; }
+.ppc.small.inlist { color: #fff; cursor: default; }
+@keyframes ppblink { 0%, 100% { opacity: 1; } 50% { opacity: .12; } }
+.pp-val.blink2 { animation: ppblink .42s ease-in-out 3; }
+.ppc.small:active { transform: scale(.92); }
+.ppc.flash { outline: 4px solid #22c55e; }
+.ppc .c-emoji { font-size: calc(var(--csize, 120px) * 0.30); line-height: 1; }
+.ppc .c-name { font-size: calc(var(--csize, 120px) * 0.155); font-weight: 800; text-align: center; padding: 0 8px; line-height: 1.1; }
+.pp-lbl { font-size: calc(var(--csize, 120px) * 0.19); font-weight: 800; text-align: center; }
+.pp-val { font-size: calc(var(--csize, 120px) * 0.135); font-weight: 700; opacity: .92; }
+.ppc.amt .pp-val { font-size: calc(var(--csize, 120px) * 0.23); font-weight: 800; opacity: 1; }   /* amount circles = value only, larger */
+#pp-toast { position: absolute; left: 0; right: 0; bottom: 18px; text-align: center; color: #22c55e; font-size: 18px; font-weight: 800; opacity: 0; transition: opacity .2s; pointer-events: none; }
+#pp-toast.show { opacity: 1; }

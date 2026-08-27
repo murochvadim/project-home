@@ -11,6 +11,8 @@
   const $ = id => document.getElementById(id);
   const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const UNIT_HE = { kg: 'ק"ג', l: 'ליטר', piece: 'יח׳', tray: 'תבנית', pack: 'חבילה', bottle: 'בקבוק', jar: 'צנצנת', tub: 'גביע', loaf: 'כיכר', bar: 'חטיף' };
+  const unitHe = u => UNIT_HE[(u || '').toLowerCase()] || (u || '');
   const numOf = v => (v == null ? 0 : parseFloat(v) || 0);
   const fmtN = v => { const n = +v; return Number.isInteger(n) ? String(n) : (Math.round(n * 100) / 100).toString(); };
   const unitStep = u => { u = (u || '').toLowerCase(); return (u === 'kg' || u === 'l' || u.includes('ק') || u.includes('ליטר')) ? 0.5 : 1; };
@@ -43,7 +45,7 @@
     catch (e) { products = []; $('p-rows').innerHTML =
       `<tr><td colspan="6" style="color:#ef5a6a">Can't reach kitchen service (${esc(e.message)}) — ${API}</td></tr>`; return; }
     renderProducts();
-    if (categories.length) { renderCategories(); renderStock(); }   // keep counts + stock fresh
+    if (categories.length) { renderCategories(); renderStock(); renderAmounts(); }   // keep counts/stock/amounts fresh
   }
 
   function renderProducts() {
@@ -55,7 +57,7 @@
         <td class="k-emoji">${p.emoji || '🍽️'}</td>
         <td class="heb">${esc(p.name)}</td>
         <td>${p.category_emoji ? p.category_emoji + ' ' : ''}${esc(p.category_name || '')}</td>
-        <td>${esc(p.unit || '')}</td>
+        <td>${esc(unitHe(p.unit))}</td>
         <td>${p.price != null ? '₪' + (+p.price).toFixed(2).replace(/\.00$/, '') : ''}</td>
         <td style="white-space:nowrap;text-align:right">
           <button class="k-edit" data-act="edit" title="Edit">✎</button>
@@ -75,7 +77,7 @@
     $('p-name').value = p.name || '';
     $('p-emoji').value = p.emoji || '';
     $('p-category').value = p.category_id || '';
-    $('p-unit').value = p.unit || '';
+    $('p-unit').value = p.unit || 'piece';
     $('p-price').value = p.price != null ? p.price : '';
     $('p-barcode').value = p.barcode || '';
     $('pform-title').textContent = 'Edit: ' + (p.name || '');
@@ -134,7 +136,7 @@
       const stockN = numOf(i.product_stock);
       const lowN = i.product_low != null ? numOf(i.product_low) : null;
       const isLow = lowN != null && stockN <= lowN;
-      const chip = hasStock ? `<span class="k-stock-chip ${isLow ? 'low' : ''}">במלאי: ${fmtN(stockN)}${unit ? ' ' + esc(unit) : ''}</span>` : '';
+      const chip = hasStock ? `<span class="k-stock-chip ${isLow ? 'low' : ''}">במלאי: ${fmtN(stockN)}${unit ? ' ' + esc(unitHe(unit)) : ''}</span>` : '';
       return `<div class="k-li ${i.checked ? 'checked' : ''}" data-id="${i.id}">
         <input type="checkbox" ${i.checked ? 'checked' : ''} data-act="check">
         <span class="em">${emoji}</span>
@@ -144,7 +146,7 @@
           <span class="qn">${fmtN(numOf(i.qty))}</span>
           <button data-act="inc" title="more">+</button>
         </span>
-        <span class="k-unit">${esc(unit)}</span>
+        <span class="k-unit">${esc(unitHe(unit))}</span>
         ${chip}
         <button class="k-x" data-act="rm" title="Remove">🗑</button>
       </div>`;
@@ -188,7 +190,7 @@
       const name = i.product_name || i.free_text || '(item)';
       const q = numOf(i.qty);
       const unit = i.product_unit || '';
-      const qtyPart = q ? ` ${fmtN(q)}${unit ? ' ' + unit : ''}` : '';
+      const qtyPart = q ? ` ${fmtN(q)}${unit ? ' ' + unitHe(unit) : ''}` : '';
       return '• ' + name + qtyPart;
     });
     const text = '🧺 Shopping list:\n' + lines.join('\n');
@@ -203,6 +205,7 @@
     renderCategoryOptions();
     renderCategories();
     renderStock();
+    renderAmounts();
   }
 
   function renderCategoryOptions() {
@@ -313,7 +316,7 @@
             <span class="qn">${fmtN(stock)}</span>
             <button data-act="inc" title="more">+</button>
           </span>
-          <span class="k-unit">${esc(unit)}</span>
+          <span class="k-unit">${esc(unitHe(unit))}</span>
           <span class="k-unit">low</span>
           <input class="k-lowin" data-act="low" type="number" step="0.5" min="0" value="${low != null ? fmtN(low) : ''}">
           ${isLow ? '<span class="k-stock-chip low">⚠ חסר</span>' : ''}
@@ -352,8 +355,75 @@
     } catch (e) { alert('Check failed: ' + e.message); }
   };
 
+  // ── settings: per-product buy amounts (קצת / בינוני / הרבה) ──
+  function renderAmounts() {
+    const box = $('amt-rows');
+    if (!box) return;
+    if (!products.length) { box.innerHTML = '<div class="k-hint">No products yet — add them on the 🍎 Products tab.</div>'; return; }
+    const catIds = categories.map(c => c.id);
+    const groups = {};
+    products.forEach(p => { const k = (p.category_id == null ? 0 : p.category_id); (groups[k] = groups[k] || []).push(p); });
+    const order = [...catIds, 0].filter((v, i, a) => a.indexOf(v) === i);
+    let html = '';
+    order.forEach(cid => {
+      const list = groups[cid]; if (!list || !list.length) return;
+      const cat = categories.find(c => c.id === cid);
+      const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
+      html += `<div class="k-stock-h">${esc(label)}</div>`;
+      html += list.map(p => {
+        const v = k => (p[k] != null ? +p[k] : '');
+        const cell = (k, lbl) => `<span class="amt-cell">${lbl}<input class="k-lowin" data-k="${k}" type="number" step="0.25" min="0" value="${v(k)}"></span>`;
+        return `<div class="k-srow" data-id="${p.id}">
+          <span class="em">${p.emoji || '🍽️'}</span>
+          <span class="nm">${esc(p.name)}</span>
+          <span class="k-unit">${esc(unitHe(p.unit))}</span>
+          ${cell('amount_little', 'קצת')}${cell('amount_medium', 'בינוני')}${cell('amount_lots', 'הרבה')}${cell('amount_extra', 'הרבה מעוד')}
+          <button class="btn btn-primary btn-sm amt-save" data-act="save">💾 Save</button>
+        </div>`;
+      }).join('');
+    });
+    box.innerHTML = html;
+    box.querySelectorAll('.k-srow').forEach(row => {
+      const id = +row.dataset.id;
+      const btn = row.querySelector('[data-act=save]');
+      row.querySelectorAll('input[data-k]').forEach(inp => { inp.oninput = () => btn.classList.add('dirty'); });
+      btn.onclick = () => saveAmounts(id, row, btn);
+    });
+  }
+  async function saveAmounts(id, row, btn) {
+    const body = { id };
+    row.querySelectorAll('input[data-k]').forEach(inp => {
+      body[inp.dataset.k] = (inp.value === '') ? null : Math.max(0, parseFloat(inp.value) || 0);
+    });
+    try {
+      await jpost('/api/kitchen/amounts', body);
+      const p = products.find(x => x.id === id);   // keep the local copy in sync (no full reload)
+      if (p) row.querySelectorAll('input[data-k]').forEach(inp => { p[inp.dataset.k] = body[inp.dataset.k]; });
+      btn.classList.remove('dirty'); btn.textContent = '✓ Saved';
+      setTimeout(() => { btn.textContent = '💾 Save'; }, 1200);
+    } catch (e) { alert('Save failed: ' + e.message); }
+  }
+
+  // ── Settings sub-tabs (Product Settings / Tech Settings) ──
+  window.kSub = function (name, btn) {
+    document.querySelectorAll('.sub-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.k-subtab').forEach(b => b.classList.remove('active'));
+    const p = document.getElementById('sub-' + name); if (p) p.classList.add('active');
+    if (btn) btn.classList.add('active');
+  };
+  async function loadTech() {
+    try { const s = await jget('/api/kitchen/settings'); const el = $('ts-idle'); if (el) el.value = (s && s.idle_return_sec != null) ? s.idle_return_sec : 60; }
+    catch (e) { }
+  }
+  window.kSaveTech = async function () {
+    const v = parseInt($('ts-idle').value, 10);
+    const sec = isNaN(v) ? 60 : Math.max(0, v);
+    try { await jpost('/api/kitchen/settings', { idle_return_sec: sec }); const b = event && event.target; if (b) { b.textContent = '✓ Saved'; setTimeout(() => b.textContent = '💾 Save', 1200); } }
+    catch (e) { alert('Save failed: ' + e.message); }
+  };
+
   // ── boot ──
-  window.kLoad = async function () { await loadProducts(); await loadCategories(); await loadList(); };
+  window.kLoad = async function () { await loadProducts(); await loadCategories(); await loadList(); await loadTech(); };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);
   else window.kLoad();

@@ -2397,7 +2397,7 @@ const DBV_GROUPS = [
   ['Notifications',         ['notification_defs','notification_events']],
   ['Email',                 ['email_messages','email_labels','email_state','email_extractions','email_automation_log']],
   ['Kazir 15',              ['kazir15_hosts','kazir15_names']],
-  ['Kitchen',               ['kitchen_categories','kitchen_products','kitchen_shopping_lists','kitchen_shopping_items']],
+  ['Kitchen',               ['kitchen_categories','kitchen_products','kitchen_shopping_lists','kitchen_shopping_items','kitchen_settings']],
 ];
 const DBV_TABLES = DBV_GROUPS.flatMap(g => g[1]);
 const DBV_TABLE_GROUP = Object.fromEntries(DBV_GROUPS.flatMap(g => g[1].map(t => [t, g[0]])));
@@ -2433,7 +2433,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       email_messages: 'msg_ts', email_labels: 'updated_at', email_state: 'updated_at',
       email_extractions: 'extracted_at', email_automation_log: 'ts',
       kazir15_hosts: 'last_scan_at', kazir15_names: 'updated_at',
-      kitchen_categories: 'updated_at', kitchen_products: 'updated_at', kitchen_shopping_lists: 'created_at', kitchen_shopping_items: 'added_at',
+      kitchen_categories: 'updated_at', kitchen_products: 'updated_at', kitchen_shopping_lists: 'created_at', kitchen_shopping_items: 'added_at', kitchen_settings: 'updated_at',
       power_consumption: 'ts',
       power_devices: 'updated_at',
       power_bills: 'uploaded_at',
