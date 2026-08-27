@@ -127,7 +127,7 @@
 
     let placed = 0;
     for (let k = 0; k < ringCount; k++) {
-      const cnt = counts[k], r = radii[k], om = OMEGA * (k % 2 === 0 ? 1 : -1);   // alternate direction per ring
+      const cnt = counts[k], r = radii[k], om = OMEGA;   // all rings turn the same way — clockwise
       for (let j = 0; j < cnt; j++) {
         const el = els[1 + placed + j];
         const base = (j * 2 * Math.PI / cnt) - Math.PI / 2 + k * 0.4;
