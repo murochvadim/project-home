@@ -11,6 +11,9 @@
   const $ = id => document.getElementById(id);
   const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const numOf = v => (v == null ? 0 : parseFloat(v) || 0);
+  const fmtN = v => { const n = +v; return Number.isInteger(n) ? String(n) : (Math.round(n * 100) / 100).toString(); };
+  const unitStep = u => { u = (u || '').toLowerCase(); return (u === 'kg' || u === 'l' || u.includes('ק') || u.includes('ליטר')) ? 0.5 : 1; };
 
   async function jget(p) {
     const r = await fetch(API + p, { cache: 'no-store' });
@@ -40,7 +43,7 @@
     catch (e) { products = []; $('p-rows').innerHTML =
       `<tr><td colspan="6" style="color:#ef5a6a">Can't reach kitchen service (${esc(e.message)}) — ${API}</td></tr>`; return; }
     renderProducts();
-    if (categories.length) renderCategories();   // keep per-category counts fresh
+    if (categories.length) { renderCategories(); renderStock(); }   // keep counts + stock fresh
   }
 
   function renderProducts() {
@@ -122,22 +125,38 @@
 
   function renderList() {
     const box = $('l-rows');
-    if (!listItems.length) { box.innerHTML = '<div class="k-hint">List is empty. Add items from the fridge tablet, or check the Products tab.</div>'; return; }
+    if (!listItems.length) { box.innerHTML = '<div class="k-hint">List is empty. Add items from the fridge tablet, or the 📦 Stock tab.</div>'; return; }
     box.innerHTML = listItems.map(i => {
       const name = i.product_name || i.free_text || '(item)';
       const emoji = i.product_emoji || '🛒';
-      const qty = (i.qty && +i.qty !== 1) ? ` ×${+i.qty}` : '';
+      const unit = i.product_unit || '';
+      const hasStock = i.product_stock != null;
+      const stockN = numOf(i.product_stock);
+      const lowN = i.product_low != null ? numOf(i.product_low) : null;
+      const isLow = lowN != null && stockN <= lowN;
+      const chip = hasStock ? `<span class="k-stock-chip ${isLow ? 'low' : ''}">במלאי: ${fmtN(stockN)}${unit ? ' ' + esc(unit) : ''}</span>` : '';
       return `<div class="k-li ${i.checked ? 'checked' : ''}" data-id="${i.id}">
         <input type="checkbox" ${i.checked ? 'checked' : ''} data-act="check">
         <span class="em">${emoji}</span>
-        <span class="nm">${esc(name)}${qty}</span>
+        <span class="nm">${esc(name)}</span>
+        <span class="k-step">
+          <button data-act="dec" title="less">−</button>
+          <span class="qn">${fmtN(numOf(i.qty))}</span>
+          <button data-act="inc" title="more">+</button>
+        </span>
+        <span class="k-unit">${esc(unit)}</span>
+        ${chip}
         <button class="k-x" data-act="rm" title="Remove">🗑</button>
       </div>`;
     }).join('');
     box.querySelectorAll('.k-li').forEach(row => {
       const id = +row.dataset.id;
+      const it = listItems.find(x => x.id === id);
+      const step = unitStep(it && it.product_unit);
       row.querySelector('[data-act=check]').onchange = e => toggleCheck(id, e.target.checked);
       row.querySelector('[data-act=rm]').onclick = () => removeItem(id);
+      row.querySelector('[data-act=dec]').onclick = () => setItemQty(id, numOf(it.qty) - step);
+      row.querySelector('[data-act=inc]').onclick = () => setItemQty(id, numOf(it.qty) + step);
     });
   }
 
@@ -148,6 +167,11 @@
   async function removeItem(id) {
     try { await jpost('/api/kitchen/list/remove', { id }); await loadList(); }
     catch (e) { alert('Remove failed: ' + e.message); }
+  }
+  async function setItemQty(id, qty) {
+    qty = Math.max(0, Math.round(qty * 100) / 100);   // 0 → server removes it
+    try { await jpost('/api/kitchen/list/qty', { id, qty }); await loadList(); }
+    catch (e) { alert('Qty failed: ' + e.message); }
   }
   window.kClearChecked = async function () {
     const done = listItems.filter(i => i.checked);
@@ -162,8 +186,10 @@
     if (!pending.length) { alert('Nothing to send — list is empty (or all checked).'); return; }
     const lines = pending.map(i => {
       const name = i.product_name || i.free_text || '(item)';
-      const qty = (i.qty && +i.qty !== 1) ? ` x${+i.qty}` : '';
-      return '• ' + name + qty;
+      const q = numOf(i.qty);
+      const unit = i.product_unit || '';
+      const qtyPart = q ? ` ${fmtN(q)}${unit ? ' ' + unit : ''}` : '';
+      return '• ' + name + qtyPart;
     });
     const text = '🧺 Shopping list:\n' + lines.join('\n');
     // wa.me with no number → user picks the chat in WhatsApp.
@@ -176,6 +202,7 @@
     catch (e) { categories = []; }
     renderCategoryOptions();
     renderCategories();
+    renderStock();
   }
 
   function renderCategoryOptions() {
@@ -257,6 +284,73 @@
     try { await jpost('/api/kitchen/categories/reorder', { order }); await loadCategories(); }
     catch (e) { alert('Reorder failed: ' + e.message); }
   }
+
+  // ── stock (qty_on_hand + low threshold per product, in its unit) ──
+  function renderStock() {
+    const box = $('stock-rows');
+    if (!box) return;
+    if (!products.length) { box.innerHTML = '<div class="k-hint">No products yet — add them on the 🍎 Products tab.</div>'; return; }
+    const catIds = categories.map(c => c.id);
+    const groups = {};
+    products.forEach(p => { const k = (p.category_id == null ? 0 : p.category_id); (groups[k] = groups[k] || []).push(p); });
+    const order = [...catIds, 0].filter((v, i, a) => a.indexOf(v) === i);
+    let html = '';
+    order.forEach(cid => {
+      const list = groups[cid]; if (!list || !list.length) return;
+      const cat = categories.find(c => c.id === cid);
+      const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
+      html += `<div class="k-stock-h">${esc(label)}</div>`;
+      html += list.map(p => {
+        const unit = p.unit || '';
+        const stock = numOf(p.qty_on_hand);
+        const low = p.low_stock_threshold != null ? numOf(p.low_stock_threshold) : null;
+        const isLow = low != null && stock <= low;
+        return `<div class="k-srow" data-id="${p.id}">
+          <span class="em">${p.emoji || '🍽️'}</span>
+          <span class="nm">${esc(p.name)}</span>
+          <span class="k-step">
+            <button data-act="dec" title="less">−</button>
+            <span class="qn">${fmtN(stock)}</span>
+            <button data-act="inc" title="more">+</button>
+          </span>
+          <span class="k-unit">${esc(unit)}</span>
+          <span class="k-unit">low</span>
+          <input class="k-lowin" data-act="low" type="number" step="0.5" min="0" value="${low != null ? fmtN(low) : ''}">
+          ${isLow ? '<span class="k-stock-chip low">⚠ חסר</span>' : ''}
+        </div>`;
+      }).join('');
+    });
+    box.innerHTML = html;
+    box.querySelectorAll('.k-srow').forEach(row => {
+      const id = +row.dataset.id;
+      const p = products.find(x => x.id === id);
+      const step = unitStep(p && p.unit);
+      row.querySelector('[data-act=dec]').onclick = () => setStock(id, numOf(p.qty_on_hand) - step);
+      row.querySelector('[data-act=inc]').onclick = () => setStock(id, numOf(p.qty_on_hand) + step);
+      row.querySelector('[data-act=low]').onchange = e => setLow(id, e.target.value);
+    });
+  }
+
+  async function setStock(id, qty) {
+    qty = Math.max(0, Math.round(qty * 100) / 100);
+    try { await jpost('/api/kitchen/stock', { id, qty_on_hand: qty }); await loadProducts(); }
+    catch (e) { alert('Stock failed: ' + e.message); }
+  }
+  async function setLow(id, val) {
+    const low = (val === '' || val == null) ? null : Math.max(0, parseFloat(val) || 0);
+    try { await jpost('/api/kitchen/stock', { id, low_stock_threshold: low }); await loadProducts(); }
+    catch (e) { alert('Low failed: ' + e.message); }
+  }
+
+  window.kCheckMissing = async function () {
+    try {
+      const r = await jpost('/api/kitchen/stock/check-missing');
+      if (!r.missing.length) { alert('אין מוצרים חסרים 👍\n(No items are at/below their low threshold — set thresholds in the Stock rows.)'); return; }
+      alert(`חסרים: ${r.missing.length}\nנוספו לרשימה: ${r.added.length}` + (r.added.length ? '\n• ' + r.added.join('\n• ') : '\n(all already on the list)'));
+      await loadList();
+      kTab('lists', [...document.querySelectorAll('.k-tab')].find(b => b.textContent.includes('Shopping')));
+    } catch (e) { alert('Check failed: ' + e.message); }
+  };
 
   // ── boot ──
   window.kLoad = async function () { await loadProducts(); await loadCategories(); await loadList(); };

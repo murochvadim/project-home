@@ -18,8 +18,11 @@ API:
   POST /api/kitchen/categories          -> upsert one category (id present = update)
   POST /api/kitchen/categories/delete   -> soft-delete (active=false)
   POST /api/kitchen/categories/reorder  -> set sort_order from an ordered id list
-  GET  /api/kitchen/list                -> the active shopping list + its items
-  POST /api/kitchen/list/add            -> add an item (product_id | free_text, qty)
+  POST /api/kitchen/stock               -> set qty_on_hand / low_stock_threshold on a product
+  POST /api/kitchen/stock/check-missing -> add at/below-threshold products to the active list
+  GET  /api/kitchen/list                -> the active shopping list + items (+ product unit/stock/low)
+  POST /api/kitchen/list/add            -> add an item (product_id bumps qty if already on the list)
+  POST /api/kitchen/list/qty            -> set an item's qty (0 = remove)
   POST /api/kitchen/list/check          -> toggle an item checked
   POST /api/kitchen/list/remove         -> delete an item
   GET  /api/kitchen/barcode/<code>      -> Open Food Facts lookup (non-Chinese), cache-aware
@@ -218,6 +221,49 @@ def categories_reorder():
     except Exception as e:
         return _err(e)
 
+# ── stock (qty_on_hand + low_stock_threshold, in the product's unit) ─
+@app.route('/api/kitchen/stock', methods=['POST'])
+def stock_set():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        pid = b.get('id')
+        if not pid:
+            return jsonify({'error': 'id required'}), 400
+        sets, params = [], {'id': pid}
+        if 'qty_on_hand' in b:
+            sets.append('qty_on_hand=%(qty_on_hand)s'); params['qty_on_hand'] = b.get('qty_on_hand')
+        if 'low_stock_threshold' in b:
+            sets.append('low_stock_threshold=%(low_stock_threshold)s'); params['low_stock_threshold'] = b.get('low_stock_threshold')
+        if not sets:
+            return jsonify({'error': 'nothing to set'}), 400
+        row = q(f"UPDATE kitchen_products SET {','.join(sets)}, updated_at=now() "
+                f"WHERE id=%(id)s RETURNING id, qty_on_hand, low_stock_threshold", params, fetch='one')
+        return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/stock/check-missing', methods=['POST'])
+def stock_check_missing():
+    try:
+        lid = _active_list_id()
+        # "missing" = at or below the low threshold (threshold must be set)
+        low = q("""SELECT id, name FROM kitchen_products
+                    WHERE active IS NOT FALSE AND low_stock_threshold IS NOT NULL
+                      AND COALESCE(qty_on_hand, 0) <= low_stock_threshold
+                    ORDER BY sort_order, name""")
+        added = []
+        for p in low:
+            ex = q("""SELECT 1 FROM kitchen_shopping_items
+                       WHERE list_id=%s AND product_id=%s AND checked=false LIMIT 1""",
+                   (lid, p['id']), fetch='one')
+            if not ex:
+                q("INSERT INTO kitchen_shopping_items (list_id, product_id, qty) VALUES (%s,%s,1)",
+                  (lid, p['id']), fetch='none')
+                added.append(p['name'])
+        return jsonify({'ok': True, 'added': added, 'missing': [p['name'] for p in low]})
+    except Exception as e:
+        return _err(e)
+
 # ── shopping list (single shared active list) ──────────────────────
 def _active_list_id():
     row = q("SELECT id FROM kitchen_shopping_lists WHERE active IS NOT FALSE ORDER BY id DESC LIMIT 1", fetch='one')
@@ -229,7 +275,9 @@ def _active_list_id():
 def list_get():
     try:
         lid = _active_list_id()
-        items = q("""SELECT i.*, p.name AS product_name, p.emoji AS product_emoji
+        items = q("""SELECT i.*, p.name AS product_name, p.emoji AS product_emoji,
+                            p.unit AS product_unit, p.qty_on_hand AS product_stock,
+                            p.low_stock_threshold AS product_low
                        FROM kitchen_shopping_items i
                        LEFT JOIN kitchen_products p ON p.id = i.product_id
                       WHERE i.list_id=%s ORDER BY i.checked, i.added_at""", (lid,))
@@ -245,10 +293,37 @@ def list_add():
         ft = (b.get('free_text') or '').strip() or None
         if not pid and not ft:
             return jsonify({'error': 'product_id or free_text required'}), 400
+        lid = _active_list_id()
+        add_qty = b.get('qty') or 1
+        # tap/add the same product again -> bump its qty instead of a duplicate row
+        if pid:
+            ex = q("""SELECT id FROM kitchen_shopping_items
+                       WHERE list_id=%s AND product_id=%s AND checked=false
+                       ORDER BY id LIMIT 1""", (lid, pid), fetch='one')
+            if ex:
+                row = q("UPDATE kitchen_shopping_items SET qty=qty+%s WHERE id=%s RETURNING *",
+                        (add_qty, ex['id']), fetch='one')
+                return jsonify(row)
         row = q("""INSERT INTO kitchen_shopping_items (list_id, product_id, free_text, qty)
                    VALUES (%s,%s,%s,%s) RETURNING *""",
-                (_active_list_id(), pid, ft, b.get('qty') or 1), fetch='one')
+                (lid, pid, ft, add_qty), fetch='one')
         return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/list/qty', methods=['POST'])
+def list_qty():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        iid, qty = b.get('id'), b.get('qty')
+        if iid is None or qty is None:
+            return jsonify({'error': 'id + qty required'}), 400
+        qty = max(0, float(qty))
+        if qty <= 0:                       # dial down to 0 = remove from the list
+            q("DELETE FROM kitchen_shopping_items WHERE id=%s", (iid,), fetch='none')
+            return jsonify({'ok': True, 'removed': True})
+        q("UPDATE kitchen_shopping_items SET qty=%s WHERE id=%s", (qty, iid), fetch='none')
+        return jsonify({'ok': True})
     except Exception as e:
         return _err(e)
 
