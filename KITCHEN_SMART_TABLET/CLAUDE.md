@@ -32,7 +32,9 @@
 
 **Remaining:** Caddy internal-CA HTTPS (needed for the barcode camera secure context) + Fully Kiosk on
 the fridge tablet + real barcode camera test + install the Caddy root CA on the tablet — all **home
-steps**. Optional Step 7: `svc-lxc113` Health cell + PVE vzdump backup (needs explicit host OK).
+steps**. **Step 7 DONE 2026-08-27:** `svc-lxc113` Health cell (server.js `tcpCheck` + `health.js`) +
+**full backup** — on-site PVE vzdump (`QNAP_KITCHEN_Backup` → `/PBS_Data/KITCHEN_Data`, 05:25, keep-daily=4)
++ off-site (`113` in `guests-cloud-backup.sh` GUESTS → gpg→Drive `Guest_Images/113/`), verified end-to-end.
 
 ---
 

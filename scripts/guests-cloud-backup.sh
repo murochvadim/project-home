@@ -7,7 +7,7 @@
 # dashboard_settings.privacy.cloud_retention (min 1, default 4). Logs to Recent
 # Backup Log via the disabled "Guest Images (Drive)" job.
 #
-# Usage: guests-cloud-backup.sh [guest_id]   (no arg = all 100-110; arg = just that one)
+# Usage: guests-cloud-backup.sh [guest_id]   (no arg = all guests; arg = just that one)
 set -eo pipefail
 
 DB_HOST="192.168.1.219"; DB_NAME="home_data"; DB_USER="postgres"
@@ -16,7 +16,7 @@ PASSFILE="/etc/privacy-project-backup.pass"
 PBS="/mnt/pbs"
 REMOTE="gdrive_sheets:Guest_Images"
 JOB_NAME="Guest Images (Drive)"
-GUESTS="100 101 102 103 104 105 106 107 108 109 110 111"
+GUESTS="100 101 102 103 104 105 106 107 108 109 110 111 113"
 [ -n "$1" ] && GUESTS="$1"
 
 # HARDENING vs the shared rclone client_id rate limit (Error 403 "Queries per
