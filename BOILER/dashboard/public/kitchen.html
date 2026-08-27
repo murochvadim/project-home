@@ -81,6 +81,7 @@
 
   <div class="k-tabs">
     <button class="k-tab active" onclick="kTab('products', this)">🍎 Products</button>
+    <button class="k-tab" onclick="kTab('cats', this)">🏷 Categories</button>
     <button class="k-tab" onclick="kTab('lists', this)">🧺 Shopping List</button>
   </div>
 
@@ -92,10 +93,7 @@
         <input type="hidden" id="p-id">
         <label>Name (Hebrew)<input id="p-name" class="heb" placeholder="שם המוצר"></label>
         <label>Emoji<input id="p-emoji" style="width:64px" placeholder="🍎"></label>
-        <label>Category<select id="p-category">
-          <option value="">—</option><option>produce</option><option>dairy</option><option>bakery</option>
-          <option>meat</option><option>pantry</option><option>beverage</option><option>frozen</option><option>snack</option>
-        </select></label>
+        <label>Category<select id="p-category"><option value="">—</option></select></label>
         <label>Unit<input id="p-unit" style="width:80px" placeholder="piece"></label>
         <label>Price ₪<input id="p-price" type="number" step="0.1" style="width:90px"></label>
         <label>Barcode<input id="p-barcode" style="width:130px"></label>
@@ -108,6 +106,27 @@
       <table class="k-table">
         <thead><tr><th></th><th>Name</th><th>Category</th><th>Unit</th><th>Price</th><th></th></tr></thead>
         <tbody id="p-rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Categories -->
+  <div id="tab-cats" class="tab-panel">
+    <div class="card">
+      <h3 id="cform-title" style="margin-top:0">Add category</h3>
+      <div class="k-form">
+        <input type="hidden" id="c-id">
+        <label>Name (Hebrew)<input id="c-name" class="heb" placeholder="שם הקטגוריה"></label>
+        <label>Emoji<input id="c-emoji" style="width:64px" placeholder="🥦"></label>
+        <button class="btn btn-primary btn-sm" onclick="kSaveCategory()">Save</button>
+        <button class="btn btn-secondary btn-sm" onclick="kResetCatForm()">Clear</button>
+      </div>
+      <div style="font-size:0.78rem;color:#8a93a6;margin-top:6px;">Order (▲▼) sets the page/section order on the fridge tablet.</div>
+    </div>
+    <div class="card">
+      <table class="k-table">
+        <thead><tr><th></th><th>Category</th><th>Products</th><th style="text-align:right">Order</th><th></th></tr></thead>
+        <tbody id="c-rows"></tbody>
       </table>
     </div>
   </div>
@@ -128,6 +147,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/kitchen.js?v=2"></script>
+<script src="js/kitchen.js?v=3"></script>
 </body>
 </html>

@@ -6,6 +6,7 @@
 
   let products = [];
   let listItems = [];
+  let categories = [];
 
   const $ = id => document.getElementById(id);
   const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c =>
@@ -39,6 +40,7 @@
     catch (e) { products = []; $('p-rows').innerHTML =
       `<tr><td colspan="6" style="color:#ef5a6a">Can't reach kitchen service (${esc(e.message)}) — ${API}</td></tr>`; return; }
     renderProducts();
+    if (categories.length) renderCategories();   // keep per-category counts fresh
   }
 
   function renderProducts() {
@@ -49,7 +51,7 @@
       <tr data-id="${p.id}">
         <td class="k-emoji">${p.emoji || '🍽️'}</td>
         <td class="heb">${esc(p.name)}</td>
-        <td>${esc(p.category || '')}</td>
+        <td>${p.category_emoji ? p.category_emoji + ' ' : ''}${esc(p.category_name || '')}</td>
         <td>${esc(p.unit || '')}</td>
         <td>${p.price != null ? '₪' + (+p.price).toFixed(2).replace(/\.00$/, '') : ''}</td>
         <td style="white-space:nowrap;text-align:right">
@@ -69,7 +71,7 @@
     $('p-id').value = p.id;
     $('p-name').value = p.name || '';
     $('p-emoji').value = p.emoji || '';
-    $('p-category').value = p.category || '';
+    $('p-category').value = p.category_id || '';
     $('p-unit').value = p.unit || '';
     $('p-price').value = p.price != null ? p.price : '';
     $('p-barcode').value = p.barcode || '';
@@ -89,7 +91,7 @@
     const body = {
       name,
       emoji: $('p-emoji').value.trim() || null,
-      category: $('p-category').value || null,
+      category_id: $('p-category').value ? +$('p-category').value : null,
       unit: $('p-unit').value.trim() || null,
       price: $('p-price').value !== '' ? +$('p-price').value : null,
       barcode: $('p-barcode').value.trim() || null,
@@ -168,8 +170,96 @@
     window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
   };
 
+  // ── categories (managed Hebrew set; order = fridge-tablet page order) ──
+  async function loadCategories() {
+    try { categories = await jget('/api/kitchen/categories') || []; }
+    catch (e) { categories = []; }
+    renderCategoryOptions();
+    renderCategories();
+  }
+
+  function renderCategoryOptions() {
+    const sel = $('p-category');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">—</option>' +
+      categories.map(c => `<option value="${c.id}">${c.emoji ? c.emoji + ' ' : ''}${esc(c.name)}</option>`).join('');
+    sel.value = cur;
+  }
+
+  function renderCategories() {
+    const tb = $('c-rows');
+    if (!tb) return;
+    if (!categories.length) { tb.innerHTML = '<tr><td colspan="5" class="k-hint">No categories yet — add one above.</td></tr>'; return; }
+    const counts = {};
+    products.forEach(p => { if (p.category_id != null) counts[p.category_id] = (counts[p.category_id] || 0) + 1; });
+    tb.innerHTML = categories.map((c, i) => `
+      <tr data-id="${c.id}">
+        <td class="k-emoji">${c.emoji || '🏷'}</td>
+        <td class="heb">${esc(c.name)}</td>
+        <td>${counts[c.id] || 0}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="k-edit" data-act="up"   title="Move up"   ${i === 0 ? 'disabled style="opacity:.3"' : ''}>▲</button>
+          <button class="k-edit" data-act="down" title="Move down" ${i === categories.length - 1 ? 'disabled style="opacity:.3"' : ''}>▼</button>
+        </td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="k-edit" data-act="edit" title="Edit">✎</button>
+          <button class="k-x" data-act="del" title="Delete">🗑</button>
+        </td>
+      </tr>`).join('');
+    tb.querySelectorAll('tr[data-id]').forEach(row => {
+      const id = +row.dataset.id;
+      const up = row.querySelector('[data-act=up]');   if (up && !up.disabled)   up.onclick   = () => moveCategory(id, -1);
+      const dn = row.querySelector('[data-act=down]'); if (dn && !dn.disabled)   dn.onclick   = () => moveCategory(id, 1);
+      row.querySelector('[data-act=edit]').onclick = () => editCategory(id);
+      row.querySelector('[data-act=del]').onclick  = () => delCategory(id);
+    });
+  }
+
+  function editCategory(id) {
+    const c = categories.find(x => x.id === id); if (!c) return;
+    $('c-id').value = c.id;
+    $('c-name').value = c.name || '';
+    $('c-emoji').value = c.emoji || '';
+    $('cform-title').textContent = 'Edit: ' + (c.name || '');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  window.kResetCatForm = function () {
+    ['c-id', 'c-name', 'c-emoji'].forEach(i => $(i).value = '');
+    $('cform-title').textContent = 'Add category';
+  };
+
+  window.kSaveCategory = async function () {
+    const name = $('c-name').value.trim();
+    if (!name) { alert('Category name (Hebrew) is required.'); return; }
+    const body = { name, emoji: $('c-emoji').value.trim() || null };
+    const id = $('c-id').value;
+    if (id) body.id = +id; else body.sort_order = categories.length + 1;
+    try { await jpost('/api/kitchen/categories', body); window.kResetCatForm(); await loadCategories(); }
+    catch (e) { alert('Save failed: ' + e.message); }
+  };
+
+  async function delCategory(id) {
+    const c = categories.find(x => x.id === id);
+    const n = products.filter(p => p.category_id === id).length;
+    if (!confirm(`Delete category "${c ? c.name : id}"?` + (n ? `\n${n} product(s) will become uncategorized.` : ''))) return;
+    try { await jpost('/api/kitchen/categories/delete', { id }); await loadCategories(); await loadProducts(); }
+    catch (e) { alert('Delete failed: ' + e.message); }
+  }
+
+  async function moveCategory(id, dir) {
+    const i = categories.findIndex(x => x.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= categories.length) return;
+    const order = categories.map(c => c.id);
+    order.splice(i, 1); order.splice(j, 0, id);
+    try { await jpost('/api/kitchen/categories/reorder', { order }); await loadCategories(); }
+    catch (e) { alert('Reorder failed: ' + e.message); }
+  }
+
   // ── boot ──
-  window.kLoad = async function () { await loadProducts(); await loadList(); };
+  window.kLoad = async function () { await loadProducts(); await loadCategories(); await loadList(); };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);
   else window.kLoad();

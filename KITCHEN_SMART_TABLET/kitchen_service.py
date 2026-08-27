@@ -14,6 +14,10 @@ API:
   GET  /api/kitchen/products            -> active catalog (add ?all=1 for inactive too)
   POST /api/kitchen/products            -> upsert one product (id present = update), RETURNING
   POST /api/kitchen/products/delete     -> soft-delete (active=false)
+  GET  /api/kitchen/categories          -> managed Hebrew categories (sort_order = tablet page order)
+  POST /api/kitchen/categories          -> upsert one category (id present = update)
+  POST /api/kitchen/categories/delete   -> soft-delete (active=false)
+  POST /api/kitchen/categories/reorder  -> set sort_order from an ordered id list
   GET  /api/kitchen/list                -> the active shopping list + its items
   POST /api/kitchen/list/add            -> add an item (product_id | free_text, qty)
   POST /api/kitchen/list/check          -> toggle an item checked
@@ -96,10 +100,11 @@ def health():
 @app.route('/api/kitchen/products')
 def products_list():
     try:
-        sql = "SELECT * FROM kitchen_products"
+        sql = ("SELECT p.*, c.name AS category_name, c.emoji AS category_emoji "
+               "FROM kitchen_products p LEFT JOIN kitchen_categories c ON c.id = p.category_id")
         if request.args.get('all') != '1':
-            sql += " WHERE active IS NOT FALSE"
-        sql += " ORDER BY sort_order, name"
+            sql += " WHERE p.active IS NOT FALSE"
+        sql += " ORDER BY p.sort_order, p.name"
         return jsonify(q(sql))
     except Exception as e:
         return _err(e)
@@ -114,7 +119,7 @@ def products_upsert():
         p = {
             'name': name,
             'name_en': b.get('name_en'),
-            'category': b.get('category'),
+            'category_id': b.get('category_id'),
             'emoji': b.get('emoji'),
             'unit': b.get('unit') or 'piece',
             'price': b.get('price'),
@@ -129,7 +134,7 @@ def products_upsert():
         pid = b.get('id')
         if pid:
             row = q("""UPDATE kitchen_products SET
-                         name=%(name)s, name_en=%(name_en)s, category=%(category)s, emoji=%(emoji)s,
+                         name=%(name)s, name_en=%(name_en)s, category_id=%(category_id)s, emoji=%(emoji)s,
                          unit=%(unit)s, price=%(price)s, calories_per_unit=%(calories_per_unit)s,
                          nutri_score=%(nutri_score)s, health_score=%(health_score)s, barcode=%(barcode)s,
                          notes=%(notes)s, sort_order=%(sort_order)s, allergens=%(allergens)s::jsonb,
@@ -138,9 +143,9 @@ def products_upsert():
                     {**p, 'id': pid}, fetch='one')
         else:
             row = q("""INSERT INTO kitchen_products
-                         (name,name_en,category,emoji,unit,price,calories_per_unit,nutri_score,
+                         (name,name_en,category_id,emoji,unit,price,calories_per_unit,nutri_score,
                           health_score,barcode,notes,sort_order,allergens)
-                       VALUES (%(name)s,%(name_en)s,%(category)s,%(emoji)s,%(unit)s,%(price)s,
+                       VALUES (%(name)s,%(name_en)s,%(category_id)s,%(emoji)s,%(unit)s,%(price)s,
                           %(calories_per_unit)s,%(nutri_score)s,%(health_score)s,%(barcode)s,
                           %(notes)s,%(sort_order)s,%(allergens)s::jsonb)
                        RETURNING *""", p, fetch='one')
@@ -156,6 +161,60 @@ def products_delete():
             return jsonify({'error': 'id required'}), 400
         q("UPDATE kitchen_products SET active=false, updated_at=now() WHERE id=%s", (pid,), fetch='none')
         return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+# ── categories (managed Hebrew set; sort_order = tablet page order) ─
+@app.route('/api/kitchen/categories')
+def categories_list():
+    try:
+        sql = "SELECT * FROM kitchen_categories"
+        if request.args.get('all') != '1':
+            sql += " WHERE active IS NOT FALSE"
+        sql += " ORDER BY sort_order, name"
+        return jsonify(q(sql))
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/categories', methods=['POST'])
+def categories_upsert():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        name = (b.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'name required'}), 400
+        c = {'name': name, 'emoji': b.get('emoji'), 'sort_order': b.get('sort_order') or 0}
+        cid = b.get('id')
+        if cid:
+            row = q("""UPDATE kitchen_categories SET name=%(name)s, emoji=%(emoji)s,
+                         sort_order=%(sort_order)s, updated_at=now()
+                       WHERE id=%(id)s RETURNING *""", {**c, 'id': cid}, fetch='one')
+        else:
+            row = q("""INSERT INTO kitchen_categories (name, emoji, sort_order)
+                       VALUES (%(name)s,%(emoji)s,%(sort_order)s) RETURNING *""", c, fetch='one')
+        return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/categories/delete', methods=['POST'])
+def categories_delete():
+    try:
+        cid = (request.get_json(force=True, silent=True) or {}).get('id')
+        if not cid:
+            return jsonify({'error': 'id required'}), 400
+        # soft-delete: drops out of the active set + tablet pages; products keep their FK.
+        q("UPDATE kitchen_categories SET active=false, updated_at=now() WHERE id=%s", (cid,), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/categories/reorder', methods=['POST'])
+def categories_reorder():
+    try:
+        order = (request.get_json(force=True, silent=True) or {}).get('order') or []
+        for i, cid in enumerate(order):
+            q("UPDATE kitchen_categories SET sort_order=%s, updated_at=now() WHERE id=%s", (i + 1, cid), fetch='none')
+        return jsonify({'ok': True, 'n': len(order)})
     except Exception as e:
         return _err(e)
 
