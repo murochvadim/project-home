@@ -19,10 +19,14 @@
   tile grid + 🛒 Buy mode (tap → +1 to active list) + ℹ️ Browse (detail) + Shopping-List screen
   (check/remove/manual-add) + barcode-decode code (camera test = home). manifest = fullscreen PWA.
 - **Dashboard Kitchen Agent page** (`BOILER/dashboard/public/kitchen.html` + `js/kitchen.js`, sidebar
-  under **Agents**), **3 tabs**: **🍎 Products** CRUD (Hebrew name/emoji/**category dropdown**/price) +
-  **🏷 Categories** (add/rename/delete + **▲▼ reorder** = tablet page order, Hebrew + emoji, live
-  per-category product counts) + **🧺 Shopping List** (check/remove/clear + **📲 Send-to-WhatsApp**
-  `wa.me`). English-name field was dropped (Hebrew-only UI); Products Name column centered. Calls LXC 113 directly (`http://192.168.1.208:8772`)
+  under **Agents**), **4 tabs** (order: **🍎 Products · 📦 Stock · 🧺 Shopping List · 🏷 Categories** —
+  Categories last): **Products** CRUD (Hebrew name/emoji/**category dropdown**/price) + **Stock**
+  (per-product `qty_on_hand` −/+ in its unit + low threshold, grouped by category, **"Check missing"** →
+  adds at/below-threshold items to the list) + **Shopping List** (per-item **−/+ buy qty in the unit** +
+  a **stock chip** (red when low); add **bumps qty** not duplicates, qty 0 removes; **📲 WhatsApp** text
+  includes qty+unit) + **Categories** (add/rename/delete + **▲▼ reorder** = tablet page order, live
+  counts). English-name field dropped (Hebrew-only UI); Products Name column centered. Unit-aware step
+  (kg/L = 0.5, else 1). Calls LXC 113 directly (`http://192.168.1.208:8772`)
   — architecture-guard safe (no server.js business logic). `agents` table row + orchestrator SSH key
   authorized on 113 so the Health Services check passes.
 
