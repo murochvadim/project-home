@@ -9,12 +9,20 @@
 - **DB** (LXC 102): `kitchen_products` (catalog, forever+🔒), `kitchen_shopping_lists`,
   `kitchen_shopping_items` — migration `migrations/001_kitchen.sql`; 35 realistic **Hebrew-named**
   products seeded (`002_seed_products.sql`). Registered in Health DB-Volumes (`DBV_GROUPS` 'Kitchen').
+- **Managed Hebrew categories** (migration `003_categories.sql`): `kitchen_categories` (Hebrew name +
+  emoji + **`sort_order` = the fridge-tablet page/section order**, forever+🔒) + a `category_id` FK on
+  `kitchen_products`; 8 Hebrew categories seeded, all 35 products migrated off the old English text
+  `category` → `category_id` (0 orphans). Products GET JOINs → `category_name`/`category_emoji`.
+  Endpoints `/api/kitchen/categories` GET/POST/delete/**reorder**. **Categories drive the tablet layout**
+  (Part 2) — the PWA will group tiles into pages by category in `sort_order`.
 - **PWA** (`kitchen/` served same-origin by the service at `http://192.168.1.208:8772/`): Hebrew-RTL
   tile grid + 🛒 Buy mode (tap → +1 to active list) + ℹ️ Browse (detail) + Shopping-List screen
   (check/remove/manual-add) + barcode-decode code (camera test = home). manifest = fullscreen PWA.
 - **Dashboard Kitchen Agent page** (`BOILER/dashboard/public/kitchen.html` + `js/kitchen.js`, sidebar
-  under **Agents**): Products CRUD (Hebrew name/emoji/category/price) + Shopping List (check/remove/
-  clear) + **📲 Send-to-WhatsApp** `wa.me` button. Calls LXC 113 directly (`http://192.168.1.208:8772`)
+  under **Agents**), **3 tabs**: **🍎 Products** CRUD (Hebrew name/emoji/**category dropdown**/price) +
+  **🏷 Categories** (add/rename/delete + **▲▼ reorder** = tablet page order, Hebrew + emoji, live
+  per-category product counts) + **🧺 Shopping List** (check/remove/clear + **📲 Send-to-WhatsApp**
+  `wa.me`). English-name field was dropped (Hebrew-only UI); Products Name column centered. Calls LXC 113 directly (`http://192.168.1.208:8772`)
   — architecture-guard safe (no server.js business logic). `agents` table row + orchestrator SSH key
   authorized on 113 so the Health Services check passes.
 
