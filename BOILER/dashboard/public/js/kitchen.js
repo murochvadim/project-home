@@ -481,7 +481,7 @@
       }).join('');
     });
     box.innerHTML = html;
-    box.querySelectorAll('.k-srow').forEach(row => {
+    box.querySelectorAll('.k-srow[data-id]').forEach(row => {   // skip the k-st-head header (no data-id / no buttons)
       const id = +row.dataset.id;
       const p = products.find(x => x.id === id);
       const step = unitStep(p && p.unit);
