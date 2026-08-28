@@ -49,6 +49,19 @@
   — architecture-guard safe (no server.js business logic). `agents` table row + orchestrator SSH key
   authorized on 113 so the Health Services check passes.
 
+**Product on-shelf SEASON (setting-only, 2026-08-29):** every product carries a **season** in the
+Products form — a **"כל השנה / Always" checkbox** (default) + **From-month → To-month** dropdowns (Hebrew
+months, enabled only when Always is unchecked). Stored in `kitchen_products.season_all_year` (BOOLEAN
+DEFAULT true) + `season_start_month` / `season_end_month` (SMALLINT 1–12), migration `008_season.sql`;
+`start>end` wraps year-end (e.g. Nov→Feb). Threaded through `products_upsert` (months NULL when Always).
+**Display = a "Season" COLUMN on the Products table** (added 2026-08-29) — for a product WITH a season
+set it shows **בעונה** (green) when today's month is in the window / **לא בעונה** (grey) when not (month
+range as a tooltip); **Always products show nothing** in the column. Computed client-side from the
+current month (`inSeason`/`seasonCell` in `js/kitchen.js`). No word on the fridge tiles or other lists —
+Products column only. Pre-seeded seasons: **אבוקדו** (id 7) Nov–Apr, **תותים** (id 39) Dec–Apr; all
+other 36 products left Always (year-round in Israel). Form JS: `kSeasonToggle` + `editProduct`/
+`kResetForm`/`kSaveProduct`.
+
 **Remaining:** Caddy internal-CA HTTPS (needed for the barcode camera secure context) + Fully Kiosk on
 the fridge tablet + real barcode camera test + install the Caddy root CA on the tablet — all **home
 steps**. **Step 7 DONE 2026-08-27:** `svc-lxc113` Health cell (server.js `tcpCheck` + `health.js`) +

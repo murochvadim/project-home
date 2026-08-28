@@ -28,6 +28,20 @@
     ? `<img class="${cls || 'k-thumb'}" src="${API}/media/${encodeURIComponent(photo)}?v=${epochOf(upd)}" alt="">`
     : (emoji || '🍽️');
   const prodArt = (p, cls) => artHtml(p && p.photo_path, p && p.updated_at, p && p.emoji, cls);
+  // ── on-shelf season ──
+  const MON_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+  const isSeasonal = p => p && p.season_all_year === false && p.season_start_month && p.season_end_month;
+  const inSeason = (p, m) => {                     // m = 1..12; not seasonal → always in season
+    if (!isSeasonal(p)) return true;
+    const s = +p.season_start_month, e = +p.season_end_month;
+    return s <= e ? (m >= s && m <= e) : (m >= s || m <= e);   // s>e wraps year-end
+  };
+  const seasonCell = p => {                        // Season table cell — only when a season is set
+    if (!isSeasonal(p)) return '';
+    const on = inSeason(p, new Date().getMonth() + 1);
+    const range = `${MON_HE[p.season_start_month - 1]}–${MON_HE[p.season_end_month - 1]}`;
+    return `<span class="k-season ${on ? 'on' : 'off'}" title="${esc(range)}">${on ? 'בעונה' : 'לא בעונה'}</span>`;
+  };
 
   async function jget(p) {
     const r = await fetch(API + p, { cache: 'no-store' });
@@ -63,7 +77,7 @@
   function renderProducts() {
     const tb = $('p-rows');
     $('p-count').textContent = `${products.length} product${products.length === 1 ? '' : 's'}`;
-    if (!products.length) { tb.innerHTML = '<tr><td colspan="5" class="k-hint">No products yet — add one above.</td></tr>'; return; }
+    if (!products.length) { tb.innerHTML = '<tr><td colspan="6" class="k-hint">No products yet — add one above.</td></tr>'; return; }
     const catIds = categories.map(c => c.id);
     const groups = {};
     products.forEach(p => { const k = (p.category_id == null ? 0 : p.category_id); (groups[k] = groups[k] || []).push(p); });
@@ -73,10 +87,11 @@
       const list = groups[cid]; if (!list || !list.length) return;
       const cat = categories.find(c => c.id === cid);
       const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
-      html += `<tr><td colspan="5" class="k-cat-cell">${esc(label)}</td></tr>`;
+      html += `<tr><td colspan="6" class="k-cat-cell">${esc(label)}</td></tr>`;
       html += list.map(p => `
         <tr data-id="${p.id}">
           <td class="k-emoji">${prodArt(p)}</td>
+          <td style="text-align:center;padding-left:24px">${seasonCell(p)}</td>
           <td class="heb">${esc(p.name)}</td>
           <td>${esc(unitHe(p.unit))}</td>
           <td>${p.price != null ? '₪' + (+p.price).toFixed(2).replace(/\.00$/, '') : ''}</td>
@@ -103,6 +118,10 @@
     $('p-unit').value = p.unit || 'piece';
     $('p-price').value = p.price != null ? p.price : '';
     $('p-barcode').value = p.barcode || '';
+    $('p-allyear').checked = p.season_all_year !== false;
+    $('p-season-from').value = p.season_start_month || '';
+    $('p-season-to').value = p.season_end_month || '';
+    kSeasonToggle();
     $('pform-title').textContent = 'Edit: ' + (p.name || '');
     refreshFormPhoto();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -111,13 +130,22 @@
   window.kResetForm = function () {
     ['p-id', 'p-name', 'p-emoji', 'p-unit', 'p-price', 'p-barcode'].forEach(i => $(i).value = '');
     $('p-category').value = '';
+    $('p-allyear').checked = true;
+    $('p-season-from').value = ''; $('p-season-to').value = '';
+    kSeasonToggle();
     $('pform-title').textContent = 'Add product';
     refreshFormPhoto();
+  };
+
+  window.kSeasonToggle = function () {   // disable the month pickers while "כל השנה" (always) is checked
+    const off = $('p-allyear').checked;
+    $('p-season-from').disabled = off; $('p-season-to').disabled = off;
   };
 
   window.kSaveProduct = async function () {
     const name = $('p-name').value.trim();
     if (!name) { alert('Name (Hebrew) is required.'); return; }
+    const allYear = $('p-allyear').checked;
     const body = {
       name,
       emoji: $('p-emoji').value.trim() || null,
@@ -125,6 +153,9 @@
       unit: $('p-unit').value.trim() || null,
       price: $('p-price').value !== '' ? +$('p-price').value : null,
       barcode: $('p-barcode').value.trim() || null,
+      season_all_year: allYear,
+      season_start_month: allYear ? null : (+$('p-season-from').value || null),
+      season_end_month: allYear ? null : (+$('p-season-to').value || null),
     };
     const id = $('p-id').value;
     if (id) body.id = +id;
@@ -530,6 +561,7 @@
       html += list.map(p => `
         <div class="k-srow cm" data-id="${p.id}">
           <span class="em">${prodArt(p)}</span>
+          <span class="k-cmseason">${seasonCell(p)}</span>
           <span class="nm">${esc(p.name)}</span>
           <span class="k-step">
             <button data-act="dec" title="less">−</button>

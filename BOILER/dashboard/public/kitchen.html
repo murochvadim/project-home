@@ -18,7 +18,7 @@
     .k-table th, .k-table td { text-align:left; padding:8px 10px; border-bottom:1px solid #eef2f7; vertical-align:middle; }
     .k-table th { color:#64748b; font-weight:600; }
     .k-table td.heb { direction:rtl; text-align:center; font-weight:600; }
-    .k-table th:nth-child(2) { text-align:center; }
+    .k-table th:nth-child(3) { text-align:center; }
     .k-emoji { font-size:1.5rem; }
     .k-li { display:grid; grid-template-columns:26px 30px 1fr 116px 48px 108px 30px; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid #eef2f7; }
     .k-li.checked .nm { opacity:0.5; text-decoration:line-through; }
@@ -52,9 +52,10 @@
     /* Stock column header — green "מינימום נדרש" over the threshold column (mirrors the shopping list's במלאי) */
     .k-st-head { border-bottom:none; padding-bottom:2px; }
     .k-st-head .lh { text-align:center; font-weight:800; color:#16a34a; font-size:1.15rem; white-space:nowrap; }
-    .k-srow.cm { display:grid; grid-template-columns:30px 1fr 116px 48px; align-items:center; }
+    .k-srow.cm { display:grid; grid-template-columns:30px 90px 1fr 116px 48px; align-items:center; }
     .k-srow.cm .nm { flex:none; }
     .k-srow.cm .k-step { justify-content:center; }
+    .k-cmseason { text-align:center; padding-left:20px; }
     .k-lowin { width:56px; padding:5px 6px; border:1px solid #cbd5e1; border-radius:6px; text-align:center; font-size:0.85rem; }
     .amt-cell { display:inline-flex; flex-direction:column; align-items:center; gap:2px; font-size:0.68rem; color:#64748b; }
     .amt-save { margin-left:auto; }
@@ -64,6 +65,15 @@
     .k-subtab.active { background:#334155; color:#fff; border-color:#334155; }
     .sub-panel { display:none; } .sub-panel.active { display:block; }
     .k-cat-cell { direction:rtl; text-align:right; font-weight:700; font-size:0.92rem; color:#334155; background:#f4f7fa; border-bottom:2px solid #e2e8f0; }
+    /* on-shelf season control (product form) */
+    .k-season-ctl { display:flex; align-items:center; gap:6px; }
+    .k-season-ctl .k-ay { flex-direction:row; align-items:center; gap:4px; color:#334155; font-size:0.8rem; white-space:nowrap; }
+    .k-season-ctl select { padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem; direction:rtl; }
+    .k-season-ctl select:disabled { opacity:0.45; }
+    /* season word in the Products table (only for products with a season) */
+    .k-season { direction:rtl; font-size:0.72rem; font-weight:700; padding:2px 9px; border-radius:10px; white-space:nowrap; }
+    .k-season.on  { background:#dcfce7; color:#16a34a; }
+    .k-season.off { background:#eef2f7; color:#64748b; }
     /* product photos */
     .k-thumb { width:34px; height:34px; border-radius:50%; object-fit:cover; vertical-align:middle; display:inline-block; }
     .k-thumb-li { width:30px; height:30px; border-radius:50%; object-fit:cover; vertical-align:middle; display:inline-block; }
@@ -176,6 +186,25 @@
         </select></label>
         <label>Price ₪<input id="p-price" type="number" step="0.1" style="width:90px"></label>
         <label>Barcode<input id="p-barcode" style="width:130px"></label>
+        <label>Season (on shelf)
+          <span class="k-season-ctl">
+            <label class="k-ay"><input type="checkbox" id="p-allyear" checked onchange="kSeasonToggle()"> כל השנה</label>
+            <select id="p-season-from" disabled title="From month">
+              <option value="">מ־</option>
+              <option value="1">ינואר</option><option value="2">פברואר</option><option value="3">מרץ</option>
+              <option value="4">אפריל</option><option value="5">מאי</option><option value="6">יוני</option>
+              <option value="7">יולי</option><option value="8">אוגוסט</option><option value="9">ספטמבר</option>
+              <option value="10">אוקטובר</option><option value="11">נובמבר</option><option value="12">דצמבר</option>
+            </select>
+            <select id="p-season-to" disabled title="To month">
+              <option value="">עד־</option>
+              <option value="1">ינואר</option><option value="2">פברואר</option><option value="3">מרץ</option>
+              <option value="4">אפריל</option><option value="5">מאי</option><option value="6">יוני</option>
+              <option value="7">יולי</option><option value="8">אוגוסט</option><option value="9">ספטמבר</option>
+              <option value="10">אוקטובר</option><option value="11">נובמבר</option><option value="12">דצמבר</option>
+            </select>
+          </span>
+        </label>
         <button class="btn btn-primary btn-sm" onclick="kSaveProduct()">Save</button>
         <button class="btn btn-secondary btn-sm" onclick="kResetForm()">Clear</button>
       </div>
@@ -183,7 +212,7 @@
     <div class="card">
       <div id="p-count" style="font-size:0.82rem;color:#8a93a6;margin-bottom:8px;"></div>
       <table class="k-table">
-        <thead><tr><th></th><th>Name</th><th>Unit</th><th>Price</th><th></th></tr></thead>
+        <thead><tr><th></th><th style="text-align:center">Season</th><th>Name</th><th>Unit</th><th>Price</th><th></th></tr></thead>
         <tbody id="p-rows"></tbody>
       </table>
     </div>
@@ -305,6 +334,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/kitchen.js?v=31"></script>
+<script src="js/kitchen.js?v=36"></script>
 </body>
 </html>

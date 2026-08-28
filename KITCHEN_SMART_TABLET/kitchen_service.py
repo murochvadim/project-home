@@ -141,6 +141,8 @@ def products_upsert():
         name = (b.get('name') or '').strip()
         if not name:
             return jsonify({'error': 'name required'}), 400
+        all_year = b.get('season_all_year')
+        all_year = True if all_year is None else bool(all_year)
         p = {
             'name': name,
             'name_en': b.get('name_en'),
@@ -155,6 +157,9 @@ def products_upsert():
             'notes': b.get('notes'),
             'sort_order': b.get('sort_order') or 0,
             'allergens': json.dumps(b.get('allergens') or []),
+            'season_all_year': all_year,
+            'season_start_month': None if all_year else b.get('season_start_month'),
+            'season_end_month': None if all_year else b.get('season_end_month'),
         }
         pid = b.get('id')
         if pid:
@@ -163,7 +168,8 @@ def products_upsert():
                          unit=%(unit)s, price=%(price)s, calories_per_unit=%(calories_per_unit)s,
                          nutri_score=%(nutri_score)s, health_score=%(health_score)s, barcode=%(barcode)s,
                          notes=%(notes)s, sort_order=%(sort_order)s, allergens=%(allergens)s::jsonb,
-                         updated_at=now()
+                         season_all_year=%(season_all_year)s, season_start_month=%(season_start_month)s,
+                         season_end_month=%(season_end_month)s, updated_at=now()
                        WHERE id=%(id)s RETURNING *""",
                     {**p, 'id': pid}, fetch='one')
         else:
@@ -171,10 +177,12 @@ def products_upsert():
             row = q("""INSERT INTO kitchen_products
                          (name,name_en,category_id,emoji,unit,price,calories_per_unit,nutri_score,
                           health_score,barcode,notes,sort_order,allergens,
+                          season_all_year,season_start_month,season_end_month,
                           amount_little,amount_medium,amount_lots,amount_extra)
                        VALUES (%(name)s,%(name_en)s,%(category_id)s,%(emoji)s,%(unit)s,%(price)s,
                           %(calories_per_unit)s,%(nutri_score)s,%(health_score)s,%(barcode)s,
                           %(notes)s,%(sort_order)s,%(allergens)s::jsonb,
+                          %(season_all_year)s,%(season_start_month)s,%(season_end_month)s,
                           %(amount_little)s,%(amount_medium)s,%(amount_lots)s,%(amount_extra)s)
                        RETURNING *""", p, fetch='one')
         return jsonify(row)
