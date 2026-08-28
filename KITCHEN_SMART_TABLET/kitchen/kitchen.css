@@ -70,7 +70,7 @@ body {
 .circle.prod .c-name { text-shadow: none; }
 
 .c-emoji { font-size: calc(var(--csize, 110px) * 0.30); line-height: 1; }
-.c-photo { width: 100%; height: 100%; object-fit: cover; display: block; }   /* product photo — circle already clips it round */
+.c-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }   /* fill the whole circle (absolute → no flex gaps); circle clips it round */
 .lv-photo { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; display: block; }
 /* product-panel name caption under a photo circle (photo tiles carry no in-circle name) */
 .pp-title { position: absolute; text-align: center; color: #e8eefc; font-weight: 800; font-size: 17px; line-height: 1.15; direction: rtl; }
