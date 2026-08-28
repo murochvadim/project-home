@@ -49,8 +49,8 @@
     : `<span class="c-emoji">${emoji || fallback || '🏷'}</span>`;
   const circleHTML = (cls, size, color, emoji, name, photo, ver) =>
     `<button class="circle ${cls}" style="--csize:${size}px;background:${color}">
-       ${artNode(photo, ver, emoji)}<span class="c-name">${esc(name)}</span>
-     </button>`;
+       ${artNode(photo, ver, emoji)}${photo ? '' : `<span class="c-name">${esc(name)}</span>`}
+     </button>`;   // photo present → photo only (no name); emoji tiles keep the name
 
   // ── HOME: bob-in-place grid ──
   function buildHome() {
@@ -250,7 +250,12 @@
     const stockSize = Math.round(centerSize * 0.62);
 
     let html = `<button class="ppc center" style="--csize:${centerSize}px;left:${mainX - centerSize / 2}px;top:${mainY - centerSize / 2}px;background:${color}">
-        ${artNode(p.photo_path, p.updated_at, p.emoji, '🍽️')}<span class="c-name">${esc(p.name)}</span></button>`;
+        ${artNode(p.photo_path, p.updated_at, p.emoji, '🍽️')}${p.photo_path ? '' : `<span class="c-name">${esc(p.name)}</span>`}</button>`;
+    if (p.photo_path) {   // photo covers the in-circle name → show the name as a caption UNDER the circle
+      const capW = Math.min(W - 2 * margin, centerSize + 60);
+      const capLeft = Math.max(margin, Math.min(mainX - capW / 2, W - margin - capW));
+      html += `<div class="pp-title" style="left:${capLeft}px;top:${mainY + centerSize / 2 + 8}px;width:${capW}px;">${esc(p.name)}</div>`;
+    }
     // info circles above the main: stock (right) + this product's shopping-list qty (left)
     const infoTop = mainY - centerSize / 2 - gap - stockSize;
     html += `<button class="ppc small stock" style="--csize:${stockSize}px;left:${mainX - stockSize / 2}px;top:${infoTop}px;background:#5b6675">
