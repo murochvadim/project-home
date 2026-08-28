@@ -148,14 +148,14 @@
   function refreshFormPhoto() {          // sync the form's photo preview + button state to the current p-id
     const id = $('p-id').value;
     const p = id ? products.find(x => x.id === +id) : null;
-    const prev = $('p-photo-prev'), btn = $('p-photo-btn'), rm = $('p-photo-rm'), hint = $('p-photo-hint');
+    const prev = $('p-photo-prev'), btn = $('p-photo-btn'), rm = $('p-photo-rm');
     if (!prev) return;
-    if (!id) {                            // new product — must save first (need an id for the file)
+    if (!id) {                            // new product — need a saved id before uploading a photo
       prev.innerHTML = '🍽️'; prev.classList.remove('has');
-      btn.disabled = true; rm.style.display = 'none'; hint.style.display = '';
+      btn.disabled = true; rm.style.display = 'none';
       return;
     }
-    hint.style.display = 'none'; btn.disabled = false;
+    btn.disabled = false;
     if (p && p.photo_path) {
       prev.innerHTML = artHtml(p.photo_path, p.updated_at, 'p-photo-img');
       prev.classList.add('has'); rm.style.display = '';
