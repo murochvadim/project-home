@@ -255,6 +255,18 @@
     });
     stage.innerHTML = html;
     stage.querySelectorAll('.ppc.amt').forEach(el => { el.onclick = () => addAmount(p.id, numOf(el.dataset.qty), el); });
+    const ilb = stage.querySelector('.ppc.inlist'); if (ilb) ilb.onclick = () => decFromList(p.id);   // tap ברשימה → −1
+  }
+
+  async function decFromList(pid) {
+    const it = listItems.find(x => x.product_id === pid && !x.checked);
+    if (!it) return;                                   // not on the list → nothing to decrease
+    const newQty = Math.max(0, numOf(it.qty) - 1);     // −1 each click (0 removes it)
+    try {
+      await jpost('/api/kitchen/list/qty', { id: it.id, qty: newQty });
+      await loadList(); if (panelProduct) layoutProduct();
+      blinkListVal();
+    } catch (e) { /* silent */ }
   }
 
   async function addAmount(pid, qty, el) {
@@ -263,8 +275,8 @@
       await jpost('/api/kitchen/list/add', { product_id: pid, qty });   // adds that amount (bumps if already on the list)
       el.classList.add('flash'); $('pp-toast').classList.add('show');
       await loadList(); if (panelProduct) layoutProduct();              // refresh the ברשימה circle
-      const il = $('pp-stage').querySelector('.inlist .pp-val'); if (il) il.classList.add('blink2');   // blink the value 2×
-      setTimeout(window.closeProduct, 1450);
+      blinkListVal();
+      setTimeout(window.closeProduct, Math.max(0, Math.round(panelReturnSec * 1000)));   // configurable return delay
     } catch (e) { /* silent on the fridge */ }
   }
 
@@ -280,8 +292,21 @@
   function rebuild() { if (mode === 'category' && curCat != null) showCategory(curCat); else buildHome(); }
 
   // ── inactivity → always return to the flying-circles home ──
-  let idleSec = 60, idleTimer = null;
-  async function loadSettings() { try { const s = await jget('/api/kitchen/settings'); if (s && s.idle_return_sec != null) idleSec = +s.idle_return_sec || 0; } catch (e) { } }
+  let idleSec = 60, idleTimer = null, panelReturnSec = 1.5, blinkCount = 3;
+  async function loadSettings() {
+    try {
+      const s = await jget('/api/kitchen/settings');
+      if (s) {
+        if (s.idle_return_sec != null) idleSec = +s.idle_return_sec || 0;
+        if (s.panel_return_sec != null) panelReturnSec = +s.panel_return_sec || 0;
+        if (s.blink_count != null) blinkCount = Math.max(0, parseInt(s.blink_count, 10) || 0);
+      }
+    } catch (e) { }
+  }
+  function blinkListVal() {
+    const il = $('pp-stage').querySelector('.inlist .pp-val');
+    if (il && blinkCount > 0) { il.style.animationIterationCount = String(blinkCount); il.classList.add('blink2'); }
+  }
   function goIdleHome() {
     if (!$('prodpanel').hidden) window.closeProduct();
     if (!$('listview').hidden) window.closeListScreen();

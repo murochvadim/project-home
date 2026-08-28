@@ -51,19 +51,30 @@
   function renderProducts() {
     const tb = $('p-rows');
     $('p-count').textContent = `${products.length} product${products.length === 1 ? '' : 's'}`;
-    if (!products.length) { tb.innerHTML = '<tr><td colspan="6" class="k-hint">No products yet — add one above.</td></tr>'; return; }
-    tb.innerHTML = products.map(p => `
-      <tr data-id="${p.id}">
-        <td class="k-emoji">${p.emoji || '🍽️'}</td>
-        <td class="heb">${esc(p.name)}</td>
-        <td>${p.category_emoji ? p.category_emoji + ' ' : ''}${esc(p.category_name || '')}</td>
-        <td>${esc(unitHe(p.unit))}</td>
-        <td>${p.price != null ? '₪' + (+p.price).toFixed(2).replace(/\.00$/, '') : ''}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="k-edit" data-act="edit" title="Edit">✎</button>
-          <button class="k-x" data-act="del" title="Delete">🗑</button>
-        </td>
-      </tr>`).join('');
+    if (!products.length) { tb.innerHTML = '<tr><td colspan="5" class="k-hint">No products yet — add one above.</td></tr>'; return; }
+    const catIds = categories.map(c => c.id);
+    const groups = {};
+    products.forEach(p => { const k = (p.category_id == null ? 0 : p.category_id); (groups[k] = groups[k] || []).push(p); });
+    const order = [...catIds, 0].filter((v, i, a) => a.indexOf(v) === i);
+    let html = '';
+    order.forEach(cid => {
+      const list = groups[cid]; if (!list || !list.length) return;
+      const cat = categories.find(c => c.id === cid);
+      const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
+      html += `<tr><td colspan="5" class="k-cat-cell">${esc(label)}</td></tr>`;
+      html += list.map(p => `
+        <tr data-id="${p.id}">
+          <td class="k-emoji">${p.emoji || '🍽️'}</td>
+          <td class="heb">${esc(p.name)}</td>
+          <td>${esc(unitHe(p.unit))}</td>
+          <td>${p.price != null ? '₪' + (+p.price).toFixed(2).replace(/\.00$/, '') : ''}</td>
+          <td style="white-space:nowrap;text-align:right">
+            <button class="k-edit" data-act="edit" title="Edit">✎</button>
+            <button class="k-x" data-act="del" title="Delete">🗑</button>
+          </td>
+        </tr>`).join('');
+    });
+    tb.innerHTML = html;
     tb.querySelectorAll('tr[data-id]').forEach(row => {
       const id = +row.dataset.id;
       const eb = row.querySelector('[data-act=edit]'); if (eb) eb.onclick = () => editProduct(id);
@@ -128,7 +139,11 @@
   function renderList() {
     const box = $('l-rows');
     if (!listItems.length) { box.innerHTML = '<div class="k-hint">List is empty. Add items from the fridge tablet, or the 📦 Stock tab.</div>'; return; }
-    box.innerHTML = listItems.map(i => {
+    const catIds = categories.map(c => c.id);
+    const groups = {};
+    listItems.forEach(i => { const k = (i.product_category_id == null ? 0 : i.product_category_id); (groups[k] = groups[k] || []).push(i); });
+    const order = [...catIds, 0].filter((v, idx, a) => a.indexOf(v) === idx);
+    const rowHtml = i => {
       const name = i.product_name || i.free_text || '(item)';
       const emoji = i.product_emoji || '🛒';
       const unit = i.product_unit || '';
@@ -136,7 +151,7 @@
       const stockN = numOf(i.product_stock);
       const lowN = i.product_low != null ? numOf(i.product_low) : null;
       const isLow = lowN != null && stockN <= lowN;
-      const chip = hasStock ? `<span class="k-stock-chip ${isLow ? 'low' : ''}">במלאי: ${fmtN(stockN)}${unit ? ' ' + esc(unitHe(unit)) : ''}</span>` : '';
+      const chip = hasStock ? `<span class="k-instock ${isLow ? 'low' : ''}">${fmtN(stockN)}</span>` : '<span></span>';
       return `<div class="k-li ${i.checked ? 'checked' : ''}" data-id="${i.id}">
         <input type="checkbox" ${i.checked ? 'checked' : ''} data-act="check">
         <span class="em">${emoji}</span>
@@ -150,8 +165,16 @@
         ${chip}
         <button class="k-x" data-act="rm" title="Remove">🗑</button>
       </div>`;
-    }).join('');
-    box.querySelectorAll('.k-li').forEach(row => {
+    };
+    let html = '<div class="k-li k-li-head"><span></span><span></span><span></span><span></span><span></span><span class="lh">במלאי</span><span></span></div>';
+    order.forEach(cid => {
+      const list = groups[cid]; if (!list || !list.length) return;
+      const cat = categories.find(c => c.id === cid);
+      const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
+      html += `<div class="k-stock-h">${esc(label)}</div>` + list.map(rowHtml).join('');
+    });
+    box.innerHTML = html;
+    box.querySelectorAll('.k-li[data-id]').forEach(row => {   // skip the header row
       const id = +row.dataset.id;
       const it = listItems.find(x => x.id === id);
       const step = unitStep(it && it.product_unit);
@@ -206,6 +229,8 @@
     renderCategories();
     renderStock();
     renderAmounts();
+    renderProducts();   // re-group products by category
+    renderList();       // re-group the shopping list by category
   }
 
   function renderCategoryOptions() {
@@ -308,7 +333,7 @@
         const stock = numOf(p.qty_on_hand);
         const low = p.low_stock_threshold != null ? numOf(p.low_stock_threshold) : null;
         const isLow = low != null && stock <= low;
-        return `<div class="k-srow" data-id="${p.id}">
+        return `<div class="k-srow st" data-id="${p.id}">
           <span class="em">${p.emoji || '🍽️'}</span>
           <span class="nm">${esc(p.name)}</span>
           <span class="k-step">
@@ -319,7 +344,7 @@
           <span class="k-unit">${esc(unitHe(unit))}</span>
           <span class="k-unit">low</span>
           <input class="k-lowin" data-act="low" type="number" step="0.5" min="0" value="${low != null ? fmtN(low) : ''}">
-          ${isLow ? '<span class="k-stock-chip low">⚠ חסר</span>' : ''}
+          ${isLow ? '<span class="k-stock-chip low">⚠ חסר</span>' : '<span></span>'}
         </div>`;
       }).join('');
     });
@@ -336,12 +361,12 @@
 
   async function setStock(id, qty) {
     qty = Math.max(0, Math.round(qty * 100) / 100);
-    try { await jpost('/api/kitchen/stock', { id, qty_on_hand: qty }); await loadProducts(); }
+    try { await jpost('/api/kitchen/stock', { id, qty_on_hand: qty }); await loadProducts(); await loadList(); }   // refresh במלאי on the list
     catch (e) { alert('Stock failed: ' + e.message); }
   }
   async function setLow(id, val) {
     const low = (val === '' || val == null) ? null : Math.max(0, parseFloat(val) || 0);
-    try { await jpost('/api/kitchen/stock', { id, low_stock_threshold: low }); await loadProducts(); }
+    try { await jpost('/api/kitchen/stock', { id, low_stock_threshold: low }); await loadProducts(); await loadList(); }
     catch (e) { alert('Low failed: ' + e.message); }
   }
 
@@ -412,13 +437,23 @@
     if (btn) btn.classList.add('active');
   };
   async function loadTech() {
-    try { const s = await jget('/api/kitchen/settings'); const el = $('ts-idle'); if (el) el.value = (s && s.idle_return_sec != null) ? s.idle_return_sec : 60; }
-    catch (e) { }
+    try {
+      const s = await jget('/api/kitchen/settings') || {};
+      if ($('ts-idle')) $('ts-idle').value = s.idle_return_sec != null ? s.idle_return_sec : 60;
+      if ($('ts-return')) $('ts-return').value = s.panel_return_sec != null ? s.panel_return_sec : 1.5;
+      if ($('ts-blink')) $('ts-blink').value = s.blink_count != null ? s.blink_count : 3;
+    } catch (e) { }
   }
   window.kSaveTech = async function () {
-    const v = parseInt($('ts-idle').value, 10);
-    const sec = isNaN(v) ? 60 : Math.max(0, v);
-    try { await jpost('/api/kitchen/settings', { idle_return_sec: sec }); const b = event && event.target; if (b) { b.textContent = '✓ Saved'; setTimeout(() => b.textContent = '💾 Save', 1200); } }
+    const idle = parseInt($('ts-idle').value, 10);
+    const ret = parseFloat($('ts-return').value);
+    const blink = parseInt($('ts-blink').value, 10);
+    const body = {
+      idle_return_sec: isNaN(idle) ? 60 : Math.max(0, idle),
+      panel_return_sec: isNaN(ret) ? 1.5 : Math.max(0, ret),
+      blink_count: isNaN(blink) ? 3 : Math.max(0, blink),
+    };
+    try { await jpost('/api/kitchen/settings', body); const b = event && event.target; if (b) { b.textContent = '✓ Saved'; setTimeout(() => b.textContent = '💾 Save', 1200); } }
     catch (e) { alert('Save failed: ' + e.message); }
   };
 

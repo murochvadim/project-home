@@ -329,7 +329,8 @@ def list_get():
         lid = _active_list_id()
         items = q("""SELECT i.*, p.name AS product_name, p.emoji AS product_emoji,
                             p.unit AS product_unit, p.qty_on_hand AS product_stock,
-                            p.low_stock_threshold AS product_low, p.price AS product_price
+                            p.low_stock_threshold AS product_low, p.price AS product_price,
+                            p.category_id AS product_category_id
                        FROM kitchen_shopping_items i
                        LEFT JOIN kitchen_products p ON p.id = i.product_id
                       WHERE i.list_id=%s ORDER BY i.checked, i.added_at""", (lid,))

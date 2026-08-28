@@ -90,9 +90,9 @@ body {
 .ppc.center .c-name { text-shadow: 0 1px 3px rgba(0, 0, 0, .45); }
 .ppc.small { color: #2a2f3a; }
 .ppc.small.stock { color: #fff; cursor: default; }
-.ppc.small.inlist { color: #fff; cursor: default; }
+.ppc.small.inlist { color: #fff; cursor: pointer; }
 @keyframes ppblink { 0%, 100% { opacity: 1; } 50% { opacity: .12; } }
-.pp-val.blink2 { animation: ppblink .42s ease-in-out 3; }
+.pp-val.blink2 { animation: ppblink .7s ease-in-out 3; }
 .ppc.small:active { transform: scale(.92); }
 .ppc.flash { outline: 4px solid #22c55e; }
 .ppc .c-emoji { font-size: calc(var(--csize, 120px) * 0.30); line-height: 1; }
