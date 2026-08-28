@@ -455,7 +455,7 @@
     const groups = {};
     products.forEach(p => { const k = (p.category_id == null ? 0 : p.category_id); (groups[k] = groups[k] || []).push(p); });
     const order = [...catIds, 0].filter((v, i, a) => a.indexOf(v) === i);
-    let html = '';
+    let html = '<div class="k-srow st k-st-head"><span></span><span></span><span></span><span></span><span class="lh" style="grid-column:5 / 7">מינימום נדרש</span></div>';
     order.forEach(cid => {
       const list = groups[cid]; if (!list || !list.length) return;
       const cat = categories.find(c => c.id === cid);
