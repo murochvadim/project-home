@@ -8,6 +8,10 @@
   let listItems = [];
   let categories = [];
 
+  // ── product-photo editor (square crop + zoom + pan → 400×400 JPEG) ──
+  const PE_V = 320, PE_OUT = 400;          // viewport px / output px
+  let _peImg = null, _peScale = 1, _peMin = 1, _peOx = 0, _peOy = 0, _peUrl = null, _peDrag = null;
+
   const $ = id => document.getElementById(id);
   const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -16,6 +20,14 @@
   const numOf = v => (v == null ? 0 : parseFloat(v) || 0);
   const fmtN = v => { const n = +v; return Number.isInteger(n) ? String(n) : (Math.round(n * 100) / 100).toString(); };
   const unitStep = u => { u = (u || '').toLowerCase(); return (u === 'kg' || u === 'l' || u.includes('ק') || u.includes('ליטר')) ? 0.5 : 1; };
+  const epochOf = ts => { const t = Date.parse(ts); return isNaN(t) ? '' : t; };
+  // product art, dropped INSIDE each render site's existing emoji wrapper:
+  //  - photo present → a round <img> that sizes itself (class default k-thumb)
+  //  - else → the emoji glyph string (parent's font-size renders it)
+  const artHtml = (photo, upd, emoji, cls) => photo
+    ? `<img class="${cls || 'k-thumb'}" src="${API}/media/${encodeURIComponent(photo)}?v=${epochOf(upd)}" alt="">`
+    : (emoji || '🍽️');
+  const prodArt = (p, cls) => artHtml(p && p.photo_path, p && p.updated_at, p && p.emoji, cls);
 
   async function jget(p) {
     const r = await fetch(API + p, { cache: 'no-store' });
@@ -64,7 +76,7 @@
       html += `<tr><td colspan="5" class="k-cat-cell">${esc(label)}</td></tr>`;
       html += list.map(p => `
         <tr data-id="${p.id}">
-          <td class="k-emoji">${p.emoji || '🍽️'}</td>
+          <td class="k-emoji">${prodArt(p)}</td>
           <td class="heb">${esc(p.name)}</td>
           <td>${esc(unitHe(p.unit))}</td>
           <td>${p.price != null ? '₪' + (+p.price).toFixed(2).replace(/\.00$/, '') : ''}</td>
@@ -92,6 +104,7 @@
     $('p-price').value = p.price != null ? p.price : '';
     $('p-barcode').value = p.barcode || '';
     $('pform-title').textContent = 'Edit: ' + (p.name || '');
+    refreshFormPhoto();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -99,6 +112,7 @@
     ['p-id', 'p-name', 'p-emoji', 'p-unit', 'p-price', 'p-barcode'].forEach(i => $(i).value = '');
     $('p-category').value = '';
     $('pform-title').textContent = 'Add product';
+    refreshFormPhoto();
   };
 
   window.kSaveProduct = async function () {
@@ -115,9 +129,11 @@
     const id = $('p-id').value;
     if (id) body.id = +id;
     try {
-      await jpost('/api/kitchen/products', body);
-      window.kResetForm();
+      const saved = await jpost('/api/kitchen/products', body);
       await loadProducts();
+      // stay in edit mode for the saved product so its 📷 Photo button is usable right away
+      if (saved && saved.id) { $('p-id').value = saved.id; $('pform-title').textContent = 'Edit: ' + (saved.name || ''); }
+      refreshFormPhoto();
     } catch (e) { alert('Save failed: ' + e.message); }
   };
 
@@ -126,6 +142,122 @@
     if (!confirm(`Delete "${p ? p.name : id}" from the catalog?`)) return;
     try { await jpost('/api/kitchen/products/delete', { id }); await loadProducts(); }
     catch (e) { alert('Delete failed: ' + e.message); }
+  }
+
+  // ── product photo: form preview + crop editor ──
+  function refreshFormPhoto() {          // sync the form's photo preview + button state to the current p-id
+    const id = $('p-id').value;
+    const p = id ? products.find(x => x.id === +id) : null;
+    const prev = $('p-photo-prev'), btn = $('p-photo-btn'), rm = $('p-photo-rm'), hint = $('p-photo-hint');
+    if (!prev) return;
+    if (!id) {                            // new product — must save first (need an id for the file)
+      prev.innerHTML = '🍽️'; prev.classList.remove('has');
+      btn.disabled = true; rm.style.display = 'none'; hint.style.display = '';
+      return;
+    }
+    hint.style.display = 'none'; btn.disabled = false;
+    if (p && p.photo_path) {
+      prev.innerHTML = artHtml(p.photo_path, p.updated_at, 'p-photo-img');
+      prev.classList.add('has'); rm.style.display = '';
+    } else {
+      prev.innerHTML = (p && p.emoji) || '🍽️'; prev.classList.remove('has'); rm.style.display = 'none';
+    }
+  }
+
+  window.kOpenPhoto = function () {
+    if (!$('p-id').value) { alert('Save the product first, then add a photo.'); return; }
+    _peImg = null; $('kpe-file').value = ''; $('kpe-zoom').value = 1;
+    $('kpe-hint').style.display = ''; $('kpe-save').disabled = true;
+    _peDraw();                            // clears the canvas
+    $('k-photo-modal').style.display = 'flex';
+  };
+  window.kClosePhoto = function () {
+    $('k-photo-modal').style.display = 'none';
+    if (_peUrl) { URL.revokeObjectURL(_peUrl); _peUrl = null; }
+    _peImg = null;
+  };
+  window.kPhotoFile = function (input) {
+    const f = input.files && input.files[0]; if (!f) return;
+    if (_peUrl) URL.revokeObjectURL(_peUrl);
+    _peUrl = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => {
+      _peImg = img;
+      _peMin = Math.max(PE_V / img.width, PE_V / img.height);   // "cover" the square
+      $('kpe-zoom').value = 1;
+      _peSetZoom(1);                       // sets scale + centers + draws
+      $('kpe-hint').style.display = 'none'; $('kpe-save').disabled = false;
+    };
+    img.onerror = () => alert('Could not read that image.');
+    img.src = _peUrl;
+  };
+  function _peClamp() {                    // keep the image covering the viewport (no empty edges)
+    if (!_peImg) return;
+    const w = _peImg.width * _peScale, h = _peImg.height * _peScale;
+    _peOx = Math.min(0, Math.max(PE_V - w, _peOx));
+    _peOy = Math.min(0, Math.max(PE_V - h, _peOy));
+  }
+  function _peDraw() {
+    const c = $('kpe-canvas'); if (!c) return;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#0f1729'; ctx.fillRect(0, 0, PE_V, PE_V);
+    if (_peImg) ctx.drawImage(_peImg, _peOx, _peOy, _peImg.width * _peScale, _peImg.height * _peScale);
+  }
+  function _peSetZoom(mult) {              // zoom around the viewport centre
+    if (!_peImg) return;
+    const cx = PE_V / 2, cy = PE_V / 2;
+    const ix = (cx - _peOx) / _peScale, iy = (cy - _peOy) / _peScale;
+    _peScale = _peMin * mult;
+    _peOx = cx - ix * _peScale; _peOy = cy - iy * _peScale;
+    _peClamp(); _peDraw();
+  }
+  window.kPhotoZoom = function (v) { _peSetZoom(parseFloat(v) || 1); };
+  function _peStart(e) { if (!_peImg) return; const p = _pePt(e); _peDrag = { x: p.x, y: p.y }; e.preventDefault(); }
+  function _peMove(e) {
+    if (!_peDrag || !_peImg) return;
+    const p = _pePt(e);
+    _peOx += p.x - _peDrag.x; _peOy += p.y - _peDrag.y; _peDrag = { x: p.x, y: p.y };
+    _peClamp(); _peDraw(); e.preventDefault();
+  }
+  function _peEnd() { _peDrag = null; }
+  function _pePt(e) {
+    const r = $('kpe-canvas').getBoundingClientRect();
+    const t = e.touches && e.touches[0];
+    const cx = t ? t.clientX : e.clientX, cy = t ? t.clientY : e.clientY;
+    return { x: (cx - r.left) * (PE_V / r.width), y: (cy - r.top) * (PE_V / r.height) };
+  }
+  window.kPhotoSave = async function () {
+    if (!_peImg) return;
+    const pid = +$('p-id').value; if (!pid) return;
+    const r = PE_OUT / PE_V;
+    const out = document.createElement('canvas'); out.width = PE_OUT; out.height = PE_OUT;
+    const octx = out.getContext('2d');
+    octx.fillStyle = '#fff'; octx.fillRect(0, 0, PE_OUT, PE_OUT);
+    octx.drawImage(_peImg, _peOx * r, _peOy * r, _peImg.width * _peScale * r, _peImg.height * _peScale * r);
+    const blob = await new Promise(res => out.toBlob(res, 'image/jpeg', 0.85));
+    if (!blob) { alert('Encode failed.'); return; }
+    try {
+      const fd = new FormData(); fd.append('file', blob, pid + '.jpg');
+      const resp = await fetch(`${API}/api/kitchen/products/${pid}/photo`, { method: 'POST', body: fd });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      window.kClosePhoto();
+      await loadProducts();
+      refreshFormPhoto();
+    } catch (e) { alert('Upload failed: ' + e.message); }
+  };
+  window.kRemovePhoto = async function () {
+    const pid = +$('p-id').value; if (!pid) return;
+    if (!confirm('Remove this product photo?')) return;
+    try {
+      const resp = await fetch(`${API}/api/kitchen/products/${pid}/photo`, { method: 'DELETE' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      await loadProducts(); refreshFormPhoto();
+    } catch (e) { alert('Remove failed: ' + e.message); }
+  };
+  function _peWire() {                     // attach canvas drag handlers once
+    const c = $('kpe-canvas'); if (!c || c._wired) return; c._wired = true;
+    c.addEventListener('mousedown', _peStart); window.addEventListener('mousemove', _peMove); window.addEventListener('mouseup', _peEnd);
+    c.addEventListener('touchstart', _peStart, { passive: false }); c.addEventListener('touchmove', _peMove, { passive: false }); c.addEventListener('touchend', _peEnd);
   }
 
   // ── shopping list ──
@@ -154,7 +286,7 @@
       const chip = hasStock ? `<span class="k-instock ${isLow ? 'low' : ''}">${fmtN(stockN)}</span>` : '<span></span>';
       return `<div class="k-li ${i.checked ? 'checked' : ''}" data-id="${i.id}">
         <input type="checkbox" ${i.checked ? 'checked' : ''} data-act="check">
-        <span class="em">${emoji}</span>
+        <span class="em">${artHtml(i.product_photo, i.product_updated, emoji, 'k-thumb-li')}</span>
         <span class="nm">${esc(name)}</span>
         <span class="k-step">
           <button data-act="dec" title="less">−</button>
@@ -335,7 +467,7 @@
         const low = p.low_stock_threshold != null ? numOf(p.low_stock_threshold) : null;
         const isLow = low != null && stock <= low;
         return `<div class="k-srow st" data-id="${p.id}">
-          <span class="em">${p.emoji || '🍽️'}</span>
+          <span class="em">${prodArt(p)}</span>
           <span class="nm">${esc(p.name)}</span>
           <span class="k-step">
             <button data-act="dec" title="less">−</button>
@@ -398,7 +530,7 @@
       html += `<div class="k-stock-h">${esc(label)}</div>`;
       html += list.map(p => `
         <div class="k-srow cm" data-id="${p.id}">
-          <span class="em">${p.emoji || '🍽️'}</span>
+          <span class="em">${prodArt(p)}</span>
           <span class="nm">${esc(p.name)}</span>
           <span class="k-step">
             <button data-act="dec" title="less">−</button>
@@ -442,7 +574,7 @@
         const v = k => (p[k] != null ? +p[k] : '');
         const cell = (k, lbl) => `<span class="amt-cell">${lbl}<input class="k-lowin" data-k="${k}" type="number" step="0.25" min="0" value="${v(k)}"></span>`;
         return `<div class="k-srow" data-id="${p.id}">
-          <span class="em">${p.emoji || '🍽️'}</span>
+          <span class="em">${prodArt(p)}</span>
           <span class="nm">${esc(p.name)}</span>
           <span class="k-unit">${esc(unitHe(p.unit))}</span>
           ${cell('amount_little', 'קצת')}${cell('amount_medium', 'בינוני')}${cell('amount_lots', 'הרבה')}${cell('amount_extra', 'הרבה מעוד')}
@@ -501,7 +633,10 @@
   };
 
   // ── boot ──
-  window.kLoad = async function () { await loadProducts(); await loadCategories(); await loadList(); await loadTech(); };
+  window.kLoad = async function () {
+    _peWire(); refreshFormPhoto();
+    await loadProducts(); await loadCategories(); await loadList(); await loadTech();
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);
   else window.kLoad();

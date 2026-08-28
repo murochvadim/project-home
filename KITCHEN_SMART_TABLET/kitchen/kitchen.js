@@ -42,9 +42,14 @@
     if (products.some(p => p.category_id == null)) arr.push({ id: 0, name: 'אחר', emoji: '🍽️', color: '#7a8699' });
     return arr;
   }
-  const circleHTML = (cls, size, color, emoji, name) =>
+  const epochOf = ts => { const t = Date.parse(ts); return isNaN(t) ? '' : t; };
+  // product art inside a circle: a photo (round-cropped by the circle) when set, else the emoji glyph.
+  const artNode = (photo, ver, emoji, fallback) => photo
+    ? `<img class="c-photo" src="/media/${encodeURIComponent(photo)}?v=${epochOf(ver)}" alt="">`
+    : `<span class="c-emoji">${emoji || fallback || '🏷'}</span>`;
+  const circleHTML = (cls, size, color, emoji, name, photo, ver) =>
     `<button class="circle ${cls}" style="--csize:${size}px;background:${color}">
-       <span class="c-emoji">${emoji || '🏷'}</span><span class="c-name">${esc(name)}</span>
+       ${artNode(photo, ver, emoji)}<span class="c-name">${esc(name)}</span>
      </button>`;
 
   // ── HOME: bob-in-place grid ──
@@ -101,7 +106,7 @@
 
     const cname = cat ? cat.name : 'אחר';
     let html = `<button class="circle center" style="--csize:${centerSize}px;background:${color}"><span class="c-name">${esc(cname)}</span></button>`;  // center = name only, no icon
-    html += list.map(p => circleHTML('prod', 60, prodColor, p.emoji, p.name)).join('');   // size set below
+    html += list.map(p => circleHTML('prod', 60, prodColor, p.emoji, p.name, p.photo_path, p.updated_at)).join('');   // size set below
     if (!N) html += '<div class="empty" style="bottom:12%;top:auto">אין מוצרים בקטגוריה זו</div>';
     box.innerHTML = html;
     const els = [...box.querySelectorAll('.circle')];
@@ -194,7 +199,9 @@
           <button data-act="inc">+</button>
         </span>
         <span class="lv-name">${esc(name)}</span>
-        <span class="lv-emoji">${i.product_emoji || '🛒'}</span>
+        <span class="lv-emoji">${i.product_photo
+          ? `<img class="lv-photo" src="/media/${encodeURIComponent(i.product_photo)}?v=${epochOf(i.product_updated)}" alt="">`
+          : (i.product_emoji || '🛒')}</span>
       </div>`;
     }).join('');
     $('lv-total').textContent = 'מחיר ' + fmtN(Math.round(total * 100) / 100) + ' שיח';
@@ -243,7 +250,7 @@
     const stockSize = Math.round(centerSize * 0.62);
 
     let html = `<button class="ppc center" style="--csize:${centerSize}px;left:${mainX - centerSize / 2}px;top:${mainY - centerSize / 2}px;background:${color}">
-        <span class="c-emoji">${p.emoji || '🍽️'}</span><span class="c-name">${esc(p.name)}</span></button>`;
+        ${artNode(p.photo_path, p.updated_at, p.emoji, '🍽️')}<span class="c-name">${esc(p.name)}</span></button>`;
     // info circles above the main: stock (right) + this product's shopping-list qty (left)
     const infoTop = mainY - centerSize / 2 - gap - stockSize;
     html += `<button class="ppc small stock" style="--csize:${stockSize}px;left:${mainX - stockSize / 2}px;top:${infoTop}px;background:#5b6675">

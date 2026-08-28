@@ -57,6 +57,26 @@
     .k-subtab.active { background:#334155; color:#fff; border-color:#334155; }
     .sub-panel { display:none; } .sub-panel.active { display:block; }
     .k-cat-cell { direction:rtl; text-align:right; font-weight:700; font-size:0.92rem; color:#334155; background:#f4f7fa; border-bottom:2px solid #e2e8f0; }
+    /* product photos */
+    .k-thumb { width:34px; height:34px; border-radius:50%; object-fit:cover; vertical-align:middle; display:inline-block; }
+    .k-thumb-li { width:30px; height:30px; border-radius:50%; object-fit:cover; vertical-align:middle; display:inline-block; }
+    .k-photo-ctl { display:flex; align-items:center; gap:8px; }
+    .k-photo-prev { width:40px; height:40px; border-radius:50%; background:#eef2f7; display:flex; align-items:center; justify-content:center; font-size:1.4rem; overflow:hidden; flex:none; }
+    .k-photo-prev.has { background:#fff; box-shadow:0 0 0 1px #cbd5e1; }
+    .p-photo-img { width:100%; height:100%; object-fit:cover; }
+    .k-photo-rm { font-size:0.72rem; color:#ef5a6a; text-decoration:none; }
+    .k-photo-hint { font-size:0.68rem; color:#94a3b8; }
+    /* photo editor modal */
+    .k-modal { display:none; position:fixed; inset:0; z-index:200; background:rgba(6,10,20,.55); align-items:center; justify-content:center; }
+    .k-modal-box { background:#fff; border-radius:14px; padding:18px; box-shadow:0 20px 60px rgba(0,0,0,.35); width:min(94vw,380px); }
+    .k-pe-stage { position:relative; width:320px; max-width:100%; margin:0 auto; }
+    #kpe-canvas { width:320px; height:320px; max-width:100%; border-radius:50%; background:#0f1729; touch-action:none; cursor:grab; display:block; }
+    #kpe-canvas:active { cursor:grabbing; }
+    .k-pe-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; color:#cbd5e1; font-size:0.85rem; pointer-events:none; padding:0 30px; }
+    .k-pe-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; flex-wrap:wrap; }
+    .k-pe-zoom { display:flex; align-items:center; gap:8px; font-size:0.8rem; color:#64748b; flex:1; }
+    .k-pe-zoom input[type=range] { flex:1; }
+    .k-pe-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
   </style>
 </head>
 <body>
@@ -126,6 +146,16 @@
         <input type="hidden" id="p-id">
         <label>Name (Hebrew)<input id="p-name" class="heb" placeholder="שם המוצר"></label>
         <label>Emoji<input id="p-emoji" style="width:64px" placeholder="🍎"></label>
+        <label>Photo
+          <span class="k-photo-ctl">
+            <span id="p-photo-prev" class="k-photo-prev">🍽️</span>
+            <span style="display:flex;flex-direction:column;gap:3px;">
+              <button type="button" id="p-photo-btn" class="btn btn-secondary btn-sm" onclick="kOpenPhoto()">📷 Photo</button>
+              <a href="#" id="p-photo-rm" class="k-photo-rm" style="display:none" onclick="event.preventDefault();kRemovePhoto()">✕ remove</a>
+              <span id="p-photo-hint" class="k-photo-hint">save product first</span>
+            </span>
+          </span>
+        </label>
         <label>Category<select id="p-category"><option value="">—</option></select></label>
         <label>Unit<select id="p-unit" style="width:100px">
           <option value="piece">יחידה</option>
@@ -151,6 +181,29 @@
         <thead><tr><th></th><th>Name</th><th>Unit</th><th>Price</th><th></th></tr></thead>
         <tbody id="p-rows"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Product photo editor (square crop + zoom + pan → 400×400 JPEG) -->
+  <div id="k-photo-modal" class="k-modal">
+    <div class="k-modal-box">
+      <h3 style="margin:0 0 10px;">📷 Product photo</h3>
+      <div class="k-pe-stage">
+        <canvas id="kpe-canvas" width="320" height="320"></canvas>
+        <div id="kpe-hint" class="k-pe-hint">Choose a photo below,<br>then drag to move &amp; zoom to frame it in the circle.</div>
+      </div>
+      <div class="k-pe-row">
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer;">🖼 Choose photo
+          <input id="kpe-file" type="file" accept="image/*" style="display:none" onchange="kPhotoFile(this)">
+        </label>
+        <span class="k-pe-zoom">Zoom
+          <input id="kpe-zoom" type="range" min="1" max="4" step="0.01" value="1" oninput="kPhotoZoom(this.value)">
+        </span>
+      </div>
+      <div class="k-pe-actions">
+        <button class="btn btn-secondary btn-sm" onclick="kClosePhoto()">Cancel</button>
+        <button id="kpe-save" class="btn btn-primary btn-sm" onclick="kPhotoSave()" disabled>Save photo</button>
+      </div>
     </div>
   </div>
 
@@ -247,6 +300,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/kitchen.js?v=22"></script>
+<script src="js/kitchen.js?v=23"></script>
 </body>
 </html>

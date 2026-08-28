@@ -15,18 +15,37 @@
   `category` → `category_id` (0 orphans). Products GET JOINs → `category_name`/`category_emoji`.
   Endpoints `/api/kitchen/categories` GET/POST/delete/**reorder**. **Categories drive the tablet layout**
   (Part 2) — the PWA will group tiles into pages by category in `sort_order`.
-- **PWA** (`kitchen/` served same-origin by the service at `http://192.168.1.208:8772/`): Hebrew-RTL
-  tile grid + 🛒 Buy mode (tap → +1 to active list) + ℹ️ Browse (detail) + Shopping-List screen
-  (check/remove/manual-add) + barcode-decode code (camera test = home). manifest = fullscreen PWA.
+- **PWA** (`kitchen/` served same-origin by the service at `http://192.168.1.208:8772/`): **redesigned
+  circle UI** (2026-08-27) — bobbing **category circles** on home; tap → that category centred with its
+  products **orbiting** in slow concentric rings; tap a product → a right-side panel with amount circles
+  (קצת/בינוני/הרבה/הרבה מעוד) + stock + a black **ברשימה** −1 circle; a floating black **רשימה** circle
+  (top-left) opens the shopping-list screen (per-product −/+ unit-aware, remove, total, 🗑 נקה הכל). Tech
+  Settings (idle-return / panel-return / blink). Barcode-decode code present (camera test = home).
+  manifest = fullscreen PWA.
+- **Product PHOTOS** (2026-08-28) — a product tile shows a **real photo** (round-cropped) instead of its
+  emoji when set; **emoji stays the fallback**. Photos are **imported + cropped on the dashboard** (file
+  pick — the phone photo moved to the laptop — square **crop + zoom + pan** canvas editor → one 400×400
+  JPEG; no live camera, so no HTTPS/secure-context needed). Stored on **LXC 113's own disk**
+  (`/opt/kitchen/product_media/<id>.jpg`, one file per product, replace-in-place) via
+  `POST/DELETE /api/kitchen/products/<id>/photo` (multipart; 2 MB + image-mimetype guards); served by
+  `GET /media/<file>` with `Cache-Control: max-age=300` (a route BEFORE the no-cache PWA catch-all),
+  cache-busted by `?v=<updated_at>`. The `kitchen_products.photo_path` column already existed → **no
+  migration**. Shown on both the fridge PWA (orbit circle + product panel + list rows — the circles are
+  already `overflow:hidden;border-radius:50%` so they round-crop for free) and every dashboard table.
+  Editor = hand-rolled `<canvas>` (the `medical.js` crop pattern; no vendored crop lib). product_media is
+  covered by 113's existing vzdump + off-site guest backup (no extra step).
 - **Dashboard Kitchen Agent page** (`BOILER/dashboard/public/kitchen.html` + `js/kitchen.js`, sidebar
-  under **Agents**), **4 tabs** (order: **🍎 Products · 📦 Stock · 🧺 Shopping List · 🏷 Categories** —
-  Categories last): **Products** CRUD (Hebrew name/emoji/**category dropdown**/price) + **Stock**
-  (per-product `qty_on_hand` −/+ in its unit + low threshold, grouped by category, **"Check missing"** →
-  adds at/below-threshold items to the list) + **Shopping List** (per-item **−/+ buy qty in the unit** +
-  a **stock chip** (red when low); add **bumps qty** not duplicates, qty 0 removes; **📲 WhatsApp** text
-  includes qty+unit) + **Categories** (add/rename/delete + **▲▼ reorder** = tablet page order, live
-  counts). English-name field dropped (Hebrew-only UI); Products Name column centered. Unit-aware step
-  (kg/L = 0.5, else 1). Calls LXC 113 directly (`http://192.168.1.208:8772`)
+  under **Agents**), **6 tabs** (order: **🍎 Products · 🧾 Common list · 📦 Stock list · 🧺 Shopping List**
+  ⟶gap⟶ **⚙ Settings · 🏷 Categories**): **Products** CRUD (Hebrew name/emoji/**📷 photo**/**category
+  dropdown**/price) + **Common list** (per-product weekly-staple `common_qty` −/+ in its unit, grouped by
+  category, like Stock but no low threshold; column `kitchen_products.common_qty`, migration
+  `007_common.sql`, `POST /api/kitchen/common`) + **Stock list** (per-product `qty_on_hand` −/+ + low
+  threshold, grouped by category, **"Check missing"** → adds at/below-threshold items to the list) +
+  **Shopping List** (per-item **−/+ buy qty in the unit** + a **stock chip** (red when low); add **bumps
+  qty** not duplicates, qty 0 removes; **📲 WhatsApp** text includes qty+unit; 🗑 clear via the PWA) +
+  **Settings** (Tech Settings — idle/panel/blink) + **Categories** (add/rename/delete + **▲▼ reorder** =
+  tablet page order, live counts). English-name field dropped (Hebrew-only UI); Products Name column
+  centered. Unit-aware step (kg/L = 0.5, else 1). Calls LXC 113 directly (`http://192.168.1.208:8772`)
   — architecture-guard safe (no server.js business logic). `agents` table row + orchestrator SSH key
   authorized on 113 so the Health Services check passes.
 
@@ -107,8 +126,9 @@ v1 tables (Core buy-list) — the rest land in later phases:
   - **Health rating = one consistent field:** store OFF's **Nutri-Score (A–E)** when the barcode
     resolves it, with a **manual `health_score` 1–5 override**; the Pantry Health Score aggregates
     whichever is set.
-  - **Photos:** v1 = **emoji only**. If photos are added later, **download + cache to LXC 113 disk**
-    (or QNAP like Medical docs) — never render a live OFF image URL (offline-fragile).
+  - **Photos:** IMPLEMENTED 2026-08-28 (see "Product PHOTOS" above) — `photo_path` = a filename served
+    from LXC 113's own disk (`/media/<id>.jpg`), imported+cropped on the dashboard; emoji is the
+    fallback. Never a live OFF image URL (offline-fragile), as planned.
 - **`kitchen_shopping_lists`** — `id, name, store, active, created_at, closed_at`.
 - **`kitchen_shopping_items`** — `list_id FK, product_id FK (nullable), free_text, qty, checked,
   added_at, checked_at`. *(Concurrent fridge+phone edits → append-based writes; a single `active`

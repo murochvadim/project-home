@@ -70,6 +70,8 @@ body {
 .circle.prod .c-name { text-shadow: none; }
 
 .c-emoji { font-size: calc(var(--csize, 110px) * 0.30); line-height: 1; }
+.c-photo { width: 100%; height: 100%; object-fit: cover; display: block; }   /* product photo — circle already clips it round */
+.lv-photo { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; display: block; }
 .c-name {
   font-size: calc(var(--csize, 110px) * 0.155); font-weight: 800; text-align: center;
   padding: 0 10px; max-width: 100%; line-height: 1.1; text-shadow: 0 1px 3px rgba(0, 0, 0, .45);

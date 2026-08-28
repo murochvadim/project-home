@@ -14,6 +14,9 @@ API:
   GET  /api/kitchen/products            -> active catalog (add ?all=1 for inactive too)
   POST /api/kitchen/products            -> upsert one product (id present = update), RETURNING
   POST /api/kitchen/products/delete     -> soft-delete (active=false)
+  POST /api/kitchen/products/<id>/photo -> upload a product photo (multipart file -> <id>.jpg on disk)
+  DEL  /api/kitchen/products/<id>/photo -> remove the product photo (file + photo_path)
+  GET  /media/<file>                    -> serve a product photo (cached; NOT no-cache)
   GET  /api/kitchen/categories          -> managed Hebrew categories (sort_order = tablet page order)
   POST /api/kitchen/categories          -> upsert one category (id present = update)
   POST /api/kitchen/categories/delete   -> soft-delete (active=false)
@@ -45,6 +48,8 @@ CORS(app)
 
 PORT       = 8772
 STATIC_DIR = str(Path(__file__).resolve().parent / 'kitchen')
+MEDIA_DIR  = Path(__file__).resolve().parent / 'product_media'   # per-product photos (<id>.jpg)
+MEDIA_DIR.mkdir(exist_ok=True)
 DB_HOST    = '192.168.1.219'
 DB_NAME    = 'home_data'
 DB_USER    = 'postgres'          # trust auth from 192.168.1.0/24 — no password
@@ -90,6 +95,14 @@ def _nocache(resp):
 @app.route('/')
 def index():
     return _nocache(send_from_directory(STATIC_DIR, 'index.html'))
+
+# product photos — served with a real cache (NOT no-cache); clients bust with ?v=<updated_at>.
+# Declared before the catch-all so it isn't shadowed (Flask picks the more specific rule anyway).
+@app.route('/media/<path:fn>')
+def media_file(fn):
+    resp = send_from_directory(str(MEDIA_DIR), fn)
+    resp.headers['Cache-Control'] = 'max-age=300'
+    return resp
 
 @app.route('/<path:fn>')
 def static_file(fn):
@@ -175,6 +188,41 @@ def products_delete():
         if not pid:
             return jsonify({'error': 'id required'}), 400
         q("UPDATE kitchen_products SET active=false, updated_at=now() WHERE id=%s", (pid,), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+# ── product photo (one <id>.jpg per product on this LXC's own disk) ─
+@app.route('/api/kitchen/products/<int:pid>/photo', methods=['POST'])
+def product_photo_set(pid):
+    try:
+        exists = q("SELECT id FROM kitchen_products WHERE id=%s", (pid,), fetch='one')
+        if not exists:
+            return jsonify({'error': 'product not found'}), 404
+        f = request.files.get('file')
+        if not f or not f.filename:
+            return jsonify({'error': 'file required'}), 400
+        if not (f.mimetype or '').startswith('image/'):
+            return jsonify({'error': 'not an image'}), 400
+        blob = f.read()
+        if len(blob) > 2 * 1024 * 1024:                      # ~2 MB ceiling (client sends a 400px JPEG)
+            return jsonify({'error': 'image too large'}), 400
+        rel = f'{pid}.jpg'
+        (MEDIA_DIR / rel).write_bytes(blob)                  # replace-in-place → no orphan buildup
+        row = q("UPDATE kitchen_products SET photo_path=%s, updated_at=now() WHERE id=%s "
+                "RETURNING id, photo_path, updated_at", (rel, pid), fetch='one')
+        return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/products/<int:pid>/photo', methods=['DELETE'])
+def product_photo_del(pid):
+    try:
+        try:
+            (MEDIA_DIR / f'{pid}.jpg').unlink()
+        except FileNotFoundError:
+            pass
+        q("UPDATE kitchen_products SET photo_path=NULL, updated_at=now() WHERE id=%s", (pid,), fetch='none')
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)
@@ -343,6 +391,7 @@ def list_get():
     try:
         lid = _active_list_id()
         items = q("""SELECT i.*, p.name AS product_name, p.emoji AS product_emoji,
+                            p.photo_path AS product_photo, p.updated_at AS product_updated,
                             p.unit AS product_unit, p.qty_on_hand AS product_stock,
                             p.low_stock_threshold AS product_low, p.price AS product_price,
                             p.category_id AS product_category_id
