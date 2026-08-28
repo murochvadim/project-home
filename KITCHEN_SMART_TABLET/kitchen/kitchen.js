@@ -172,6 +172,11 @@
   // ── shopping-list SCREEN (opens from the רשימה circle; +/- per product) ──
   window.openListScreen = async function () { await loadList(); renderListScreen(); $('listview').hidden = false; };
   window.closeListScreen = function () { $('listview').hidden = true; };
+  window.clearListAll = async function () {
+    if (!listItems.length) return;
+    if (!confirm('לנקות את כל רשימת הקניות?')) return;
+    try { await jpost('/api/kitchen/list/clear'); await loadList(); renderListScreen(); } catch (e) { }
+  };
   function renderListScreen() {
     const box = $('lv-items');
     if (!listItems.length) { box.innerHTML = '<div class="empty">הרשימה ריקה</div>'; $('lv-total').textContent = 'מחיר 0 שיח'; return; }
@@ -182,14 +187,14 @@
       const q = numOf(i.qty), price = numOf(i.product_price);
       total += price * q;
       return `<div class="lv-row" data-id="${i.id}">
-        <span class="lv-emoji">${i.product_emoji || '🛒'}</span>
-        <span class="lv-name">${esc(name)}</span>
+        <button class="lv-rm" data-act="rm">🗑</button>
         <span class="lv-step">
           <button data-act="dec">−</button>
           <span class="lv-qty">${fmtN(q)}${u ? ' ' + esc(u) : ''}</span>
           <button data-act="inc">+</button>
         </span>
-        <button class="lv-rm" data-act="rm">🗑</button>
+        <span class="lv-name">${esc(name)}</span>
+        <span class="lv-emoji">${i.product_emoji || '🛒'}</span>
       </div>`;
     }).join('');
     $('lv-total').textContent = 'מחיר ' + fmtN(Math.round(total * 100) / 100) + ' שיח';

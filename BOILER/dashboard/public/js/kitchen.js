@@ -45,7 +45,7 @@
     catch (e) { products = []; $('p-rows').innerHTML =
       `<tr><td colspan="6" style="color:#ef5a6a">Can't reach kitchen service (${esc(e.message)}) — ${API}</td></tr>`; return; }
     renderProducts();
-    if (categories.length) { renderCategories(); renderStock(); renderAmounts(); }   // keep counts/stock/amounts fresh
+    if (categories.length) { renderCategories(); renderStock(); renderAmounts(); renderCommon(); }   // keep counts/stock/amounts/common fresh
   }
 
   function renderProducts() {
@@ -231,6 +231,7 @@
     renderAmounts();
     renderProducts();   // re-group products by category
     renderList();       // re-group the shopping list by category
+    renderCommon();     // common-list tab
   }
 
   function renderCategoryOptions() {
@@ -379,6 +380,48 @@
       kTab('lists', [...document.querySelectorAll('.k-tab')].find(b => b.textContent.includes('Shopping')));
     } catch (e) { alert('Check failed: ' + e.message); }
   };
+
+  // ── common list (weekly staple qty per product; like stock, no low) ──
+  function renderCommon() {
+    const box = $('common-rows');
+    if (!box) return;
+    if (!products.length) { box.innerHTML = '<div class="k-hint">No products yet — add them on the 🍎 Products tab.</div>'; return; }
+    const catIds = categories.map(c => c.id);
+    const groups = {};
+    products.forEach(p => { const k = (p.category_id == null ? 0 : p.category_id); (groups[k] = groups[k] || []).push(p); });
+    const order = [...catIds, 0].filter((v, i, a) => a.indexOf(v) === i);
+    let html = '';
+    order.forEach(cid => {
+      const list = groups[cid]; if (!list || !list.length) return;
+      const cat = categories.find(c => c.id === cid);
+      const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
+      html += `<div class="k-stock-h">${esc(label)}</div>`;
+      html += list.map(p => `
+        <div class="k-srow cm" data-id="${p.id}">
+          <span class="em">${p.emoji || '🍽️'}</span>
+          <span class="nm">${esc(p.name)}</span>
+          <span class="k-step">
+            <button data-act="dec" title="less">−</button>
+            <span class="qn">${fmtN(numOf(p.common_qty))}</span>
+            <button data-act="inc" title="more">+</button>
+          </span>
+          <span class="k-unit">${esc(unitHe(p.unit))}</span>
+        </div>`).join('');
+    });
+    box.innerHTML = html;
+    box.querySelectorAll('.k-srow').forEach(row => {
+      const id = +row.dataset.id;
+      const p = products.find(x => x.id === id);
+      const step = unitStep(p && p.unit);
+      row.querySelector('[data-act=dec]').onclick = () => setCommon(id, numOf(p.common_qty) - step);
+      row.querySelector('[data-act=inc]').onclick = () => setCommon(id, numOf(p.common_qty) + step);
+    });
+  }
+  async function setCommon(id, qty) {
+    qty = Math.max(0, Math.round(qty * 100) / 100);
+    try { await jpost('/api/kitchen/common', { id, common_qty: qty }); await loadProducts(); }
+    catch (e) { alert('Save failed: ' + e.message); }
+  }
 
   // ── settings: per-product buy amounts (קצת / בינוני / הרבה) ──
   function renderAmounts() {

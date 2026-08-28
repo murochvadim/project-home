@@ -254,6 +254,21 @@ def settings_set():
     except Exception as e:
         return _err(e)
 
+# ── common list (weekly staple quantity per product) ───────────────
+@app.route('/api/kitchen/common', methods=['POST'])
+def common_set():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        pid = b.get('id')
+        if not pid:
+            return jsonify({'error': 'id required'}), 400
+        qv = b.get('common_qty')
+        row = q("UPDATE kitchen_products SET common_qty=%s, updated_at=now() WHERE id=%s RETURNING id, common_qty",
+                (qv, pid), fetch='one')
+        return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
 # ── stock (qty_on_hand + low_stock_threshold, in the product's unit) ─
 @app.route('/api/kitchen/stock', methods=['POST'])
 def stock_set():
@@ -388,6 +403,14 @@ def list_check():
         q("""UPDATE kitchen_shopping_items
                 SET checked=%s, checked_at=CASE WHEN %s THEN now() ELSE NULL END
               WHERE id=%s""", (checked, checked, b.get('id')), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/list/clear', methods=['POST'])
+def list_clear():
+    try:
+        q("DELETE FROM kitchen_shopping_items WHERE list_id=%s", (_active_list_id(),), fetch='none')
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)

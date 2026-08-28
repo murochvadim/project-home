@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>מקרר</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="kitchen.css?v=31">
+  <link rel="stylesheet" href="kitchen.css?v=42">
 </head>
 <body>
   <div id="bar">
@@ -41,11 +41,14 @@
     <div class="lv-bar">
       <button class="lv-back" onclick="closeListScreen()">→ חזרה</button>
       <div class="lv-title">🧺 רשימת קניות</div>
-      <div class="lv-total" id="lv-total">₪0</div>
+      <div class="lv-left">
+        <div class="lv-total" id="lv-total">מחיר 0 שיח</div>
+        <button class="lv-clear" onclick="clearListAll()">🗑 נקה הכל</button>
+      </div>
     </div>
     <div id="lv-items"></div>
   </div>
 
-  <script src="kitchen.js?v=25"></script>
+  <script src="kitchen.js?v=28"></script>
 </body>
 </html>

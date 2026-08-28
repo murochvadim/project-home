@@ -45,6 +45,9 @@
     .k-srow.st { display:grid; grid-template-columns:30px 1fr 116px 48px 34px 62px 72px; align-items:center; }
     .k-srow.st .nm { flex:none; }
     .k-srow.st .k-step { justify-content:center; }
+    .k-srow.cm { display:grid; grid-template-columns:30px 1fr 116px 48px; align-items:center; }
+    .k-srow.cm .nm { flex:none; }
+    .k-srow.cm .k-step { justify-content:center; }
     .k-lowin { width:56px; padding:5px 6px; border:1px solid #cbd5e1; border-radius:6px; text-align:center; font-size:0.85rem; }
     .amt-cell { display:inline-flex; flex-direction:column; align-items:center; gap:2px; font-size:0.68rem; color:#64748b; }
     .amt-save { margin-left:auto; }
@@ -108,6 +111,7 @@
 
   <div class="k-tabs">
     <button class="k-tab active" onclick="kTab('products', this)">🍎 Products</button>
+    <button class="k-tab" onclick="kTab('common', this)">🧾 Common list</button>
     <button class="k-tab" onclick="kTab('stock', this)">📦 Stock</button>
     <button class="k-tab" onclick="kTab('amounts', this)">⚙ Settings</button>
     <button class="k-tab" onclick="kTab('lists', this)">🧺 Shopping List</button>
@@ -147,6 +151,17 @@
         <thead><tr><th></th><th>Name</th><th>Unit</th><th>Price</th><th></th></tr></thead>
         <tbody id="p-rows"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Common list: weekly staples (per-product weekly qty) -->
+  <div id="tab-common" class="tab-panel">
+    <div class="card">
+      <h3 style="margin:0">🧾 Common list — weekly staples</h3>
+      <div style="font-size:0.78rem;color:#8a93a6;margin-top:6px;">Set how much of each product you buy every week (in its unit). Products with a quantity above 0 are your staples; the weekly fill adds them to the shopping list.</div>
+    </div>
+    <div class="card">
+      <div id="common-rows"></div>
     </div>
   </div>
 
@@ -232,6 +247,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/kitchen.js?v=21"></script>
+<script src="js/kitchen.js?v=22"></script>
 </body>
 </html>
