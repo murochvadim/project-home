@@ -103,6 +103,9 @@ body {
 .pp-val.blink2 { animation: ppblink .7s ease-in-out 3; }
 .ppc.small:active { transform: scale(.92); }
 .ppc.flash { outline: 4px solid #22c55e; }
+/* out-of-season warning — red "לא בעונה" blinks the whole time the product panel is open */
+@keyframes ppOosBlink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.pp-oos { position: absolute; text-align: center; direction: rtl; font-weight: 800; font-size: 23px; color: #ef4444; animation: ppOosBlink 1.4s ease-in-out infinite; }
 .ppc .c-emoji { font-size: calc(var(--csize, 120px) * 0.30); line-height: 1; }
 .ppc .c-name { font-size: calc(var(--csize, 120px) * 0.155); font-weight: 800; text-align: center; padding: 0 8px; line-height: 1.1; }
 .pp-lbl { font-size: calc(var(--csize, 120px) * 0.19); font-weight: 800; text-align: center; }

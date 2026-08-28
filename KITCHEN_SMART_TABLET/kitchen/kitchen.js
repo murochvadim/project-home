@@ -35,6 +35,13 @@
   const fmtN = v => { const n = +v; return Number.isInteger(n) ? String(n) : (Math.round(n * 100) / 100).toString(); };
   const UNIT_HE = { kg: 'ק"ג', l: 'ליטר', piece: 'יח׳', tray: 'תבנית', pack: 'חב׳', bottle: 'בקבוק', jar: 'צנצנת', tub: 'גביע', loaf: 'כיכר', bar: 'יח׳' };
   const unitHe = u => UNIT_HE[(u || '').toLowerCase()] || (u || '');
+  // ── on-shelf season ──
+  const isSeasonal = p => p && p.season_all_year === false && p.season_start_month && p.season_end_month;
+  const inSeason = p => {                          // seasonal + current month outside window → false
+    if (!isSeasonal(p)) return true;
+    const m = new Date().getMonth() + 1, s = +p.season_start_month, e = +p.season_end_month;
+    return s <= e ? (m >= s && m <= e) : (m >= s || m <= e);   // s>e wraps year-end
+  };
   let panelProduct = null;
 
   function circleList() {
@@ -270,6 +277,12 @@
       html += `<button class="ppc small amt" data-qty="${a[1]}" style="--csize:${small}px;left:${cxk - small / 2}px;top:${mainY - small / 2}px;background:${amtColor}">
           <span class="pp-val">${esc(val)}</span></button>`;   // amount only, no label
     });
+    if (isSeasonal(p) && !inSeason(p)) {   // out of season → red "לא בעונה" blinking the whole time the panel is open
+      const capW = Math.min(W - 2 * margin, centerSize + 80);
+      const capLeft = Math.max(margin, Math.min(mainX - capW / 2, W - margin - capW));
+      const capTop = mainY + centerSize / 2 + (p.photo_path ? 58 : 12);   // photo → clear the name caption (can wrap 2 lines)
+      html += `<div class="pp-oos" style="left:${capLeft}px;top:${capTop}px;width:${capW}px;">לא בעונה</div>`;
+    }
     stage.innerHTML = html;
     stage.querySelectorAll('.ppc.amt').forEach(el => { el.onclick = () => addAmount(p.id, numOf(el.dataset.qty), el); });
     const ilb = stage.querySelector('.ppc.inlist'); if (ilb) ilb.onclick = () => decFromList(p.id);   // tap ברשימה → −1

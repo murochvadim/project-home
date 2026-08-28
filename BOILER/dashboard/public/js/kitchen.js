@@ -179,19 +179,19 @@
   function refreshFormPhoto() {          // sync the form's photo preview + button state to the current p-id
     const id = $('p-id').value;
     const p = id ? products.find(x => x.id === +id) : null;
-    const prev = $('p-photo-prev'), btn = $('p-photo-btn'), rm = $('p-photo-rm');
+    const prev = $('p-photo-prev'), btn = $('p-photo-btn');
     if (!prev) return;
     if (!id) {                            // new product — need a saved id before uploading a photo
       prev.innerHTML = '🍽️'; prev.classList.remove('has');
-      btn.disabled = true; rm.style.display = 'none';
+      btn.disabled = true;
       return;
     }
     btn.disabled = false;
     if (p && p.photo_path) {
       prev.innerHTML = artHtml(p.photo_path, p.updated_at, 'p-photo-img');
-      prev.classList.add('has'); rm.style.display = '';
+      prev.classList.add('has');
     } else {
-      prev.innerHTML = (p && p.emoji) || '🍽️'; prev.classList.remove('has'); rm.style.display = 'none';
+      prev.innerHTML = (p && p.emoji) || '🍽️'; prev.classList.remove('has');
     }
   }
 
@@ -275,15 +275,6 @@
       await loadProducts();
       refreshFormPhoto();
     } catch (e) { alert('Upload failed: ' + e.message); }
-  };
-  window.kRemovePhoto = async function () {
-    const pid = +$('p-id').value; if (!pid) return;
-    if (!confirm('Remove this product photo?')) return;
-    try {
-      const resp = await fetch(`${API}/api/kitchen/products/${pid}/photo`, { method: 'DELETE' });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      await loadProducts(); refreshFormPhoto();
-    } catch (e) { alert('Remove failed: ' + e.message); }
   };
   function _peWire() {                     // attach canvas drag handlers once
     const c = $('kpe-canvas'); if (!c || c._wired) return; c._wired = true;

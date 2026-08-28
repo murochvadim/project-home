@@ -65,11 +65,13 @@
     .k-subtab.active { background:#334155; color:#fff; border-color:#334155; }
     .sub-panel { display:none; } .sub-panel.active { display:block; }
     .k-cat-cell { direction:rtl; text-align:right; font-weight:700; font-size:0.92rem; color:#334155; background:#f4f7fa; border-bottom:2px solid #e2e8f0; }
-    /* on-shelf season control (product form) */
-    .k-season-ctl { display:flex; align-items:center; gap:6px; }
-    .k-season-ctl .k-ay { flex-direction:row; align-items:center; gap:4px; color:#334155; font-size:0.8rem; white-space:nowrap; }
-    .k-season-ctl select { padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem; direction:rtl; }
-    .k-season-ctl select:disabled { opacity:0.45; }
+    /* on-shelf season control (product form) — On-shelf / From / To kept together on one row */
+    .k-season-group { display:flex; gap:10px; align-items:flex-end; }
+    .k-season-group > label:first-child { margin-bottom:3px; }   /* nudge "On shelf" up a touch */
+    .k-ay { display:flex; align-items:center; gap:5px; color:#334155; font-size:0.85rem; white-space:nowrap; padding:7px 0; border:1px solid transparent; box-sizing:border-box; }
+    .k-ay input { margin:0; }
+    .k-monsel { direction:rtl; }
+    .k-monsel:disabled { opacity:0.45; }
     /* season word in the Products table (only for products with a season) */
     .k-season { direction:rtl; font-size:0.72rem; font-weight:700; padding:2px 9px; border-radius:10px; white-space:nowrap; }
     .k-season.on  { background:#dcfce7; color:#16a34a; }
@@ -81,7 +83,6 @@
     .k-photo-prev { width:40px; height:40px; border-radius:50%; background:#eef2f7; display:flex; align-items:center; justify-content:center; font-size:1.4rem; overflow:hidden; flex:none; }
     .k-photo-prev.has { background:#fff; box-shadow:0 0 0 1px #cbd5e1; }
     .p-photo-img { width:100%; height:100%; object-fit:cover; }
-    .k-photo-rm { font-size:0.72rem; color:#ef5a6a; text-decoration:none; }
     /* photo editor modal */
     .k-modal { display:none; position:fixed; inset:0; z-index:200; background:rgba(6,10,20,.55); align-items:center; justify-content:center; }
     .k-modal-box { background:#fff; border-radius:14px; padding:18px; box-shadow:0 20px 60px rgba(0,0,0,.35); width:min(94vw,380px); }
@@ -167,7 +168,6 @@
             <span id="p-photo-prev" class="k-photo-prev">🍽️</span>
             <span style="display:flex;flex-direction:column;gap:3px;">
               <button type="button" id="p-photo-btn" class="btn btn-secondary btn-sm" onclick="kOpenPhoto()">📷 Photo</button>
-              <a href="#" id="p-photo-rm" class="k-photo-rm" style="display:none" onclick="event.preventDefault();kRemovePhoto()">✕ remove</a>
             </span>
           </span>
         </label>
@@ -186,25 +186,25 @@
         </select></label>
         <label>Price ₪<input id="p-price" type="number" step="0.1" style="width:90px"></label>
         <label>Barcode<input id="p-barcode" style="width:130px"></label>
-        <label>Season (on shelf)
-          <span class="k-season-ctl">
-            <label class="k-ay"><input type="checkbox" id="p-allyear" checked onchange="kSeasonToggle()"> כל השנה</label>
-            <select id="p-season-from" disabled title="From month">
-              <option value="">מ־</option>
-              <option value="1">ינואר</option><option value="2">פברואר</option><option value="3">מרץ</option>
-              <option value="4">אפריל</option><option value="5">מאי</option><option value="6">יוני</option>
-              <option value="7">יולי</option><option value="8">אוגוסט</option><option value="9">ספטמבר</option>
-              <option value="10">אוקטובר</option><option value="11">נובמבר</option><option value="12">דצמבר</option>
-            </select>
-            <select id="p-season-to" disabled title="To month">
-              <option value="">עד־</option>
-              <option value="1">ינואר</option><option value="2">פברואר</option><option value="3">מרץ</option>
-              <option value="4">אפריל</option><option value="5">מאי</option><option value="6">יוני</option>
-              <option value="7">יולי</option><option value="8">אוגוסט</option><option value="9">ספטמבר</option>
-              <option value="10">אוקטובר</option><option value="11">נובמבר</option><option value="12">דצמבר</option>
-            </select>
-          </span>
+        <div class="k-season-group">
+        <label>On shelf
+          <span class="k-ay"><input type="checkbox" id="p-allyear" checked onchange="kSeasonToggle()"> כל השנה</span>
         </label>
+        <label>From month<select id="p-season-from" class="k-monsel" disabled>
+          <option value="">—</option>
+          <option value="1">ינואר</option><option value="2">פברואר</option><option value="3">מרץ</option>
+          <option value="4">אפריל</option><option value="5">מאי</option><option value="6">יוני</option>
+          <option value="7">יולי</option><option value="8">אוגוסט</option><option value="9">ספטמבר</option>
+          <option value="10">אוקטובר</option><option value="11">נובמבר</option><option value="12">דצמבר</option>
+        </select></label>
+        <label>To month<select id="p-season-to" class="k-monsel" disabled>
+          <option value="">—</option>
+          <option value="1">ינואר</option><option value="2">פברואר</option><option value="3">מרץ</option>
+          <option value="4">אפריל</option><option value="5">מאי</option><option value="6">יוני</option>
+          <option value="7">יולי</option><option value="8">אוגוסט</option><option value="9">ספטמבר</option>
+          <option value="10">אוקטובר</option><option value="11">נובמבר</option><option value="12">דצמבר</option>
+        </select></label>
+        </div>
         <button class="btn btn-primary btn-sm" onclick="kSaveProduct()">Save</button>
         <button class="btn btn-secondary btn-sm" onclick="kResetForm()">Clear</button>
       </div>
@@ -334,6 +334,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/kitchen.js?v=36"></script>
+<script src="js/kitchen.js?v=45"></script>
 </body>
 </html>
