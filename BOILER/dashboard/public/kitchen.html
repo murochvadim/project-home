@@ -47,6 +47,8 @@
     .k-srow.st { display:grid; grid-template-columns:30px 1fr 116px 48px 34px 62px 72px; align-items:center; }
     .k-srow.st .nm { flex:none; }
     .k-srow.st .k-step { justify-content:center; }
+    /* vertical separator between the qty/unit values and the low-threshold group (right edge of the 4th cell) */
+    .k-srow.st > :nth-child(4) { align-self:stretch; display:flex; align-items:center; justify-content:center; border-right:2px solid #64748b; padding-right:10px; }
     .k-srow.cm { display:grid; grid-template-columns:30px 1fr 116px 48px; align-items:center; }
     .k-srow.cm .nm { flex:none; }
     .k-srow.cm .k-step { justify-content:center; }
@@ -300,6 +302,6 @@
 </main>
 
 <script src="js/alerts-monitor.js"></script>
-<script src="js/kitchen.js?v=26"></script>
+<script src="js/kitchen.js?v=27"></script>
 </body>
 </html>
