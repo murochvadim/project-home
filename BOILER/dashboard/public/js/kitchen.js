@@ -475,8 +475,7 @@
             <button data-act="inc" title="more">+</button>
           </span>
           <span class="k-unit">${esc(unitHe(unit))}</span>
-          <span class="k-unit">low</span>
-          <input class="k-lowin" data-act="low" type="number" step="0.5" min="0" value="${low != null ? fmtN(low) : ''}">
+          <input class="k-lowin" data-act="low" type="number" step="0.5" min="0" placeholder="low" title="Low-stock threshold" value="${low != null ? fmtN(low) : ''}">
           ${isLow ? '<span class="k-stock-chip low">⚠ חסר</span>' : '<span></span>'}
         </div>`;
       }).join('');
