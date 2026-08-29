@@ -128,5 +128,5 @@ Recognition accuracy, direction logic, PTZ presets aimed at the lane, night/IR h
 ## References
 - Building-network monitor + the camera's presence row: [../KAZIR_15_NETWORK/CLAUDE.md](../KAZIR_15_NETWORK/CLAUDE.md)
 - go2rtc relay pattern siblings: [../ROBOT_TONYBOT/CLAUDE.md](../ROBOT_TONYBOT/CLAUDE.md) · [../BALCONY/CLAUDE.md](../BALCONY/CLAUDE.md)
-- Sibling / DNS node: [../RP01/CLAUDE.md](../RP01/CLAUDE.md) · infra node [../RP03/CLAUDE.md](../RP03/CLAUDE.md)
+- Sibling / DNS node: [../RP01_ADGUARD_FLASHER/CLAUDE.md](../RP01_ADGUARD_FLASHER/CLAUDE.md) · infra node [../RP03/CLAUDE.md](../RP03/CLAUDE.md)
 - Memory: [[project_agent_raspberry_pi]]

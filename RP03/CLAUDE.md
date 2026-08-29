@@ -1,7 +1,7 @@
 # RP03 — Raspberry Pi Zero 2 W (infra node)
 
 A **third Raspberry Pi Zero 2 W** on the LAN (added 2026-08-16). Sibling of **RP01**
-([../RP01/CLAUDE.md](../RP01/CLAUDE.md)) and **RP02** ([../RP02_PTZ_CAMERA/CLAUDE.md](../RP02_PTZ_CAMERA/CLAUDE.md)).
+([../RP01_ADGUARD_FLASHER/CLAUDE.md](../RP01_ADGUARD_FLASHER/CLAUDE.md)) and **RP02** ([../RP02_PTZ_CAMERA/CLAUDE.md](../RP02_PTZ_CAMERA/CLAUDE.md)).
 Treated like an LXC / infra node (NOT `esp_boards`): SSH-key-managed, on Project Health.
 **Purpose = TBD** — brought online + wired into monitoring first; the role gets scoped later.
 
@@ -39,5 +39,5 @@ Cloned from RP01/RP02's footprint, **minus the AdGuard tab** (DNS is RP01-only):
 - **Scope the purpose** — then document it here.
 
 ## References
-- Sibling infra nodes: [../RP01/CLAUDE.md](../RP01/CLAUDE.md) · [../RP02_PTZ_CAMERA/CLAUDE.md](../RP02_PTZ_CAMERA/CLAUDE.md)
+- Sibling infra nodes: [../RP01_ADGUARD_FLASHER/CLAUDE.md](../RP01_ADGUARD_FLASHER/CLAUDE.md) · [../RP02_PTZ_CAMERA/CLAUDE.md](../RP02_PTZ_CAMERA/CLAUDE.md)
 - Memory: [[project_agent_raspberry_pi]]

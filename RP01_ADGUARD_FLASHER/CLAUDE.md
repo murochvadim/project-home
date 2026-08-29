@@ -1,4 +1,9 @@
-# RP01 — Raspberry Pi Zero 2 W (flashing station + AdGuard DNS)
+# RP01_ADGUARD_FLASHER — Raspberry Pi Zero 2 W (AdGuard DNS + Tuya flashing station)
+
+> Module folder renamed `RP01/` → `RP01_ADGUARD_FLASHER/` on 2026-08-29 (both roles now real —
+> AdGuard live + tuya-convert installed). ⚠ **The node identity stays `rp01`** — `svc-rp01`,
+> `dashboard_settings.health.node_monitoring.rp01`, `backup_jobs` id 10, the hostname, and the
+> dashboard `rp01`/AdGuard env are all UNCHANGED. Only the docs/folder name changed.
 
 A dedicated **Raspberry Pi Zero 2 W** (hostname `RP01`, user `rp01_project`, eth0 `192.168.1.217`). Two roles:
 a **local flashing station** to de‑cloud Tuya devices (open firmware over MQTT), and the **AdGuard Home DNS**
