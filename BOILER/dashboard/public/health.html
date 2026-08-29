@@ -915,9 +915,14 @@
         <a class="tab-btn" href="http://192.168.1.217:8080" target="_blank" rel="noopener"
            style="display:inline-block; vertical-align:middle; line-height:normal; text-decoration:none; color:#2c7fb8; border-color:#2c7fb8;"
            title="Open the full AdGuard Home admin (runs on RP01)">AdGuard&nbsp;admin&nbsp;↗</a>
+        <button class="tab-btn" id="agh-svc-btn" onclick="adguardToggleService(this)" style="cursor:pointer;"
+           title="Stop AdGuard so RP01 can run a Tuya flash session (frees port 53 + RAM). LAN DNS for DHCP clients pauses until you Start it again.">…</button>
       </div>
       <div style="font-size:0.78rem; color:#999; margin-top:6px;">
         All DNS logic + logging runs on <b>RP01</b> (192.168.1.217); this tab is a read-only view of AdGuard's own data.
+      </div>
+      <div id="agh-flasher-banner" style="display:none; margin-top:8px; padding:8px 12px; border-radius:8px; background:#fff4e5; border:1px solid #f0c98a; color:#8a5a00; font-size:0.85rem;">
+        ⏸ <b>AdGuard is STOPPED (flasher mode).</b> LAN DNS for DHCP clients is paused (your LXCs/servers use <code>192.168.1.1</code> and are unaffected). RP01's port&nbsp;53 is free for a flash. For a full AP flash also point the router's DHCP DNS to <code>192.168.1.1</code>. Click <b>▶ Start AdGuard</b> when done.
       </div>
     </div>
 

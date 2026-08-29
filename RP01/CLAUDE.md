@@ -271,6 +271,63 @@ date: kernel 6.18.34 → 6.18.39, 0 pending, dpkg clean.** But it hit a real inc
   the reliable fallback (needs only a ~$2 USB‑TTL adapter — not the Pi).
 - **Step 5 — Re‑integrate:** OpenBeken (IR) + ESPHome (switches) → MQTT on **LXC 107** → device‑agent / rules.
 
+## ⚠ Flashing WHILE AdGuard is live — can RP01 do both? (procedure, 2026-08-29)
+**Yes, but NOT concurrently — you time-share the two roles** (or side-step the conflict with serial).
+RP01 now serves LAN DNS for 90+ DHCP clients, so a flash session can't just barge in. Three hard
+constraints:
+1. **Port 53 collision (the blocker):** a tuya-convert / cloudcutter AP flash runs its **own dnsmasq on
+   `:53`** on `wlan0` to hijack the target's DNS; AdGuard already binds **`0.0.0.0:53` on every
+   interface** (incl. `wlan0`). They fight for that port → **AdGuard must be stopped for an AP flash.**
+2. **Stopping AdGuard = LAN DNS outage** for all DHCP clients (phones/TVs/IoT) for the session. The
+   LXCs + PVE host are static-DNS on `192.168.1.1`, so the **core stack is unaffected** — only consumer/
+   IoT DNS drops.
+3. **RAM:** ~424 MB usable, AdGuard ~142 MB RSS (~160 MB free). **cloudcutter runs in Docker** →
+   stacking it on top thrashes swap = the exact condition that once **deadlocked this Pi's kernel** (the
+   chromium incident). `tuya-convert` is lighter but still tight.
+
+### ✅ Option A — Serial flash (RECOMMENDED — zero conflict, AdGuard stays UP)
+Flash via the board's **TX/RX pads + a ~$2 USB-TTL adapter** (not the Pi's AP at all): no dnsmasq, no
+port-53 clash, **no DNS downtime, AdGuard keeps running the whole time**, and no Docker/RAM pressure. For
+the locked **TYWE3S/ESP8266 switches** serial is usually *more* reliable than the OTA route anyway (their
+cloud-cutter OTA odds are low). This is the clean way to truly run both roles at once.
+
+### 🔘 Stop/Start button (dashboard — built 2026-08-29)
+**Project Health → AdGuard tab** has a **⏻ Stop AdGuard / ▶ Start AdGuard** toggle (top-right of the
+header card) so you don't have to SSH in for a flash session. It runs `sudo systemctl stop|start
+AdGuardHome` on RP01 over **`node-ssh`** (dashboard `routes-adguard.js`: `GET /api/adguard/service` =
+`is-active`, `POST /api/adguard/service {action:start|stop|restart}`; SSHes `rp01_project@192.168.1.217`
+with the dashboard's `~/.ssh/id_ed25519` — `rp01_project` already has passwordless-sudo, **no RP01 change
+needed**). **Stop** confirms first (warns LAN DNS pauses for DHCP clients; LXCs/servers on `.1`
+unaffected), shows an amber "flasher mode" banner, and **auto-pauses RP01 monitoring**
+(`health.node_monitoring.rp01=false`) so `svc-adguard` doesn't false-alarm red; **Start** reverses both.
+⚠ reading state uses SSH `is-active` (not AGH's HTTP API) because a stopped AGH's `:8080` is down.
+Verified live: GET=active, POST restart self-recovered, bad action rejected. ⚠ the button only stops the
+service — for a full **AP** flash you STILL repoint the router DHCP DNS (Step 1 below); for a **serial**
+flash you don't even need to stop it.
+
+### Option B — AP flash, time-shared with AdGuard (one Pi, brief planned DNS interruption)
+Flash sessions are short, one-off jobs; take AdGuard offline just for the window.
+1. **Repoint LAN DNS off RP01 first** (so clients keep resolving): Technicolor gateway `192.168.1.1` →
+   LAN → DHCP → DNS Server back to **`192.168.1.1`** (or `1.1.1.1`). Give it a few minutes / renew leases.
+2. **Stop AdGuard so it frees `:53` + RAM:** the dashboard **⏻ Stop AdGuard** button (above), or
+   `sudo systemctl stop AdGuardHome`.
+3. **Disconnect `wlan0` from the router** so it's free to become the flashing AP (leave `eth0` = mgmt/SSH).
+4. **Install the flash tools if not present** (see "Next steps" above — `tuya-convert` and/or
+   `tuya-cloudcutter`+`docker.io`), then run the flash (cloudcutter for the RTL8710 IR board,
+   tuya-convert for the ESP8266 switches).
+5. **Restore when done:** `sudo systemctl start AdGuardHome` → re-point the router's DHCP DNS back to
+   **`192.168.1.217`** → verify `svc-adguard` cell green + a test device resolves via the Pi.
+⚠ If cloudcutter's Docker makes the 424 MB box thrash, prefer serial (Option A) — don't fight the RAM.
+
+### Option C — dedicate a different box
+**RP03** is spare (purpose TBD) but **WiFi-only / no Ethernet**, so it can't be the dual-homed AP flasher
+(needs `eth0` for internet+SSH *while* `wlan0` is the AP) without adding a USB-Ethernet HAT like RP01/RP02
+have. So today RP01 (time-shared or serial) is the path; a HAT'd RP03 would be the way to fully separate
+the roles later.
+
+**Naming note:** because RP01 keeps a real (if occasional) flashing role, `RP01_ADGUARD` would undersell
+it — `RP01_ADGUARD_FLASHER` (or leaving it `RP01`) fits better. Decide when a rename is actually wanted.
+
 ## References
 - Tuya WR3E datasheet (RTL8710BN): https://developer.tuya.com/en/docs/iot/wr3e-module-datasheet?id=K9elwlqbfosbc
 - OpenBeken (Realtek + IR + MQTT): https://github.com/openshwprojects/OpenBK7231T_App

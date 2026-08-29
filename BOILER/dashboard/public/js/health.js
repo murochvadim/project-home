@@ -2203,14 +2203,69 @@ let _aghTimer = null;
 
 function adguardOnTabShow() {
   loadAdguard();
+  adguardRefreshServiceBtn();
   if (_aghTimer) clearInterval(_aghTimer);
   _aghTimer = setInterval(() => {
     if (!document.getElementById('tab-adguard')?.classList.contains('active')) return;
     if (document.hidden) return;
     loadAdguard();
+    adguardRefreshServiceBtn();
   }, 10000);
 }
 window.adguardOnTabShow = adguardOnTabShow;
+
+// ── AdGuard service control (Stop/Start for a Tuya flash session on RP01) ──
+// Stop frees RP01's :53 + RAM for the flasher; DNS for DHCP clients pauses until Start.
+async function adguardRefreshServiceBtn() {
+  const btn = document.getElementById('agh-svc-btn');
+  const banner = document.getElementById('agh-flasher-banner');
+  if (!btn) return;
+  try {
+    const s = await fetch('/api/adguard/service').then(r => r.json());
+    const active = !!s.active;
+    btn.dataset.active = active ? '1' : '0';
+    btn.disabled = false;
+    btn.textContent = active ? '⏻ Stop AdGuard' : '▶ Start AdGuard';
+    btn.style.color = active ? '#b13d3d' : '#1a7a1a';
+    btn.style.borderColor = active ? '#b13d3d' : '#1a7a1a';
+    btn.style.background = '#fff';
+    if (banner) banner.style.display = active ? 'none' : 'block';
+  } catch (e) {
+    btn.textContent = '⚠ RP01 unreachable';
+    btn.dataset.active = ''; btn.disabled = true;
+    btn.style.color = '#999'; btn.style.borderColor = '#ccc';
+  }
+}
+
+async function _aghSetRp01Monitor(monitored) {   // pause (false) / unpause (true) RP01 monitoring so svc-adguard doesn't false-alarm while stopped
+  try {
+    const cur = await fetch('/api/dashboard-settings/health.node_monitoring').then(r => r.json()).catch(() => ({}));
+    const map = (cur && cur.value && typeof cur.value === 'object') ? cur.value : {};
+    map.rp01 = !!monitored;
+    await fetch('/api/dashboard-settings/health.node_monitoring', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: map }),
+    });
+  } catch (e) { /* non-fatal */ }
+}
+
+window.adguardToggleService = async function (btn) {
+  const active = btn.dataset.active === '1';
+  const action = active ? 'stop' : 'start';
+  if (active && !confirm('Stop AdGuard on RP01 for a flash session?\n\nLAN DNS for phones / TVs / IoT will PAUSE until you Start it again.\n(Your LXCs and servers use 192.168.1.1 and are unaffected.)')) return;
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = action === 'stop' ? 'Stopping…' : 'Starting…';
+  try {
+    const r = await fetch('/api/adguard/service', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+    }).then(res => res.json());
+    if (r.error) throw new Error(r.error);
+    await _aghSetRp01Monitor(action === 'start');   // pause monitoring while stopped, unpause on start
+    await adguardRefreshServiceBtn();
+  } catch (e) {
+    alert('Service ' + action + ' failed: ' + e.message);
+    btn.disabled = false; btn.textContent = prev;
+  }
+};
 
 function _aghEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));

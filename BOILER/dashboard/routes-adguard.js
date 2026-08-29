@@ -20,9 +20,29 @@
 //   GET /api/adguard/querylog?limit=N[&status=] query-log passthrough (<=5000)
 //   GET /api/adguard/impact                     "Check Devices" report (popup)
 
+const os = require('os');
+const { NodeSSH } = require('node-ssh');
+
 const AGH_URL  = (process.env.ADGUARD_URL || 'http://192.168.1.217:8080').replace(/\/+$/, '');
 const AGH_USER = process.env.ADGUARD_USER || '';
 const AGH_PASS = process.env.ADGUARD_PASS || '';
+
+// Service control (Stop/Start for a Tuya flash session) SSHes to RP01 and runs
+// `sudo systemctl <action> AdGuardHome`. rp01_project has passwordless sudo; the
+// key is the same one routes-people.js uses. Reading state goes over SSH too
+// (is-active), because once AGH is stopped its own HTTP API is down.
+const RP01_HOST = '192.168.1.217';
+const RP01_USER = 'rp01_project';
+const SSH_KEY   = process.env.SSH_KEY_PATH || os.homedir() + '/.ssh/id_ed25519';
+const AGH_UNIT  = 'AdGuardHome';
+
+async function _sshAgh(cmd) {
+  const ssh = new NodeSSH();
+  try {
+    await ssh.connect({ host: RP01_HOST, username: RP01_USER, privateKeyPath: SSH_KEY, readyTimeout: 12000 });
+    return await ssh.execCommand(cmd);
+  } finally { ssh.dispose(); }
+}
 
 // Representative device-control cloud endpoints for the "Check Devices" impact
 // check — if a blocklist ever caught one of these, that device would lose its
@@ -67,6 +87,34 @@ async function _agh(path, timeoutMs = 6000) {
 }
 
 module.exports = function (app) {
+  // Service state — SSH `systemctl is-active` (works even when AGH's HTTP is down).
+  app.get('/api/adguard/service', async (_req, res) => {
+    try {
+      const r = await _sshAgh(`sudo -n systemctl is-active ${AGH_UNIT}`);
+      const state = (r.stdout || r.stderr || '').trim();
+      res.json({ active: state === 'active', state });
+    } catch (e) {
+      res.status(502).json({ error: 'RP01 unreachable: ' + e.message });
+    }
+  });
+
+  // Service control — Stop/Start AdGuard on RP01 for a Tuya flash session (frees
+  // :53 + RAM). Allowlisted action → sudo systemctl → read state back.
+  app.post('/api/adguard/service', async (req, res) => {
+    try {
+      const action = ((req.body && req.body.action) || '').toLowerCase();
+      if (!['start', 'stop', 'restart'].includes(action)) {
+        return res.status(400).json({ error: 'action must be start|stop|restart' });
+      }
+      const r = await _sshAgh(`sudo -n systemctl ${action} ${AGH_UNIT}`);
+      if (r.code !== 0) return res.status(500).json({ error: (r.stderr || 'systemctl failed').trim() });
+      const s = await _sshAgh(`sudo -n systemctl is-active ${AGH_UNIT}`);
+      res.json({ ok: true, action, active: (s.stdout || '').trim() === 'active' });
+    } catch (e) {
+      res.status(502).json({ error: 'RP01 unreachable: ' + e.message });
+    }
+  });
+
   // One combined call for the tab: header/health + 24h overview + top cards +
   // client IP->name map. Parallel fetch keeps it one round-trip for the browser.
   app.get('/api/adguard/summary', async (_req, res) => {
