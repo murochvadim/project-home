@@ -77,8 +77,8 @@ sudo apt update && sudo apt full-upgrade -y && sudo reboot
 ---
 
 ## ✅ Provisioned + verified live (2026-08-08)
-The Pi is flashed, on the LAN, and I have passwordless key access — **no flash tooling is set up**
-(installs paused per user). ✅ **Re-audited clean 2026-08-08:** only the OS + my `claude-code` SSH key +
+The Pi is flashed, on the LAN, and I have passwordless key access. *(At the time: no flash tooling —
+**tuya-convert has since been installed 2026-08-29, see "Flash tools INSTALLED" below.**)* ✅ **Re-audited clean 2026-08-08:** only the OS + my `claude-code` SSH key +
 the pre-existing `iw`; the earlier `~/tuya-convert` source clone was **removed** (`rm -rf ~/tuya-convert`) —
 home dir is default folders only, `authorized_keys` = 1 line (my key), **no Docker / hostapd / mosquitto /
 dnsmasq**, no lingering processes, 8.9 G free. ⚠ The flashed image is the **Desktop** variant, **not Lite**
@@ -257,16 +257,27 @@ date: kernel 6.18.34 → 6.18.39, 0 pending, dpkg clean.** But it hit a real inc
   purge the offender → resume. EEPROM note: the Zero 2 W boots from SD (no SPI EEPROM), so `rpi-eeprom` updates
   are inert on this model.
 
-## Next steps (not yet done — PAUSED per user)
-- **Step 2 — Install the flash tools** (on the Pi):
-  ```bash
-  # tuya-convert (ESP8266 switches)
-  git clone https://github.com/ct-Open-Source/tuya-convert && cd tuya-convert && ./install_prereq.sh
-  # tuya-cloudcutter (RTL8710B WR3E IR board)
-  cd ~ && sudo apt install -y docker.io git
-  git clone https://github.com/tuya-cloudcutter/tuya-cloudcutter
-  ```
-- **Step 3 — Verify `wlan0` supports AP mode** (`iw list | grep -A10 'Supported interface modes'` → must list `AP`).
+## ✅ Flash tools INSTALLED — tuya-convert (2026-08-29, scope narrowed to the 15 switches)
+Per user, flashing scope is now the **15 firmware-locked ESP8266/`TYWE3S` wall switches ONLY** — the WR3E
+IR hub (and therefore **tuya-cloudcutter + Docker**) was **dropped**. So only **tuya-convert** was installed:
+```bash
+git clone --depth 1 https://github.com/ct-Open-Source/tuya-convert && cd tuya-convert && ./install_prereq.sh
+```
+**Verified live:** `~/tuya-convert/` present (`start_flash.sh`); apt prereqs installed (**hostapd `/sbin`,
+dnsmasq `/sbin`, mosquitto `/sbin`, screen**); Python deps (**paho-mqtt 2.1.0, tornado 6.5.8,
+pycryptodomex 3.23.0, sslpsk 1.0.0**) all import OK; **`wlan0` AP mode supported**; **AdGuard stayed
+`active`** throughout (the pulled-in dnsmasq can't grab `:53` while AGH holds it — harmless; tuya-convert
+manages those services itself only at flash time); 9.1 G free.
+⚠ **PEP 668 gotcha (Debian trixie):** `install_prereq.sh`'s `pip install --user` **failed** with
+`externally-managed-environment`. Completed the Python deps with
+`sudo python3 -m pip install --break-system-packages --upgrade paho-mqtt tornado pycryptodomex
+git+https://github.com/drbild/sslpsk.git` — **sslpsk built cleanly** (the OpenSSL-3.5 build fear didn't
+materialise). Install logs kept at `~/tuya-convert-install.log` + `~/tc-pip.log`.
+⚠ **`esptool` NOT yet installed** — only needed for the SERIAL fallback (`pip install --break-system-packages
+esptool` or `apt install esptool` when that stage is reached).
+
+## Next steps (flash sessions — NOT yet done)
+- **Step 3 — Verify `wlan0` supports AP mode** (`iw list | grep -A10 'Supported interface modes'` → must list `AP`) — ✅ done (AP supported).
 - **Step 4 — Flash sessions:** cloudcutter (IR board) + tuya‑convert (switches); serial via TX/RX pads is
   the reliable fallback (needs only a ~$2 USB‑TTL adapter — not the Pi).
 - **Step 5 — Re‑integrate:** OpenBeken (IR) + ESPHome (switches) → MQTT on **LXC 107** → device‑agent / rules.
