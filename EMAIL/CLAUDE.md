@@ -1,5 +1,11 @@
 # Email Agent
 
+> ⚠ **PLANNED (2026-08-29):** the Email page will become a **"Communication" page** — `email.html` →
+> `communication.html` with 3 top-level tabs **`[📧 Email][💬 WhatsApp][⚙ Settings]`**. Email's current
+> Inbox+Automation become the Email tab's sub-tabs; **Settings becomes a shared tab** (Email section +
+> WhatsApp section); the sidebar link renames across 22 pages. Email backend/agent (LXC 110) is unchanged.
+> See [WHATSAPP/CLAUDE.md](../WHATSAPP/CLAUDE.md).
+
 ## Purpose
 Two-way Gmail client on the dashboard (read / send / reply / archive / label) **plus**
 incoming-mail automation: new mail is published to MQTT so the rule engine can trigger on it.

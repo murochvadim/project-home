@@ -68,21 +68,50 @@ Replaces today's manual `wa.me` share link (Kitchen shopping list) with real aut
 - `whatsapp_state` — singleton (token expiry/watermark + settings), forever.
 - `whatsapp_contacts` (optional) — wa_id → name map.
 Register in Health **DB-Volumes** + `retention_policies`. `agents` row with **data_table/settings_table
-NULL** (a service cache, not a decision-loop agent — same as `email`).
+NULL** (a service cache, not a decision-loop agent — same as `email`, `EMAIL/migrations/002_agent_row.sql`;
+non-NULL → `agent_schedule_check_failed`). ⚠ **On the new LXC, authorize the orchestrator's SSH key**
+(LXC 105 `root@MainAgent`) in `authorized_keys` so its per-agent service check can SSH in — else
+`service_ssh_failed` (the exact email/110 gotcha; `/create-agent` step 4b covers it).
 
-## Dashboard — WhatsApp presentation (`whatsapp.html` + `js/whatsapp.js`, Personal group, under Email)
-A **full chat-style page**, same shape as the Email page (UI-only, calls the agent's Flask API directly
-like `email.js`):
-- **Thread list** (left) — conversations grouped by contact (wa_id → name from `whatsapp_contacts`), last
-  message + unread marker, newest first.
-- **Read pane / chat view** (right) — message bubbles for the selected thread (inbound vs outbound styled),
-  delivery/read ticks from the webhook status events, media thumbnails if received.
-- **Compose / send** — free-form text (allowed only inside the 24 h window — greyed out with "session
-  closed, use a template" when outside) + a **template picker** (approved templates + their variables) for
-  proactive sends.
-- **Automation tab** (later) — sender rules → react/extract, Email-style.
+## Dashboard — a "Communication" page with Email + WhatsApp TABS (decided 2026-08-29)
+Instead of a standalone `whatsapp.html`, **evolve the existing Email page into a "Communication" page**
+with **THREE top-level tabs: `[📧 Email] [💬 WhatsApp] [⚙ Settings]`** (Settings **shared** across both).
+Cleaner sidebar + scales to future channels.
+
+**Verified against live code (2026-08-29 — don't guess):**
+- `email.html` **already has a tab system** — `.tab-bar`/`.tab-btn` + `emShowTab(name, this)` + `.tab-panel`
+  divs, with sub-tabs **📬 Inbox / ⚙ Automation / 🔧 Settings** (`email.html:99-102`; panels
+  `#tab-inbox`/`#tab-automation`/`#tab-settings`).
+- The sidebar **"Email" link (`href="email.html"`) is injected into 22 pages**; `<title>`/`<h1>` = Email.
+- Nested-tab precedent already exists (Media / Main Agent / Project General with `showTab` + inner tab-bars).
+
+**Top-level layout (Email's 3 tabs split as the user directed):**
+- **📧 Email** → sub-tabs **Inbox + Automation** (the existing `#tab-inbox`/`#tab-automation` panels +
+  `emShowTab`, unchanged; drop Settings from its sub-tab bar).
+- **💬 WhatsApp** → sub-tabs **Chat + Automation** (new, `js/whatsapp.js`).
+- **⚙ Settings (shared)** → the current Email `#tab-settings` content moves into an **Email subsection** +
+  a new **WhatsApp subsection** (token status / phone number / templates / default recipient). One Settings
+  surface for both channels — no per-channel duplicate.
+
+**Refactor approach (execution — NOT done here):**
+1. Add a **TOP-LEVEL tab bar** `[Email][WhatsApp][Settings]` via a small `commTab('email'|'whatsapp'|'settings')`
+   switcher toggling three top panels; Email + WhatsApp keep their own inner sub-tab bars (nested tabs).
+   Repoint `emShowTab` to the two remaining Email sub-tabs; the Settings panel moves out to the shared tab.
+2. Rename `email.html → communication.html`, `<title>`/`<h1>` → **Communication**, and **sed the sidebar
+   link across all 22 pages** (`href="email.html">Email` → `href="communication.html">Communication`, keep
+   `.active` where it was). *(Low-touch alt: keep the `email.html` filename, rename only the sidebar text.)*
+3. `js/email.js` stays for the Email tab (unchanged); add **`js/whatsapp.js`** for the WhatsApp tab; each
+   tab calls its own agent directly (Email → LXC 110 `:8780`; WhatsApp → the new WhatsApp LXC).
+
+**WhatsApp tab content** (new, `js/whatsapp.js` — UI-only, mirrors the Email tab's shape):
+- **Thread list** — conversations grouped by contact (wa_id → name from `whatsapp_contacts`), last message
+  + unread marker, newest first.
+- **Chat read pane** — message bubbles (inbound vs outbound), delivery/read ticks from webhook status
+  events, media thumbnails if received.
+- **Compose / send** — free-form text (greyed out with "session closed, use a template" outside the 24 h
+  window) + a **template picker** for proactive sends. (An **Automation** sub-tab later, Email-style.)
 - **First real use:** Kitchen shopping list — switch the `wa.me` button to `POST` the list via the agent
-  (via an approved template for the proactive send).
+  (approved template).
 
 ## Notifications integration — WhatsApp as a delivery surface
 The project-wide **Notifications** subsystem ([[project_agent_notifications]]) already has surfaces
@@ -122,10 +151,14 @@ email group. Authored via `/create-rule`.
   sender-rule automation (Email-style).
 
 ## Files (on execution)
-- New: `WHATSAPP/` (this doc + `migrations/`), the LXC `whatsapp-agent` service, `whatsapp.html` +
-  `js/whatsapp.js`, `RULES/rules/whatsapp_*.py`, memory `project_agent_whatsapp.md`.
-- Edit: root `CLAUDE.md` (Dashboard Pages + Project Modules rows), `MEMORY.md`, Kitchen shopping-list send
-  path, broker ACL (LXC 107), Cloudflare Tunnel config.
+- New: `WHATSAPP/` (this doc + `migrations/`), the LXC `whatsapp-agent` service, **`js/whatsapp.js`** (the
+  WhatsApp tab), `RULES/rules/whatsapp_*.py`, memory `project_agent_whatsapp.md`.
+- Edit: **`email.html` → `communication.html`** (top-level Email/WhatsApp/Settings tabs; Email keeps
+  `js/email.js` + `emShowTab`), the **sidebar link in all 22 pages** (Email → Communication), root
+  `CLAUDE.md` (Dashboard Pages + Project Modules rows), `MEMORY.md`, Kitchen shopping-list send path, broker
+  ACL (LXC 107), rule_engine subscribe list + `on_mqtt_event` (add `mur/home/whatsapp/message`),
+  `RULES/rules/notifications.py` (`_build_whatsapp` + `surfaces.whatsapp`) + `notifications-tab.js`,
+  Cloudflare Tunnel config.
 - No change to the core stack; the agent is self-contained like Email.
 
 ## Cost
