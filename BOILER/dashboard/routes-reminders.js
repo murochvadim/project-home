@@ -22,9 +22,15 @@ const SETTINGS_KEY = 'reminders';
 // carry-over for late doses. 0 = legacy behavior (clears at midnight).
 const DEFAULTS = { enabled: true, snooze_min: 30, med_window_hours: 8, pages: [] };
 const { logExerciseRoutine } = require('./lib-exercise-log');
+const travelTz = require('./lib-travel-tz');
 
 module.exports = (app, db) => {
   const err = (res, e) => res.status(500).json({ error: (e && e.message) || String(e) });
+  // Travel mode: the whole reminders badge (meds / journal / measure schedules —
+  // all personal) follows the user's current-country local time when the
+  // `reminders` feature is ticked in dashboard_settings.travel; else Asia/Jerusalem.
+  const tz = travelTz(db);
+  const remTz = () => tz.activeTzFor('reminders');
 
   async function getSettings() {
     try {
@@ -38,12 +44,13 @@ module.exports = (app, db) => {
   // current Asia/Jerusalem date / HH:MM / dow + epoch, straight from the DB clock.
   // Also yesterday's date + dow, for the overnight med carry-over.
   async function localNow() {
+    const TZ = await remTz();
     const r = await db.query(
-      `SELECT (now() AT TIME ZONE 'Asia/Jerusalem')::date::text                          AS ldate,
-              to_char(now() AT TIME ZONE 'Asia/Jerusalem','HH24:MI')                     AS lhm,
-              lower(to_char(now() AT TIME ZONE 'Asia/Jerusalem','Dy'))                   AS ldow,
-              ((now() AT TIME ZONE 'Asia/Jerusalem')::date - 1)::text                    AS ydate,
-              lower(to_char((now() AT TIME ZONE 'Asia/Jerusalem') - interval '1 day','Dy')) AS ydow,
+      `SELECT (now() AT TIME ZONE '${TZ}')::date::text                          AS ldate,
+              to_char(now() AT TIME ZONE '${TZ}','HH24:MI')                     AS lhm,
+              lower(to_char(now() AT TIME ZONE '${TZ}','Dy'))                   AS ldow,
+              ((now() AT TIME ZONE '${TZ}')::date - 1)::text                    AS ydate,
+              lower(to_char((now() AT TIME ZONE '${TZ}') - interval '1 day','Dy')) AS ydow,
               extract(epoch from now())::bigint                                          AS epoch`);
     return r.rows[0];
   }
@@ -261,10 +268,11 @@ module.exports = (app, db) => {
     if (exCfg && exCfg.enabled && exIncluded > 0) {
       const timeHm = (exCfg.schedule && exCfg.schedule.time_hm) || '07:00';
       if (nowMin >= hm2min(timeHm)) {
+        const _exTz = await remTz();
         for (const pr of profs) {
           const doneToday = Number((await db.query(
             `SELECT count(*) AS c FROM ph_exercise_log
-              WHERE profile_id=$1 AND (measured_at AT TIME ZONE 'Asia/Jerusalem')::date = $2::date`,
+              WHERE profile_id=$1 AND (measured_at AT TIME ZONE '${_exTz}')::date = $2::date`,
             [pr.id, t.ldate])).rows[0].c) || 0;
           if (doneToday) continue;
           items.push({
@@ -325,9 +333,12 @@ module.exports = (app, db) => {
       // per-day model, migration 017; upsert-increment, not a new row). rkey = water:<pid>:…
       if (rkey.startsWith('water:')) {
         const pid = parseInt(rkey.split(':')[1], 10);
+        // Use the SAME tz as the Personal Health water day-boundary (personal_health
+        // feature), so a Clear near midnight lands on the day the PH card reads.
+        const _wtz = await tz.activeTzFor('personal_health');
         if (pid) await db.query(
           `INSERT INTO ph_water (profile_id, day, cups)
-           VALUES ($1, (now() AT TIME ZONE 'Asia/Jerusalem')::date, 1)
+           VALUES ($1, (now() AT TIME ZONE '${_wtz}')::date, 1)
            ON CONFLICT (profile_id, day) DO UPDATE SET cups = ph_water.cups + 1, measured_at = now()`,
           [pid]);
       }

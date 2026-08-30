@@ -15,9 +15,16 @@
 //   DELETE /api/personal-health/measurements/:id
 
 const { logExerciseRoutine } = require('./lib-exercise-log');
+const travelTz = require('./lib-travel-tz');
 
 module.exports = (app, db) => {
   const err  = (res, e) => res.status(500).json({ error: (e && e.message) || String(e) });
+  // Travel mode: Personal Health "today" day-boundaries + display formatting follow
+  // the user's current-country local time when the `personal_health` feature is
+  // ticked in dashboard_settings.travel; else Asia/Jerusalem. Home automation is
+  // unaffected. The returned tz is validated (safe to interpolate into SQL).
+  const _tz  = travelTz(db);
+  const phTz = () => _tz.activeTzFor('personal_health');
   const trim = (s) => (s == null ? null : String(s).trim() || null);
   const num  = (v) => (v === '' || v == null || isNaN(Number(v))) ? null : Number(v);
 
@@ -94,8 +101,9 @@ module.exports = (app, db) => {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT id, profile_id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at,
+        `SELECT id, profile_id, to_char(measured_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS measured_at,
                 weight_kg, created_at
            FROM ph_measurements WHERE profile_id = $1
           ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
@@ -111,9 +119,10 @@ module.exports = (app, db) => {
       if (!pid || w == null) return res.status(400).json({ error: 'profile_id and weight_kg required' });
       // measured_at defaults to now() but can be supplied (history "+ Add" with a
       // chosen timestamp / backdated re-add).
+      const TZ = await phTz();
       const r = await db.query(
         `INSERT INTO ph_measurements (profile_id, weight_kg, measured_at)
-         VALUES ($1, $2, COALESCE($3::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at`,
+         VALUES ($1, $2, COALESCE($3::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS measured_at`,
         [pid, w, b.measured_at || null]);
       res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }
@@ -226,8 +235,9 @@ module.exports = (app, db) => {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at, systolic, diastolic, pulse, context, note
+        `SELECT id, to_char(measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at, systolic, diastolic, pulse, context, note
            FROM ph_bp WHERE profile_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
       res.json(r.rows);
     } catch (e) { err(res, e); }
@@ -241,9 +251,10 @@ module.exports = (app, db) => {
       if (sys == null && dia == null && pulse == null) return res.status(400).json({ error: 'enter a reading' });
       const ctx = (b.context === 'rest' || b.context === 'exertion') ? b.context : null;
       const note = (b.note != null && String(b.note).trim()) ? String(b.note).trim().slice(0, 500) : null;
+      const TZ = await phTz();
       const r = await db.query(
         `INSERT INTO ph_bp (profile_id, systolic, diastolic, pulse, context, note, measured_at)
-         VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at`,
+         VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS measured_at`,
         [pid, sys, dia, pulse, ctx, note, b.measured_at || null]);
       res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }
@@ -285,8 +296,8 @@ module.exports = (app, db) => {
   };
   // Shape mirrors the old test-results row (results blob + meta.game) so the shared
   // game shell + renderBalance work unchanged, plus first-class columns for the card.
-  const _boboCols = `b.id, b.profile_id, p.user_id,
-                to_char(b.measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+  const _boboColsFn = (TZ) => `b.id, b.profile_id, p.user_id,
+                to_char(b.measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at,
                 b.measured_at AS tested_at,   -- renderBalance() reads tested_at (dashboard detail modal)
                 b.game, b.level, b.score, b.duration_s, b.calories,
                 b.details AS results, jsonb_build_object('game', b.game) AS meta, h.name AS member_name`;
@@ -294,6 +305,7 @@ module.exports = (app, db) => {
     try {
       const pid = await _boboPid(req.query.profile_id, req.query.user_id);
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const _boboCols = _boboColsFn(await phTz());
       if (pid) {   // one person's history (the Personal Health card)
         const r = await db.query(
           `SELECT ${_boboCols} FROM ph_bobo b JOIN ph_profiles p ON p.id = b.profile_id
@@ -338,8 +350,9 @@ module.exports = (app, db) => {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+        `SELECT id, to_char(measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at,
                 waist_cm, hip_cm, round(waist_cm / NULLIF(hip_cm, 0), 2) AS whr
            FROM ph_body WHERE profile_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
       res.json(r.rows);
@@ -352,9 +365,10 @@ module.exports = (app, db) => {
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const waist = num(b.waist_cm), hip = num(b.hip_cm);
       if (waist == null && hip == null) return res.status(400).json({ error: 'enter waist or hip' });
+      const TZ = await phTz();
       const r = await db.query(
         `INSERT INTO ph_body (profile_id, waist_cm, hip_cm, measured_at)
-         VALUES ($1,$2,$3, COALESCE($4::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at`,
+         VALUES ($1,$2,$3, COALESCE($4::timestamptz, now())) RETURNING id, to_char(measured_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS measured_at`,
         [pid, waist, hip, b.measured_at || null]);
       res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }
@@ -384,13 +398,15 @@ module.exports = (app, db) => {
   // migration 017; was one +1 row per cup). "Today" in Asia/Jerusalem. The card
   // reads today's total; +1 / reminder-Clear increment it (/inc, upsert); the
   // history sets a day's total directly. "behind pace" reminder in routes-reminders.js.
-  const _localToday = "(now() AT TIME ZONE 'Asia/Jerusalem')::date";
+  // "today"/day-boundary expression, tz-aware (personal_health travel feature).
+  const _localTodayExpr = (TZ) => `(now() AT TIME ZONE '${TZ}')::date`;
   app.get('/api/personal-health/water', async (req, res) => {
     try {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT COALESCE(SUM(cups),0) AS today_total FROM ph_water WHERE profile_id=$1 AND day = ${_localToday}`, [pid]);
+        `SELECT COALESCE(SUM(cups),0) AS today_total FROM ph_water WHERE profile_id=$1 AND day = ${_localTodayExpr(TZ)}`, [pid]);
       res.json(r.rows[0]);
     } catch (e) { err(res, e); }
   });
@@ -402,8 +418,9 @@ module.exports = (app, db) => {
       const pid = parseInt(b.profile_id);
       const delta = num(b.delta) != null ? num(b.delta) : 1;
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const TZ = await phTz();
       const r = await db.query(
-        `INSERT INTO ph_water (profile_id, day, cups) VALUES ($1, ${_localToday}, $2)
+        `INSERT INTO ph_water (profile_id, day, cups) VALUES ($1, ${_localTodayExpr(TZ)}, $2)
          ON CONFLICT (profile_id, day) DO UPDATE SET cups = ph_water.cups + EXCLUDED.cups, measured_at = now()
          RETURNING cups AS today_total`, [pid, delta]);
       res.json({ ok: true, today_total: Number(r.rows[0].today_total) });
@@ -414,8 +431,9 @@ module.exports = (app, db) => {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at, cups
+        `SELECT id, to_char(measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at, cups
            FROM ph_water WHERE profile_id=$1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
       res.json(r.rows);
     } catch (e) { err(res, e); }
@@ -428,9 +446,10 @@ module.exports = (app, db) => {
       const pid = parseInt(b.profile_id);
       const cups = num(b.cups);
       if (!pid || cups == null) return res.status(400).json({ error: 'profile_id and cups required' });
+      const TZ = await phTz();
       const r = await db.query(
         `INSERT INTO ph_water (profile_id, day, cups, measured_at)
-         VALUES ($1, (COALESCE($3::timestamptz, now()) AT TIME ZONE 'Asia/Jerusalem')::date, $2, COALESCE($3::timestamptz, now()))
+         VALUES ($1, (COALESCE($3::timestamptz, now()) AT TIME ZONE '${TZ}')::date, $2, COALESCE($3::timestamptz, now()))
          ON CONFLICT (profile_id, day) DO UPDATE SET cups = EXCLUDED.cups, measured_at = EXCLUDED.measured_at
          RETURNING id`,
         [pid, cups, b.measured_at || null]);
@@ -446,8 +465,9 @@ module.exports = (app, db) => {
       if (b.measured_at !== undefined) {
         add('measured_at', b.measured_at || null);
         // keep `day` in sync with the edited timestamp (one-row-per-day model)
+        const TZ = await phTz();
         params.push(b.measured_at || null);
-        sets.push(`day = (COALESCE($${params.length}::timestamptz, now()) AT TIME ZONE 'Asia/Jerusalem')::date`);
+        sets.push(`day = (COALESCE($${params.length}::timestamptz, now()) AT TIME ZONE '${TZ}')::date`);
       }
       if (!sets.length) return res.status(400).json({ error: 'no fields' });
       params.push(parseInt(req.params.id));
@@ -466,11 +486,12 @@ module.exports = (app, db) => {
   // so walking-trip imports from LXC 104 land on the same key). Manual entries are
   // server-stamped on Save; trip entries are inserted by scripts/steps_from_trips.py.
   // "Today" is computed in Asia/Jerusalem.
-  const _today = "(measured_at AT TIME ZONE 'Asia/Jerusalem')::date = (now() AT TIME ZONE 'Asia/Jerusalem')::date";
+  const _todayExpr = (TZ) => `(measured_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date`;
   app.get('/api/personal-health/steps', async (req, res) => {
     try {
       const uid = parseInt(req.query.user_id);
       if (!uid) return res.status(400).json({ error: 'user_id required' });
+      const TZ = await phTz(); const _today = _todayExpr(TZ);
       const r = await db.query(
         `SELECT
            COALESCE(SUM(steps) FILTER (WHERE ${_today}), 0)                       AS today_total,
@@ -486,8 +507,9 @@ module.exports = (app, db) => {
       const uid = parseInt(req.query.user_id);
       if (!uid) return res.status(400).json({ error: 'user_id required' });
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at, steps, source, trip_id
+        `SELECT id, to_char(measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at, steps, source, trip_id
            FROM ph_steps WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [uid, lim]);
       res.json(r.rows);
     } catch (e) { err(res, e); }
@@ -498,10 +520,11 @@ module.exports = (app, db) => {
       const uid = parseInt(b.user_id);
       const steps = num(b.steps);
       if (!uid || steps == null) return res.status(400).json({ error: 'user_id and steps required' });
+      const TZ = await phTz();
       const r = await db.query(
         `INSERT INTO ph_steps (user_id, steps, source, measured_at)
          VALUES ($1, $2, 'manual', COALESCE($3::timestamptz, now()))
-         RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem', 'YYYY-MM-DD HH24:MI') AS measured_at`,
+         RETURNING id, to_char(measured_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS measured_at`,
         [uid, Math.round(steps), b.measured_at || null]);
       res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }
@@ -536,16 +559,17 @@ module.exports = (app, db) => {
   // routine's TOTAL calories + distinct muscles (written by lib-exercise-log from
   // the global dashboard_settings.medical.exercises definitions, via "Done" here
   // or the reminder "Clear"). "Today" is computed in Asia/Jerusalem.
-  const _exToday = "(measured_at AT TIME ZONE 'Asia/Jerusalem')::date = (now() AT TIME ZONE 'Asia/Jerusalem')::date";
+  const _exTodayExpr = (TZ) => `(measured_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date`;
   // Today's totals: summed calories + the UNION of distinct muscles over today's rows.
   app.get('/api/personal-health/exercise', async (req, res) => {
     try {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+        `SELECT id, to_char(measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at,
                 total_calories, muscles, exercises
-           FROM ph_exercise_log WHERE profile_id=$1 AND ${_exToday}
+           FROM ph_exercise_log WHERE profile_id=$1 AND ${_exTodayExpr(TZ)}
           ORDER BY measured_at DESC, id DESC`, [pid]);
       const SEC_PER_REP = 3;                     // rough time estimate for rep-based exercises
       let cal = 0, exCount = 0, seconds = 0; const mset = new Set();
@@ -570,8 +594,9 @@ module.exports = (app, db) => {
       const pid = parseInt(req.query.profile_id);
       if (!pid) return res.status(400).json({ error: 'profile_id required' });
       const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+      const TZ = await phTz();
       const r = await db.query(
-        `SELECT id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at,
+        `SELECT id, to_char(measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at,
                 total_calories, muscles, exercises
            FROM ph_exercise_log WHERE profile_id=$1 ORDER BY measured_at DESC, id DESC LIMIT $2`, [pid, lim]);
       res.json(r.rows);
@@ -594,10 +619,11 @@ module.exports = (app, db) => {
       const pid = parseInt(b.profile_id);
       const cal = num(b.total_calories);
       if (!pid || cal == null) return res.status(400).json({ error: 'profile_id and total_calories required' });
+      const TZ = await phTz();
       const r = await db.query(
         `INSERT INTO ph_exercise_log (profile_id, total_calories, muscles, measured_at)
          VALUES ($1, $2, $3::jsonb, COALESCE($4::timestamptz, now()))
-         RETURNING id, to_char(measured_at AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI') AS measured_at`,
+         RETURNING id, to_char(measured_at AT TIME ZONE '${TZ}','YYYY-MM-DD HH24:MI') AS measured_at`,
         [pid, cal, JSON.stringify(Array.isArray(b.muscles) ? b.muscles : []), b.measured_at || null]);
       res.json({ ok: true, id: r.rows[0].id, measured_at: r.rows[0].measured_at });
     } catch (e) { err(res, e); }

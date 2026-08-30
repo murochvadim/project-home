@@ -53,7 +53,7 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
   if (name === 'doccreate' && typeof pvdcOnShow === 'function') pvdcOnShow();
-  if (name === 'settings') { _pvFillSettingsForm(); pvLoadUsers(); pvLoadReminders(); if (typeof pvPeopleSettingsLoad === 'function') pvPeopleSettingsLoad(); }
+  if (name === 'settings') { _pvFillSettingsForm(); pvTravelLoad(); pvLoadUsers(); pvLoadReminders(); if (typeof pvPeopleSettingsLoad === 'function') pvPeopleSettingsLoad(); }
   if (name === 'places' && typeof pvPlacesOnShow === 'function') pvPlacesOnShow();
 }
 async function pvRefresh() { await pvLoadSettings(); await pvLoadCrypto(); await pvLoadSites(); pvRenderLockState(); pvJournalLoadCfg(); }
@@ -88,6 +88,83 @@ async function pvSaveSettings() {
     _pvApptColors = out;
     if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; }
     pvRenderSites();   // re-color appointment cards with the new bands
+  } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
+}
+
+// ── Travel mode (dashboard_settings key 'travel') — when abroad, personal features
+// follow the active country's local time; home automation stays Israel. Also drives
+// the global "Travel" clock injected on every page by alerts-monitor.js. ──
+const _PV_TRAVEL_FEATS = [
+  ['daily_journal', 'Daily Journal'], ['medical', 'Medical'],
+  ['personal_health', 'Personal Health'], ['reminders', 'Reminders badge'],
+];
+const _PV_TZ_LIST = [
+  'Asia/Jerusalem',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Madrid', 'Europe/Rome',
+  'Europe/Amsterdam', 'Europe/Athens', 'Europe/Moscow', 'Europe/Istanbul',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'America/Toronto', 'America/Mexico_City', 'America/Sao_Paulo', 'America/Argentina/Buenos_Aires',
+  'Asia/Dubai', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Hong_Kong', 'Asia/Shanghai',
+  'Asia/Tokyo', 'Asia/Kolkata', 'Asia/Seoul',
+  'Australia/Sydney', 'Pacific/Auckland', 'Africa/Cairo', 'Africa/Johannesburg', 'UTC',
+];
+let _pvTravel = { active_timezone: 'Asia/Jerusalem', features: {} };
+function _pvTravelIsHome() {
+  const tz = _pvTravel.active_timezone || 'Asia/Jerusalem';
+  return !tz || tz === 'Asia/Jerusalem';
+}
+function _pvTravelBadge() {
+  const badge = document.getElementById('pv-travel-badge'); if (!badge) return;
+  if (_pvTravelIsHome()) { badge.textContent = '🏠 Home — Israel'; badge.style.background = '#dcfce7'; badge.style.color = '#15803d'; }
+  else { badge.textContent = '🧳 Away — ' + _pvTravel.active_timezone; badge.style.background = '#fef3c7'; badge.style.color = '#b45309'; }
+}
+function pvTravelRender() {
+  const sel = document.getElementById('pv-travel-tz');
+  if (sel) {
+    if (!sel.options.length) sel.innerHTML = _PV_TZ_LIST.map(z => `<option value="${z}">${z === 'Asia/Jerusalem' ? 'Asia/Jerusalem (Home)' : z}</option>`).join('');
+    sel.value = _pvTravel.active_timezone || 'Asia/Jerusalem';
+    if (sel.selectedIndex < 0 && _pvTravel.active_timezone) {  // unknown tz → add + select
+      const o = document.createElement('option'); o.value = o.textContent = _pvTravel.active_timezone; sel.appendChild(o); sel.value = _pvTravel.active_timezone;
+    }
+  }
+  const feats = _pvTravel.features || {};
+  const host = document.getElementById('pv-travel-feats');
+  if (host) host.innerHTML = _PV_TRAVEL_FEATS.map(([k, label]) =>
+    `<label style="display:flex; align-items:center; gap:7px;"><input type="checkbox" data-travel-feat="${k}" ${feats[k] ? 'checked' : ''}> ${label}</label>`).join('');
+  _pvTravelBadge();
+}
+async function pvTravelLoad() {
+  try {
+    const j = await (await fetch('/api/dashboard-settings/travel')).json();
+    const v = (j && j.value) || {};
+    _pvTravel = { active_timezone: v.active_timezone || 'Asia/Jerusalem', features: (v.features && typeof v.features === 'object') ? v.features : {} };
+  } catch (e) { _pvTravel = { active_timezone: 'Asia/Jerusalem', features: {} }; }
+  pvTravelRender();
+}
+function pvTravelHome() {
+  const sel = document.getElementById('pv-travel-tz'); if (sel) sel.value = 'Asia/Jerusalem';
+  _pvTravel = Object.assign({}, _pvTravel, { active_timezone: 'Asia/Jerusalem' });
+  _pvTravelBadge();
+}
+async function pvTravelSave() {
+  const st = document.getElementById('pv-travel-status');
+  const sel = document.getElementById('pv-travel-tz');
+  const tz = (sel && sel.value) || 'Asia/Jerusalem';
+  const features = {};
+  document.querySelectorAll('#pv-travel-feats input[data-travel-feat]').forEach(cb => { features[cb.getAttribute('data-travel-feat')] = cb.checked; });
+  const out = { active_timezone: tz, features };
+  try {
+    const r = await fetch('/api/dashboard-settings/travel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: out }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _pvTravel = out;
+    // refresh the shared cache so pvjTodayJeru + the global clock update immediately
+    if (window.loadTravelSettings) { try { await window.loadTravelSettings(true); } catch (e) {} }
+    if (window.travelClockRefresh) { try { window.travelClockRefresh(); } catch (e) {} }
+    pvTravelRender();
+    if (st) { st.style.color = '#2e7d32'; st.textContent = '✓ Saved'; }
   } catch (e) { if (st) { st.style.color = '#c0392b'; st.textContent = 'Save failed: ' + e.message; } }
 }
 
@@ -1007,7 +1084,10 @@ async function pvJournalCfgSave() {
 // even when the laptop is abroad (en-CA formats as YYYY-MM-DD; he-IL would give
 // DD.MM.YYYY which a <input type="date"> can't consume).
 function pvjTodayJeru() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+  // Travel-aware: when the `daily_journal` feature travels (Privacy → Settings →
+  // Travel), "today" follows the active country's timezone; else Asia/Jerusalem.
+  const tz = (window.activeTzFor ? window.activeTzFor('daily_journal') : 'Asia/Jerusalem');
+  return new Date().toLocaleDateString('en-CA', { timeZone: tz });
 }
 // ── Daily Journal media attachments (photos/videos on the QNAP media library) ──
 // Bytes go browser → media agent (LXC 100) → /mnt/media (QNAP) ONLY; Postgres
@@ -1185,6 +1265,7 @@ function pvjLightbox(relEnc, type) {
 function pvjLightboxClose() { const m = document.getElementById('pvj-lightbox'); if (m) { m.style.display = 'none'; m.innerHTML = ''; } }
 
 async function pvJournalOnShow() {
+  if (window.loadTravelSettings) { try { await window.loadTravelSettings(true); } catch (e) {} }
   await pvJournalLoadCfg();
   pvJournalSearchCats();
   // Default to today (Jerusalem) on every open, so normal daily use isn't left

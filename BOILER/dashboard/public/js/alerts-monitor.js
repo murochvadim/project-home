@@ -338,3 +338,66 @@
   setInterval(checkNetwork, 60000);
   setInterval(checkNetbird, 60000);
 })();
+
+// ── Global "Travel" clock — a big local-time clock on EVERY page's header row ──
+// Shows DD:HH:MM in the travel timezone (dashboard_settings.travel.active_timezone,
+// default Asia/Jerusalem = Home). Injected into .page-header so it sits on the same
+// row as the page <h1>. window.travelClockRefresh() re-reads the setting (called by
+// the Privacy → Travel panel right after Save). This is display-only — home
+// automation is unaffected and always runs on Asia/Jerusalem.
+(function () {
+  let tz = 'Asia/Jerusalem';
+  const TZ_RE = /^[A-Za-z]+(?:\/[A-Za-z0-9_+-]+){1,2}$/;
+  // City name from the timezone: America/New_York -> "New York", Asia/Jerusalem -> "Jerusalem".
+  function cityOf(z) { return String(z || '').split('/').pop().replace(/_/g, ' '); }
+  function render() {
+    const box = document.getElementById('travel-clock');
+    if (!box) return;
+    const nm = box.querySelector('.tc-name'), dt = box.querySelector('.tc-date'), tm = box.querySelector('.tc-time');
+    let dstr = '--.--', tstr = '--:--';
+    try {
+      const p = new Intl.DateTimeFormat('en-GB', { timeZone: tz, day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+      const g = (t) => (p.find(x => x.type === t) || {}).value;
+      if (g('day') && g('month')) dstr = g('day') + '.' + g('month');   // 30.8
+      if (g('hour') && g('minute')) tstr = g('hour') + ':' + g('minute'); // 14:07
+    } catch (e) {}
+    // At Home show the country "Israel"; abroad show the city (e.g. "New York").
+    if (nm) nm.textContent = (tz === 'Asia/Jerusalem') ? 'Israel' : cityOf(tz);
+    if (dt) dt.textContent = dstr;
+    if (tm) tm.textContent = tstr;
+  }
+  async function refresh() {
+    try {
+      const j = await fetch('/api/dashboard-settings/travel').then(r => r.json());
+      const v = (j && j.value) || {};
+      tz = (v.active_timezone && TZ_RE.test(v.active_timezone)) ? v.active_timezone : 'Asia/Jerusalem';
+    } catch (e) { /* keep last known tz */ }
+    const away = tz !== 'Asia/Jerusalem';
+    const box = document.getElementById('travel-clock');
+    if (box) box.title = 'Local time — ' + tz + (away ? '  (Travel / abroad)' : '  (Home / Israel)');
+    render();
+  }
+  window.travelClockRefresh = refresh;
+  function inject() {
+    const hdr = document.querySelector('.page-header');
+    if (!hdr || document.getElementById('travel-clock')) return;
+    // Absolute dead-center of the header on EVERY page — independent of the title
+    // length and of whether the page has a Refresh button (Project General has none).
+    if (getComputedStyle(hdr).position === 'static') hdr.style.position = 'relative';
+    const clock = document.createElement('div');
+    clock.id = 'travel-clock';
+    clock.style.cssText = 'position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); display:inline-flex; align-items:baseline; gap:10px; line-height:1;';
+    clock.innerHTML =
+      '<span class="tc-name" style="font-size:1.4rem; font-weight:800; color:#166534;">—</span>' +
+      '<span style="display:inline-flex; align-items:baseline; gap:14px;">' +
+        '<span class="tc-date" style="font-size:1.4rem; font-weight:800; font-variant-numeric:tabular-nums; font-family:ui-monospace,Menlo,Consolas,monospace; color:inherit;">--.--</span>' +
+        '<span class="tc-time" style="font-size:1.4rem; font-weight:800; font-variant-numeric:tabular-nums; font-family:ui-monospace,Menlo,Consolas,monospace; color:inherit;">--:--</span>' +
+      '</span>';
+    hdr.appendChild(clock);
+    refresh();
+  }
+  function start() { inject(); setInterval(render, 10000); setInterval(refresh, 60000); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+

@@ -283,6 +283,27 @@
   <div class="tab-panel" id="tab-settings">
     <div style="display:grid; grid-template-columns:repeat(2, minmax(300px, 1fr)); gap:16px; align-items:stretch;">
     <div class="card" style="margin:0;">
+      <h2 style="margin-top:0;">🧳 Travel</h2>
+      <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
+        When you're abroad, pick your current timezone and the checked personal features follow
+        <b>local time</b> — so "today", day totals and reminder times match where you are. <b>Home
+        automation always stays Israel.</b> The big <b>Travel</b> clock at the top of every page shows this time.
+      </p>
+      <div id="pv-travel-badge" style="display:inline-block; font-weight:700; font-size:0.95rem; padding:5px 12px; border-radius:14px; margin-bottom:12px;">🏠 Home — Israel</div>
+      <label style="font-size:0.92rem; display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+        <span style="min-width:130px;">Current timezone</span>
+        <select id="pv-travel-tz" style="flex:1; min-width:200px; padding:6px 8px; border:1px solid #ccc; border-radius:4px; font-size:0.92rem;"></select>
+        <button class="btn btn-sm" style="background:#e5e7eb; color:#111;" onclick="pvTravelHome()">🏠 Home</button>
+      </label>
+      <div style="font-size:0.9rem; color:#333; margin-bottom:6px;">Which features follow local time:</div>
+      <div id="pv-travel-feats" style="display:grid; grid-template-columns:1fr 1fr; gap:6px 16px; font-size:0.9rem; margin-bottom:14px;"></div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button class="btn btn-sm" style="background:#2563eb; color:#fff;" onclick="pvTravelSave()">Save</button>
+        <span id="pv-travel-status" style="font-size:0.85rem; color:#2e7d32; min-height:1.1em;"></span>
+      </div>
+    </div>
+
+    <div class="card" style="margin:0;">
       <h2 style="margin-top:0;">Schedule &amp; appointment colors</h2>
       <p style="font-size:0.88rem; color:#555; line-height:1.5; margin-top:0;">
         The next-appointment card is colored by how close it is. A far-off appointment is
@@ -681,11 +702,12 @@
   .pv-form-grid input, .pv-form-grid select, .pv-form-grid textarea { font-size:0.88rem; padding:5px 7px; width:100%; box-sizing:border-box; border:1px solid #ccc; border-radius:4px; }
 </style>
 
-<script src="js/alerts-monitor.js?v=12"></script>
+<script src="js/alerts-monitor.js?v=21"></script>
 <script src="js/reminders-badge.js?v=13"></script>
 <script src="js/notify-toast.js?v=12"></script>
+<script src="js/travel-tz.js?v=1"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="js/privacy.js?v=92"></script>
+<script src="js/privacy.js?v=93"></script>
 <script src="js/privacy-places.js?v=11"></script>
 <script src="js/privacy-people.js?v=28"></script>
 <script src="vendor/doccreate/signature_pad.umd.min.js"></script>
