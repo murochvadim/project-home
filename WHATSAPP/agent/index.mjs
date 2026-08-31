@@ -32,8 +32,24 @@ const q = (text, params) => pool.query(text, params);
 // ── State held in memory (mirrors whatsapp_state) ───────────────────────────
 let sock = null;
 let state = { connection: 'connecting', me: null, qrDataUrl: null, lastSync: null };
-let settings = { min_gap_sec: 4, hourly_cap: 20, daily_cap: 100, contact_only: true };
+let settings = { min_gap_sec: 4, hourly_cap: 20, daily_cap: 100, contact_only: true,
+                 del_min_gap_sec: 4, del_hourly_cap: 30 };
 let lastSendTs = 0;
+let _actionTimes = [];   // epoch-ms of recent destructive actions (delete/leave), in-memory sliding hour
+
+// Throttle for destructive actions (message delete / group leave / chat delete).
+// Rapid bursts look like automation and risk a ban — refuse if too fast / over cap.
+// Records the moment on every permitted attempt (conservative: counts outbound intent).
+function guardAction() {
+  const now = Date.now();
+  const gap = settings.del_min_gap_sec != null ? settings.del_min_gap_sec : 4;
+  const cap = settings.del_hourly_cap  != null ? settings.del_hourly_cap  : 30;
+  _actionTimes = _actionTimes.filter(t => now - t < 3600e3);
+  const last = _actionTimes.length ? _actionTimes[_actionTimes.length - 1] : 0;
+  if ((now - last) / 1000 < gap) { const e = new Error('rate'); e.reason = 'rate'; throw e; }
+  if (_actionTimes.length >= cap) { const e = new Error('cap'); e.reason = 'cap'; throw e; }
+  _actionTimes.push(now);
+}
 
 async function loadSettings() {
   try {
@@ -241,10 +257,42 @@ app.get('/status', async (req, res) => {
   ok(res, { connection: state.connection, me: state.me, lastSync: state.lastSync, counts });
 });
 app.get('/qr', (req, res) => ok(res, { qr: state.qrDataUrl, connection: state.connection }));
+// All chats — name-resolved + searchable + recent-first + paged. Resolution chain:
+// chat.name -> contact.name -> contact.notify -> latest message pushName -> number
+// (for @s.whatsapp.net) -> raw jid (@lid = "unknown"). Empty stubs (no ts, no msgs)
+// and status@broadcast are filtered out. count(*) OVER() gives the search-aware total.
 app.get('/chats', async (req, res) => {
-  const lim = Math.min(parseInt(req.query.limit) || 500, 1000);
-  const r = await q(`SELECT jid,name,is_group,last_ts,unread FROM whatsapp_chats ORDER BY last_ts DESC NULLS LAST LIMIT $1`, [lim]);
-  ok(res, { chats: r.rows });
+  const lim = Math.min(parseInt(req.query.limit) || 40, 200);
+  const off = Math.max(parseInt(req.query.offset) || 0, 0);
+  const qs  = (req.query.q || '').trim();
+  const like = '%' + qs.replace(/[%_\\]/g, m => '\\' + m) + '%';
+  const filter = ['dm', 'group', 'unknown', 'renamed'].includes(req.query.filter) ? req.query.filter : 'all';
+  const fSql = filter === 'dm' ? ' AND NOT is_group'
+             : filter === 'group' ? ' AND is_group'
+             : filter === 'unknown' ? ' AND disp IS NULL'
+             : filter === 'renamed' ? ' AND custom_name IS NOT NULL' : '';
+  const r = await q(`
+    WITH base AS (
+      SELECT c.jid, c.is_group, c.last_ts, c.unread, c.custom_name,
+        COALESCE(NULLIF(c.custom_name,''), NULLIF(c.name,''), NULLIF(ct.name,''), NULLIF(ct.notify,''),
+          NULLIF((SELECT m.sender_name FROM whatsapp_messages m
+                  WHERE m.chat_jid=c.jid AND m.sender_name IS NOT NULL
+                  ORDER BY m.ts DESC NULLS LAST LIMIT 1),''),
+          CASE WHEN c.jid LIKE '%@s.whatsapp.net' THEN split_part(c.jid,'@',1) END) AS disp,
+        EXISTS(SELECT 1 FROM whatsapp_messages m2 WHERE m2.chat_jid=c.jid) AS has_msgs
+      FROM whatsapp_chats c
+      LEFT JOIN whatsapp_contacts ct ON ct.jid=c.jid
+      WHERE c.jid NOT LIKE '%@broadcast'
+    )
+    SELECT jid, is_group, last_ts, unread, disp AS name,
+           (disp IS NOT NULL) AS resolved, count(*) OVER() AS total
+    FROM base
+    WHERE (last_ts IS NOT NULL OR has_msgs)
+      AND ($1 = '' OR disp ILIKE $2 OR jid ILIKE $2)${fSql}
+    ORDER BY last_ts DESC NULLS LAST
+    LIMIT $3 OFFSET $4`, [qs, like, lim, off]);
+  const total = r.rows[0] ? Number(r.rows[0].total) : 0;
+  ok(res, { chats: r.rows.map(({ total, ...c }) => c), total, offset: off, limit: lim });
 });
 app.get('/groups', async (req, res) => {
   const r = await q(`SELECT c.jid, c.name, c.owner_jid, c.participant_count, c.last_ts, c.unread,
@@ -300,6 +348,8 @@ app.post('/settings', async (req, res) => {
       hourly_cap:   ci(b.hourly_cap,  1, 1000, settings.hourly_cap),
       daily_cap:    ci(b.daily_cap,   1, 5000, settings.daily_cap),
       contact_only: b.contact_only === undefined ? settings.contact_only : !!b.contact_only,
+      del_min_gap_sec: ci(b.del_min_gap_sec, 0, 3600, settings.del_min_gap_sec),
+      del_hourly_cap:  ci(b.del_hourly_cap,  1, 1000, settings.del_hourly_cap),
     });
     await q(`UPDATE whatsapp_state SET settings=$1, updated_at=now() WHERE id=1`, [JSON.stringify(settings)]);
     log.info('settings updated: ' + JSON.stringify(settings));
@@ -321,6 +371,25 @@ app.get('/messages', async (req, res) => {
                      FROM whatsapp_messages WHERE chat_jid=$1 ORDER BY ts DESC NULLS LAST LIMIT $2`, [jid, lim]);
   ok(res, { messages: r.rows.reverse() });
 });
+// Live "new messages" monitor — latest INBOUND messages, newest first, chat name
+// resolved via the same chain as /chats. Skips empty WhatsApp system rows
+// (senderKeyDistributionMessage/protocolMessage with no body). Read-only, zero risk.
+app.get('/recent', async (req, res) => {
+  const lim = Math.min(parseInt(req.query.limit) || 15, 50);
+  const r = await q(`
+    SELECT m.chat_jid, m.sender_name, m.body, m.type, m.ts, c.is_group,
+      COALESCE(NULLIF(c.custom_name,''), NULLIF(c.name,''), NULLIF(ct.name,''), NULLIF(ct.notify,''),
+        NULLIF(m.sender_name,''),
+        CASE WHEN m.chat_jid LIKE '%@s.whatsapp.net' THEN split_part(m.chat_jid,'@',1) END) AS chat_name
+    FROM whatsapp_messages m
+    LEFT JOIN whatsapp_chats c     ON c.jid = m.chat_jid
+    LEFT JOIN whatsapp_contacts ct ON ct.jid = m.chat_jid
+    WHERE m.from_me = false
+      AND (COALESCE(m.body,'') <> '' OR m.type ~* 'image|video|audio|ptt|sticker|document|location')
+    ORDER BY m.ts DESC NULLS LAST
+    LIMIT $1`, [lim]);
+  ok(res, { messages: r.rows });
+});
 app.post('/history', async (req, res) => {
   try { const { jid, count } = req.body || {}; if (!sock) return bad(res, 'not_connected', 409);
     const oldest = (await q(`SELECT wa_id, ts FROM whatsapp_messages WHERE chat_jid=$1 ORDER BY ts ASC LIMIT 1`, [jid])).rows[0];
@@ -339,6 +408,7 @@ app.post('/leave', async (req, res) => {
   try {
     const { jid } = req.body || {}; if (!jid || !jid.endsWith('@g.us')) return bad(res, 'group_jid');
     if (!sock || state.connection !== 'open') return bad(res, 'not_connected', 409);
+    guardAction();
     await sock.groupLeave(jid);
     // VERIFY the leave actually took before removing the row (a silent no-op would
     // otherwise hide a group we're still in; a re-sync then resurrects it).
@@ -349,16 +419,73 @@ app.post('/leave', async (req, res) => {
     await q(`DELETE FROM whatsapp_chats WHERE jid=$1`, [jid]);
     log.info('LEFT group ' + jid);
     ok(res, {});
-  } catch (e) { log.warn('leave error ' + (req.body && req.body.jid) + ': ' + e.message); bad(res, e.message, 500); }
+  } catch (e) {
+    if (e.reason === 'rate' || e.reason === 'cap') return bad(res, e.reason, 429);
+    log.warn('leave error ' + (req.body && req.body.jid) + ': ' + e.message); bad(res, e.message, 500);
+  }
 });
 app.post('/delete', async (req, res) => {
   try { const { jid, key } = req.body || {}; if (!jid || !key) return bad(res, 'jid_and_key');
+    guardAction();
     await sock.sendMessage(jid, { delete: key }); ok(res, {}); }
-  catch (e) { bad(res, e.message, 500); }
+  catch (e) {
+    if (e.reason === 'rate' || e.reason === 'cap') return bad(res, e.reason, 429);
+    bad(res, e.message, 500);
+  }
 });
 app.post('/read', async (req, res) => {
   try { const { jid } = req.body || {}; await q(`UPDATE whatsapp_chats SET unread=0 WHERE jid=$1`, [jid]); ok(res, {}); }
   catch (e) { bad(res, e.message, 500); }
+});
+// Rename a chat with a local custom label (dashboard-only; NOT synced to WhatsApp).
+// Empty/blank name clears it (reverts to the resolved name / "unknown"). Zero ban risk.
+app.post('/chat/name', async (req, res) => {
+  try {
+    const { jid } = req.body || {}; if (!jid) return bad(res, 'jid');
+    const nm = (req.body.name || '').trim().slice(0, 120) || null;
+    const r = await q(`UPDATE whatsapp_chats SET custom_name=$2, updated_at=now() WHERE jid=$1`, [jid, nm]);
+    if (!r.rowCount) return bad(res, 'no_such_chat', 404);
+    // Return the freshly-RESOLVED display name (same chain as /chats) so the UI is
+    // correct whether the label was set or cleared.
+    const d = await q(`
+      SELECT COALESCE(NULLIF(c.custom_name,''), NULLIF(c.name,''), NULLIF(ct.name,''), NULLIF(ct.notify,''),
+        NULLIF((SELECT m.sender_name FROM whatsapp_messages m WHERE m.chat_jid=c.jid AND m.sender_name IS NOT NULL
+                ORDER BY m.ts DESC NULLS LAST LIMIT 1),''),
+        CASE WHEN c.jid LIKE '%@s.whatsapp.net' THEN split_part(c.jid,'@',1) END) AS disp
+      FROM whatsapp_chats c LEFT JOIN whatsapp_contacts ct ON ct.jid=c.jid WHERE c.jid=$1`, [jid]);
+    const disp = d.rows[0] ? d.rows[0].disp : null;
+    ok(res, { name: disp, resolved: disp != null });
+  } catch (e) { bad(res, e.message, 500); }
+});
+// Delete a DM conversation. Best-effort real WhatsApp delete-for-me (account-local)
+// via chatModify; if that's unavailable/fails, fall back to a dashboard-only hide.
+// Either way the DB rows go so the chat leaves the list. Groups use /leave instead.
+app.post('/chat/delete', async (req, res) => {
+  try {
+    const { jid } = req.body || {}; if (!jid) return bad(res, 'jid');
+    if (jid.endsWith('@g.us')) return bad(res, 'use_leave_for_groups', 400);
+    guardAction();
+    let removed = 'local';
+    if (sock && state.connection === 'open') {
+      try {
+        const last = (await q(`SELECT wa_id, from_me, ts FROM whatsapp_messages
+                               WHERE chat_jid=$1 ORDER BY ts DESC NULLS LAST LIMIT 1`, [jid])).rows[0];
+        if (last && last.wa_id) {
+          const key = { id: last.wa_id, remoteJid: jid, fromMe: !!last.from_me };
+          const tsSec = last.ts ? Math.floor(new Date(last.ts).getTime() / 1000) : Math.floor(Date.now() / 1000);
+          await sock.chatModify({ delete: true, lastMessages: [{ key, messageTimestamp: tsSec }] }, jid);
+          removed = 'whatsapp';
+        }
+      } catch (e) { log.warn('chatModify delete failed for ' + jid + ': ' + e.message + ' — local hide only'); }
+    }
+    await q(`DELETE FROM whatsapp_messages WHERE chat_jid=$1`, [jid]);
+    await q(`DELETE FROM whatsapp_chats WHERE jid=$1`, [jid]);
+    log.info('chat deleted (' + removed + ') ' + jid);
+    ok(res, { removed });
+  } catch (e) {
+    if (e.reason === 'rate' || e.reason === 'cap') return bad(res, e.reason, 429);
+    bad(res, e.message, 500);
+  }
 });
 app.post('/relink', async (req, res) => {
   try { await import('fs').then(fs => fs.promises.rm(AUTH, { recursive: true, force: true }).catch(()=>{}));

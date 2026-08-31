@@ -8,18 +8,19 @@
   <style>
     /* top-level Email/WhatsApp switcher — own class so email.js's emShowTab (which
        clears all .tab-btn) can't steal its active state */
-    .comm-tab { padding:8px 18px; border:none; background:#e5e7eb; color:#334155; border-radius:7px 7px 0 0; cursor:pointer; font-size:1rem; font-weight:600; margin-right:4px; }
-    .comm-tab.active { background:#25D366; color:#fff; }
-    .comm-tab#comm-tab-email.active { background:#3a3a3a; }
+    /* match the project-wide .tab-btn look (muted-blue active) */
+    .comm-tab { padding:7px 20px; border:1px solid #d0cbc4; border-radius:4px; background:#f0ebe6; color:#555; font-size:0.85rem; cursor:pointer; transition:all 0.15s; margin-right:4px; }
+    .comm-tab:hover { background:#e8ddd8; }
+    .comm-tab.active { background:#7a9ab8; color:#fff; border-color:#7a9ab8; }
     /* WhatsApp groups view */
-    #wa-layout { display:grid; grid-template-columns: 400px 1fr; gap:14px; align-items:stretch; }
-    #wa-groups-card { max-height: calc(100vh - 240px); min-height:320px; overflow-y:auto; }
+    #wa-layout { display:grid; grid-template-columns: 1.4fr 1fr; gap:14px; align-items:start; }
+    @media (max-width: 820px) { #wa-layout { grid-template-columns: 1fr; } }
+    #wa-groups-card { max-height: calc(100vh - 240px); overflow-y:auto; }
     .wa-grow { padding:9px 12px; border-bottom:1px solid var(--border,#e5e7eb); cursor:pointer; display:flex; justify-content:space-between; gap:8px; align-items:center; }
     .wa-grow:hover { background:#f0fdf4; } .wa-grow.active { background:#dcfce7; }
     .wa-gname { font-size:0.9rem; color:#14532d; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .wa-gsub { font-size:0.75rem; color:#64748b; margin-top:2px; }
     .wa-gcount { font-size:0.78rem; color:#166534; background:#dcfce7; border-radius:10px; padding:1px 9px; flex:0 0 auto; }
-    #wa-detail-card { min-height:320px; }
     .wa-part { display:flex; justify-content:space-between; gap:10px; padding:7px 4px; border-bottom:1px solid #eef2f7; font-size:0.86rem; }
     .wa-pname { color:#1f2a44; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .wa-pnum { color:#8a93a6; font-size:0.78rem; }
@@ -28,6 +29,31 @@
     .wa-hint { color:#8a93a6; padding:40px 12px; text-align:center; }
     .wa-del { background:none; border:none; cursor:pointer; font-size:1rem; opacity:0.45; flex:0 0 auto; padding:2px 5px; border-radius:5px; }
     .wa-del:hover { opacity:1; background:#fee2e2; }
+    #wa-monitor-feed { max-height:220px; overflow-y:auto; }
+    .wa-mrow { padding:7px 48px 7px 8px; border-bottom:1px solid #cbd5e1; cursor:pointer; display:grid; grid-template-columns: 46px 1fr max-content; column-gap:30px; align-items:baseline; }
+    .wa-mrow:hover { background:#f0fdf4; }
+    .wa-mrow.fresh { background:#fefce8; }
+    .wa-mtime { font-size:0.74rem; color:#000; font-weight:600; }
+    .wa-mtext { min-width:0; color:#0f172a; font-size:0.95rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; margin-left:70px; }
+    .wa-mchat { font-weight:600; color:#14532d; font-size:0.84rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-left:30px; }
+    .wa-msender { color:#0891b2; font-weight:600; }
+    #wa-chats-card { max-height: calc(100vh - 320px); overflow-y:auto; }
+    .wa-crow { padding:8px 10px; border-bottom:1px solid #eef2f7; cursor:pointer; display:flex; align-items:center; gap:9px; }
+    .wa-crow:hover { background:#f0fdf4; }
+    .wa-cname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#1f2a44; font-size:0.9rem; }
+    .wa-cname.unknown { color:#8a93a6; font-style:italic; }
+    .wa-ctag { font-size:0.66rem; border-radius:8px; padding:1px 7px; flex:0 0 auto; }
+    .wa-ctag.dm { background:#e0f2fe; color:#075985; } .wa-ctag.grp { background:#dcfce7; color:#166534; }
+    .wa-ctime { font-size:0.72rem; color:#8a93a6; flex:0 0 auto; }
+    .wa-unread { background:#25D366; color:#fff; font-size:0.66rem; border-radius:10px; padding:0 6px; flex:0 0 auto; }
+    .wa-bubble { max-width:76%; padding:6px 10px; border-radius:10px; margin:3px 0; font-size:0.86rem; word-wrap:break-word; white-space:pre-wrap; position:relative; }
+    .wa-bubble.in  { background:#fff; border:1px solid #e5e7eb; align-self:flex-start; }
+    .wa-bubble.out { background:#d9fdd3; align-self:flex-end; }
+    .wa-brow { display:flex; flex-direction:column; }
+    .wa-bsender { font-size:0.7rem; color:#0891b2; font-weight:600; margin-bottom:1px; }
+    .wa-btime { font-size:0.66rem; color:#94a3b8; text-align:right; margin-top:2px; }
+    .wa-bdel { position:absolute; top:2px; right:4px; cursor:pointer; opacity:0.4; font-size:0.72rem; }
+    .wa-bdel:hover { opacity:1; }
     .wa-risk { border-collapse:collapse; width:100%; max-width:820px; font-size:0.85rem; }
     .wa-risk th, .wa-risk td { border:1px solid #e5e7eb; padding:8px 10px; text-align:left; vertical-align:top; }
     .wa-risk th { background:#f1f5f9; color:#334155; font-weight:600; }
@@ -209,17 +235,76 @@
   <div id="comm-whatsapp" class="comm-panel" style="display:none;">
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
       <span id="wa-status" style="font-size:0.85rem; font-weight:600; color:#166534;">WhatsApp: connecting…</span>
-      <button class="btn btn-secondary btn-sm" onclick="waRefresh()">↺ Refresh groups</button>
-      <input id="wa-group-search" type="text" placeholder="Filter groups…" oninput="waFilter()" style="padding:5px 9px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem;">
+      <button class="btn btn-secondary btn-sm" onclick="waRefresh()">↺ Refresh</button>
+    </div>
+    <div class="card" id="wa-monitor" style="margin-bottom:14px;">
+      <h3 style="margin:0 0 8px; display:flex; align-items:center; gap:8px;">
+        <button id="wa-monitor-toggle" onclick="waToggleMonitor()" title="Hide / show the monitor"
+                style="background:none;border:none;cursor:pointer;font-size:1.5rem;line-height:1;padding:0;color:#334155;">▾</button>
+        🔔 New messages <span style="font-weight:400;color:#8a93a6;font-size:0.78rem;">— live incoming</span>
+        <span id="wa-monitor-dot" style="margin-left:auto;font-size:0.72rem;color:#8a93a6;"></span>
+      </h3>
+      <div id="wa-monitor-feed"><div class="wa-hint">Loading…</div></div>
     </div>
     <div id="wa-layout">
+      <div class="card" id="wa-chats-card">
+        <h3 style="margin:0 0 8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button id="wa-chats-toggle" onclick="waToggleChats()" title="Hide / show the list"
+                  style="background:none;border:none;cursor:pointer;font-size:1.5rem;line-height:1;padding:0;color:#334155;">▾</button>
+          Chats <span id="wa-chats-count" style="font-weight:400;color:#8a93a6;font-size:0.8rem;"></span>
+          <select id="wa-chat-filter" onchange="waChatFilter()" style="margin-left:auto; padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.82rem; font-family:inherit;">
+            <option value="all">All</option>
+            <option value="dm">People</option>
+            <option value="group">Groups</option>
+            <option value="unknown">Unknown (hidden id)</option>
+            <option value="renamed">Renamed ✏️</option>
+          </select>
+          <input id="wa-chat-search" type="text" placeholder="Search by name / number…"
+                 oninput="waChatSearch()" style="padding:5px 9px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; min-width:180px;">
+        </h3>
+        <div id="wa-chats"><div class="wa-hint">Loading…</div></div>
+        <div id="wa-chats-more" style="text-align:center; padding:8px 0 2px;"></div>
+      </div>
       <div class="card" id="wa-groups-card">
-        <h3 style="margin:0 0 8px;">Groups <span id="wa-groups-count" style="font-weight:400;color:#8a93a6;font-size:0.8rem;"></span></h3>
-        <div id="wa-groups"><div class="wa-hint">Loading…</div></div>
+        <h3 style="margin:0 0 8px; display:flex; align-items:center; gap:8px;">
+          <button id="wa-groups-toggle" onclick="waToggleGroups()" title="Hide / show the list"
+                  style="background:none;border:none;cursor:pointer;font-size:1.5rem;line-height:1;padding:0;color:#334155;">▸</button>
+          Groups <span id="wa-groups-count" style="font-weight:400;color:#8a93a6;font-size:0.8rem;"></span>
+        </h3>
+        <div id="wa-groups" style="display:none;"><div class="wa-hint">Loading…</div></div>
       </div>
-      <div class="card" id="wa-detail-card">
-        <div id="wa-detail"><div class="wa-hint">Select a group to see its owner and participants.</div></div>
+    </div>
+  </div>
+
+  <!-- Group detail — modal window; stays open until Cancel -->
+  <div id="wa-group-modal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; width:min(560px,92vw); max-height:86vh; display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #eef2f7;">
+        <span style="font-weight:600; color:#1f2a44;">Group details</span>
+        <button onclick="waCloseGroup()" style="background:#e2e8f0; border:none; border-radius:6px; padding:5px 14px; cursor:pointer; font-size:0.85rem; color:#334155;">Cancel</button>
       </div>
+      <div id="wa-detail" style="padding:14px 16px; overflow-y:auto;"><div class="wa-hint">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Conversation — modal window; stays open until Cancel. Read + send + delete. -->
+  <div id="wa-chat-modal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; width:min(600px,94vw); height:min(80vh,720px); display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid #eef2f7;">
+        <span id="wa-chat-title" style="font-weight:600; color:#1f2a44; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Chat</span>
+        <span style="display:flex; gap:8px; flex:0 0 auto;">
+          <button onclick="waRenameChat()" title="Set a custom name (dashboard only)" style="background:#e0f2fe; border:none; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:0.82rem; color:#075985;">✏️ Rename</button>
+          <button id="wa-chat-del" onclick="waDeleteChat()" style="background:#fee2e2; border:none; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:0.82rem; color:#991b1b;">Delete</button>
+          <button onclick="waCloseChat()" style="background:#e2e8f0; border:none; border-radius:6px; padding:5px 14px; cursor:pointer; font-size:0.85rem; color:#334155;">Cancel</button>
+        </span>
+      </div>
+      <div id="wa-chat-body" style="flex:1; overflow-y:auto; padding:12px 14px; background:#f6f7f9;"><div class="wa-hint">Loading…</div></div>
+      <div style="padding:10px 12px; border-top:1px solid #eef2f7; display:flex; gap:8px; align-items:center;">
+        <input id="wa-chat-input" type="text" placeholder="Type a message…" onkeydown="if(event.key==='Enter')waSendChat()"
+               style="flex:1; padding:8px 11px; border:1px solid #cbd5e1; border-radius:20px; font-size:0.9rem; font-family:inherit;">
+        <button id="wa-chat-send" onclick="waSendChat()" style="background:#25D366; border:none; border-radius:20px; padding:8px 18px; cursor:pointer; font-size:0.88rem; color:#fff; font-weight:600;">Send</button>
+      </div>
+      <div id="wa-chat-sendmsg" style="font-size:0.78rem; color:#c0392b; padding:0 14px 8px; min-height:14px;"></div>
     </div>
   </div>
 
@@ -242,7 +327,7 @@
     <div class="card" id="wa-settings-card">
       <h3 style="margin:0 0 6px;">💬 WhatsApp — Safety &amp; Send Limits</h3>
       <div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:9px 12px;font-size:0.84rem;margin-bottom:14px;max-width:800px;">
-        ⚠ WhatsApp runs on your <b>own number</b> via an unofficial client — WhatsApp can <b>ban the number</b> for spam-like behaviour. <b>Reading is always safe.</b> The limits below throttle sending; the table shows what to avoid. Never do the 🔴 items.
+        ⚠ WhatsApp runs on your <b>own number</b> via an unofficial client — WhatsApp can <b>ban the number</b> for spam-like behaviour.
       </div>
       <div style="display:grid;grid-template-columns:1fr 96px;gap:9px 14px;align-items:center;max-width:490px;font-size:0.88rem;">
         <span>Minimum seconds between sends</span>
@@ -253,6 +338,11 @@
         <input id="wa-set-day" type="number" min="1" max="5000" style="width:88px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;text-align:center;">
         <span>Only message people already in my contacts / chats</span>
         <input id="wa-set-contact" type="checkbox" style="justify-self:start; transform:scale(1.3);">
+        <span style="grid-column:1/3; border-top:1px solid #eef2f7; margin:6px 0 2px; padding-top:8px; color:#64748b; font-size:0.8rem;">Deletes &amp; leaves (delete message / delete chat / leave group)</span>
+        <span>Minimum seconds between deletes / leaves</span>
+        <input id="wa-set-delgap" type="number" min="0" max="3600" style="width:88px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;text-align:center;">
+        <span>Max deletes / leaves per hour</span>
+        <input id="wa-set-delhour" type="number" min="1" max="1000" style="width:88px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;text-align:center;">
       </div>
       <div style="margin-top:14px;">
         <button class="btn btn-primary btn-sm" onclick="waSettingsSave()">Save limits</button>
@@ -295,7 +385,7 @@
 
 <script src="js/alerts-monitor.js?v=21"></script>
 <script src="js/email.js?v=9"></script>
-<script src="js/whatsapp.js?v=3"></script>
+<script src="js/whatsapp.js?v=13"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script>
   // Top-level channel switcher (Email / WhatsApp). Its own class so email.js's
