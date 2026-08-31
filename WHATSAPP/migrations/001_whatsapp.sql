@@ -55,3 +55,12 @@ INSERT INTO whatsapp_state (id, connection, settings)
 VALUES (1, 'connecting',
         '{"min_gap_sec":4,"hourly_cap":20,"daily_cap":100,"contact_only":true}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
+
+-- Retention (Project Health → Retention Policies). Messages 180 d auto-clean; the
+-- rest forever (chats/contacts/state are the live cache + config).
+INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description) VALUES
+  ('whatsapp_messages', 180,  true,  24, 'WhatsApp message metadata + text cache'),
+  ('whatsapp_chats',    NULL, false, 24, 'WhatsApp chats (DMs + groups)'),
+  ('whatsapp_contacts', NULL, false, 24, 'WhatsApp contacts (jid to name)'),
+  ('whatsapp_state',    NULL, false, 24, 'WhatsApp agent singleton state/settings')
+ON CONFLICT (table_name) DO NOTHING;
