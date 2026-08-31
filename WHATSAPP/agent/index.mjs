@@ -142,6 +142,22 @@ async function guardedSend(jid, text, force) {
   return sent;
 }
 
+// ── Group metadata (owner + participant count) for the dashboard groups view ──
+async function refreshGroups() {
+  try {
+    const gs = await sock.groupFetchAllParticipating();
+    for (const g of Object.values(gs)) {
+      await q(`INSERT INTO whatsapp_chats (jid, name, is_group, owner_jid, participant_count, updated_at)
+               VALUES ($1,$2,true,$3,$4,now())
+               ON CONFLICT (jid) DO UPDATE SET
+                 name=COALESCE(EXCLUDED.name, whatsapp_chats.name), is_group=true,
+                 owner_jid=EXCLUDED.owner_jid, participant_count=EXCLUDED.participant_count, updated_at=now()`,
+        [g.id, g.subject || null, g.owner || null, (g.participants || []).length]);
+    }
+    log.info('refreshGroups: ' + Object.keys(gs).length + ' groups');
+  } catch (e) { log.warn('refreshGroups: ' + e.message); }
+}
+
 // ── Baileys connect + event wiring ───────────────────────────────────────────
 async function connect() {
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH);
@@ -176,6 +192,7 @@ async function connect() {
       state.connection = 'open'; state.qrDataUrl = null;
       state.me = { jid: sock.user && sock.user.id, name: sock.user && sock.user.name };
       await saveState(); log.info('connection OPEN as ' + (state.me.jid || '?'));
+      setTimeout(refreshGroups, 5000);  // owner + participant counts for the groups view
     }
     if (connection === 'close') {
       const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
@@ -230,8 +247,51 @@ app.get('/chats', async (req, res) => {
   ok(res, { chats: r.rows });
 });
 app.get('/groups', async (req, res) => {
-  const r = await q(`SELECT jid,name,last_ts,unread FROM whatsapp_chats WHERE is_group ORDER BY name`);
+  const r = await q(`SELECT c.jid, c.name, c.owner_jid, c.participant_count, c.last_ts, c.unread,
+                            ct.name AS owner_name, ct.notify AS owner_notify
+                     FROM whatsapp_chats c
+                     LEFT JOIN whatsapp_contacts ct ON ct.jid = c.owner_jid
+                     WHERE c.is_group ORDER BY c.name NULLS LAST`);
   ok(res, { groups: r.rows });
+});
+// Full participant list for ONE group, fetched live from Baileys (names resolved
+// from the contacts cache; falls back to the number). Read-only, zero ban risk.
+app.get('/group/:jid', async (req, res) => {
+  try {
+    const jid = req.params.jid;
+    if (!sock || state.connection !== 'open') return bad(res, 'not_connected', 409);
+    const md = await sock.groupMetadata(jid);
+    const parts = md.participants || [];
+    // Best-effort: WhatsApp now anonymizes group members as @lid; resolve to the
+    // phone-jid via Baileys' learned LID map (only LIDs it has seen resolve).
+    const lidStore = sock.signalRepository && sock.signalRepository.lidMapping;
+    const pnOf = async (id) => {
+      if (!id || !id.endsWith('@lid') || !lidStore || !lidStore.getPNForLID) return id;
+      try { const pn = await Promise.resolve(lidStore.getPNForLID(id)); return pn || id; } catch (e) { return id; }
+    };
+    const norm = (j) => (j ? j.replace(/:\d+@/, '@') : j);   // strip :device so it matches contacts
+    const resolved = await Promise.all(parts.map(async p => ({ lid: p.id, jid: norm(await pnOf(p.id)), admin: p.admin || null })));
+    const ownerPn = norm(await pnOf(md.owner || null));
+    const lookup = resolved.map(r => r.jid).concat(ownerPn ? [ownerPn] : []);
+    const names = {};
+    if (lookup.length) {
+      const nr = await q(`SELECT jid, name, notify FROM whatsapp_contacts WHERE jid = ANY($1)`, [lookup]);
+      for (const row of nr.rows) names[row.jid] = row.name || row.notify || null;
+    }
+    const numOf = (j) => (j && j.includes('@s.whatsapp.net')) ? j.split('@')[0] : null;
+    const participants = resolved.map(r => ({ jid: r.jid, lid: r.lid, name: names[r.jid] || null, number: numOf(r.jid), admin: r.admin }));
+    ok(res, {
+      jid, subject: md.subject, desc: md.desc || null,
+      owner: ownerPn, owner_name: (ownerPn && names[ownerPn]) || null, owner_number: numOf(ownerPn),
+      creation: md.creation || null, size: md.size || participants.length,
+      resolved_count: participants.filter(p => p.name || p.number).length,
+      participants,
+    });
+  } catch (e) { bad(res, e.message, 500); }
+});
+// Manual re-sync of group owner/counts (the dashboard "refresh groups" button).
+app.post('/groups/refresh', async (req, res) => {
+  try { await refreshGroups(); ok(res, {}); } catch (e) { bad(res, e.message, 500); }
 });
 app.get('/contacts', async (req, res) => {
   const r = await q(`SELECT jid,name,notify FROM whatsapp_contacts ORDER BY name NULLS LAST`);
