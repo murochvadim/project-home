@@ -289,6 +289,23 @@ app.get('/group/:jid', async (req, res) => {
     });
   } catch (e) { bad(res, e.message, 500); }
 });
+// Send-guard settings (read/update) for the dashboard WhatsApp Settings card.
+app.get('/settings', (req, res) => ok(res, { settings }));
+app.post('/settings', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const ci = (v, lo, hi, def) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : def; };
+    settings = Object.assign(settings, {
+      min_gap_sec:  ci(b.min_gap_sec, 0, 3600, settings.min_gap_sec),
+      hourly_cap:   ci(b.hourly_cap,  1, 1000, settings.hourly_cap),
+      daily_cap:    ci(b.daily_cap,   1, 5000, settings.daily_cap),
+      contact_only: b.contact_only === undefined ? settings.contact_only : !!b.contact_only,
+    });
+    await q(`UPDATE whatsapp_state SET settings=$1, updated_at=now() WHERE id=1`, [JSON.stringify(settings)]);
+    log.info('settings updated: ' + JSON.stringify(settings));
+    ok(res, { settings });
+  } catch (e) { bad(res, e.message, 500); }
+});
 // Manual re-sync of group owner/counts (the dashboard "refresh groups" button).
 app.post('/groups/refresh', async (req, res) => {
   try { await refreshGroups(); ok(res, {}); } catch (e) { bad(res, e.message, 500); }
@@ -319,9 +336,20 @@ app.post('/send', async (req, res) => {
   catch (e) { bad(res, e.reason || e.message, e.reason === 'cap' || e.reason === 'rate' ? 429 : 400); }
 });
 app.post('/leave', async (req, res) => {
-  try { const { jid } = req.body || {}; if (!jid || !jid.endsWith('@g.us')) return bad(res, 'group_jid');
-    await sock.groupLeave(jid); await q(`DELETE FROM whatsapp_chats WHERE jid=$1`, [jid]); ok(res, {}); }
-  catch (e) { bad(res, e.message, 500); }
+  try {
+    const { jid } = req.body || {}; if (!jid || !jid.endsWith('@g.us')) return bad(res, 'group_jid');
+    if (!sock || state.connection !== 'open') return bad(res, 'not_connected', 409);
+    await sock.groupLeave(jid);
+    // VERIFY the leave actually took before removing the row (a silent no-op would
+    // otherwise hide a group we're still in; a re-sync then resurrects it).
+    await new Promise(r => setTimeout(r, 1500));
+    let stillIn = false;
+    try { const gs = await sock.groupFetchAllParticipating(); stillIn = !!gs[jid]; } catch (e) {}
+    if (stillIn) { log.warn('leave did NOT take for ' + jid + ' — still a member'); return bad(res, 'leave_not_confirmed', 409); }
+    await q(`DELETE FROM whatsapp_chats WHERE jid=$1`, [jid]);
+    log.info('LEFT group ' + jid);
+    ok(res, {});
+  } catch (e) { log.warn('leave error ' + (req.body && req.body.jid) + ': ' + e.message); bad(res, e.message, 500); }
 });
 app.post('/delete', async (req, res) => {
   try { const { jid, key } = req.body || {}; if (!jid || !key) return bad(res, 'jid_and_key');

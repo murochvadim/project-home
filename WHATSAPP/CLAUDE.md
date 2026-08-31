@@ -1,8 +1,9 @@
 # WHATSAPP — personal-account agent via **Baileys** (LXC 114)
 
-**STATUS: P1 BUILT + LIVE (2026-08-31).** Reads + sends the user's REAL WhatsApp from an always-on LXC.
-P2 (dashboard tab) / P3 (write UI) / P4 (notifications surface) pending. The old **Cloud-API** plan is kept
-at the bottom as a separate no-risk option for a future *business* channel — it CANNOT touch personal chats.
+**STATUS: P1 + P2 BUILT + LIVE (2026-08-31).** Reads + sends the user's REAL WhatsApp from an always-on LXC;
+the Communication dashboard page is live. P3 (write UI) / P4 (notifications surface) pending. The old
+**Cloud-API** plan is kept at the bottom as a separate no-risk option for a future *business* channel — it
+CANNOT touch personal chats.
 
 ## Why Baileys (what the POC proved)
 Goal = manage the user's **real** WhatsApp (all contacts/groups, read conversations, reply, delete, leave
@@ -52,6 +53,22 @@ irreversible) · `POST /delete {jid,key}` · `POST /read {jid}` · `POST /relink
 ⚠ **Caps count ONLY agent sends** (`status='sent'`), NOT the user's historical sends synced from the phone
 (those are `direction='out'` with `status NULL`) — counting `direction='out'` wrongly tripped the cap on the
 first real send (thousands of historical out-rows); fixed to `status='sent'`.
+The limits are editable from the dashboard via **`GET/POST /settings`** (added P2) — GET returns the current
+`settings`; POST clamps each field (`min_gap_sec` 0–3600, `hourly_cap` 1–1000, `daily_cap` 1–5000,
+`contact_only` bool), updates the in-memory `settings` **and** `UPDATE whatsapp_state SET settings=…`, and
+returns the clamped result. (The dead `/group/:jid/remove-me` endpoint — owner-sole-member groups return
+"not-allowed" — was replaced by `/settings`.)
+
+## Groups view + @lid resolution (P2)
+`GET /groups` = `groupFetchAllParticipating()` → each chat's `owner_jid` + `participant_count` (upserted into
+`whatsapp_chats`, migration `003_group_meta.sql`). `GET /group/:jid` returns the full participant list with
+names + admin roles. **WhatsApp anonymises group members as `@lid`** (e.g. `1327…@lid`); the agent resolves
+each to a phone-jid via `sock.signalRepository.lidMapping.getPNForLID(lid)` **after stripping the `:device`
+suffix** (`.replace(/:\d+@/, '@')`) so the contact-name lookup matches (7/7 members resolved live).
+**Owner-sole-member "announcement" groups (e.g. Smary) can't be left/deleted** — WhatsApp returns
+"not-allowed" for the owner removing self; `/leave` therefore **verifies the leave actually took** (re-fetches
+participating groups after `groupLeave`, 409 `leave_not_confirmed` if still in) **before** deleting the DB row,
+so a failed leave never silently drops the group from the list.
 
 ## MQTT (broker LXC 107; user `whatsapp_agent`, ACL `readwrite mur/home/whatsapp/#`)
 - **Inbound** `mur/home/whatsapp/message` (QoS 1): `{chat_jid,is_group,group_name,from_jid,from_name,text,
@@ -82,9 +99,27 @@ DB-Volumes + retention_policies (P2 doc step).
 - rule_engine: `scp` to `/opt/main-agent/project/RULES/rule_engine.py` on LXC 105 + `systemctl restart rule-engine`.
 - Dashboard changes: `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`.
 
+## P2 — Communication dashboard (BUILT 2026-08-31)
+- **`email.html` → `communication.html`** (old page `git rm`'d; sidebar re-pointed across **22 pages**, label
+  Email→**Communication**, `.active` preserved per page). Title/h1 → Communication.
+- **Top-level tab bar** `[📧 Email][💬 WhatsApp][⚙ Settings]` driven by inline **`commTab(name, btn)`** showing
+  one of three `.comm-panel`s (`#comm-email` / `#comm-whatsapp` / `#comm-settings`). `.comm-tab` is its **own
+  class** — email.js's `emShowTab` clears every `.tab-btn`, so a shared class would let it steal the active
+  state; the separate class keeps the top bar independent. `commRefresh()` routes ↺ to whichever panel is open.
+- **Email panel** = the untouched Inbox + Automation `emShowTab` sub-tabs; the inner **🔧 Settings button was
+  removed** and its `#tab-settings` content moved into the shared Settings panel.
+- **WhatsApp panel** (`js/whatsapp.js`, **read-only**, calls LXC 114 directly `WA_API='http://192.168.1.228:8790'`)
+  = **all groups + owner + participants**: a searchable group list (name · owner · participant count) → click
+  opens the participant list (names + admin/owner badges, @lid-resolved) + a per-row 🗑 **leave** (strong
+  confirm → guarded `/leave`). `waOnShow` loads once on first tab open.
+- **Shared ⚙ Settings panel** = **📧 Email Settings** card (moved: spam→Trash-after-N-days, `esLoad`/`esSave`
+  already exposed by email.js) **+ 💬 WhatsApp — Safety & Send Limits** card: a red ban-risk banner + editable
+  send-guard inputs (min-gap / hourly / daily / contact-only) wired to the agent's `/settings`
+  (`waSettingsLoad`/`waSettingsSave`, reflecting the agent's clamped values back) **+ a 🟢/🔴 ban-risk table**
+  (`.wa-risk`: 🟢 Safe—read · 🟢 Low risk—write · 🔴 Bans the number). `commTab('settings')` calls both
+  `esLoad()` + `waSettingsLoad()`. Files: `js/whatsapp.js?v=3`.
+
 ## Pending phases
-- **P2** — dashboard: `email.html → communication.html` (`[Email][WhatsApp][Settings]` tabs); `js/whatsapp.js`
-  (thread list, chat pane, live-QR, messages-by-person); 22-page sidebar; root/module/memory docs.
 - **P3** — write UI (compose behind the guard; Leave/Delete/Archive with confirm).
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine
   `protocol=='whatsapp'` branch → self-chat notify-anywhere); incoming automation `RULES/rules/whatsapp_*.py`.

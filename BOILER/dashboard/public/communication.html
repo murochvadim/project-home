@@ -3,9 +3,36 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Email</title>
+  <title>Communication</title>
   <link rel="stylesheet" href="css/style.css">
   <style>
+    /* top-level Email/WhatsApp switcher — own class so email.js's emShowTab (which
+       clears all .tab-btn) can't steal its active state */
+    .comm-tab { padding:8px 18px; border:none; background:#e5e7eb; color:#334155; border-radius:7px 7px 0 0; cursor:pointer; font-size:1rem; font-weight:600; margin-right:4px; }
+    .comm-tab.active { background:#25D366; color:#fff; }
+    .comm-tab#comm-tab-email.active { background:#3a3a3a; }
+    /* WhatsApp groups view */
+    #wa-layout { display:grid; grid-template-columns: 400px 1fr; gap:14px; align-items:stretch; }
+    #wa-groups-card { max-height: calc(100vh - 240px); min-height:320px; overflow-y:auto; }
+    .wa-grow { padding:9px 12px; border-bottom:1px solid var(--border,#e5e7eb); cursor:pointer; display:flex; justify-content:space-between; gap:8px; align-items:center; }
+    .wa-grow:hover { background:#f0fdf4; } .wa-grow.active { background:#dcfce7; }
+    .wa-gname { font-size:0.9rem; color:#14532d; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .wa-gsub { font-size:0.75rem; color:#64748b; margin-top:2px; }
+    .wa-gcount { font-size:0.78rem; color:#166534; background:#dcfce7; border-radius:10px; padding:1px 9px; flex:0 0 auto; }
+    #wa-detail-card { min-height:320px; }
+    .wa-part { display:flex; justify-content:space-between; gap:10px; padding:7px 4px; border-bottom:1px solid #eef2f7; font-size:0.86rem; }
+    .wa-pname { color:#1f2a44; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .wa-pnum { color:#8a93a6; font-size:0.78rem; }
+    .wa-badge { font-size:0.68rem; background:#fde68a; color:#92400e; border-radius:8px; padding:1px 7px; flex:0 0 auto; }
+    .wa-badge.super { background:#fca5a5; color:#7f1d1d; }
+    .wa-hint { color:#8a93a6; padding:40px 12px; text-align:center; }
+    .wa-del { background:none; border:none; cursor:pointer; font-size:1rem; opacity:0.45; flex:0 0 auto; padding:2px 5px; border-radius:5px; }
+    .wa-del:hover { opacity:1; background:#fee2e2; }
+    .wa-risk { border-collapse:collapse; width:100%; max-width:820px; font-size:0.85rem; }
+    .wa-risk th, .wa-risk td { border:1px solid #e5e7eb; padding:8px 10px; text-align:left; vertical-align:top; }
+    .wa-risk th { background:#f1f5f9; color:#334155; font-weight:600; }
+    .wa-risk tr.ok td:first-child { background:#f0fdf4; color:#166534; font-weight:600; white-space:nowrap; }
+    .wa-risk tr.bad td:first-child { background:#fef2f2; color:#991b1b; font-weight:600; white-space:nowrap; }
     #email-layout { display:grid; grid-template-columns: 380px 1fr; gap:14px; align-items:stretch; }
     #email-list-card { max-height: calc(100vh - 220px); min-height:300px; overflow-y:auto; }
     .em-row { padding:10px 12px; border-bottom:1px solid var(--border,#e5e7eb); cursor:pointer; }
@@ -75,7 +102,7 @@
 
   <div class="section-label">Personal</div>
   <a href="privacy.html">Privacy</a>
-  <a href="email.html" class="active">Email</a>
+  <a href="communication.html" class="active">Communication</a>
   <a href="medical.html">Medical</a>
 
   <div class="section-label">Voice</div>
@@ -90,16 +117,23 @@
 
 <main id="content">
   <div class="page-header">
-    <h1>Email</h1>
+    <h1>Communication</h1>
     <div class="refresh-bar">
-      <button class="btn btn-secondary btn-sm" onclick="emReload()">↺ Refresh</button>
+      <button class="btn btn-secondary btn-sm" onclick="commRefresh()">↺ Refresh</button>
     </div>
   </div>
 
+  <!-- top-level channel switcher -->
+  <div style="border-bottom:2px solid #e5e7eb; margin-bottom:14px;">
+    <button class="comm-tab active" id="comm-tab-email" onclick="commTab('email', this)">📧 Email</button>
+    <button class="comm-tab" id="comm-tab-whatsapp" onclick="commTab('whatsapp', this)">💬 WhatsApp</button>
+    <button class="comm-tab" id="comm-tab-settings" onclick="commTab('settings', this)">⚙ Settings</button>
+  </div>
+
+  <div id="comm-email" class="comm-panel">
   <div class="tab-bar">
     <button class="tab-btn active" onclick="emShowTab('inbox', this)" style="background:#3a3a3a;color:#fff;">📬 Inbox</button>
     <button class="tab-btn" onclick="emShowTab('automation', this)">⚙ Automation</button>
-    <button class="tab-btn" onclick="emShowTab('settings', this)">🔧 Settings</button>
   </div>
 
   <div id="er-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
@@ -170,9 +204,28 @@
     </div>
   </div>
 
-  <div id="tab-settings" class="tab-panel">
-    <div class="card">
-      <h3 style="margin:0 0 12px;">Email Settings</h3>
+  </div><!-- /comm-email -->
+
+  <div id="comm-whatsapp" class="comm-panel" style="display:none;">
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+      <span id="wa-status" style="font-size:0.85rem; font-weight:600; color:#166534;">WhatsApp: connecting…</span>
+      <button class="btn btn-secondary btn-sm" onclick="waRefresh()">↺ Refresh groups</button>
+      <input id="wa-group-search" type="text" placeholder="Filter groups…" oninput="waFilter()" style="padding:5px 9px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem;">
+    </div>
+    <div id="wa-layout">
+      <div class="card" id="wa-groups-card">
+        <h3 style="margin:0 0 8px;">Groups <span id="wa-groups-count" style="font-weight:400;color:#8a93a6;font-size:0.8rem;"></span></h3>
+        <div id="wa-groups"><div class="wa-hint">Loading…</div></div>
+      </div>
+      <div class="card" id="wa-detail-card">
+        <div id="wa-detail"><div class="wa-hint">Select a group to see its owner and participants.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="comm-settings" class="comm-panel" style="display:none;">
+    <div class="card" style="margin-bottom:16px;">
+      <h3 style="margin:0 0 12px;">📧 Email Settings</h3>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <label style="font-size:0.9rem;">Move automation-spammed emails to Trash after
           <input id="es-trash-days" type="number" min="0" max="60" value="0" style="width:64px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;font-family:inherit;"> days</label>
@@ -183,6 +236,40 @@
         Emails your rules moved to <b>Spam</b> get moved to <b>Trash</b> this many days later — still
         recoverable (Gmail purges Trash ~30 days after that). <b>0 = off</b> (leave them in Spam; Gmail
         auto-purges Spam in ~30 days). No permanent delete — that would need a broader Gmail permission.
+      </div>
+    </div>
+
+    <div class="card" id="wa-settings-card">
+      <h3 style="margin:0 0 6px;">💬 WhatsApp — Safety &amp; Send Limits</h3>
+      <div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:9px 12px;font-size:0.84rem;margin-bottom:14px;max-width:800px;">
+        ⚠ WhatsApp runs on your <b>own number</b> via an unofficial client — WhatsApp can <b>ban the number</b> for spam-like behaviour. <b>Reading is always safe.</b> The limits below throttle sending; the table shows what to avoid. Never do the 🔴 items.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 96px;gap:9px 14px;align-items:center;max-width:490px;font-size:0.88rem;">
+        <span>Minimum seconds between sends</span>
+        <input id="wa-set-gap" type="number" min="0" max="3600" style="width:88px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;text-align:center;">
+        <span>Max sends per hour</span>
+        <input id="wa-set-hour" type="number" min="1" max="1000" style="width:88px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;text-align:center;">
+        <span>Max sends per day</span>
+        <input id="wa-set-day" type="number" min="1" max="5000" style="width:88px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;text-align:center;">
+        <span>Only message people already in my contacts / chats</span>
+        <input id="wa-set-contact" type="checkbox" style="justify-self:start; transform:scale(1.3);">
+      </div>
+      <div style="margin-top:14px;">
+        <button class="btn btn-primary btn-sm" onclick="waSettingsSave()">Save limits</button>
+        <span id="wa-set-status" style="font-size:0.82rem;color:#64748b;margin-left:8px;"></span>
+      </div>
+
+      <h4 style="margin:20px 0 8px;">What is safe · what gets the number banned</h4>
+      <table class="wa-risk">
+        <thead><tr><th style="width:150px;">Zone</th><th>Actions</th></tr></thead>
+        <tbody>
+          <tr class="ok"><td>🟢 Safe — read</td><td>List chats / groups / contacts · read history · view group participants · stay connected 24/7</td></tr>
+          <tr class="ok"><td>🟢 Low risk — write</td><td>Reply to someone who messaged you · an occasional message to a <b>known contact</b> · leave a group · delete your own message · self-chat notifications</td></tr>
+          <tr class="bad"><td>🔴 Bans the number</td><td><b>Bulk / mass messaging</b> · messaging <b>strangers</b> not in your contacts · fast robotic sending (many/second) · the <b>same text to many people</b> · getting <b>reported / blocked</b> · mass-adding people to groups · broadcasts to many · link / promo spam</td></tr>
+        </tbody>
+      </table>
+      <div style="font-size:0.78rem;color:#8a93a6;margin-top:10px;max-width:800px;">
+        The agent <b>enforces</b> the limits above (no bulk endpoint · min-gap · hourly/daily caps · contact-only) and routes project notifications to your <b>own self-chat</b> (zero risk). The rest is on you — stay human-paced, and only message people you actually talk to.
       </div>
     </div>
   </div>
@@ -208,6 +295,27 @@
 
 <script src="js/alerts-monitor.js?v=21"></script>
 <script src="js/email.js?v=9"></script>
+<script src="js/whatsapp.js?v=3"></script>
 <script src="js/notify-toast.js?v=12"></script>
+<script>
+  // Top-level channel switcher (Email / WhatsApp). Its own class so email.js's
+  // emShowTab (which clears every .tab-btn) can't touch these buttons.
+  function commTab(name, btn) {
+    document.querySelectorAll('.comm-panel').forEach(p => { p.style.display = 'none'; });
+    var el = document.getElementById('comm-' + name); if (el) el.style.display = '';
+    document.querySelectorAll('.comm-tab').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    if (name === 'whatsapp' && window.waOnShow) window.waOnShow();
+    if (name === 'settings') {
+      if (window.esLoad) window.esLoad();
+      if (window.waSettingsLoad) window.waSettingsLoad();
+    }
+  }
+  function commRefresh() {
+    var wa = document.getElementById('comm-whatsapp');
+    if (wa && wa.style.display !== 'none') { if (window.waRefresh) window.waRefresh(); }
+    else if (window.emReload) window.emReload();
+  }
+</script>
 </body>
 </html>
