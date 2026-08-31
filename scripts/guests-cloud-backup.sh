@@ -16,7 +16,7 @@ PASSFILE="/etc/privacy-project-backup.pass"
 PBS="/mnt/pbs"
 REMOTE="gdrive_sheets:Guest_Images"
 JOB_NAME="Guest Images (Drive)"
-GUESTS="100 101 102 103 104 105 106 107 108 109 110 111 113"
+GUESTS="100 101 102 103 104 105 106 107 108 109 110 111 113 114"
 [ -n "$1" ] && GUESTS="$1"
 
 # HARDENING vs the shared rclone client_id rate limit (Error 403 "Queries per

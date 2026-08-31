@@ -1,0 +1,16 @@
+[Unit]
+Description=WhatsApp Agent (Baileys personal-account bridge + HTTP API + MQTT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/whatsapp-agent.env
+ExecStart=/usr/bin/node /opt/whatsapp-agent/index.mjs
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/opt/whatsapp-agent
+
+[Install]
+WantedBy=multi-user.target

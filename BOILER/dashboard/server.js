@@ -2122,6 +2122,7 @@ async function runHealthChecks() {
     backupJobsResult,
     vm101Result, lxc100Result, lxc102Result, lxc103Result, lxc104Result, lxc105Result, lxc106Result, lxc107Result, lxc108Result, lxc109Result, lxc110Result, rp01Result, robotResult, kitchenResult,
     phonelinkResult, adguardResult, rp01TempResult, rp02Result, rp02TempResult, rp03Result, rp03TempResult,
+    whatsappResult,
   ] = await Promise.all([
     db.query('SELECT 1').then(() => ({ ok: true })).catch(e => ({ ok: false, error: e.message })),
     fetch(`${HA_URL}/api/`, { headers: { Authorization: `Bearer ${getHaToken()}` }, signal: AbortSignal.timeout(5000) })
@@ -2195,6 +2196,7 @@ async function runHealthChecks() {
     rp02TempRead(),
     (mon.rp03 === false ? Promise.resolve({ ok: null }) : tcpCheck('192.168.1.169', 22)),  // RP03 — Raspberry Pi (probe skipped when monitoring paused)
     rp03TempRead(),
+    tcpCheck('192.168.1.228', 22),    // LXC 114 — WhatsApp (Baileys personal-account agent)
   ]);
 
   const r = {};
@@ -2214,6 +2216,7 @@ async function runHealthChecks() {
   r.lxc109 = { ok: lxc109Result.ok };
   r.lxc110 = { ok: lxc110Result.ok };
   r.lxc113 = { ok: kitchenResult.ok };
+  r.lxc114 = { ok: whatsappResult.ok };
   r.rp01   = { ok: rp01Result.ok, monitored: mon.rp01 !== false, temp_c: rp01TempResult.temp_c };
   r.rp02   = { ok: rp02Result.ok, monitored: mon.rp02 !== false, temp_c: rp02TempResult.temp_c };
   r.rp03   = { ok: rp03Result.ok, monitored: mon.rp03 !== false, temp_c: rp03TempResult.temp_c };

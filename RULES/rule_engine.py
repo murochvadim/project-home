@@ -495,6 +495,19 @@ class RuleEngine:
             })
             return
 
+        # mur/home/whatsapp/message — WhatsApp Agent (LXC 114): incoming WhatsApp →
+        # rule triggers. Synthetic event device_id 'whatsapp' with dps {chat_jid,
+        # is_group, from_jid, from_name, text, type, wa_id, ts}. Same pattern as email.
+        if (len(parts) == 4 and parts[:3] == ['mur', 'home', 'whatsapp']
+                and parts[3] == 'message'):
+            self._fire_rules_for_event({
+                'device_id': 'whatsapp',
+                'dps': payload if isinstance(payload, dict) else {},
+                'source': 'whatsapp',
+                'ts': datetime.now(tz=TZ).isoformat(),
+            })
+            return
+
         # ---- Event topics (update state AND trigger rules) ----
 
         device_id = None
@@ -2765,6 +2778,7 @@ class RuleEngine:
             ('mur/home/rule-engine/test', 0),
             ('mur/home/esp/+/+', 0),  # ESP boards ingest (Phase 5, 2026-05-02)
             ('mur/home/email/message', 1),  # Email Agent ingest (2026-07-01) → device_id 'email'
+            ('mur/home/whatsapp/message', 1),  # WhatsApp Agent ingest (LXC 114) → device_id 'whatsapp'
             ('hasp/+/state', 0),
             ('hasp/+/state/+', 0),
             ('awtrix/+/stats', 0),
