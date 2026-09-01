@@ -272,7 +272,11 @@ A photo used to render as the text `📷 photo` and could not be opened: `upsert
   sock.updateMediaMessage, logger})`, served with the node's mimetype. ⚠ **LXC 114 root is 8 GB**, so
   the cache at `/opt/whatsapp-agent/.media_cache/` is bounded: files >25 MB are streamed but not
   cached, and the dir is pruned oldest-first past 300 MB.
-- **UI** (`js/whatsapp.js?v=44`): thumbnail + caption in the bubble (▶ badge on video), click → a
+- **The 🔔 monitor feed shows previews too** (`/recent` carries the same decoded flags): an incoming
+  photo renders as a 30 px thumbnail + its caption instead of the text `📷 photo`. ⚠ The feed is
+  **incoming-only** (`WHERE m.from_me = false`), so a photo you send YOURSELF never appears there —
+  it is in the chat, not the feed. That is not a bug; it is what the feed means.
+- **UI** (`js/whatsapp.js?v=45`): thumbnail + caption in the bubble (▶ badge on video), click → a
   lightbox (`#wa-media-modal`) with `<img>` / `<video controls>` / `<audio controls>` / download link,
   all hitting `…/full` — so the real file is fetched **only on click**, one at a time, like the real
   client. Ban-risk unchanged; viewing never sends.

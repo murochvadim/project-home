@@ -136,9 +136,17 @@
       // The row carries only its INDEX. Putting the jid/name in the attribute is how this
       // was broken: JSON.stringify(name) emits raw double quotes, which closed the
       // double-quoted onclick attribute, so every named row silently did nothing.
+      // A photo/video shows its preview here too — the thumbnail came WITH the message,
+      // so this costs no WhatsApp traffic. Falls back to the "📷 photo" text if absent.
+      const thumb = (m.has_media && m.has_thumb)
+        ? '<img src="' + mediaUrl(m.wa_id, 'thumb') + '" style="height:30px;width:30px;object-fit:cover;border-radius:5px;vertical-align:middle;margin-right:6px;">'
+        : '';
+      const text = (m.has_media && m.has_thumb)
+        ? (m.body ? esc(m.body) : (m.media_kind === 'video' ? '🎞 video' : '📷 photo'))
+        : msgBody(m);
       return '<div class="wa-mrow' + fresh + '" onclick="waOpenRecent(' + i + ')">' +
         '<span class="wa-mtime">' + fmtTime(m.ts) + '</span>' +
-        '<span class="wa-mtext">' + sender + msgBody(m) + '</span>' +
+        '<span class="wa-mtext">' + sender + thumb + text + '</span>' +
         '<span class="wa-mchat">' + esc(nm) + '</span></div>';
     }).join('');
     const dot = q('wa-monitor-dot'); if (dot) dot.textContent = '● live';

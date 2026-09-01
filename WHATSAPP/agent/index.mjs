@@ -691,7 +691,7 @@ app.get('/messages', async (req, res) => {
 app.get('/recent', async (req, res) => {
   const lim = Math.min(parseInt(req.query.limit) || 15, 50);
   const r = await q(`
-    SELECT m.wa_id, m.chat_jid, m.sender_name, m.body, m.type, m.ts, c.is_group,
+    SELECT m.wa_id, m.chat_jid, m.sender_name, m.body, m.type, m.ts, m.media_proto, c.is_group,
       COALESCE(NULLIF(c.custom_name,''), NULLIF(c.name,''), NULLIF(ct.name,''), NULLIF(ct.notify,''),
         NULLIF(m.sender_name,''),
         CASE WHEN m.chat_jid LIKE '%@s.whatsapp.net' THEN split_part(m.chat_jid,'@',1) END) AS chat_name
@@ -702,7 +702,18 @@ app.get('/recent', async (req, res) => {
       AND (COALESCE(m.body,'') <> '' OR m.type ~* 'image|video|audio|ptt|sticker|document|location')
     ORDER BY m.ts DESC NULLS LAST
     LIMIT $1`, [lim]);
-  ok(res, { messages: r.rows });
+  // Same media flags as /messages so the feed can show a preview instead of "📷 photo".
+  // Derived by DECODING the stored node — never from `type` (see mediaNodeOf).
+  ok(res, { messages: r.rows.map(m => {
+    const { media_proto, ...rest } = m;
+    if (!media_proto) return rest;
+    try {
+      const hit = mediaNodeOf(proto.Message.decode(media_proto));
+      if (!hit) return rest;
+      const t = hit.node.jpegThumbnail;
+      return { ...rest, has_media: true, media_kind: mediaKindOf(hit.key), has_thumb: !!(t && t.length) };
+    } catch (e) { return rest; }
+  }) });
 });
 // ── Automation endpoints (dashboard calls the agent directly, CORS) ──
 app.get('/automation/log', async (req, res) => {
