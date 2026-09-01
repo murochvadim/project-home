@@ -115,7 +115,7 @@
   }
 
   // ── Live monitor: latest INCOMING messages, auto-refresh while tab visible ──
-  let _monTimer = null, _monHidden = false;
+  let _monTimer = null, _monHidden = false, _recent = [];   // rows currently shown; clicked by index
   async function loadRecent() {
     const host = q('wa-monitor-feed'); if (!host) return;
     try {
@@ -125,14 +125,17 @@
   }
   function renderRecent(msgs) {
     const host = q('wa-monitor-feed'); if (!host) return;
-    if (!msgs.length) { host.innerHTML = '<div class="wa-hint">No recent incoming messages.</div>'; return; }
+    if (!msgs.length) { _recent = []; host.innerHTML = '<div class="wa-hint">No recent incoming messages.</div>'; return; }
     const now = Date.now();
-    host.innerHTML = msgs.map(m => {
+    _recent = msgs;                     // click opens _recent[i] — see openRecent()
+    host.innerHTML = msgs.map((m, i) => {
       const fresh = m.ts && (now - new Date(m.ts).getTime() < 30000) ? ' fresh' : '';
       const nm = m.chat_name || '(unknown)';
       const sender = (m.is_group && m.sender_name) ? '<span class="wa-msender">' + esc(m.sender_name) + ':</span> ' : '';
-      const jarg = "'" + esc(m.chat_jid) + "'," + JSON.stringify(nm) + "," + (m.is_group ? 'true' : 'false');
-      return '<div class="wa-mrow' + fresh + '" onclick="waOpenChatJid(' + jarg + ')">' +
+      // The row carries only its INDEX. Putting the jid/name in the attribute is how this
+      // was broken: JSON.stringify(name) emits raw double quotes, which closed the
+      // double-quoted onclick attribute, so every named row silently did nothing.
+      return '<div class="wa-mrow' + fresh + '" onclick="waOpenRecent(' + i + ')">' +
         '<span class="wa-mtime">' + fmtTime(m.ts) + '</span>' +
         '<span class="wa-mtext">' + sender + msgBody(m) + '</span>' +
         '<span class="wa-mchat">' + esc(nm) + '</span></div>';
@@ -225,8 +228,10 @@
   function closeChat() { showChatModal(false); _activeChat = null; }
 
   function openChat(idx) { openChatObj(_chats[idx]); }
-  function openChatJid(jid, name, isGroup) {
-    openChatObj({ jid, name: name || null, is_group: !!isGroup, resolved: !!name });
+  function openRecent(i) {
+    const m = _recent[i]; if (!m) return;
+    openChatObj({ jid: m.chat_jid, name: m.chat_name || null,
+                  is_group: !!m.is_group, resolved: !!m.chat_name });
   }
 
   async function openChatObj(c) {
@@ -555,7 +560,7 @@
   window.waToggleChats = toggleChats;
   window.waMoreChats = () => loadChats(false);
   window.waOpenChat = openChat;
-  window.waOpenChatJid = openChatJid;
+  window.waOpenRecent = openRecent;
   window.waToggleMonitor = toggleMonitor;
   window.waCloseChat = closeChat;
   window.waSendChat = sendChat;
