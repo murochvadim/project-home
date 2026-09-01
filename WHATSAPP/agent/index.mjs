@@ -699,7 +699,12 @@ app.get('/recent', async (req, res) => {
     LEFT JOIN whatsapp_chats c     ON c.jid = m.chat_jid
     LEFT JOIN whatsapp_contacts ct ON ct.jid = m.chat_jid
     WHERE m.from_me = false
-      AND (COALESCE(m.body,'') <> '' OR m.type ~* 'image|video|audio|ptt|sticker|document|location')
+      -- Keep a real message, drop WhatsApp's noise (reactions / key rotation / context).
+      -- ⚠ media_proto is checked FIRST: the type column is only the first key of the node, so a real
+      -- photo can arrive labelled senderKeyDistributionMessage and, without a caption, the
+      -- type test alone silently hid it from the feed (seen live 2026-09-01 17:33).
+      AND (COALESCE(m.body,'') <> '' OR m.media_proto IS NOT NULL
+           OR m.type ~* 'image|video|audio|ptt|sticker|document|location')
     ORDER BY m.ts DESC NULLS LAST
     LIMIT $1`, [lim]);
   // Same media flags as /messages so the feed can show a preview instead of "📷 photo".

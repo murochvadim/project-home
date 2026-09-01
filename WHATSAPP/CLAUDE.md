@@ -279,7 +279,11 @@ A photo used to render as the text `📷 photo` and could not be opened: `upsert
   the cache at `/opt/whatsapp-agent/.media_cache/` is bounded: files >25 MB are streamed but not
   cached, and the dir is pruned oldest-first past 300 MB.
 - **The 🔔 monitor feed shows previews too** (`/recent` carries the same decoded flags): an incoming
-  photo renders as a 30 px thumbnail + its caption instead of the text `📷 photo`. ⚠ The feed is
+  photo renders as a 30 px thumbnail + its caption instead of the text `📷 photo`. ⚠ The feed keeps a row when it has TEXT **or a stored media key**
+  or a media-looking type — `media_proto IS NOT NULL` had to be added 2026-09-01 because a real photo
+  can arrive labelled `senderKeyDistributionMessage` and, with no caption, the type test alone hid it
+  (live case: רינה רצון's photo in "קציר 15", 17:33). Reactions / `messageContextInfo` / key-rotation
+  rows are still dropped — that is the noise the filter is for. ⚠ The feed is
   **incoming-only** (`WHERE m.from_me = false`), so a photo you send YOURSELF never appears there —
   it is in the chat, not the feed. That is not a bug; it is what the feed means.
 - **UI** (`js/whatsapp.js?v=46`): thumbnail + caption in the bubble (▶ badge on video), click → a
