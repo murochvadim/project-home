@@ -120,7 +120,7 @@
   async function loadRecent() {
     const host = q('wa-monitor-feed'); if (!host) return;
     try {
-      const r = await (await fetch(WA_API + '/recent?limit=15')).json();
+      const r = await (await fetch(WA_API + '/recent?limit=30')).json();
       renderRecent(r.messages || []);
     } catch (e) { /* leave last render; transient */ }
   }
@@ -141,7 +141,11 @@
       const thumb = (m.has_media && m.has_thumb)
         ? '<img src="' + mediaUrl(m.wa_id, 'thumb') + '" style="height:30px;width:30px;object-fit:cover;border-radius:5px;vertical-align:middle;margin-right:6px;">'
         : '';
-      const text = (m.has_media && m.has_thumb)
+      // A reaction is "<emoji> → the message it answers"; a bare 👍 tells you nothing.
+      const text = m.is_reaction
+        ? '<span style="font-size:1.05rem;">' + esc(m.reaction || '👍') + '</span>' +
+          (m.reaction_to ? '<span style="opacity:.6;"> → ' + esc(String(m.reaction_to).slice(0, 40)) + '</span>' : '')
+        : (m.has_media && m.has_thumb)
         ? (m.body ? esc(m.body) : (m.media_kind === 'video' ? '🎞 video' : '📷 photo'))
         : msgBody(m);
       return '<div class="wa-mrow' + fresh + '" onclick="waOpenRecent(' + i + ')">' +

@@ -116,11 +116,14 @@ async function upsertMessage(m, direction) {
   const chat = m.key.remoteJid;
   const sender = m.key.participant || m.participant || (m.key.fromMe ? (state.me && state.me.jid) : chat);
   const body = bodyOf(m);
-  // Keep the media node so the file can be fetched later (see /media/:wa_id/*).
+  // Keep the message node for MEDIA (so the file can be fetched later, /media/:wa_id/*)
+  // and for REACTIONS (the emoji + which message it answers live only in the node).
   let mediaProto = null;
   try {
-    if (mediaNodeOf(m.message)) mediaProto = Buffer.from(proto.Message.encode(m.message).finish());
-  } catch (e) { log.warn('media encode: ' + e.message); }
+    if (mediaNodeOf(m.message) || (m.message && m.message.reactionMessage)) {
+      mediaProto = Buffer.from(proto.Message.encode(m.message).finish());
+    }
+  } catch (e) { log.warn('node encode: ' + e.message); }
   await q(`INSERT INTO whatsapp_messages (wa_id, chat_jid, sender_jid, sender_name, from_me, direction, type, body, ts, status, media_proto)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
            ON CONFLICT (wa_id, chat_jid) DO UPDATE SET status=COALESCE(EXCLUDED.status, whatsapp_messages.status),
@@ -705,20 +708,40 @@ app.get('/recent', async (req, res) => {
       -- type test alone silently hid it from the feed (seen live 2026-09-01 17:33).
       AND (COALESCE(m.body,'') <> '' OR m.media_proto IS NOT NULL
            OR m.type ~* 'image|video|audio|ptt|sticker|document|location')
+      -- (reactions ride in on media_proto: their node is stored, so they pass the line above)
     ORDER BY m.ts DESC NULLS LAST
     LIMIT $1`, [lim]);
   // Same media flags as /messages so the feed can show a preview instead of "📷 photo".
   // Derived by DECODING the stored node — never from `type` (see mediaNodeOf).
-  ok(res, { messages: r.rows.map(m => {
+  const rows = r.rows.map(m => {
     const { media_proto, ...rest } = m;
     if (!media_proto) return rest;
     try {
-      const hit = mediaNodeOf(proto.Message.decode(media_proto));
-      if (!hit) return rest;
-      const t = hit.node.jpegThumbnail;
-      return { ...rest, has_media: true, media_kind: mediaKindOf(hit.key), has_thumb: !!(t && t.length) };
+      const node = proto.Message.decode(media_proto);
+      const hit = mediaNodeOf(node);
+      if (hit) {
+        const t = hit.node.jpegThumbnail;
+        return { ...rest, has_media: true, media_kind: mediaKindOf(hit.key), has_thumb: !!(t && t.length) };
+      }
+      if (node.reactionMessage) {
+        return { ...rest, is_reaction: true, reaction: node.reactionMessage.text || '',
+                 target_id: (node.reactionMessage.key && node.reactionMessage.key.id) || null };
+      }
+      return rest;
     } catch (e) { return rest; }
-  }) });
+  });
+  // Resolve, in ONE query, the text each reaction answers — a bare "👍" says nothing.
+  const targets = [...new Set(rows.filter(x => x.target_id).map(x => x.target_id))];
+  if (targets.length) {
+    const tr = await q('SELECT wa_id, body, type FROM whatsapp_messages WHERE wa_id = ANY($1)', [targets]);
+    const byId = {}; tr.rows.forEach(t => { byId[t.wa_id] = t; });
+    rows.forEach(x => {
+      if (!x.target_id) return;
+      const t = byId[x.target_id];
+      x.reaction_to = t ? (t.body || (/image/i.test(t.type || '') ? '📷 photo' : /video/i.test(t.type || '') ? '🎞 video' : '')) : '';
+    });
+  }
+  ok(res, { messages: rows });
 });
 // ── Automation endpoints (dashboard calls the agent directly, CORS) ──
 app.get('/automation/log', async (req, res) => {

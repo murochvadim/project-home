@@ -282,8 +282,14 @@ A photo used to render as the text `📷 photo` and could not be opened: `upsert
   photo renders as a 30 px thumbnail + its caption instead of the text `📷 photo`. ⚠ The feed keeps a row when it has TEXT **or a stored media key**
   or a media-looking type — `media_proto IS NOT NULL` had to be added 2026-09-01 because a real photo
   can arrive labelled `senderKeyDistributionMessage` and, with no caption, the type test alone hid it
-  (live case: רינה רצון's photo in "קציר 15", 17:33). Reactions / `messageContextInfo` / key-rotation
-  rows are still dropped — that is the noise the filter is for. ⚠ The feed is
+  (live case: רינה רצון's photo in "קציר 15", 17:33). `messageContextInfo` / key-rotation rows are still
+  dropped — that is the noise the filter is for. **Reactions ARE shown** (2026-09-02): the emoji and
+  the message it answers live only inside the node, so `upsertMessage` now stores the node for
+  `reactionMessage` too (same `media_proto` column) — which also makes them pass the filter above —
+  and `/recent` returns `is_reaction` / `reaction` / `reaction_to`, the last resolved for all rows in
+  ONE extra query. The feed renders `👍 → <the message it answers>`, because a bare 👍 says nothing.
+  ⚠ Only reactions arriving AFTER 2026-09-02 — older rows have no stored node. Feed depth is
+  **30 rows** (`/recent?limit=30`, server cap 50) in a 385 px window (~5 rows more than the old 220 px). ⚠ The feed is
   **incoming-only** (`WHERE m.from_me = false`), so a photo you send YOURSELF never appears there —
   it is in the chat, not the feed. That is not a bug; it is what the feed means.
 - **UI** (`js/whatsapp.js?v=46`): thumbnail + caption in the bubble (▶ badge on video), click → a
