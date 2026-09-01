@@ -320,6 +320,16 @@
     </div>
   </div>
 
+  <!-- WhatsApp media lightbox (photo / video / voice / document) -->
+  <div id="wa-media-modal" onclick="if(event.target===this)waCloseMedia()"
+       style="display:none; position:fixed; inset:0; background:rgba(8,12,20,0.88); z-index:1200; align-items:center; justify-content:center;">
+    <div style="position:relative; max-width:94vw; text-align:center;">
+      <button onclick="waCloseMedia()" title="Close"
+              style="position:absolute; top:-34px; right:0; background:transparent; border:none; color:#fff; font-size:1.5rem; cursor:pointer;">✕</button>
+      <div id="wa-media-body"></div>
+    </div>
+  </div>
+
   <!-- Group detail — modal window; stays open until Cancel -->
   <div id="wa-group-modal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.45); z-index:1000; align-items:center; justify-content:center;">
     <div style="background:#fff; border-radius:10px; width:min(560px,92vw); max-height:86vh; display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
@@ -430,7 +440,7 @@
 
 <script src="js/alerts-monitor.js?v=21"></script>
 <script src="js/email.js?v=9"></script>
-<script src="js/whatsapp.js?v=43"></script>
+<script src="js/whatsapp.js?v=44"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/reminders-badge.js?v=15"></script>
 <script>

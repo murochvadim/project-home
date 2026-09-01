@@ -252,6 +252,37 @@ agent** on each inbound message (`applyAutomation(ctx,true)` from the `!m.key.fr
   `wa.logLimit`). ⚠ There is deliberately **NO Clear button** — one was built and then removed by request:
   the 90-day retention policy owns cleanup, so nothing in the UI deletes audit rows. `js/whatsapp.js?v=38` + `js/reminders-badge.js?v=15`.
 
+## Media — open photos / videos in a chat (BUILT 2026-09-01)
+A photo used to render as the text `📷 photo` and could not be opened: `upsertMessage` stored only
+`wa_id/chat_jid/sender/type/body/ts`, and WhatsApp media is **encrypted** — without the message node
+(mediaKey / directPath / fileEncSha256 / mimetype) the bytes are unreachable forever.
+- **`whatsapp_messages.media_proto BYTEA`** (migration `007_media.sql`) = `proto.Message.encode(m.message)`
+  for media messages. **Protobuf, NOT JSON** — every binary field is a `Uint8Array` that
+  `JSON.stringify` mangles (runtime-verified: encode→decode keeps `mediaKey` + `jpegThumbnail`).
+  ~1 KB/row. `ON CONFLICT` fills it only when still NULL.
+- **`bodyOf` now takes media CAPTIONS** (`imageMessage/videoMessage/documentMessage.caption`) — they
+  were silently dropped (all 2,800 pre-existing image rows have an empty body).
+- ⚠ **Never decide "is this media" from the `type` column** — `typeOf` is just `Object.keys(m.message)[0]`,
+  so real messages get labelled `messageContextInfo` (214 rows) / `senderKeyDistributionMessage`.
+  `mediaNodeOf()` decodes the stored node instead; `/messages` returns `has_media`/`media_kind`/`mime`/
+  `has_thumb`/`file_name` from it.
+- **`GET /media/:wa_id/thumb`** → the `jpegThumbnail` that CAME WITH the message: a real preview for
+  **zero** WhatsApp traffic (measured 460 bytes). 404 when the node has none (audio/document).
+- **`GET /media/:wa_id/full`** → `downloadMediaMessage(node,'buffer',{},{reuploadRequest:
+  sock.updateMediaMessage, logger})`, served with the node's mimetype. ⚠ **LXC 114 root is 8 GB**, so
+  the cache at `/opt/whatsapp-agent/.media_cache/` is bounded: files >25 MB are streamed but not
+  cached, and the dir is pruned oldest-first past 300 MB.
+- **UI** (`js/whatsapp.js?v=44`): thumbnail + caption in the bubble (▶ badge on video), click → a
+  lightbox (`#wa-media-modal`) with `<img>` / `<video controls>` / `<audio controls>` / download link,
+  all hitting `…/full` — so the real file is fetched **only on click**, one at a time, like the real
+  client. Ban-risk unchanged; viewing never sends.
+- ⚠ **Only messages received AFTER this deploy.** The 2,800 images / 337 videos already in history have
+  no stored node and can never be opened. `sock.fetchMessageHistory(count, key, ts)` exists
+  (`Socket/messages-recv.d.ts:11`) and could back-fill, but it drags thousands of old messages through
+  the personal number — **deliberately not done**; possible later as a small opt-in per-chat button.
+- Verified live: 3 photos ingested with `media_proto` (1020-1202 B) + caption "טסט"; `/thumb` = 460 B
+  JPEG; `/full` = 97,770 B JPEG, byte-identical on the cached second call.
+
 ## Pending phases
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine
   `protocol=='whatsapp'` branch → self-chat notify-anywhere); incoming automation `RULES/rules/whatsapp_*.py`.

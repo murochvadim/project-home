@@ -5,13 +5,14 @@
 //   • Express HTTP API for the dashboard (read free; writes behind the send-guard)
 // Ban-risk: read-primary; the send-guard enforces min-gap + hourly/daily caps + no-bulk
 // + contact-only. Notifications default to self-chat (recipient:"self").
-import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, proto, downloadMediaMessage } from '@whiskeysockets/baileys';
 import P from 'pino';
 import qrcode from 'qrcode';
 import express from 'express';
 import mqtt from 'mqtt';
 import pg from 'pg';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const DIR   = path.dirname(fileURLToPath(import.meta.url));
@@ -66,9 +67,31 @@ async function saveState() {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-const bodyOf = (m) => (m.message && (m.message.conversation
-  || (m.message.extendedTextMessage && m.message.extendedTextMessage.text))) || '';
+// Text of a message. Media CAPTIONS count as text — without this a photo with a
+// caption reads as empty (every image row before 2026-09-01 has an empty body).
+const bodyOf = (m) => {
+  const x = m.message || {};
+  return x.conversation
+    || (x.extendedTextMessage && x.extendedTextMessage.text)
+    || (x.imageMessage && x.imageMessage.caption)
+    || (x.videoMessage && x.videoMessage.caption)
+    || (x.documentMessage && x.documentMessage.caption)
+    || '';
+};
 const typeOf = (m) => (m.message && Object.keys(m.message)[0]) || 'unknown';
+
+// ── Media ───────────────────────────────────────────────────────────────────
+// ⚠ Never decide "is this media" from the `type` column: typeOf() is just the FIRST
+// key of the node, so real messages get labelled messageContextInfo /
+// senderKeyDistributionMessage. Always look for the media node itself.
+const MEDIA_KEYS = ['imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage', 'documentMessage'];
+const mediaNodeOf = (msg) => {
+  if (!msg) return null;
+  for (const k of MEDIA_KEYS) if (msg[k]) return { key: k, node: msg[k] };
+  return null;
+};
+const mediaKindOf = (k) => (k === 'imageMessage' || k === 'stickerMessage') ? 'image'
+  : k === 'videoMessage' ? 'video' : k === 'audioMessage' ? 'audio' : 'document';
 const tsOf = (m) => m.messageTimestamp ? new Date(Number(m.messageTimestamp) * 1000) : null;
 
 async function upsertChat(jid, patch) {
@@ -93,11 +116,17 @@ async function upsertMessage(m, direction) {
   const chat = m.key.remoteJid;
   const sender = m.key.participant || m.participant || (m.key.fromMe ? (state.me && state.me.jid) : chat);
   const body = bodyOf(m);
-  await q(`INSERT INTO whatsapp_messages (wa_id, chat_jid, sender_jid, sender_name, from_me, direction, type, body, ts, status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-           ON CONFLICT (wa_id, chat_jid) DO UPDATE SET status=COALESCE(EXCLUDED.status, whatsapp_messages.status)`,
+  // Keep the media node so the file can be fetched later (see /media/:wa_id/*).
+  let mediaProto = null;
+  try {
+    if (mediaNodeOf(m.message)) mediaProto = Buffer.from(proto.Message.encode(m.message).finish());
+  } catch (e) { log.warn('media encode: ' + e.message); }
+  await q(`INSERT INTO whatsapp_messages (wa_id, chat_jid, sender_jid, sender_name, from_me, direction, type, body, ts, status, media_proto)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           ON CONFLICT (wa_id, chat_jid) DO UPDATE SET status=COALESCE(EXCLUDED.status, whatsapp_messages.status),
+             media_proto=COALESCE(whatsapp_messages.media_proto, EXCLUDED.media_proto)`,
     [m.key.id, chat, sender, m.pushName || null, !!m.key.fromMe,
-     direction || (m.key.fromMe ? 'out' : 'in'), typeOf(m), (body || '').slice(0, 8000), tsOf(m), null]);
+     direction || (m.key.fromMe ? 'out' : 'in'), typeOf(m), (body || '').slice(0, 8000), tsOf(m), null, mediaProto]);
   await upsertChat(chat, { last_ts: tsOf(m) });
 }
 
@@ -545,6 +574,69 @@ app.get('/automation/senders', async (req, res) => {
     ok(res, { senders });
   } catch (e) { bad(res, e.message, 500); }
 });
+// ── Media: preview + full file ──────────────────────────────────────────────
+// The stored node (media_proto) is the only way back to an encrypted WhatsApp file.
+// /thumb serves the jpegThumbnail that CAME WITH the message — zero WhatsApp traffic.
+// /full downloads on demand (what the real client does) and caches the bytes on disk.
+// ⚠ LXC 114 has an 8 GB root, so the cache is bounded: big files are streamed but not
+// cached, and the directory is pruned oldest-first past the ceiling.
+const MEDIA_CACHE = path.join(DIR, '.media_cache');
+const CACHE_MAX_FILE = 25 * 1024 * 1024;    // don't cache anything larger
+const CACHE_MAX_TOTAL = 300 * 1024 * 1024;  // prune oldest past this
+function cachePrune() {
+  try {
+    const files = fs.readdirSync(MEDIA_CACHE).map(f => {
+      const st = fs.statSync(path.join(MEDIA_CACHE, f));
+      return { f, size: st.size, at: st.mtimeMs };
+    }).sort((a, b) => a.at - b.at);
+    let total = files.reduce((n, x) => n + x.size, 0);
+    while (total > CACHE_MAX_TOTAL && files.length) {
+      const old = files.shift();
+      try { fs.unlinkSync(path.join(MEDIA_CACHE, old.f)); total -= old.size; } catch (e) {}
+    }
+  } catch (e) { /* cache is best-effort */ }
+}
+async function mediaRowOf(waId) {
+  const r = await q('SELECT wa_id, chat_jid, sender_jid, from_me, media_proto FROM whatsapp_messages WHERE wa_id=$1 AND media_proto IS NOT NULL LIMIT 1', [waId]);
+  const row = r.rows[0]; if (!row) return null;
+  let msg = null;
+  try { msg = proto.Message.decode(row.media_proto); } catch (e) { return null; }
+  const media = mediaNodeOf(msg); if (!media) return null;
+  return { row, msg, media };
+}
+app.get('/media/:wa_id/thumb', async (req, res) => {
+  try {
+    const hit = await mediaRowOf(req.params.wa_id); if (!hit) return bad(res, 'not_found', 404);
+    const t = hit.media.node.jpegThumbnail;
+    if (!t || !t.length) return bad(res, 'no_thumbnail', 404);
+    res.set('Content-Type', 'image/jpeg').set('Cache-Control', 'max-age=86400').send(Buffer.from(t));
+  } catch (e) { bad(res, e.message, 500); }
+});
+app.get('/media/:wa_id/full', async (req, res) => {
+  try {
+    const hit = await mediaRowOf(req.params.wa_id); if (!hit) return bad(res, 'not_found', 404);
+    const mime = hit.media.node.mimetype || 'application/octet-stream';
+    const cached = path.join(MEDIA_CACHE, req.params.wa_id.replace(/[^A-Za-z0-9_-]/g, '') );
+    if (fs.existsSync(cached)) {
+      return res.set('Content-Type', mime).set('Cache-Control', 'max-age=86400').send(fs.readFileSync(cached));
+    }
+    if (!sock || state.connection !== 'open') return bad(res, 'not_connected', 409);
+    const buf = await downloadMediaMessage(
+      { key: { remoteJid: hit.row.chat_jid, id: hit.row.wa_id, fromMe: !!hit.row.from_me,
+               participant: String(hit.row.chat_jid).endsWith('@g.us') ? hit.row.sender_jid : undefined },
+        message: hit.msg },
+      'buffer', {}, { reuploadRequest: sock.updateMediaMessage, logger: log });
+    try {
+      if (buf.length <= CACHE_MAX_FILE) {
+        fs.mkdirSync(MEDIA_CACHE, { recursive: true });
+        fs.writeFileSync(cached, buf);
+        cachePrune();
+      }
+    } catch (e) { log.warn('media cache: ' + e.message); }
+    log.info('media served ' + req.params.wa_id + ' (' + mime + ', ' + buf.length + ' bytes)');
+    res.set('Content-Type', mime).set('Cache-Control', 'max-age=86400').send(buf);
+  } catch (e) { log.warn('media download: ' + e.message); bad(res, 'media_unavailable', 404); }
+});
 // Send-guard settings (read/update) for the dashboard WhatsApp Settings card.
 app.get('/settings', (req, res) => ok(res, { settings }));
 app.post('/settings', async (req, res) => {
@@ -575,9 +667,23 @@ app.get('/contacts', async (req, res) => {
 app.get('/messages', async (req, res) => {
   const jid = req.query.jid; if (!jid) return bad(res, 'jid required');
   const lim = Math.min(parseInt(req.query.limit) || 200, 1000);
-  const r = await q(`SELECT wa_id,chat_jid,sender_jid,sender_name,from_me,direction,type,body,ts,status
+  const r = await q(`SELECT wa_id,chat_jid,sender_jid,sender_name,from_me,direction,type,body,ts,status,media_proto
                      FROM whatsapp_messages WHERE chat_jid=$1 ORDER BY ts DESC NULLS LAST LIMIT $2`, [jid, lim]);
-  ok(res, { messages: r.rows.reverse() });
+  // Media flags are derived by DECODING the stored node — never from `type`, which is
+  // just the first key of the message and mislabels many rows.
+  const msgs = r.rows.map(m => {
+    const { media_proto, ...rest } = m;
+    if (!media_proto) return rest;
+    try {
+      const hit = mediaNodeOf(proto.Message.decode(media_proto));
+      if (!hit) return rest;
+      const t = hit.node.jpegThumbnail;
+      return { ...rest, has_media: true, media_kind: mediaKindOf(hit.key),
+               mime: hit.node.mimetype || null, has_thumb: !!(t && t.length),
+               file_name: hit.node.fileName || null };
+    } catch (e) { return rest; }
+  });
+  ok(res, { messages: msgs.reverse() });
 });
 // Live "new messages" monitor — latest INBOUND messages, newest first, chat name
 // resolved via the same chain as /chats. Skips empty WhatsApp system rows

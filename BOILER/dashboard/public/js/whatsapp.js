@@ -276,6 +276,7 @@
     } catch (e) { if (body) body.innerHTML = '<div class="wa-hint">Error loading messages.</div>'; }
   }
 
+  // Plain one-line rendering (monitor feed): no media fetching here.
   function msgBody(m) {
     if (m.body) return esc(m.body);
     const t = m.type || '';
@@ -283,6 +284,44 @@
     if (/audio|ptt/i.test(t)) return '🎙 audio'; if (/sticker/i.test(t)) return '🩹 sticker';
     if (/document/i.test(t)) return '📄 document'; if (/location/i.test(t)) return '📍 location';
     return '<i style="opacity:.6;">(' + esc(t || 'no text') + ')</i>';
+  }
+  // In a thread: show the preview that CAME WITH the message (free — no download) and
+  // the caption. The full file is fetched only when the tile is clicked (openMedia).
+  const mediaUrl = (id, what) => WA_API + '/media/' + encodeURIComponent(id) + '/' + what;
+  function msgBubbleBody(m, i) {
+    if (!m.has_media) return msgBody(m);
+    const cap = m.body ? '<div style="margin-top:4px;">' + esc(m.body) + '</div>' : '';
+    const kind = m.media_kind || 'document';
+    if ((kind === 'image' || kind === 'video') && m.has_thumb) {
+      const play = kind === 'video'
+        ? '<span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1.6rem;color:#fff;text-shadow:0 1px 4px #000;">▶</span>' : '';
+      return '<div style="position:relative;display:inline-block;cursor:pointer;" onclick="waOpenMedia(' + i + ')" title="Click to open">' +
+        '<img src="' + mediaUrl(m.wa_id, 'thumb') + '" style="max-width:190px;max-height:190px;border-radius:8px;display:block;">' + play + '</div>' + cap;
+    }
+    const label = kind === 'audio' ? '🎙 voice message' : (kind === 'video' ? '🎞 video' : (kind === 'image' ? '📷 photo' : '📄 ' + (m.file_name || 'document')));
+    return '<span style="cursor:pointer;text-decoration:underline;" onclick="waOpenMedia(' + i + ')">' + esc(label) + '</span>' + cap;
+  }
+  // Lightbox — the ONLY place that downloads the real file.
+  function openMedia(i) {
+    const m = _msgs[i]; if (!m || !m.has_media) return;
+    const url = mediaUrl(m.wa_id, 'full'), kind = m.media_kind || 'document';
+    const inner = kind === 'image'
+      ? '<img src="' + url + '" style="max-width:92vw;max-height:82vh;border-radius:8px;display:block;">'
+      : kind === 'video'
+      ? '<video src="' + url + '" controls autoplay style="max-width:92vw;max-height:82vh;border-radius:8px;display:block;background:#000;"></video>'
+      : kind === 'audio'
+      ? '<audio src="' + url + '" controls autoplay style="width:min(80vw,420px);"></audio>'
+      : '<a href="' + url + '" target="_blank" rel="noopener" style="color:#25D366;font-weight:600;">⬇ ' + esc(m.file_name || 'download file') + '</a>';
+    const ov = q('wa-media-modal'); if (!ov) return;
+    ov.querySelector('#wa-media-body').innerHTML =
+      '<div style="color:#fff;font-size:0.8rem;margin-bottom:6px;">' + esc(m.body || m.file_name || '') + '</div>' + inner +
+      '<div style="margin-top:8px;"><a href="' + url + '" target="_blank" rel="noopener" style="color:#9be7b4;font-size:0.8rem;">open in a new tab</a></div>';
+    ov.style.display = 'flex';
+  }
+  function closeMedia() {
+    const ov = q('wa-media-modal'); if (!ov) return;
+    ov.style.display = 'none';
+    ov.querySelector('#wa-media-body').innerHTML = '';   // stops video/audio playback
   }
 
   function renderMessages(msgs, c) {
@@ -297,7 +336,7 @@
       const del = out ? '<span class="wa-bdel" title="Delete for everyone" onclick=\'waDelMsg(' +
         JSON.stringify({ id: m.wa_id, jid: c.jid, fromMe: true, part: m.sender_jid || null }).replace(/'/g, '&#39;') + ')\'>🗑</span>' : '';
       const rep = m.wa_id ? '<span class="wa-brep" title="Reply to this message" onclick="waReplyTo(' + i + ')">↩</span>' : '';
-      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '">' + sender + msgBody(m) + rep + del +
+      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '">' + sender + msgBubbleBody(m, i) + rep + del +
         '<div class="wa-btime">' + fmtTime(m.ts) + '</div></div>';
     }).join('') + '</div>';
     body.scrollTop = body.scrollHeight;
@@ -595,6 +634,7 @@
   window.waCloseChat = closeChat;
   window.waSendChat = sendChat;
   window.waReplyTo = replyTo; window.waCancelReply = cancelReply;
+  window.waOpenMedia = openMedia; window.waCloseMedia = closeMedia;
   window.waDelMsg = delMsg;
   window.waRenameChat = renameChat;
   window.waDeleteChat = deleteChat;
