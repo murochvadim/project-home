@@ -504,10 +504,21 @@
       warStatus('Preview: scanned ' + r.scanned + ', logged ' + r.logged); warLoadLog();
     } catch (e) { warStatus('run error: ' + e.message); }
   }
+  // How many log rows to show — remembered per browser so it survives navigation.
+  function warLogSize() {
+    const v = parseInt(localStorage.getItem('wa.logLimit'), 10);
+    return [10, 20, 50].includes(v) ? v : 10;
+  }
+  function warLogLimit(v) {
+    localStorage.setItem('wa.logLimit', String(parseInt(v, 10) || 10));
+    warLoadLog();
+  }
   async function warLoadLog() {
     const host = q('war-log'); if (!host) return;
+    const lim = warLogSize();
+    const sel = q('war-log-limit'); if (sel) sel.value = String(lim);
     try {
-      const r = await (await fetch(WA_API + '/automation/log?limit=100')).json();
+      const r = await (await fetch(WA_API + '/automation/log?limit=' + lim)).json();
       const rows = r.log || [];
       if (!rows.length) { host.innerHTML = '<div class="wa-hint">No activity yet.</div>'; return; }
       host.innerHTML = '<table class="war-table"><thead><tr><th>When</th><th>Rule</th><th>From</th><th>Message</th><th>Do</th><th>Mode</th><th>Note</th></tr></thead><tbody>' +
@@ -527,7 +538,7 @@
   window.waSubTab = subTab;
   window.warNew = warNew; window.warEdit = warEdit; window.warDel = warDel;
   window.warSave = warSave; window.warDiscard = warLoad; window.warTest = warTest;
-  window.warRunNow = warRunNow; window.waCsv = warCsv; window.waRerenderRules = warRender;
+  window.warRunNow = warRunNow; window.warLogLimit = warLogLimit; window.waCsv = warCsv; window.waRerenderRules = warRender;
   window.warPickFrom = warPickFrom;
   window.waOnShow = onShow;
   window.waRefresh = refresh;

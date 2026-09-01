@@ -227,7 +227,10 @@ agent** on each inbound message (`applyAutomation(ctx,true)` from the `!m.key.fr
   (dry-run vs last 80 inbound, no writes) · **`GET /automation/senders?scope=`** (From-picker source, see above) · **`POST /automation/run-now`** (PREVIEW ONLY — logs dry-run rows,
   **never sends replies or fires popups**; deduped on `wa_id`) · `POST /automation/test-popup {rule}` (inserts
   one demo live-popup log row so the reminders card shows a preview — the ▶ Test button uses it). Table
-  **`whatsapp_automation_log`** (migration `005_automation.sql`, 90 d) + Health DB-Volumes. `js/whatsapp.js?v=38` + `js/reminders-badge.js?v=15`.
+  **`whatsapp_automation_log`** (migration `005_automation.sql`, 90 d) + Health DB-Volumes. The Activity-log
+  card has a **show-last 10 / 20 / 50** selector (default 10, remembered per browser in `localStorage`
+  `wa.logLimit`). ⚠ There is deliberately **NO Clear button** — one was built and then removed by request:
+  the 90-day retention policy owns cleanup, so nothing in the UI deletes audit rows. `js/whatsapp.js?v=38` + `js/reminders-badge.js?v=15`.
 
 ## Pending phases
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine

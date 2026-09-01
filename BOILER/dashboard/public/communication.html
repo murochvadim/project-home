@@ -305,7 +305,14 @@
       </div>
       <div id="war-rules"><div class="wa-hint">Loading rules…</div></div>
       <div class="card" style="margin-top:14px;">
-        <h3 style="margin:0 0 8px;">Activity log <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— what rules did / would do</span></h3>
+        <h3 style="margin:0 0 8px;display:flex;align-items:center;gap:10px;">Activity log <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— what rules did / would do</span>
+          <span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-weight:400;font-size:0.82rem;color:#64748b;">
+            show last
+            <select id="war-log-limit" onchange="warLogLimit(this.value)" style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:5px;font-size:0.82rem;font-family:inherit;">
+              <option value="10">10</option><option value="20">20</option><option value="50">50</option>
+            </select>
+          </span>
+        </h3>
         <div id="war-log" style="max-height:320px; overflow-y:auto;"><div class="wa-hint">—</div></div>
       </div>
     </div>
@@ -420,7 +427,7 @@
 
 <script src="js/alerts-monitor.js?v=21"></script>
 <script src="js/email.js?v=9"></script>
-<script src="js/whatsapp.js?v=38"></script>
+<script src="js/whatsapp.js?v=41"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/reminders-badge.js?v=15"></script>
 <script>
