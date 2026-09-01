@@ -157,7 +157,14 @@ zero ban risk; every write goes through a guard.**
   messages (`from_me=false`), newest first, chat name resolved (same chain), **`AND (body<>'' OR type ~*
   'image|video|audio|ptt|sticker|document|location')`** to drop empty `senderKeyDistributionMessage`/system
   rows. `renderRecent` → a 3-column grid (time · message · name); rows within ~30 s get a "fresh" highlight;
-  click a row → `openChatJid` opens that conversation. **Self-gating poll** (`setInterval` 5 s, started once on
+  click a row → **`waOpenRecent(i)`** → `openChatObj` opens that conversation (where you can reply).
+  ⚠ **This was DEAD until 2026-09-01:** the row's `onclick` embedded the chat name via
+  `JSON.stringify(name)`, whose raw double quotes **closed the double-quoted attribute** — the browser
+  parsed `waOpenChatJid('<jid>',` as the handler (silent syntax error) plus `Maya` / `Muroch",false)"`
+  as stray attributes, so every NAMED row did nothing (a nameless chat, `JSON.stringify(null)` →
+  unquoted, was the only one that worked). Rows now carry only their **index** into a `_recent` array —
+  the pattern the Chats list already used (`waOpenChat(i)`). **Never put data in an HTML attribute**;
+  if you must, escape it like `js/medical.js:420` (`JSON.stringify(x).replace(/"/g,'&quot;')`). **Self-gating poll** (`setInterval` 5 s, started once on
   `onShow`) — no-ops unless `#comm-whatsapp` is the visible tab AND `document.visibilityState==='visible'`, so
   it stops when you leave the tab / background the window (no wasted traffic). Read-only.
 - **Layout/UX polish**: Chats + Groups side-by-side (`#wa-layout` grid `1.4fr 1fr`, stacks < 820px); **Groups
