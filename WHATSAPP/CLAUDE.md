@@ -164,6 +164,12 @@ zero ban risk; every write goes through a guard.**
   as stray attributes, so every NAMED row did nothing (a nameless chat, `JSON.stringify(null)` →
   unquoted, was the only one that worked). Rows now carry only their **index** into a `_recent` array —
   the pattern the Chats list already used (`waOpenChat(i)`). **Never put data in an HTML attribute**;
+- **Any message in the thread can be answered (2026-09-01).** Clicking a **text bubble** arms the reply
+  to it and marks it in place (`.wa-bubble.armed` — green left bar + tint), so you can answer an old
+  message, not just the newest. A **media bubble keeps click = open the file** (otherwise a photo could
+  never be viewed), so those are answered via their green **↩**, which carries `event.stopPropagation()`.
+  The mark is toggled on the live node by `armHighlight(i)` — **never re-render to highlight**, it would
+  scroll the thread back to the bottom and lose your place.
 - **↩ Reply to ONE message (quoted reply, 2026-09-01).** A send used to be a plain new message in the
   chat. Now clicking a monitor row **arms a reply to THAT message** (and every bubble in a thread has a
   faint `↩`): a green bar above the input shows `↩ <who>: <preview>` with `✕` to cancel, and the send
@@ -276,7 +282,7 @@ A photo used to render as the text `📷 photo` and could not be opened: `upsert
   photo renders as a 30 px thumbnail + its caption instead of the text `📷 photo`. ⚠ The feed is
   **incoming-only** (`WHERE m.from_me = false`), so a photo you send YOURSELF never appears there —
   it is in the chat, not the feed. That is not a bug; it is what the feed means.
-- **UI** (`js/whatsapp.js?v=45`): thumbnail + caption in the bubble (▶ badge on video), click → a
+- **UI** (`js/whatsapp.js?v=46`): thumbnail + caption in the bubble (▶ badge on video), click → a
   lightbox (`#wa-media-modal`) with `<img>` / `<video controls>` / `<audio controls>` / download link,
   all hitting `…/full` — so the real file is fetched **only on click**, one at a time, like the real
   client. Ban-risk unchanged; viewing never sends.

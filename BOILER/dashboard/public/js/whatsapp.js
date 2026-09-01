@@ -256,14 +256,25 @@
         (_replyTo.who ? '<b>' + esc(_replyTo.who) + ':</b> ' : '') + esc(prev) + '</span>' +
       '<span onclick="waCancelReply()" title="Cancel reply" style="cursor:pointer;color:#64748b;padding:0 4px;">✕</span>';
   }
+  // Mark which bubble the next send answers. Class toggle on the live node — a
+  // re-render would jump the thread back to the bottom and lose your place.
+  function armHighlight(i) {
+    const body = q('wa-chat-body'); if (!body) return;
+    body.querySelectorAll('.wa-bubble.armed').forEach(b => b.classList.remove('armed'));
+    if (i != null) {
+      const el = body.querySelector('[data-bi="' + i + '"]');
+      if (el) el.classList.add('armed');
+    }
+  }
   function replyTo(i) {
     const m = _msgs[i]; if (!m) return;
-    _replyTo = { wa_id: m.wa_id, body: m.body, type: m.type,
+    _replyTo = { wa_id: m.wa_id, body: m.body, type: m.type, idx: i,
                  who: m.from_me ? 'You' : (m.sender_name || (_activeChat && _activeChat.name) || '') };
     replyBarRender();
+    armHighlight(i);
     const inp = q('wa-chat-input'); if (inp) inp.focus();
   }
-  function cancelReply() { _replyTo = null; replyBarRender(); }
+  function cancelReply() { _replyTo = null; replyBarRender(); armHighlight(null); }
 
   async function openChatObj(c, replyTo) {
     if (!c) return;
@@ -343,8 +354,12 @@
       const sender = (!out && c.is_group && m.sender_name) ? '<div class="wa-bsender">' + esc(m.sender_name) + '</div>' : '';
       const del = out ? '<span class="wa-bdel" title="Delete for everyone" onclick=\'waDelMsg(' +
         JSON.stringify({ id: m.wa_id, jid: c.jid, fromMe: true, part: m.sender_jid || null }).replace(/'/g, '&#39;') + ')\'>🗑</span>' : '';
-      const rep = m.wa_id ? '<span class="wa-brep" title="Reply to this message" onclick="waReplyTo(' + i + ')">↩</span>' : '';
-      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '">' + sender + msgBubbleBody(m, i) + rep + del +
+      const rep = m.wa_id ? '<span class="wa-brep" title="Reply to this message" onclick="event.stopPropagation();waReplyTo(' + i + ')">↩</span>' : '';
+      // Clicking the message ARMS a reply to it — any message in the thread, not just the
+      // newest. A media bubble keeps click = open the photo/video (otherwise you could
+      // never view it), so those are answered via their ↩.
+      const arm = (m.wa_id && !m.has_media) ? ' onclick="waReplyTo(' + i + ')" style="cursor:pointer;"' : '';
+      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '" data-bi="' + i + '"' + arm + '>' + sender + msgBubbleBody(m, i) + rep + del +
         '<div class="wa-btime">' + fmtTime(m.ts) + '</div></div>';
     }).join('') + '</div>';
     body.scrollTop = body.scrollHeight;
