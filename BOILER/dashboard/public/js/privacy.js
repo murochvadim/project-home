@@ -178,7 +178,7 @@ const _PV_REM_PAGES = [
   ['bedroom', 'Bedroom'], ['voice', 'Voice'], ['health', 'Project Health'],
   ['network', 'Project Network'], ['power', 'Project Power'], ['gateway', 'Project Gateway'],
   ['esp-boards', 'Project Boards'], ['project-general', 'Project General'],
-  ['privacy', 'Privacy'], ['medical', 'Medical'],
+  ['privacy', 'Privacy'], ['communication', 'Communication'], ['medical', 'Medical'],
 ];
 async function pvLoadReminders() {
   let cfg = {};

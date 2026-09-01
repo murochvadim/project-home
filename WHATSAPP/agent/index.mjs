@@ -35,6 +35,7 @@ let state = { connection: 'connecting', me: null, qrDataUrl: null, lastSync: nul
 let settings = { min_gap_sec: 4, hourly_cap: 20, daily_cap: 100, contact_only: true,
                  del_min_gap_sec: 4, del_hourly_cap: 30 };
 let lastSendTs = 0;
+let authKeys = null;   // Baileys signal key store — LOCAL reads only (lid-mapping), never USync
 let _actionTimes = [];   // epoch-ms of recent destructive actions (delete/leave), in-memory sliding hour
 
 // Throttle for destructive actions (message delete / group leave / chat delete).
@@ -98,6 +99,169 @@ async function upsertMessage(m, direction) {
     [m.key.id, chat, sender, m.pushName || null, !!m.key.fromMe,
      direction || (m.key.fromMe ? 'out' : 'in'), typeOf(m), (body || '').slice(0, 8000), tsOf(m), null]);
   await upsertChat(chat, { last_ts: tsOf(m) });
+}
+
+// ── Automation (dashboard_settings.whatsapp.rules) — mirror of the email agent ──
+// Rules match an inbound message (sender / keyword / scope) → auto-reply and/or popup.
+// Dry-run first; live reply goes through guardedSend; live popup just writes the log
+// row (mode='live', action popup/both) which the dashboard reminders card reads via
+// /api/reminders and shows as a blue card. No notification_events insert here.
+let _rulesCache = { data: null, ts: 0 };
+const _RULES_TTL = 30000;
+async function loadRules() {
+  const now = Date.now();
+  if (_rulesCache.data && now - _rulesCache.ts < _RULES_TTL) return _rulesCache.data;
+  let rules = _rulesCache.data || [];
+  try {
+    const r = await q(`SELECT value FROM dashboard_settings WHERE key='whatsapp.rules'`);
+    const v = r.rows[0] && r.rows[0].value;
+    rules = Array.isArray(v) ? v : (v ? JSON.parse(v) : []);
+    _rulesCache = { data: rules, ts: now };
+  } catch (e) { log.warn('loadRules: ' + e.message); }
+  return rules;
+}
+const _lc = (s) => String(s == null ? '' : s).toLowerCase();
+
+// ── Sender identity ─────────────────────────────────────────────────────────
+// WhatsApp now delivers most messages from an anonymized @lid id that carries
+// NEITHER the phone number NOR your address-book name — only the sender's own
+// profile name (pushName). Matching a rule on a display name therefore failed for
+// nearly every contact. So a rule's `from` is matched on IDENTITY: the set of ids
+// that are the same person (lid + phone), plus every name that person is known by.
+//
+// ⚠ Resolution is LOCAL ONLY. Baileys' getLIDForPN() falls back to a USync query to
+// WhatsApp's servers on a cache miss — bulk contact lookups from an unofficial client
+// are a ban risk — so we read the signal key store directly instead (the same store
+// Baileys reads: 'lid-mapping' → <pn>:<lid>, '<lid>_reverse':<pn>). A miss is a miss.
+const _bare = (j) => String(j || '').split('@')[0].split(':')[0];
+const _idCache = new Map();   // jid -> {ids:[], ts}
+const _ID_TTL = 10 * 60 * 1000;
+async function identityIds(jid) {
+  if (!jid) return [];
+  const key = _bare(jid);
+  if (!key) return [];
+  const hit = _idCache.get(key);
+  if (hit && Date.now() - hit.ts < _ID_TTL) return hit.ids;
+  const ids = new Set([key]);
+  try {
+    if (authKeys && String(jid).includes('@lid')) {
+      const r = await authKeys.get('lid-mapping', [key + '_reverse']);
+      const pn = r && r[key + '_reverse'];
+      if (pn && typeof pn === 'string') ids.add(_bare(pn));
+    } else if (authKeys && String(jid).includes('@s.whatsapp.net')) {
+      const r = await authKeys.get('lid-mapping', [key]);         // local read, no USync
+      const lid = r && r[key];
+      if (lid && typeof lid === 'string') ids.add(_bare(lid));
+    }
+  } catch (e) { /* unmapped — the bare id still matches */ }
+  const out = [...ids];
+  _idCache.set(key, { ids: out, ts: Date.now() });
+  return out;
+}
+// Every name this sender is known by: profile name (pushName) + the chat's own /
+// renamed title + your address-book name for EITHER identity. Keeps old name-based
+// rules working and makes the names the From-picker offers actually matchable.
+async function identityNames(ids, chatIds) {
+  const all = [...new Set([...(ids || []), ...(chatIds || [])])];
+  if (!all.length) return [];
+  const jids = [];
+  for (const id of all) jids.push(id + '@s.whatsapp.net', id + '@lid', id + '@g.us');
+  const names = new Set();
+  try {
+    const r = await q(`SELECT custom_name, name FROM whatsapp_chats WHERE jid = ANY($1)`, [jids]);
+    for (const row of r.rows) { if (row.custom_name) names.add(row.custom_name); if (row.name) names.add(row.name); }
+    const c = await q(`SELECT name, notify FROM whatsapp_contacts WHERE jid = ANY($1)`, [jids]);
+    for (const row of c.rows) { if (row.name) names.add(row.name); if (row.notify) names.add(row.notify); }
+  } catch (e) { log.warn('identityNames: ' + e.message); }
+  return [...names];
+}
+// One shared context builder for all three evaluation paths (live inbound,
+// run-now preview, rule test) so they can never drift apart.
+async function buildCtx(o) {
+  const chat_jid = o.chat_jid;
+  const from_jid = o.from_jid || chat_jid;
+  const chatIds = await identityIds(chat_jid);
+  const fromIds = await identityIds(from_jid);
+  const ids = [...new Set([...chatIds, ...fromIds])];
+  const names = await identityNames(fromIds, chatIds);
+  if (o.from_name) names.unshift(o.from_name);
+  return { wa_id: o.wa_id || null, chat_jid, from_jid,
+    is_group: String(chat_jid || '').endsWith('@g.us'),
+    from_name: o.from_name || null, body: o.body || '',
+    ids, names: [...new Set(names.filter(Boolean))] };
+}
+
+function ruleMatches(rule, ctx) {
+  const m = rule.match || {};
+  const scope = m.scope || 'all';
+  if (scope === 'people' && ctx.is_group) return false;
+  if (scope === 'groups' && !ctx.is_group) return false;
+  const froms = (m.from || []).filter(Boolean);
+  if (froms.length) {
+    // An id entry (what the From-picker writes) matches EXACTLY — substring would
+    // make a DM id fire on the legacy group jid that embeds it
+    // (972545259144 ⊂ 972545259144-1402322229@g.us). A text entry matches a name.
+    const ids = ctx.ids || [];
+    const names = (ctx.names || []).map(_lc);
+    const ok = froms.some(f => {
+      const raw = String(f).trim();
+      const bare = _bare(raw);                       // strips @domain and :device
+      // ids: a phone/lid (all digits) OR a LEGACY group jid <creator>-<created_ts>
+      const isId = /^\d{5,}(-\d{5,})?$/.test(bare) && /^[\d@.:a-z-]+$/i.test(raw);
+      if (isId) return ids.includes(bare);
+      const t = _lc(raw);
+      return names.some(n => n.includes(t));
+    });
+    if (!ok) return false;
+  }
+  const contains = (m.contains || []).filter(Boolean);
+  if (contains.length) {
+    const b = _lc(ctx.body);
+    if (!contains.some(c => b.includes(_lc(c)))) return false;
+  }
+  return true;
+}
+async function logAuto(rule, ctx, action, mode, applied, note) {
+  try {
+    // popup_text = the rule's own sentence AT FIRE TIME. Stored on the row (not looked up
+    // later) so a popup always shows the sentence that actually fired it.
+    await q(`INSERT INTO whatsapp_automation_log
+             (rule_id,rule_name,wa_id,chat_jid,from_jid,from_name,matched_text,action,mode,applied,note,popup_text)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [rule.id || null, rule.name || null, ctx.wa_id || null, ctx.chat_jid, ctx.from_jid, ctx.from_name,
+       (ctx.body || '').slice(0, 500), action, mode, applied, note || null,
+       (rule.popup && rule.popup.text) ? String(rule.popup.text).slice(0, 300) : null]);
+  } catch (e) { log.warn('logAuto: ' + e.message); }
+}
+// Evaluate rules for one inbound message. live=false → PREVIEW ONLY (log dry-run, no
+// send/popup — used by run-now). live=true → act only when the matched rule is mode:'live'.
+async function applyAutomation(ctx, live) {
+  const rules = await loadRules();
+  for (const rule of rules) {
+    if (!rule || !rule.active) continue;
+    if (!ruleMatches(rule, ctx)) continue;               // first matching ACTIVE rule wins
+    const doReply = !!(rule.reply && rule.reply.text);
+    const doPopup = !!rule.popup;
+    const action = doReply && doPopup ? 'both' : (doReply ? 'reply' : (doPopup ? 'popup' : 'none'));
+    if (action === 'none') { await logAuto(rule, ctx, 'none', 'dryrun', false, 'matched, no action'); return true; }
+    const liveMode = live && (rule.mode === 'live');
+    if (!liveMode) {
+      const preview = [doReply ? 'reply' : null, doPopup ? 'popup' : null].filter(Boolean).join(' + ');
+      await logAuto(rule, ctx, action, 'dryrun', false, 'would ' + preview);
+      return true;
+    }
+    let replied = false; const note = [];
+    if (doReply) {
+      try { await guardedSend(ctx.chat_jid, rule.reply.text); replied = true; note.push('replied'); }
+      catch (e) { note.push('reply blocked: ' + (e.reason || e.message)); }
+    }
+    // popup is delivered by the reminders card (top-right, where medical/journal show):
+    // it reads this LIVE popup log row via /api/reminders. No notification_events insert.
+    if (doPopup) note.push('popup');
+    await logAuto(rule, ctx, action, 'live', replied || doPopup, note.join('; '));
+    return true;
+  }
+  return false;
 }
 
 // ── MQTT ────────────────────────────────────────────────────────────────────
@@ -177,6 +341,7 @@ async function refreshGroups() {
 // ── Baileys connect + event wiring ───────────────────────────────────────────
 async function connect() {
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH);
+  authKeys = authState.keys;            // local lid-mapping reads (see identityIds)
   const { version } = await fetchLatestBaileysVersion();
   sock = makeWASocket({ version, auth: authState, logger: P({ level: 'silent' }), browser: ['whatsapp-agent', 'Chrome', '1.0'] });
   sock.ev.on('creds.update', saveCreds);
@@ -197,7 +362,14 @@ async function connect() {
     for (const m of messages) {
       if (!m.message) continue;
       try { await upsertMessage(m); } catch (e) { log.warn('msg upsert: ' + e.message); }
-      if (!m.key.fromMe) publishInbound(m);
+      if (!m.key.fromMe) {
+        publishInbound(m);
+        buildCtx({ wa_id: m.key.id, chat_jid: m.key.remoteJid,
+          from_jid: m.key.participant || m.participant || m.key.remoteJid,
+          from_name: m.pushName || null, body: bodyOf(m) })
+          .then(ctx => applyAutomation(ctx, true))
+          .catch(e => log.warn('automation: ' + e.message));
+      }
     }
   });
 
@@ -337,6 +509,40 @@ app.get('/group/:jid', async (req, res) => {
     });
   } catch (e) { bad(res, e.message, 500); }
 });
+// Senders for the rule From-picker: ONE entry per person, value = an id that is
+// guaranteed to match an inbound message (the picker must never offer something the
+// matcher can't see — an address-book name alone never appears in a message).
+// A person reachable under both identities (@lid + phone) is merged into one row,
+// labelled with the best name we know. LOCAL lid-mapping reads only — no USync.
+app.get('/automation/senders', async (req, res) => {
+  try {
+    const scope = ['people', 'groups', 'all'].includes(req.query.scope) ? req.query.scope : 'all';
+    const r = await q(`
+      SELECT c.jid, c.is_group, c.last_ts,
+        COALESCE(NULLIF(c.custom_name,''), NULLIF(c.name,''), NULLIF(ct.name,''), NULLIF(ct.notify,''),
+          NULLIF((SELECT m.sender_name FROM whatsapp_messages m
+                  WHERE m.chat_jid=c.jid AND m.sender_name IS NOT NULL
+                  ORDER BY m.ts DESC NULLS LAST LIMIT 1),'')) AS name
+      FROM whatsapp_chats c LEFT JOIN whatsapp_contacts ct ON ct.jid=c.jid
+      WHERE c.jid NOT LIKE '%@broadcast'
+        AND EXISTS (SELECT 1 FROM whatsapp_messages m2 WHERE m2.chat_jid=c.jid AND NOT m2.from_me)
+      ORDER BY c.last_ts DESC NULLS LAST`);
+    const byKey = new Map();
+    for (const row of r.rows) {
+      if (scope === 'people' && row.is_group) continue;
+      if (scope === 'groups' && !row.is_group) continue;
+      const ids = row.is_group ? [_bare(row.jid)] : await identityIds(row.jid);
+      const key = ids.slice().sort().join('|');            // both identities => one entry
+      const cur = byKey.get(key);
+      if (!cur) { byKey.set(key, { id: ids[0], ids, name: row.name || null, is_group: row.is_group, last_ts: row.last_ts }); continue; }
+      if (!cur.name && row.name) cur.name = row.name;      // fill the label from either row
+      if (row.last_ts && (!cur.last_ts || row.last_ts > cur.last_ts)) cur.last_ts = row.last_ts;
+    }
+    const senders = [...byKey.values()].filter(x => x.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    ok(res, { senders });
+  } catch (e) { bad(res, e.message, 500); }
+});
 // Send-guard settings (read/update) for the dashboard WhatsApp Settings card.
 app.get('/settings', (req, res) => ok(res, { settings }));
 app.post('/settings', async (req, res) => {
@@ -389,6 +595,62 @@ app.get('/recent', async (req, res) => {
     ORDER BY m.ts DESC NULLS LAST
     LIMIT $1`, [lim]);
   ok(res, { messages: r.rows });
+});
+// ── Automation endpoints (dashboard calls the agent directly, CORS) ──
+app.get('/automation/log', async (req, res) => {
+  const lim = Math.min(parseInt(req.query.limit) || 100, 500);
+  const r = await q(`SELECT ts, rule_name, from_name, chat_jid, matched_text, action, mode, applied, note
+                     FROM whatsapp_automation_log ORDER BY ts DESC LIMIT $1`, [lim]);
+  ok(res, { log: r.rows });
+});
+app.post('/automation/test', async (req, res) => {
+  try {
+    const rule = (req.body || {}).rule; if (!rule) return bad(res, 'rule');
+    const r = await q(`SELECT wa_id, chat_jid, sender_jid, sender_name, body
+                       FROM whatsapp_messages WHERE from_me=false ORDER BY ts DESC LIMIT 80`);
+    const matches = [];
+    for (const m of r.rows) {
+      const ctx = await buildCtx({ wa_id: m.wa_id, chat_jid: m.chat_jid,
+        from_jid: m.sender_jid || m.chat_jid, from_name: m.sender_name, body: m.body || '' });
+      if (ruleMatches(rule, ctx)) matches.push({ chat_jid: m.chat_jid, from_name: m.sender_name, body: (m.body || '').slice(0, 120) });
+    }
+    ok(res, { matches, scanned: r.rows.length });
+  } catch (e) { bad(res, e.message, 500); }
+});
+// PREVIEW ONLY — evaluate recent inbound messages, write dry-run log rows, NEVER send/popup.
+app.post('/automation/run-now', async (req, res) => {
+  try {
+    const lim = Math.min(parseInt((req.body || {}).limit) || 200, 500);
+    const r = await q(`SELECT wa_id, chat_jid, sender_jid, sender_name, body
+                       FROM whatsapp_messages WHERE from_me=false ORDER BY ts DESC LIMIT $1`, [lim]);
+    const doneR = await q(`SELECT DISTINCT wa_id FROM whatsapp_automation_log WHERE wa_id IS NOT NULL`);
+    const done = new Set(doneR.rows.map(x => x.wa_id));
+    let logged = 0;
+    for (const m of r.rows) {
+      if (done.has(m.wa_id)) continue;
+      const ctx = await buildCtx({ wa_id: m.wa_id, chat_jid: m.chat_jid,
+        from_jid: m.sender_jid || m.chat_jid, from_name: m.sender_name, body: m.body || '' });
+      if (await applyAutomation(ctx, false)) logged++;   // preview only; count real matches
+    }
+    ok(res, { scanned: r.rows.length, logged });
+  } catch (e) { bad(res, e.message, 500); }
+});
+// Show a DEMO popup for a rule (a preview) — inserts one live popup log row so the
+// reminders card shows it, letting the user SEE the popup without a real message.
+app.post('/automation/test-popup', async (req, res) => {
+  try {
+    const rule = (req.body || {}).rule; if (!rule || !rule.popup) return bad(res, 'no_popup');
+    await q(`INSERT INTO whatsapp_automation_log
+             (rule_id,rule_name,wa_id,chat_jid,from_jid,from_name,matched_text,action,mode,applied,note,popup_text)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'popup','live',true,'test preview',$8)`,
+      [rule.id || null, (rule.name || 'rule') + ' (test)', 'test_' + Date.now(),
+       'preview@s.whatsapp.net', 'preview@s.whatsapp.net', 'Preview',
+       // demo MESSAGE text — the rule's own popup sentence is rendered as the title
+       // line by the reminders card, so putting it here too would show it twice
+       'this is how a match popup looks',
+       rule.popup.text ? String(rule.popup.text).slice(0, 300) : null]);
+    ok(res, {});
+  } catch (e) { bad(res, e.message, 500); }
 });
 app.post('/history', async (req, res) => {
   try { const { jid, count } = req.body || {}; if (!sock) return bad(res, 'not_connected', 409);

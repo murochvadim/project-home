@@ -285,6 +285,38 @@ module.exports = (app, db) => {
       }
     }
 
+    // ── WhatsApp automation matches: LIVE popup rows from the automation log →
+    // shown in this same reminders card (top-right). Always evaluated (like meds) —
+    // controlled by the rules themselves. Chat name resolved like /chats; rkey per
+    // match so Clear/Delay stick. Silent if the table doesn't exist yet. ──
+    try {
+      const wr = await db.query(
+        `SELECT l.id, l.rule_id, l.popup_text, l.from_name, l.matched_text, (l.chat_jid LIKE '%@g.us') AS is_group,
+           COALESCE(NULLIF(c.custom_name,''), NULLIF(c.name,''), NULLIF(ct.name,''), NULLIF(ct.notify,''),
+             l.from_name, CASE WHEN l.chat_jid LIKE '%@s.whatsapp.net' THEN split_part(l.chat_jid,'@',1) END, l.chat_jid) AS chat_name
+         FROM whatsapp_automation_log l
+         LEFT JOIN whatsapp_chats c     ON c.jid = l.chat_jid
+         LEFT JOIN whatsapp_contacts ct ON ct.jid = l.chat_jid
+         WHERE l.mode='live' AND l.action IN ('popup','both') AND l.ts > now() - interval '24 hours'
+         ORDER BY l.ts DESC LIMIT 20`);
+      // The rule's own popup sentence (if it has one) is shown as a TITLE line above
+      // the message — it says WHY this popped. Read live from the rules setting, so an
+      // edited sentence applies to rows already on screen. No sentence → message only.
+      let popupTitles = {};
+      try {
+        const rr = await db.query(`SELECT value FROM dashboard_settings WHERE key='whatsapp.rules'`);
+        const rules = rr.rows[0] ? (Array.isArray(rr.rows[0].value) ? rr.rows[0].value : JSON.parse(rr.rows[0].value || '[]')) : [];
+        for (const r of rules) if (r && r.id && r.popup && r.popup.text) popupTitles[r.id] = String(r.popup.text);
+      } catch (e) { /* no rules yet — message only */ }
+      for (const w of wr.rows) {
+        const who = (w.is_group && w.from_name) ? (w.chat_name + ' — ' + w.from_name) : w.chat_name;
+        const txt = (w.matched_text || '').slice(0, 60);
+        items.push({ rkey: 'whatsapp:' + w.id, user_name: null, kind: 'whatsapp',
+          title: w.popup_text || popupTitles[w.rule_id] || null,   // row first: what actually fired
+          label: '💬 ' + who + (txt ? ': ' + txt : '') });
+      }
+    } catch (e) { /* whatsapp_automation_log not present — skip */ }
+
     // ── filter out snoozed / cleared instances ──
     if (!items.length) return [];
     const states = (await db.query(

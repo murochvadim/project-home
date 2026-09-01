@@ -1,10 +1,11 @@
 # WHATSAPP — personal-account agent via **Baileys** (LXC 114)
 
-**STATUS: P1 + P2 + P3 BUILT + LIVE (2026-08-31).** Reads + sends the user's REAL WhatsApp from an always-on
-LXC; the Communication dashboard page + full "manage all chats" surface (browse/search/filter, conversation
-read/send/delete, rename, live monitor) are live. P4 (notifications surface) pending. The old **Cloud-API**
-plan is kept at the bottom as a separate no-risk option for a future *business* channel — it CANNOT touch
-personal chats.
+**STATUS: P1 + P2 + P3 + AUTOMATION BUILT + LIVE (2026-08-31).** Reads + sends the user's REAL WhatsApp from an
+always-on LXC; the Communication dashboard page + full "manage all chats" surface (browse/search/filter,
+conversation read/send/delete, rename, live monitor) + an **Automation tab** (rules → auto-reply and/or a
+top-right blue popup card, via the reminders system) are live. P4 (notifications surface) pending. The old
+**Cloud-API** plan is kept at the bottom as a separate no-risk option for a future *business* channel — it
+CANNOT touch personal chats.
 
 ## Why Baileys (what the POC proved)
 Goal = manage the user's **real** WhatsApp (all contacts/groups, read conversations, reply, delete, leave
@@ -163,6 +164,70 @@ zero ban risk; every write goes through a guard.**
   collapsed by default on every tab entry** (`_groupsHidden` reset in `onShow` — NOT persisted, so it can't
   reopen itself between pages); the old top "Filter groups…" box removed (redundant with the Chats search +
   the Groups filter); ↺ button relabeled "Refresh" (reloads status+groups+chats+monitor).
+
+## Automation — rules → auto-reply and/or popup (BUILT 2026-08-31, mirror of the Email agent)
+An **Automation** sub-tab on the WhatsApp panel (`[💬 Chats][⚙ Automation]` inner tabs via `waSubTab`). Rules
+in **`dashboard_settings.whatsapp.rules`** (generic dashboard endpoint — no server change), evaluated **in the
+agent** on each inbound message (`applyAutomation(ctx,true)` from the `!m.key.fromMe` branch), 30 s TTL cache.
+- **Rule shape:** `{id,name,active,mode:'dryrun'|'live', match:{from:[...],contains:[...],scope:'all'|'people'|
+  'groups'}, reply:{text}|null, popup:{text}|null}`. **First matching ACTIVE rule wins** (like email). `from`/
+  `contains` are case-insensitive OR-match substrings; `scope` filters on `is_group`.
+- **⚠ Matching in the @lid era — IDENTITY-based since 2026-09-01 (was display-name, and it was broken).**
+  WhatsApp now delivers many messages from **anonymized `@lid` ids that carry NEITHER the phone number NOR your
+  saved contact name** — only the sender's **profile name (pushName)**. The old matcher hayed
+  `chat_jid + from_jid + from_name`, so a `from` picked from the dropdown (the chat's *display* name, which comes
+  mostly from your address book) **could never match**: measured on live data, **300 of the 302** real-name DM
+  options the picker offered were unmatchable. A rule only fired if the saved name happened to equal the pushName.
+  Now:
+  - **`identityIds(jid)`** returns every id that is the same person — the bare id plus its **lid↔phone
+    counterpart**. ⚠ **LOCAL reads only:** it reads the Baileys signal key store directly
+    (`authKeys.get('lid-mapping', ['<lid>_reverse'])` / `['<pn>']`, the same store Baileys reads, backed by
+    `.wa_auth/lid-mapping-*.json`). **Never call `getLIDForPN`** — on a cache miss it does a **USync query to
+    WhatsApp's servers**, and bulk contact lookups from an unofficial client are a ban risk. `getPNForLID` is
+    local-only and safe. Verified: **104 of 105** `@lid` DM chats resolve locally; 10-min LRU.
+  - **`identityNames(ids, chatIds)`** collects every name the person is known by — pushName + the chat's
+    `custom_name`/`name` + `whatsapp_contacts.name`/`notify` **for either identity** — so an address-book name
+    ("Mayicha Muroch") now matches a message that arrives under her `@lid` profile name ("Maya Muroch").
+  - **`buildCtx()`** is the single context builder for all three evaluation paths (live inbound,
+    `/automation/run-now`, `/automation/test`) so they can't drift.
+  - **`ruleMatches`**: a `from` entry that is an **id** (≥5 digits after stripping `@domain`/`:device`) matches
+    `ctx.ids` **EXACTLY**; anything else is a case-insensitive substring over `ctx.names`. An "id" is
+    `^\d{5,}(-\d{5,})?$` after stripping `@domain`/`:device` — the optional `-<ts>` half is the **legacy
+    group jid** form (`972542993344-1594042272@g.us`); without it 7 of the 21 groups the picker offers were
+    unmatchable (audit 2026-09-01). ⚠ Exact-match is
+    load-bearing: with the old `includes()`, a DM id fired on the **legacy group jid that embeds it**
+    (`972545259144` ⊂ `972545259144-1402322229@g.us`) — 358 such collisions in live data. Regression-tested:
+    that rule now returns **0** matches while 35 of the group's messages were in the scan window.
+- **From-picker = `GET /automation/senders`** (not `/chats`): **one entry per PERSON** (the two rows of a
+  migrated contact — `@lid` + phone — merged by identity), only chats that have actually **received** an inbound
+  (so nothing offered is unmatchable), label = the best known name, **value = the identity id**. The rule row
+  renders the resolved sender **name under the From field in big bold green** (15 px, `#166534`) — the stored
+  value is an unreadable id, so WHO the rule listens to must be legible at a glance. ⚠ `/chats` is deliberately
+  **untouched** — merging there would hide a migrated contact's old phone-chat history in the Chats card.
+- **reply (live):** `guardedSend(chat_jid, text)` — ban-guarded (min-gap/caps/contact-only); dry-run logs only.
+  Flagged in the UI "⚠ auto-sends a real WhatsApp reply from your number".
+- **popup text = an optional TITLE line (2026-09-01).** It used to be **dead** — `applyAutomation` only read
+  `!!rule.popup`, and the card's label is built from the log row (`💬 <chat>: <matched_text>`), so whatever you
+  typed was discarded. Now `routes-reminders.js` looks the rule up in `dashboard_settings.whatsapp.rules` by the
+  log row's own **`popup_text`** column (migration `006_popup_text.sql`, written at fire time by `logAuto` and by
+  `/automation/test-popup`) — falling back to a lookup in `dashboard_settings.whatsapp.rules` by `rule_id` for
+  rows written before the column existed — and returns it as **`item.title`**, which `reminders-badge.js` renders **bold above the
+  message**; no sentence → message only. Read live, so editing the sentence updates rows already on screen.
+  `/automation/test-popup` stores a demo MESSAGE (not the sentence) so the preview doesn't show it twice.
+- **popup (live):** delivered through the **reminders card** (top-right, same place as medical/journal) — NOT
+  a notification_events/notify-toast popup. The live log row (mode='live', action popup/both) IS the source:
+  **`/api/reminders` (`routes-reminders.js`) surfaces recent live popup rows from `whatsapp_automation_log`** as
+  `kind:'whatsapp'` items (chat name resolved like /chats, rkey `whatsapp:<id>` for Clear/Delay), and
+  **`reminders-badge.js` renders them in a dedicated BLUE card** (`renderWhatsApp`, stacked below the red
+  reminders badge; the split at ~:243 routes `kind==='whatsapp'`). Controlled ONLY by the rules (like meds) —
+  no separate on/off in reminders settings; a WhatsApp popup shows only when a rule is **active + LIVE + popup**
+  AND the reminder badge is enabled AND the page is in the reminders page list (`communication` added). The
+  Automation tab shows a live 🟢/🔴 "Show Popup enabled/disabled in Reminders" hint per rule.
+- **Endpoints** (agent, CORS, dashboard calls directly): `GET /automation/log` · `POST /automation/test {rule}`
+  (dry-run vs last 80 inbound, no writes) · **`GET /automation/senders?scope=`** (From-picker source, see above) · **`POST /automation/run-now`** (PREVIEW ONLY — logs dry-run rows,
+  **never sends replies or fires popups**; deduped on `wa_id`) · `POST /automation/test-popup {rule}` (inserts
+  one demo live-popup log row so the reminders card shows a preview — the ▶ Test button uses it). Table
+  **`whatsapp_automation_log`** (migration `005_automation.sql`, 90 d) + Health DB-Volumes. `js/whatsapp.js?v=38` + `js/reminders-badge.js?v=15`.
 
 ## Pending phases
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine

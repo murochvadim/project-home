@@ -116,19 +116,40 @@
   // Two INDEPENDENT fixed elements — the red badge stays exactly where it always
   // sits (top:10px right:14px); the journal panel is positioned a MEASURED
   // distance to its LEFT each render, so they can never overlap.
-  let badgeEl = null, journalEl = null, _jsig = '';
+  let badgeEl = null, journalEl = null, waEl = null, _jsig = '';
   function ensureEls() {
     if (badgeEl) return;
     badgeEl = document.createElement('div');
     badgeEl.id = 'reminders-badge';
     badgeEl.style.cssText = 'position:fixed;top:10px;right:14px;z-index:99999;display:none;background:#c0392b;' +
       'color:#fff;border-radius:8px;box-shadow:0 3px 12px rgba(0,0,0,.32);font-size:0.8rem;line-height:1.25;max-width:360px;padding:8px 11px;';
+    // WhatsApp automation popups — their OWN BLUE card (separate from the red
+    // reminders badge), stacked just below it on the right.
+    waEl = document.createElement('div');
+    waEl.id = 'whatsapp-badge';
+    waEl.style.cssText = 'position:fixed;top:10px;right:14px;z-index:99999;display:none;background:#2563eb;' +
+      'color:#fff;border-radius:8px;box-shadow:0 3px 12px rgba(0,0,0,.32);font-size:0.8rem;line-height:1.25;max-width:360px;padding:8px 11px;';
+    document.body.appendChild(waEl);
     journalEl = document.createElement('div');
     journalEl.id = 'journal-capture';
     journalEl.style.cssText = 'position:fixed;top:10px;right:14px;z-index:99998;display:none;background:#0f766e;' +
       'color:#fff;border-radius:10px;box-shadow:0 3px 12px rgba(0,0,0,.32);width:400px;max-width:min(400px,90vw);padding:10px 12px;font-size:0.82rem;';
     document.body.appendChild(badgeEl);
     document.body.appendChild(journalEl);
+  }
+
+  function renderWhatsApp(items) {
+    if (!items.length) { waEl.style.display = 'none'; waEl.innerHTML = ''; return; }
+    waEl.style.display = 'block';
+    waEl.innerHTML = '<div style="font-weight:700;margin-bottom:4px;">💬 WhatsApp</div>' +
+      items.map(it => `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-top:1px solid rgba(255,255,255,.28);">
+        <span style="flex:1;">${it.title ? `<b>${esc(it.title)}</b><br>` : ''}${esc(it.label)}</span>
+        <button data-rk="${esc(it.rkey)}" data-act="clear" title="Done"
+          style="background:#fff;color:#2563eb;border:none;border-radius:4px;cursor:pointer;font-size:0.72rem;padding:2px 7px;">Clear</button>
+      </div>`).join('');
+    waEl.querySelectorAll('button[data-rk]').forEach(b => {
+      b.addEventListener('click', () => act(b.getAttribute('data-act'), b.getAttribute('data-rk')));
+    });
   }
 
   function renderBadge(items) {
@@ -239,11 +260,18 @@
     ensureEls();
     const all = (data && data.items) || [];
     const on = data && data.enabled && Array.isArray(data.pages) && data.pages.indexOf(SLUG) !== -1;
-    if (!on) { badgeEl.style.display = 'none'; journalEl.style.display = 'none'; return; }
+    if (!on) { badgeEl.style.display = 'none'; journalEl.style.display = 'none'; if (waEl) waEl.style.display = 'none'; return; }
     const journalItems = all.filter(i => i.kind === 'journal');
-    const badgeItems = all.filter(i => i.kind !== 'journal');
-    renderBadge(badgeItems);       // sets badgeEl display + content
-    renderJournal(journalItems);   // sets journalEl display + content
+    const waItems = all.filter(i => i.kind === 'whatsapp');
+    const badgeItems = all.filter(i => i.kind !== 'journal' && i.kind !== 'whatsapp');
+    renderBadge(badgeItems);       // red reminders card
+    renderWhatsApp(waItems);       // blue WhatsApp card
+    renderJournal(journalItems);   // teal journal panel
+    // Stack the blue WhatsApp card just BELOW the red reminders badge (right corner).
+    if (waEl.style.display !== 'none') {
+      const bottom = (badgeEl.style.display !== 'none') ? badgeEl.getBoundingClientRect().bottom : 2;
+      waEl.style.top = Math.round(bottom + 8) + 'px';
+    }
     // Park the journal panel to the LEFT of the red badge (measure its width so
     // they never overlap). If the badge isn't showing, the journal takes the corner.
     if (journalEl.style.display !== 'none') {

@@ -108,7 +108,9 @@
     loadStatus();
     if (!_shown) { _shown = true; loadChats(true); loadGroups(); startMonitorPoll(); }
     _groupsHidden = true;   // always collapse Groups on tab entry
+    _chatsHidden = true;    // always collapse Chats on tab entry (same as Groups)
     applyGroupsVis();
+    applyChatsVis();
     if (monitorVisible()) loadRecent();   // refresh the feed immediately on tab entry
   }
 
@@ -138,8 +140,9 @@
     const dot = q('wa-monitor-dot'); if (dot) dot.textContent = '● live';
   }
   function monitorVisible() {
-    const p = q('comm-whatsapp');
-    return p && p.style.display !== 'none' && document.visibilityState === 'visible' && !_monHidden;
+    const p = q('comm-whatsapp'), sub = q('wa-sub-chats');
+    return p && p.style.display !== 'none' && document.visibilityState === 'visible' && !_monHidden
+      && (!sub || sub.style.display !== 'none');   // paused on the Automation sub-tab
   }
   function startMonitorPoll() {
     if (_monTimer) return;
@@ -208,13 +211,16 @@
     const el = q('wa-chat-filter'); if (!el) return;
     _chatFilter = el.value; loadChats(true);
   }
-  function toggleChats() {
+  // Chats card behaves like Groups: collapsed by default on every tab entry, staying
+  // closed across page/tab moves (not persisted → can't reopen itself).
+  let _chatsHidden = true;
+  function applyChatsVis() {
     const list = q('wa-chats'), more = q('wa-chats-more'), btn = q('wa-chats-toggle'); if (!list) return;
-    const hidden = list.style.display === 'none';
-    list.style.display = hidden ? '' : 'none';
-    if (more) more.style.display = hidden ? '' : 'none';
-    if (btn) btn.textContent = hidden ? '▾' : '▸';
+    list.style.display = _chatsHidden ? 'none' : '';
+    if (more) more.style.display = _chatsHidden ? 'none' : '';
+    if (btn) btn.textContent = _chatsHidden ? '▸' : '▾';
   }
+  function toggleChats() { _chatsHidden = !_chatsHidden; applyChatsVis(); }
   function showChatModal(on) { const m = q('wa-chat-modal'); if (m) m.style.display = on ? 'flex' : 'none'; }
   function closeChat() { showChatModal(false); _activeChat = null; }
 
@@ -383,6 +389,146 @@
     }
   }
 
+  // ── Automation (rules in dashboard_settings.whatsapp.rules) — mirror of Email ──
+  let _rules = [], _warSenders = [], _remindersEnabled = true;
+  const warCsv = (s) => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+  const csv = (a) => (a || []).join(', ');
+  function warStatus(t) { const s = q('war-status'); if (s) s.textContent = t; }
+
+  async function warLoad() {
+    try { const r = await (await fetch('/api/dashboard-settings/whatsapp.rules')).json();
+      _rules = Array.isArray(r.value) ? r.value : []; } catch (e) { _rules = []; }
+    try { const s2 = await (await fetch(WA_API + '/automation/senders')).json(); _warSenders = s2.senders || []; } catch (e) { _warSenders = []; }
+    try { const rr = await (await fetch('/api/dashboard-settings/reminders')).json(); _remindersEnabled = !(rr && rr.value && rr.value.enabled === false); } catch (e) { _remindersEnabled = true; }
+    warStatus(''); warRender(); warLoadLog();
+  }
+  // From-picker: one entry per PERSON, A→Z, from /automation/senders. The option's
+  // LABEL is the name you know them by; the VALUE is their identity id — because a
+  // display name is not what arrives in a message (WhatsApp sends an anonymized @lid
+  // that carries only the sender's profile name, never your address-book name), so a
+  // name-valued pick silently never matched. The id always does, and the agent treats
+  // a person's @lid and phone number as the same identity.
+  function warFromPicker(i, scope) {
+    const opts = _warSenders
+      .filter(c => scope === 'all' ? true : (scope === 'groups' ? c.is_group : !c.is_group))
+      .map(c => '<option value="' + esc(c.id) + '">' + esc(c.name) + (c.is_group ? ' 👥' : '') + '</option>').join('');
+    return '<select title="pick who this rule listens to" onchange="warPickFrom(' + i + ',this.value);this.selectedIndex=0" style="max-width:190px;">' +
+      '<option value="">➕ pick…</option>' + opts + '</select>';
+  }
+  // The From field holds an ID (the only thing that reliably matches — a saved contact
+  // name never travels with a WhatsApp message), so WHO the rule listens to is shown
+  // right under it, big and green. An unknown id falls back to its raw value so a stale
+  // entry is never invisible.
+  function warFromHint(m) {
+    const froms = (m.from || []).filter(Boolean);
+    if (!froms.length) return '';
+    const label = froms.map(f => {
+      const hit = _warSenders.find(s2 => s2.id === f || (s2.ids || []).includes(f));
+      return hit ? esc(hit.name) : esc(f);
+    }).join(', ');
+    return '<div class="war-row" style="margin-top:3px;"><span class="war-lbl"></span>' +
+      '<span style="font-size:15px;font-weight:700;color:#166534;margin-left:16px;">' + label + '</span></div>';
+  }
+  function warPickFrom(i, val) {
+    if (!val || !_rules[i]) return;
+    const from = _rules[i].match.from || (_rules[i].match.from = []);
+    if (!from.includes(val)) from.push(val);
+    warStatus('● unsaved'); warRender();
+  }
+  function warNew() {
+    _rules.push({ id: 'wrule_' + Date.now(), name: 'New rule', active: true, mode: 'dryrun',
+      match: { from: [], contains: [], scope: 'people' }, reply: null, popup: { text: '' } });
+    warStatus('● unsaved'); warRender();
+  }
+  function warEdit(i, fn) { if (_rules[i]) { fn(_rules[i]); warStatus('● unsaved'); } }
+  function warDel(i) { if (!confirm('Delete this rule?')) return; _rules.splice(i, 1); warStatus('● unsaved'); warRender(); }
+
+  function warRender() {
+    const host = q('war-rules'); if (!host) return;
+    if (!_rules.length) { host.innerHTML = '<div class="wa-hint">No rules yet. Click "+ New rule".</div>'; return; }
+    host.innerHTML = _rules.map((r, i) => {
+      const m = r.match || {}, rep = r.reply || {}, pop = r.popup;
+      const W = 'width:calc(50% - 74px);';   // every field input reaches the card middle
+      return '<div class="war-rule ' + (r.mode === 'live' ? 'live' : 'dryrun') + '">' +
+        '<div class="war-row">' +
+          '<span class="war-lbl">Name</span><input type="text" value="' + esc(r.name || '') + '" placeholder="Rule name" style="width:calc(50% - 74px);min-width:150px;" onchange="warEdit(' + i + ',x=>x.name=this.value)">' +
+          '<label style="font-size:0.82rem;"><input type="checkbox" ' + (r.active !== false ? 'checked' : '') + ' onchange="warEdit(' + i + ',x=>x.active=this.checked)"> active</label>' +
+          '<select onchange="warEdit(' + i + ',x=>x.mode=this.value);waRerenderRules()">' +
+            '<option value="dryrun"' + (r.mode !== 'live' ? ' selected' : '') + '>Test (dry-run)</option>' +
+            '<option value="live"' + (r.mode === 'live' ? ' selected' : '') + '>LIVE</option>' +
+          '</select>' +
+          '<button class="btn btn-secondary btn-sm" onclick="warTest(' + i + ')">Test</button>' +
+          '<button class="wa-del" title="Delete rule" onclick="warDel(' + i + ')">🗑</button>' +
+        '</div>' +
+        '<div class="war-row"><span class="war-lbl">From</span><input type="text" value="' + esc(csv(m.from)) + '" placeholder="anyone (or pick →)" style="' + W + '" onchange="warEdit(' + i + ',x=>x.match.from=waCsv(this.value))">' + warFromPicker(i, m.scope || 'people') +
+          '<select onchange="warEdit(' + i + ',x=>x.match.scope=this.value);waRerenderRules()">' +
+            ['all', 'people', 'groups'].map(s => '<option value="' + s + '"' + ((m.scope || 'people') === s ? ' selected' : '') + '>' + s + '</option>').join('') +
+          '</select></div>' + warFromHint(m) +
+        '<div class="war-row"><span class="war-lbl">Contains</span><input type="text" value="' + esc(csv(m.contains)) + '" placeholder="keywords" style="' + W + '" onchange="warEdit(' + i + ',x=>x.match.contains=waCsv(this.value))"></div>' +
+        '<div class="war-row"><span class="war-lbl">↩ Reply</span><input type="text" value="' + esc(rep.text || '') + '" placeholder="auto-reply text (blank = no reply)" style="' + W + '" onchange="warEdit(' + i + ',x=>x.reply=this.value.trim()?{text:this.value}:null)"><span class="war-warn">⚠ auto-sends a real WhatsApp reply from your number</span></div>' +
+        '<div class="war-row"><span class="war-lbl">🔔 Popup</span><input type="text" value="' + esc(pop ? (pop.text || '') : '') + '" placeholder="optional line shown above the message (blank = message only)" style="' + W + '"' + (pop ? '' : ' disabled') + ' onchange="warEdit(' + i + ',x=>{if(!x.popup)x.popup={};x.popup.text=this.value})">' +
+          '<label style="font-size:0.82rem;white-space:nowrap;"><input type="checkbox" ' + (pop ? 'checked' : '') + ' onchange="warEdit(' + i + ',x=>x.popup=this.checked?{text:(x.popup&&x.popup.text)||String()}:null);waRerenderRules()"> show a popup</label>' +
+          (_remindersEnabled
+            ? '<span style="font-size:0.78rem;font-weight:600;color:#166534;white-space:nowrap;margin-left:18px;">Show Popup enabled in Reminders</span>'
+            : '<span style="font-size:0.78rem;font-weight:600;color:#c0392b;white-space:nowrap;margin-left:18px;">Show Popup disabled in Reminders</span>') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  async function warSave() {
+    try {
+      await fetch('/api/dashboard-settings/whatsapp.rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: _rules }) });
+      warStatus('✓ saved');
+    } catch (e) { warStatus('save failed: ' + e.message); }
+  }
+  async function warTest(i) {
+    const rule = _rules[i]; if (!rule) return; warStatus('testing…');
+    try {
+      const r = await (await fetch(WA_API + '/automation/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rule }) })).json();
+      if (!r.ok) { warStatus('test error'); return; }
+      const eg = r.matches[0] ? ' — e.g. ' + (r.matches[0].from_name || r.matches[0].chat_jid) : '';
+      warStatus('Test: ' + r.matches.length + ' of last ' + r.scanned + ' messages match' + eg);
+      // If the rule has a popup, show a live preview of it in the reminders card (top-right).
+      if (rule.popup) {
+        await fetch(WA_API + '/automation/test-popup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rule }) });
+        warStatus('Test: ' + r.matches.length + ' match' + (r.matches.length === 1 ? '' : 'es') + ' · 🔔 popup preview shown top-right (Clear it there)');
+      }
+    } catch (e) { warStatus('test error: ' + e.message); }
+  }
+  async function warRunNow() {
+    if (!confirm('Run rules against recent messages?\n\nThis is a PREVIEW — it logs what rules WOULD do and sends NOTHING (no replies, no popups).')) return;
+    warStatus('running…');
+    try {
+      const r = await (await fetch(WA_API + '/automation/run-now', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 200 }) })).json();
+      warStatus('Preview: scanned ' + r.scanned + ', logged ' + r.logged); warLoadLog();
+    } catch (e) { warStatus('run error: ' + e.message); }
+  }
+  async function warLoadLog() {
+    const host = q('war-log'); if (!host) return;
+    try {
+      const r = await (await fetch(WA_API + '/automation/log?limit=100')).json();
+      const rows = r.log || [];
+      if (!rows.length) { host.innerHTML = '<div class="wa-hint">No activity yet.</div>'; return; }
+      host.innerHTML = '<table class="war-table"><thead><tr><th>When</th><th>Rule</th><th>From</th><th>Message</th><th>Do</th><th>Mode</th><th>Note</th></tr></thead><tbody>' +
+        rows.map(x => '<tr><td>' + esc(fmtTime(x.ts)) + '</td><td>' + esc(x.rule_name || '') + '</td><td>' + esc(x.from_name || x.chat_jid || '') + '</td><td>' + esc((x.matched_text || '').slice(0, 50)) + '</td><td>' + esc(x.action || '') + '</td><td><span class="war-pill ' + (x.mode === 'live' ? 'live' : 'dryrun') + '">' + esc(x.mode || '') + '</span></td><td>' + esc(x.note || '') + '</td></tr>').join('') +
+        '</tbody></table>';
+    } catch (e) { host.innerHTML = '<div class="wa-hint">Log unavailable.</div>'; }
+  }
+  function subTab(name, btn) {
+    const chats = q('wa-sub-chats'), auto = q('wa-sub-automation');
+    if (chats) chats.style.display = name === 'chats' ? '' : 'none';
+    if (auto) auto.style.display = name === 'automation' ? '' : 'none';
+    document.querySelectorAll('.wa-subtab').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    if (name === 'automation') warLoad();
+  }
+
+  window.waSubTab = subTab;
+  window.warNew = warNew; window.warEdit = warEdit; window.warDel = warDel;
+  window.warSave = warSave; window.warDiscard = warLoad; window.warTest = warTest;
+  window.warRunNow = warRunNow; window.waCsv = warCsv; window.waRerenderRules = warRender;
+  window.warPickFrom = warPickFrom;
   window.waOnShow = onShow;
   window.waRefresh = refresh;
   window.waOpenGroup = openGroup;

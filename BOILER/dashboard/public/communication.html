@@ -37,6 +37,20 @@
     .wa-mtext { min-width:0; color:#0f172a; font-size:0.95rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; margin-left:70px; }
     .wa-mchat { font-weight:600; color:#14532d; font-size:0.84rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-left:30px; }
     .wa-msender { color:#0891b2; font-weight:600; }
+    .wa-subtab { padding:6px 14px; border:1px solid #d0cbc4; border-radius:6px; background:#f0ebe6; color:#555; font-size:0.85rem; cursor:pointer; }
+    .wa-subtab.active { background:#7a9ab8; color:#fff; border-color:#7a9ab8; }
+    .war-rule { border:1px solid #e5e7eb; border-radius:8px; padding:12px; margin-bottom:10px; }
+    .war-rule.dryrun { border-left:4px solid #f0b429; }
+    .war-rule.live { border-left:4px solid #c0392b; }
+    .war-rule input[type=text], .war-rule select { padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; font-family:inherit; }
+    .war-row { display:flex; gap:5px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+    .war-lbl { font-size:0.78rem; color:#64748b; min-width:64px; }
+    .war-warn { font-size:0.9rem; color:#c0392b; font-weight:600; }
+    .war-table { width:100%; border-collapse:collapse; font-size:0.8rem; }
+    .war-table th, .war-table td { text-align:left; padding:5px 8px; border-bottom:1px solid #eef2f7; vertical-align:top; }
+    .war-table th { color:#64748b; font-weight:600; }
+    .war-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:0.72rem; }
+    .war-pill.dryrun { background:#fef3c7; color:#92640a; } .war-pill.live { background:#dcfce7; color:#166534; }
     #wa-chats-card { max-height: calc(100vh - 320px); overflow-y:auto; }
     .wa-crow { padding:8px 10px; border-bottom:1px solid #eef2f7; cursor:pointer; display:flex; align-items:center; gap:9px; }
     .wa-crow:hover { background:#f0fdf4; }
@@ -158,7 +172,7 @@
 
   <div id="comm-email" class="comm-panel">
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="emShowTab('inbox', this)" style="background:#3a3a3a;color:#fff;">📬 Inbox</button>
+    <button class="tab-btn active" onclick="emShowTab('inbox', this)">📬 Inbox</button>
     <button class="tab-btn" onclick="emShowTab('automation', this)">⚙ Automation</button>
   </div>
 
@@ -237,6 +251,11 @@
       <span id="wa-status" style="font-size:0.85rem; font-weight:600; color:#166534;">WhatsApp: connecting…</span>
       <button class="btn btn-secondary btn-sm" onclick="waRefresh()">↺ Refresh</button>
     </div>
+    <div style="display:flex; gap:6px; margin-bottom:12px; border-bottom:1px solid #e5e7eb; padding-bottom:8px;">
+      <button class="wa-subtab active" id="wa-subtab-chats" onclick="waSubTab('chats', this)">💬 Chats</button>
+      <button class="wa-subtab" id="wa-subtab-automation" onclick="waSubTab('automation', this)">⚙ Automation</button>
+    </div>
+    <div id="wa-sub-chats">
     <div class="card" id="wa-monitor" style="margin-bottom:14px;">
       <h3 style="margin:0 0 8px; display:flex; align-items:center; gap:8px;">
         <button id="wa-monitor-toggle" onclick="waToggleMonitor()" title="Hide / show the monitor"
@@ -250,7 +269,7 @@
       <div class="card" id="wa-chats-card">
         <h3 style="margin:0 0 8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <button id="wa-chats-toggle" onclick="waToggleChats()" title="Hide / show the list"
-                  style="background:none;border:none;cursor:pointer;font-size:1.5rem;line-height:1;padding:0;color:#334155;">▾</button>
+                  style="background:none;border:none;cursor:pointer;font-size:1.5rem;line-height:1;padding:0;color:#334155;">▸</button>
           Chats <span id="wa-chats-count" style="font-weight:400;color:#8a93a6;font-size:0.8rem;"></span>
           <select id="wa-chat-filter" onchange="waChatFilter()" style="margin-left:auto; padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.82rem; font-family:inherit;">
             <option value="all">All</option>
@@ -262,8 +281,8 @@
           <input id="wa-chat-search" type="text" placeholder="Search by name / number…"
                  oninput="waChatSearch()" style="padding:5px 9px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; min-width:180px;">
         </h3>
-        <div id="wa-chats"><div class="wa-hint">Loading…</div></div>
-        <div id="wa-chats-more" style="text-align:center; padding:8px 0 2px;"></div>
+        <div id="wa-chats" style="display:none;"><div class="wa-hint">Loading…</div></div>
+        <div id="wa-chats-more" style="display:none; text-align:center; padding:8px 0 2px;"></div>
       </div>
       <div class="card" id="wa-groups-card">
         <h3 style="margin:0 0 8px; display:flex; align-items:center; gap:8px;">
@@ -272,6 +291,22 @@
           Groups <span id="wa-groups-count" style="font-weight:400;color:#8a93a6;font-size:0.8rem;"></span>
         </h3>
         <div id="wa-groups" style="display:none;"><div class="wa-hint">Loading…</div></div>
+      </div>
+    </div>
+    </div><!-- /wa-sub-chats -->
+
+    <div id="wa-sub-automation" style="display:none;">
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="warNew()">+ New rule</button>
+        <button class="btn btn-primary btn-sm" onclick="warSave()">💾 Save</button>
+        <button class="btn btn-secondary btn-sm" onclick="warDiscard()">Discard</button>
+        <button class="btn btn-secondary btn-sm" onclick="warRunNow()" title="Preview rules against recent messages — sends nothing">▶ Run now (preview)</button>
+        <span id="war-status" style="font-size:0.82rem;color:#64748b;"></span>
+      </div>
+      <div id="war-rules"><div class="wa-hint">Loading rules…</div></div>
+      <div class="card" style="margin-top:14px;">
+        <h3 style="margin:0 0 8px;">Activity log <span style="font-weight:400;color:#8a93a6;font-size:0.8rem;">— what rules did / would do</span></h3>
+        <div id="war-log" style="max-height:320px; overflow-y:auto;"><div class="wa-hint">—</div></div>
       </div>
     </div>
   </div>
@@ -385,8 +420,9 @@
 
 <script src="js/alerts-monitor.js?v=21"></script>
 <script src="js/email.js?v=9"></script>
-<script src="js/whatsapp.js?v=13"></script>
+<script src="js/whatsapp.js?v=38"></script>
 <script src="js/notify-toast.js?v=12"></script>
+<script src="js/reminders-badge.js?v=15"></script>
 <script>
   // Top-level channel switcher (Email / WhatsApp). Its own class so email.js's
   // emShowTab (which clears every .tab-btn) can't touch these buttons.
