@@ -303,6 +303,21 @@ A photo used to render as the text `📷 photo` and could not be opened: `upsert
 - Verified live: 3 photos ingested with `media_proto` (1020-1202 B) + caption "טסט"; `/thumb` = 460 B
   JPEG; `/full` = 97,770 B JPEG, byte-identical on the cached second call.
 
+### Display hygiene (2026-09-02 audit)
+Two things a contract-level check could not catch — both were visible on screen:
+- **Chat names via the OTHER identity.** A DM delivered as an anonymized `@lid` has no contact row of
+  its own, so the name chain fell through to the SENDER'S OWN profile name — which can be junk (live:
+  Alon Muroch's chat displayed as **"."**, because that is literally his profile name). `bookNames()`
+  now resolves the lid↔phone counterpart from the LOCAL key store and prefers **your** address-book
+  name; applied in `/recent` and `/chats`. After it: 0 of 200 chats unnamed (22 legitimately show a
+  phone number — people not in your contacts).
+- **Protocol records were rendered as messages.** A thread showed literal rows reading
+  `(messageContextInfo)`, `(senderKeyDistributionMessage)`, `(protocolMessage)` — 18 in one group
+  thread of 200. `renderMessages` now drops those (and reactions it cannot render, i.e. any stored
+  before 2026-09-02) BEFORE assigning `_msgs`, so the reply/media indices stay aligned.
+⚠ Lesson for future audits: "endpoint 200 + flag present" proves nothing about what the user sees.
+Render the real payload through the real function and read the output.
+
 ## Pending phases
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine
   `protocol=='whatsapp'` branch → self-chat notify-anywhere); incoming automation `RULES/rules/whatsapp_*.py`.

@@ -352,6 +352,12 @@
     if (!msgs.length) {
       body.innerHTML = '<div class="wa-hint">No messages cached yet — you can still send below.</div>'; return;
     }
+    // WhatsApp mixes protocol records into a chat (key rotation, context info, edits/
+    // deletes). They are not messages — before this they rendered as literal rows saying
+    // "(messageContextInfo)" / "(senderKeyDistributionMessage)". Drop them, and drop a
+    // reaction we can't render (only reactions stored since 2026-09-02 carry the emoji).
+    const NOISE = /^(messageContextInfo|senderKeyDistributionMessage|protocolMessage|secretEncryptedMessage)$/;
+    msgs = msgs.filter(m => m.body || m.has_media || !(NOISE.test(m.type || '') || m.type === 'reactionMessage'));
     _msgs = msgs;                       // the reply affordance targets this array BY INDEX
     body.innerHTML = '<div class="wa-brow">' + msgs.map((m, i) => {
       const out = !!m.from_me;

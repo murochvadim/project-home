@@ -207,6 +207,37 @@ async function identityNames(ids, chatIds) {
   } catch (e) { log.warn('identityNames: ' + e.message); }
   return [...names];
 }
+// Your address-book name for a chat, found through the sender's OTHER identity.
+// WhatsApp delivers many chats as an anonymized @lid that has no contact row, so the
+// name chain falls through to the sender's own profile name — which can be junk (a
+// live case: Alon Muroch's chat showed as "." because that is his profile name).
+// identityIds() gives us the phone counterpart from the LOCAL key store, and the
+// contact row hanging off THAT jid is the name you actually recognise.
+async function bookNames(chatJids) {
+  const out = {};
+  const alt = {};
+  for (const jid of new Set(chatJids.filter(Boolean))) {
+    const ids = await identityIds(jid);
+    const others = ids.filter(x => x !== _bare(jid));
+    if (others.length) alt[jid] = others;
+  }
+  const lookup = [];
+  for (const list of Object.values(alt)) for (const id of list) lookup.push(id + '@s.whatsapp.net', id + '@lid');
+  if (!lookup.length) return out;
+  try {
+    const r = await q(`SELECT jid, COALESCE(NULLIF(name,''), NULLIF(notify,'')) AS nm
+                       FROM whatsapp_contacts WHERE jid = ANY($1) AND COALESCE(name, notify) IS NOT NULL`, [lookup]);
+    const byId = {}; r.rows.forEach(x => { byId[_bare(x.jid)] = x.nm; });
+    const c = await q(`SELECT jid, COALESCE(NULLIF(custom_name,''), NULLIF(name,'')) AS nm
+                       FROM whatsapp_chats WHERE jid = ANY($1) AND COALESCE(custom_name, name) IS NOT NULL`, [lookup]);
+    c.rows.forEach(x => { if (!byId[_bare(x.jid)]) byId[_bare(x.jid)] = x.nm; });
+    for (const [jid, ids] of Object.entries(alt)) {
+      const hit = ids.map(i => byId[i]).find(Boolean);
+      if (hit) out[jid] = hit;
+    }
+  } catch (e) { log.warn('bookNames: ' + e.message); }
+  return out;
+}
 // One shared context builder for all three evaluation paths (live inbound,
 // run-now preview, rule test) so they can never drift apart.
 async function buildCtx(o) {
@@ -498,7 +529,14 @@ app.get('/chats', async (req, res) => {
     ORDER BY last_ts DESC NULLS LAST
     LIMIT $3 OFFSET $4`, [qs, like, lim, off]);
   const total = r.rows[0] ? Number(r.rows[0].total) : 0;
-  ok(res, { chats: r.rows.map(({ total, ...c }) => c), total, offset: off, limit: lim });
+  const chats = r.rows.map(({ total, ...c }) => c);
+  // Same identity-based naming as the feed: an @lid chat with no contact row of its own
+  // still has your address-book name hanging off its phone counterpart.
+  try {
+    const book = await bookNames(chats.filter(c => !c.is_group).map(c => c.jid));
+    chats.forEach(c => { if (book[c.jid]) { c.name = book[c.jid]; c.resolved = true; } });
+  } catch (e) { log.warn('chats names: ' + e.message); }
+  ok(res, { chats, total, offset: off, limit: lim });
 });
 app.get('/groups', async (req, res) => {
   const r = await q(`SELECT c.jid, c.name, c.owner_jid, c.participant_count, c.last_ts, c.unread,
@@ -730,6 +768,11 @@ app.get('/recent', async (req, res) => {
       return rest;
     } catch (e) { return rest; }
   });
+  // Prefer YOUR name for the chat over the sender's profile name (see bookNames).
+  try {
+    const book = await bookNames(rows.filter(x => !x.is_group).map(x => x.chat_jid));
+    rows.forEach(x => { if (book[x.chat_jid]) x.chat_name = book[x.chat_jid]; });
+  } catch (e) { log.warn('recent names: ' + e.message); }
   // Resolve, in ONE query, the text each reaction answers — a bare "👍" says nothing.
   const targets = [...new Set(rows.filter(x => x.target_id).map(x => x.target_id))];
   if (targets.length) {
