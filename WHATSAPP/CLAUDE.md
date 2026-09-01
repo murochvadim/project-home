@@ -164,6 +164,19 @@ zero ban risk; every write goes through a guard.**
   as stray attributes, so every NAMED row did nothing (a nameless chat, `JSON.stringify(null)` →
   unquoted, was the only one that worked). Rows now carry only their **index** into a `_recent` array —
   the pattern the Chats list already used (`waOpenChat(i)`). **Never put data in an HTML attribute**;
+- **↩ Reply to ONE message (quoted reply, 2026-09-01).** A send used to be a plain new message in the
+  chat. Now clicking a monitor row **arms a reply to THAT message** (and every bubble in a thread has a
+  faint `↩`): a green bar above the input shows `↩ <who>: <preview>` with `✕` to cancel, and the send
+  attaches it so WhatsApp renders the quoted bubble. Wiring: `/recent` now also returns **`wa_id`** (it
+  did not — without it a monitor click could not identify the message and the reply silently armed
+  nothing); `POST /send` takes **`quoted_id`** and resolves it in **`quotedStub()`** server-side —
+  `SELECT … WHERE wa_id=$1 AND chat_jid=$2`, so the browser never supplies quoted content and a quote
+  can't cross chats; `guardedSend(jid, text, force, quoted)` passes it as Baileys'
+  `sendMessage(jid, {text}, {quoted})` (`MiscMessageGenerationOptions.quoted`, Types/Message.d.ts:246).
+  An unresolvable `quoted_id` is refused **before** `guardedSend` (`quoted_not_found`) so a bad quote can
+  never turn into a send. The reply clears after a successful send. **Ban-risk unchanged** — same single
+  guarded send, no extra traffic. UI: `#wa-reply-bar` + `.wa-brep` in `communication.html`,
+  `_replyTo`/`replyBarRender`/`replyTo(i)`/`cancelReply` in `js/whatsapp.js?v=43`.
   if you must, escape it like `js/medical.js:420` (`JSON.stringify(x).replace(/"/g,'&quot;')`). **Self-gating poll** (`setInterval` 5 s, started once on
   `onShow`) — no-ops unless `#comm-whatsapp` is the visible tab AND `document.visibilityState==='visible'`, so
   it stops when you leave the tab / background the window (no wasted traffic). Read-only.

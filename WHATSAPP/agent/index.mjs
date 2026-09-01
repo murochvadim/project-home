@@ -297,7 +297,7 @@ function publishInbound(m) {
 }
 
 // ── send-guard ───────────────────────────────────────────────────────────────
-async function guardedSend(jid, text, force) {
+async function guardedSend(jid, text, force, quoted) {
   const now = Date.now();
   if ((now - lastSendTs) / 1000 < settings.min_gap_sec) { const e = new Error('rate'); e.reason = 'rate'; throw e; }
   // Count ONLY messages this agent actually sent (status='sent'); NOT the user's
@@ -311,7 +311,9 @@ async function guardedSend(jid, text, force) {
     if (!known) { const e = new Error('not_contact'); e.reason = 'not_contact'; throw e; }
   }
   if (!sock || state.connection !== 'open') { const e = new Error('not_connected'); e.reason = 'not_connected'; throw e; }
-  const sent = await sock.sendMessage(jid, { text: String(text) });
+  // `quoted` (optional) makes this a REPLY to one specific message — WhatsApp shows the
+  // quoted bubble above it. Baileys takes it as the 3rd arg (MiscMessageGenerationOptions).
+  const sent = await sock.sendMessage(jid, { text: String(text) }, quoted ? { quoted } : undefined);
   lastSendTs = now;
   // log as outbound
   await q(`INSERT INTO whatsapp_messages (wa_id, chat_jid, sender_jid, sender_name, from_me, direction, type, body, ts, status)
@@ -583,7 +585,7 @@ app.get('/messages', async (req, res) => {
 app.get('/recent', async (req, res) => {
   const lim = Math.min(parseInt(req.query.limit) || 15, 50);
   const r = await q(`
-    SELECT m.chat_jid, m.sender_name, m.body, m.type, m.ts, c.is_group,
+    SELECT m.wa_id, m.chat_jid, m.sender_name, m.body, m.type, m.ts, c.is_group,
       COALESCE(NULLIF(c.custom_name,''), NULLIF(c.name,''), NULLIF(ct.name,''), NULLIF(ct.notify,''),
         NULLIF(m.sender_name,''),
         CASE WHEN m.chat_jid LIKE '%@s.whatsapp.net' THEN split_part(m.chat_jid,'@',1) END) AS chat_name
@@ -661,9 +663,22 @@ app.post('/history', async (req, res) => {
   } catch (e) { bad(res, e.message, 500); }
 });
 // writes (P3 — behind the guard; wired now so the API is complete)
+// Build the minimal WAMessage Baileys needs to quote a message we already cached.
+// Resolved HERE from wa_id (never trusted from the browser) and only within the same chat.
+async function quotedStub(jid, waId) {
+  if (!waId) return null;
+  const r = await q(`SELECT wa_id, chat_jid, sender_jid, from_me, body FROM whatsapp_messages
+                     WHERE wa_id=$1 AND chat_jid=$2 LIMIT 1`, [waId, jid]);
+  const m = r.rows[0]; if (!m) return null;
+  const key = { remoteJid: m.chat_jid, id: m.wa_id, fromMe: !!m.from_me };
+  if (String(m.chat_jid).endsWith('@g.us') && m.sender_jid) key.participant = m.sender_jid;
+  return { key, message: { conversation: m.body || '' } };
+}
 app.post('/send', async (req, res) => {
-  try { const { jid, text, force } = req.body || {}; if (!jid || !text) return bad(res, 'jid_and_text');
-    await guardedSend(jid, text, !!force); ok(res, {}); }
+  try { const { jid, text, force, quoted_id } = req.body || {}; if (!jid || !text) return bad(res, 'jid_and_text');
+    const quoted = await quotedStub(jid, quoted_id);
+    if (quoted_id && !quoted) return bad(res, 'quoted_not_found');
+    await guardedSend(jid, text, !!force, quoted); ok(res, { quoted: !!quoted }); }
   catch (e) { bad(res, e.reason || e.message, e.reason === 'cap' || e.reason === 'rate' ? 429 : 400); }
 });
 app.post('/leave', async (req, res) => {

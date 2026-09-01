@@ -116,6 +116,7 @@
 
   // ── Live monitor: latest INCOMING messages, auto-refresh while tab visible ──
   let _monTimer = null, _monHidden = false, _recent = [];   // rows currently shown; clicked by index
+  let _msgs = [], _replyTo = null;   // open thread + the message the next send REPLIES to
   async function loadRecent() {
     const host = q('wa-monitor-feed'); if (!host) return;
     try {
@@ -228,15 +229,39 @@
   function closeChat() { showChatModal(false); _activeChat = null; }
 
   function openChat(idx) { openChatObj(_chats[idx]); }
+  // Clicking a monitor row opens the chat AND arms a reply to THAT message, so the
+  // answer is attached to what you clicked (WhatsApp shows it quoted above your text).
   function openRecent(i) {
     const m = _recent[i]; if (!m) return;
     openChatObj({ jid: m.chat_jid, name: m.chat_name || null,
-                  is_group: !!m.is_group, resolved: !!m.chat_name });
+                  is_group: !!m.is_group, resolved: !!m.chat_name },
+                { wa_id: m.wa_id, body: m.body, type: m.type, who: m.sender_name || m.chat_name });
   }
+  // ── Reply-to (quoted) ──────────────────────────────────────────────────────
+  function replyBarRender() {
+    const bar = q('wa-reply-bar'); if (!bar) return;
+    if (!_replyTo) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    const prev = (_replyTo.body || '').slice(0, 70) || '(media)';
+    bar.style.display = 'flex';
+    bar.innerHTML = '<span style="color:#25D366;font-weight:700;">↩</span>' +
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+        (_replyTo.who ? '<b>' + esc(_replyTo.who) + ':</b> ' : '') + esc(prev) + '</span>' +
+      '<span onclick="waCancelReply()" title="Cancel reply" style="cursor:pointer;color:#64748b;padding:0 4px;">✕</span>';
+  }
+  function replyTo(i) {
+    const m = _msgs[i]; if (!m) return;
+    _replyTo = { wa_id: m.wa_id, body: m.body, type: m.type,
+                 who: m.from_me ? 'You' : (m.sender_name || (_activeChat && _activeChat.name) || '') };
+    replyBarRender();
+    const inp = q('wa-chat-input'); if (inp) inp.focus();
+  }
+  function cancelReply() { _replyTo = null; replyBarRender(); }
 
-  async function openChatObj(c) {
+  async function openChatObj(c, replyTo) {
     if (!c) return;
     _activeChat = c;
+    _replyTo = replyTo && replyTo.wa_id ? replyTo : null;   // armed when opened from a monitor row
+    replyBarRender();
     showChatModal(true);
     const title = q('wa-chat-title'); if (title) title.textContent = c.name || '(unknown)';
     const del = q('wa-chat-del'); if (del) del.textContent = c.is_group ? 'Leave' : 'Delete';
@@ -265,12 +290,14 @@
     if (!msgs.length) {
       body.innerHTML = '<div class="wa-hint">No messages cached yet — you can still send below.</div>'; return;
     }
-    body.innerHTML = '<div class="wa-brow">' + msgs.map(m => {
+    _msgs = msgs;                       // the reply affordance targets this array BY INDEX
+    body.innerHTML = '<div class="wa-brow">' + msgs.map((m, i) => {
       const out = !!m.from_me;
       const sender = (!out && c.is_group && m.sender_name) ? '<div class="wa-bsender">' + esc(m.sender_name) + '</div>' : '';
       const del = out ? '<span class="wa-bdel" title="Delete for everyone" onclick=\'waDelMsg(' +
         JSON.stringify({ id: m.wa_id, jid: c.jid, fromMe: true, part: m.sender_jid || null }).replace(/'/g, '&#39;') + ')\'>🗑</span>' : '';
-      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '">' + sender + msgBody(m) + del +
+      const rep = m.wa_id ? '<span class="wa-brep" title="Reply to this message" onclick="waReplyTo(' + i + ')">↩</span>' : '';
+      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '">' + sender + msgBody(m) + rep + del +
         '<div class="wa-btime">' + fmtTime(m.ts) + '</div></div>';
     }).join('') + '</div>';
     body.scrollTop = body.scrollHeight;
@@ -282,13 +309,16 @@
     const text = inp.value.trim(); if (!text) return;
     if (sm) { sm.style.color = '#64748b'; sm.textContent = 'Sending…'; }
     try {
-      const r = await (await fetch(WA_API + '/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: c.jid, text }) })).json();
+      const payload = { jid: c.jid, text };
+      if (_replyTo && _replyTo.wa_id) payload.quoted_id = _replyTo.wa_id;   // reply to THAT message
+      const r = await (await fetch(WA_API + '/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })).json();
       if (!r.ok) {
         const why = { rate: 'Too fast — wait a few seconds (safety limit).', cap: 'Hourly/daily send limit reached.', not_contact: 'Not in your contacts (blocked by contact-only).', not_connected: 'WhatsApp not connected.' }[r.reason] || ('Failed: ' + (r.reason || 'error'));
         if (sm) { sm.style.color = '#c0392b'; sm.textContent = why; }
         return;
       }
       inp.value = '';
+      cancelReply();                    // the quote applies to that one message only
       if (sm) sm.textContent = '';
       // reload the thread to show the sent message
       const mr = await (await fetch(WA_API + '/messages?jid=' + encodeURIComponent(c.jid) + '&limit=200')).json();
@@ -564,6 +594,7 @@
   window.waToggleMonitor = toggleMonitor;
   window.waCloseChat = closeChat;
   window.waSendChat = sendChat;
+  window.waReplyTo = replyTo; window.waCancelReply = cancelReply;
   window.waDelMsg = delMsg;
   window.waRenameChat = renameChat;
   window.waDeleteChat = deleteChat;
