@@ -262,7 +262,31 @@ and the printer feeds **full A4 lengths only** (a 5-line list still ejects a who
 Later candidates: the daily journal summary, reminders, a medical document for an appointment.
 
 **Open before building:** which machine hosts it (the mini PC, next to the two camera extenders, is
-the natural choice), and USB vs Bluetooth.
+the natural choice), and USB vs Bluetooth. Also **which variant it is** — the M08F ships as
+**A4** (210x297) or **Letter** (216x279); measure a sheet. Buy **A4** paper (Letter is a nuisance to
+restock in Israel): Phomemo folded/Z-fold A4 packs, Amazon `B0CL4B2Q8P` (200 sheets) or `B0C4N6SV2L`
+(100). ⚠ avoid `B0CR1LLBXH` — its title says A4 but it also claims "M08F-Letter" compatibility.
+
+### ⚠ What we can and cannot control — TEST THESE FIRST (2026-09-02, unverified)
+Printing itself is fully ours: as a CUPS queue any service can print any PDF/image, and we render the
+page, so layout / Hebrew / barcodes are ours to decide. Device management is NOT:
+
+| | |
+|---|---|
+| full control | what is printed, and when |
+| partial | darkness / speed / feed — only what the binary driver exposes |
+| probably not | battery level, sleep state, paper-out (the phone app reads battery over BT; USB likely won't) |
+| no | power on/off — physical button |
+
+⚠ **It is a battery-powered PORTABLE printer, so it is not a server printer by default.** A "print the
+list" button only works if it is awake and powered, and a sleeping printer may fail **silently**.
+**Three tests to run the day it is connected — do not build the button before these pass:**
+1. On permanent USB power, does it stay reachable, or sleep so deep CUPS cannot wake it?
+2. Does an incoming job **wake** it, or does it need a physical button press first?
+3. With **no paper loaded**, does the job error visibly in CUPS, or vanish silently?
+
+The answers decide whether the Kitchen gets a plain 🧾 Print button or a button plus a
+"check the printer" warning when a job is not confirmed.
 
 ## Integrations with existing systems
 `household_users` (who eats) · `ph_*` (Personal Health calories) · Privacy Budget (spend) · Email
