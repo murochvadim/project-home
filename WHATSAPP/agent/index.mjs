@@ -316,6 +316,13 @@ async function logAuto(rule, ctx, action, mode, applied, note) {
 // Evaluate rules for one inbound message. live=false → PREVIEW ONLY (log dry-run, no
 // send/popup — used by run-now). live=true → act only when the matched rule is mode:'live'.
 async function applyAutomation(ctx, live) {
+  // ⚠ Baileys can re-emit the SAME message (reconnects, unacked delivery). Without this the
+  // rule would fire a SECOND real auto-reply for one incoming message. The retroactive sweep
+  // already dedupes this way; the live path must too. Uses idx_wa_autolog_wa (wa_id) WHERE applied.
+  if (live && ctx.wa_id) {
+    const dup = await q(`SELECT 1 FROM whatsapp_automation_log WHERE wa_id=$1 AND applied=true LIMIT 1`, [ctx.wa_id]);
+    if (dup.rowCount) { log.info('automation: already handled ' + ctx.wa_id + ' — skipping'); return false; }
+  }
   const rules = await loadRules();
   for (const rule of rules) {
     if (!rule || !rule.active) continue;
@@ -425,7 +432,15 @@ async function connect() {
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH);
   authKeys = authState.keys;            // local lid-mapping reads (see identityIds)
   const { version } = await fetchLatestBaileysVersion();
-  sock = makeWASocket({ version, auth: authState, logger: P({ level: 'silent' }), browser: ['whatsapp-agent', 'Chrome', '1.0'] });
+  // ⚠ Two Baileys defaults are BOTH `true` and both work against us on a personal number:
+  //   markOnlineOnConnect — would present the account as online 24/7 (bot-like, and WhatsApp
+  //     suppresses phone push notifications while a linked device is "online").
+  //   syncFullHistory — would ask the phone for the whole history on every fresh link; heavy
+  //     and unusual traffic. We already cache everything in Postgres and can pull older
+  //     messages on demand via /history.
+  sock = makeWASocket({ version, auth: authState, logger: P({ level: 'silent' }),
+    browser: ['whatsapp-agent', 'Chrome', '1.0'],
+    markOnlineOnConnect: false, syncFullHistory: false });
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('messaging-history.set', async ({ chats, contacts, messages }) => {
@@ -459,10 +474,26 @@ async function connect() {
     }
   });
 
+// Reconnect with EXPONENTIAL BACKOFF. A fixed 2 s retry is fine while drops are the normal
+// occasional ones (measured: ~7/day, codes 428/503), but if WhatsApp starts refusing us the
+// old code would hammer a login every 2 s indefinitely — a connect storm is exactly the
+// bot-like signal that turns a temporary block into a ban. Ramps 2s→4→8… capped at 5 min,
+// with jitter so retries never land in lockstep; reset by a successful connection.
+let _reconnectTry = 0;
+function reconnectLater(loggedOut) {
+  _reconnectTry++;
+  const base = Math.min(2000 * Math.pow(2, _reconnectTry - 1), 300000);
+  const wait = loggedOut ? Math.max(base, 60000) : base;      // no point retrying a relink fast
+  const delay = Math.round(wait * (0.85 + Math.random() * 0.3));
+  log.warn('reconnect attempt ' + _reconnectTry + ' in ' + Math.round(delay / 1000) + 's');
+  setTimeout(connect, delay);
+}
+
   sock.ev.on('connection.update', async (u) => {
     const { connection, lastDisconnect, qr } = u;
     if (qr) { state.qrDataUrl = await qrcode.toDataURL(qr).catch(() => null); state.connection = 'qr'; await saveState(); }
     if (connection === 'open') {
+      _reconnectTry = 0;                       // a good connection resets the backoff
       state.connection = 'open'; state.qrDataUrl = null;
       state.me = { jid: sock.user && sock.user.id, name: sock.user && sock.user.name };
       await saveState(); log.info('connection OPEN as ' + (state.me.jid || '?'));
@@ -473,10 +504,13 @@ async function connect() {
       if (code === DisconnectReason.loggedOut) {
         state.connection = 'logged-out'; state.me = null; await saveState();
         log.warn('LOGGED OUT — clearing auth, need relink'); try { await import('fs').then(fs => fs.promises.rm(AUTH, { recursive: true, force: true })); } catch (e) {}
-        setTimeout(connect, 2000);   // fresh QR
+        // Nothing can succeed until a human scans a QR, so back off hard instead of
+        // reconnecting every 2 s forever.
+        reconnectLater(true);
       } else {
         state.connection = 'connecting'; await saveState();
-        log.warn('connection closed (code=' + code + ') — reconnecting'); setTimeout(connect, 2000);
+        log.warn('connection closed (code=' + code + ') — reconnecting');
+        reconnectLater(false);
       }
     }
   });

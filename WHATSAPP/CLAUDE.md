@@ -392,6 +392,42 @@ with nothing sent; two back-to-back calls → second `429 rate`; apply → chip 
 chips empty; the real `reactChips()` rendered against the live payload. Not exercised: `react_hourly_cap`
 (would need 60 reactions — same code shape as the live-proven `guardAction` cap).
 
+## Ban-safety audit (full sweep, 2026-09-02)
+
+Every call that touches WhatsApp's servers was enumerated (`sock.*`) and traced to its trigger.
+
+**Clean:**
+- **No bulk lookups anywhere** — no `onWhatsApp`, no `getLIDForPN` (USync), no `profilePictureUrl`, no
+  `presenceSubscribe`/`sendPresenceUpdate`, no `readMessages`. LID→phone resolution is a LOCAL key-store
+  read. Bulk contact-checking is the classic way these numbers get banned; we never do it.
+- **Nothing on a timer talks to WhatsApp.** The only intervals are the monitor feed (reads OUR Postgres)
+  and the QR page (polls our own endpoint). `groupFetchAllParticipating` runs once 5 s after connect, on the
+  manual ↺ Refresh, and once after a leave; `groupMetadata` only when you open one group;
+  `fetchMessageHistory` has no caller at all.
+- **Every write endpoint is guarded:** `/send` → `guardedSend`, `/react` → `guardReact`,
+  `/leave` + `/delete` + `/chat/delete` → `guardAction`. `/read` never leaves the box (a DB `unread=0`;
+  we don't even send read receipts).
+- **Rule replies obey the Settings limits** — `guardedSend` with no `force`, and only when the rule is
+  `mode:'live'`. `force` (explicit `/send` or MQTT only) relaxes **contact_only alone**; rate + caps are
+  unconditional. Live inventory 2026-09-02: **1 rule, popup-only (`reply:null`) — it cannot send.**
+- `rule_engine` holds a `write mur/home/whatsapp/send` ACL (the planned P4 notify path). **Nothing publishes
+  it and 0 MQTT sends have ever occurred** — latent capability, not an active risk.
+
+**Fixed by this audit:**
+1. **Reconnect had no backoff** — a flat `setTimeout(connect, 2000)` on every close. Normal drops are rare
+   (measured: 21 in 3 days, max 2/h, codes 428/503/515) so it never bit, but a *persistent* refusal would
+   have hammered a login every 2 s forever — a connect storm is exactly what turns a temporary block into a
+   ban. Now exponential with jitter, **2→4→9→17→35→60→119→237→297 s (cap 5 min)**, reset on a successful
+   connection, and ≥ 60 s when logged out (only a human QR scan can fix that). Worst case **12 attempts/h
+   instead of 1800**; the first retry is still 2 s, so ordinary drops recover exactly as fast as before.
+2. **Live automation had no duplicate-delivery guard.** Baileys can re-emit the same message (reconnect,
+   unacked delivery) and the rule would have fired a **second real auto-reply**. `applyAutomation` now skips
+   a `wa_id` that already has an `applied` log row — the same dedupe the retroactive sweep always had.
+3. **`markOnlineOnConnect` was Baileys' default `true`** — the account was presented as **online 24/7**
+   (bot-like, and WhatsApp suppresses phone push notifications while a linked device is online). Now `false`.
+4. **`syncFullHistory` was Baileys' default `true`** — asked the phone for the entire history on every fresh
+   link. Now `false`: everything is already cached in Postgres, and `/history` can pull older on demand.
+
 ## Pending phases
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine
   `protocol=='whatsapp'` branch → self-chat notify-anywhere); incoming automation `RULES/rules/whatsapp_*.py`.
