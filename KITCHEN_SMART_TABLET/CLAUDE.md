@@ -343,8 +343,7 @@ converted to the product's purchase unit).
 - **4 endpoints** on LXC 113, mirroring the product-category ones: `GET /api/kitchen/recipe-categories`
   (`?all=1` includes inactive) · `POST` upsert · `POST /delete` (**soft**, `active=false`) ·
   `POST /reorder` (`{order:[ids]}` → `sort_order = i+1`).
-- **Dashboard 📖 Recipes tab**, immediately right of 🧺 Shopping List (the 40 px gap lives on ⚙ Settings,
-  so Settings + 🏷 Categories shift right on their own). Form + table with ▲▼ reorder and delete — a
+- **Dashboard 📖 Recipes tab.** Tab order (set 2026-09-03): `🍎 Products · 🧾 Common · 📦 Stock · 🧺 Shopping List · 🏷 Categories` ⟶gap⟶ `📖 Recipes · ⚙ Settings` — the 40 px gap now sits on the Recipes button. Form + table with ▲▼ reorder and delete — a
   copy of the 🏷 Categories tab, `rc-` element ids, functions `loadRecipeCats` / `renderRecipeCats` /
   `kSaveRecipeCat` / `kResetRecipeCatForm` / `delRecipeCat` / `moveRecipeCat` in `js/kitchen.js`.
   No "Recipes" count column yet — there are no recipes, so it could only print 0.
