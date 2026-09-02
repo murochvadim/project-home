@@ -34,10 +34,12 @@ const q = (text, params) => pool.query(text, params);
 let sock = null;
 let state = { connection: 'connecting', me: null, qrDataUrl: null, lastSync: null };
 let settings = { min_gap_sec: 4, hourly_cap: 20, daily_cap: 100, contact_only: true,
-                 del_min_gap_sec: 4, del_hourly_cap: 30 };
+                 del_min_gap_sec: 4, del_hourly_cap: 30,
+                 react_min_gap_sec: 2, react_hourly_cap: 60 };
 let lastSendTs = 0;
 let authKeys = null;   // Baileys signal key store — LOCAL reads only (lid-mapping), never USync
 let _actionTimes = [];   // epoch-ms of recent destructive actions (delete/leave), in-memory sliding hour
+let _reactTimes = [];    // same idea for reactions (own lighter budget — see guardReact)
 
 // Throttle for destructive actions (message delete / group leave / chat delete).
 // Rapid bursts look like automation and risk a ban — refuse if too fast / over cap.
@@ -51,6 +53,21 @@ function guardAction() {
   if ((now - last) / 1000 < gap) { const e = new Error('rate'); e.reason = 'rate'; throw e; }
   if (_actionTimes.length >= cap) { const e = new Error('cap'); e.reason = 'cap'; throw e; }
   _actionTimes.push(now);
+}
+
+// Reactions are outbound traffic, so they are throttled — but with their OWN budget.
+// The 4 s message gap would make tapping 👍 feel broken, and a reaction is far lighter than a
+// message: it can only ever land on a message in a chat you are already in, so it cannot be used
+// to reach a stranger (the pattern that actually gets numbers banned).
+function guardReact() {
+  const now = Date.now();
+  const gap = settings.react_min_gap_sec != null ? settings.react_min_gap_sec : 2;
+  const cap = settings.react_hourly_cap  != null ? settings.react_hourly_cap  : 60;
+  _reactTimes = _reactTimes.filter(t => now - t < 3600e3);
+  const last = _reactTimes.length ? _reactTimes[_reactTimes.length - 1] : 0;
+  if ((now - last) / 1000 < gap) { const e = new Error('rate'); e.reason = 'rate'; throw e; }
+  if (_reactTimes.length >= cap) { const e = new Error('cap'); e.reason = 'cap'; throw e; }
+  _reactTimes.push(now);
 }
 
 async function loadSettings() {
@@ -427,7 +444,11 @@ async function connect() {
     for (const m of messages) {
       if (!m.message) continue;
       try { await upsertMessage(m); } catch (e) { log.warn('msg upsert: ' + e.message); }
-      if (!m.key.fromMe) {
+      // A reaction is stored (the thread shows it as a chip) but it is NOT an incoming
+      // message: its body is empty, so a rule that matches only on the SENDER would fire a
+      // real auto-reply just because someone tapped a thumbs-up. Never automate on one.
+      const isReaction = !!(m.message && m.message.reactionMessage);
+      if (!m.key.fromMe && !isReaction) {
         publishInbound(m);
         buildCtx({ wa_id: m.key.id, chat_jid: m.key.remoteJid,
           from_jid: m.key.participant || m.participant || m.key.remoteJid,
@@ -691,6 +712,8 @@ app.post('/settings', async (req, res) => {
       contact_only: b.contact_only === undefined ? settings.contact_only : !!b.contact_only,
       del_min_gap_sec: ci(b.del_min_gap_sec, 0, 3600, settings.del_min_gap_sec),
       del_hourly_cap:  ci(b.del_hourly_cap,  1, 1000, settings.del_hourly_cap),
+      react_min_gap_sec: ci(b.react_min_gap_sec, 0, 3600, settings.react_min_gap_sec),
+      react_hourly_cap:  ci(b.react_hourly_cap,  1, 1000, settings.react_hourly_cap),
     });
     await q(`UPDATE whatsapp_state SET settings=$1, updated_at=now() WHERE id=1`, [JSON.stringify(settings)]);
     log.info('settings updated: ' + JSON.stringify(settings));
@@ -724,7 +747,30 @@ app.get('/messages', async (req, res) => {
                file_name: hit.node.fileName || null };
     } catch (e) { return rest; }
   });
-  ok(res, { messages: msgs.reverse() });
+  // Reactions are not messages — they belong UNDER the message they answer.
+  // Each person has AT MOST ONE reaction per message: changing it, or removing it (which
+  // arrives as an empty text), supersedes their previous one. So keep only the LATEST row
+  // per (answered message, author) — collecting every row would leave a removed 👍 on screen.
+  const latest = {};                                   // "<target>|<author>" -> {ts, emoji, from_me, by}
+  for (const m of r.rows) {                            // rows are newest-first (ORDER BY ts DESC)
+    if (!m.media_proto || m.type !== 'reactionMessage') continue;
+    try {
+      const node = proto.Message.decode(m.media_proto).reactionMessage;
+      const tid = node && node.key && node.key.id;
+      if (!tid) continue;
+      const k = tid + '|' + (m.from_me ? 'me' : (m.sender_jid || '?'));
+      const ts = m.ts ? new Date(m.ts).getTime() : 0;
+      if (latest[k] && latest[k].ts >= ts) continue;
+      latest[k] = { ts, tid, emoji: node.text || '', from_me: !!m.from_me, by: m.sender_name || null };
+    } catch (e) { /* unreadable node — skip */ }
+  }
+  const reactions = {};
+  for (const k of Object.keys(latest)) {
+    const v = latest[k];
+    if (!v.emoji) continue;                            // their latest action was a removal
+    (reactions[v.tid] = reactions[v.tid] || []).push({ emoji: v.emoji, from_me: v.from_me, by: v.by });
+  }
+  ok(res, { messages: msgs.reverse(), reactions });
 });
 // Live "new messages" monitor — latest INBOUND messages, newest first, chat name
 // resolved via the same chain as /chats. Skips empty WhatsApp system rows
@@ -746,7 +792,8 @@ app.get('/recent', async (req, res) => {
       -- type test alone silently hid it from the feed (seen live 2026-09-01 17:33).
       AND (COALESCE(m.body,'') <> '' OR m.media_proto IS NOT NULL
            OR m.type ~* 'image|video|audio|ptt|sticker|document|location')
-      -- (reactions ride in on media_proto: their node is stored, so they pass the line above)
+      -- (reactions ride in on media_proto: their node is stored, so they pass the line above
+      --  and are LABELLED below — without that they would render as a blank feed row)
     ORDER BY m.ts DESC NULLS LAST
     LIMIT $1`, [lim]);
   // Same media flags as /messages so the feed can show a preview instead of "📷 photo".
@@ -756,6 +803,12 @@ app.get('/recent', async (req, res) => {
     if (!media_proto) return rest;
     try {
       const node = proto.Message.decode(media_proto);
+      // Someone reacted to one of your messages. bodyOf() has no text for a reaction, so say
+      // what happened instead of showing an empty line.
+      if (node.reactionMessage) {
+        const t = node.reactionMessage.text || '';
+        return { ...rest, body: t ? ('reacted ' + t) : 'removed a reaction', is_reaction: true };
+      }
       const hit = mediaNodeOf(node);
       if (hit) {
         const t = hit.node.jpegThumbnail;
@@ -868,6 +921,40 @@ app.post('/send', async (req, res) => {
     if (quoted_id && !quoted) return bad(res, 'quoted_not_found');
     await guardedSend(jid, text, !!force, quoted); ok(res, { quoted: !!quoted }); }
   catch (e) { bad(res, e.reason || e.message, e.reason === 'cap' || e.reason === 'rate' ? 429 : 400); }
+});
+// React to ONE message with an emoji (empty emoji = remove the reaction).
+// The target key is rebuilt HERE from our own row — the browser sends only an id, never a key.
+// ⚠ We must write our own row: sendMessage emits its event as upsertMessage(msg,'append')
+// (Socket/messages-send.js), and the ingest only handles 'notify' — which is why guardedSend
+// also inserts by hand. And it must NOT be status='sent': the hourly/daily caps count exactly
+// that value, so a 👍 would silently spend the message budget. status='reacted' keeps them apart.
+app.post('/react', async (req, res) => {
+  try {
+    const { jid, wa_id, emoji } = req.body || {};
+    if (!jid || !wa_id) return bad(res, 'jid_and_wa_id');
+    const text = (emoji == null) ? '' : String(emoji);
+    const r = await q(`SELECT wa_id, chat_jid, sender_jid, from_me FROM whatsapp_messages
+                       WHERE wa_id=$1 AND chat_jid=$2 LIMIT 1`, [wa_id, jid]);
+    const m = r.rows[0];
+    if (!m) return bad(res, 'not_found', 404);
+    if (!sock || state.connection !== 'open') return bad(res, 'not_connected', 409);
+    guardReact();
+    const key = { remoteJid: m.chat_jid, id: m.wa_id, fromMe: !!m.from_me };
+    if (String(m.chat_jid).endsWith('@g.us') && m.sender_jid) key.participant = m.sender_jid;
+    const sent = await sock.sendMessage(jid, { react: { text, key } });
+    // keep our own reaction so the chip survives a reload (see the note above)
+    let node = null;
+    try { node = Buffer.from(proto.Message.encode({ reactionMessage: { key, text } }).finish()); }
+    catch (e) { log.warn('react encode: ' + e.message); }
+    await q(`INSERT INTO whatsapp_messages (wa_id, chat_jid, sender_jid, from_me, direction, type, body, ts, status, media_proto)
+             VALUES ($1,$2,$3,true,'out','reactionMessage','',now(),'reacted',$4)
+             ON CONFLICT (wa_id, chat_jid) DO UPDATE SET media_proto=EXCLUDED.media_proto`,
+      [sent.key.id, jid, state.me && state.me.jid, node]);
+    log.info('react ' + (text || '(removed)') + ' -> ' + wa_id);
+    ok(res, { emoji: text });
+  } catch (e) {
+    bad(res, e.reason || e.message, (e.reason === 'rate' || e.reason === 'cap') ? 429 : 400);
+  }
 });
 app.post('/leave', async (req, res) => {
   try {

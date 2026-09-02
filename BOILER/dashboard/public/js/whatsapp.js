@@ -117,6 +117,7 @@
   // ── Live monitor: latest INCOMING messages, auto-refresh while tab visible ──
   let _monTimer = null, _monHidden = false, _recent = [];   // rows currently shown; clicked by index
   let _msgs = [], _replyTo = null;   // open thread + the message the next send REPLIES to
+  let _reactions = {};               // wa_id of the ANSWERED message -> [{emoji, from_me}]
   async function loadRecent() {
     const host = q('wa-monitor-feed'); if (!host) return;
     try {
@@ -295,7 +296,7 @@
     fetch(WA_API + '/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: c.jid }) }).catch(() => {});
     try {
       const r = await (await fetch(WA_API + '/messages?jid=' + encodeURIComponent(c.jid) + '&limit=200')).json();
-      renderMessages(r.messages || [], c);
+      renderMessages(r.messages || [], c, r.reactions);
     } catch (e) { if (body) body.innerHTML = '<div class="wa-hint">Error loading messages.</div>'; }
   }
 
@@ -413,7 +414,89 @@
     ov.querySelector('#wa-media-body').innerHTML = '';   // stops video/audio playback
   }
 
-  function renderMessages(msgs, c) {
+  // -- Reactions -----------------------------------------------------------
+  // A reaction is not a message: it belongs UNDER the message it answers. The same emoji
+  // from several people collapses into one chip with a count; yours is tinted green.
+  const REACT_SET = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+  function reactChips(m) {
+    const list = (m.wa_id && _reactions[m.wa_id]) || [];
+    if (!list.length) return '';
+    const seen = {}, order = [];
+    list.forEach(r => {
+      if (!r.emoji) return;
+      if (!seen[r.emoji]) { seen[r.emoji] = { n: 0, mine: false }; order.push(r.emoji); }
+      seen[r.emoji].n++; if (r.from_me) seen[r.emoji].mine = true;
+    });
+    if (!order.length) return '';
+    return '<div class="wa-breact">' + order.map(e =>
+      '<span class="wa-rchip' + (seen[e].mine ? ' mine' : '') + '">' + esc(e) +
+      (seen[e].n > 1 ? ' ' + seen[e].n : '') + '</span>').join('') + '</div>';
+  }
+  // Repaint ONE bubble's chips in place -- a full re-render would scroll the thread back
+  // to the bottom and lose where you were reading.
+  function reactRedraw(i) {
+    const body = q('wa-chat-body'); if (!body) return;
+    const el = body.querySelector('[data-bi="' + i + '"]'); if (!el) return;
+    const html = reactChips(_msgs[i]);
+    const cur = el.querySelector('.wa-breact');
+    if (!html) { if (cur) cur.remove(); return; }
+    if (cur) { cur.outerHTML = html; return; }
+    const time = el.querySelector('.wa-btime');
+    if (time) time.insertAdjacentHTML('beforebegin', html); else el.insertAdjacentHTML('beforeend', html);
+  }
+  function closeReactPick() { const el = document.getElementById('wa-react-pick'); if (el) el.remove(); }
+  function reactPick(i, ev) {
+    if (ev) ev.stopPropagation();
+    closeReactPick();
+    if (!_msgs[i] || !_msgs[i].wa_id) return;
+    const el = document.createElement('div');
+    el.id = 'wa-react-pick';
+    el.innerHTML = REACT_SET.map(e => '<span data-e="' + e + '">' + e + '</span>').join('') +
+      '<span data-e="" title="Remove my reaction" style="color:#64748b;font-size:0.95rem;">✕</span>';
+    document.body.appendChild(el);
+    const r = el.getBoundingClientRect();
+    const x = ev ? ev.clientX : window.innerWidth / 2, y = ev ? ev.clientY : window.innerHeight / 2;
+    el.style.left = Math.max(6, Math.min(x - r.width / 2, window.innerWidth - r.width - 6)) + 'px';
+    el.style.top = Math.max(6, y - r.height - 10) + 'px';
+    el.onclick = (e2) => {
+      const t = e2.target.closest('[data-e]'); if (!t) return;
+      e2.stopPropagation();
+      doReact(i, t.getAttribute('data-e'));
+      closeReactPick();
+    };
+    setTimeout(() => document.addEventListener('click', closeReactPick, { once: true }), 0);
+  }
+  const reactWhy = (reason) => ({
+    rate: 'Too fast -- wait a moment (reaction safety limit).',
+    cap: 'Hourly reaction limit reached.',
+    not_found: 'That message is not in the cache.',
+    not_connected: 'WhatsApp not connected.',
+  }[reason] || ('Reaction failed: ' + (reason || 'error')));
+  // Show it immediately, then undo if WhatsApp refused -- an emoji tap should feel instant.
+  async function doReact(i, emoji) {
+    const m = _msgs[i], c = _activeChat;
+    if (!m || !m.wa_id || !c) return;
+    const before = (_reactions[m.wa_id] || []).slice();
+    const others = before.filter(r => !r.from_me);      // one reaction per person, WhatsApp's rule
+    _reactions[m.wa_id] = emoji ? others.concat([{ emoji: emoji, from_me: true }]) : others;
+    reactRedraw(i);
+    const sm = q('wa-chat-sendmsg');
+    try {
+      const r = await (await fetch(WA_API + '/react', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jid: c.jid, wa_id: m.wa_id, emoji: emoji }),
+      })).json();
+      if (!r.ok) throw new Error(r.reason || 'error');
+      if (sm) sm.textContent = '';
+    } catch (e) {
+      _reactions[m.wa_id] = before;
+      reactRedraw(i);
+      if (sm) { sm.style.color = '#c0392b'; sm.textContent = reactWhy(e.message); }
+    }
+  }
+
+  function renderMessages(msgs, c, reactions) {
+    _reactions = reactions || {};
     const body = q('wa-chat-body'); if (!body) return;
     if (!msgs.length) {
       body.innerHTML = '<div class="wa-hint">No messages cached yet — you can still send below.</div>'; return;
@@ -431,11 +514,12 @@
       const del = out ? '<span class="wa-bdel" title="Delete for everyone" onclick=\'waDelMsg(' +
         JSON.stringify({ id: m.wa_id, jid: c.jid, fromMe: true, part: m.sender_jid || null }).replace(/'/g, '&#39;') + ')\'>🗑</span>' : '';
       const rep = m.wa_id ? '<span class="wa-brep" title="Reply to this message" onclick="event.stopPropagation();waReplyTo(' + i + ')">↩</span>' : '';
+      const rct = m.wa_id ? '<span class="wa-bmoji" title="React to this message" onclick="waReactPick(' + i + ',event)">😊</span>' : '';
       // Clicking the message ARMS a reply to it — any message in the thread, not just the
       // newest. A media bubble keeps click = open the photo/video (otherwise you could
       // never view it), so those are answered via their ↩.
       const arm = (m.wa_id && !m.has_media) ? ' onclick="waReplyTo(' + i + ')" style="cursor:pointer;"' : '';
-      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '" data-bi="' + i + '"' + arm + '>' + sender + msgBubbleBody(m, i) + rep + del +
+      return '<div class="wa-bubble ' + (out ? 'out' : 'in') + '" data-bi="' + i + '"' + arm + '>' + sender + msgBubbleBody(m, i) + reactChips(m) + rct + rep + del +
         '<div class="wa-btime">' + fmtTime(m.ts) + '</div></div>';
     }).join('') + '</div>';
     body.scrollTop = body.scrollHeight;
@@ -460,7 +544,7 @@
       if (sm) sm.textContent = '';
       // reload the thread to show the sent message
       const mr = await (await fetch(WA_API + '/messages?jid=' + encodeURIComponent(c.jid) + '&limit=200')).json();
-      renderMessages(mr.messages || [], c);
+      renderMessages(mr.messages || [], c, mr.reactions);
     } catch (e) { if (sm) { sm.style.color = '#c0392b'; sm.textContent = 'Error: ' + e.message; } }
   }
 
@@ -529,6 +613,8 @@
       if (q('wa-set-contact')) q('wa-set-contact').checked = s.contact_only !== false;
       if (q('wa-set-delgap')) q('wa-set-delgap').value = s.del_min_gap_sec != null ? s.del_min_gap_sec : 4;
       if (q('wa-set-delhour')) q('wa-set-delhour').value = s.del_hourly_cap != null ? s.del_hourly_cap : 30;
+      if (q('wa-set-reactgap')) q('wa-set-reactgap').value = s.react_min_gap_sec != null ? s.react_min_gap_sec : 2;
+      if (q('wa-set-reacthour')) q('wa-set-reacthour').value = s.react_hourly_cap != null ? s.react_hourly_cap : 60;
     } catch (e) {
       if (st) { st.textContent = 'agent unreachable'; st.style.color = '#c0392b'; }
     }
@@ -542,7 +628,9 @@
       daily_cap: parseInt(q('wa-set-day').value, 10),
       contact_only: !!q('wa-set-contact').checked,
       del_min_gap_sec: parseInt(q('wa-set-delgap').value, 10),
-      del_hourly_cap: parseInt(q('wa-set-delhour').value, 10)
+      del_hourly_cap: parseInt(q('wa-set-delhour').value, 10),
+      react_min_gap_sec: parseInt(q('wa-set-reactgap').value, 10),
+      react_hourly_cap: parseInt(q('wa-set-reacthour').value, 10)
     };
     if (st) { st.textContent = 'Saving…'; st.style.color = '#64748b'; }
     try {
@@ -556,6 +644,8 @@
       if (q('wa-set-contact')) q('wa-set-contact').checked = s.contact_only !== false;
       if (q('wa-set-delgap')) q('wa-set-delgap').value = s.del_min_gap_sec;
       if (q('wa-set-delhour')) q('wa-set-delhour').value = s.del_hourly_cap;
+      if (q('wa-set-reactgap')) q('wa-set-reactgap').value = s.react_min_gap_sec;
+      if (q('wa-set-reacthour')) q('wa-set-reacthour').value = s.react_hourly_cap;
       if (st) { st.textContent = '✓ Saved'; st.style.color = '#166534'; }
     } catch (e) {
       if (st) { st.textContent = 'Error: ' + e.message; st.style.color = '#c0392b'; }
@@ -733,6 +823,7 @@
   window.waCloseChat = closeChat;
   window.waSendChat = sendChat;
   window.waReplyTo = replyTo; window.waCancelReply = cancelReply;
+  window.waReactPick = reactPick;
   window.waOpenMedia = openMedia; window.waCloseMedia = closeMedia;
   window.waSaveToJournal = saveToJournal;
   window.waDelMsg = delMsg;

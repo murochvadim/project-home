@@ -339,6 +339,44 @@ overlay + injects its CSS** on Communication (those classes live inside `privacy
 stylesheet). `communication.html` also loads `travel-tz.js`. Verified end-to-end on a real photo:
 file on the NAS, `journal_media` row with the **message's** day + the right slot, library row indexed.
 
+## Reactions — answer a message with an emoji (BUILT 2026-09-02)
+
+Tap the **😊** on any bubble → a one-row picker (**👍 ❤️ 😂 😮 😢 🙏** + **✕** to remove) attaches the
+emoji to *that* message instead of sending a new one. Baileys: `sock.sendMessage(jid, { react: { text, key } })`
+(`AnyRegularMessageContent.react`); an **empty `text` removes** the reaction (`Utils/messages.js` — it also
+auto-fills `senderTimestampMs`, so we don't).
+
+- **`POST /react` `{jid, wa_id, emoji}`** — the browser sends only an **id**; the message `key`
+  (`remoteJid`/`id`/`fromMe`/`participant`) is rebuilt server-side from our own row, exactly like `quotedStub()`.
+- ⚠ **The endpoint writes its own row.** `sendMessage` emits its event as `upsertMessage(msg, 'append')`
+  (`Socket/messages-send.js`) and the ingest returns early on `type !== 'notify'` — the same reason
+  `guardedSend` inserts by hand. Without this the chip vanishes on reload.
+- ⚠ **That row is `status='reacted'`, never `'sent'`.** The hourly/daily send caps count exactly
+  `status='sent'`, so writing it as a send would silently spend the message budget on a 👍. Verified live:
+  4 reactions → `sends_last_10min = 0`.
+- **Own lighter guard `guardReact()`** (same in-memory sliding-hour shape as `guardAction`):
+  `react_min_gap_sec` (default 2) + `react_hourly_cap` (default 60), in `whatsapp_state.settings`,
+  editable on the shared **Settings** tab. The 4 s message gap would make tapping an emoji feel broken, and a
+  reaction can only ever land on a message in a chat you are already in — it cannot reach a stranger, which is
+  the pattern that actually gets numbers banned. ⚠ `POST /settings` **clamps an explicit key list** — a new key
+  must be added there or it is silently dropped.
+- **Rendering:** reactions are not messages, so `/messages` returns them **grouped under the message they
+  answer** (`reactions[target_id] = [{emoji, from_me, by}]`) and the thread keeps filtering the rows themselves
+  out. Chips sit under the bubble; the same emoji from several people collapses with a count; yours is tinted
+  green. Repaint is **per bubble** (`reactRedraw`) — a full re-render would scroll the thread back to the bottom.
+- ⚠ **Only the LATEST reaction per (message, author) counts.** Every change/removal is its own row with its own
+  id; collecting them all left a **removed 👍 still on screen** (caught in test, fixed).
+- ⚠ **A reaction must never trigger automation.** Its body is empty, so a rule matching only on the SENDER
+  would fire a **real auto-reply because someone tapped 👍**. `messages.upsert` now skips `reactionMessage`
+  for both `publishInbound` and `applyAutomation` (it is still stored, for the chip).
+- ⚠ In the 🔔 monitor an incoming reaction passes the `media_proto IS NOT NULL` filter, so `/recent`
+  **labels** it `reacted <emoji>` / `removed a reaction` — otherwise it rendered as a blank row.
+
+Verified 2026-09-02 on the **self-chat** (a note to yourself — reaches nobody else): bogus `wa_id` → `not_found`
+with nothing sent; two back-to-back calls → second `429 rate`; apply → chip returned by `/messages`; remove →
+chips empty; the real `reactChips()` rendered against the live payload. Not exercised: `react_hourly_cap`
+(would need 60 reactions — same code shape as the live-proven `guardAction` cap).
+
 ## Pending phases
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine
   `protocol=='whatsapp'` branch → self-chat notify-anywhere); incoming automation `RULES/rules/whatsapp_*.py`.
