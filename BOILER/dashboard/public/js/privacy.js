@@ -97,6 +97,7 @@ async function pvSaveSettings() {
 const _PV_TRAVEL_FEATS = [
   ['daily_journal', 'Daily Journal'], ['medical', 'Medical'],
   ['personal_health', 'Personal Health'], ['reminders', 'Reminders badge'],
+  ['geolocation', 'Geolocation'],
 ];
 const _PV_TZ_LIST = [
   'Asia/Jerusalem',

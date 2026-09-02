@@ -407,3 +407,22 @@ root@192.168.1.227:/opt/geo_places.py` (config via dashboard settings — no res
 - Multi-phone support is already wired via `group_id` — just add another entry to `tracked_devices`.
 - Phase-2 rules that consume `phone_trips` for derived signals (step-counting, daily-distance summaries, etc.) can land any time; the OwnTracks-only data is sufficient.
 - If commit latency matters in the future, the WiFi-confirm path could be re-added against an MQTT-direct WiFi sensor source (not HA REST) — same algorithmic shape, different data source. Not planned now.
+
+## Times follow 🧳 Travel (2026-09-02)
+
+Every timestamp on **Project General → Geolocation** and **→ Car Geolocation** renders in
+`activeTzFor('geolocation')` — the travel timezone when **Geolocation is ticked** in Privacy →
+Settings → 🧳 Travel, otherwise `Asia/Jerusalem`. Presentation only: `device_locations` /
+`phone_trips` / `phone_place_trips` and the ingest daemon are untouched, and the server formats no
+geolocation dates (it returns raw timestamps; all formatting is client-side).
+
+- Helpers in `project-general.html`: `geoTz()` · `geoFmt(ts)` (tables) · `geoFmtShort(ts)` (map
+  tooltips) · `geoTzNote()` (an amber `times: New York` next to the **Map · trail** heading whenever
+  the zone is not Israel — without it you cannot tell whether 19:29 means Israel or New York).
+- ⚠ `activeTzFor()` is **sync over a preloaded cache**, so both `geoOnTabShow()` and `carOnTabShow()`
+  are `async` and `await loadTravelSettings()` **before** the first paint; `travel-tz.js` also
+  self-preloads, which would otherwise mask the miss as a rare first-render-only bug.
+- **Two defects fixed on the way:** the map trail tooltips printed the **raw UTC string**
+  (`2026-09-02T00:25:22.000Z · accuracy 9.0 m`), and the **Car** tab's `fmtT` had **no timezone at
+  all** — browser-local, which only looked right because the dashboard laptop is on Israel time.
+- Verified against the database: leg 8464 = `02.09 00:43` Israel = `01.09 17:43` New York.

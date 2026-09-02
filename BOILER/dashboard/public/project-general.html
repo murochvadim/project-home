@@ -370,7 +370,7 @@
 
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-        <h2 style="margin:0;">Map · trail</h2>
+        <h2 style="margin:0;">Map · trail</h2><span id="geo-tz-note" style="font-size:0.78rem; color:#b45309; font-weight:600;"></span>
         <div style="display:flex; gap:10px; align-items:center;">
           <button onclick="geoFitToTrack()" style="padding:4px 12px; font-size:0.82rem; border:1px solid #1565c0; color:#1565c0; background:#fff; border-radius:3px; cursor:pointer;" title="Zoom + pan the map so the entire trail is visible">🔍 Fit to track</button>
           <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;" title="Off = clean map (tick a trip in Recent trips to view its route in red). On = draw the full live trail.">
@@ -660,6 +660,7 @@
 <script src="js/reminders-badge.js?v=15"></script>
 <script src="js/notify-toast.js?v=12"></script>
 <script src="js/scroll-stabilizer.js"></script>
+<script src="js/travel-tz.js?v=1"></script>
 <script src="js/weather.js"></script>
 <script>
 function pgEsc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -696,7 +697,8 @@ const CAR_DEVICE_ID = 'owntracks_owntracks_phone_car';   // raw device_id (for /
 const CAR_GROUP_ID  = 'car';                             // group_id (in /status + /trips)
 let _carMap = null, _carPollTimer = null, _carTrailLayer = null, _carMarker = null;
 
-function carOnTabShow() {
+async function carOnTabShow() {
+  if (window.loadTravelSettings) { try { await window.loadTravelSettings(); } catch (e) {} }
   if (!_carMap) carInitMap();
   carLoadSettings();
   carReloadStatus();
@@ -774,7 +776,7 @@ async function carReloadTrips() {
     const all = d.trips || (Array.isArray(d) ? d : []);
     const rows = all.filter(t => t.group_id === CAR_GROUP_ID);
     if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" style="padding:14px; text-align:center; color:#aaa;">No car trips yet.</td></tr>'; return; }
-    const fmtT = s => s ? new Date(s).toLocaleString('en-GB', { hour12:false, day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+    const fmtT = s => geoFmtShort(s);   // follows 🧳 Travel like the rest of the geo surfaces
     const fmtDur = s => s ? (s < 3600 ? Math.round(s/60)+' min' : (s/3600).toFixed(1)+' h') : '—';
     const fmtDist = m => m == null ? '—' : (m < 1000 ? m+' m' : (m/1000).toFixed(1)+' km');
     tb.innerHTML = rows.map((t,i) => `<tr style="border-top:1px solid #eee; ${t.dim?'opacity:0.5;':''}">
@@ -1158,7 +1160,24 @@ let _geoSettings = null;
 let _geoLastBoundsFit = false;
 let _geoPollTimer = null;
 
-function geoOnTabShow() {
+// Which timezone the geolocation surfaces print in. Follows 🧳 Travel ONLY when the
+// Geolocation feature is ticked (Privacy → Settings) — otherwise Asia/Jerusalem, which
+// is what these screens always showed. `activeTzFor` is SYNC over a preloaded cache, so
+// geoOnTabShow/carOnTabShow await loadTravelSettings() before the first paint.
+const geoTz = () => (window.activeTzFor ? window.activeTzFor('geolocation') : 'Asia/Jerusalem');
+const geoFmt = (ts) => (ts ? new Date(ts).toLocaleString('he-IL', { timeZone: geoTz() }) : '—');
+// Short form for map tooltips: "02.09 03:25" (they used to print the raw UTC string).
+const geoFmtShort = (ts) => (ts ? new Date(ts).toLocaleString('en-GB', {
+  timeZone: geoTz(), hour12: false, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+function geoTzNote() {
+  const tz = geoTz();
+  const el = document.getElementById('geo-tz-note');
+  if (el) el.textContent = (tz === 'Asia/Jerusalem') ? '' : ('times: ' + tz.split('/').pop().replace(/_/g, ' '));
+}
+
+async function geoOnTabShow() {
+  if (window.loadTravelSettings) { try { await window.loadTravelSettings(); } catch (e) {} }
+  geoTzNote();
   if (!_geoMap) geoInitMap();
   // Restore last-chosen trail window from localStorage so it persists across
   // page navigation. Falls back to the default option in the markup.
@@ -1752,21 +1771,21 @@ async function geoReloadTrail() {
           const html = `<div style="background:#fff; border:1px solid #555; color:#222; border-radius:8px; padding:0 4px; font-size:0.65rem; font-weight:600; line-height:1.1; white-space:nowrap;">${outsideSeq}</div>`;
           const icon = L.divIcon({ html, className: 'geo-grey-num', iconSize: null, iconAnchor: [10, 7] });
           const m = L.marker([p.lat, p.lon], { icon });
-          m.bindTooltip(`#${outsideSeq} · ${p.ts} · accuracy ${p.accuracy_m || '?'} m`);
+          m.bindTooltip(`#${outsideSeq} · ${geoFmtShort(p.ts)} · accuracy ${p.accuracy_m || '?'} m`);
           m.addTo(_geoMap);
           _geoMarkers.push(m);
         } else {
           const dot = L.circleMarker([p.lat, p.lon], {
             radius: 3, color: '#888', fillColor: '#888', fillOpacity: 0.6, weight: 1,
           });
-          dot.bindTooltip(`${p.ts} · accuracy ${p.accuracy_m || '?'} m`);
+          dot.bindTooltip(`${geoFmtShort(p.ts)} · accuracy ${p.accuracy_m || '?'} m`);
           dot.addTo(_geoMap);
           _geoMarkers.push(dot);
         }
       });
       const newest = merged[merged.length - 1];
       const lastMarker = L.marker([newest.lat, newest.lon], { title: members[0].name || gid }).addTo(_geoMap);
-      lastMarker.bindTooltip(`${newest.ts} · accuracy ${newest.accuracy_m || '?'} m`);
+      lastMarker.bindTooltip(`${geoFmtShort(newest.ts)} · accuracy ${newest.accuracy_m || '?'} m`);
       _geoMarkers.push(lastMarker);
     } catch (e) { console.warn('geoReloadTrail:', e); }
   }
@@ -1870,7 +1889,7 @@ async function geoReloadEvents() {
       }
       return `<tr style="border-top:1px solid #f0eee8;">
         <td style="padding:5px 12px; text-align:center; color:#1565c0; font-weight:600; font-family:monospace;">${seq}</td>
-        <td style="padding:5px 12px; text-align:center; color:#666;">${pgEsc(new Date(e.ts).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
+        <td style="padding:5px 12px; text-align:center; color:#666;">${pgEsc(geoFmt(e.ts))}</td>
         <td style="padding:5px 12px; text-align:center;">${pgEsc(e.device_id)}</td>
         <td style="padding:5px 12px; text-align:center; font-weight:600; color:${color};">${event}</td>
         <td style="padding:5px 12px; text-align:center; color:#444;">${distCell}</td>
@@ -1919,7 +1938,7 @@ async function geoReloadTrips() {
       const routeWeight = rt === 'home' ? '500' : '700';
       const muted = dim ? 'color:#c2beb6;' : 'color:#666;';
       const returnedCell = t.returned_at
-        ? pgEsc(new Date(t.returned_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))
+        ? pgEsc(geoFmt(t.returned_at))
         : (rt === 'stay'
             ? '<span style="color:#1a7a3a; font-weight:600;">still here</span>'
             : '<span style="color:#e67e22; font-weight:600;">in progress</span>');
@@ -1928,7 +1947,7 @@ async function geoReloadTrips() {
         <td style="padding:5px 6px; text-align:center;"><input type="checkbox" class="geo-trip-cb" data-trip-id="${pgEsc(t.rid || ('home:' + t.id))}" data-start="${pgEsc(t.started_at || '')}" data-end="${pgEsc(t.returned_at || '')}" onchange="geoTripsUpdateDeleteBtn()" /></td>
         <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : 'color:#1565c0;'} font-weight:600; font-family:monospace;">${total - i}</td>
         <td style="padding:5px 12px; text-align:left; color:${routeColor}; font-weight:${routeWeight}; ${dim ? 'font-size:0.82rem;' : ''}">${pgEsc(t.route || '')}${dim ? ' <span style="font-size:0.72rem; color:#c2beb6;">(umbrella)</span>' : ''}</td>
-        <td style="padding:5px 12px; text-align:center; ${muted}">${pgEsc(new Date(t.started_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }))}</td>
+        <td style="padding:5px 12px; text-align:center; ${muted}">${pgEsc(geoFmt(t.started_at))}</td>
         <td style="padding:5px 12px; text-align:center; ${muted}">${returnedCell}</td>
         <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : ''} font-weight:600;">${fmtDur(t.duration_sec)}</td>
         <td style="padding:5px 12px; text-align:center; ${dim ? 'color:#c2beb6;' : 'color:#c0392b;'} font-weight:600;">${fmtDist(t.max_dist_m)}</td>
