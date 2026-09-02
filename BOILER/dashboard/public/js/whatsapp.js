@@ -562,7 +562,7 @@
     try {
       const r = await (await fetch(WA_API + '/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: info.jid, key }) })).json();
       if (!r.ok) { alert('Could not delete: ' + guardWhy(r.reason)); return; }
-      if (_activeChat) { const mr = await (await fetch(WA_API + '/messages?jid=' + encodeURIComponent(_activeChat.jid) + '&limit=200')).json(); renderMessages(mr.messages || [], _activeChat); }
+      if (_activeChat) { const mr = await (await fetch(WA_API + '/messages?jid=' + encodeURIComponent(_activeChat.jid) + '&limit=200')).json(); renderMessages(mr.messages || [], _activeChat, mr.reactions); }
     } catch (e) { alert('Error deleting: ' + e.message); }
   }
 

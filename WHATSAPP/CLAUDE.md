@@ -372,6 +372,21 @@ auto-fills `senderTimestampMs`, so we don't).
 - ⚠ In the 🔔 monitor an incoming reaction passes the `media_proto IS NOT NULL` filter, so `/recent`
   **labels** it `reacted <emoji>` / `removed a reaction` — otherwise it rendered as a blank row.
 
+**No reaction can be sent without a deliberate click** (audited 2026-09-02). The whole project contains
+exactly ONE caller of `/react` (`doReact`) and ONE `sendMessage({react})` (inside the endpoint). `doReact`
+is reachable only from the picker's own click handler, and only for a target carrying `data-e`; the picker
+opens only from the bubble's 😊. No timer, retry or open-chat path touches it — the 5 s interval refreshes
+only the monitor feed, and the thread re-renders solely on open / send / delete, so a picker can never end up
+pointing at a different message. **No automation rule can react** either: rules only reply with text or pop up.
+
+**Rule replies obey the Settings limits.** `applyAutomation` calls `guardedSend(jid, text)` with **no `force`**,
+so `min_gap_sec` + `hourly_cap` + `daily_cap` + `contact_only` all apply, and a blocked reply is logged with the
+reason rather than retried. (`force` — used only by an explicit `/send`/MQTT request — relaxes **contact_only
+alone**; the rate and caps are unconditional.) A rule also only sends when it is set to **live**; otherwise it
+logs "would reply". Replies are `status='sent'`, so they count against the same caps as manual sends.
+`contact_only` is not re-checked for reactions because it cannot fail there: `/react` requires a stored message,
+and storing one always upserts its chat — so the chat is known by construction.
+
 Verified 2026-09-02 on the **self-chat** (a note to yourself — reaches nobody else): bogus `wa_id` → `not_found`
 with nothing sent; two back-to-back calls → second `429 rate`; apply → chip returned by `/messages`; remove →
 chips empty; the real `reactChips()` rendered against the live payload. Not exercised: `react_hourly_cap`
