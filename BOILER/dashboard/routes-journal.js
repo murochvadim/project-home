@@ -137,9 +137,35 @@ module.exports = (app, db) => {
     } catch (e) { err(res, e); }
   });
 
-  // Detach (delete the link row ONLY — file stays in the QNAP media library).
+  // Delete an attachment: the link row AND the file on the NAS.
+  // Removing a photo from the journal used to keep the file forever, quietly filling
+  // /mnt/media with orphans nothing pointed at. The media agent owns those files (it
+  // wrote them, and the QNAP SMB user cannot delete on that share), and its
+  // POST /api/media/delete also drops the media_library row, cleans playlists and
+  // re-indexes DLNA — so the whole thing stays consistent.
+  // The file is removed ONLY when no other journal entry still points at it.
   app.delete('/api/journal/media/:id', async (req, res) => {
-    try { await db.query('DELETE FROM journal_media WHERE id = $1', [parseInt(req.params.id)]); res.json({ ok: true }); }
-    catch (e) { err(res, e); }
+    try {
+      const id = parseInt(req.params.id);
+      const row = (await db.query('SELECT media_path FROM journal_media WHERE id = $1', [id])).rows[0];
+      await db.query('DELETE FROM journal_media WHERE id = $1', [id]);
+      let fileDeleted = false;
+      const path = row && row.media_path;
+      if (path) {
+        const others = (await db.query('SELECT count(*)::int AS n FROM journal_media WHERE media_path = $1', [path])).rows[0].n;
+        if (!others) {
+          try {
+            const r = await fetch('http://192.168.1.138:8766/api/media/delete', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ paths: [path] }),
+            });
+            const j = await r.json().catch(() => ({}));
+            fileDeleted = (j && j.deleted) === 1;
+            if (!fileDeleted) console.warn('[journal] file not deleted:', path, JSON.stringify(j));
+          } catch (e) { console.warn('[journal] media delete failed:', e.message); }
+        }
+      }
+      res.json({ ok: true, file_deleted: fileDeleted });
+    } catch (e) { err(res, e); }
   });
 };

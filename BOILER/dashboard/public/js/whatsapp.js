@@ -325,20 +325,86 @@
     return '<span style="cursor:pointer;text-decoration:underline;" onclick="waOpenMedia(' + i + ')">' + esc(label) + '</span>' + cap;
   }
   // Lightbox — the ONLY place that downloads the real file.
+  // ── Save a chat photo/video into the Daily Journal ─────────────────────────
+  // Files it on the day the MESSAGE was sent (not today), in the journal slot nearest
+  // the message time, using the journal's own upload + "Add details" prompt so both
+  // pages behave identically (js/journal-media.js).
+  const _J_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const _EXT_OF = { 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png', 'image/webp': '.webp',
+                    'image/gif': '.gif', 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/3gpp': '.mp4' };
+  // The message time as {day:'YYYY-MM-DD', hm:minutes, year} in the journal's timezone.
+  function _msgWhen(ts) {
+    const tz = (window.activeTzFor ? window.activeTzFor('daily_journal') : 'Asia/Jerusalem');
+    const d = new Date(ts);
+    const day = d.toLocaleDateString('en-CA', { timeZone: tz });               // YYYY-MM-DD
+    const t = d.toLocaleTimeString('en-GB', { timeZone: tz, hour12: false, hour: '2-digit', minute: '2-digit' });
+    const [h, m] = t.split(':').map(Number);
+    return { day, hm: h * 60 + m, hhmm: t.replace(':', ''), year: day.slice(0, 4) };
+  }
+  async function _journalSlotFor(hm) {
+    let slots = [];
+    try {
+      const j = await (await fetch('/api/dashboard-settings/journal')).json();
+      slots = (j && j.value && j.value.slots) || [];
+    } catch (e) { /* fall through */ }
+    if (!slots.length) return null;
+    const mins = (s) => { const [h, m] = String(s.time_hm || '00:00').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+    return slots.slice().sort((a, b) => Math.abs(mins(a) - hm) - Math.abs(mins(b) - hm))[0];
+  }
+  async function saveToJournal(i, btn) {
+    const m = _msgs[i]; if (!m || !m.has_media) return;
+    const say = (t, ok) => { if (btn) { btn.textContent = t; btn.style.background = ok === false ? '#c0392b' : (ok ? '#166534' : '#2b7a4b'); btn.disabled = !!ok; } };
+    try {
+      say('saving…');
+      if (window.loadTravelSettings) { try { await window.loadTravelSettings(); } catch (e) {} }   // activeTzFor reads a preloaded cache
+      const when = _msgWhen(m.ts);
+      const slot = await _journalSlotFor(when.hm);
+      if (!slot) { say('no journal slots configured', false); return; }
+      const kind = m.media_kind === 'video' ? 'video' : 'image';
+      if (m.media_kind !== 'image' && m.media_kind !== 'video') { say('only photos/videos', false); return; }
+      // Already filed? (the link row is keyed by the file name, which is derived from wa_id)
+      const ext = _EXT_OF[(m.mime || '').toLowerCase()] || (kind === 'video' ? '.mp4' : '.jpg');
+      const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(when.day);
+      const fname = dm[1] + '-' + _J_MONTHS[+dm[2] - 1] + '-' + dm[3] + '_' + when.hhmm + '_wa_' + m.wa_id + ext;
+      let existing = [];
+      try { existing = await (await fetch('/api/journal/media?user_id=1&from=' + when.day + '&to=' + when.day)).json(); } catch (e) {}
+      const already = (existing || []).find(x => String(x.media_path || '').endsWith('/' + fname));
+      if (already) { say('already in the journal · ' + when.day, true); return; }
+      // bytes -> journal folder -> link row
+      const blob = await (await fetch(mediaUrl(m.wa_id, 'full'))).blob();
+      const file = new File([blob], fname, { type: m.mime || blob.type || 'application/octet-stream' });
+      const path = await window.journalUploadMedia(file, when.day, fname);
+      await fetch('/api/journal/media', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: 1, entry_date: when.day, slot_id: slot.id, media_path: path,
+                               media_type: kind, orig_name: fname }),
+      });
+      say('saved · ' + when.day + ' · ' + (slot.name || slot.id), true);
+      // …then the journal's own Event / Year / Location / People prompt.
+      try { await window.journalMediaScan(); } catch (e) {}
+      const meta = await window.journalMediaMetaPrompt(fname, when.day);
+      if (meta) await window.journalApplyMediaMeta(path, meta);
+    } catch (e) { say('failed: ' + (e.message || 'error'), false); }
+  }
+
   function openMedia(i) {
     const m = _msgs[i]; if (!m || !m.has_media) return;
     const url = mediaUrl(m.wa_id, 'full'), kind = m.media_kind || 'document';
     const inner = kind === 'image'
-      ? '<img src="' + url + '" style="max-width:92vw;max-height:82vh;border-radius:8px;display:block;">'
+      ? '<img src="' + url + '" style="max-width:92vw;max-height:88vh;border-radius:8px;display:block;">'
       : kind === 'video'
-      ? '<video src="' + url + '" controls autoplay style="max-width:92vw;max-height:82vh;border-radius:8px;display:block;background:#000;"></video>'
+      ? '<video src="' + url + '" controls autoplay style="max-width:92vw;max-height:88vh;border-radius:8px;display:block;background:#000;"></video>'
       : kind === 'audio'
       ? '<audio src="' + url + '" controls autoplay style="width:min(80vw,420px);"></audio>'
       : '<a href="' + url + '" target="_blank" rel="noopener" style="color:#25D366;font-weight:600;">⬇ ' + esc(m.file_name || 'download file') + '</a>';
     const ov = q('wa-media-modal'); if (!ov) return;
+    const saveable = (kind === 'image' || kind === 'video');
     ov.querySelector('#wa-media-body').innerHTML =
       '<div style="color:#fff;font-size:0.8rem;margin-bottom:6px;">' + esc(m.body || m.file_name || '') + '</div>' + inner +
-      '<div style="margin-top:8px;"><a href="' + url + '" target="_blank" rel="noopener" style="color:#9be7b4;font-size:0.8rem;">open in a new tab</a></div>';
+      '<div style="margin-top:10px;display:flex;gap:12px;align-items:center;justify-content:center;">' +
+        (saveable ? '<button id="wa-media-save" onclick="waSaveToJournal(' + i + ',this)" style="padding:6px 16px;border:none;background:#2b7a4b;color:#fff;border-radius:5px;cursor:pointer;font-weight:600;">💾 Save to Journal</button>' : '') +
+        '<a href="' + url + '" target="_blank" rel="noopener" style="color:#9be7b4;font-size:0.8rem;">open in a new tab</a>' +
+      '</div>';
     ov.style.display = 'flex';
   }
   function closeMedia() {
@@ -668,6 +734,7 @@
   window.waSendChat = sendChat;
   window.waReplyTo = replyTo; window.waCancelReply = cancelReply;
   window.waOpenMedia = openMedia; window.waCloseMedia = closeMedia;
+  window.waSaveToJournal = saveToJournal;
   window.waDelMsg = delMsg;
   window.waRenameChat = renameChat;
   window.waDeleteChat = deleteChat;

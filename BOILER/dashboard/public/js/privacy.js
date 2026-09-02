@@ -1091,7 +1091,8 @@ function pvjTodayJeru() {
 }
 // ── Daily Journal media attachments (photos/videos on the QNAP media library) ──
 // Bytes go browser → media agent (LXC 100) → /mnt/media (QNAP) ONLY; Postgres
-// (journal_media) stores just the path. Detach removes the link, keeps the file.
+// (journal_media) stores just the path. Deleting an attachment removes the link AND the
+// file on the NAS (see routes-journal.js) — it is a real delete, not a detach.
 const PVJ_MEDIA_INGEST = 'http://192.168.1.138:8767';   // POST /api/media/upload
 const PVJ_MEDIA_PLAYER = 'http://192.168.1.138:8766';   // /api/media/thumb + /stream
 let pvjMediaMap = {};                                   // "<date>|<slot>" → [rows]
@@ -1100,28 +1101,10 @@ const pvjRelOf  = (p) => String(p || '').replace(/^\/mnt\/media\//, '');
 const pvjRelEnc = (p) => pvjRelOf(p).split('/').map(encodeURIComponent).join('/');
 const pvjThumb  = (p) => PVJ_MEDIA_PLAYER + '/api/media/thumb?path=' + encodeURIComponent(pvjRelOf(p));
 
-async function pvjUpload(file, dateStr) {
-  // Date-led name so the item reads as the journal day (e.g. 2026-08-04_193502_g5r.mp4).
-  // Keep it unique — upload does f.save() which OVERWRITES a same-name file.
-  const _now = new Date();
-  const _hms = String(_now.getHours()).padStart(2, '0') + String(_now.getMinutes()).padStart(2, '0') + String(_now.getSeconds()).padStart(2, '0');
-  const _ext = (/(\.[a-z0-9]+)$/i.exec(file.name || '') || ['', ''])[1].toLowerCase();
-  const _MO = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const _dm = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
-  const _dname = _dm ? (_dm[1] + '-' + (_MO[+_dm[2] - 1] || _dm[2]) + '-' + _dm[3]) : String(dateStr || '');
-  // Folder is per-MONTH (e.g. "2026-August") — the filename stays day-stamped so
-  // each item still reads as its exact day, but all of a month share one folder.
-  const _mname = _dm ? (_dm[1] + '-' + (_MO[+_dm[2] - 1] || _dm[2])) : String(dateStr || '');
-  const uni = _dname + '_' + _hms + '_' + Math.random().toString(36).slice(2, 5) + _ext;
-  const fd = new FormData();
-  fd.append('file', file, file.name);
-  fd.append('relativePath', uni);
-  fd.append('targetPath', 'Daily Journal/' + _mname);
-  const r = await fetch(PVJ_MEDIA_INGEST + '/api/media/upload', { method: 'POST', body: fd });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.path) throw new Error(j.error || 'upload failed');
-  return j.path;
-}
+// Upload + metadata prompt now live in js/journal-media.js so the Communication page
+// (WhatsApp -> journal) uses the very same code. Thin wrappers keep the call sites here.
+const pvjUpload = (file, dateStr) => window.journalUploadMedia(file, dateStr);
+
 async function pvJournalLoadMedia(from, to, merge) {
   let rows = [];
   try {
@@ -1148,7 +1131,7 @@ function pvjMediaChipsHtml(date, slot) {
       : `<span style="display:inline-flex;align-items:center;justify-content:center;height:52px;width:52px;background:#0b3b37;color:#fff;border-radius:6px;font-size:1.4rem;">🎬</span>`;
     return `<span style="position:relative;display:inline-block;">
       <span style="cursor:pointer;" title="${pvjEsc(m.orig_name || '')}" onclick="pvjLightbox('${rel}','${m.media_type}')">${thumb}</span>
-      <button title="Remove from journal (keeps the file)" onclick="pvJournalDetach(${m.id})"
+      <button title="Delete from the journal and from the NAS" onclick="pvJournalDetach(${m.id})"
         style="position:absolute;top:-7px;right:-7px;background:#c0392b;color:#fff;border:none;border-radius:50%;width:18px;height:18px;line-height:16px;font-size:0.7rem;cursor:pointer;padding:0;">✕</button>
     </span>`;
   }).join('');
@@ -1192,51 +1175,15 @@ async function pvJournalAttach(input, slotId) {
 
 // Per-file metadata prompt for a just-attached journal item. Resolves the metadata object
 // on Save, or null on Skip. Reuses the same fields as the analyzer's edit modal.
-function pvjMediaMetaPrompt(fileName, dateStr) {
-  return new Promise((resolve) => {
-    const ov = document.getElementById('pvj-media-meta');
-    if (!ov) { resolve(null); return; }
-    document.getElementById('pvjmm-file').textContent     = fileName || '';
-    document.getElementById('pvjmm-event').value          = '';
-    document.getElementById('pvjmm-year').value           = (String(dateStr || '').slice(0, 4)) || '';
-    document.getElementById('pvjmm-location').value       = '';
-    document.getElementById('pvjmm-person').value         = '';
-    ov.style.display = 'flex';
-    const saveBtn = document.getElementById('pvjmm-save');
-    const skipBtn = document.getElementById('pvjmm-skip');
-    const done = (val) => { ov.style.display = 'none'; saveBtn.onclick = null; skipBtn.onclick = null; resolve(val); };
-    saveBtn.onclick = () => {
-      const event    = document.getElementById('pvjmm-event').value.trim()    || null;
-      const yr       = document.getElementById('pvjmm-year').value.trim();
-      const year     = yr ? parseInt(yr, 10) : null;
-      const location = document.getElementById('pvjmm-location').value.trim() || null;
-      const pr       = document.getElementById('pvjmm-person').value.trim();
-      const person   = pr ? pr.split(',').map(s => s.trim()).filter(Boolean) : null;
-      done({ event, year, location, person });
-    };
-    skipBtn.onclick = () => done(null);
-    setTimeout(() => document.getElementById('pvjmm-event').focus(), 50);
-  });
-}
+const pvjMediaMetaPrompt = (fileName, dateStr) => window.journalMediaMetaPrompt(fileName, dateStr);
+
 
 // Wait for the media_library row (registered async by the scan) then PATCH the metadata.
 // Uses the exact endpoints the analyzer edit modal uses: GET (player :8766), PATCH (ingest :8767).
-async function pvjApplyMediaMeta(path, meta) {
-  for (let i = 0; i < 8; i++) {
-    try {
-      const g = await fetch(PVJ_MEDIA_PLAYER + '/api/media/library/' + encodeURIComponent(path));
-      if (g.ok) break;
-    } catch (_) {}
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  try {
-    await fetch(PVJ_MEDIA_INGEST + '/api/media/library?path=' + encodeURIComponent(path), {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(meta),
-    });
-  } catch (_) { /* metadata will apply after the next scan */ }
-}
+const pvjApplyMediaMeta = (path, meta) => window.journalApplyMediaMeta(path, meta);
+
 async function pvJournalDetach(id) {
-  if (!confirm('Remove this photo/video from the journal? The file stays in your media library.')) return;
+  if (!confirm('Delete this photo/video? It is removed from the journal AND deleted from the media library on the NAS.')) return;
   try { await fetch('/api/journal/media/' + id, { method: 'DELETE' }); } catch (e) { /* ignore */ }
   const D = document.getElementById('pvj-date')?.value || pvjTodayJeru();
   await pvJournalLoadMedia(_pvjFrom(90));

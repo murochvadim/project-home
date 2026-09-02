@@ -318,6 +318,27 @@ Two things a contract-level check could not catch — both were visible on scree
 ⚠ Lesson for future audits: "endpoint 200 + flag present" proves nothing about what the user sees.
 Render the real payload through the real function and read the output.
 
+### 💾 Save a chat photo/video into the Daily Journal (BUILT 2026-09-02)
+The media lightbox (journal-styled: `rgba(0,0,0,.85)`, `92vw x 88vh`, white ✕ top-right) carries a
+**💾 Save to Journal** button. One click, no questions:
+- **day** = the message time in the journal's timezone — `activeTzFor('daily_journal')`, so Travel mode
+  applies exactly as it does to the journal itself (⚠ it is **sync over a preloaded cache**, so the
+  handler `await`s `loadTravelSettings()` first, else it silently falls back to Asia/Jerusalem);
+- **slot** = the configured slot nearest that time (בוקר 08:00 · יום 14:00 · ערב 21:00 → 16:24 = יום),
+  read live from `dashboard_settings.journal`;
+- bytes = `GET <agent>/media/<wa_id>/full` → `Blob` → `File` named
+  `<YYYY-Month-DD>_<HHMM>_wa_<wa_id><ext>`; ext comes from the message **mimetype** because the media
+  agent rejects unknown extensions. The name is derived from `wa_id`, so re-saving overwrites its own
+  file, and the link row is checked first — a second Save reports "already in the journal".
+- then the journal's own **📸 Add details** prompt (Event / Year / Location / People, Skip allowed) →
+  `PATCH :8767/api/media/library`.
+**Shared code:** upload + prompt + metadata PATCH now live in **`js/journal-media.js`**, used by BOTH
+`privacy.js` (the journal) and `whatsapp.js` — one implementation, so the two pages cannot drift into
+different folders or questions. The prompt reuses `#pvj-media-meta` on Privacy and **builds the same
+overlay + injects its CSS** on Communication (those classes live inside `privacy.html`, not a shared
+stylesheet). `communication.html` also loads `travel-tz.js`. Verified end-to-end on a real photo:
+file on the NAS, `journal_media` row with the **message's** day + the right slot, library row indexed.
+
 ## Pending phases
 - **P4** — Notifications `surfaces.whatsapp` (`_build_whatsapp` mirror of `_build_panel_alert`; rule_engine
   `protocol=='whatsapp'` branch → self-chat notify-anywhere); incoming automation `RULES/rules/whatsapp_*.py`.
