@@ -7,6 +7,7 @@
   let products = [];
   let listItems = [];
   let categories = [];
+  let recipeCats = [];   // recipe categories (own table, separate from the food categories)
 
   // ── product-photo editor (square crop + zoom + pan → 400×400 JPEG) ──
   const PE_V = 320, PE_OUT = 400;          // viewport px / output px
@@ -468,6 +469,83 @@
     catch (e) { alert('Reorder failed: ' + e.message); }
   }
 
+  // ── recipe categories (מרקים / סלטים …) — step 1 of the Recipes feature ──
+  // Their own table + endpoints, deliberately NOT kitchen_categories: the fridge home screen draws a
+  // circle for every food category, so recipe categories there would appear among the food.
+  // No "Recipes" count column yet — there are no recipes, so it could only ever print 0.
+  async function loadRecipeCats() {
+    try { recipeCats = await jget('/api/kitchen/recipe-categories') || []; }
+    catch (e) { recipeCats = []; }
+    renderRecipeCats();
+  }
+
+  function renderRecipeCats() {
+    const tb = $('rc-rows');
+    if (!tb) return;
+    if (!recipeCats.length) { tb.innerHTML = '<tr><td colspan="4" class="k-hint">No recipe categories yet — add one above.</td></tr>'; return; }
+    tb.innerHTML = recipeCats.map((c, i) => `
+      <tr data-id="${c.id}">
+        <td class="k-emoji">${c.emoji || '📖'}</td>
+        <td class="heb">${esc(c.name)}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="k-edit" data-act="up"   title="Move up"   ${i === 0 ? 'disabled style="opacity:.3"' : ''}>▲</button>
+          <button class="k-edit" data-act="down" title="Move down" ${i === recipeCats.length - 1 ? 'disabled style="opacity:.3"' : ''}>▼</button>
+        </td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="k-edit" data-act="edit" title="Edit">✎</button>
+          <button class="k-x" data-act="del" title="Delete">🗑</button>
+        </td>
+      </tr>`).join('');
+    tb.querySelectorAll('tr[data-id]').forEach(row => {
+      const id = +row.dataset.id;
+      const up = row.querySelector('[data-act=up]');   if (up && !up.disabled) up.onclick = () => moveRecipeCat(id, -1);
+      const dn = row.querySelector('[data-act=down]'); if (dn && !dn.disabled) dn.onclick = () => moveRecipeCat(id, 1);
+      row.querySelector('[data-act=edit]').onclick = () => editRecipeCat(id);
+      row.querySelector('[data-act=del]').onclick  = () => delRecipeCat(id);
+    });
+  }
+
+  function editRecipeCat(id) {
+    const c = recipeCats.find(x => x.id === id); if (!c) return;
+    $('rc-id').value = c.id;
+    $('rc-name').value = c.name || '';
+    $('rc-emoji').value = c.emoji || '';
+    $('rcform-title').textContent = 'Edit: ' + (c.name || '');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  window.kResetRecipeCatForm = function () {
+    $('rc-id').value = ''; $('rc-name').value = ''; $('rc-emoji').value = '';
+    $('rcform-title').textContent = 'Add recipe category';
+  };
+
+  window.kSaveRecipeCat = async function () {
+    const name = $('rc-name').value.trim();
+    if (!name) { alert('Recipe category name (Hebrew) is required.'); return; }
+    const body = { name, emoji: $('rc-emoji').value.trim() || null };
+    const id = $('rc-id').value;
+    if (id) body.id = +id; else body.sort_order = recipeCats.length + 1;
+    try { await jpost('/api/kitchen/recipe-categories', body); window.kResetRecipeCatForm(); await loadRecipeCats(); }
+    catch (e) { alert('Save failed: ' + e.message); }
+  };
+
+  async function delRecipeCat(id) {
+    const c = recipeCats.find(x => x.id === id);
+    if (!confirm(`Delete recipe category "${c ? c.name : id}"?`)) return;
+    try { await jpost('/api/kitchen/recipe-categories/delete', { id }); await loadRecipeCats(); }
+    catch (e) { alert('Delete failed: ' + e.message); }
+  }
+
+  async function moveRecipeCat(id, dir) {
+    const i = recipeCats.findIndex(x => x.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= recipeCats.length) return;
+    const order = recipeCats.map(c => c.id);
+    order.splice(i, 1); order.splice(j, 0, id);
+    try { await jpost('/api/kitchen/recipe-categories/reorder', { order }); await loadRecipeCats(); }
+    catch (e) { alert('Reorder failed: ' + e.message); }
+  }
+
   // ── stock (qty_on_hand + low threshold per product, in its unit) ──
   function renderStock() {
     const box = $('stock-rows');
@@ -657,7 +735,7 @@
   // ── boot ──
   window.kLoad = async function () {
     _peWire(); refreshFormPhoto();
-    await loadProducts(); await loadCategories(); await loadList(); await loadTech();
+    await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats();
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);

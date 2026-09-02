@@ -151,6 +151,7 @@
     <button class="k-tab" onclick="kTab('common', this)">🧾 Common list</button>
     <button class="k-tab" onclick="kTab('stock', this)">📦 Stock list</button>
     <button class="k-tab" onclick="kTab('lists', this)">🧺 Shopping List</button>
+    <button class="k-tab" onclick="kTab('recipes', this)">📖 Recipes</button>
     <button class="k-tab" style="margin-left:40px" onclick="kTab('amounts', this)">⚙ Settings</button>
     <button class="k-tab" onclick="kTab('cats', this)">🏷 Categories</button>
   </div>
@@ -271,6 +272,7 @@
     <div class="k-subtabs">
       <button class="k-subtab active" onclick="kSub('prod', this)">Product Settings</button>
       <button class="k-subtab" onclick="kSub('tech', this)">Tech Settings</button>
+      <button class="k-subtab" onclick="kSub('recipe', this)">Recipe Settings</button>
     </div>
     <div id="sub-prod" class="sub-panel active">
       <div class="card"><div id="amt-rows"></div></div>
@@ -294,6 +296,36 @@
           <button class="btn btn-primary btn-sm" style="align-self:flex-start" onclick="kSaveTech()">💾 Save</button>
         </div>
       </div>
+    </div>
+    <div id="sub-recipe" class="sub-panel">
+      <div class="card">
+        <h3 style="margin-top:0">Recipe Settings</h3>
+        <div style="font-size:0.85rem;color:#8a93a6;">
+          Nothing here yet — tell me what belongs on this page and I'll add it.<br>
+          The timings for the recipe screens on the tablet come from <b>Tech Settings</b>, which is shared.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recipes (step 1: recipe categories) -->
+  <div id="tab-recipes" class="tab-panel">
+    <div class="card">
+      <h3 id="rcform-title" style="margin-top:0">Add recipe category</h3>
+      <div class="k-form">
+        <input type="hidden" id="rc-id">
+        <label>Name (Hebrew)<input id="rc-name" class="heb" placeholder="שם הקטגוריה"></label>
+        <label>Emoji<input id="rc-emoji" style="width:64px" placeholder="🍲"></label>
+        <button class="btn btn-primary btn-sm" onclick="kSaveRecipeCat()">Save</button>
+        <button class="btn btn-secondary btn-sm" onclick="kResetRecipeCatForm()">Clear</button>
+      </div>
+      <div style="font-size:0.78rem;color:#8a93a6;margin-top:6px;">Order (▲▼) sets the order the recipe categories appear in on the fridge tablet.</div>
+    </div>
+    <div class="card">
+      <table class="k-table">
+        <thead><tr><th></th><th>Recipe category</th><th style="text-align:right">Order</th><th></th></tr></thead>
+        <tbody id="rc-rows"></tbody>
+      </table>
     </div>
   </div>
 
@@ -334,6 +366,6 @@
 </main>
 
 <script src="js/alerts-monitor.js?v=21"></script>
-<script src="js/kitchen.js?v=45"></script>
+<script src="js/kitchen.js?v=46"></script>
 </body>
 </html>

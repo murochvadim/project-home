@@ -322,3 +322,42 @@ Side-to-side audit against the live project changed the plan in these ways (see 
 - [EMAIL](../EMAIL/CLAUDE.md) — receipt-email path (LXC 110 + `/create-email-rule` pattern).
 - Personal Health ([PERSONAL_HEALTH](../PERSONAL_HEALTH/CLAUDE.md)) — calorie/allergen integration.
 - [PRIVACY](../PRIVACY/CLAUDE.md) — Caddy internal-CA HTTPS pattern (LXC 109) reused here for the camera.
+
+## Recipes (מתכונים) — STEP 1: recipe categories (BUILT 2026-09-03)
+
+First slice of the Recipes feature. **Dashboard only — the fridge tablet is untouched.**
+
+The end shape (later steps): a **מתכונים circle of its own** beside רשימה on the tablet → tap it and the
+**recipe categories fly like the food categories** → tap one for its recipes → tap a recipe for its
+products, each with a **+** that puts it on the shopping list at the required amount (recipe units,
+converted to the product's purchase unit).
+
+**Step 1 delivers only the place to create those categories:**
+- **`kitchen_recipe_categories`** (migration `009_recipe_categories.sql`) — `id, name (Hebrew), emoji,
+  sort_order, active, created_at, updated_at`; retention **forever + 🔒 protected**; registered in
+  Health DB-Volumes under **Kitchen** (`DBV_GROUPS` server.js:2403 + the `tsCol` literal at :2440).
+- ⚠ **Deliberately its OWN table, not a `kind` column on `kitchen_categories`:** the fridge home screen
+  draws a circle for **every** row of `kitchen_categories` (`circleList()` in `kitchen/kitchen.js`), so
+  recipe categories living there would appear among the food. A separate table cannot leak — verified
+  after the build (tablet still shows exactly its 10 food categories).
+- **4 endpoints** on LXC 113, mirroring the product-category ones: `GET /api/kitchen/recipe-categories`
+  (`?all=1` includes inactive) · `POST` upsert · `POST /delete` (**soft**, `active=false`) ·
+  `POST /reorder` (`{order:[ids]}` → `sort_order = i+1`).
+- **Dashboard 📖 Recipes tab**, immediately right of 🧺 Shopping List (the 40 px gap lives on ⚙ Settings,
+  so Settings + 🏷 Categories shift right on their own). Form + table with ▲▼ reorder and delete — a
+  copy of the 🏷 Categories tab, `rc-` element ids, functions `loadRecipeCats` / `renderRecipeCats` /
+  `kSaveRecipeCat` / `kResetRecipeCatForm` / `delRecipeCat` / `moveRecipeCat` in `js/kitchen.js`.
+  No "Recipes" count column yet — there are no recipes, so it could only print 0.
+- **⚙ Settings → "Recipe Settings"** sub-tab (`#sub-recipe`, `kSub('recipe')`) — **wired and empty on
+  purpose**: its contents aren't decided yet. **Tech Settings stays shared** and governs the recipe
+  screens too, so there are **no new settings keys** — the later tablet step must reuse
+  `idle_return_sec` / `panel_return_sec` / `blink_count`.
+
+⚠ **Deploy gotchas (both caught by re-auditing the plan, both real):** `kitchen.html` loads
+`js/kitchen.js?v=N` — **bump it** (45→46 here) or the browser serves the old JS; and because this
+touches `server.js`, the dashboard needs **`pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`**
+(never `pm2 restart`).
+
+**Not built yet:** the מתכונים circle + flying recipe categories on the tablet, the recipes themselves,
+products inside a recipe, amounts and unit conversion. **Open question for the next step:** can one
+recipe belong to more than one category (a column vs a join table)?

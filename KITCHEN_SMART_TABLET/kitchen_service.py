@@ -289,6 +289,62 @@ def categories_reorder():
     except Exception as e:
         return _err(e)
 
+# ── recipe categories (מרקים / סלטים …) ────────────────────────
+# Their OWN table, not a flavour of kitchen_categories: the fridge home screen draws a circle for
+# every row of kitchen_categories, so recipe categories living there would show up among the food.
+@app.route('/api/kitchen/recipe-categories')
+def recipe_categories_list():
+    try:
+        sql = "SELECT * FROM kitchen_recipe_categories"
+        if request.args.get('all') != '1':
+            sql += " WHERE active IS NOT FALSE"
+        sql += " ORDER BY sort_order, name"
+        return jsonify(q(sql))
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/recipe-categories', methods=['POST'])
+def recipe_categories_upsert():
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        name = (b.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'name required'}), 400
+        c = {'name': name, 'emoji': b.get('emoji'), 'sort_order': b.get('sort_order') or 0}
+        cid = b.get('id')
+        if cid:
+            row = q("""UPDATE kitchen_recipe_categories SET name=%(name)s, emoji=%(emoji)s,
+                         sort_order=%(sort_order)s, updated_at=now()
+                       WHERE id=%(id)s RETURNING *""", {**c, 'id': cid}, fetch='one')
+        else:
+            row = q("""INSERT INTO kitchen_recipe_categories (name, emoji, sort_order)
+                       VALUES (%(name)s,%(emoji)s,%(sort_order)s) RETURNING *""", c, fetch='one')
+        return jsonify(row)
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/recipe-categories/delete', methods=['POST'])
+def recipe_categories_delete():
+    try:
+        cid = (request.get_json(force=True, silent=True) or {}).get('id')
+        if not cid:
+            return jsonify({'error': 'id required'}), 400
+        # soft-delete, like the product categories: drops out of the active set, recipes keep their FK.
+        q("UPDATE kitchen_recipe_categories SET active=false, updated_at=now() WHERE id=%s", (cid,), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/recipe-categories/reorder', methods=['POST'])
+def recipe_categories_reorder():
+    try:
+        order = (request.get_json(force=True, silent=True) or {}).get('order') or []
+        for i, cid in enumerate(order):
+            q("UPDATE kitchen_recipe_categories SET sort_order=%s, updated_at=now() WHERE id=%s", (i + 1, cid), fetch='none')
+        return jsonify({'ok': True, 'n': len(order)})
+    except Exception as e:
+        return _err(e)
+
 # ── settings (singleton config: idle-return timeout, etc.) ──────────
 @app.route('/api/kitchen/settings')
 def settings_get():
