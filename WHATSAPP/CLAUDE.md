@@ -413,6 +413,18 @@ Every call that touches WhatsApp's servers was enumerated (`sock.*`) and traced 
 - `rule_engine` holds a `write mur/home/whatsapp/send` ACL (the planned P4 notify path). **Nothing publishes
   it and 0 MQTT sends have ever occurred** — latent capability, not an active risk.
 
+**Origin lock (2026-09-02).** The API used to answer `Access-Control-Allow-Origin: *` with no auth, so
+**any website opened on the home network could call it** — `/send` from the real number, `/leave`,
+`/chat/delete`, or read every chat. Now only pages served from INSIDE the network may call it: same-origin,
+`localhost`/`127.0.0.1`, or an RFC1918 / NetBird (100.64/10) host — an attacker page comes from a public
+domain and is refused. `ALLOWED_ORIGINS` (comma-separated) adds exceptions. ⚠ The refusal is an explicit
+**403**, not just withheld headers: a *simple* request needing no preflight (e.g. `POST /groups/refresh`,
+no JSON body) would otherwise still **execute** server-side while the browser merely hid the reply.
+A request with **no Origin** (curl, server-side callers, same-origin GET) is untouched, so the LAN trust
+model is unchanged. Verified live: evil-origin preflight **403**, evil `POST /send` **403**, evil
+`POST /groups/refresh` **403**; `http://localhost:3000` and `http://192.168.1.128:3000` **200** on
+status/chats/recent/settings/groups; no-Origin **200**; `/link` still serves.
+
 **Fixed by this audit:**
 1. **Reconnect had no backoff** — a flat `setTimeout(connect, 2000)` on every close. Normal drops are rare
    (measured: 21 in 3 days, max 2/h, codes 428/503/515) so it never bit, but a *persistent* refusal would

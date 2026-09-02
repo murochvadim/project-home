@@ -519,9 +519,43 @@ function reconnectLater(loggedOut) {
 // ── HTTP API ─────────────────────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
-// CORS — the dashboard (different origin) calls this API directly (like email/kitchen agents).
+// CORS — the dashboard (a different origin) calls this API directly, like the email/kitchen
+// agents. But this one can SEND FROM YOUR REAL NUMBER, so `Allow-Origin: *` was too open: any
+// website you happened to visit while at home could call /send, /leave or /chat/delete, or read
+// every chat — and abuse like that is what gets a number banned. Only pages served from INSIDE
+// the network may call it now; an attacker page comes from a public domain and is refused.
+//
+// ⚠ The refusal is an explicit 403, not just withheld headers. A "simple" request (one that
+// needs no preflight, e.g. POST /groups/refresh with no JSON body) would otherwise still EXECUTE
+// server-side — the browser would only hide the reply. Blocking it outright stops the action.
+// A request with NO Origin (curl, a server-side caller, a same-origin GET) is untouched.
+const ORIGIN_ALLOW = (process.env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean);
+function originAllowed(origin, host) {
+  if (!origin) return true;                                   // not a browser cross-origin call
+  if (ORIGIN_ALLOW.includes(origin)) return true;             // explicit override via env
+  try {
+    const u = new URL(origin);
+    if (host && u.host === host) return true;                 // our own pages (e.g. /link)
+    const h = u.hostname;
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return true;
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+    if (m) {
+      const a = +m[1], b = +m[2];
+      if (a === 10) return true;                              // 10.0.0.0/8
+      if (a === 172 && b >= 16 && b <= 31) return true;       // 172.16.0.0/12
+      if (a === 192 && b === 168) return true;                // 192.168.0.0/16  (the dashboard)
+      if (a === 100 && b >= 64 && b <= 127) return true;      // 100.64.0.0/10   (NetBird)
+    }
+  } catch (e) { /* unparsable Origin -> refuse */ }
+  return false;
+}
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (!originAllowed(origin, req.headers.host)) {
+    log.warn('BLOCKED cross-origin ' + req.method + ' ' + req.path + ' from ' + origin);
+    return res.status(403).json({ ok: false, reason: 'origin_not_allowed' });
+  }
+  if (origin) { res.header('Access-Control-Allow-Origin', origin); res.header('Vary', 'Origin'); }
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
