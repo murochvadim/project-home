@@ -235,6 +235,35 @@ Deliberately NOT borrowed: Grocy's chores/batteries modules (out of scope — th
 - **WhatsApp** = `wa.me` link (no third-party relay) **from the phone/dashboard, not the kiosk**;
   if automated later, Meta Cloud API (non-Chinese).
 
+## 🖨 Shopping-list printer — Phomemo M08F (decided 2026-09-02, not yet wired)
+
+An **A4 thermal printer** (no ink, no toner) so the buy-list can leave the fridge as paper.
+
+**Hardware (from Phomemo's own page):** A4 thermal sheets **210 × 297 mm** ("A4 Thermal Paper Quick
+Dry", Letter version also sold) · **203 dpi** · **USB-C + Bluetooth** · 1200 mAh ≈ **140 pages** per
+charge. Sold as Phomemo / COLORWING / AIMO — same device.
+
+**Paper to buy:** A4 **thermal** sheets (NOT plain paper — there is no ink; the head burns the
+coating). Third-party A4 thermal packs fit. Prefer **BPA/BPS-free** for a kitchen, and "long-life"
+coating if a list ever needs to survive.
+⚠ **Thermal fades** — months to a couple of years, faster in heat and sunlight. Fine for a shopping
+list; never use it for anything that must be kept (those belong in the Privacy docs vault).
+
+**How to drive it — CUPS, not raw Bluetooth.**
+1. Plug it in by **USB** and add a CUPS queue:
+   `sudo lpadmin -p M08F -v 'usb://Phomemo/M08F' -P M08F.ppd -E` → then anything can `lp -d M08F`.
+2. Share that queue on the LAN so any LXC or the dashboard can print, with no protocol code at all.
+3. Raw **ESC/POS over Bluetooth** exists as a fallback (reverse-engineered from the Android app —
+   `vivier/phomemo-tools`), but only if CUPS disappoints.
+⚠ Both the community `rastertoM08F` filter and Phomemo's own Linux driver are **binary, no source**;
+and the printer feeds **full A4 lengths only** (a 5-line list still ejects a whole page).
+
+**First use:** a **🧾 Print** button on the Kitchen page / fridge PWA → the active buy-list as A4.
+Later candidates: the daily journal summary, reminders, a medical document for an appointment.
+
+**Open before building:** which machine hosts it (the mini PC, next to the two camera extenders, is
+the natural choice), and USB vs Bluetooth.
+
 ## Integrations with existing systems
 `household_users` (who eats) · `ph_*` (Personal Health calories) · Privacy Budget (spend) · Email
 Agent LXC 110 (receipt email) · reminders-badge / Notifications (expiry, low-stock) · Voice LXC 106
