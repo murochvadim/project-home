@@ -375,13 +375,14 @@ The recipe categories from step 1 now appear on the fridge. **Tablet-only — no
   before and after the extraction: **HTML byte-identical**. (Circle positions differ between any two
   renders because the bob phase is `Math.random()` by design — `kitchen.js:91-92` — so compare the
   HTML, not the coordinates.)
-- **`mode`** gains `recipes` + `recipe-cat`; `rebuild()` (rotate/resize), `goIdleHome()` and the 30 s
+- **`mode`** gains `recipes`; `rebuild()` (rotate/resize), `goIdleHome()` and the 30 s
   poll all handle them. The poll re-fetches the recipe categories only while those screens are open,
   and redraws only when the set actually changed (same signature trick the home screen uses).
 - **`goBack()`** replaces `showHome()` on `#backbtn`: recipe-category → מתכונים → food home,
   one level at a time (a product category still goes straight home, unchanged).
 - Recipe categories are fetched **lazily on open**, never at boot — the fridge home must not wait.
-- Tapping a category shows the category circle + "no recipes in this category" — recipes are step 3.
+- Tapping a category showed the category circle + "no recipes in this category" — **superseded by
+  step 4**, which opens a right-side panel listing that category's recipes.
 - The bar on a recipe-category screen reads **מתכוני <category>** (construct form: "recipes of X"),
   e.g. 🥩 מתכוני בשר — not the bare category name (2026-09-04). Cache-bust `kitchen.js?v=36`.
 
@@ -550,6 +551,51 @@ flows** — name, category, and per row the qty / unit / product plus an ✕ to 
 rows used to be plain text; a wrong parse or a wrong fuzzy guess must be as easy to fix as a blank.
 Cache-bust `js/kitchen.js?v=48`.
 
-**Not built yet:** recipes on the tablet (category screens still say "no recipes yet"), the **+**
-button, and recipe-unit → purchase-unit conversion. This step stores כף/כפית/צרור as parsed, which is
-exactly what that conversion will consume.
+**Not built yet:** the **+** button and recipe-unit → purchase-unit conversion. This step stores
+כף/כפית/צרור as parsed, which is exactly what that conversion will consume. (Recipes on the tablet
+landed in step 4 below.)
+
+## Recipes — STEP 4: the recipes of a category, on the tablet (BUILT 2026-09-04)
+
+Tapping a recipe category opens a **right-side panel** listing that category's recipes — one row per
+recipe: **icon + name**, and **its own two circles**.
+
+- **Same panel as a product, deliberately** — the markup reuses `.pp-backdrop` / `.pp-inner` /
+  `.pp-close`, so it is `width: min(50%, 560px)` pinned right over a dimmed backdrop: it covers
+  **part** of the screen with the flying categories still visible behind, exactly like tapping a
+  product does. ⚠ A first attempt spread the rows across the whole stage with one shared pair of
+  circles in the left gutter — wrong on both counts.
+- **Two circles per ROW, not per screen**: **ברשימה** (see below) and a grey **`?`** placeholder,
+  reserved for a use still to be defined. The placeholder is deliberate — it holds its position so
+  giving it a meaning later cannot reflow the row.
+- **ברשימה = how many of that recipe's ingredients are already on the shopping list (N/M).** Only the
+  **matched** ingredients can count — an unmatched line has no product, so it could never be on the
+  list — and it counts **distinct products**, so two lines of the same product are one thing to buy.
+  Reuses `inListQty()`; refreshed on the same 30 s poll that refreshes the list.
+- **No measured-pixel layout.** The circles are placed by flexbox inside the row, so nothing can
+  overlap the fixed nav circles or overflow on a different screen — the earlier attempt needed
+  viewport maths and three fallbacks, this needs none.
+- `mode` stays `recipes` while the panel is open (it is an overlay, like the product panel):
+  `goBack()` closes the panel first, then goes home; `goIdleHome()` closes it too; a resize needs
+  nothing from it. Ingredient rows are fetched **once per recipe** and cached.
+- **`item_count` is part of the recipes signature** on purpose: editing only a recipe's *ingredients*
+  changes nothing else, and without it the cached items — and so the ברשימה count — would go stale.
+- Cache-bust `kitchen.css?v=52` / `kitchen.js?v=38`.
+
+### ⚠ The recipe-icon bug this step had to fix first (dashboard)
+
+Rows show an icon, but **no recipe had one and none could be set**:
+
+- the recipe edit window had **no emoji input** (products, product categories and recipe categories
+  all had one — recipes were missed), and
+- `kImportSave` **never sent `emoji`**, while `recipe_save` writes `emoji=%(emoji)s` unconditionally
+  — so an emoji set directly in the DB was **wiped on the next ✎ Edit + Save**.
+
+Fixed in `BOILER/dashboard/public/kitchen.html` (an `imp-emoji` field beside the name) and
+`js/kitchen.js` (filled in `kRecipeEdit`, cleared in `kImportOpen`, and **sent** in `kImportSave`);
+no backend change — `recipe_save` already persisted it and `GET /api/kitchen/recipes` already
+returned it. Cache-bust `js/kitchen.js?v=53`. Verified by round-tripping the real save payload: the
+icon survives a **second** save, item counts unchanged.
+
+**Not built yet:** what the second circle does, opening a recipe to see its ingredients, and the **+**
+that puts an ingredient on the shopping list.

@@ -545,6 +545,7 @@
     $('imp-msg').textContent = '';
     $('imp-save-msg').textContent = '';
     await loadRecipeSites();
+    $('imp-emoji').value = '';                 // a fresh import must not inherit the last edit's icon
     $('imp-site').innerHTML = recipeSites.map(s => `<option value="${esc(s.key)}">${esc(s.name)}</option>`).join('');
     $('imp-cat').innerHTML = recipeCats.map(c => `<option value="${c.id}">${c.emoji ? c.emoji + ' ' : ''}${esc(c.name)}</option>`).join('');
     $('k-import').style.display = 'flex';
@@ -576,6 +577,7 @@
       $('imp-cat').innerHTML = recipeCats.map(c => `<option value="${c.id}">${c.emoji ? c.emoji + ' ' : ''}${esc(c.name)}</option>`).join('');
       if (r.category_id) $('imp-cat').value = r.category_id;
       $('imp-title').value = r.name || '';
+      $('imp-emoji').value = r.emoji || '';
       $('imp-src').href = r.source_url || '#';
       renderImportRows();
       $('imp-result').style.display = '';
@@ -702,7 +704,8 @@
     if (!name) { $('imp-save-msg').textContent = 'Give the recipe a name.'; return; }
     const body = {
       id: impEditId || undefined,           // present => UPDATE, absent => INSERT
-      category_id: +cat, name: name, source_url: impParsed.source_url,
+      category_id: +cat, name: name, emoji: ($('imp-emoji').value || '').trim() || null,
+      source_url: impParsed.source_url,
       source_site: impParsed.site, instructions: (impParsed.steps || []).join('\n'),
       items: impParsed.items.map((it, n) => ({
         sort_order: n, group_label: it.group_label, raw_line: it.raw_line,

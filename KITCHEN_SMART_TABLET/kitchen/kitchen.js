@@ -10,8 +10,10 @@
   let products = [];
   let listItems = [];             // current shopping-list items (for the "ברשימה" circle)
   let nodes = [];                 // animated elements: each has .el + .upd(e)->{x,y}
-  let mode = 'home';              // 'home' | 'category' | 'recipes' | 'recipe-cat'
+  let mode = 'home';              // 'home' | 'category' | 'recipes'  (the recipe list is a panel)
   let recipeCats = [], curRecipeCat = null, rsig = '';   // recipe categories (loaded lazily)
+  let recipes = [], recSig = '';  // recipes (loaded lazily, listed in the recipe-category panel)
+  const recItems = {};            // recipe id -> its ingredient rows, fetched once each
   let curCat = null;
   let raf = null, startT = 0, sig = '';
 
@@ -184,29 +186,68 @@
     buildBobGrid(items, it => showRecipeCat(it.id), 'אין קטגוריות מתכונים עדיין');
   }
 
-  // A recipe category's own screen. The recipes themselves are the NEXT step, so for now it shows
-  // the category in the middle and says it is empty — same shape as a product category screen.
-  function showRecipeCat(id) {
-    mode = 'recipe-cat'; curRecipeCat = id;
-    const idx = recipeCats.findIndex(c => c.id === id);
+  // Tapping a recipe category opens a RIGHT-SIDE panel over the flying categories — the same
+  // .pp-inner shape a product uses, so it covers part of the screen, not all of it.
+  // Each row is one recipe: its icon and name, plus its OWN two circles (ברשימה + one reserved).
+  async function showRecipeCat(id) {
+    curRecipeCat = id;
     const cat = recipeCats.find(c => c.id === id);
-    $('backbtn').hidden = false;
-    // "מתכוני <category>" - the construct form reads as "recipes of X", so the bar says what the
-    // screen holds rather than repeating the category name on its own.
-    $('title').textContent = cat ? ((cat.emoji ? cat.emoji + ' ' : '') + 'מתכוני ' + cat.name) : 'מתכונים';
-    const stage = $('stage'), box = $('circles');
-    const W = stage.clientWidth, H = stage.clientHeight, S = Math.min(W - LEFT_SAFE, H);
-    const cx = LEFT_SAFE + (W - LEFT_SAFE) / 2, cy = H / 2;
-    const color = catColor(idx < 0 ? -1 : idx);
-    const centerSize = Math.max(100, Math.min(Math.round(S * 0.22), 180));
-    box.innerHTML = `<button class="circle center" style="--csize:${centerSize}px;background:${color}"><span class="c-name">${esc(cat ? cat.name : '')}</span></button>`
-      + '<div class="empty" style="bottom:12%;top:auto">אין מתכונים בקטגוריה זו</div>';
-    const els = [...box.querySelectorAll('.circle')];
-    nodes = [{ el: els[0], upd: () => ({ x: cx - centerSize / 2, y: cy - centerSize / 2 }) }];
+    $('rp-title').textContent = cat ? ((cat.emoji ? cat.emoji + ' ' : '') + 'מתכוני ' + cat.name) : 'מתכונים';
+    $('rp-list').innerHTML = '';
+    $('recipepanel').hidden = false;
+    if (!recipes.length) await loadRecipes();
+    if (curRecipeCat === id) renderRecipeRows(id);
+  }
+  window.closeRecipeCat = function () { $('recipepanel').hidden = true; curRecipeCat = null; };
+
+  async function loadRecipes() {
+    try { recipes = await jget('/api/kitchen/recipes') || []; } catch (e) { recipes = []; }
+    // item_count is in the signature on purpose: editing only a recipe's INGREDIENTS changes
+    // nothing else, and without it the cached items (and so the ברשימה count) would go stale.
+    recSig = recipes.map(r => [r.id, r.category_id, r.emoji, r.name, r.item_count].join('~')).join('|');
+  }
+
+  function renderRecipeRows(id) {
+    const list = recipes.filter(r => r.category_id === id);
+    const box = $('rp-list');
+    if (!list.length) { box.innerHTML = '<div class="rp-empty">אין מתכונים בקטגוריה זו</div>'; return; }
+    // The circles sit inside the row and are placed by flexbox, not by measured pixels, so nothing
+    // here can overlap or overflow on a different screen size.
+    box.innerHTML = list.map(r => `<div class="rp-row" data-id="${r.id}">
+        <span class="rp-emoji">${r.emoji || '📖'}</span>
+        <span class="rp-name">${esc(r.name)}</span>
+        <span class="rpc rp-inlist"><b class="rp-lbl">ברשימה</b><b class="rp-val" data-count="${r.id}">…</b></span>
+        <span class="rpc rp-todo">?</span>
+      </div>`).join('');
+    paintRowCounts(list);
+  }
+
+  async function recipeItems(rid) {
+    if (!recItems[rid]) {
+      try { const r = await jget('/api/kitchen/recipes/' + rid); recItems[rid] = r.items || []; }
+      catch (e) { recItems[rid] = []; }
+    }
+    return recItems[rid];
+  }
+
+  // ברשימה = how many of that recipe's ingredients are already on the shopping list. Only MATCHED
+  // ingredients can count: an unmatched line has no product, so it could never be on the list.
+  // Counted per distinct product, so two lines of the same product are one thing to buy.
+  async function paintRowCounts(list) {
+    await Promise.all(list.map(async r => {
+      const items = await recipeItems(r.id);
+      const need = [...new Set(items.map(i => i.product_id).filter(p => p != null))];
+      const have = need.filter(pid => inListQty(pid) > 0).length;
+      const el = document.querySelector('.rp-val[data-count="' + r.id + '"]');   // gone if closed
+      if (el) el.textContent = have + '/' + need.length;
+    }));
   }
 
   // One step back, not straight home: recipe category -> the flying recipe categories -> food home.
-  window.goBack = function () { if (mode === 'recipe-cat') buildRecipes(); else buildHome(); };
+  window.goBack = function () {
+    if (!$('recipepanel').hidden) { window.closeRecipeCat(); return; }   // panel -> categories
+    buildHome();
+  };
 
   // ── PRODUCT panel (opens on the right of the same screen; constant circles) ──
   async function loadList() { try { const d = await jget('/api/kitchen/list'); listItems = d.items || []; } catch (e) { } updateListBadge(); }
@@ -369,7 +410,6 @@
   function rebuild() {
     if (mode === 'category' && curCat != null) showCategory(curCat);
     else if (mode === 'recipes') buildRecipes();
-    else if (mode === 'recipe-cat' && curRecipeCat != null) showRecipeCat(curRecipeCat);
     else buildHome();
   }
 
@@ -392,6 +432,7 @@
   function goIdleHome() {
     if (!$('prodpanel').hidden) window.closeProduct();
     if (!$('listview').hidden) window.closeListScreen();
+    if (!$('recipepanel').hidden) window.closeRecipeCat();
     if (mode !== 'home') buildHome();
   }
   function resetIdle() { if (idleTimer) clearTimeout(idleTimer); if (idleSec > 0) idleTimer = setTimeout(goIdleHome, idleSec * 1000); }
@@ -413,14 +454,21 @@
       try { categories = await jget('/api/kitchen/categories') || []; products = await jget('/api/kitchen/products') || []; } catch (e) { }
       const s = circleList().map(c => c.emoji + c.name).join('|');
       if (s !== sig) { sig = s; if (mode === 'home') buildHome(); }   // reflect category add/rename on home
-      if (mode === 'recipes' || mode === 'recipe-cat') {                 // same for the recipe categories
+      if (mode === 'recipes') {                                          // same for the recipe categories
         try {
           recipeCats = await jget('/api/kitchen/recipe-categories') || [];
           const r = recipeCats.map(c => c.emoji + c.name).join('|');
           if (r !== rsig) { rsig = r; if (mode === 'recipes') buildRecipes(); }
         } catch (e) { }
       }
+      if (!$('recipepanel').hidden && curRecipeCat != null) {   // a recipe saved on the dashboard
+        const before = recSig;
+        await loadRecipes();
+        if (recSig !== before) { for (const k in recItems) delete recItems[k]; renderRecipeRows(curRecipeCat); }
+      }
       await loadList();                                 // keep the רשימה badge fresh
+      if (!$('recipepanel').hidden && curRecipeCat != null)   // ...and the ברשימה circles with it
+        paintRowCounts(recipes.filter(r => r.category_id === curRecipeCat));
       await loadSettings();                             // pick up a changed idle timeout
     }, 30000);
   }

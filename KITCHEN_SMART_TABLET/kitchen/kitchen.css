@@ -122,3 +122,26 @@ body {
 .ppc.amt .pp-val { font-size: calc(var(--csize, 120px) * 0.23); font-weight: 800; opacity: 1; }   /* amount circles = value only, larger */
 #pp-toast { position: absolute; left: 0; right: 0; bottom: 18px; text-align: center; color: #22c55e; font-size: 18px; font-weight: 800; opacity: 0; transition: opacity .2s; pointer-events: none; }
 #pp-toast.show { opacity: 1; }
+
+/* ── recipes of one category: a right-side panel (reuses .pp-backdrop/.pp-inner/.pp-close) ── */
+#recipepanel { position: fixed; inset: 0; z-index: 40; }
+#recipepanel[hidden] { display: none; }
+.rp-title { position: absolute; top: 14px; right: 64px; left: 14px; text-align: right; direction: rtl;
+  font-size: 22px; font-weight: 800; color: #e8eefc; }
+.rp-list { position: absolute; top: 62px; right: 0; left: 0; bottom: 0; overflow-y: auto;
+  -webkit-overflow-scrolling: touch; padding: 10px 14px 14px; }
+.rp-empty { color: #7f8db0; font-size: 18px; text-align: center; direction: rtl; padding-top: 28px; }
+/* one recipe. RTL: icon at the right, then the name, then its own two circles on the LEFT. */
+.rp-row { direction: rtl; display: flex; align-items: center; gap: 10px;
+  border: 1px solid #24345a; background: #16233f; border-radius: 14px;
+  padding: 10px 14px; margin-bottom: 10px; color: #e8eefc; }
+.rp-emoji { font-size: 30px; line-height: 1; flex: none; }
+.rp-name { font-size: 20px; font-weight: 700; flex: 1 1 auto; min-width: 0; text-align: right; }
+/* same round label+value graphic as the product panel's circles, sized for a row */
+.rpc { flex: none; width: 62px; height: 62px; border-radius: 50%; display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .4); color: #fff; }
+.rp-inlist { background: #000; }
+.rp-todo { background: #3a4152; opacity: .5; font-size: 20px; font-weight: 800; }
+.rp-lbl { font-size: 11px; font-weight: 800; }
+.rp-val { font-size: 15px; font-weight: 700; }

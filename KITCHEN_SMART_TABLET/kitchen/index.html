@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>מקרר</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="kitchen.css?v=50">
+  <link rel="stylesheet" href="kitchen.css?v=52">
 </head>
 <body>
   <div id="bar">
@@ -32,6 +32,17 @@
   </div>
 
   <!-- product panel: opens on the RIGHT of the same screen -->
+  <!-- recipes of one category: same right-side panel shape as a product, so it covers part of
+       the screen with the flying categories still visible behind it -->
+  <div id="recipepanel" hidden>
+    <div class="pp-backdrop" onclick="closeRecipeCat()"></div>
+    <div class="pp-inner">
+      <button class="pp-close" onclick="closeRecipeCat()">✕</button>
+      <div id="rp-title" class="rp-title"></div>
+      <div id="rp-list" class="rp-list"></div>
+    </div>
+  </div>
+
   <div id="prodpanel" hidden>
     <div class="pp-backdrop" onclick="closeProduct()"></div>
     <div class="pp-inner">
@@ -54,6 +65,6 @@
     <div id="lv-items"></div>
   </div>
 
-  <script src="kitchen.js?v=36"></script>
+  <script src="kitchen.js?v=38"></script>
 </body>
 </html>
