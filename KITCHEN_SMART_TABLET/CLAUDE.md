@@ -430,6 +430,14 @@ Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; match
 1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
 21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
 
+⚠ **KNOWN GAP — a learned alias is sticky and invisible.** Picking a product for an unmatched row
+writes a row in `kitchen_ingredient_aliases`, and there is **no UI to see or correct that list**. A
+mis-click therefore repeats on every future recipe: live on 2026-09-03 a stray pick stored
+**עגבניות → אורז (rice)**, which then re-applied on re-import. It was only found by reading the table.
+Until a small aliases editor exists (Recipe Settings is the obvious home), fix one with:
+`UPDATE kitchen_ingredient_aliases SET product_id=<id> WHERE alias='<name>';` or re-map the row in
+an import window, which overwrites it.
+
 ⚠ **Deleting a recipe then re-importing it USED TO BE A DEAD END (fixed 2026-09-03).** Delete is
 **soft** (`active=false`) but `source_url` stays UNIQUE, so the duplicate guard refused to re-import a
 recipe the user could no longer see. `recipe_save` now blocks only on a **live** duplicate; a
