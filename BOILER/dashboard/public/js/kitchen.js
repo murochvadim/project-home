@@ -726,6 +726,62 @@
     }
   };
 
+  // ── Recipe Settings: what the importer has LEARNED ──
+  // Picking a product for an unrecognised ingredient is remembered forever. Without this screen a
+  // mis-click is permanent AND invisible - a stray pick once stored עגבניות -> אורז and kept
+  // re-applying on every import, findable only by reading the database.
+  let aliases = [];
+
+  async function loadAliases() {
+    try { aliases = await jget('/api/kitchen/ingredient-aliases') || []; }
+    catch (e) { aliases = []; }
+    renderAliases();
+  }
+
+  function renderAliases() {
+    const tb = $('al-rows');
+    if (!tb) return;
+    if ($('al-count')) $('al-count').textContent = aliases.length ? aliases.length + ' remembered' : '';
+    if (!aliases.length) {
+      tb.innerHTML = '<tr><td colspan="3" class="k-hint">Nothing learned yet — map an ingredient while importing and it appears here.</td></tr>';
+      return;
+    }
+    const opts = products.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    tb.innerHTML = aliases.map(a => `
+      <tr data-id="${a.id}">
+        <td class="heb">${esc(a.alias)}</td>
+        <td>
+          <select class="al-prod" data-id="${a.id}" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;max-width:220px;">
+            <option value="">— choose —</option>${opts}
+          </select>
+          ${a.product_id ? '' : '<span style="color:#b91c1c;font-size:0.8rem;"> product missing</span>'}
+        </td>
+        <td style="text-align:right"><button class="k-x" data-act="del" title="Forget this">🗑</button></td>
+      </tr>`).join('');
+    tb.querySelectorAll('select.al-prod').forEach(sel => {
+      const a = aliases.find(x => x.id === +sel.dataset.id);
+      if (a && a.product_id) sel.value = a.product_id;
+      sel.onchange = () => kAliasSet(a, sel.value);
+    });
+    tb.querySelectorAll('tr[data-id]').forEach(row => {
+      row.querySelector('[data-act=del]').onclick = () => kAliasDel(+row.dataset.id);
+    });
+  }
+
+  async function kAliasSet(a, productId) {
+    if (!a || !productId) return;
+    try { await jpost('/api/kitchen/ingredient-aliases', { alias: a.alias, product_id: +productId }); await loadAliases(); }
+    catch (e) { alert('Could not save: ' + e.message); }
+  }
+
+  async function kAliasDel(id) {
+    const a = aliases.find(x => x.id === id);
+    if (!confirm(`Forget "${a ? a.alias : id}"?
+The next import will ask about it again. Saved recipes are not changed.`)) return;
+    try { await jpost('/api/kitchen/ingredient-aliases/delete', { id }); await loadAliases(); }
+    catch (e) { alert('Could not delete: ' + e.message); }
+  }
+
   // ── Recipe Settings: the site list ──
   async function loadRecipeSites() {
     try { recipeSites = await jget('/api/kitchen/recipe-sites') || []; }
@@ -1038,7 +1094,7 @@
   // ── boot ──
   window.kLoad = async function () {
     _peWire(); refreshFormPhoto();
-    await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats(); await loadRecipes(); await loadRecipeSites();
+    await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats(); await loadRecipes(); await loadRecipeSites(); await loadAliases();
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);

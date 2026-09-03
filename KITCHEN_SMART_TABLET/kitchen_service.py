@@ -865,6 +865,36 @@ def recipe_parse():
     except Exception as e:
         return _err(e)
 
+# The learned map, with a screen behind it. Without one a mis-click is permanent AND invisible:
+# a stray pick once stored עגבניות -> אורז (rice) and kept re-applying on every import.
+@app.route('/api/kitchen/ingredient-aliases')
+def ingredient_aliases_list():
+    try:
+        return jsonify(q("""SELECT a.id, a.alias, a.product_id, p.name AS product_name, p.unit AS product_unit
+                              FROM kitchen_ingredient_aliases a
+                              LEFT JOIN kitchen_products p ON p.id = a.product_id
+                             ORDER BY a.alias"""))
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/ingredient-aliases/delete', methods=['POST'])
+def ingredient_alias_delete():
+    """Hard delete on purpose - an alias is a preference, not a record. Forgetting one simply means
+    the next import asks about that ingredient again. Saved recipes keep their own product ids."""
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        aid = b.get('id')
+        alias = (b.get('alias') or '').strip()
+        if not aid and not alias:
+            return jsonify({'error': 'id or alias required'}), 400
+        if aid:
+            q("DELETE FROM kitchen_ingredient_aliases WHERE id=%s", (aid,), fetch='none')
+        else:
+            q("DELETE FROM kitchen_ingredient_aliases WHERE alias=%s", (alias,), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
 @app.route('/api/kitchen/ingredient-aliases', methods=['POST'])
 def ingredient_alias_set():
     """Remember one manual mapping so the same ingredient is never asked about twice."""

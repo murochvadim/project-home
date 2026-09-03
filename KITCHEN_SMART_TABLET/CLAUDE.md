@@ -430,7 +430,19 @@ Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; match
 1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
 21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
 
-⚠ **KNOWN GAP — a learned alias is sticky and invisible.** Picking a product for an unmatched row
+**Learned-alias editor (BUILT 2026-09-03)** — closes the gap below. ⚙ Settings → Recipe Settings now
+has a **Learned ingredient names** card: every remembered pairing, a product dropdown to correct one
+in place, and 🗑 to forget it (next import asks again). Endpoints `GET /api/kitchen/ingredient-aliases`
+(LEFT JOIN products, so a row survives a deleted product and shows "product missing") and
+`POST /api/kitchen/ingredient-aliases/delete` (**hard** delete — an alias is a preference, not a record).
+⚠ **Editing an alias only affects FUTURE parses** — a saved recipe holds its own `product_id` per row,
+so fix an existing recipe in its own ✎ window. Verified with **ביצה → ביצים** (plural: only the alias
+can connect them, so the test actually proves the alias path): forget → re-parse gives `match:none`,
+re-add → `match:alias`, and the saved recipe row never moved. Cache-bust `js/kitchen.js?v=52`.
+⚠ Pick a test alias whose product name DIFFERS from the ingredient — פטרוזיליה matches by exact name
+anyway, so deleting its alias proves nothing.
+
+⚠ **THE GAP THIS CLOSED — a learned alias was sticky and invisible.** Picking a product for an unmatched row
 writes a row in `kitchen_ingredient_aliases`, and there is **no UI to see or correct that list**. A
 mis-click therefore repeats on every future recipe: live on 2026-09-03 a stray pick stored
 **עגבניות → אורז (rice)**, which then re-applied on re-import. It was only found by reading the table.

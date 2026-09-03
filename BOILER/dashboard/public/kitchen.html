@@ -374,6 +374,23 @@
           <span id="rs-msg" style="font-size:0.8rem;color:#8a93a6;"></span>
         </div>
       </div>
+
+      <!-- what the importer has LEARNED, so a wrong pick can be seen and fixed -->
+      <div class="card">
+        <h3 style="margin-top:0;display:flex;align-items:center;gap:10px;">
+          Learned ingredient names
+          <span id="al-count" style="font-size:0.8rem;color:#8a93a6;font-weight:400;"></span>
+        </h3>
+        <div style="font-size:0.82rem;color:#8a93a6;margin-bottom:10px;">
+          Every product you pick for an unrecognised ingredient is remembered and reused in future
+          imports. Change one here, or 🗑 to forget it so the next import asks again.
+          <b>Recipes already saved keep the products they were saved with.</b>
+        </div>
+        <table class="k-table">
+          <thead><tr><th>Ingredient (as the site writes it)</th><th>Product</th><th></th></tr></thead>
+          <tbody id="al-rows"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -446,6 +463,6 @@
 </main>
 
 <script src="js/alerts-monitor.js?v=21"></script>
-<script src="js/kitchen.js?v=51"></script>
+<script src="js/kitchen.js?v=52"></script>
 </body>
 </html>
