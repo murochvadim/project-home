@@ -191,7 +191,9 @@
     const idx = recipeCats.findIndex(c => c.id === id);
     const cat = recipeCats.find(c => c.id === id);
     $('backbtn').hidden = false;
-    $('title').textContent = cat ? ((cat.emoji ? cat.emoji + ' ' : '') + cat.name) : 'מתכונים';
+    // "מתכוני <category>" - the construct form reads as "recipes of X", so the bar says what the
+    // screen holds rather than repeating the category name on its own.
+    $('title').textContent = cat ? ((cat.emoji ? cat.emoji + ' ' : '') + 'מתכוני ' + cat.name) : 'מתכונים';
     const stage = $('stage'), box = $('circles');
     const W = stage.clientWidth, H = stage.clientHeight, S = Math.min(W - LEFT_SAFE, H);
     const cx = LEFT_SAFE + (W - LEFT_SAFE) / 2, cy = H / 2;

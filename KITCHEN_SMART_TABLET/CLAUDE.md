@@ -382,6 +382,8 @@ The recipe categories from step 1 now appear on the fridge. **Tablet-only — no
   one level at a time (a product category still goes straight home, unchanged).
 - Recipe categories are fetched **lazily on open**, never at boot — the fridge home must not wait.
 - Tapping a category shows the category circle + "no recipes in this category" — recipes are step 3.
+- The bar on a recipe-category screen reads **מתכוני <category>** (construct form: "recipes of X"),
+  e.g. 🥩 מתכוני בשר — not the bare category name (2026-09-04). Cache-bust `kitchen.js?v=36`.
 
 ⚠ **Deploy: `scp` the `kitchen/` folder only — NO `systemctl restart`.** Those files are read from
 disk per request (`send_from_directory` + `_nocache`, `kitchen_service.py:107`); the browser cache is
