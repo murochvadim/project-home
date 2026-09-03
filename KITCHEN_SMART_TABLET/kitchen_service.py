@@ -989,9 +989,9 @@ def recipe_save():
             if dup and dup['active']:    # a LIVE one exists -> never create a second copy
                 return jsonify({'error': 'already_imported', 'recipe': dup}), 409
             if dup:
-                # It was deleted. Deleting is soft (active=false) but source_url stays UNIQUE, so a
-                # plain 409 here would refuse to re-import a recipe the user can no longer see -
-                # a dead end. Revive that row instead: same id, fresh contents.
+                # Safety net: recipe deletes are HARD now, so an inactive row should not exist. If one
+                # ever does (set by hand, or a future soft-delete), revive it rather than refusing to
+                # re-import a recipe the user cannot see - that was a dead end before 2026-09-03.
                 rid = dup['id']
         rec = {'category_id': b.get('category_id'), 'name': name, 'emoji': b.get('emoji'),
                'servings': b.get('servings'), 'instructions': b.get('instructions'),
@@ -1031,7 +1031,10 @@ def recipe_delete():
         rid = (request.get_json(force=True, silent=True) or {}).get('id')
         if not rid:
             return jsonify({'error': 'id required'}), 400
-        q("UPDATE kitchen_recipes SET active=false, updated_at=now() WHERE id=%s", (rid,), fetch='none')
+        # HARD delete. Products and categories are soft-deleted because other rows point at them;
+        # nothing points at a recipe except its own ingredient rows, which go with it via
+        # ON DELETE CASCADE. Keeping dead recipes only made the table read 3 when the user had 1.
+        q("DELETE FROM kitchen_recipes WHERE id=%s", (rid,), fetch='none')
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)

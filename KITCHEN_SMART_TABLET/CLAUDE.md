@@ -452,6 +452,16 @@ Until a small aliases editor exists (Recipe Settings is the obvious home), fix o
 `UPDATE kitchen_ingredient_aliases SET product_id=<id> WHERE alias='<name>';` or re-map the row in
 an import window, which overwrites it.
 
+**Deleting a recipe is PERMANENT (fixed 2026-09-04)** — it was a soft delete, copied from products
+without checking whether it fitted. It did not: **nothing references a recipe** (only its own
+`kitchen_recipe_items`, which go with it via ON DELETE CASCADE), and there is **no undo screen**, so a
+retained row could never be recovered — it only made the tables read 3 recipes when the user had 1.
+`recipe_delete` now does a real `DELETE`; the two rows already stranded were purged. Re-importing a
+deleted URL now creates a fresh row instead of reviving one, and a LIVE duplicate still returns 409.
+Verified: delete → gone from the list, from `?all=1` and from a direct fetch (404), with **0 orphan
+ingredient rows**.
+⚠ Products, categories and recipe-categories stay SOFT-deleted — other rows point at those.
+
 ℹ **Health DB-Volumes counts rows, not visible recipes.** Deleting is soft, and a deleted recipe
 KEEPS its ingredient rows, so `kitchen_recipes`/`kitchen_recipe_items` read higher than the Recipes
 tab shows (2026-09-04: 3 rows / 40 items for 1 visible recipe of 18). Re-importing revives the row
