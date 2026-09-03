@@ -632,7 +632,7 @@
     const opts = products.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
     tb.innerHTML = impParsed.items.map((it, i) => {
       const grp = (i === 0 || impParsed.items[i - 1].group_label !== it.group_label) && it.group_label
-        ? `<tr><td colspan="5" class="heb" style="background:#f1f5f9;font-weight:600;">${esc(it.group_label)}</td></tr>` : '';
+        ? `<tr><td colspan="6" class="heb" style="background:#e2e8f0;font-weight:700;font-size:0.9rem;padding:6px 8px;border-top:2px solid #94a3b8;">${esc(it.group_label)}</td></tr>` : '';
       // EVERY row is editable - a wrong parse or a wrong guess must be as easy to fix as a blank
       const sel = `<select data-i="${i}" class="imp-prod" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;max-width:180px;">
              <option value="">— choose —</option>${opts}
