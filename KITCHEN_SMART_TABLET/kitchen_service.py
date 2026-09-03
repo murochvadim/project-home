@@ -612,6 +612,7 @@ _DROP = ['בינוניים', 'בינוני', 'בינונית', 'גדולים', '
 # a trailing clause starting with one of these is preparation, not the name
 _CUT = ['חתוך', 'חתוכה', 'חתוכים', 'פרוס', 'פרוסות', 'קצוץ', 'קצוצה', 'מגורד', 'מגורדים', 'כל']
 _NOISE = ['נגיעה של', 'מעט פחות', 'מעט']
+_DROP += ['מלאה', 'מלא', 'דק', 'דקה']   # כף מלאה סילאן -> סילאן
 
 def _norm_ingredient(line):
     """-> (qty|None, unit|None, product_name, note|None)"""
@@ -698,25 +699,46 @@ def _recipe_sites():
     return cfg.get('recipe_sites') or [{'key': 'nikib', 'name': 'nikib.co.il',
                                         'base': 'https://nikib.co.il', 'adapter': 'nikib'}]
 
+# Hebrew plurals and construct forms, so בצלים finds בצל and תפוח אדמה finds תפוחי אדמה.
+_FINALS = str.maketrans('ךםןףץ', 'כמנפצ')   # ךםןףץ -> כמנפצ
+
+def _stem(w, is_last):
+    """Strip a plural ending. Deliberately conservative:
+    - only יות / ות / ים, never a final ה or ת. Stripping ה would make חלבה (halva) match
+      חלב (milk); stripping ת would make שמנת (cream) match שמן (oil).
+    - a stem must keep >= 3 letters, so מים does not collapse to מ.
+    - a trailing י is the construct form (תפוחי אדמה) and is only dropped on a NON-final
+      word, where that form actually occurs."""
+    w = w.translate(_FINALS)
+    for suf in ('יות', 'ות', 'ים'):
+        # ⚠ the suffix needs the SAME final-letter normalisation as the word: בצלים becomes
+        # regular-mem above, so a suffix still holding the FINAL mem would never match.
+        suf = suf.translate(_FINALS)
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[:-len(suf)]
+    if not is_last and w.endswith('י') and len(w) >= 4:
+        return w[:-1]
+    return w
+
+def _words(name):
+    ws = re.sub(r'\s+', ' ', (name or '').strip()).split()
+    return [_stem(w, i == len(ws) - 1) for i, w in enumerate(ws)]
+
 def _same_ingredient(a, b):
     """Are these two ingredient names the same thing?
 
-    Hebrew puts the HEAD NOUN FIRST, so an addition extends a name to the RIGHT:
-      מלח / מלח גס            -> same thing (coarse salt is salt)
-      פלפל שחור / פלפל שחור גרוס -> same thing
-    but a word added on the LEFT changes what the thing IS:
-      עגבניות / רסק עגבניות    -> tomatoes vs tomato PASTE - NOT the same
-      פלפל שחור / פלפל חריף    -> black pepper vs chilli   - NOT the same
-    So: equal, or the shorter is a whole-WORD PREFIX of the longer. Never a suffix,
-    and never a partial word (which would make פלפל match פלפלת)."""
-    a = re.sub(r'\s+', ' ', (a or '').strip())
-    b = re.sub(r'\s+', ' ', (b or '').strip())
-    if not a or not b:
+    Compared word by word on stems, so plural/singular and construct forms match:
+      בצל / בצלים · תפוח אדמה / תפוחי אדמה · מלח / מלח גס
+
+    Hebrew puts the HEAD NOUN FIRST, so an addition extends a name to the RIGHT. A word added on
+    the LEFT changes what the thing IS, and must NOT match:
+      עגבניות / רסק עגבניות (tomatoes vs tomato PASTE) · פלפל שחור / פלפל חריף
+    So: the shorter word-list must be a PREFIX of the longer one. Never a suffix."""
+    wa, wb = _words(a), _words(b)
+    if not wa or not wb:
         return False
-    if a == b:
-        return True
-    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
-    return long_.startswith(short + ' ')
+    short, long_ = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+    return long_[:len(short)] == short
 
 
 def _merge_items(items):
@@ -853,9 +875,20 @@ def recipe_parse():
             return jsonify({'error': 'url does not belong to the selected site'}), 400
         ad = RECIPE_ADAPTERS.get(site.get('adapter') or 'nikib')
         parsed = ad['parse'](_recipe_fetch(url, site_key))
-        for n, it in enumerate(parsed['items']):
+        rows = []
+        for it in parsed['items']:
             qty, unit, name, note = _norm_ingredient(it['raw_line'])
-            it.update({'sort_order': n, 'qty': qty, 'unit': unit, 'parsed_name': name, 'note': note})
+            if not name:
+                # The site sometimes puts a note on its own line - "(כל קופסת טונה 160 ג')".
+                # Stripping the brackets leaves nothing, so it used to become an empty row.
+                # It belongs to the ingredient above it.
+                if rows:
+                    prev = rows[-1]
+                    prev['note'] = ((prev.get('note') + ' ') if prev.get('note') else '') + it['raw_line'].strip()
+                continue
+            it.update({'sort_order': len(rows), 'qty': qty, 'unit': unit, 'parsed_name': name, 'note': note})
+            rows.append(it)
+        parsed['items'] = rows
         _match_products(parsed['items'])
         parsed['items'] = _merge_items(parsed['items'])
         existing = q("SELECT id, name FROM kitchen_recipes WHERE source_url=%s", (url,), fetch='one')

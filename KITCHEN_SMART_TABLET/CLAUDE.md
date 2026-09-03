@@ -465,6 +465,18 @@ when they don't (never a faked total), every original line kept in `merged_from`
 cleared when a row spans two sections. ⚠ The cost: **how much goes in each part of the dish is gone**
 from the ingredient list — the method stays in the 📋 Preparation window and at the source link.
 
+**Hebrew plurals + orphan note lines (fixed 2026-09-03, found on a second recipe):**
+- **`בצלים` did not find `בצל`, `תפוח אדמה` did not find `תפוחי אדמה`.** `_same_ingredient` now
+  compares **stems word by word** (`_stem`/`_words`): strips יות/ות/ים and a construct י on a
+  non-final word. ⚠ **Never strips a final ה or ת** — that would make חלבה match חלב (halva/milk)
+  and שמנת match שמן (cream/oil); a stem keeps ≥ 3 letters so מים cannot collapse to מ.
+  ⚠ **The suffix constants must be normalised too**: the word's final letters are folded first
+  (ם→מ), so a suffix still holding the FINAL mem never matched — the fix looked right and silently
+  did nothing until the unit test caught it.
+- **A line that is only a bracketed note** (`(כל קופסת טונה 160 ג')` on its own line) parsed to an
+  empty name and became a **blank row**. It is now attached as the `note` of the row above it.
+- `_DROP` gained מלאה/מלא/דק/דקה (`כף מלאה סילאן` → `סילאן`).
+
 **⚠ The name rule (`_same_ingredient`) — the risky part, get it right.** Hebrew puts the **head noun
 first**, so an addition extends a name to the RIGHT. Two names are the same only when equal or the
 shorter is a whole-WORD **prefix** of the longer:
