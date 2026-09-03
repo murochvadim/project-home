@@ -221,6 +221,21 @@
   </div>
 
   <!-- Product photo editor (square crop + zoom + pan → 400×400 JPEG) -->
+<!-- ── Preparation steps, in their own readable window ────────────────── -->
+<div id="k-steps" class="k-modal" style="display:none;">
+  <div class="k-modal-box" style="width:min(94vw,760px);">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+      <h3 style="margin:0;" id="stp-title" class="heb"></h3>
+      <span style="flex:1;"></span>
+      <a id="stp-src" href="#" target="_blank" rel="noopener" style="font-size:0.8rem;">source ↗</a>
+      <button class="btn btn-secondary btn-sm" onclick="kStepsClose()">✕ Close</button>
+    </div>
+    <ol id="stp-list" class="heb"
+        style="direction:rtl;text-align:right;font-size:1rem;line-height:1.85;padding-inline-start:26px;
+               max-height:65vh;overflow:auto;margin:0;"></ol>
+  </div>
+</div>
+
 <!-- ── Import a recipe from a site (step 3) ───────────────────────────────── -->
 <div id="k-import" class="k-modal" style="display:none;">
   <div class="k-modal-box" style="width:min(96vw,1000px);">   <!-- the shared class caps at 380px; a table needs room -->
@@ -252,10 +267,6 @@
           <tbody id="imp-rows"></tbody>
         </table>
       </div>
-      <details style="margin-top:8px;">
-        <summary style="cursor:pointer;font-size:0.85rem;">Preparation steps</summary>
-        <ol id="imp-steps" class="heb" style="font-size:0.85rem;line-height:1.5;"></ol>
-      </details>
       <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;">
         <label style="font-size:0.85rem;">Category
           <select id="imp-cat" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:5px;margin-right:6px;"></select>
@@ -375,7 +386,7 @@
       <span id="rec-status" style="font-size:0.8rem;color:#8a93a6;"></span>
     </h3>
     <table class="k-table">
-      <thead><tr><th></th><th>Recipe</th><th>Category</th><th>Ingredients</th><th>Source</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Recipe</th><th>Category</th><th>Ingredients</th><th>Source</th><th>Preparation</th><th></th></tr></thead>
       <tbody id="rec-rows"></tbody>
     </table>
   </div>
@@ -435,6 +446,6 @@
 </main>
 
 <script src="js/alerts-monitor.js?v=21"></script>
-<script src="js/kitchen.js?v=49"></script>
+<script src="js/kitchen.js?v=50"></script>
 </body>
 </html>

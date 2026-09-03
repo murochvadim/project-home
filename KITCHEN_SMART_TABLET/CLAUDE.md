@@ -430,6 +430,14 @@ Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; match
 1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
 21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
 
+**Preparation has its OWN window (2026-09-03).** A 📋 button sits beside **Source** on each recipe
+row and opens the method alone: RTL, ~1 rem, line-height 1.85, roomy modal, and the site's own
+leading numbers (`1. `) stripped so the `<ol>` does the numbering. It was removed from the edit
+window — that one is a dense table for fixing ingredients; the method is what you read while cooking.
+⚠ The edit window no longer SHOWS the steps but still **carries** them (`kRecipeEdit` loads
+`instructions` into `impParsed.steps`, Save writes them back) — otherwise editing a recipe would
+silently wipe a method it never displayed. Cache-bust `js/kitchen.js?v=50`.
+
 **Unit `box` = קופסה added 2026-09-03.** ⚠ A product unit lives in **three** places and all must agree:
 the `<select id="p-unit">` in `kitchen.html`, and the `UNIT_HE` map in **both** `js/kitchen.js`
 (dashboard) and `kitchen/kitchen.js` (fridge PWA) — miss one and the unit renders as its raw English

@@ -485,7 +485,7 @@
     const tb = $('rec-rows');
     if (!tb) return;
     if (!recipes.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="k-hint">No recipes yet — use ⬇ Import from site.</td></tr>';
+      tb.innerHTML = '<tr><td colspan="7" class="k-hint">No recipes yet — use ⬇ Import from site.</td></tr>';
       return;
     }
     tb.innerHTML = recipes.map(r => `
@@ -495,12 +495,14 @@
         <td class="heb">${r.category_emoji ? r.category_emoji + ' ' : ''}${esc(r.category_name || '—')}</td>
         <td>${r.item_count}</td>
         <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
+        <td><button class="k-edit" data-act="steps" title="Preparation steps">📋</button></td>
         <td style="text-align:right">
           <button class="k-edit" data-act="edit" title="Edit">✎</button>
           <button class="k-x" data-act="del" title="Delete">🗑</button></td>
       </tr>`).join('');
     tb.querySelectorAll('tr[data-id]').forEach(row => {
-      row.querySelector('[data-act=edit]').onclick = () => kRecipeEdit(+row.dataset.id);
+      row.querySelector('[data-act=steps]').onclick = () => kStepsOpen(+row.dataset.id);
+      row.querySelector('[data-act=edit]').onclick  = () => kRecipeEdit(+row.dataset.id);
       row.querySelector('[data-act=del]').onclick  = () => delRecipe(+row.dataset.id);
     });
   }
@@ -511,6 +513,26 @@
     try { await jpost('/api/kitchen/recipes/delete', { id }); await loadRecipes(); }
     catch (e) { alert('Delete failed: ' + e.message); }
   }
+
+  // ── preparation steps, in their own window ──
+  // Deliberately NOT in the edit window: that one is a dense table for fixing ingredients, and the
+  // method is what you actually read while cooking, so it gets room, RTL and a comfortable line height.
+  window.kStepsOpen = async function (id) {
+    try {
+      const r = await jget('/api/kitchen/recipes/' + id);
+      const steps = (r.instructions || '').split('\n').map(x => x.trim()).filter(Boolean)
+        // the site numbers its own steps ("1. ..."), so strip that - the <ol> numbers them
+        .map(x => x.replace(/^\s*\d+[.)]\s*/, ''));
+      $('stp-title').textContent = r.name || '';
+      const src = $('stp-src');
+      if (r.source_url) { src.href = r.source_url; src.style.display = ''; } else { src.style.display = 'none'; }
+      $('stp-list').innerHTML = steps.length
+        ? steps.map(x => `<li style="margin-bottom:10px;">${esc(x)}</li>`).join('')
+        : '<div class="k-hint">This recipe has no preparation steps saved.</div>';
+      $('k-steps').style.display = 'flex';
+    } catch (e) { alert('Could not open the steps: ' + e.message); }
+  };
+  window.kStepsClose = function () { $('k-steps').style.display = 'none'; };
 
   // ── the import window ──
   window.kImportOpen = async function () {
@@ -555,7 +577,6 @@
       if (r.category_id) $('imp-cat').value = r.category_id;
       $('imp-title').value = r.name || '';
       $('imp-src').href = r.source_url || '#';
-      $('imp-steps').innerHTML = impParsed.steps.map(x => `<li>${esc(x)}</li>`).join('');
       renderImportRows();
       $('imp-result').style.display = '';
       $('k-import').style.display = 'flex';
@@ -590,7 +611,6 @@
       const miss = (p.items || []).filter(i => !i.product_id).length;
       $('imp-counts').textContent = `${p.items.length} ingredients · ${p.steps.length} steps · ${miss} not in your products`;
       $('imp-src').href = p.source_url;
-      $('imp-steps').innerHTML = (p.steps || []).map(s => `<li>${esc(s)}</li>`).join('');
       $('imp-msg').textContent = p.already_imported
         ? '⚠ already imported as "' + p.already_imported.name + '" — saving again will be refused'
         : '';
