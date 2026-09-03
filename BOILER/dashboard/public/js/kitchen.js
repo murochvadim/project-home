@@ -469,6 +469,225 @@
     catch (e) { alert('Reorder failed: ' + e.message); }
   }
 
+  // ── recipes + import from a site (step 3) ──
+  // The window never saves what it parsed without showing it first: every ingredient row is listed
+  // with how it matched (exact / alias / fuzzy / none), and an unmatched row gets a product dropdown
+  // so YOU choose. Picking one also stores an alias, so that ingredient is never asked about again.
+  let recipes = [], recipeSites = [], impParsed = null;
+
+  async function loadRecipes() {
+    try { recipes = await jget('/api/kitchen/recipes') || []; }
+    catch (e) { recipes = []; }
+    renderRecipes();
+  }
+
+  function renderRecipes() {
+    const tb = $('rec-rows');
+    if (!tb) return;
+    if (!recipes.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="k-hint">No recipes yet — use ⬇ Import from site.</td></tr>';
+      return;
+    }
+    tb.innerHTML = recipes.map(r => `
+      <tr data-id="${r.id}">
+        <td class="k-emoji">${r.emoji || '📖'}</td>
+        <td class="heb">${esc(r.name)}</td>
+        <td class="heb">${r.category_emoji ? r.category_emoji + ' ' : ''}${esc(r.category_name || '—')}</td>
+        <td>${r.item_count}</td>
+        <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
+        <td style="text-align:right"><button class="k-x" data-act="del" title="Delete">🗑</button></td>
+      </tr>`).join('');
+    tb.querySelectorAll('tr[data-id]').forEach(row => {
+      row.querySelector('[data-act=del]').onclick = () => delRecipe(+row.dataset.id);
+    });
+  }
+
+  async function delRecipe(id) {
+    const r = recipes.find(x => x.id === id);
+    if (!confirm(`Delete recipe "${r ? r.name : id}"?`)) return;
+    try { await jpost('/api/kitchen/recipes/delete', { id }); await loadRecipes(); }
+    catch (e) { alert('Delete failed: ' + e.message); }
+  }
+
+  // ── the import window ──
+  window.kImportOpen = async function () {
+    impParsed = null;
+    $('imp-result').style.display = 'none';
+    $('imp-hits').innerHTML = '';
+    $('imp-msg').textContent = '';
+    $('imp-save-msg').textContent = '';
+    await loadRecipeSites();
+    $('imp-site').innerHTML = recipeSites.map(s => `<option value="${esc(s.key)}">${esc(s.name)}</option>`).join('');
+    $('imp-cat').innerHTML = recipeCats.map(c => `<option value="${c.id}">${c.emoji ? c.emoji + ' ' : ''}${esc(c.name)}</option>`).join('');
+    $('k-import').style.display = 'flex';
+    setTimeout(() => $('imp-q').focus(), 60);
+  };
+  window.kImportClose = function () { $('k-import').style.display = 'none'; };
+
+  window.kImportSearch = async function () {
+    const site = $('imp-site').value, q = $('imp-q').value.trim();
+    if (!q) return;
+    $('imp-msg').textContent = 'Searching…';
+    $('imp-hits').innerHTML = '';
+    try {
+      const r = await jget('/api/kitchen/recipe-search?site=' + encodeURIComponent(site) + '&q=' + encodeURIComponent(q));
+      const hits = r.hits || [];
+      $('imp-msg').textContent = hits.length ? hits.length + ' found — pick one' : 'nothing found';
+      $('imp-hits').innerHTML = hits.map((h, i) =>
+        `<div class="k-hitrow" data-i="${i}" style="padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:4px;cursor:pointer;">
+           <span class="heb">${esc(h.title)}</span>
+         </div>`).join('');
+      $('imp-hits').querySelectorAll('.k-hitrow').forEach(el => {
+        el.onclick = () => kImportParse(site, hits[+el.dataset.i].url);
+      });
+    } catch (e) { $('imp-msg').textContent = 'Search failed: ' + e.message; }
+  };
+
+  async function kImportParse(site, url) {
+    $('imp-msg').textContent = 'Reading the recipe…';
+    try {
+      const p = await jget('/api/kitchen/recipe-parse?site=' + encodeURIComponent(site) + '&url=' + encodeURIComponent(url));
+      impParsed = p;
+      $('imp-title').textContent = p.title || '(no title)';
+      const miss = (p.items || []).filter(i => !i.product_id).length;
+      $('imp-counts').textContent = `${p.items.length} ingredients · ${p.steps.length} steps · ${miss} not in your products`;
+      $('imp-src').href = p.source_url;
+      $('imp-steps').innerHTML = (p.steps || []).map(s => `<li>${esc(s)}</li>`).join('');
+      $('imp-msg').textContent = p.already_imported
+        ? '⚠ already imported as "' + p.already_imported.name + '" — saving again will be refused'
+        : '';
+      renderImportRows();
+      $('imp-result').style.display = '';
+    } catch (e) { $('imp-msg').textContent = 'Could not read that page: ' + e.message; }
+  }
+
+  const MATCH_TAG = {
+    exact: '<span style="color:#166534;">✓ exact</span>',
+    alias: '<span style="color:#166534;">✓ learned</span>',
+    fuzzy: '<span style="color:#b45309;">≈ guess</span>',
+    none:  '<span style="color:#b91c1c;">✗ missing</span>',
+  };
+
+  function renderImportRows() {
+    const tb = $('imp-rows');
+    if (!tb || !impParsed) return;
+    const opts = products.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    tb.innerHTML = impParsed.items.map((it, i) => {
+      const grp = (i === 0 || impParsed.items[i - 1].group_label !== it.group_label) && it.group_label
+        ? `<tr><td colspan="5" class="heb" style="background:#f1f5f9;font-weight:600;">${esc(it.group_label)}</td></tr>` : '';
+      // a guess and a miss both get the dropdown — a wrong guess must be as easy to fix as a blank
+      const sel = (it.match === 'exact' || it.match === 'alias')
+        ? `<span class="heb">${esc(productName(it.product_id))}</span> ${MATCH_TAG[it.match]}`
+        : `<select data-i="${i}" class="imp-prod" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;max-width:190px;">
+             <option value="">— choose —</option>${opts}
+           </select> ${MATCH_TAG[it.match]}`;
+      return grp + `
+        <tr>
+          <td>${i + 1}</td>
+          <td class="heb" style="font-size:0.82rem;color:#64748b;">${esc(it.raw_line)}</td>
+          <td>${it.qty == null ? '' : fmtN(it.qty)}</td>
+          <td class="heb">${esc(it.unit || '')}</td>
+          <td>${sel}</td>
+        </tr>`;
+    }).join('');
+    tb.querySelectorAll('select.imp-prod').forEach(sel => {
+      const it = impParsed.items[+sel.dataset.i];
+      if (it.product_id) sel.value = it.product_id;         // a fuzzy guess is pre-selected, not hidden
+      sel.onchange = async () => {
+        it.product_id = sel.value ? +sel.value : null;
+        it.match = it.product_id ? 'alias' : 'none';
+        if (it.product_id && it.parsed_name) {              // remember it so it is never asked again
+          try { await jpost('/api/kitchen/ingredient-aliases', { alias: it.parsed_name, product_id: it.product_id }); }
+          catch (e) { /* the recipe still saves; only the learning is lost */ }
+        }
+        const miss = impParsed.items.filter(x => !x.product_id).length;
+        $('imp-counts').textContent = `${impParsed.items.length} ingredients · ${impParsed.steps.length} steps · ${miss} not in your products`;
+      };
+    });
+  }
+
+  function productName(id) {
+    const p = products.find(x => x.id === id);
+    return p ? p.name : '';
+  }
+
+  window.kImportSave = async function () {
+    if (!impParsed) return;
+    const cat = $('imp-cat').value;
+    if (!cat) { $('imp-save-msg').textContent = 'Pick a category first.'; return; }
+    $('imp-save-msg').style.color = '#8a93a6';
+    $('imp-save-msg').textContent = 'Saving…';
+    const body = {
+      category_id: +cat, name: impParsed.title, source_url: impParsed.source_url,
+      source_site: impParsed.site, instructions: (impParsed.steps || []).join('\n'),
+      items: impParsed.items.map((it, n) => ({
+        sort_order: n, group_label: it.group_label, raw_line: it.raw_line,
+        qty: it.qty, unit: it.unit, parsed_name: it.parsed_name, product_id: it.product_id,
+      })),
+    };
+    try {
+      const r = await jpost('/api/kitchen/recipes', body);
+      if (r && r.error === 'already_imported') {
+        $('imp-save-msg').style.color = '#b45309';
+        $('imp-save-msg').textContent = 'Already imported as "' + (r.recipe && r.recipe.name) + '" — not saved twice.';
+        return;
+      }
+      $('imp-save-msg').style.color = '#166534';
+      $('imp-save-msg').textContent = '✓ Saved';
+      await loadRecipes();
+      setTimeout(window.kImportClose, 700);
+    } catch (e) {
+      $('imp-save-msg').style.color = '#b91c1c';
+      $('imp-save-msg').textContent = 'Save failed: ' + e.message;
+    }
+  };
+
+  // ── Recipe Settings: the site list ──
+  async function loadRecipeSites() {
+    try { recipeSites = await jget('/api/kitchen/recipe-sites') || []; }
+    catch (e) { recipeSites = []; }
+    renderRecipeSites();
+  }
+
+  function renderRecipeSites() {
+    const tb = $('rs-rows');
+    if (!tb) return;
+    if (!recipeSites.length) { tb.innerHTML = '<tr><td colspan="4" class="k-hint">No sites yet.</td></tr>'; return; }
+    tb.innerHTML = recipeSites.map((s, i) => `
+      <tr data-i="${i}">
+        <td>${esc(s.name)}</td>
+        <td style="font-size:0.8rem;color:#64748b;">${esc(s.base)}</td>
+        <td>${esc(s.adapter)}</td>
+        <td style="text-align:right"><button class="k-x" data-act="del" title="Remove">🗑</button></td>
+      </tr>`).join('');
+    tb.querySelectorAll('tr[data-i]').forEach(row => {
+      row.querySelector('[data-act=del]').onclick = () => kSiteDel(+row.dataset.i);
+    });
+  }
+
+  async function saveSites(list) {
+    try {
+      recipeSites = await jpost('/api/kitchen/recipe-sites', { sites: list });
+      renderRecipeSites();
+      $('rs-msg').textContent = '✓ saved';
+      setTimeout(() => { if ($('rs-msg')) $('rs-msg').textContent = ''; }, 1500);
+    } catch (e) { $('rs-msg').textContent = 'Save failed: ' + e.message; }
+  }
+
+  window.kSiteAdd = function () {
+    const name = $('rs-name').value.trim(), base = $('rs-base').value.trim();
+    if (!base.startsWith('http')) { $('rs-msg').textContent = 'Address must start with http.'; return; }
+    const key = (name || base).replace(/^https?:\/\//, '').split('.')[0].toLowerCase();
+    saveSites(recipeSites.concat([{ key, name: name || base, base, adapter: $('rs-adapter').value }]));
+    $('rs-name').value = ''; $('rs-base').value = '';
+  };
+
+  function kSiteDel(i) {
+    const s = recipeSites[i];
+    if (!confirm(`Remove site "${s ? s.name : i}"?`)) return;
+    saveSites(recipeSites.filter((_, n) => n !== i));
+  }
+
   // ── recipe categories (מרקים / סלטים …) — step 1 of the Recipes feature ──
   // Their own table + endpoints, deliberately NOT kitchen_categories: the fridge home screen draws a
   // circle for every food category, so recipe categories there would appear among the food.
@@ -735,7 +954,7 @@
   // ── boot ──
   window.kLoad = async function () {
     _peWire(); refreshFormPhoto();
-    await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats();
+    await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats(); await loadRecipes(); await loadRecipeSites();
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);

@@ -386,3 +386,50 @@ The recipe categories from step 1 now appear on the fridge. **Tablet-only — no
 ⚠ **Deploy: `scp` the `kitchen/` folder only — NO `systemctl restart`.** Those files are read from
 disk per request (`send_from_directory` + `_nocache`, `kitchen_service.py:107`); the browser cache is
 defeated by the bumps `kitchen.css?v=50` / `kitchen.js?v=34` in `index.html`.
+
+## Recipes — STEP 3: import a recipe from a site, by name (BUILT 2026-09-03)
+
+Pick a site → type a recipe name → a window shows **every ingredient in a table** → the ones missing
+from your products are flagged with a **product dropdown** → save it under a recipe category.
+
+- **Tables** (migration `010_recipes.sql`, all forever + 🔒): `kitchen_recipes` (category FK, name,
+  instructions, **`source_url` UNIQUE** — what stops a recipe being imported twice),
+  `kitchen_recipe_items` (**`raw_line` kept** so a bad parse is fixable without re-fetching, plus
+  qty / unit / parsed_name / product FK), and **`kitchen_ingredient_aliases`** (learned
+  ingredient→product mappings, so a manual choice is **never asked twice**).
+- **All the import logic is on LXC 113** (`kitchen_service.py`), never in `server.js`:
+  `/recipe-sites` (GET/POST) · `/recipe-search` · `/recipe-parse` · `/recipes` (GET/POST/`/delete`,
+  **409 `already_imported`** on a duplicate URL) · `/ingredient-aliases`. Site **adapters** — a second
+  site is a new adapter, not a rewrite.
+- **nikib.co.il adapter:** it is WordPress, so **search-by-name is its own REST API**
+  (`/wp-json/wp/v2/posts?search=`) — no scraping of search pages. There is **no schema.org Recipe**
+  data, so ingredients come from the theme markup: `#ingredients` → `<p>` blocks with `<br>`-separated
+  lines and `<strong>` sub-groups; steps are the numbered `<p>`s after the ad slot. Verified by walking
+  the div to its matching close: **1 title + 2 groups + 21 ingredients, nothing missed**.
+- **Hebrew normaliser** turns `2 תפוחי אדמה בינוניים מגורדים וסחוטים` into qty **2** + product
+  **תפוחי אדמה**: leading number or Hebrew fraction (חצי/שליש/רבע), unit list, then drop-words and
+  preparation clauses. ⚠ A leading **vav** (ורכות = "and soft") hides a word from the drop list — it is
+  stripped before matching.
+- **Matching order:** exact product name → learned alias → normalised contains → unmatched. Every row
+  reports **how** it matched, and the UI gives a dropdown to **both** `none` **and** `fuzzy` rows — a
+  wrong guess must be as easy to fix as a blank (live: עגבניות fuzzy-matched עגבניות שרי).
+- ⚠ **`requests` decoded the page as ISO-8859-1** because it sends no charset header — every Hebrew word
+  came back mojibake, which ALSO broke unit-stripping and made all 21 rows look unmatched.
+  `_recipe_fetch` now decodes explicitly: header charset → `<meta charset>` → UTF-8.
+  **Never use `r.text` on these pages.**
+- **Politeness, in code:** one page per explicit user action (never a crawl), honest `User-Agent`, a
+  2 s per-site gap. The site's `robots.txt` allows ordinary clients but sets `ai-train=no`,
+  `use=reference`, blocks every named AI crawler (ClaudeBot included) and reserves EU copyright —
+  imports stay private, are never republished, and are never used for training.
+- **UI:** ⬇ Import from site on the 📖 Recipes tab (search → hits → ingredient table → steps →
+  category → Save) plus the recipes list; **⚙ Settings → Recipe Settings** now holds the **site list**
+  (that tab was wired-and-empty since step 1). Cache-bust `js/kitchen.js?v=47`.
+
+Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; matching → 4 exact + 1 fuzzy +
+16 missing; alias learned → the same row re-parsed as `alias`; saved under דגים with 21 items and
+1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
+21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
+
+**Not built yet:** recipes on the tablet (category screens still say "no recipes yet"), the **+**
+button, and recipe-unit → purchase-unit conversion. This step stores כף/כפית/צרור as parsed, which is
+exactly what that conversion will consume.
