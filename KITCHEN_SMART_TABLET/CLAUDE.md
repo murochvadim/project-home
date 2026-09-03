@@ -430,6 +430,14 @@ Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; match
 1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
 21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
 
+**Editing a saved recipe (2026-09-03):** each row on the Recipes tab has an **✎** that opens the
+**same window** as the import — search step hidden, `id` carried on save so the service UPDATEs
+(`kImportOpen` resets `impEditId`; `kRecipeEdit(id)` sets it). The duplicate guard only applies to
+new inserts, so re-saving an edit of the same `source_url` is fine. **Everything is editable in both
+flows** — name, category, and per row the qty / unit / product plus an ✕ to drop a line. ⚠ Matched
+rows used to be plain text; a wrong parse or a wrong fuzzy guess must be as easy to fix as a blank.
+Cache-bust `js/kitchen.js?v=48`.
+
 **Not built yet:** recipes on the tablet (category screens still say "no recipes yet"), the **+**
 button, and recipe-unit → purchase-unit conversion. This step stores כף/כפית/צרור as parsed, which is
 exactly what that conversion will consume.

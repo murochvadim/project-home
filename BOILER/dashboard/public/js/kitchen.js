@@ -473,7 +473,7 @@
   // The window never saves what it parsed without showing it first: every ingredient row is listed
   // with how it matched (exact / alias / fuzzy / none), and an unmatched row gets a product dropdown
   // so YOU choose. Picking one also stores an alias, so that ingredient is never asked about again.
-  let recipes = [], recipeSites = [], impParsed = null;
+  let recipes = [], recipeSites = [], impParsed = null, impEditId = null;
 
   async function loadRecipes() {
     try { recipes = await jget('/api/kitchen/recipes') || []; }
@@ -495,10 +495,13 @@
         <td class="heb">${r.category_emoji ? r.category_emoji + ' ' : ''}${esc(r.category_name || '—')}</td>
         <td>${r.item_count}</td>
         <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
-        <td style="text-align:right"><button class="k-x" data-act="del" title="Delete">🗑</button></td>
+        <td style="text-align:right">
+          <button class="k-edit" data-act="edit" title="Edit">✎</button>
+          <button class="k-x" data-act="del" title="Delete">🗑</button></td>
       </tr>`).join('');
     tb.querySelectorAll('tr[data-id]').forEach(row => {
-      row.querySelector('[data-act=del]').onclick = () => delRecipe(+row.dataset.id);
+      row.querySelector('[data-act=edit]').onclick = () => kRecipeEdit(+row.dataset.id);
+      row.querySelector('[data-act=del]').onclick  = () => delRecipe(+row.dataset.id);
     });
   }
 
@@ -511,7 +514,10 @@
 
   // ── the import window ──
   window.kImportOpen = async function () {
-    impParsed = null;
+    impParsed = null; impEditId = null;
+    $('imp-head').textContent = '⬇ Import recipe';
+    $('imp-search').style.display = '';        // the search box is import-only
+    $('imp-hits').style.display = '';
     $('imp-result').style.display = 'none';
     $('imp-hits').innerHTML = '';
     $('imp-msg').textContent = '';
@@ -523,6 +529,38 @@
     setTimeout(() => $('imp-q').focus(), 60);
   };
   window.kImportClose = function () { $('k-import').style.display = 'none'; };
+
+  // Editing reuses the import window: same table, same product dropdowns, same Save - only the
+  // search step is hidden and Save carries the id, so the service UPDATEs instead of inserting.
+  window.kRecipeEdit = async function (id) {
+    try {
+      const r = await jget('/api/kitchen/recipes/' + id);
+      impEditId = id;
+      impParsed = {
+        title: r.name, source_url: r.source_url, site: r.source_site,
+        steps: (r.instructions || '').split('\n').filter(Boolean),
+        items: (r.items || []).map(i => ({
+          raw_line: i.raw_line, group_label: i.group_label, qty: i.qty == null ? null : +i.qty,
+          unit: i.unit, parsed_name: i.parsed_name, product_id: i.product_id,
+          match: i.product_id ? 'exact' : 'none',
+        })),
+      };
+      $('imp-head').textContent = '✎ Edit recipe';
+      $('imp-search').style.display = 'none';
+      $('imp-hits').style.display = 'none';
+      $('imp-hits').innerHTML = '';
+      $('imp-msg').textContent = '';
+      $('imp-save-msg').textContent = '';
+      $('imp-cat').innerHTML = recipeCats.map(c => `<option value="${c.id}">${c.emoji ? c.emoji + ' ' : ''}${esc(c.name)}</option>`).join('');
+      if (r.category_id) $('imp-cat').value = r.category_id;
+      $('imp-title').value = r.name || '';
+      $('imp-src').href = r.source_url || '#';
+      $('imp-steps').innerHTML = impParsed.steps.map(x => `<li>${esc(x)}</li>`).join('');
+      renderImportRows();
+      $('imp-result').style.display = '';
+      $('k-import').style.display = 'flex';
+    } catch (e) { alert('Could not open the recipe: ' + e.message); }
+  };
 
   window.kImportSearch = async function () {
     const site = $('imp-site').value, q = $('imp-q').value.trim();
@@ -548,7 +586,7 @@
     try {
       const p = await jget('/api/kitchen/recipe-parse?site=' + encodeURIComponent(site) + '&url=' + encodeURIComponent(url));
       impParsed = p;
-      $('imp-title').textContent = p.title || '(no title)';
+      $('imp-title').value = p.title || '';
       const miss = (p.items || []).filter(i => !i.product_id).length;
       $('imp-counts').textContent = `${p.items.length} ingredients · ${p.steps.length} steps · ${miss} not in your products`;
       $('imp-src').href = p.source_url;
@@ -575,21 +613,38 @@
     tb.innerHTML = impParsed.items.map((it, i) => {
       const grp = (i === 0 || impParsed.items[i - 1].group_label !== it.group_label) && it.group_label
         ? `<tr><td colspan="5" class="heb" style="background:#f1f5f9;font-weight:600;">${esc(it.group_label)}</td></tr>` : '';
-      // a guess and a miss both get the dropdown — a wrong guess must be as easy to fix as a blank
-      const sel = (it.match === 'exact' || it.match === 'alias')
-        ? `<span class="heb">${esc(productName(it.product_id))}</span> ${MATCH_TAG[it.match]}`
-        : `<select data-i="${i}" class="imp-prod" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;max-width:190px;">
+      // EVERY row is editable - a wrong parse or a wrong guess must be as easy to fix as a blank
+      const sel = `<select data-i="${i}" class="imp-prod" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;max-width:180px;">
              <option value="">— choose —</option>${opts}
-           </select> ${MATCH_TAG[it.match]}`;
+           </select> ${MATCH_TAG[it.match] || ''}`;
       return grp + `
         <tr>
           <td>${i + 1}</td>
           <td class="heb" style="font-size:0.82rem;color:#64748b;">${esc(it.raw_line)}</td>
-          <td>${it.qty == null ? '' : fmtN(it.qty)}</td>
-          <td class="heb">${esc(it.unit || '')}</td>
+          <td><input data-i="${i}" class="imp-qty" type="number" step="any" value="${it.qty == null ? '' : it.qty}"
+                     style="width:64px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:5px;"></td>
+          <td><input data-i="${i}" class="imp-unit heb" value="${esc(it.unit || '')}"
+                     style="width:74px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:5px;"></td>
           <td>${sel}</td>
+          <td style="text-align:right"><button class="k-x" data-act="rm" data-i="${i}" title="Remove line">✕</button></td>
         </tr>`;
     }).join('');
+    tb.querySelectorAll('input.imp-qty').forEach(inp => {
+      inp.onchange = () => {
+        const v = inp.value.trim();
+        impParsed.items[+inp.dataset.i].qty = v === '' ? null : parseFloat(v);
+      };
+    });
+    tb.querySelectorAll('input.imp-unit').forEach(inp => {
+      inp.onchange = () => { impParsed.items[+inp.dataset.i].unit = inp.value.trim() || null; };
+    });
+    tb.querySelectorAll('button[data-act=rm]').forEach(btn => {
+      btn.onclick = () => {                       // drop a line you do not want to shop for
+        impParsed.items.splice(+btn.dataset.i, 1);
+        renderImportRows();
+        impCounts();
+      };
+    });
     tb.querySelectorAll('select.imp-prod').forEach(sel => {
       const it = impParsed.items[+sel.dataset.i];
       if (it.product_id) sel.value = it.product_id;         // a fuzzy guess is pre-selected, not hidden
@@ -600,10 +655,16 @@
           try { await jpost('/api/kitchen/ingredient-aliases', { alias: it.parsed_name, product_id: it.product_id }); }
           catch (e) { /* the recipe still saves; only the learning is lost */ }
         }
-        const miss = impParsed.items.filter(x => !x.product_id).length;
-        $('imp-counts').textContent = `${impParsed.items.length} ingredients · ${impParsed.steps.length} steps · ${miss} not in your products`;
+        impCounts();
       };
     });
+  }
+
+  function impCounts() {
+    if (!impParsed) return;
+    const miss = impParsed.items.filter(x => !x.product_id).length;
+    $('imp-counts').textContent =
+      `${impParsed.items.length} ingredients · ${impParsed.steps.length} steps · ${miss} not in your products`;
   }
 
   function productName(id) {
@@ -617,8 +678,11 @@
     if (!cat) { $('imp-save-msg').textContent = 'Pick a category first.'; return; }
     $('imp-save-msg').style.color = '#8a93a6';
     $('imp-save-msg').textContent = 'Saving…';
+    const name = ($('imp-title').value || '').trim();
+    if (!name) { $('imp-save-msg').textContent = 'Give the recipe a name.'; return; }
     const body = {
-      category_id: +cat, name: impParsed.title, source_url: impParsed.source_url,
+      id: impEditId || undefined,           // present => UPDATE, absent => INSERT
+      category_id: +cat, name: name, source_url: impParsed.source_url,
       source_site: impParsed.site, instructions: (impParsed.steps || []).join('\n'),
       items: impParsed.items.map((it, n) => ({
         sort_order: n, group_label: it.group_label, raw_line: it.raw_line,

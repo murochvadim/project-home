@@ -224,13 +224,13 @@
 <div id="k-import" class="k-modal" style="display:none;">
   <div class="k-modal-box" style="width:min(96vw,1000px);">   <!-- the shared class caps at 380px; a table needs room -->
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-      <h3 style="margin:0;">⬇ Import recipe</h3>
+      <h3 style="margin:0;" id="imp-head">⬇ Import recipe</h3>
       <span id="imp-msg" style="font-size:0.82rem;color:#8a93a6;flex:1;"></span>
       <button class="btn btn-secondary btn-sm" onclick="kImportClose()">✕ Close</button>
     </div>
 
-    <!-- 1. search by name -->
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+    <!-- 1. search by name (hidden when editing a saved recipe) -->
+    <div id="imp-search" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
       <select id="imp-site" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:5px;"></select>
       <input id="imp-q" class="heb" placeholder="שם המתכון" style="flex:1;min-width:220px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:5px;"
              onkeydown="if(event.key==='Enter')kImportSearch()">
@@ -241,13 +241,13 @@
     <!-- 2. the parsed recipe: ingredients table + steps -->
     <div id="imp-result" style="display:none;">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-        <b id="imp-title" class="heb" style="font-size:1rem;"></b>
+        <input id="imp-title" class="heb" placeholder="שם המתכון" style="font-size:0.95rem;font-weight:600;padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;min-width:260px;">
         <span id="imp-counts" style="font-size:0.8rem;color:#8a93a6;"></span>
         <a id="imp-src" href="#" target="_blank" rel="noopener" style="font-size:0.78rem;">source ↗</a>
       </div>
       <div style="max-height:340px;overflow:auto;">
         <table class="k-table">
-          <thead><tr><th>#</th><th>Original line</th><th>Qty</th><th>Unit</th><th>Product</th></tr></thead>
+          <thead><tr><th>#</th><th>Original line</th><th>Qty</th><th>Unit</th><th>Product</th><th></th></tr></thead>
           <tbody id="imp-rows"></tbody>
         </table>
       </div>
@@ -434,6 +434,6 @@
 </main>
 
 <script src="js/alerts-monitor.js?v=21"></script>
-<script src="js/kitchen.js?v=47"></script>
+<script src="js/kitchen.js?v=48"></script>
 </body>
 </html>
