@@ -452,6 +452,11 @@ Until a small aliases editor exists (Recipe Settings is the obvious home), fix o
 `UPDATE kitchen_ingredient_aliases SET product_id=<id> WHERE alias='<name>';` or re-map the row in
 an import window, which overwrites it.
 
+ℹ **Health DB-Volumes counts rows, not visible recipes.** Deleting is soft, and a deleted recipe
+KEEPS its ingredient rows, so `kitchen_recipes`/`kitchen_recipe_items` read higher than the Recipes
+tab shows (2026-09-04: 3 rows / 40 items for 1 visible recipe of 18). Re-importing revives the row
+rather than adding another, so this does not grow without bound.
+
 ⚠ **Deleting a recipe then re-importing it USED TO BE A DEAD END (fixed 2026-09-03).** Delete is
 **soft** (`active=false`) but `source_url` stays UNIQUE, so the duplicate guard refused to re-import a
 recipe the user could no longer see. `recipe_save` now blocks only on a **live** duplicate; a
