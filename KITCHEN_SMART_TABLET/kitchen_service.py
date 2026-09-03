@@ -804,14 +804,19 @@ def _match_products(items):
         elif name:
             # ⚠ NOT a plain substring test: that matched רסק עגבניות (tomato paste) to a
             # tomato product. _same_ingredient only accepts a whole-word PREFIX.
-            best = None
-            for p in prods:
-                pn = p['name'].strip()
-                if _same_ingredient(pn, name):
-                    if best is None or len(pn) > len(best['name'].strip()):
-                        best = p
-            if best:
-                hit, how = best['id'], 'fuzzy'
+            # ⚠ Rank the candidates - two earlier rules each picked the WRONG product:
+            #   "longest name wins" made בצלים match בצל אדום (red onion) over plain בצל;
+            #   "fewest words wins" made תפוח אדמה match תפוחים (apples) over תפוחי אדמה.
+            # So: an exact stem match always wins; only then prefer the closest length.
+            want = _words(name)
+
+            def _rank(prod):
+                wp = _words(prod['name'].strip())
+                return (0 if wp == want else 1, abs(len(wp) - len(want)), len(prod['name'].strip()))
+
+            cands = [p for p in prods if _same_ingredient(p['name'].strip(), name)]
+            if cands:
+                hit, how = min(cands, key=_rank)['id'], 'fuzzy'
         it['product_id'], it['match'] = hit, how
     return items
 

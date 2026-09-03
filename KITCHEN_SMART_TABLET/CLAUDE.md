@@ -465,6 +465,13 @@ when they don't (never a faked total), every original line kept in `merged_from`
 cleared when a row spans two sections. ⚠ The cost: **how much goes in each part of the dish is gone**
 from the ingredient list — the method stays in the 📋 Preparation window and at the source link.
 
+**⚠ Candidate RANKING when several products match (fixed 2026-09-03) — two rules in a row picked the
+wrong product, each caught only by looking at a real import:**
+- `longest name wins` → `בצלים` matched **בצל אדום** (red onion) instead of plain `בצל`.
+- then `fewest words wins` → `תפוח אדמה` matched **תפוחים (apples)** instead of `תפוחי אדמה`.
+The rule now is `(exact stem match first, then closest length, then shorter name)`. **Any change here
+must be checked against BOTH pairs** — they pull in opposite directions.
+
 **Hebrew plurals + orphan note lines (fixed 2026-09-03, found on a second recipe):**
 - **`בצלים` did not find `בצל`, `תפוח אדמה` did not find `תפוחי אדמה`.** `_same_ingredient` now
   compares **stems word by word** (`_stem`/`_words`): strips יות/ות/ים and a construct י on a
