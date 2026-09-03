@@ -16,7 +16,7 @@
   const $ = id => document.getElementById(id);
   const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const UNIT_HE = { kg: 'ק"ג', l: 'ליטר', piece: 'יח׳', tray: 'תבנית', pack: 'חבילה', bottle: 'בקבוק', jar: 'צנצנת', tub: 'גביע', loaf: 'כיכר', bar: 'חטיף' };
+  const UNIT_HE = { kg: 'ק"ג', l: 'ליטר', piece: 'יח׳', tray: 'תבנית', pack: 'חבילה', bottle: 'בקבוק', jar: 'צנצנת', tub: 'גביע', loaf: 'כיכר', bar: 'חטיף' , box: 'קופסה'};
   const unitHe = u => UNIT_HE[(u || '').toLowerCase()] || (u || '');
   const numOf = v => (v == null ? 0 : parseFloat(v) || 0);
   const fmtN = v => { const n = +v; return Number.isInteger(n) ? String(n) : (Math.round(n * 100) / 100).toString(); };

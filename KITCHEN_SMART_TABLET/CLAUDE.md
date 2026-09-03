@@ -430,6 +430,11 @@ Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; match
 1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
 21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
 
+**Unit `box` = קופסה added 2026-09-03.** ⚠ A product unit lives in **three** places and all must agree:
+the `<select id="p-unit">` in `kitchen.html`, and the `UNIT_HE` map in **both** `js/kitchen.js`
+(dashboard) and `kitchen/kitchen.js` (fridge PWA) — miss one and the unit renders as its raw English
+key. `_amount_defaults` needs nothing (unknown units fall to its 1/2/4/6 branch).
+
 **Editing a saved recipe (2026-09-03):** each row on the Recipes tab has an **✎** that opens the
 **same window** as the import — search step hidden, `id` carried on save so the service UPDATEs
 (`kImportOpen` resets `impEditId`; `kRecipeEdit(id)` sets it). The duplicate guard only applies to

@@ -34,7 +34,7 @@
   async function jpost(p, b) { const r = await fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
   const numOf = v => (v == null ? 0 : parseFloat(v) || 0);
   const fmtN = v => { const n = +v; return Number.isInteger(n) ? String(n) : (Math.round(n * 100) / 100).toString(); };
-  const UNIT_HE = { kg: 'ק"ג', l: 'ליטר', piece: 'יח׳', tray: 'תבנית', pack: 'חב׳', bottle: 'בקבוק', jar: 'צנצנת', tub: 'גביע', loaf: 'כיכר', bar: 'יח׳' };
+  const UNIT_HE = { kg: 'ק"ג', l: 'ליטר', piece: 'יח׳', tray: 'תבנית', pack: 'חב׳', bottle: 'בקבוק', jar: 'צנצנת', tub: 'גביע', loaf: 'כיכר', bar: 'יח׳' , box: 'קופסה'};
   const unitHe = u => UNIT_HE[(u || '').toLowerCase()] || (u || '');
   // ── on-shelf season ──
   const isSeasonal = p => p && p.season_all_year === false && p.season_start_month && p.season_end_month;
