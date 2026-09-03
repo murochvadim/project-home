@@ -347,6 +347,7 @@
 - Secrets stored in `BOILER/dashboard/.env` (gitignored): `HA_TOKEN`, `ANTHROPIC_API_KEY`, `DB_PASS`
 - `ecosystem.config.js` loads `.env` automatically at startup — always start with `pm2 delete boiler-dashboard && pm2 start ecosystem.config.js`
 - ⚠ **NEVER use `pm2 restart`** — it caches the old process environment and ignores `.env` changes (causes stale HA tokens and wrong secrets)
+- ⚠ **Restart policy lives in `ecosystem.config.js`, which is GIT-IGNORED** (it maps secrets out of `.env`). If this machine is ever rebuilt from git, re-add these two keys to the app block or the dashboard becomes killable-for-good again: **`min_uptime: 30000`** and **`restart_delay: 5000`**. Reason: pm2's defaults (min_uptime 1 s, max_restarts 16) let a network outage stop the app permanently — an instant exit counts as an "unstable" restart, 16 happen within seconds, and pm2 then leaves it `errored` until started by hand. That happened on 2026-05-14, 2026-05-29 and 2026-08-24. See [[incident_dashboard_crash_loop]].
 - Dependencies: `express`, `pg`, `node-ssh`, `@anthropic-ai/sdk` (in `node_modules`)
 - PM2 env vars required: `HA_TOKEN`, `ANTHROPIC_API_KEY` — sourced from `.env` (never hardcode in ecosystem.config.js)
 

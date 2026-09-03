@@ -71,6 +71,26 @@ const db = new Pool({
   max:                         10,
 });
 
+// ⚠ WITHOUT THIS LISTENER A WI-FI BLIP KILLS THE WHOLE DASHBOARD.
+// When an idle connection's socket dies (the laptop is on Wi-Fi, so the route to
+// 192.168.1.219 disappears regularly — ENETUNREACH appears ~1900 times in the pm2 error log),
+// pg-pool's makeIdleListener sets err.client and calls pool.emit('error', ...). An 'error'
+// event with no listener is thrown by Node, and an uncaught throw ends the process; pm2 then
+// restarts it, the restart can't reach the DB either, and pm2 eventually gives up entirely
+// (it has done exactly that three times: 2026-05-14, 2026-05-29, 2026-08-24).
+// pg-pool has ALREADY closed and purged the broken client before emitting, so there is nothing
+// to clean up here — the next query simply opens a fresh connection. Logging is the whole fix.
+db.on('error', (err) => {
+  console.error('pg pool error (client already discarded, pool self-heals):', err.message);
+});
+
+// A rejected promise nobody caught would take the process down the same way. Log it loudly
+// instead of dying silently. (Deliberately NOT catching 'uncaughtException' — continuing from
+// an unknown broken state hides the next real bug; fix those at the source, as above.)
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandled promise rejection:', (reason && reason.message) || reason);
+});
+
 // Medical Tests results routes (hearing/vision) live in their own module so
 // this file stays free of new route handlers (architecture-guard hook). The
 // module receives the express instance + the pg pool and registers its own
@@ -9500,7 +9520,17 @@ app.delete('/api/rooms/:name', async (req, res) => {
 
 
 const PORT = 3000;
-ensureSchema().then(() => {
+
+// Start SERVING first, then bring the schema up in the background.
+//
+// ⚠ This used to be `ensureSchema().then(listen).catch(() => process.exit(1))`, which meant a
+// dashboard that could not reach Postgres refused to start at all. Combined with the crash above
+// that was the outage: blip → crash → restart → DB still unreachable → instant exit → pm2 counts
+// it as an unstable restart → after 16 of them pm2 stops trying and the dashboard stays dead until
+// someone starts it by hand ('Schema init failed' appears 382 times in the log; 371 of those exits
+// were instant ENETUNREACH ones). Plenty of this app needs no database at all (static pages,
+// TV/HA control), and the pages that do already handle a failing query.
+function listen() {
   // Bind to all interfaces so NetBird peers can reach the dashboard via the
   // wt0 (WireGuard Tunnel) interface at 100.102.207.1:3000. A Windows
   // Firewall rule restricts inbound TCP/3000 to the wt0 interface only —
@@ -9509,7 +9539,20 @@ ensureSchema().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Boiler Dashboard running at http://localhost:${PORT}`);
   });
-}).catch(e => {
-  console.error('Schema init failed:', e.message);
-  process.exit(1);
-});
+}
+
+// Retry forever, backing off 5s → 60s. The network comes back on its own; nothing here should
+// ever be a reason for the process to die.
+function initSchema(attempt = 1) {
+  ensureSchema()
+    .then(() => { if (attempt > 1) console.log('Schema init succeeded on attempt ' + attempt); })
+    .catch((e) => {
+      const wait = Math.min(5000 * attempt, 60000);
+      console.error('Schema init failed (attempt ' + attempt + ', retrying in ' +
+                    Math.round(wait / 1000) + 's):', e.message);
+      setTimeout(() => initSchema(attempt + 1), wait);
+    });
+}
+
+listen();
+initSchema();
