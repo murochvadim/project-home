@@ -611,11 +611,15 @@ _UNITS = ['קילוגרם', 'קילו', 'גרם', "ג'", 'ק"ג', 'מ״ל', 'מ"
 _DROP = ['בינוניים', 'בינוני', 'בינונית', 'גדולים', 'גדולה', 'גדול', 'קטנות', 'קטנים', 'קטן', 'קטנה',
          'מגורדים', 'מגורד', 'מגורדת', 'סחוטים', 'סחוט', 'סחוטה', 'קצוצה', 'קצוץ', 'קצוצים',
          'פרוסות', 'פרוס', 'פרוסה', 'חתוך', 'חתוכה', 'חתוכים', 'בשלות', 'בשל', 'רכות', 'רך',
-         'מומסת', 'מומס', 'קלוף', 'קלופה', 'טרי', 'טריים', 'גדושה', 'גדוש']
+         'מומסת', 'מומס', 'קלוף', 'קלופה', 'טרי', 'טריים']
 # a trailing clause starting with one of these is preparation, not the name
 _CUT = ['חתוך', 'חתוכה', 'חתוכים', 'פרוס', 'פרוסות', 'קצוץ', 'קצוצה', 'מגורד', 'מגורדים', 'כל']
 _NOISE = ['נגיעה של', 'מעט פחות', 'מעט']
-_DROP += ['מלאה', 'מלא', 'דק', 'דקה']   # כף מלאה סילאן -> סילאן
+_DROP += ['דק', 'דקה']
+# ⚠ מלא/מלאה/גדוש are NOT in _DROP: they mean "heaped" after a unit (כף מלאה סילאן) but they are
+# part of real PRODUCT names too (קמח מלא, אורז מלא). Dropping them everywhere made a wholemeal-flour
+# recipe silently match WHITE flour. They are only removed directly after the unit - see below.
+_AFTER_UNIT = ['מלאה', 'מלא', 'גדושה', 'גדוש']
 _DROP += ['מסוננות', 'מסוננים', 'מסוננת', 'מסונן', 'מפוררות', 'מפוררים', 'מפוררת', 'מפורר']   # drained / crumbled
 # ...and they also END the name: everything after them is preparation, so cut there too
 # ("2 קופסאות טונה מסוננות ומפוררות" -> טונה).
@@ -653,6 +657,11 @@ def _norm_ingredient(line):
             unit = u
             s = s[len(u):].strip()
             break
+    # "כף מלאה סילאן" / "כף גדושה קטשופ" - heaped describes the SPOON, so it is only
+    # noise here, immediately after the unit. Anywhere else the same word belongs to the product.
+    first = s.split(' ', 1)
+    if unit and first and first[0] in _AFTER_UNIT:
+        s = first[1] if len(first) > 1 else ''
     for ph in _NOISE:
         s = s.replace(ph, ' ')
     # A dash introduces an explanation of the ingredient, never part of its name:

@@ -463,6 +463,11 @@ import, not from imagination — the word lists only earn entries this way:
   buying the lower number leaves you short.
 - **units**: קילו/קילוגרם, and the construct forms קופסת/חבילת ("a tin/pack OF"), listed BEFORE
   the plain forms so the longer one wins the startswith test.
+⚠ **מלא/מלאה/גדוש are stripped ONLY directly after a unit** (`_AFTER_UNIT`). They mean "heaped" of a
+SPOON (כף מלאה סילאן) but are part of real PRODUCT names elsewhere (קמח מלא, אורז מלא, לחם מלא).
+Dropping them everywhere — which this parser did briefly on 2026-09-04 — is a **silent** wrong match:
+proved by simulation that `200 גרם קמח מלא` then resolved to **קמח לבן (white flour)**. It was
+invisible only because no מלא product existed yet.
 ⚠ קשה/קשות (hard) is deliberately NOT dropped — גבינה קשה is a different product from גבינה.
 Measured over three real recipes: **35 of 42 rows match a product**; the misses are products not in the
 catalogue (שמן קנולה, שמרים, אריסה, גריל עוף).
