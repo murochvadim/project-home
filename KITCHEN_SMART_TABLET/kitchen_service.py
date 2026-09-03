@@ -917,9 +917,14 @@ def recipe_save():
         src = (b.get('source_url') or '').strip() or None
         rid = b.get('id')
         if src and not rid:
-            dup = q("SELECT id, name FROM kitchen_recipes WHERE source_url=%s", (src,), fetch='one')
-            if dup:      # already imported -> tell the UI, never create a second copy
+            dup = q("SELECT id, name, active FROM kitchen_recipes WHERE source_url=%s", (src,), fetch='one')
+            if dup and dup['active']:    # a LIVE one exists -> never create a second copy
                 return jsonify({'error': 'already_imported', 'recipe': dup}), 409
+            if dup:
+                # It was deleted. Deleting is soft (active=false) but source_url stays UNIQUE, so a
+                # plain 409 here would refuse to re-import a recipe the user can no longer see -
+                # a dead end. Revive that row instead: same id, fresh contents.
+                rid = dup['id']
         rec = {'category_id': b.get('category_id'), 'name': name, 'emoji': b.get('emoji'),
                'servings': b.get('servings'), 'instructions': b.get('instructions'),
                'source_url': src, 'source_site': b.get('source_site'), 'notes': b.get('notes'),
@@ -928,7 +933,7 @@ def recipe_save():
             row = q("""UPDATE kitchen_recipes SET category_id=%(category_id)s, name=%(name)s,
                          emoji=%(emoji)s, servings=%(servings)s, instructions=%(instructions)s,
                          source_url=%(source_url)s, source_site=%(source_site)s, notes=%(notes)s,
-                         sort_order=%(sort_order)s, updated_at=now()
+                         sort_order=%(sort_order)s, active=true, updated_at=now()
                        WHERE id=%(id)s RETURNING *""", {**rec, 'id': rid}, fetch='one')
         else:
             row = q("""INSERT INTO kitchen_recipes

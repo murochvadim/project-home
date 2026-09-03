@@ -430,6 +430,13 @@ Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; match
 1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
 21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
 
+⚠ **Deleting a recipe then re-importing it USED TO BE A DEAD END (fixed 2026-09-03).** Delete is
+**soft** (`active=false`) but `source_url` stays UNIQUE, so the duplicate guard refused to re-import a
+recipe the user could no longer see. `recipe_save` now blocks only on a **live** duplicate; a
+soft-deleted one is **revived in place** (same id, fresh contents, `active=true` in the UPDATE).
+Verified: import → delete → re-import succeeds and reuses the id, a live duplicate still returns 409,
+and only one row per URL ever exists.
+
 **Duplicate ingredients are MERGED — one row per product (2026-09-03).** A recipe here exists to say
 **what to buy**, and the tuna recipe seasons the patties and the sauce separately (מלח ×2, פלפל שחור
 ×2, בצל ×2). `_merge_items` (called from `recipe_parse` after matching) collapses them: **21 lines → 18
