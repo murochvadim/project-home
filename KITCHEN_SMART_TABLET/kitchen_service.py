@@ -601,9 +601,12 @@ def _txt(x):
 # ── Hebrew ingredient normaliser ────────────────────────────────────
 # Turns "2 תפוחי אדמה בינוניים מגורדים וסחוטים" into (2, None, "תפוחי אדמה").
 _FRACTION = {'חצי': 0.5, 'שליש': 1 / 3.0, 'רבע': 0.25}
-_UNITS = ['גרם', "ג'", 'ק"ג', 'מ״ל', 'מ"ל', 'מיל', 'ליטר',
+_UNITS = ['קילוגרם', 'קילו', 'גרם', "ג'", 'ק"ג', 'מ״ל', 'מ"ל', 'מיל', 'ליטר',
           'כפיות', 'כפית', 'כפות', 'כף', 'כוסות', 'כוס',
-          'קופסאות', 'קופסה', 'חבילות', 'חבילה', 'צרור', 'שיני', 'שן']
+          # קופסת / חבילת are the construct forms ("a tin/pack OF"); listed before the plain
+          # forms so the longer one wins the startswith test.
+          'קופסאות', 'קופסת', 'קופסה', 'חבילות', 'חבילת', 'חבילה',
+          'צרור', 'שיני', 'שן']
 # descriptive / preparation words that are not part of the product's name
 _DROP = ['בינוניים', 'בינוני', 'בינונית', 'גדולים', 'גדולה', 'גדול', 'קטנות', 'קטנים', 'קטן', 'קטנה',
          'מגורדים', 'מגורד', 'מגורדת', 'סחוטים', 'סחוט', 'סחוטה', 'קצוצה', 'קצוץ', 'קצוצים',
@@ -613,6 +616,11 @@ _DROP = ['בינוניים', 'בינוני', 'בינונית', 'גדולים', '
 _CUT = ['חתוך', 'חתוכה', 'חתוכים', 'פרוס', 'פרוסות', 'קצוץ', 'קצוצה', 'מגורד', 'מגורדים', 'כל']
 _NOISE = ['נגיעה של', 'מעט פחות', 'מעט']
 _DROP += ['מלאה', 'מלא', 'דק', 'דקה']   # כף מלאה סילאן -> סילאן
+_DROP += ['מסוננות', 'מסוננים', 'מסוננת', 'מסונן', 'מפוררות', 'מפוררים', 'מפוררת', 'מפורר']   # drained / crumbled
+# ...and they also END the name: everything after them is preparation, so cut there too
+# ("2 קופסאות טונה מסוננות ומפוררות" -> טונה).
+_DROP += ['חם', 'חמים', 'חמימים', 'חצוי', 'חצויה', 'חצויים', 'יותר', 'כתוש', 'כתושה', 'כתושים', 'מגורדות', 'קר', 'קרים']   # halved / crushed / grated / warm / "more"
+_CUT += ['מסוננות', 'מסוננים', 'מסוננת', 'מסונן', 'מפוררות', 'מפוררים', 'מפוררת', 'מפורר', 'חצוי', 'חצויה', 'חצויים', 'כתוש', 'כתושה', 'לפרוסות', 'לקוביות', 'לטבעות', 'לרצועות']
 
 def _norm_ingredient(line):
     """-> (qty|None, unit|None, product_name, note|None)"""
@@ -628,6 +636,12 @@ def _norm_ingredient(line):
         else:
             qty = float(raw.replace(',', '.'))
         s = m.group(2)
+        # A range - "7 - 8 תפוחי אדמה" (any dash, including the en-dash the sites use). Take the
+        # UPPER bound: this feeds a shopping list, and buying the smaller number leaves you short.
+        rng = re.match(r'^\s*[-–—]\s*(\d+(?:[.,]\d+)?)\s*(.*)$', s)
+        if rng:
+            qty = max(qty, float(rng.group(1).replace(',', '.')))
+            s = rng.group(2)
     else:
         for w, v in _FRACTION.items():
             if s.startswith(w + ' '):
@@ -641,6 +655,9 @@ def _norm_ingredient(line):
             break
     for ph in _NOISE:
         s = s.replace(ph, ' ')
+    # A dash introduces an explanation of the ingredient, never part of its name:
+    #   "חלקי עוף – כרעיים, שוקיים, כנפיים עם העור"  ->  "חלקי עוף"
+    s = re.split(r'\s[-–—]\s', s)[0]
     words = s.split()
     for i, w in enumerate(words):
         if w in _CUT:

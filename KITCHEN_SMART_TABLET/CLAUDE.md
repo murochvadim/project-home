@@ -452,6 +452,21 @@ Until a small aliases editor exists (Recipe Settings is the obvious home), fix o
 `UPDATE kitchen_ingredient_aliases SET product_id=<id> WHERE alias='<name>';` or re-map the row in
 an import window, which overwrites it.
 
+**Parser vocabulary grew with real recipes (2026-09-04).** Every one of these came from an actual
+import, not from imagination — the word lists only earn entries this way:
+- **preparation participles** now dropped/cut: מסוננות (drained), מפוררות (crumbled), חצוי (halved),
+  כתוש (crushed), מגורדות, חמימים/קרים, יותר — so `2 קופסאות טונה מסוננות ומפוררות` → `טונה`.
+- **"cut into X" clauses** end the name: לפרוסות / לקוביות / לטבעות / לרצועות.
+- **a dash introduces an explanation**, never part of the name:
+  `חלקי עוף – כרעיים, שוקיים` → `חלקי עוף` (matches – en-dash too, which the sites use).
+- **quantity RANGES**: `7 – 8 תפוחי אדמה` takes the **upper** bound (8) — this feeds a shopping list, and
+  buying the lower number leaves you short.
+- **units**: קילו/קילוגרם, and the construct forms קופסת/חבילת ("a tin/pack OF"), listed BEFORE
+  the plain forms so the longer one wins the startswith test.
+⚠ קשה/קשות (hard) is deliberately NOT dropped — גבינה קשה is a different product from גבינה.
+Measured over three real recipes: **35 of 42 rows match a product**; the misses are products not in the
+catalogue (שמן קנולה, שמרים, אריסה, גריל עוף).
+
 **Deleting a recipe is PERMANENT (fixed 2026-09-04)** — it was a soft delete, copied from products
 without checking whether it fitted. It did not: **nothing references a recipe** (only its own
 `kitchen_recipe_items`, which go with it via ON DELETE CASCADE), and there is **no undo screen**, so a
