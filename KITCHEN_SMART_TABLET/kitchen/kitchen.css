@@ -28,6 +28,15 @@ body {
   box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
 }
 #listbtn:active { transform: scale(.94); }
+/* מתכונים — same circle as רשימה, directly beneath it (74 + 132 + 16 gap) */
+#recipebtn {
+  position: fixed; left: 20px; top: 222px; z-index: 30;
+  width: 132px; height: 132px; border-radius: 50%; border: none; background: #000; color: #fff;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
+}
+#recipebtn:active { transform: scale(.94); }
+#recipebtn .lb-cap { font-size: 20px; }   /* label-only circle, so it carries the weight alone */
 .lb-cap { font-size: 14px; font-weight: 700; opacity: .92; line-height: 1.1; }
 .lb-count { font-size: 34px; font-weight: 800; line-height: 1.15; }
 .lb-price { font-size: 15px; font-weight: 700; opacity: .95; line-height: 1.1; }

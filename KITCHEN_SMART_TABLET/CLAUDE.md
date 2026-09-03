@@ -360,3 +360,29 @@ touches `server.js`, the dashboard needs **`pm2 delete boiler-dashboard && pm2 s
 **Not built yet:** the מתכונים circle + flying recipe categories on the tablet, the recipes themselves,
 products inside a recipe, amounts and unit conversion. **Open question for the next step:** can one
 recipe belong to more than one category (a column vs a join table)?
+
+## Recipes — STEP 2: the מתכונים circle on the tablet (BUILT 2026-09-03)
+
+The recipe categories from step 1 now appear on the fridge. **Tablet-only — no backend work at all**
+(step 1's `GET /api/kitchen/recipe-categories` already served everything needed).
+
+- **`#recipebtn`** — a second floating circle, an exact copy of `#listbtn` at `top:222px`
+  (74 + 132 + 16 gap), label **מתכונים** only (**no count** — never asked for; a category count
+  isn't actionable the way the list's item count is).
+- **`buildBobGrid(items, onPick, emptyMsg)`** — the bob-in-place grid **extracted from `buildHome`**
+  and now shared by the food home and the מתכונים screen, so the two move identically **by
+  construction** rather than by copy-paste. ⚠ Verified behaviour-preserving by rendering `buildHome`
+  before and after the extraction: **HTML byte-identical**. (Circle positions differ between any two
+  renders because the bob phase is `Math.random()` by design — `kitchen.js:91-92` — so compare the
+  HTML, not the coordinates.)
+- **`mode`** gains `recipes` + `recipe-cat`; `rebuild()` (rotate/resize), `goIdleHome()` and the 30 s
+  poll all handle them. The poll re-fetches the recipe categories only while those screens are open,
+  and redraws only when the set actually changed (same signature trick the home screen uses).
+- **`goBack()`** replaces `showHome()` on `#backbtn`: recipe-category → מתכונים → food home,
+  one level at a time (a product category still goes straight home, unchanged).
+- Recipe categories are fetched **lazily on open**, never at boot — the fridge home must not wait.
+- Tapping a category shows the category circle + "no recipes in this category" — recipes are step 3.
+
+⚠ **Deploy: `scp` the `kitchen/` folder only — NO `systemctl restart`.** Those files are read from
+disk per request (`send_from_directory` + `_nocache`, `kitchen_service.py:107`); the browser cache is
+defeated by the bumps `kitchen.css?v=50` / `kitchen.js?v=34` in `index.html`.

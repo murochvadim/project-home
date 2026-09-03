@@ -7,11 +7,11 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>מקרר</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="kitchen.css?v=49">
+  <link rel="stylesheet" href="kitchen.css?v=50">
 </head>
 <body>
   <div id="bar">
-    <button id="backbtn" onclick="showHome()" hidden>→ חזרה</button>
+    <button id="backbtn" onclick="goBack()" hidden>→ חזרה</button>
     <div id="title">🧊 מקרר</div>
   </div>
 
@@ -20,6 +20,11 @@
     <span class="lb-cap">רשימה</span>
     <span class="lb-count" id="lb-count">0</span>
     <span class="lb-date" id="lb-date"></span>
+  </button>
+
+  <!-- מתכונים circle — sits directly under רשימה, same style -->
+  <button id="recipebtn" onclick="openRecipes()" title="מתכונים">
+    <span class="lb-cap">מתכונים</span>
   </button>
 
   <div id="stage">
@@ -49,6 +54,6 @@
     <div id="lv-items"></div>
   </div>
 
-  <script src="kitchen.js?v=33"></script>
+  <script src="kitchen.js?v=34"></script>
 </body>
 </html>

@@ -10,7 +10,8 @@
   let products = [];
   let listItems = [];             // current shopping-list items (for the "ברשימה" circle)
   let nodes = [];                 // animated elements: each has .el + .upd(e)->{x,y}
-  let mode = 'home';              // 'home' | 'category'
+  let mode = 'home';              // 'home' | 'category' | 'recipes' | 'recipe-cat'
+  let recipeCats = [], curRecipeCat = null, rsig = '';   // recipe categories (loaded lazily)
   let curCat = null;
   let raf = null, startT = 0, sig = '';
 
@@ -64,9 +65,14 @@
     mode = 'home'; curCat = null;
     $('backbtn').hidden = true;
     $('title').textContent = '🧊 מקרר';
+    buildBobGrid(circleList(), it => showCategory(it.id), 'אין קטגוריות עדיין');
+  }
+
+  // The bob-in-place grid, shared by the food home AND the מתכונים screen so the two move
+  // identically by construction instead of by copy-paste. Lifted out of buildHome unchanged.
+  function buildBobGrid(items, onPick, emptyMsg) {
     const stage = $('stage'), box = $('circles');
-    const items = circleList();
-    if (!items.length) { box.innerHTML = '<div class="empty">אין קטגוריות עדיין</div>'; nodes = []; return; }
+    if (!items.length) { box.innerHTML = '<div class="empty">' + emptyMsg + '</div>'; nodes = []; return; }
     const W = stage.clientWidth, H = stage.clientHeight, n = items.length;
     const UW = Math.max(80, W - LEFT_SAFE);              // content lives right of the floating circle
     let bestCell = 0, cols = 1;
@@ -84,7 +90,7 @@
       const hy = row * cellH + cellH / 2 - size / 2;
       const wX = 0.45 + Math.random() * 0.35, wY = 0.40 + Math.random() * 0.35;
       const pX = Math.random() * 6.283, pY = Math.random() * 6.283;
-      el.onclick = () => showCategory(items[i].id);
+      el.onclick = () => onPick(items[i]);
       return { el, upd: e => ({ x: hx + amp * Math.sin(e * wX + pX), y: hy + amp * Math.cos(e * wY + pY) }) };
     });
   }
@@ -160,6 +166,45 @@
       placed += cnt;
     }
   }
+
+  // ── מתכונים (recipe categories) ────────────────────────────────────
+  // Own floating circle under רשימה. Tapping it flies the RECIPE categories using the very same
+  // grid as the food home (buildBobGrid). Fetched lazily — the fridge home must never wait on it.
+  window.openRecipes = async function () {
+    try { recipeCats = await jget('/api/kitchen/recipe-categories') || []; } catch (e) { recipeCats = []; }
+    rsig = recipeCats.map(c => c.emoji + c.name).join('|');
+    buildRecipes();
+  };
+
+  function buildRecipes() {
+    mode = 'recipes'; curRecipeCat = null;
+    $('backbtn').hidden = false;
+    $('title').textContent = '📖 מתכונים';
+    const items = recipeCats.map((c, i) => ({ id: c.id, name: c.name, emoji: c.emoji, color: catColor(i) }));
+    buildBobGrid(items, it => showRecipeCat(it.id), 'אין קטגוריות מתכונים עדיין');
+  }
+
+  // A recipe category's own screen. The recipes themselves are the NEXT step, so for now it shows
+  // the category in the middle and says it is empty — same shape as a product category screen.
+  function showRecipeCat(id) {
+    mode = 'recipe-cat'; curRecipeCat = id;
+    const idx = recipeCats.findIndex(c => c.id === id);
+    const cat = recipeCats.find(c => c.id === id);
+    $('backbtn').hidden = false;
+    $('title').textContent = cat ? ((cat.emoji ? cat.emoji + ' ' : '') + cat.name) : 'מתכונים';
+    const stage = $('stage'), box = $('circles');
+    const W = stage.clientWidth, H = stage.clientHeight, S = Math.min(W - LEFT_SAFE, H);
+    const cx = LEFT_SAFE + (W - LEFT_SAFE) / 2, cy = H / 2;
+    const color = catColor(idx < 0 ? -1 : idx);
+    const centerSize = Math.max(100, Math.min(Math.round(S * 0.22), 180));
+    box.innerHTML = `<button class="circle center" style="--csize:${centerSize}px;background:${color}"><span class="c-name">${esc(cat ? cat.name : '')}</span></button>`
+      + '<div class="empty" style="bottom:12%;top:auto">אין מתכונים בקטגוריה זו</div>';
+    const els = [...box.querySelectorAll('.circle')];
+    nodes = [{ el: els[0], upd: () => ({ x: cx - centerSize / 2, y: cy - centerSize / 2 }) }];
+  }
+
+  // One step back, not straight home: recipe category -> the flying recipe categories -> food home.
+  window.goBack = function () { if (mode === 'recipe-cat') buildRecipes(); else buildHome(); };
 
   // ── PRODUCT panel (opens on the right of the same screen; constant circles) ──
   async function loadList() { try { const d = await jget('/api/kitchen/list'); listItems = d.items || []; } catch (e) { } updateListBadge(); }
@@ -319,7 +364,12 @@
   }
   function startAnim() { if (raf) cancelAnimationFrame(raf); startT = 0; raf = requestAnimationFrame(tick); }
 
-  function rebuild() { if (mode === 'category' && curCat != null) showCategory(curCat); else buildHome(); }
+  function rebuild() {
+    if (mode === 'category' && curCat != null) showCategory(curCat);
+    else if (mode === 'recipes') buildRecipes();
+    else if (mode === 'recipe-cat' && curRecipeCat != null) showRecipeCat(curRecipeCat);
+    else buildHome();
+  }
 
   // ── inactivity → always return to the flying-circles home ──
   let idleSec = 60, idleTimer = null, panelReturnSec = 1.5, blinkCount = 3;
@@ -361,6 +411,13 @@
       try { categories = await jget('/api/kitchen/categories') || []; products = await jget('/api/kitchen/products') || []; } catch (e) { }
       const s = circleList().map(c => c.emoji + c.name).join('|');
       if (s !== sig) { sig = s; if (mode === 'home') buildHome(); }   // reflect category add/rename on home
+      if (mode === 'recipes' || mode === 'recipe-cat') {                 // same for the recipe categories
+        try {
+          recipeCats = await jget('/api/kitchen/recipe-categories') || [];
+          const r = recipeCats.map(c => c.emoji + c.name).join('|');
+          if (r !== rsig) { rsig = r; if (mode === 'recipes') buildRecipes(); }
+        } catch (e) { }
+      }
       await loadList();                                 // keep the רשימה badge fresh
       await loadSettings();                             // pick up a changed idle timeout
     }, 30000);
