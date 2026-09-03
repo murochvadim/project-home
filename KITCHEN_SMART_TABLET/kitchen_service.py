@@ -698,6 +698,74 @@ def _recipe_sites():
     return cfg.get('recipe_sites') or [{'key': 'nikib', 'name': 'nikib.co.il',
                                         'base': 'https://nikib.co.il', 'adapter': 'nikib'}]
 
+def _same_ingredient(a, b):
+    """Are these two ingredient names the same thing?
+
+    Hebrew puts the HEAD NOUN FIRST, so an addition extends a name to the RIGHT:
+      מלח / מלח גס            -> same thing (coarse salt is salt)
+      פלפל שחור / פלפל שחור גרוס -> same thing
+    but a word added on the LEFT changes what the thing IS:
+      עגבניות / רסק עגבניות    -> tomatoes vs tomato PASTE - NOT the same
+      פלפל שחור / פלפל חריף    -> black pepper vs chilli   - NOT the same
+    So: equal, or the shorter is a whole-WORD PREFIX of the longer. Never a suffix,
+    and never a partial word (which would make פלפל match פלפלת)."""
+    a = re.sub(r'\s+', ' ', (a or '').strip())
+    b = re.sub(r'\s+', ' ', (b or '').strip())
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return long_.startswith(short + ' ')
+
+
+def _merge_items(items):
+    """One row per PRODUCT - what a recipe is for here is the shopping list.
+
+    A recipe legitimately names the same thing twice (this tuna recipe seasons the patties and
+    the sauce separately), but for buying that is one entry. Quantities add up when the units
+    match; when they do not, the leftovers are recorded in `qty_note` rather than being faked
+    into a single number. Every original line is kept in `merged_from`, so nothing is lost."""
+    out = []
+    for it in items:
+        tgt = None
+        for m in out:
+            if it.get('product_id') and m.get('product_id') == it.get('product_id'):
+                tgt = m
+                break
+            if not it.get('product_id') and not m.get('product_id') \
+                    and _same_ingredient(it.get('parsed_name'), m.get('parsed_name')):
+                tgt = m
+                break
+            if it.get('product_id') and m.get('product_id') is None \
+                    and _same_ingredient(it.get('parsed_name'), m.get('parsed_name')):
+                tgt = m
+                break
+        if tgt is None:
+            row = dict(it)
+            row['merged_from'] = [it.get('raw_line')]
+            row['qty_note'] = None
+            out.append(row)
+            continue
+        tgt['merged_from'].append(it.get('raw_line'))
+        # a mapped product always wins over an unmapped one, and the SHORTER name is the head noun
+        if it.get('product_id') and not tgt.get('product_id'):
+            tgt['product_id'], tgt['match'] = it['product_id'], it.get('match')
+        if it.get('parsed_name') and len(it['parsed_name']) < len(tgt.get('parsed_name') or ''):
+            tgt['parsed_name'] = it['parsed_name']
+        a, b = tgt.get('qty'), it.get('qty')
+        if (tgt.get('unit') or None) == (it.get('unit') or None):
+            tgt['qty'] = (1 if a is None else a) + (1 if b is None else b)
+        else:                                   # cannot add teaspoons to tablespoons - say so
+            extra = ('%s %s' % ('' if b is None else b, it.get('unit') or '')).strip()
+            tgt['qty_note'] = ((tgt.get('qty_note') + ' + ') if tgt.get('qty_note') else '+ ') + extra
+        if tgt.get('group_label') != it.get('group_label'):
+            tgt['group_label'] = None           # it now belongs to more than one part of the recipe
+    for n, row in enumerate(out):
+        row['sort_order'] = n
+    return out
+
+
 def _match_products(items):
     """exact product name -> learned alias -> normalised 'contains' -> unmatched.
     Never guesses silently: every row reports HOW it matched so the UI can show it."""
@@ -712,10 +780,12 @@ def _match_products(items):
         elif name and name in aliases:
             hit, how = aliases[name], 'alias'
         elif name:
-            best = None                            # either contains the other; longest name wins
+            # ⚠ NOT a plain substring test: that matched רסק עגבניות (tomato paste) to a
+            # tomato product. _same_ingredient only accepts a whole-word PREFIX.
+            best = None
             for p in prods:
                 pn = p['name'].strip()
-                if pn and (pn in name or name in pn):
+                if _same_ingredient(pn, name):
                     if best is None or len(pn) > len(best['name'].strip()):
                         best = p
             if best:
@@ -787,6 +857,7 @@ def recipe_parse():
             qty, unit, name, note = _norm_ingredient(it['raw_line'])
             it.update({'sort_order': n, 'qty': qty, 'unit': unit, 'parsed_name': name, 'note': note})
         _match_products(parsed['items'])
+        parsed['items'] = _merge_items(parsed['items'])
         existing = q("SELECT id, name FROM kitchen_recipes WHERE source_url=%s", (url,), fetch='one')
         return jsonify({'site': site_key, 'source_url': url, 'title': parsed['title'],
                         'steps': parsed['steps'], 'items': parsed['items'],

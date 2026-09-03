@@ -430,6 +430,22 @@ Verified live end-to-end: search → 8 hits; parse → 21 items / 8 steps; match
 1899 chars of instructions; **re-saving the same URL returned 409**; deleting the recipe cascaded its
 21 items away. Test rows then removed — the tables are empty and the tablet is unchanged.
 
+**Duplicate ingredients are MERGED — one row per product (2026-09-03).** A recipe here exists to say
+**what to buy**, and the tuna recipe seasons the patties and the sauce separately (מלח ×2, פלפל שחור
+×2, בצל ×2). `_merge_items` (called from `recipe_parse` after matching) collapses them: **21 lines → 18
+rows**, quantities summed when the units match (מלח 1½ כפית, פלפל שחור ⅖ כפית, בצל 2), a `qty_note`
+when they don't (never a faked total), every original line kept in `merged_from`, and the group label
+cleared when a row spans two sections. ⚠ The cost: **how much goes in each part of the dish is gone**
+from the ingredient list — the method stays in the 📋 Preparation window and at the source link.
+
+**⚠ The name rule (`_same_ingredient`) — the risky part, get it right.** Hebrew puts the **head noun
+first**, so an addition extends a name to the RIGHT. Two names are the same only when equal or the
+shorter is a whole-WORD **prefix** of the longer:
+- same: `מלח` / `מלח גס` · `פלפל שחור` / `פלפל שחור גרוס` · `עגבניות` / `עגבניות שרי`
+- **NOT** same: `עגבניות` / `רסק עגבניות` (tomato **paste**) · `פלפל שחור` / `פלפל חריף` (chilli)
+A plain substring test — which `_match_products` used until now — merges tomato paste into tomatoes.
+**Never use `in`; use `_same_ingredient`.** The same rule now drives product matching too.
+
 **Preparation has its OWN window (2026-09-03).** A 📋 button sits beside **Source** on each recipe
 row and opens the method alone: RTL, ~1 rem, line-height 1.85, roomy modal, and the site's own
 leading numbers (`1. `) stripped so the `<ol>` does the numbering. It was removed from the edit
