@@ -175,6 +175,7 @@
   // Own circle beside רשימה in the bar card. Tapping it flies the RECIPE categories using the same
   // grid as the food home (buildBobGrid). Fetched lazily — the fridge home must never wait on it.
   window.openRecipes = async function () {
+    _cookHidRecipePanel = false; window.closeCook();   // reachable from the cooking screen (bar is visible)
     try { recipeCats = await jget('/api/kitchen/recipe-categories') || []; } catch (e) { recipeCats = []; }
     rsig = recipeCats.map(c => c.emoji + c.name).join('|');
     buildRecipes();
@@ -219,9 +220,12 @@
     box.innerHTML = list.map(r => `<div class="rp-row" data-id="${r.id}">
         <span class="rp-emoji">${r.emoji || '📖'}</span>
         <span class="rp-name">${esc(r.name)}</span>
-        <span class="rpc rp-inlist"><b class="rp-lbl">ברשימה</b><b class="rp-val" data-count="${r.id}">…</b></span>
-        <span class="rpc rp-todo">?</span>
+        <span class="rpc rp-inlist"><b class="rp-plus">+</b><b class="rp-lbl">ברשימה</b><b class="rp-val" data-count="${r.id}">…</b></span>
+        <span class="rpc rp-todo" data-cook="${r.id}"><b class="rp-lbl">מצרכים</b><b class="rp-val">${r.item_count || 0}</b></span>
       </div>`).join('');
+    box.querySelectorAll('[data-cook]').forEach(el => {
+      el.onclick = () => openCook(+el.dataset.cook);
+    });
     box.querySelectorAll('.rp-inlist').forEach(el => {
       el.onclick = () => addRecipeToList(+el.closest('.rp-row').dataset.id, el);
     });
@@ -242,6 +246,61 @@
       el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 700);
     } catch (e) { /* silent on the fridge */ }
     finally { _addingRecipe = false; }
+  }
+
+  // ── the cooking screen: the whole recipe, big enough to read while cooking ──
+  const recFull = {};                    // whole recipe (items + method), fetched once each
+  let cookRecipe = null, cookTabName = 'ing';
+  async function recipeFull(rid) {
+    if (!recFull[rid]) {
+      try { recFull[rid] = await jget('/api/kitchen/recipes/' + rid); } catch (e) { recFull[rid] = null; }
+    }
+    return recFull[rid];
+  }
+  window.openCook = async function (rid) {
+    const r = await recipeFull(rid); if (!r) return;
+    cookRecipe = r; cookTabName = 'ing';
+    // measured, not hardcoded: the screen starts where the bar ends, so the card is never covered
+    $('cookview').style.top = Math.round($('bar').getBoundingClientRect().bottom) + 'px';
+    $('cv-title').textContent = (r.emoji ? r.emoji + ' ' : '') + (r.name || '');
+    // The recipe panel behind is inset:0 and so covers the bar. Tuck it away while cooking, or the
+    // card is only half visible - the whole point of this screen stopping at the bar.
+    _cookHidRecipePanel = !$('recipepanel').hidden;
+    if (_cookHidRecipePanel) $('recipepanel').hidden = true;
+    $('cookview').hidden = false;
+    renderCook();
+  };
+  let _cookHidRecipePanel = false;
+  window.closeCook = function () {
+    $('cookview').hidden = true; cookRecipe = null;
+    if (_cookHidRecipePanel) { $('recipepanel').hidden = false; _cookHidRecipePanel = false; }
+  };
+  window.cookTab = function (t) { cookTabName = t; renderCook(); };
+  function renderCook() {
+    if (!cookRecipe) return;
+    $('cv-tab-ing').classList.toggle('active', cookTabName === 'ing');
+    $('cv-tab-steps').classList.toggle('active', cookTabName === 'steps');
+    const box = $('cv-body');
+    if (cookTabName === 'ing') {
+      let html = '', sec = null;
+      (cookRecipe.items || []).forEach(i => {
+        if (i.group_label && i.group_label !== sec) {
+          sec = i.group_label; html += `<div class="cv-sec">${esc(sec)}</div>`;
+        }
+        // the recipe's OWN amount - fmtN so 400.000 reads as 400. No number (כפית מלח) -> unit alone.
+        const amount = [(i.qty == null ? '' : fmtN(i.qty)), (i.unit || '')].filter(Boolean).join(' ');
+        html += `<div class="cv-row"><span class="cv-qty">${esc(amount)}</span>`
+              + `<span class="cv-name">${esc(i.parsed_name || i.raw_line || '')}</span></div>`;
+      });
+      box.innerHTML = html || '<div class="empty">אין מצרכים</div>';
+    } else {
+      const steps = (cookRecipe.instructions || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean)
+        .map(x => x.replace(/^\s*\d+[.)]\s*/, ''));      // the site numbers its own steps
+      box.innerHTML = steps.length
+        ? steps.map((x, n) => `<div class="cv-step"><span class="cv-num">${n + 1}</span><span>${esc(x)}</span></div>`).join('')
+        : '<div class="empty">אין הוראות הכנה</div>';
+    }
+    box.scrollTop = 0;
   }
 
   async function recipeItems(rid) {
@@ -267,6 +326,7 @@
 
   // One step back, not straight home: recipe category -> the flying recipe categories -> food home.
   window.goBack = function () {
+    if (!$('cookview').hidden) { window.closeCook(); return; }           // cooking -> the recipes
     if (!$('recipepanel').hidden) { window.closeRecipeCat(); return; }   // panel -> categories
     buildHome();
   };
@@ -361,7 +421,7 @@
   }
 
   // ── shopping-list SCREEN (opens from the רשימה circle; +/- per product) ──
-  window.openListScreen = async function () { await loadList(); renderListScreen(); $('listview').hidden = false; };
+  window.openListScreen = async function () { _cookHidRecipePanel = false; window.closeCook(); await loadList(); renderListScreen(); $('listview').hidden = false; };
   window.closeListScreen = function () { $('listview').hidden = true; };
   window.clearListAll = async function () {
     if (!listItems.length) return;
@@ -543,6 +603,7 @@
     if (il && blinkCount > 0) { il.style.animationIterationCount = String(blinkCount); il.classList.add('blink2'); }
   }
   function goIdleHome() {
+    if (!$('cookview').hidden) return;     // cooking: it stays until Back, however long she takes
     if (!$('prodpanel').hidden) window.closeProduct();
     if (!$('listview').hidden) window.closeListScreen();
     if (!$('recipepanel').hidden) window.closeRecipeCat();

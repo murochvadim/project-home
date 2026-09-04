@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>מקרר</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="kitchen.css?v=60">
+  <link rel="stylesheet" href="kitchen.css?v=67">
 </head>
 <body>
   <div id="bar">
@@ -30,6 +30,20 @@
       </div>
     </div>
     <div id="title">🧊 מקרר</div>
+  </div>
+
+  <!-- the cooking screen: a whole recipe, large. Its top is set from the bar's measured height,
+       so the 🧊 מקרר card stays visible and usable above it. -->
+  <div id="cookview" hidden>
+    <div class="cv-head">
+      <button class="cv-back" onclick="closeCook()">→ חזרה</button>
+      <div id="cv-title"></div>
+      <div class="cv-tabs">
+        <button id="cv-tab-ing" class="cv-tab active" onclick="cookTab('ing')">מצרכים</button>
+        <button id="cv-tab-steps" class="cv-tab" onclick="cookTab('steps')">הוראות</button>
+      </div>
+    </div>
+    <div id="cv-body"></div>
   </div>
 
   <div id="stage">
@@ -70,6 +84,6 @@
     <div id="lv-items"></div>
   </div>
 
-  <script src="kitchen.js?v=52"></script>
+  <script src="kitchen.js?v=55"></script>
 </body>
 </html>

@@ -716,3 +716,41 @@ span, one font, literal spaces.
   killing the page. It now falls back to reserving 200 px around the centre, and the call is wrapped:
   **a cosmetic line must never break the list.**
 - Cache-bust `kitchen.css?v=59` / `kitchen.js?v=51`.
+
+## Recipes — STEP 8: the cooking screen (BUILT 2026-09-04)
+
+The second circle on a recipe row was a grey `?`. It is now **מצרכים** over the ingredient count, and it
+opens the **cooking view** — the whole recipe, big enough to read while cooking.
+
+- Two tabs, **מצרכים / הוראות**. Ingredients are one row each: the recipe's own amount in **green 32 px**
+  (via `fmtN`, so `400.000` reads `400`; a line with no number shows its unit alone, `כפית`) and the
+  name in **white 26 px**; `group_label` becomes a section heading (`מרינדה:`). The method is the
+  `instructions` lines, numbered, green numerals.
+- ⚠ **It deliberately does NOT cover the 🧊 מקרר card.** Every other overlay is `position:fixed;
+  inset:0`; this one sets `top` from the bar's **measured** height at open. Verified equal to the bar's
+  bottom edge at 800×1280, 600×1024 and 1340×800.
+- ⚠ **The recipe panel behind is `inset:0` and was covering half the bar** — measured checks passed
+  while the screenshot showed the card still half-hidden. `openCook` tucks that panel away and
+  `closeCook` restores it. *Only the render showed this; the numbers did not.*
+- ⚠ **`goIdleHome()` returns immediately while it is open.** The fridge returns home after
+  `idle_return_sec` (10 s); a cooking screen that vanishes mid-recipe is useless. Verified: still open
+  after 13 s. It closes only on Back — its own חזרה, the bar's arrow, or either bar circle (all
+  reachable because the bar stays visible).
+- No backend work and no migration: `GET /api/kitchen/recipes/<id>` already returned everything.
+  Cache `recFull` holds the whole recipe so the method needs no second call.
+- Cache-bust `kitchen.css?v=67` / `kitchen.js?v=55`.
+
+### ⚠ Recipes are no longer merged at import (same day, and the reason this screen is truthful)
+
+`_merge_items` combined lines for the same product at import time — right for a shopping list, and
+asked for. But **the merged detail was never saved**, so the recipe itself lost it: פריקסה stored 11
+rows for a page with 14 ingredient lines, and its oil read **240 מ"ל** because the site's **60** and
+**180** were summed. On a shopping list that was invisible (one bottle either way). On a cooking screen
+it is a wrong instruction.
+
+**The merge is removed** — a recipe is now stored exactly as the site writes it — and both recipes were
+re-imported (`פריקסה` 11 → 13 rows, oil correctly 60 + 180, mappings 9 → 11, emoji kept). **The shopping
+side is unaffected**: `add-recipe` skips a product already on the list, and the ברשימה count is over
+*distinct products* (recipe 9: 13 rows, 11 matched, **9 distinct**) — so it still reads 9/9.
+⚠ Consequence to accept: the import review screen shows the same product twice again when a recipe
+names it twice.

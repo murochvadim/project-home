@@ -1017,52 +1017,6 @@ def _same_ingredient(a, b):
     return long_[:len(short)] == short
 
 
-def _merge_items(items):
-    """One row per PRODUCT - what a recipe is for here is the shopping list.
-
-    A recipe legitimately names the same thing twice (this tuna recipe seasons the patties and
-    the sauce separately), but for buying that is one entry. Quantities add up when the units
-    match; when they do not, the leftovers are recorded in `qty_note` rather than being faked
-    into a single number. Every original line is kept in `merged_from`, so nothing is lost."""
-    out = []
-    for it in items:
-        tgt = None
-        for m in out:
-            if it.get('product_id') and m.get('product_id') == it.get('product_id'):
-                tgt = m
-                break
-            if not it.get('product_id') and not m.get('product_id') \
-                    and _same_ingredient(it.get('parsed_name'), m.get('parsed_name')):
-                tgt = m
-                break
-            if it.get('product_id') and m.get('product_id') is None \
-                    and _same_ingredient(it.get('parsed_name'), m.get('parsed_name')):
-                tgt = m
-                break
-        if tgt is None:
-            row = dict(it)
-            row['merged_from'] = [it.get('raw_line')]
-            row['qty_note'] = None
-            out.append(row)
-            continue
-        tgt['merged_from'].append(it.get('raw_line'))
-        # a mapped product always wins over an unmapped one, and the SHORTER name is the head noun
-        if it.get('product_id') and not tgt.get('product_id'):
-            tgt['product_id'], tgt['match'] = it['product_id'], it.get('match')
-        if it.get('parsed_name') and len(it['parsed_name']) < len(tgt.get('parsed_name') or ''):
-            tgt['parsed_name'] = it['parsed_name']
-        a, b = tgt.get('qty'), it.get('qty')
-        if (tgt.get('unit') or None) == (it.get('unit') or None):
-            tgt['qty'] = (1 if a is None else a) + (1 if b is None else b)
-        else:                                   # cannot add teaspoons to tablespoons - say so
-            extra = ('%s %s' % ('' if b is None else b, it.get('unit') or '')).strip()
-            tgt['qty_note'] = ((tgt.get('qty_note') + ' + ') if tgt.get('qty_note') else '+ ') + extra
-        if tgt.get('group_label') != it.get('group_label'):
-            tgt['group_label'] = None           # it now belongs to more than one part of the recipe
-    for n, row in enumerate(out):
-        row['sort_order'] = n
-    return out
-
 
 def _match_products(items):
     """exact product name -> learned alias -> normalised 'contains' -> unmatched.
@@ -1171,7 +1125,11 @@ def recipe_parse():
             rows.append(it)
         parsed['items'] = rows
         _match_products(parsed['items'])
-        parsed['items'] = _merge_items(parsed['items'])
+        # NOT merged: a recipe is stored exactly as the site writes it. Merging duplicate
+        # products here made a shopping list out of it and threw the detail away - the oil in
+        # פריקסה became one 240 מל row instead of the 60 and 180 the method actually calls for,
+        # and 3 of 14 lines vanished. The shopping list still ends up with one of each, because
+        # add-recipe skips a product that is already on the list (the common-quantity rule).
         existing = q("SELECT id, name FROM kitchen_recipes WHERE source_url=%s", (url,), fetch='one')
         return jsonify({'site': site_key, 'source_url': url, 'title': parsed['title'],
                         'steps': parsed['steps'], 'items': parsed['items'],
