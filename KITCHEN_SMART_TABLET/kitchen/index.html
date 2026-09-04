@@ -7,14 +7,16 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>מקרר</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="kitchen.css?v=54">
+  <link rel="stylesheet" href="kitchen.css?v=60">
 </head>
 <body>
   <div id="bar">
     <button id="backbtn" onclick="goBack()" hidden>→ חזרה</button>
     <!-- רשימה + מתכונים live INSIDE the bar card. They used to float over the stage,
          which is why the stage had to reserve a wide left gutter on every screen. -->
-    <div id="barcircles">
+    <div id="barleft">
+      <div id="barstatus" hidden></div>
+      <div id="barcircles">
       <button id="listbtn" onclick="openListScreen()" title="רשימת קניות">
         <span class="lb-cap">רשימה</span>
         <span class="lb-count" id="lb-count">0</span>
@@ -25,6 +27,7 @@
         <span class="lb-count" id="rb-count">0</span>
         <span class="lb-date"></span><!-- empty 3rd slot: keeps both circles' rows aligned -->
       </button>
+      </div>
     </div>
     <div id="title">🧊 מקרר</div>
   </div>
@@ -67,6 +70,6 @@
     <div id="lv-items"></div>
   </div>
 
-  <script src="kitchen.js?v=40"></script>
+  <script src="kitchen.js?v=51"></script>
 </body>
 </html>

@@ -33,7 +33,7 @@ API:
 
 Runs as systemd service kitchen-service.service. No secret needed (trust-auth DB).
 """
-import json, logging, re, time, html
+import json, logging, math, re, time, html
 from pathlib import Path
 import psycopg2, psycopg2.extras, psycopg2.pool
 import requests
@@ -439,11 +439,32 @@ def stock_check_missing():
                 q("INSERT INTO kitchen_shopping_items (list_id, product_id, qty) VALUES (%s,%s,1)",
                   (lid, p['id']), fetch='none')
                 added.append(p['name'])
+        if added:
+            _log('product_added', added[-1])
         return jsonify({'ok': True, 'added': added, 'missing': [p['name'] for p in low]})
     except Exception as e:
         return _err(e)
 
 # ── shopping list (single shared active list) ──────────────────────
+def _log(kind, name=None):
+    """Record a list change. Removals are hard DELETEs, so this is the ONLY trace they leave -
+    and the name is snapshotted here so the bar still reads right after the row is gone."""
+    try:
+        q("INSERT INTO kitchen_activity (kind, name) VALUES (%s,%s)", (kind, name), fetch='none')
+    except Exception:
+        log.exception('activity log failed')      # never let the trail break the action itself
+
+def _product_name(pid):
+    r = q("SELECT name FROM kitchen_products WHERE id=%s", (pid,), fetch='one') if pid else None
+    return r['name'] if r else None
+
+def _item_name(iid):
+    """Read the name BEFORE the row is deleted - afterwards there is nothing to read."""
+    r = q("""SELECT COALESCE(p.name, i.free_text) AS nm FROM kitchen_shopping_items i
+               LEFT JOIN kitchen_products p ON p.id = i.product_id WHERE i.id=%s""",
+          (iid,), fetch='one') if iid else None
+    return r['nm'] if r else None
+
 def _active_list_id():
     row = q("SELECT id FROM kitchen_shopping_lists WHERE active IS NOT FALSE ORDER BY id DESC LIMIT 1", fetch='one')
     if row:
@@ -462,7 +483,17 @@ def list_get():
                        FROM kitchen_shopping_items i
                        LEFT JOIN kitchen_products p ON p.id = i.product_id
                       WHERE i.list_id=%s ORDER BY i.checked, i.added_at""", (lid,))
-        return jsonify({'list_id': lid, 'items': items})
+        # Only recipes that still have a line: items can vanish four ways (row delete, qty 0,
+        # clear, clear-checked) and each cascades its lines, so this one read-side rule keeps the
+        # מתכונים section honest without patching every delete path.
+        recipes = q("""SELECT lr.* FROM kitchen_list_recipes lr
+                        WHERE lr.list_id=%s
+                          AND EXISTS (SELECT 1 FROM kitchen_list_recipe_items li
+                                       WHERE li.list_recipe_id = lr.id)
+                        ORDER BY lr.added_at""", (lid,))
+        act = q("SELECT kind, name, ts FROM kitchen_activity ORDER BY ts DESC, id DESC LIMIT 1",
+                fetch='one')
+        return jsonify({'list_id': lid, 'items': items, 'recipes': recipes, 'last_activity': act})
     except Exception as e:
         return _err(e)
 
@@ -484,10 +515,12 @@ def list_add():
             if ex:
                 row = q("UPDATE kitchen_shopping_items SET qty=qty+%s WHERE id=%s RETURNING *",
                         (add_qty, ex['id']), fetch='one')
+                _log('product_added', _product_name(pid))
                 return jsonify(row)
         row = q("""INSERT INTO kitchen_shopping_items (list_id, product_id, free_text, qty)
                    VALUES (%s,%s,%s,%s) RETURNING *""",
                 (lid, pid, ft, add_qty), fetch='one')
+        _log('product_added', _product_name(pid) if pid else ft)
         return jsonify(row)
     except Exception as e:
         return _err(e)
@@ -501,6 +534,7 @@ def list_qty():
             return jsonify({'error': 'id + qty required'}), 400
         qty = max(0, float(qty))
         if qty <= 0:                       # dial down to 0 = remove from the list
+            _log('product_removed', _item_name(iid))
             q("DELETE FROM kitchen_shopping_items WHERE id=%s", (iid,), fetch='none')
             return jsonify({'ok': True, 'removed': True})
         q("UPDATE kitchen_shopping_items SET qty=%s WHERE id=%s", (qty, iid), fetch='none')
@@ -523,7 +557,10 @@ def list_check():
 @app.route('/api/kitchen/list/clear', methods=['POST'])
 def list_clear():
     try:
-        q("DELETE FROM kitchen_shopping_items WHERE list_id=%s", (_active_list_id(),), fetch='none')
+        lid = _active_list_id()
+        q("DELETE FROM kitchen_shopping_items WHERE list_id=%s", (lid,), fetch='none')
+        q("DELETE FROM kitchen_list_recipes  WHERE list_id=%s", (lid,), fetch='none')
+        _log('list_cleared')
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)
@@ -532,7 +569,126 @@ def list_clear():
 def list_remove():
     try:
         iid = (request.get_json(force=True, silent=True) or {}).get('id')
+        _log('product_removed', _item_name(iid))
         q("DELETE FROM kitchen_shopping_items WHERE id=%s", (iid,), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+# ── a recipe onto the shopping list, and back off it again ────────
+@app.route('/api/kitchen/list/add-recipe', methods=['POST'])
+def list_add_recipe():
+    """Put a recipe's products on the list. Two rules, both deliberate:
+       1. WHAT amount - never the recipe's own number (400 ג' of flour is not 400 packs); the
+          conversion table turns it into how many of the PRODUCT to buy.
+       2. WHETHER to add - only while the list already holds no more than the Common-list quantity,
+          i.e. "you have enough already" wins."""
+    try:
+        rid = (request.get_json(force=True, silent=True) or {}).get('recipe_id')
+        rec = q("SELECT id, name, emoji FROM kitchen_recipes WHERE id=%s", (rid,), fetch='one')
+        if not rec:
+            return jsonify({'error': 'recipe not found'}), 404
+        items = q("""SELECT i.*, p.name AS product_name, COALESCE(p.common_qty,0) AS common_qty
+                       FROM kitchen_recipe_items i
+                       LEFT JOIN kitchen_products p ON p.id = i.product_id
+                      WHERE i.recipe_id=%s ORDER BY i.sort_order""", (rid,))
+        lid, rules = _active_list_id(), _recipe_conversions()
+
+        lr = q("SELECT id FROM kitchen_list_recipes WHERE list_id=%s AND recipe_id=%s",
+               (lid, rid), fetch='one')
+        if lr:
+            lrid = lr['id']
+        else:
+            lrid = q("""INSERT INTO kitchen_list_recipes (list_id, recipe_id, recipe_name, recipe_emoji)
+                        VALUES (%s,%s,%s,%s) RETURNING id""",
+                     (lid, rid, rec['name'], rec['emoji']), fetch='one')['id']
+        # re-recorded fresh on every add, so a second add reflects the CURRENT state
+        q("DELETE FROM kitchen_list_recipe_items WHERE list_recipe_id=%s AND kind='skipped'",
+          (lrid,), fetch='none')
+
+        added, skipped, missing = [], [], []
+        for it in items:
+            if not it['product_id']:                      # no product for this ingredient
+                name = (it['parsed_name'] or it['raw_line'] or '').strip()
+                if not name:
+                    continue
+                txt = 'חסר: ' + name
+                dup = q("""SELECT 1 FROM kitchen_list_recipe_items li
+                             JOIN kitchen_shopping_items si ON si.id = li.item_id
+                            WHERE li.list_recipe_id=%s AND li.kind='missing' AND si.free_text=%s""",
+                        (lrid, txt), fetch='one')
+                if dup:                                   # adding twice must not duplicate it
+                    continue
+                iid = q("""INSERT INTO kitchen_shopping_items (list_id, free_text, qty)
+                           VALUES (%s,%s,1) RETURNING id""", (lid, txt), fetch='one')['id']
+                q("""INSERT INTO kitchen_list_recipe_items (list_recipe_id, item_id, qty_added, kind)
+                     VALUES (%s,%s,1,'missing')""", (lrid, iid), fetch='none')
+                missing.append(name)
+                continue
+
+            pid = it['product_id']
+            have = float(q("""SELECT COALESCE(SUM(qty),0) AS q FROM kitchen_shopping_items
+                               WHERE list_id=%s AND product_id=%s AND checked=false""",
+                           (lid, pid), fetch='one')['q'] or 0)
+            common = float(it['common_qty'] or 0)
+            if have > common:                             # rule 2: already enough on the list
+                q("""INSERT INTO kitchen_list_recipe_items (list_recipe_id, item_id, qty_added, kind)
+                     VALUES (%s,NULL,0,'skipped')""", (lrid,), fetch='none')
+                skipped.append(it['product_name'])
+                continue
+
+            buy = _buy_qty(it['qty'], it['unit'], rules)  # rule 1: in the PRODUCT's units
+            ex = q("""SELECT id FROM kitchen_shopping_items
+                       WHERE list_id=%s AND product_id=%s AND checked=false ORDER BY id LIMIT 1""",
+                   (lid, pid), fetch='one')
+            if ex:
+                q("UPDATE kitchen_shopping_items SET qty=qty+%s WHERE id=%s", (buy, ex['id']), fetch='none')
+                iid = ex['id']
+            else:
+                iid = q("""INSERT INTO kitchen_shopping_items (list_id, product_id, qty)
+                           VALUES (%s,%s,%s) RETURNING id""", (lid, pid, buy), fetch='one')['id']
+            q("""INSERT INTO kitchen_list_recipe_items (list_recipe_id, item_id, qty_added, kind)
+                 VALUES (%s,%s,%s,'product')""", (lrid, iid, buy), fetch='none')
+            added.append({'product': it['product_name'], 'qty': buy})
+        _log('recipe_added', rec['name'])     # one event for the recipe, not one per product
+        return jsonify({'ok': True, 'list_recipe_id': lrid,
+                        'added': added, 'skipped': skipped, 'missing': missing})
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/list/remove-recipe', methods=['POST'])
+def list_remove_recipe():
+    """Undo exactly what that recipe contributed - not everything that looks like it came from one."""
+    try:
+        lrid = (request.get_json(force=True, silent=True) or {}).get('id')
+        if not lrid:
+            return jsonify({'error': 'id required'}), 400
+        lines = q("""SELECT li.*, si.qty AS item_qty, si.checked
+                       FROM kitchen_list_recipe_items li
+                       LEFT JOIN kitchen_shopping_items si ON si.id = li.item_id
+                      WHERE li.list_recipe_id=%s""", (lrid,))
+        # Aggregate per ITEM first. One item can carry several lines (the same recipe added twice
+        # tops the same product up twice), and subtracting line-by-line off the qty read at the top
+        # makes each subtraction clobber the last, leaving the product behind.
+        per_item = {}
+        for ln in lines:
+            if not ln['item_id'] or ln['checked']:
+                continue          # skipped line, or you already bought it -> leave it alone
+            e = per_item.setdefault(ln['item_id'], {'qty': float(ln['item_qty'] or 0),
+                                                    'take': 0.0, 'drop': False})
+            if ln['kind'] == 'missing':
+                e['drop'] = True
+            elif ln['kind'] == 'product':
+                e['take'] += float(ln['qty_added'] or 0)
+        for iid, e in per_item.items():
+            left = e['qty'] - e['take']
+            if e['drop'] or left <= 0.0001:
+                q("DELETE FROM kitchen_shopping_items WHERE id=%s", (iid,), fetch='none')
+            else:                  # a quantity you raised by hand survives, minus this recipe's share
+                q("UPDATE kitchen_shopping_items SET qty=%s WHERE id=%s", (left, iid), fetch='none')
+        nm = q("SELECT recipe_name FROM kitchen_list_recipes WHERE id=%s", (lrid,), fetch='one')
+        _log('recipe_removed', nm['recipe_name'] if nm else None)
+        q("DELETE FROM kitchen_list_recipes WHERE id=%s", (lrid,), fetch='none')   # lines cascade
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)
@@ -724,6 +880,91 @@ def _recipe_sites():
     cfg = (row['config'] if row else {}) or {}
     return cfg.get('recipe_sites') or [{'key': 'nikib', 'name': 'nikib.co.il',
                                         'base': 'https://nikib.co.il', 'adapter': 'nikib'}]
+
+# ── recipe amount -> how many of the PRODUCT to buy ───────────────
+# The recipe measures in cooking units (400 ג', רבע צרור); the shop sells packages. So the recipe's
+# number is never copied to the list - it is converted through this table, which the user edits in
+# Settings -> Recipe Settings. 'same' means "use the recipe's own amount", which is right only when
+# the two units are the same word (2 קופסאות טונה -> 2 boxes).
+DEFAULT_CONVERSIONS = [
+    {'unit': "ג'",       'min': 1,   'max': 900,  'buy': 1},
+    {'unit': "ג'",       'min': 901, 'max': 1800, 'buy': 2},
+    {'unit': 'מ"ל',      'min': 1,   'max': 1000, 'buy': 1},
+    {'unit': 'מ"ל',      'min': 1001,'max': 2000, 'buy': 2},
+    {'unit': '',         'min': 1,   'max': 7,    'buy': 1},
+    {'unit': '',         'min': 8,   'max': 14,   'buy': 2},
+    {'unit': 'כוס',      'min': 1,   'max': 999,  'buy': 1},
+    {'unit': 'כף',       'min': 1,   'max': 999,  'buy': 1},
+    {'unit': 'כפית',     'min': 1,   'max': 999,  'buy': 1},
+    {'unit': 'צרור',     'min': 1,   'max': 999,  'buy': 1},
+    {'unit': 'קופסאות',  'min': 1,   'max': 99,   'buy': 'same'},
+]
+# plural / spelling variants folded onto one key, so a rule for כף also covers כפות
+_UNIT_SYN = {'גרם': "ג'", 'ג': "ג'", "ג'": "ג'", 'גר': "ג'",
+             'מל': 'מ"ל', 'מ"ל': 'מ"ל', 'מיליליטר': 'מ"ל',
+             'כפות': 'כף', 'כף': 'כף', 'כפיות': 'כפית', 'כפית': 'כפית',
+             'כוסות': 'כוס', 'כוס': 'כוס',
+             'קופסה': 'קופסאות', 'קופסת': 'קופסאות', 'קופסאות': 'קופסאות'}
+
+def _norm_unit(u):
+    u = (u or '').strip()
+    return _UNIT_SYN.get(u, u)
+
+def _recipe_conversions():
+    row = q("SELECT config FROM kitchen_settings WHERE id=1", fetch='one')
+    cfg = (row['config'] if row else {}) or {}
+    rules = cfg.get('recipe_conversions')
+    return rules if isinstance(rules, list) and rules else DEFAULT_CONVERSIONS
+
+def _buy_qty(qty, unit, rules):
+    """How many of the product to buy for this recipe line. Unknown -> 1 (you need the product)."""
+    amount = float(qty) if qty is not None else 1.0     # a line with no amount counts as 1
+    u = _norm_unit(unit)
+    for r in rules:
+        if _norm_unit(r.get('unit')) != u:
+            continue
+        try:
+            lo, hi = float(r.get('min') or 0), float(r.get('max') or 10 ** 9)
+        except (TypeError, ValueError):
+            continue
+        if lo <= amount <= hi:
+            buy = r.get('buy')
+            if str(buy).strip().lower() == 'same':
+                return max(1, int(math.ceil(amount)))
+            try:
+                return max(1, int(float(buy)))
+            except (TypeError, ValueError):
+                return 1
+    return 1
+
+@app.route('/api/kitchen/recipe-conversions')
+def recipe_conversions_get():
+    try:
+        return jsonify(_recipe_conversions())
+    except Exception as e:
+        return _err(e)
+
+@app.route('/api/kitchen/recipe-conversions', methods=['POST'])
+def recipe_conversions_set():
+    try:
+        rules = (request.get_json(force=True, silent=True) or {}).get('rules')
+        if not isinstance(rules, list):
+            return jsonify({'error': 'rules[] required'}), 400
+        clean = []
+        for r in rules:
+            buy = r.get('buy')
+            buy = 'same' if str(buy).strip().lower() == 'same' else max(1, int(float(buy or 1)))
+            clean.append({'unit': (r.get('unit') or '').strip(),
+                          'min': float(r.get('min') or 0), 'max': float(r.get('max') or 0),
+                          'buy': buy})
+        # merges into the existing config blob, so sites and tablet timings are untouched
+        q("""INSERT INTO kitchen_settings (id, config, updated_at) VALUES (1, %s::jsonb, now())
+             ON CONFLICT (id) DO UPDATE SET config = kitchen_settings.config || EXCLUDED.config,
+                                            updated_at = now()""",
+          (json.dumps({'recipe_conversions': clean}),), fetch='none')
+        return jsonify(clean)
+    except Exception as e:
+        return _err(e)
 
 # Hebrew plurals and construct forms, so בצלים finds בצל and תפוח אדמה finds תפוחי אדמה.
 _FINALS = str.maketrans('ךםןףץ', 'כמנפצ')   # ךםןףץ -> כמנפצ

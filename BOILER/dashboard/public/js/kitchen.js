@@ -285,15 +285,16 @@
 
   // ── shopping list ──
   async function loadList() {
-    try { const d = await jget('/api/kitchen/list'); listItems = d.items || []; }
+    try { const d = await jget('/api/kitchen/list'); listItems = d.items || []; listRecipes = d.recipes || []; }
     catch (e) { listItems = []; $('l-rows').innerHTML =
       `<div class="k-hint" style="color:#ef5a6a">Can't reach kitchen service (${esc(e.message)})</div>`; return; }
     renderList();
   }
 
+  let listRecipes = [];        // recipes that put things on this list (the מתכונים section)
   function renderList() {
     const box = $('l-rows');
-    if (!listItems.length) { box.innerHTML = '<div class="k-hint">List is empty. Add items from the fridge tablet, or the 📦 Stock tab.</div>'; return; }
+    if (!listItems.length && !listRecipes.length) { box.innerHTML = '<div class="k-hint">List is empty. Add items from the fridge tablet, or the 📦 Stock tab.</div>'; return; }
     const catIds = categories.map(c => c.id);
     const groups = {};
     listItems.forEach(i => { const k = (i.product_category_id == null ? 0 : i.product_category_id); (groups[k] = groups[k] || []).push(i); });
@@ -307,7 +308,9 @@
       const lowN = i.product_low != null ? numOf(i.product_low) : null;
       const isLow = lowN != null && stockN <= lowN;
       const chip = hasStock ? `<span class="k-instock ${isLow ? 'low' : ''}">${fmtN(stockN)}</span>` : '<span></span>';
-      return `<div class="k-li ${i.checked ? 'checked' : ''}" data-id="${i.id}">
+      // an ingredient with no product of its own: always dark red, it is a gap in the list
+      const miss = !i.product_id && (i.free_text || '').startsWith('חסר');
+      return `<div class="k-li ${i.checked ? 'checked' : ''}${miss ? ' k-miss' : ''}" data-id="${i.id}">
         <input type="checkbox" ${i.checked ? 'checked' : ''} data-act="check">
         <span class="em">${artHtml(i.product_photo, i.product_updated, emoji, 'k-thumb-li')}</span>
         <span class="nm">${esc(name)}</span>
@@ -328,7 +331,19 @@
       const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
       html += `<div class="k-stock-h">${esc(label)}</div>` + list.map(rowHtml).join('');
     });
+    // which מתכונים put things here - 🗑 undoes exactly that recipe's contribution
+    if (listRecipes.length) {
+      html += '<div class="k-stock-h">מתכונים</div>' + listRecipes.map(r => `
+        <div class="k-li" data-lr="${r.id}">
+          <span></span><span>${r.recipe_emoji || '📖'}</span>
+          <span class="heb" style="grid-column:span 3">${esc(r.recipe_name)}</span><span></span>
+          <button class="k-x" data-act="rmrec" title="Remove this recipe from the list">🗑</button>
+        </div>`).join('');
+    }
     box.innerHTML = html;
+    box.querySelectorAll('[data-lr]').forEach(row => {
+      row.querySelector('[data-act=rmrec]').onclick = () => removeListRecipe(+row.dataset.lr);
+    });
     box.querySelectorAll('.k-li[data-id]').forEach(row => {   // skip the header row
       const id = +row.dataset.id;
       const it = listItems.find(x => x.id === id);
@@ -343,6 +358,12 @@
   async function toggleCheck(id, checked) {
     try { await jpost('/api/kitchen/list/check', { id, checked }); await loadList(); }
     catch (e) { alert('Update failed: ' + e.message); }
+  }
+  async function removeListRecipe(id) {
+    const r = listRecipes.find(x => x.id === id);
+    if (!confirm(`Remove "${r ? r.recipe_name : id}" and everything it added to the list?`)) return;
+    try { await jpost('/api/kitchen/list/remove-recipe', { id }); await loadList(); }
+    catch (e) { alert('Remove failed: ' + e.message); }
   }
   async function removeItem(id) {
     try { await jpost('/api/kitchen/list/remove', { id }); await loadList(); }
@@ -785,6 +806,52 @@ The next import will ask about it again. Saved recipes are not changed.`)) retur
     catch (e) { alert('Could not delete: ' + e.message); }
   }
 
+  // ── Recipe Settings: cards fold, and start closed on every load ──
+  window.kFold = function (h) {
+    const body = h.nextElementSibling, caret = h.querySelector('.k-caret');
+    const open = body.hidden;                 // about to open
+    body.hidden = !open;
+    if (caret) caret.textContent = open ? '▾' : '▸';
+  };
+
+  // ── Recipe Settings: recipe amount -> how many PRODUCTS to buy ──
+  let convRules = [];
+  async function loadConversions() {
+    try { convRules = await jget('/api/kitchen/recipe-conversions') || []; }
+    catch (e) { convRules = []; }
+    renderConversions();
+  }
+  function renderConversions() {
+    const tb = $('cv-rows'); if (!tb) return;
+    if (!convRules.length) { tb.innerHTML = '<tr><td colspan="5" class="k-hint">No rules — everything becomes 1.</td></tr>'; return; }
+    tb.innerHTML = convRules.map((r, i) => `
+      <tr>
+        <td class="heb">${esc(r.unit || '')}${r.unit ? '' : '<span class="k-hint">(plain count)</span>'}</td>
+        <td>${fmtNum(r.min)}</td><td>${fmtNum(r.max)}</td>
+        <td><b>${esc(String(r.buy))}</b></td>
+        <td style="text-align:right"><button class="k-x" data-i="${i}" title="Delete">🗑</button></td>
+      </tr>`).join('');
+    tb.querySelectorAll('button[data-i]').forEach(b => {
+      b.onclick = () => { convRules.splice(+b.dataset.i, 1); saveConversions(); };
+    });
+  }
+  const fmtNum = v => (Math.round((+v || 0) * 1000) / 1000);
+  async function saveConversions() {
+    try {
+      convRules = await jpost('/api/kitchen/recipe-conversions', { rules: convRules });
+      renderConversions();
+      $('cv-msg').textContent = 'Saved.'; setTimeout(() => $('cv-msg').textContent = '', 1500);
+    } catch (e) { $('cv-msg').textContent = 'Save failed: ' + e.message; }
+  }
+  window.kConvAdd = function () {
+    const buyRaw = ($('cv-buy').value || '').trim();
+    const buy = buyRaw.toLowerCase() === 'same' ? 'same' : Math.max(1, parseInt(buyRaw, 10) || 1);
+    convRules.push({ unit: ($('cv-unit').value || '').trim(),
+                     min: +$('cv-min').value || 0, max: +$('cv-max').value || 0, buy });
+    $('cv-unit').value = ''; $('cv-buy').value = '';
+    saveConversions();
+  };
+
   // ── Recipe Settings: the site list ──
   async function loadRecipeSites() {
     try { recipeSites = await jget('/api/kitchen/recipe-sites') || []; }
@@ -1097,7 +1164,7 @@ The next import will ask about it again. Saved recipes are not changed.`)) retur
   // ── boot ──
   window.kLoad = async function () {
     _peWire(); refreshFormPhoto();
-    await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats(); await loadRecipes(); await loadRecipeSites(); await loadAliases();
+    await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats(); await loadRecipes(); await loadRecipeSites(); await loadConversions(); await loadAliases();
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);

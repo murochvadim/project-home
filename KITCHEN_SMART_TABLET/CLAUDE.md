@@ -643,3 +643,69 @@ unused**.
 pushes one product amount circle outside the panel. Measured, not yet fixed; a
 `@media (max-width:1000px) { .pp-inner { width: min(88%, 620px) } }` is the one-line remedy. At 800 px
 (the likely Tab A7 portrait width) nothing is broken.
+
+## Recipes — STEP 6: a recipe onto the shopping list, and back off it (BUILT 2026-09-04)
+
+Tapping **ברשימה** on a recipe row puts its products on the shared shopping list; a 🗑 in the new
+**מתכונים** section at the end of the list undoes exactly what that recipe added.
+
+**Two rules decide what happens** (both live in `kitchen_service.py`, so the tablet only asks):
+- **How much** — the recipe's own number is *never* copied. Recipe amounts are cooking units, products
+  are sold in packages: `400 ג' קמח` would become **400 packs of flour**. A **conversion table** turns
+  the amount into how many of the PRODUCT to buy (`ג' 1-900 → 1`, `מ"ל 1-1000 → 1`, plain count `1-7 →
+  1`, `קופסאות → same`). **`same`** = use the recipe's own number, correct only when the units are the
+  same word — that is what makes `2 קופסאות טונה` land as **2 boxes** while flour lands as 1 pack.
+  First match wins, nothing matches → **1**. Edited in **⚙ Settings → Recipe Settings** (middle card),
+  stored as `recipe_conversions` in the existing `kitchen_settings.config` JSONB beside `recipe_sites`
+  — **no migration**, and it is the hook the future real unit-conversion plugs into.
+- **Whether** — `list_qty ≤ COALESCE(common_qty,0)` → add, else skip as "already enough". Verified live:
+  אבקת מרק עוף was already on the list at 6 and the recipe correctly left it alone.
+- An ingredient with **no product** becomes a `חסר: <name>` free-text row, always **dark red**
+  (`.lv-miss`, the `.lv-clear` colour family — a literal dark red is unreadable on the dark screen;
+  the dashboard, being light, uses `#b13d3d` text).
+
+**Undo has to reverse exactly its own contribution**, so migration `011_list_recipes.sql` records every
+line: `kitchen_list_recipes` (with **name/emoji snapshots** — recipe deletes are hard) +
+`kitchen_list_recipe_items` (`qty_added`, `kind ∈ product|missing|skipped`). Removal subtracts
+`qty_added` and deletes at ≤0, so **a quantity you raised by hand survives** minus the recipe's share,
+and **an item you already ticked off is left untouched**.
+- ⚠ **Bug found in testing:** adding the same recipe twice gives one product two lines; subtracting
+  line-by-line off the quantity read at the start made each subtraction clobber the last and left the
+  product behind. Removal **aggregates per item** before writing.
+- ⚠ **Stale headers are handled on READ, not per delete path.** Items vanish four ways (row 🗑, qty→0,
+  Clear all, and `kClearChecked()` which loops `/list/remove`); each cascades its lines but would leave
+  the header. `GET /list` returns only headers that still have a line — one rule, every path.
+- Re-adding the same recipe does not duplicate the `חסר:` rows, and rule 2 stops the products doubling.
+- All three **Recipe Settings cards fold and start closed** (`kFold`, ▸/▾).
+
+## Recipes — STEP 7: the 🧊 מקרר bar says what changed last (BUILT 2026-09-04)
+
+Left of the title, on the **same row as מקרר**: what happened to the list most recently and how long
+ago — `הוסר מתכון: עוף בגריל עם תפוחי אדמה לפני - 00:32`, or `נוסף: בצל`, `הרשימה נוקתה`. One line, one
+span, one font, literal spaces.
+
+- ⚠ **"Last removed" was not derivable.** `added_at` gives the last add, but removals are hard DELETEs
+  in four places — once the row is gone nothing survives. Migration `012_activity.sql` adds
+  **`kitchen_activity`** (`kind`, **`name` snapshot**, `ts`; 90 d auto-clean), written by a `_log()`
+  helper at the seven mutation points. The snapshot is why the line still reads
+  `הוסר מתכון: פריקסה טוניסאי` **after** that recipe row is deleted.
+- Deliberate: adding a recipe logs **one** `recipe_added`, not one per product it inserts; `/list/clear`
+  logs one `list_cleared`; a **+/− on the stepper logs nothing** (only a drop to 0 is a removal).
+- **No new endpoint** — `GET /list` carries `last_activity`, and that call already runs at boot, on the
+  30 s poll and after every action, so `updateListBadge()` repaints the line for free.
+- **The sentence gets the room first.** It is rendered unclipped, measured, and only the leftover
+  space is spent on the nudge right (`BAR_STATUS_STEPS × 40 px`, the unit the Settings tab uses;
+  currently 3 steps). Reserving the shift *first* was what chopped the words off — in landscape the
+  shift now auto-reduces from 120 → 57 px so the full sentence fits. `TITLE_GAP` (30 px) keeps a clear
+  space before מקרר.
+- **When words genuinely cannot fit** (the measured gap is 440 px landscape but only ~170 px at 800
+  portrait and 70 px at 600, and the full sentence needs ~360 px) it falls back to **icons + time**
+  (`➕📖 ➖📖 ➕🛒 ➖🛒 🧹`) rather than truncating mid-word.
+- ⚠ **RTL trap again:** `dir="rtl"` makes flex-start the right, so the wrapper is `[status][circles]`
+  in DOM order to render circles at the screen edge and the status towards the title.
+- ⚠ **`Range.getBoundingClientRect` is not universal.** The title is absolutely centred, so its box
+  spans the whole bar and only a Range gives the real text edge — but the call threw in a
+  non-Chrome engine and the exception propagated `renderBarStatus → updateListBadge → loadList → boot`,
+  killing the page. It now falls back to reserving 200 px around the centre, and the call is wrapped:
+  **a cosmetic line must never break the list.**
+- Cache-bust `kitchen.css?v=59` / `kitchen.js?v=51`.

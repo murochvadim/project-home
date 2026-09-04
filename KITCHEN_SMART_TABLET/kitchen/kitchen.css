@@ -14,7 +14,16 @@ body {
 /* z-index so the circles paint above the absolutely-centred title if a long title reaches them */
 /* margin-inline-start:auto = physical LEFT here, because the page is dir="rtl" so flex-start
    is the right. Left is also the side #backbtn is NOT on (it is pinned right: 14px). */
-#barcircles { display: flex; align-items: center; gap: 12px; z-index: 2; margin-inline-start: auto; }
+#barleft { display: flex; align-items: center; gap: 14px; z-index: 2; margin-inline-start: auto; min-width: 0; }
+#barcircles { display: flex; align-items: center; gap: 12px; }
+/* last thing that happened to the list, between the circles and the title */
+/* ONE row, level with the מקרר title */
+#barstatus { direction: rtl; text-align: right; min-width: 0; line-height: 1.25;
+  display: flex; align-items: baseline; gap: 8px; white-space: nowrap; overflow: hidden; }
+#barstatus[hidden] { display: none; }
+#bs-what { font-size: 15px; font-weight: 700; color: #cfe0ff;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#barstatus.compact #bs-what { font-size: 18px; }   /* icons only - no words to read */
 #title {                                   /* absolutely centered → stays centered on every screen */
   position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
   text-align: center; font-size: 20px; font-weight: 800; pointer-events: none;
@@ -151,3 +160,19 @@ body {
 .rp-todo { background: #3a4152; opacity: .5; font-size: 20px; font-weight: 800; }
 .rp-lbl { font-size: 11px; font-weight: 800; }
 .rp-val { font-size: 15px; font-weight: 700; }
+
+/* the ברשימה circle on a recipe row is a button: tap = put that recipe on the shopping list */
+.rp-inlist { cursor: pointer; }
+.rp-inlist:active { transform: scale(.92); }
+.rp-inlist.flash { outline: 4px solid #22c55e; }
+/* מתכונים section at the end of the shopping list */
+.lv-sec { direction: rtl; text-align: right; color: #8fa3cc; font-size: 17px; font-weight: 800;
+  margin: 18px 4px 8px; padding-top: 12px; border-top: 1px solid #24345a; }
+.lv-rrow { direction: ltr; display: grid; grid-template-columns: 50px 1fr 44px; align-items: center;
+  gap: 15px; padding: 12px 12px 12px 62px; border: 1px solid #24345a; background: #16233f;
+  border-radius: 14px; margin-bottom: 10px; }
+/* a "חסר:" row = an ingredient you have no product for. Dark red, same family as .lv-clear, so it
+   reads as a gap without becoming unreadable on the dark screen. */
+.lv-row.lv-miss { background: #2a1616; border-color: #7a3030; }
+.lv-row.lv-miss .lv-name { color: #ff9a9a; font-weight: 800; }
+.lv-row.lv-miss .lv-qty, .lv-row.lv-miss .lv-emoji { color: #e08a8a; }

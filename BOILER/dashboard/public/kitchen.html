@@ -32,7 +32,13 @@
     .k-li-head { border-bottom:none; padding:0 4px; }
     .k-li-head .lh { text-align:center; font-size:1.15rem; font-weight:800; color:#16a34a; }
     .k-hint { color:#8a93a6; padding:30px 12px; text-align:center; }
+    /* folding cards (Recipe Settings): the whole header is the toggle, all start closed */
+    .k-fold { margin:0; cursor:pointer; user-select:none; display:flex; align-items:center; gap:10px; }
+    .k-fold:hover { color:#2b4c7e; }
+    .k-caret { display:inline-block; width:14px; color:#8a93a6; font-size:0.9em; }
     .k-x { border:none; background:transparent; color:#ef5a6a; cursor:pointer; font-size:1.05rem; }
+    /* a "חסר:" row = an ingredient with no product of its own; always dark red */
+    .k-li.k-miss .nm { color:#b13d3d; font-weight:700; }
     .k-edit { border:none; background:transparent; color:#2563eb; cursor:pointer; font-size:0.95rem; }
     .k-step { display:inline-flex; align-items:center; gap:5px; }
     .k-step button { width:26px; height:26px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; cursor:pointer; font-weight:700; line-height:1; }
@@ -357,40 +363,70 @@
       </div>
     </div>
     <div id="sub-recipe" class="sub-panel">
+      <!-- all three cards fold, and all start closed (kFold) -->
       <div class="card">
-        <h3 style="margin-top:0">Recipe Settings</h3>
-        <div style="font-size:0.82rem;color:#8a93a6;margin-bottom:10px;">
-          Recipe sites you can import from. The timings for the recipe screens on the tablet come from
-          <b>Tech Settings</b>, which is shared.
+        <h3 class="k-fold" onclick="kFold(this)"><span class="k-caret">▸</span> Recipe sites</h3>
+        <div class="k-foldbody" hidden>
+          <div style="font-size:0.82rem;color:#8a93a6;margin-bottom:10px;">
+            Recipe sites you can import from. The timings for the recipe screens on the tablet come from
+            <b>Tech Settings</b>, which is shared.
+          </div>
+          <table class="k-table" style="margin-bottom:10px;">
+            <thead><tr><th>Name</th><th>Address</th><th>Parser</th><th></th></tr></thead>
+            <tbody id="rs-rows"></tbody>
+          </table>
+          <div class="k-form">
+            <label>Name<input id="rs-name" placeholder="nikib.co.il"></label>
+            <label>Address<input id="rs-base" placeholder="https://nikib.co.il" style="width:230px"></label>
+            <label>Parser<select id="rs-adapter"><option value="nikib">nikib (WordPress)</option></select></label>
+            <button class="btn btn-primary btn-sm" onclick="kSiteAdd()">Add site</button>
+            <span id="rs-msg" style="font-size:0.8rem;color:#8a93a6;"></span>
+          </div>
         </div>
-        <table class="k-table" style="margin-bottom:10px;">
-          <thead><tr><th>Name</th><th>Address</th><th>Parser</th><th></th></tr></thead>
-          <tbody id="rs-rows"></tbody>
-        </table>
-        <div class="k-form">
-          <label>Name<input id="rs-name" placeholder="nikib.co.il"></label>
-          <label>Address<input id="rs-base" placeholder="https://nikib.co.il" style="width:230px"></label>
-          <label>Parser<select id="rs-adapter"><option value="nikib">nikib (WordPress)</option></select></label>
-          <button class="btn btn-primary btn-sm" onclick="kSiteAdd()">Add site</button>
-          <span id="rs-msg" style="font-size:0.8rem;color:#8a93a6;"></span>
+      </div>
+
+      <!-- how a recipe amount becomes a number of PRODUCTS to buy -->
+      <div class="card">
+        <h3 class="k-fold" onclick="kFold(this)"><span class="k-caret">▸</span> Recipe quantities</h3>
+        <div class="k-foldbody" hidden>
+          <div style="font-size:0.82rem;color:#8a93a6;margin-bottom:10px;">
+            A recipe measures in cooking units (<b>400 ג'</b> of flour); the shop sells packages. These rules
+            turn the recipe amount into <b>how many of the product</b> to put on the shopping list.
+            First matching row wins; nothing matches → <b>1</b>. Put <b>same</b> in Buy to use the recipe’s own
+            number — right only when the units are the same word (<b>2 קופסאות</b> tuna → 2 boxes).
+            Leave <b>Unit</b> empty for a plain count (<b>4 תפוחי אדמה</b>).
+          </div>
+          <table class="k-table" style="margin-bottom:10px;">
+            <thead><tr><th>Unit</th><th>From</th><th>To</th><th>Buy</th><th></th></tr></thead>
+            <tbody id="cv-rows"></tbody>
+          </table>
+          <div class="k-form">
+            <label>Unit<input id="cv-unit" class="heb" placeholder="ג'" style="width:90px"></label>
+            <label>From<input id="cv-min" type="number" step="0.001" value="1" style="width:90px"></label>
+            <label>To<input id="cv-max" type="number" step="0.001" value="900" style="width:90px"></label>
+            <label>Buy<input id="cv-buy" placeholder="1 or same" style="width:90px"></label>
+            <button class="btn btn-primary btn-sm" onclick="kConvAdd()">Add rule</button>
+            <span id="cv-msg" style="font-size:0.8rem;color:#8a93a6;"></span>
+          </div>
         </div>
       </div>
 
       <!-- what the importer has LEARNED, so a wrong pick can be seen and fixed -->
       <div class="card">
-        <h3 style="margin-top:0;display:flex;align-items:center;gap:10px;">
-          Learned ingredient names
+        <h3 class="k-fold" onclick="kFold(this)"><span class="k-caret">▸</span> Learned ingredient names
           <span id="al-count" style="font-size:0.8rem;color:#8a93a6;font-weight:400;"></span>
         </h3>
-        <div style="font-size:0.82rem;color:#8a93a6;margin-bottom:10px;">
-          Every product you pick for an unrecognised ingredient is remembered and reused in future
-          imports. Change one here, or 🗑 to forget it so the next import asks again.
-          <b>Recipes already saved keep the products they were saved with.</b>
+        <div class="k-foldbody" hidden>
+          <div style="font-size:0.82rem;color:#8a93a6;margin-bottom:10px;">
+            Every product you pick for an unrecognised ingredient is remembered and reused in future
+            imports. Change one here, or 🗑 to forget it so the next import asks again.
+            <b>Recipes already saved keep the products they were saved with.</b>
+          </div>
+          <table class="k-table">
+            <thead><tr><th>Ingredient (as the site writes it)</th><th>Product</th><th></th></tr></thead>
+            <tbody id="al-rows"></tbody>
+          </table>
         </div>
-        <table class="k-table">
-          <thead><tr><th>Ingredient (as the site writes it)</th><th>Product</th><th></th></tr></thead>
-          <tbody id="al-rows"></tbody>
-        </table>
       </div>
     </div>
   </div>
@@ -464,6 +500,6 @@
 </main>
 
 <script src="js/alerts-monitor.js?v=21"></script>
-<script src="js/kitchen.js?v=53"></script>
+<script src="js/kitchen.js?v=55"></script>
 </body>
 </html>

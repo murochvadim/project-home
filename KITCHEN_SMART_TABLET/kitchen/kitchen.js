@@ -9,6 +9,7 @@
   let categories = [];
   let products = [];
   let listItems = [];             // current shopping-list items (for the "ברשימה" circle)
+  let listRecipes = [];           // recipes that put things on the list (the מתכונים section)
   let nodes = [];                 // animated elements: each has .el + .upd(e)->{x,y}
   let mode = 'home';              // 'home' | 'category' | 'recipes'  (the recipe list is a panel)
   let recipeCats = [], curRecipeCat = null, rsig = '';   // recipe categories (loaded lazily)
@@ -221,7 +222,26 @@
         <span class="rpc rp-inlist"><b class="rp-lbl">ברשימה</b><b class="rp-val" data-count="${r.id}">…</b></span>
         <span class="rpc rp-todo">?</span>
       </div>`).join('');
+    box.querySelectorAll('.rp-inlist').forEach(el => {
+      el.onclick = () => addRecipeToList(+el.closest('.rp-row').dataset.id, el);
+    });
     paintRowCounts(list);
+  }
+
+  // Tap ברשימה on a recipe -> its products go on the shopping list. The service decides HOW MUCH
+  // (conversion table) and WHETHER (common-list rule); the tablet only asks and repaints.
+  let _addingRecipe = false;
+  async function addRecipeToList(rid, el) {
+    if (_addingRecipe) return;                       // a double-tap must not add twice
+    _addingRecipe = true;
+    try {
+      await jpost('/api/kitchen/list/add-recipe', { recipe_id: rid });
+      await loadList();                              // badge + the ברשימה counts below
+      const list = recipes.filter(r => r.category_id === curRecipeCat);
+      paintRowCounts(list);
+      el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 700);
+    } catch (e) { /* silent on the fridge */ }
+    finally { _addingRecipe = false; }
   }
 
   async function recipeItems(rid) {
@@ -252,13 +272,76 @@
   };
 
   // ── PRODUCT panel (opens on the right of the same screen; constant circles) ──
-  async function loadList() { try { const d = await jget('/api/kitchen/list'); listItems = d.items || []; } catch (e) { } updateListBadge(); }
+  async function loadList() { try { const d = await jget('/api/kitchen/list'); listItems = d.items || []; listRecipes = d.recipes || []; lastActivity = d.last_activity || null; } catch (e) { } updateListBadge(); }
   const inListQty = pid => { const it = listItems.find(x => x.product_id === pid && !x.checked); return it ? numOf(it.qty) : 0; };
   const money = n => '₪' + fmtN(Math.round(numOf(n) * 100) / 100);
   const unitStepPWA = u => { u = (u || '').toLowerCase(); return (u === 'kg' || u === 'l') ? 0.5 : 1; };
 
   // מתכונים circle — total number of recipes, in the same slot רשימה uses for its count
   function updateRecipeBadge() { const e = $('rb-count'); if (e) e.textContent = recipes.length; }
+
+  // ── what changed on the list last, shown left of the 🧊 מקרר title ──
+  let lastActivity = null;
+  const BAR_STATUS_STEP = 40, BAR_STATUS_STEPS = 3, TITLE_GAP = 30;   // 40px per "step" (as the Settings tab uses):
+                                                     // 4 steps right, then 1 back left = 3
+  const AGO_LABEL = {                       // full wording when there is room for words
+    recipe_added:    n => 'נוסף מתכון: ' + n,
+    recipe_removed:  n => 'הוסר מתכון: ' + n,
+    product_added:   n => 'נוסף: ' + n,
+    product_removed: n => 'הוסר: ' + n,
+    list_cleared:    () => 'הרשימה נוקתה',
+  };
+  const AGO_ICON = {                        // and a symbol pair when there is not
+    recipe_added: '➕📖', recipe_removed: '➖📖',
+    product_added: '➕🛒', product_removed: '➖🛒', list_cleared: '🧹',
+  };
+  function agoHM(ts) {
+    const ms = Date.now() - new Date(ts).getTime();
+    if (!isFinite(ms) || ms < 0) return '00:00';
+    const mins = Math.floor(ms / 60000), h = Math.floor(mins / 60);
+    if (h > 99) return '99:59+';             // a long-idle fridge must not print five digits
+    return String(h).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+  }
+  // The title is absolutely centred, so its BOX spans the whole bar - measuring that would say
+  // there is no room at all. A Range gives the real text edge, but not every engine implements
+  // Range.getBoundingClientRect, so fall back to reserving a fixed slice around the centre.
+  function titleTextLeft(t) {
+    try {
+      const rg = document.createRange();
+      rg.selectNodeContents(t);
+      const b = rg.getBoundingClientRect();
+      if (b && b.width) return b.left;
+    } catch (e) { /* fall through */ }
+    const b = t.getBoundingClientRect();
+    return b.left + b.width / 2 - 100;       // conservative: assume a 200px-wide title
+  }
+  function renderBarStatus() {
+    const el = $('barstatus'); if (!el) return;
+    const a = lastActivity;
+    if (!a || !a.kind) { el.hidden = true; return; }
+    el.hidden = false;
+    // TITLE_GAP keeps a clear space after מקרר so the sentence never butts against the title.
+    const gap = Math.round(titleTextLeft($('title'))
+                           - $('barcircles').getBoundingClientRect().right - TITLE_GAP);
+    const name = a.name || '';
+    const full  = (AGO_LABEL[a.kind] || (() => name))(name) + ' לפני - ' + agoHM(a.ts);
+    const icons = (AGO_ICON[a.kind] || '•') + ' ' + agoHM(a.ts);
+
+    // The SENTENCE comes first: render it unclipped, measure what it needs, and only then spend
+    // what is left on the nudge right. Shifting first is what was chopping the words off.
+    el.classList.remove('compact');
+    el.style.maxWidth = 'none'; el.style.marginLeft = '0px';
+    el.innerHTML = `<span id="bs-what">${esc(full)}</span>`;
+    let natural = Math.ceil(el.getBoundingClientRect().width);
+    if (natural > gap) {                     // no room for words at all -> symbols + the time
+      el.classList.add('compact');
+      el.innerHTML = `<span id="bs-what">${esc(icons)}</span>`;
+      natural = Math.ceil(el.getBoundingClientRect().width);
+    }
+    const shift = Math.max(0, Math.min(BAR_STATUS_STEPS * BAR_STATUS_STEP, gap - natural));
+    el.style.marginLeft = shift + 'px';      // physical left = pushes it right, in RTL too
+    el.style.maxWidth = Math.max(0, gap - shift) + 'px';
+  }
 
   // רשימה circle in the bar — product COUNT (rows) + total price
   function updateListBadge() {
@@ -272,6 +355,7 @@
       if (times.length) { const d = new Date(Math.max(...times)); dt.textContent = d.getDate() + ' ' + MON[d.getMonth()]; }
       else dt.textContent = '';
     }
+    try { renderBarStatus(); } catch (e) { /* the line is cosmetic - never break the list */ }
   }
 
   // ── shopping-list SCREEN (opens from the רשימה circle; +/- per product) ──
@@ -284,14 +368,18 @@
   };
   function renderListScreen() {
     const box = $('lv-items');
-    if (!listItems.length) { box.innerHTML = '<div class="empty">הרשימה ריקה</div>'; $('lv-total').textContent = 'מחיר 0 שיח'; return; }
+    if (!listItems.length && !listRecipes.length) {
+      box.innerHTML = '<div class="empty">הרשימה ריקה</div>'; $('lv-total').textContent = 'מחיר 0 שיח'; return;
+    }
     let total = 0;
-    box.innerHTML = listItems.map(i => {
+    let html = listItems.map(i => {
       const name = i.product_name || i.free_text || '(פריט)';
       const u = unitHe(i.product_unit);
       const q = numOf(i.qty), price = numOf(i.product_price);
       total += price * q;
-      return `<div class="lv-row" data-id="${i.id}">
+      // an ingredient with no product of its own: always dark red, it is a gap in the list
+      const miss = !i.product_id && (i.free_text || '').startsWith('חסר');
+      return `<div class="lv-row${miss ? ' lv-miss' : ''}" data-id="${i.id}">
         <button class="lv-rm" data-act="rm">🗑</button>
         <span class="lv-step">
           <button data-act="dec">−</button>
@@ -304,7 +392,20 @@
           : (i.product_emoji || '🛒')}</span>
       </div>`;
     }).join('');
+    // which מתכונים put things here - each 🗑 undoes exactly that recipe's contribution
+    if (listRecipes.length) {
+      html += '<div class="lv-sec">מתכונים</div>' + listRecipes.map(r => `
+        <div class="lv-rrow" data-lr="${r.id}">
+          <button class="lv-rm" data-act="rmrec">🗑</button>
+          <span class="lv-name">${esc(r.recipe_name)}</span>
+          <span class="lv-emoji">${r.recipe_emoji || '📖'}</span>
+        </div>`).join('');
+    }
+    box.innerHTML = html;
     $('lv-total').textContent = 'מחיר ' + fmtN(Math.round(total * 100) / 100) + ' שיח';
+    box.querySelectorAll('[data-lr]').forEach(row => {
+      row.querySelector('[data-act=rmrec]').onclick = () => removeListRecipe(+row.dataset.lr);
+    });
     box.querySelectorAll('.lv-row').forEach(row => {
       const id = +row.dataset.id, it = listItems.find(x => x.id === id);
       const step = unitStepPWA(it && it.product_unit);
@@ -316,6 +417,10 @@
   async function setListQty(id, qty) {
     qty = Math.max(0, Math.round(qty * 100) / 100);   // 0 → server removes it
     try { await jpost('/api/kitchen/list/qty', { id, qty }); await loadList(); renderListScreen(); } catch (e) { }
+  }
+  async function removeListRecipe(id) {
+    try { await jpost('/api/kitchen/list/remove-recipe', { id }); await loadList(); renderListScreen(); }
+    catch (e) { }
   }
   async function removeListItem(id) {
     try { await jpost('/api/kitchen/list/remove', { id }); await loadList(); renderListScreen(); } catch (e) { }
@@ -413,6 +518,7 @@
   function startAnim() { if (raf) cancelAnimationFrame(raf); startT = 0; raf = requestAnimationFrame(tick); }
 
   function rebuild() {
+    renderBarStatus();                       // the room left of the title changes with the width
     if (mode === 'category' && curCat != null) showCategory(curCat);
     else if (mode === 'recipes') buildRecipes();
     else buildHome();

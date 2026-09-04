@@ -2420,7 +2420,7 @@ const DBV_GROUPS = [
   ['Notifications',         ['notification_defs','notification_events']],
   ['Email',                 ['email_messages','email_labels','email_state','email_extractions','email_automation_log']],
   ['Kazir 15',              ['kazir15_hosts','kazir15_names']],
-  ['Kitchen',               ['kitchen_categories','kitchen_recipe_categories','kitchen_recipes','kitchen_recipe_items','kitchen_ingredient_aliases','kitchen_products','kitchen_shopping_lists','kitchen_shopping_items','kitchen_settings']],
+  ['Kitchen',               ['kitchen_categories','kitchen_recipe_categories','kitchen_recipes','kitchen_recipe_items','kitchen_ingredient_aliases','kitchen_products','kitchen_shopping_lists','kitchen_shopping_items','kitchen_list_recipes','kitchen_list_recipe_items','kitchen_activity','kitchen_settings']],
   ['WhatsApp',              ['whatsapp_chats','whatsapp_messages','whatsapp_contacts','whatsapp_state','whatsapp_automation_log']],
 ];
 const DBV_TABLES = DBV_GROUPS.flatMap(g => g[1]);
@@ -2457,7 +2457,7 @@ app.get('/api/health/db-volumes', async (req, res) => {
       email_messages: 'msg_ts', email_labels: 'updated_at', email_state: 'updated_at',
       email_extractions: 'extracted_at', email_automation_log: 'ts',
       kazir15_hosts: 'last_scan_at', kazir15_names: 'updated_at',
-      kitchen_categories: 'updated_at', kitchen_recipe_categories: 'updated_at', kitchen_recipes: 'updated_at', kitchen_recipe_items: 'created_at', kitchen_ingredient_aliases: 'created_at', kitchen_products: 'updated_at', kitchen_shopping_lists: 'created_at', kitchen_shopping_items: 'added_at', kitchen_settings: 'updated_at',
+      kitchen_categories: 'updated_at', kitchen_recipe_categories: 'updated_at', kitchen_recipes: 'updated_at', kitchen_recipe_items: 'created_at', kitchen_ingredient_aliases: 'created_at', kitchen_products: 'updated_at', kitchen_shopping_lists: 'created_at', kitchen_shopping_items: 'added_at', kitchen_list_recipes: 'added_at', kitchen_list_recipe_items: 'created_at', kitchen_activity: 'ts', kitchen_settings: 'updated_at',
       whatsapp_chats: 'updated_at', whatsapp_messages: 'ts', whatsapp_contacts: 'updated_at', whatsapp_state: 'updated_at', whatsapp_automation_log: 'ts',
       power_consumption: 'ts',
       power_devices: 'updated_at',
