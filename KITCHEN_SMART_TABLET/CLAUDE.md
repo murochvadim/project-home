@@ -677,6 +677,13 @@ and **an item you already ticked off is left untouched**.
   the header. `GET /list` returns only headers that still have a line — one rule, every path.
 - Re-adding the same recipe does not duplicate the `חסר:` rows, and rule 2 stops the products doubling.
 - All three **Recipe Settings cards fold and start closed** (`kFold`, ▸/▾).
+- ⚠ **Both tracking tables are keep-forever** (audit 2026-09-04). They were first set to 180 d, which was
+  wrong twice over: `kitchen_shopping_items` is itself keep-forever, so ageing the tracking out from under
+  it would leave rows on the list that can never be undone — and the policy was a **silent no-op anyway**,
+  because the orchestrator's cleaner only ages rows on a `ts`/`detected_at`/`started_at` column and these
+  have `added_at`/`created_at`. See the retention warning in the root CLAUDE.md.
+- ⚠ The bar line used to read **`הוסר: חסר: שמרים יבשים`** — a `חסר:` row carries that prefix in its own
+  name, so the label stacked another on top. `renderBarStatus` strips a leading `חסר: ` before labelling.
 
 ## Recipes — STEP 7: the 🧊 מקרר bar says what changed last (BUILT 2026-09-04)
 

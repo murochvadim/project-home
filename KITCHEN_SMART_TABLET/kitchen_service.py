@@ -953,10 +953,19 @@ def recipe_conversions_set():
         clean = []
         for r in rules:
             buy = r.get('buy')
-            buy = 'same' if str(buy).strip().lower() == 'same' else max(1, int(float(buy or 1)))
+            if str(buy).strip().lower() == 'same':
+                buy = 'same'
+            else:
+                try:
+                    buy = max(1, int(float(buy or 1)))
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'buy must be a number or "same"'}), 400
+            try:                                  # bad input is the caller's fault, not a 500
+                lo, hi = float(r.get('min') or 0), float(r.get('max') or 0)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'min and max must be numbers'}), 400
             clean.append({'unit': (r.get('unit') or '').strip(),
-                          'min': float(r.get('min') or 0), 'max': float(r.get('max') or 0),
-                          'buy': buy})
+                          'min': lo, 'max': hi, 'buy': buy})
         # merges into the existing config blob, so sites and tablet timings are untouched
         q("""INSERT INTO kitchen_settings (id, config, updated_at) VALUES (1, %s::jsonb, now())
              ON CONFLICT (id) DO UPDATE SET config = kitchen_settings.config || EXCLUDED.config,

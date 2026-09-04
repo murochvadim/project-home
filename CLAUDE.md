@@ -538,6 +538,14 @@ Each project has its own CLAUDE.md with full details:
   - `POST /api/health/cleanup` — run cleanup `{table_name}` (null = all); returns `{results:[{table_name, deleted}]}`
   - `POST /api/health/vacuum` — run `VACUUM ANALYZE {table_name}`; returns `{ok, dead_tup, frag_pct}` after
 - **retention_policies table schema:** `table_name PK, keep_days INT nullable, auto_clean BOOL, clean_interval_hours INT, last_cleaned_at TIMESTAMPTZ, description TEXT`
+- ⚠ **A policy is SILENTLY IGNORED unless the table has a `ts` / `detected_at` / `started_at` column.**
+  `run_retention` (ORCHESTRATOR/orchestrator.py) picks the age column from exactly those three and
+  does a bare `continue` when none match — no warning, no log line. **The tell is `last_cleaned_at`
+  staying NULL** while every working table shows a recent timestamp. Audited 2026-09-04: **`email_messages`
+  (180 d) and `reminder_state` (30 d) are configured to auto-clean and never have been** — their
+  timestamp columns are `msg_ts`/`created_at` and `updated_at`. Fixing that means teaching the cleaner
+  those column names, which **starts real deletions on first run**, so it needs a deliberate decision
+  (dry-run the counts first). Same trap the `backup_log` comment in that function describes.
 
 ### Project Health — System Alerts card
 - Top card on Health page — shows all alerts (active first, resolved below with 50% opacity)

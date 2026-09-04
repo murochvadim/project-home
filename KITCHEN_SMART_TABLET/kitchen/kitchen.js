@@ -323,7 +323,9 @@
     // TITLE_GAP keeps a clear space after מקרר so the sentence never butts against the title.
     const gap = Math.round(titleTextLeft($('title'))
                            - $('barcircles').getBoundingClientRect().right - TITLE_GAP);
-    const name = a.name || '';
+    // A 'חסר:' row already carries that prefix in its name, so labelling it again read
+    // "הוסר: חסר: שמרים יבשים". Strip it: the label supplies the verb, the name supplies the thing.
+    const name = (a.name || '').replace(/^\s*חסר:\s*/, '');
     const full  = (AGO_LABEL[a.kind] || (() => name))(name) + ' לפני - ' + agoHM(a.ts);
     const icons = (AGO_ICON[a.kind] || '•') + ' ' + agoHM(a.ts);
 

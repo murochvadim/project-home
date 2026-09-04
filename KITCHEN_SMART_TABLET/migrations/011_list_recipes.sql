@@ -37,8 +37,12 @@ CREATE TABLE IF NOT EXISTS kitchen_list_recipe_items (
 CREATE INDEX IF NOT EXISTS idx_kitchen_list_recipe_items_parent
     ON kitchen_list_recipe_items(list_recipe_id);
 
--- ── Retention: shopping data, not catalog — cleaned with the list, not kept forever ──
+-- ── Retention: KEEP FOREVER, deliberately ──
+-- These track kitchen_shopping_items, which is itself keep-forever. Ageing the tracking out from
+-- under the items it describes would leave rows on the list that can never be undone. (They were
+-- briefly set to 180 days; that was also a silent no-op, because the orchestrator's cleaner only
+-- ages rows on a 'ts'/'detected_at'/'started_at' column and these have 'added_at'/'created_at'.)
 INSERT INTO retention_policies (table_name, keep_days, auto_clean, clean_interval_hours, description, protected) VALUES
-  ('kitchen_list_recipes',      180, true, 24, 'Recipes added to a shopping list',        false),
-  ('kitchen_list_recipe_items', 180, true, 24, 'What each of those recipes contributed',  false)
+  ('kitchen_list_recipes',      NULL, false, 24, 'Recipes added to a shopping list - keep forever',       false),
+  ('kitchen_list_recipe_items', NULL, false, 24, 'What each of those recipes contributed - keep forever', false)
 ON CONFLICT (table_name) DO NOTHING;
