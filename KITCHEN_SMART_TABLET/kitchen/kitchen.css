@@ -6,10 +6,15 @@ body {
   display: flex; flex-direction: column;
 }
 
-#bar {
-  position: relative; flex: 0 0 auto; min-height: 58px; padding: 10px 14px;
+#bar {   /* the card also HOLDS the רשימה / מתכונים circles, so it is tall */
+  position: relative; flex: 0 0 auto; min-height: 104px; padding: 10px 14px;
   background: #12203a; border-bottom: 1px solid #22304d;
+  display: flex; align-items: center;
 }
+/* z-index so the circles paint above the absolutely-centred title if a long title reaches them */
+/* margin-inline-start:auto = physical LEFT here, because the page is dir="rtl" so flex-start
+   is the right. Left is also the side #backbtn is NOT on (it is pinned right: 14px). */
+#barcircles { display: flex; align-items: center; gap: 12px; z-index: 2; margin-inline-start: auto; }
 #title {                                   /* absolutely centered → stays centered on every screen */
   position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
   text-align: center; font-size: 20px; font-weight: 800; pointer-events: none;
@@ -20,27 +25,26 @@ body {
   padding: 9px 16px; border-radius: 12px; font-size: 17px; font-weight: 700; cursor: pointer;
 }
 #backbtn[hidden] { display: none; }
-/* floating רשימה circle — constant on every screen, over the stage (top-left) */
+/* רשימה — in the bar card now (was fixed over the stage at 132px) */
 #listbtn {
-  position: fixed; left: 20px; top: 74px; z-index: 30;
-  width: 132px; height: 132px; border-radius: 50%; border: none; background: #000; color: #fff;
-  cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  flex: none; width: 84px; height: 84px; border-radius: 50%; border: none; background: #000; color: #fff;
+  cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
   box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
 }
 #listbtn:active { transform: scale(.94); }
-/* מתכונים — same circle as רשימה, directly beneath it (74 + 132 + 16 gap) */
+/* מתכונים — same circle as רשימה, beside it in the card */
 #recipebtn {
-  position: fixed; left: 20px; top: 222px; z-index: 30;
-  width: 132px; height: 132px; border-radius: 50%; border: none; background: #000; color: #fff;
+  flex: none; width: 84px; height: 84px; border-radius: 50%; border: none; background: #000; color: #fff;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
 }
 #recipebtn:active { transform: scale(.94); }
-#recipebtn .lb-cap { font-size: 20px; }   /* label-only circle, so it carries the weight alone */
-.lb-cap { font-size: 14px; font-weight: 700; opacity: .92; line-height: 1.1; }
-.lb-count { font-size: 34px; font-weight: 800; line-height: 1.15; }
-.lb-price { font-size: 15px; font-weight: 700; opacity: .95; line-height: 1.1; }
-.lb-date { font-size: 13px; font-weight: 700; opacity: .85; line-height: 1.1; margin-top: 7px; }
+/* text scaled for the 84px circle - label, count and date all still shown */
+#recipebtn .lb-cap { font-size: 13px; }   /* label-only circle, so it carries the weight alone */
+.lb-cap { font-size: 11px; font-weight: 700; opacity: .92; line-height: 1.1; }
+.lb-count { font-size: 22px; font-weight: 800; line-height: 1.15; }
+.lb-price { font-size: 12px; font-weight: 700; opacity: .95; line-height: 1.1; }
+.lb-date { font-size: 10px; font-weight: 700; opacity: .85; line-height: 1.1; margin-top: 2px; }
 
 /* shopping-list screen */
 #listview { position: fixed; inset: 0; z-index: 45; background: #0f1729; display: flex; flex-direction: column; }

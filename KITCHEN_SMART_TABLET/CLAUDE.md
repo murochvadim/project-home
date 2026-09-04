@@ -366,9 +366,10 @@ recipe belong to more than one category (a column vs a join table)?
 The recipe categories from step 1 now appear on the fridge. **Tablet-only — no backend work at all**
 (step 1's `GET /api/kitchen/recipe-categories` already served everything needed).
 
-- **`#recipebtn`** — a second floating circle, an exact copy of `#listbtn` at `top:222px`
-  (74 + 132 + 16 gap), label **מתכונים** only (**no count** — never asked for; a category count
-  isn't actionable the way the list's item count is).
+- **`#recipebtn`** — a second circle, an exact copy of `#listbtn`, label **מתכונים** only (**no
+  count** — never asked for; a category count isn't actionable the way the list's item count is).
+  ⚠ Both circles were `position:fixed` over the stage at 132 px until **step 5 moved them into the
+  bar card**; see that section.
 - **`buildBobGrid(items, onPick, emptyMsg)`** — the bob-in-place grid **extracted from `buildHome`**
   and now shared by the food home and the מתכונים screen, so the two move identically **by
   construction** rather than by copy-paste. ⚠ Verified behaviour-preserving by rendering `buildHome`
@@ -599,3 +600,33 @@ icon survives a **second** save, item counts unchanged.
 
 **Not built yet:** what the second circle does, opening a recipe to see its ingredients, and the **+**
 that puts an ingredient on the shopping list.
+
+## Recipes — STEP 5: the circles moved into the 🧊 מקרר card (BUILT 2026-09-04)
+
+The tablet is a **Samsung Galaxy Tab A7 mounted PORTRAIT**, so screen width is the scarce resource.
+**רשימה** and **מתכונים** used to be `position:fixed` 132 px circles floating *over* the stage at
+`left:20px`, which is why `kitchen.js` reserved **`LEFT_SAFE = 178`** — a gutter kept clear on every
+screen so food circles never slid under them. In portrait that is **22 % of the width, permanently
+unused**.
+
+- The bar (`#bar`) is now a **card of 104 px** (was 58) holding both circles at **84 px** inside a
+  `#barcircles` flex row; `LEFT_SAFE` drops **178 → 12**, so the stage spans the full width on every
+  screen. The list circle still shows **label + count + date**, at smaller font sizes.
+- ⚠ **`dir="rtl"` makes flex-start the RIGHT.** Dropped in as a plain flex child the circles landed on
+  the right — where **`#backbtn` is pinned (`right:14px`)**, so they would have collided on every
+  screen that shows the back button. `#barcircles` therefore carries **`margin-inline-start: auto`**,
+  which in RTL pushes the block to the physical left (the side they were on before).
+- Nothing else moved: `buildBobGrid` and `buildCategory` read `LEFT_SAFE`, so the home grid and the
+  category orbit re-centre and re-size themselves from the wider stage. `renderRecipeRows` never used
+  it (it lives in the panel).
+- Verified in **real Chrome over CDP** at portrait 800×1280, narrow portrait 600×1024 and landscape
+  1340×800: circles inside the bar, back button clear of them, all 12 food circles inside the stage,
+  no page overflow, badge count + date still rendering, and the product panel (7 circles / 4 amounts),
+  shopping list (7 rows) and recipe panel (3 rows, counts 1/9 0/9 1/17) all unchanged, 0 JS errors.
+- Cache-bust `kitchen.css?v=53` / `kitchen.js?v=39`.
+
+**Portrait note for whoever comes next:** at **600 px** wide the panels still need attention —
+`.pp-inner` is `width: min(50%, 560px)`, a landscape shape, which at 300 px clips recipe names and
+pushes one product amount circle outside the panel. Measured, not yet fixed; a
+`@media (max-width:1000px) { .pp-inner { width: min(88%, 620px) } }` is the one-line remedy. At 800 px
+(the likely Tab A7 portrait width) nothing is broken.

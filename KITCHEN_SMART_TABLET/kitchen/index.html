@@ -7,25 +7,25 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>מקרר</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="kitchen.css?v=52">
+  <link rel="stylesheet" href="kitchen.css?v=53">
 </head>
 <body>
   <div id="bar">
     <button id="backbtn" onclick="goBack()" hidden>→ חזרה</button>
+    <!-- רשימה + מתכונים live INSIDE the bar card. They used to float over the stage,
+         which is why the stage had to reserve a wide left gutter on every screen. -->
+    <div id="barcircles">
+      <button id="listbtn" onclick="openListScreen()" title="רשימת קניות">
+        <span class="lb-cap">רשימה</span>
+        <span class="lb-count" id="lb-count">0</span>
+        <span class="lb-date" id="lb-date"></span>
+      </button>
+      <button id="recipebtn" onclick="openRecipes()" title="מתכונים">
+        <span class="lb-cap">מתכונים</span>
+      </button>
+    </div>
     <div id="title">🧊 מקרר</div>
   </div>
-
-  <!-- floating רשימה circle — constant on every screen -->
-  <button id="listbtn" onclick="openListScreen()" title="רשימת קניות">
-    <span class="lb-cap">רשימה</span>
-    <span class="lb-count" id="lb-count">0</span>
-    <span class="lb-date" id="lb-date"></span>
-  </button>
-
-  <!-- מתכונים circle — sits directly under רשימה, same style -->
-  <button id="recipebtn" onclick="openRecipes()" title="מתכונים">
-    <span class="lb-cap">מתכונים</span>
-  </button>
 
   <div id="stage">
     <div id="circles"></div>
@@ -65,6 +65,6 @@
     <div id="lv-items"></div>
   </div>
 
-  <script src="kitchen.js?v=38"></script>
+  <script src="kitchen.js?v=39"></script>
 </body>
 </html>

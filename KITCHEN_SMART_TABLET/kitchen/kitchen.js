@@ -23,7 +23,8 @@
   const PALETTE = ['#2e9e5b', '#e0553f', '#e0a52e', '#4a90d9', '#9b59b6', '#e67e22',
                    '#e6608a', '#8d6e63', '#16a085', '#3f51b5', '#c0567a', '#00a5b5'];
   const catColor = i => (i < 0 ? '#7a8699' : PALETTE[i % PALETTE.length]);
-  const LEFT_SAFE = 178;                 // left gutter reserved for the floating רשימה circle
+  const LEFT_SAFE = 12;                  // was 178: the רשימה / מתכונים circles now live in the
+                                         // bar card, so the stage keeps only a small margin
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const tint = (hex, f) => {   // lighten toward white by fraction f
     const n = parseInt(hex.slice(1), 16);
@@ -76,7 +77,7 @@
     const stage = $('stage'), box = $('circles');
     if (!items.length) { box.innerHTML = '<div class="empty">' + emptyMsg + '</div>'; nodes = []; return; }
     const W = stage.clientWidth, H = stage.clientHeight, n = items.length;
-    const UW = Math.max(80, W - LEFT_SAFE);              // content lives right of the floating circle
+    const UW = Math.max(80, W - LEFT_SAFE);              // usable width (small margin only)
     let bestCell = 0, cols = 1;
     for (let c = 1; c <= n; c++) { const rows = Math.ceil(n / c); const cell = Math.min(UW / c, H / rows); if (cell > bestCell) { bestCell = cell; cols = c; } }
     const rows = Math.ceil(n / cols), cellW = UW / cols, cellH = H / rows, cell = Math.min(cellW, cellH);
@@ -112,7 +113,7 @@
     const stage = $('stage'), box = $('circles');
     const list = products.filter(p => (catId === 0 ? p.category_id == null : p.category_id === catId));
     const W = stage.clientWidth, H = stage.clientHeight, S = Math.min(W - LEFT_SAFE, H);
-    const cx = LEFT_SAFE + (W - LEFT_SAFE) / 2, cy = H / 2;   // orbit centered in the right area
+    const cx = LEFT_SAFE + (W - LEFT_SAFE) / 2, cy = H / 2;   // orbit centered in the stage
     const color = catColor(catId === 0 ? -1 : idx);
     const prodColor = tint(color, 0.20);
     const centerSize = Math.max(100, Math.min(Math.round(S * 0.22), 180));
@@ -170,7 +171,7 @@
   }
 
   // ── מתכונים (recipe categories) ────────────────────────────────────
-  // Own floating circle under רשימה. Tapping it flies the RECIPE categories using the very same
+  // Own circle beside רשימה in the bar card. Tapping it flies the RECIPE categories using the same
   // grid as the food home (buildBobGrid). Fetched lazily — the fridge home must never wait on it.
   window.openRecipes = async function () {
     try { recipeCats = await jget('/api/kitchen/recipe-categories') || []; } catch (e) { recipeCats = []; }
