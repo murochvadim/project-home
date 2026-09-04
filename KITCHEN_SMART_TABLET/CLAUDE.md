@@ -623,7 +623,20 @@ unused**.
   1340×800: circles inside the bar, back button clear of them, all 12 food circles inside the stage,
   no page overflow, badge count + date still rendering, and the product panel (7 circles / 4 amounts),
   shopping list (7 rows) and recipe panel (3 rows, counts 1/9 0/9 1/17) all unchanged, 0 JS errors.
-- Cache-bust `kitchen.css?v=53` / `kitchen.js?v=39`.
+- **The מתכונים circle carries the recipe TOTAL** (2026-09-04), in the same slot רשימה uses for its
+  item count. Both circles are built from the **same three classes** (`.lb-cap` / `.lb-count` /
+  `.lb-date`) at the same sizes — the old `#recipebtn .lb-cap { font-size:13px }` override is gone —
+  so they line up **by construction**, measured identical in portrait and landscape: label `y27`
+  11px/700, number `y39` 22px/800, third row `y66 h11`.
+  - ⚠ מתכונים has no date, and an **empty flex item collapses to zero height**, which would drop its
+    label and number out of line. `.lb-date` therefore has **`min-height: 11px`** so the row is held on
+    both circles — this also fixes the latent case where רשימה's own date is blank (no list yet).
+  - The count comes from a `loadRecipes()` at boot that is **deliberately not awaited** (the fridge
+    home must never wait on it; measured filling in at ~3 s), and the 30 s poll now refreshes recipes
+    on **every** screen instead of only while the panel is open, so adding or deleting a recipe on the
+    dashboard updates the circle without touching the tablet. Verified live: the badge followed a real
+    delete from 3 to 2.
+- Cache-bust `kitchen.css?v=54` / `kitchen.js?v=40`.
 
 **Portrait note for whoever comes next:** at **600 px** wide the panels still need attention —
 `.pp-inner` is `width: min(50%, 560px)`, a landscape shape, which at 300 px clips recipe names and

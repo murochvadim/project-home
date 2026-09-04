@@ -35,16 +35,18 @@ body {
 /* מתכונים — same circle as רשימה, beside it in the card */
 #recipebtn {
   flex: none; width: 84px; height: 84px; border-radius: 50%; border: none; background: #000; color: #fff;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
   box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
 }
 #recipebtn:active { transform: scale(.94); }
-/* text scaled for the 84px circle - label, count and date all still shown */
-#recipebtn .lb-cap { font-size: 13px; }   /* label-only circle, so it carries the weight alone */
-.lb-cap { font-size: 11px; font-weight: 700; opacity: .92; line-height: 1.1; }
+/* text scaled for the 84px circle. Both circles use the SAME three classes and the same sizes,
+   so רשימה and מתכונים line up row for row - no per-circle font override. */
+.lb-cap { font-size: 11px; font-weight: 700; opacity: .92; line-height: 1.1; white-space: nowrap; }
 .lb-count { font-size: 22px; font-weight: 800; line-height: 1.15; }
 .lb-price { font-size: 12px; font-weight: 700; opacity: .95; line-height: 1.1; }
-.lb-date { font-size: 10px; font-weight: 700; opacity: .85; line-height: 1.1; margin-top: 2px; }
+/* min-height so an EMPTY date (no list yet, and always on מתכונים) still holds its row and the
+   two circles stay aligned */
+.lb-date { font-size: 10px; font-weight: 700; opacity: .85; line-height: 1.1; margin-top: 2px; min-height: 11px; }
 
 /* shopping-list screen */
 #listview { position: fixed; inset: 0; z-index: 45; background: #0f1729; display: flex; flex-direction: column; }

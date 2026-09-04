@@ -206,6 +206,7 @@
     // item_count is in the signature on purpose: editing only a recipe's INGREDIENTS changes
     // nothing else, and without it the cached items (and so the ברשימה count) would go stale.
     recSig = recipes.map(r => [r.id, r.category_id, r.emoji, r.name, r.item_count].join('~')).join('|');
+    updateRecipeBadge();
   }
 
   function renderRecipeRows(id) {
@@ -255,6 +256,9 @@
   const inListQty = pid => { const it = listItems.find(x => x.product_id === pid && !x.checked); return it ? numOf(it.qty) : 0; };
   const money = n => '₪' + fmtN(Math.round(numOf(n) * 100) / 100);
   const unitStepPWA = u => { u = (u || '').toLowerCase(); return (u === 'kg' || u === 'l') ? 0.5 : 1; };
+
+  // מתכונים circle — total number of recipes, in the same slot רשימה uses for its count
+  function updateRecipeBadge() { const e = $('rb-count'); if (e) e.textContent = recipes.length; }
 
   // רשימה circle in the bar — product COUNT (rows) + total price
   function updateListBadge() {
@@ -445,6 +449,7 @@
     await loadSettings();                               // idle-return timeout
     sig = circleList().map(c => c.emoji + c.name).join('|');
     buildHome(); startAnim();
+    loadRecipes();          // NOT awaited: the badge fills in when it arrives, home never waits
     ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, resetIdle, { passive: true }));
     resetIdle();
     let t;
@@ -462,10 +467,13 @@
           if (r !== rsig) { rsig = r; if (mode === 'recipes') buildRecipes(); }
         } catch (e) { }
       }
-      if (!$('recipepanel').hidden && curRecipeCat != null) {   // a recipe saved on the dashboard
+      {                                     // keep the מתכונים count (and an open panel) current
         const before = recSig;
-        await loadRecipes();
-        if (recSig !== before) { for (const k in recItems) delete recItems[k]; renderRecipeRows(curRecipeCat); }
+        await loadRecipes();                // also refreshes the badge
+        if (recSig !== before) {
+          for (const k in recItems) delete recItems[k];
+          if (!$('recipepanel').hidden && curRecipeCat != null) renderRecipeRows(curRecipeCat);
+        }
       }
       await loadList();                                 // keep the רשימה badge fresh
       if (!$('recipepanel').hidden && curRecipeCat != null)   // ...and the ברשימה circles with it
