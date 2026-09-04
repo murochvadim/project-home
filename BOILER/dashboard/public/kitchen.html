@@ -390,11 +390,17 @@
         <h3 class="k-fold" onclick="kFold(this)"><span class="k-caret">▸</span> Recipe quantities</h3>
         <div class="k-foldbody" hidden>
           <div style="font-size:0.82rem;color:#8a93a6;margin-bottom:10px;">
-            A recipe measures in cooking units (<b>400 ג'</b> of flour); the shop sells packages. These rules
-            turn the recipe amount into <b>how many of the product</b> to put on the shopping list.
-            First matching row wins; nothing matches → <b>1</b>. Put <b>same</b> in Buy to use the recipe’s own
-            number — right only when the units are the same word (<b>2 קופסאות</b> tuna → 2 boxes).
-            Leave <b>Unit</b> empty for a plain count (<b>4 תפוחי אדמה</b>).
+            A recipe says <b>400 ג'</b> of flour. The shop sells a <b>pack</b>. These rules turn the
+            recipe's amount into how many to buy.<br><br>
+            Each row covers one unit and a range of amounts. The first row that fits wins.
+            If no row fits, you buy <b>1</b>.<br><br>
+            <b>Buy</b> is how many go on the list. Write <b>same</b> to use the recipe's own number.
+            Only do that when the recipe and the shop use the same word:
+            <b>2 קופסאות</b> tuna means <b>2</b> boxes.<br><br>
+            Leave <b>Unit</b> empty for things you count one by one, like <b>4 תפוחי אדמה</b>.<br><br>
+            Fractions become small numbers: <b>1/3 כוס</b> is <b>0.333</b>, <b>3/4 כף</b> is <b>0.75</b>,
+            <b>רבע צרור</b> is <b>0.25</b>. A row that starts at <b>1</b> will skip them.
+            Start it at <b>0</b> to include them.
           </div>
           <table class="k-table" style="margin-bottom:10px;">
             <thead><tr><th>Unit</th><th>From</th><th>To</th><th>Buy</th><th></th></tr></thead>
@@ -405,7 +411,11 @@
             <label>From<input id="cv-min" type="number" step="0.001" value="1" style="width:90px"></label>
             <label>To<input id="cv-max" type="number" step="0.001" value="900" style="width:90px"></label>
             <label>Buy<input id="cv-buy" placeholder="1 or same" style="width:90px"></label>
-            <button class="btn btn-primary btn-sm" onclick="kConvAdd()">Add rule</button>
+            <button class="btn btn-primary btn-sm" id="cv-save" onclick="kConvAdd()">Add rule</button>
+            <button class="btn btn-secondary btn-sm" id="cv-cancel" onclick="kConvCancel()" hidden>Cancel</button>
+            <!-- the editing label lives HERE, not in the card heading: that h3 is the fold toggle and
+                 carries the caret span, so retitling it would break open/close -->
+            <span id="cv-editing" style="font-size:0.8rem;color:#2563eb;font-weight:600;"></span>
             <span id="cv-msg" style="font-size:0.8rem;color:#8a93a6;"></span>
           </div>
         </div>
@@ -500,6 +510,6 @@
 </main>
 
 <script src="js/alerts-monitor.js?v=21"></script>
-<script src="js/kitchen.js?v=55"></script>
+<script src="js/kitchen.js?v=56"></script>
 </body>
 </html>

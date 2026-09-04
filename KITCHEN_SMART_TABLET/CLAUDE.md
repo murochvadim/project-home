@@ -677,6 +677,18 @@ and **an item you already ticked off is left untouched**.
   the header. `GET /list` returns only headers that still have a line — one rule, every path.
 - Re-adding the same recipe does not duplicate the `חסר:` rows, and rule 2 stops the products doubling.
 - All three **Recipe Settings cards fold and start closed** (`kFold`, ▸/▾).
+- **Conversion rules are editable** (2026-09-04): a per-row **✎** loads the rule into the form below,
+  which then reads **Save rule** with a **Cancel** beside it. Same idiom as the recipe-categories card.
+  - ⚠ **A rule has no id** — the rules are a positional JSON array, so the edit holds an *index*.
+    Deleting another row mid-edit would shift it and save over the wrong rule, so **delete cancels
+    an edit in progress**. Tested explicitly.
+  - ⚠ **The editing label is in the form row, not the card heading**: that `<h3>` *is* the fold
+    toggle and holds the `.k-caret` span, so retitling it with `textContent` would break the
+    open/close arrow.
+  - The card's help text was rewritten in short plain sentences, and now states what fractions do:
+    **1/3 כוס → 0.333**, **3/4 כף → 0.75**, **רבע צרור → 0.25** — so a rule whose **From** is 1
+    never matches them (they fall through to the default of 1). Those are the real stored values,
+    which is why the צרור rule never fired on the parsley.
 - ⚠ **Both tracking tables are keep-forever** (audit 2026-09-04). They were first set to 180 d, which was
   wrong twice over: `kitchen_shopping_items` is itself keep-forever, so ageing the tracking out from under
   it would leave rows on the list that can never be undone — and the policy was a **silent no-op anyway**,
@@ -738,7 +750,7 @@ opens the **cooking view** — the whole recipe, big enough to read while cookin
   reachable because the bar stays visible).
 - No backend work and no migration: `GET /api/kitchen/recipes/<id>` already returned everything.
   Cache `recFull` holds the whole recipe so the method needs no second call.
-- Cache-bust `kitchen.css?v=67` / `kitchen.js?v=55`.
+- Cache-bust `kitchen.css?v=67` / `kitchen.js?v=56`.
 
 ### ⚠ Recipes are no longer merged at import (same day, and the reason this screen is truthful)
 

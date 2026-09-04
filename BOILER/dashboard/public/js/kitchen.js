@@ -829,10 +829,20 @@ The next import will ask about it again. Saved recipes are not changed.`)) retur
         <td class="heb">${esc(r.unit || '')}${r.unit ? '' : '<span class="k-hint">(plain count)</span>'}</td>
         <td>${fmtNum(r.min)}</td><td>${fmtNum(r.max)}</td>
         <td><b>${esc(String(r.buy))}</b></td>
-        <td style="text-align:right"><button class="k-x" data-i="${i}" title="Delete">🗑</button></td>
+        <td style="text-align:right">
+          <button class="k-edit" data-edit="${i}" title="Edit">✎</button>
+          <button class="k-x" data-i="${i}" title="Delete">🗑</button></td>
       </tr>`).join('');
+    tb.querySelectorAll('button[data-edit]').forEach(b => {
+      b.onclick = () => kConvEdit(+b.dataset.edit);
+    });
     tb.querySelectorAll('button[data-i]').forEach(b => {
-      b.onclick = () => { convRules.splice(+b.dataset.i, 1); saveConversions(); };
+      b.onclick = () => {
+        // a rule is identified by its POSITION, so removing one shifts every row after it - an edit
+        // left running here would save over the wrong rule.
+        window.kConvCancel();
+        convRules.splice(+b.dataset.i, 1); saveConversions();
+      };
     });
   }
   const fmtNum = v => (Math.round((+v || 0) * 1000) / 1000);
@@ -843,12 +853,31 @@ The next import will ask about it again. Saved recipes are not changed.`)) retur
       $('cv-msg').textContent = 'Saved.'; setTimeout(() => $('cv-msg').textContent = '', 1500);
     } catch (e) { $('cv-msg').textContent = 'Save failed: ' + e.message; }
   }
-  window.kConvAdd = function () {
+  let convEditIdx = null;                 // which row the form is editing (index, there is no id)
+  function kConvEdit(i) {
+    const r = convRules[i]; if (!r) return;
+    convEditIdx = i;
+    $('cv-unit').value = r.unit || '';
+    $('cv-min').value = r.min; $('cv-max').value = r.max; $('cv-buy').value = r.buy;
+    $('cv-save').textContent = 'Save rule';
+    $('cv-cancel').hidden = false;
+    $('cv-editing').textContent = 'editing rule ' + (i + 1);
+  }
+  window.kConvCancel = function () {
+    convEditIdx = null;
+    $('cv-unit').value = ''; $('cv-buy').value = '';
+    $('cv-save').textContent = 'Add rule';
+    $('cv-cancel').hidden = true;
+    $('cv-editing').textContent = '';
+  };
+  window.kConvAdd = function () {         // add, or save the row being edited
     const buyRaw = ($('cv-buy').value || '').trim();
     const buy = buyRaw.toLowerCase() === 'same' ? 'same' : Math.max(1, parseInt(buyRaw, 10) || 1);
-    convRules.push({ unit: ($('cv-unit').value || '').trim(),
-                     min: +$('cv-min').value || 0, max: +$('cv-max').value || 0, buy });
-    $('cv-unit').value = ''; $('cv-buy').value = '';
+    const rule = { unit: ($('cv-unit').value || '').trim(),
+                   min: +$('cv-min').value || 0, max: +$('cv-max').value || 0, buy };
+    if (convEditIdx != null && convRules[convEditIdx]) convRules[convEditIdx] = rule;
+    else convRules.push(rule);
+    window.kConvCancel();
     saveConversions();
   };
 
