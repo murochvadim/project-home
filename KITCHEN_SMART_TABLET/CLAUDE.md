@@ -754,3 +754,34 @@ side is unaffected**: `add-recipe` skips a product already on the list, and the 
 *distinct products* (recipe 9: 13 rows, 11 matched, **9 distinct**) — so it still reads 9/9.
 ⚠ Consequence to accept: the import review screen shows the same product twice again when a recipe
 names it twice.
+
+## Recipes — STEP 9: a recipe notices a product you add later (BUILT 2026-09-04)
+
+You added **אריסה** as a product and the recipe still called it missing. A row's `product_id` was
+resolved **once, at import**, and nothing ever revisited it — a product created afterwards could never
+reach the recipes imported without it.
+
+**`_rematch_recipes(recipe_id=None)`** re-resolves the open rows through the **existing
+`_match_products`** (exact → learned alias → whole-word-prefix fuzzy) and persists what it finds.
+Triggered after a **product is created, edited or deleted**, after an **alias is learned**, and at the
+start of **add-recipe**.
+
+- ⚠ **"Open" is not just `product_id IS NULL`.** `products/delete` is a **soft** delete, so the
+  `ON DELETE SET NULL` never fires and a row keeps pointing at a dead product. Such rows are re-resolved
+  too, and **set back to NULL when nothing replaces them** — the first version only wrote on a hit, so
+  a deleted product would have stuck to the recipe forever. Verified both ways: create the product →
+  the row links; delete it → the row goes back to unmatched.
+- The **`חסר: X` line the recipe put on the list** is deleted when its ingredient resolves — scoped
+  through `kitchen_list_recipe_items(kind='missing')`, so nothing hand-added is ever touched. It does
+  **not** re-add the product: the common-quantity rule owns that decision.
+- ⚠ **`GET /recipes` gained `matched_count`, and `recSig` includes it.** Without it a re-match changes
+  nothing the tablet can see — same id, category, emoji, name, item_count — so the fridge would keep
+  serving a cached "missing" until someone reloaded it by hand, which is exactly the reported symptom.
+  The poll now also clears **`recFull`** (the cooking-screen cache), which the earlier code predated.
+  Proven live: with the tablet left open and untouched, creating a product moved a row from **3/9 to
+  3/10 within one 30 s poll**.
+  - ⚠ **Testing note:** a first attempt "failed" because the fridge went **home after the 10 s idle**
+    during the 34 s wait, leaving no open panel to refresh — the DOM being read was stale markup in a
+    hidden div. Any test of the poll must keep the screen awake.
+- Repair was precisely bounded: of **6** unmatched rows exactly **1** had a product (אריסה); the other
+  five still have none and stayed unmatched. Cache-bust `kitchen.js?v=56`.

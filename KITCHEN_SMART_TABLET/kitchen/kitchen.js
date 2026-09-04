@@ -207,7 +207,10 @@
     try { recipes = await jget('/api/kitchen/recipes') || []; } catch (e) { recipes = []; }
     // item_count is in the signature on purpose: editing only a recipe's INGREDIENTS changes
     // nothing else, and without it the cached items (and so the ברשימה count) would go stale.
-    recSig = recipes.map(r => [r.id, r.category_id, r.emoji, r.name, r.item_count].join('~')).join('|');
+    // matched_count is in here on purpose: when a product is added later and a recipe row finally
+    // resolves, NOTHING else about the recipe changes - without it the tablet keeps serving a
+    // cached 'missing' until someone reloads it by hand.
+    recSig = recipes.map(r => [r.id, r.category_id, r.emoji, r.name, r.item_count, r.matched_count].join('~')).join('|');
     updateRecipeBadge();
   }
 
@@ -641,6 +644,7 @@
         await loadRecipes();                // also refreshes the badge
         if (recSig !== before) {
           for (const k in recItems) delete recItems[k];
+          for (const k in recFull) delete recFull[k];      // the cooking screen caches whole recipes
           if (!$('recipepanel').hidden && curRecipeCat != null) renderRecipeRows(curRecipeCat);
         }
       }

@@ -185,6 +185,7 @@ def products_upsert():
                           %(season_all_year)s,%(season_start_month)s,%(season_end_month)s,
                           %(amount_little)s,%(amount_medium)s,%(amount_lots)s,%(amount_extra)s)
                        RETURNING *""", p, fetch='one')
+        _rematch_recipes()          # a recipe that wanted this product can now find it
         return jsonify(row)
     except Exception as e:
         return _err(e)
@@ -196,6 +197,7 @@ def products_delete():
         if not pid:
             return jsonify({'error': 'id required'}), 400
         q("UPDATE kitchen_products SET active=false, updated_at=now() WHERE id=%s", (pid,), fetch='none')
+        _rematch_recipes()          # soft delete: rows pointing at it must not keep it
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)
@@ -588,6 +590,7 @@ def list_add_recipe():
         rec = q("SELECT id, name, emoji FROM kitchen_recipes WHERE id=%s", (rid,), fetch='one')
         if not rec:
             return jsonify({'error': 'recipe not found'}), 404
+        _rematch_recipes(rid)       # always use today's products, not the ones that existed at import
         items = q("""SELECT i.*, p.name AS product_name, COALESCE(p.common_qty,0) AS common_qty
                        FROM kitchen_recipe_items i
                        LEFT JOIN kitchen_products p ON p.id = i.product_id
@@ -1050,6 +1053,50 @@ def _match_products(items):
         it['product_id'], it['match'] = hit, how
     return items
 
+def _rematch_recipes(recipe_id=None):
+    """A recipe row keeps the product it matched AT IMPORT, and nothing ever revisited it - so a
+    product created later could never reach the recipes imported without it (אריסה stayed 'missing'
+    after the product existed). Re-resolve the open rows against the products as they are NOW.
+
+    'Open' is not just product_id IS NULL: products/delete is a SOFT delete, so a row can point at an
+    inactive product that would otherwise be added to the shopping list forever."""
+    sql = ("""SELECT i.id, i.recipe_id, i.parsed_name, i.raw_line, i.product_id AS cur_pid
+                FROM kitchen_recipe_items i
+                LEFT JOIN kitchen_products p ON p.id = i.product_id
+               WHERE (i.product_id IS NULL OR p.active IS NOT TRUE)""")
+    args = ()
+    if recipe_id:
+        sql += " AND i.recipe_id=%s"; args = (recipe_id,)
+    rows = q(sql, args or None)
+    if not rows:
+        return []
+    items = [{'parsed_name': r['parsed_name']} for r in rows]
+    _match_products(items)                      # exact -> learned alias -> whole-word-prefix fuzzy
+    fixed = []
+    for r, it in zip(rows, items):
+        if not it.get('product_id'):
+            # its product was soft-deleted and nothing replaces it: the row must go back to
+            # unmatched, or the list would keep being offered a product that no longer exists.
+            if r['cur_pid'] is not None:
+                q("UPDATE kitchen_recipe_items SET product_id=NULL, updated_at=now() WHERE id=%s",
+                  (r['id'],), fetch='none')
+            continue
+        q("UPDATE kitchen_recipe_items SET product_id=%s, updated_at=now() WHERE id=%s",
+          (it['product_id'], r['id']), fetch='none')
+        fixed.append({'item_id': r['id'], 'recipe_id': r['recipe_id'],
+                      'name': r['parsed_name'], 'product_id': it['product_id']})
+        # the "חסר: X" line this recipe put on a list is now untrue - drop it. Scoped through the
+        # recipe's own link rows, so nothing the user added by hand is ever touched.
+        q("""DELETE FROM kitchen_shopping_items si
+              USING kitchen_list_recipe_items li, kitchen_list_recipes lr
+              WHERE li.item_id = si.id AND li.kind = 'missing'
+                AND lr.id = li.list_recipe_id AND lr.recipe_id = %s
+                AND si.free_text = %s""",
+          (r['recipe_id'], 'חסר: ' + (r['parsed_name'] or '')), fetch='none')
+    if fixed:
+        log.info('rematch: %d recipe row(s) resolved', len(fixed))
+    return fixed
+
 @app.route('/api/kitchen/recipe-sites')
 def recipe_sites_get():
     try:
@@ -1178,6 +1225,7 @@ def ingredient_alias_set():
         q("""INSERT INTO kitchen_ingredient_aliases (alias, product_id) VALUES (%s,%s)
              ON CONFLICT (alias) DO UPDATE SET product_id=EXCLUDED.product_id, updated_at=now()""",
           (alias, pid), fetch='none')
+        _rematch_recipes()          # the same ingredient in every OTHER recipe learns it too
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)
@@ -1186,7 +1234,10 @@ def ingredient_alias_set():
 def recipes_list():
     try:
         sql = ("SELECT r.*, c.name AS category_name, c.emoji AS category_emoji, "
-               "(SELECT count(*) FROM kitchen_recipe_items i WHERE i.recipe_id=r.id) AS item_count "
+               "(SELECT count(*) FROM kitchen_recipe_items i WHERE i.recipe_id=r.id) AS item_count, "
+               # in the tablet's refresh signature: without it a re-match changes nothing the
+               # tablet can notice, and it keeps serving a cached 'missing' until a manual reload
+               "(SELECT count(*) FROM kitchen_recipe_items i WHERE i.recipe_id=r.id AND i.product_id IS NOT NULL) AS matched_count "
                "FROM kitchen_recipes r LEFT JOIN kitchen_recipe_categories c ON c.id=r.category_id")
         if request.args.get('all') != '1':
             sql += " WHERE r.active IS NOT FALSE"
