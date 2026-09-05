@@ -64,6 +64,7 @@
     document.querySelectorAll('.k-tab').forEach(b => b.classList.remove('active'));
     $('tab-' + name).classList.add('active');
     if (btn) btn.classList.add('active');
+    if (name === 'prices' && !hhLoaded) hhLoad();   // lazy: only this tab needs the branch catalogue
   };
 
   // ── products ──
@@ -73,6 +74,7 @@
       `<tr><td colspan="6" style="color:#ef5a6a">Can't reach kitchen service (${esc(e.message)}) — ${API}</td></tr>`; return; }
     renderProducts();
     if (categories.length) { renderCategories(); renderStock(); renderAmounts(); renderCommon(); }   // keep counts/stock/amounts/common fresh
+    if (hhLoaded) hhRender();                    // the price tab is drawn from this list — keep it in step
   }
 
   function renderProducts() {
@@ -1194,6 +1196,173 @@ The next import will ask about it again. Saved recipes are not changed.`)) retur
   window.kLoad = async function () {
     _peWire(); refreshFormPhoto();
     await loadProducts(); await loadCategories(); await loadList(); await loadTech(); await loadRecipeCats(); await loadRecipes(); await loadRecipeSites(); await loadConversions(); await loadAliases();
+  };
+
+
+  // ── 🏪 חצי חינם — shelf prices from the הוד השרון branch (store 206) ──────────
+  // The list is loaded lazily the first time the tab is opened: it needs the branch's catalogue
+  // (15,419 items), and no other tab should pay for that.
+  let hhRows = [], hhPickPid = null, hhLoaded = false;
+
+  function hhFmt(n) { return (n == null || n === '') ? '—' : '₪' + Number(n).toFixed(2); }
+
+  function hhAgo(ts) {
+    if (!ts) return '';
+    const d = Math.floor((Date.now() - new Date(ts)) / 86400000);
+    return d <= 0 ? 'today' : d === 1 ? 'yesterday' : d + 'd ago';
+  }
+
+  async function hhLoad() {
+    // This table is drawn FROM `products` + `categories` (that is what keeps it identical to the
+    // Products tab). Opening this tab before those arrive used to render "No products yet." and, since
+    // it loads once, it never redrew. So wait for them here.
+    try {
+      const jobs = [jget('/api/kitchen/price-items')];
+      if (!products.length) jobs.push(loadProducts());
+      if (!categories.length) jobs.push(loadCategories());
+      const [rows] = await Promise.all(jobs);
+      hhRows = rows || [];
+    } catch (e) {
+      $('hh-rows').innerHTML = `<tr><td colspan="11" style="color:#ef5a6a">Can't reach kitchen service (${esc(e.message)})</td></tr>`;
+      return;                                   // hhLoaded stays false -> reopening the tab retries
+    }
+    hhRender();
+    hhLoaded = products.length > 0;             // only "done" once there was really something to draw
+  }
+
+  function hhRender() {
+    const tb = $('hh-rows');
+    const pinned = hhRows.filter(r => (r.items || []).length).length;
+    $('hh-status').textContent = `${pinned} of ${hhRows.length} products connected`;
+    // Built as the Products table with the branch's data added as REAL columns (price / item / size /
+    // checked / ✕) rather than one crammed line, so those values line up down the page. A product
+    // with several items spans them with rowspan, which keeps one product = one visual block.
+    // It walks the SAME `products` array and the SAME cell helpers the Products tab uses, so the two
+    // tabs cannot drift in look or order.
+    const byId = {}; hhRows.forEach(r => { byId[r.id] = r; });
+    const catIds = categories.map(c => c.id);
+    const groups = {};
+    products.forEach(p => { const k = (p.category_id == null ? 0 : p.category_id); (groups[k] = groups[k] || []).push(p); });
+    const present = Object.keys(groups).map(Number);
+    const order = [...catIds, ...present, 0].filter((v, i, a) => a.indexOf(v) === i);
+    const money = v => v == null ? '' : '₪' + (+v).toFixed(2).replace(/\.00$/, '');
+    let html = '';
+    order.forEach(cid => {
+      const list = groups[cid]; if (!list || !list.length) return;
+      const cat = categories.find(c => c.id === cid);
+      const label = cat ? (cat.emoji ? cat.emoji + ' ' : '') + cat.name : '— ללא קטגוריה —';
+      html += `<tr class="k-cat-row"><td colspan="11" class="k-cat-cell">${esc(label)}</td></tr>`;
+      html += list.map(p => {
+        const items = (byId[p.id] || {}).items || [];
+        const prices = items.map(i => Number(i.price)).filter(n => n > 0);
+        const used = prices.length ? Math.min(...prices) : (p.price != null ? Number(p.price) : null);
+        const fromBranch = prices.length > 0;
+        const canAdd = items.length < 3;
+        const span = Math.max(1, items.length + (canAdd ? 1 : 0));   // + the "add item" line
+        // the product's own cells, written once and spanning all of its branch lines
+        const head = `<td class="k-emoji" rowspan="${span}">${prodArt(p)}</td>
+          <td style="text-align:center;padding-left:24px" rowspan="${span}">${seasonCell(p)}</td>
+          <td class="heb" rowspan="${span}">${esc(p.name)}</td>
+          <td rowspan="${span}">${esc(unitHe(p.unit))}</td>
+          <td rowspan="${span}">${money(p.price)}</td>`;
+        const tail = `<td class="hh-gap" rowspan="${span}"><b style="color:${fromBranch ? '#137333' : '#8a93a6'}">${used != null ? money(used) : '—'}</b>
+            <div style="font-size:.68rem;color:#8a93a6">${fromBranch ? 'branch' : 'typed'}</div></td>`;
+        const addLine = `<td colspan="5"><button class="btn btn-sm" onclick="hhPick(${p.id})">🔗 add item</button>
+            ${items.length ? '' : '<span class="k-hint" style="margin-right:8px">nothing attached — keeps your typed price</span>'}</td>`;
+        if (!items.length) return `<tr data-id="${p.id}">${head}${addLine}${tail}</tr>`;
+        let rows = '';
+        items.forEach((i, n) => {
+          // order left-to-right: item, size, price, checked — then the remove button
+          const cells = `<td class="heb">${esc(i.name)}${i.manual ? ' <span title="you typed this price — a refresh leaves it alone" style="font-size:.72rem;color:#b26a00">✎ mine</span>' : ''}</td>
+            <td style="font-size:.8rem;color:#444;white-space:nowrap">${esc(i.size || '')}</td>
+            <td><b style="color:${Number(i.price) === used ? '#137333' : '#444'}">${money(i.price)}</b></td>
+            <td style="font-size:.72rem;color:#8a93a6" title="when we last checked the branch">${hhAgo(i.checked)}</td>
+            <td><button class="k-x" title="Remove this item" onclick="hhRemove(${i.id})">✕</button></td>`;
+          rows += n === 0 ? `<tr data-id="${p.id}">${head}${cells}${tail}</tr>` : `<tr>${cells}</tr>`;
+        });
+        if (canAdd) rows += `<tr>${addLine}</tr>`;
+        return rows;
+      }).join('');
+    });
+    tb.innerHTML = html || (products.length
+      ? '<tr><td colspan="11" class="k-hint">No products yet.</td></tr>'
+      : '<tr><td colspan="11" class="k-hint">Loading…</td></tr>');
+  }
+
+  window.hhPick = function (pid) {
+    hhPickPid = pid;
+    const r = hhRows.find(x => x.id === pid);
+    $('hh-pick-head').textContent = '🔗 ' + (r ? r.name : '');
+    $('hh-q').value = r ? r.name : '';
+    $('hh-hits').innerHTML = '';
+    $('hh-pick-msg').textContent = '';
+    $('hh-pick').style.display = 'flex';
+    hhSearch();
+  };
+
+  window.hhPickClose = function () { $('hh-pick').style.display = 'none'; hhPickPid = null; };
+
+  window.hhSearch = async function () {
+    const q = ($('hh-q').value || '').trim();
+    if (!q) return;
+    $('hh-pick-msg').textContent = 'searching the branch…';
+    let d;
+    try { d = await jget('/api/kitchen/price-candidates?q=' + encodeURIComponent(q)); }
+    catch (e) { $('hh-pick-msg').textContent = 'Search failed: ' + e.message; return; }
+    if (d.error) {
+      // access lapsed is the one failure worth explaining, because the fix is a person's job
+      $('hh-pick-msg').innerHTML = d.needs_access
+        ? '<b style="color:#b26a00">Price access needs renewing</b> — the branch stopped accepting our saved pass (it lasts a year, or the home IP changed).'
+        : 'Could not read the branch: ' + esc(d.error);
+      return;
+    }
+    const hits = d.items || [];
+    $('hh-pick-msg').innerHTML = hits.length
+      ? `${hits.length} item${hits.length === 1 ? '' : 's'} of ${d.catalogue.toLocaleString()} — <b>add words to narrow</b> (e.g. a brand or a size)`
+      : 'Nothing matched. Try fewer or different words — the branch often names things its own way (cherry tomatoes are שרי ביבי).';
+    // Size is the column that makes a wrong item obvious: "לימון בלאדי ₪17.10" reads like a bag of
+    // lemons until you see "250 גרם". The red note fires when the price is nowhere near what you
+    // typed — the signal that this is a liqueur, not the fruit.
+    const typed = (hhRows.find(r => r.id === hhPickPid) || {}).typed_price;
+    const odd = p => typed && Number(p) > 0 && (Number(p) > 2.2 * Number(typed) || Number(p) < 0.45 * Number(typed));
+    $('hh-hits').innerHTML = hits.map((i, n) => `<tr${odd(i.price) ? ' style="background:#fff6f6"' : ''}>
+        <td><b>${hhFmt(i.price)}</b>${i.unit_price ? `<div style="font-size:.68rem;color:#8a93a6">${hhFmt(i.unit_price)}/${esc(i.weighted ? (i.unit || 'kg') : 'unit')}</div>` : ''}</td>
+        <td class="heb">${esc(i.name)}
+          ${odd(i.price) ? `<div style="font-size:.7rem;color:#c0392b">≠ your ${hhFmt(typed)} — check this is the same thing</div>` : ''}</td>
+        <td style="font-size:.8rem;color:#444;white-space:nowrap">${esc(i.size || '—')}</td>
+        <td class="heb" style="font-size:.8rem;color:#666">${esc(i.mfr || '')}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="hhAdd(${n})">attach</button></td>
+      </tr>`).join('');
+    window._hhHits = hits;
+  };
+
+  window.hhAdd = async function (n) {
+    const it = (window._hhHits || [])[n];
+    if (!it || !hhPickPid) return;
+    try { await jpost('/api/kitchen/price-items', { action: 'add', product_id: hhPickPid, item: it }); }
+    catch (e) { $('hh-pick-msg').textContent = 'Could not attach: ' + e.message; return; }
+    hhPickClose();
+    await hhLoad();
+  };
+
+  window.hhRemove = async function (id) {
+    if (!confirm('Remove this item from the product?')) return;
+    await jpost('/api/kitchen/price-items', { action: 'remove', id });
+    await hhLoad();
+  };
+
+  window.hhRefresh = async function () {
+    $('hh-status').textContent = 'fetching today’s prices…';
+    let d;
+    try { d = await jpost('/api/kitchen/prices/refresh', { force: true }); }
+    catch (e) { $('hh-status').textContent = 'Refresh failed: ' + e.message; return; }
+    if (d.error) {
+      $('hh-status').textContent = d.needs_access ? 'Price access needs renewing' : 'Refresh failed: ' + d.error;
+      return;
+    }
+    await hhLoad();
+    // a price that could not be found keeps its old value — say so rather than hiding it
+    $('hh-status').textContent = `updated ${d.updated}` + (d.missing ? `, ${d.missing} kept (not in today's file)` : '');
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.kLoad);

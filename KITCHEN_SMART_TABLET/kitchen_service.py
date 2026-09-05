@@ -34,6 +34,8 @@ API:
 Runs as systemd service kitchen-service.service. No secret needed (trust-auth DB).
 """
 import json, logging, math, re, time, html
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 import psycopg2, psycopg2.extras, psycopg2.pool
 import requests
@@ -1323,6 +1325,300 @@ def recipe_delete():
         return jsonify({'ok': True})
     except Exception as e:
         return _err(e)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# חצי חינם — real shelf prices for my products (branch הוד השרון, store 206)
+#
+# HOW THE DATA IS REACHED (measured, not assumed):
+#   * The chain's listing page sits behind a Cloudflare challenge. Six plain-curl attempts with
+#     different User-Agents were refused, and so was headless Chrome. A REAL browser window passes it
+#     in ~26 s and yields a `cf_clearance` cookie valid for 365 DAYS.
+#   * With that cookie + the SAME User-Agent, ordinary requests read the listing fine — verified from
+#     this LXC and from LXC 104.
+#   * The .gz files are NOT on their site at all: they sit on Azure Blob Storage, unprotected. No
+#     cookie is needed to download one.
+#   So the cookie is used ONLY to learn today's filenames (the blob container forbids listing → 404),
+#   then the download is plain. Renewal is a once-a-year chore — see hh_cookie in kitchen_settings.
+#
+# WHY THE FILE IS CACHED: the branch's PriceFull is ~850 KB gzip / 14 MB XML holding 15,419 items,
+# rebuilt nightly (~00:56). Fetching it once a day and searching locally keeps the picker instant
+# instead of a network round trip per keystroke.
+# ══════════════════════════════════════════════════════════════════════════════
+HH_CHAIN    = '7290700100008'
+HH_STORE    = '206'          # הרקון 2, הוד השרון — 15,419 items (210 shares the address: 906 items)
+HH_LIST_URL = 'https://shop.hazi-hinam.co.il/Prices'
+HH_BLOB     = 'https://hazihinamprod01.blob.core.windows.net/regulatories/'
+HH_CACHE    = Path('/opt/kitchen/price_cache')
+_hh_mem     = {'stamp': None, 'items': None}      # parsed catalogue, kept in RAM between requests
+
+
+def _hh_conf():
+    """cookie / UA / store live in kitchen_settings.config so renewing them needs no redeploy."""
+    row = q("SELECT config FROM kitchen_settings WHERE id=1", fetch='one')
+    c = (row['config'] if row else {}) or {}
+    return {'cookie': c.get('hh_cookie', ''), 'ua': c.get('hh_ua', ''),
+            'store': str(c.get('hh_store') or HH_STORE),
+            'days': int(c.get('hh_update_days') or 3), 'last_run': c.get('hh_last_run')}
+
+
+def _hh_save_conf(patch):
+    q("""INSERT INTO kitchen_settings (id, config, updated_at) VALUES (1, %s::jsonb, now())
+         ON CONFLICT (id) DO UPDATE SET config = kitchen_settings.config || EXCLUDED.config,
+                                        updated_at = now()""",
+      (json.dumps(patch),), fetch='none')
+
+
+def _hh_newest_pricefull(conf, day=None):
+    """Read the listing page and return the newest PriceFull filename for our store.
+
+    Needs the cookie. Raises a named error when access has lapsed so the caller can ask the user to
+    renew it, instead of showing a blank screen.
+    """
+    if not conf['cookie'] or not conf['ua']:
+        raise RuntimeError('no_access')
+    # ⚠ Asia/Jerusalem, ALWAYS. This LXC's clock is UTC, so time.strftime() asked for the previous
+    # day and landed on a page that had no file for our store yet — the project rule about never
+    # assuming UTC, caught live.
+    tz = ZoneInfo('Asia/Jerusalem')
+    days = [day] if day else [(datetime.now(tz) - timedelta(days=n)).strftime('%Y-%m-%d')
+                              for n in range(3)]
+    # Walk back a day or two: the nightly file appears ~00:56, so just after midnight — and on a day
+    # the branch skipped — today's page can legitimately hold nothing for us. Yesterday's prices are
+    # far better than an error.
+    pat = r'/regulatories/(PriceFull%s-\d+-%s-\d{8}-\d{6}\.gz)' % (HH_CHAIN, re.escape(conf['store']))
+    for d in days:
+        r = requests.get(HH_LIST_URL, params={'d': d, 't': 'null', 'f': 'null'},
+                         headers={'Cookie': conf['cookie'], 'User-Agent': conf['ua'],
+                                  'Accept-Language': 'he-IL,he;q=0.9,en;q=0.8'}, timeout=30)
+        if r.status_code == 403 or 'Just a moment' in r.text[:400]:
+            raise RuntimeError('access_expired')
+        r.raise_for_status()
+        names = re.findall(pat, r.text)
+        if names:
+            return sorted(names)[-1]  # the filename ends with its timestamp, so last == newest
+    raise RuntimeError('no_file_today')
+
+
+def _hh_parse(xml):
+    """PriceFull XML -> list of items (only the fields the picker and the refresh actually use)."""
+    out = []
+    for b in re.findall(r'<Item>(.*?)</Item>', xml, re.S):
+        def g(*tags):
+            for t in tags:
+                m = re.search('<%s>(.*?)</%s>' % (t, t), b, re.S | re.I)
+                if m and m.group(1).strip():
+                    return html.unescape(m.group(1).strip())
+            return ''
+        name = g('ItemName')
+        if not name:
+            continue
+        def f(v):
+            try:
+                return float(v or 0)
+            except ValueError:
+                return 0.0
+        # size is what tells a bag of lemons apart from a 250 g packet of them — see migration 014
+        qty, uq = g('Quantity'), g('UnitQty') or g('UnitOfMeasure')
+        weighted = g('bIsWeighted') == '1'
+        if weighted:
+            size = 'by weight (per %s)' % (uq or 'kg')
+        elif qty and uq:
+            size = '%s %s' % (qty.rstrip('0').rstrip('.') if '.' in qty else qty, uq)
+        else:
+            size = uq or ''
+        out.append({'code': g('ItemCode'), 'name': name, 'price': f(g('ItemPrice')),
+                    'mfr': g('ManufactureName', 'ManufacturerName'),
+                    'unit_price': f(g('UnitOfMeasurePrice')), 'unit': g('UnitOfMeasure'),
+                    'size': size, 'weighted': weighted, 'shop_changed': g('PriceUpdateTime')})
+    return out
+
+
+def _hh_items(force=False):
+    """Today's catalogue for our store: RAM -> disk cache -> the chain, in that order."""
+    import gzip
+    conf = _hh_conf()
+    stamp = datetime.now(ZoneInfo('Asia/Jerusalem')).strftime('%Y-%m-%d')   # never UTC
+    if not force and _hh_mem['stamp'] == stamp and _hh_mem['items']:
+        return _hh_mem['items'], conf
+    HH_CACHE.mkdir(parents=True, exist_ok=True)
+    cached = HH_CACHE / ('pricefull_%s_%s.gz' % (conf['store'], stamp))
+    if force or not cached.exists():
+        fn = _hh_newest_pricefull(conf)
+        r = requests.get(HH_BLOB + fn, timeout=90)        # the blob itself needs NO cookie
+        r.raise_for_status()
+        cached.write_bytes(r.content)
+        for old in sorted(HH_CACHE.glob('pricefull_*.gz'))[:-4]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    items = _hh_parse(gzip.open(cached, 'rb').read().decode('utf-8', errors='ignore'))
+    _hh_mem['stamp'], _hh_mem['items'] = stamp, items
+    return items, conf
+
+
+_HEB = '[֐-׿]'
+
+
+def _hh_variants(term):
+    """The user writes plural (בננות); the shelf writes singular (בננה)."""
+    v = {term}
+    for suf in ('ים', 'ות', 'יות'):
+        if term.endswith(suf) and len(term) > len(suf) + 1:
+            v.add(term[:-len(suf)])
+            v.add(term[:-len(suf)] + 'ה')
+    return v
+
+
+def _hh_search(items, query, limit=60):
+    """Rank candidates for a typed query.
+
+    Whole-word matching matters: a plain substring test put FACE CREAM at the top of חלב, because חלב
+    sits inside חלבי. Every word of the query must match, so typing more words cuts 282 hits down to a
+    handful — which is exactly why the user picks and the machine does not guess.
+    """
+    words = [w for w in re.split(r'\s+', (query or '').strip()) if w]
+    if not words:
+        return []
+    pats = []
+    for w in words:
+        alts = '|'.join(re.escape(v) for v in sorted(_hh_variants(w), key=len, reverse=True))
+        pats.append(re.compile('(?<!%s)(?:%s)(?!%s)' % (_HEB, alts, _HEB)))
+    hits = [i for i in items if all(p.search(i['name']) for p in pats)]
+    first = _hh_variants(words[0])
+    hits.sort(key=lambda i: (0 if any(i['name'].startswith(v) for v in first) else 1, len(i['name'])))
+    return hits[:limit]
+
+
+@app.route('/api/kitchen/price-candidates')
+def price_candidates():
+    """Search the branch's catalogue. q defaults to the product's own name as a starting point."""
+    try:
+        pid = request.args.get('product_id', type=int)
+        query = (request.args.get('q') or '').strip()
+        if not query and pid:
+            row = q("SELECT name FROM kitchen_products WHERE id=%s", (pid,), fetch='one')
+            query = (row or {}).get('name', '')
+        items, conf = _hh_items()
+        return jsonify({'query': query, 'store': conf['store'], 'catalogue': len(items),
+                        'items': _hh_search(items, query)})
+    except RuntimeError as e:
+        return jsonify({'error': str(e), 'needs_access': str(e) in ('no_access', 'access_expired')})
+    except Exception as e:
+        return _err(e)
+
+
+@app.route('/api/kitchen/price-items')
+def price_items_list():
+    """The price list: every active product with the chain items pinned to it."""
+    try:
+        rows = q("""SELECT p.id, p.name, p.emoji, p.unit, p.price AS typed_price,
+                           COALESCE(json_agg(json_build_object(
+                             'id', i.id, 'code', i.item_code, 'name', i.item_name, 'mfr', i.manufacturer,
+                             'price', i.price, 'unit_price', i.unit_price, 'weighted', i.is_weighted,
+                             'size', i.size_text,
+                             'manual', i.price_manual, 'sort', i.sort_order,
+                             'shop_changed', i.shop_changed_at, 'checked', i.last_checked_at)
+                             ORDER BY i.sort_order, i.id) FILTER (WHERE i.id IS NOT NULL), '[]') AS items
+                      FROM kitchen_products p
+                      LEFT JOIN kitchen_product_items i ON i.product_id = p.id
+                     WHERE p.active IS TRUE
+                     GROUP BY p.id
+                     ORDER BY p.sort_order NULLS LAST, p.id""")
+        return jsonify(rows)
+    except Exception as e:
+        return _err(e)
+
+
+@app.route('/api/kitchen/price-items', methods=['POST'])
+def price_items_save():
+    """add | remove | price (a hand-typed correction) | reorder"""
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        act = b.get('action', 'add')
+        if act == 'remove':
+            owner = q("SELECT product_id FROM kitchen_product_items WHERE id=%s", (b['id'],), fetch='one')
+            q("DELETE FROM kitchen_product_items WHERE id=%s", (b['id'],), fetch='none')
+            if owner:
+                # the product's barcode came from its first item. With that item gone the barcode was
+                # stranded — a product kept the barcode of an item it no longer had. Hand it to the
+                # next remaining item, or clear it when none are left.
+                q("""UPDATE kitchen_products p
+                        SET barcode = (SELECT i.item_code FROM kitchen_product_items i
+                                        WHERE i.product_id = p.id
+                                        ORDER BY i.sort_order, i.id LIMIT 1),
+                            updated_at = now()
+                      WHERE p.id = %s""", (owner['product_id'],), fetch='none')
+        elif act == 'price':
+            # typed by the user -> mark manual so the refresh leaves it alone from now on
+            q("""UPDATE kitchen_product_items SET price=%s, price_manual=TRUE, last_checked_at=now()
+                  WHERE id=%s""", (b.get('price'), b['id']), fetch='none')
+        elif act == 'reorder':
+            for n, iid in enumerate(b.get('order') or []):
+                q("UPDATE kitchen_product_items SET sort_order=%s WHERE id=%s", (n, iid), fetch='none')
+        else:
+            pid, it = b['product_id'], b['item']
+            nxt = q("""SELECT COALESCE(MAX(sort_order)+1,0) AS n FROM kitchen_product_items
+                        WHERE product_id=%s""", (pid,), fetch='one')['n']
+            q("""INSERT INTO kitchen_product_items
+                   (product_id, chain_id, store_id, item_code, item_name, manufacturer, price,
+                    unit_price, unit_measure, size_text, is_weighted, shop_changed_at,
+                    last_checked_at, sort_order)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULLIF(%s,'')::timestamptz,now(),%s)
+                 ON CONFLICT (product_id, store_id, item_code) DO UPDATE
+                   SET item_name=EXCLUDED.item_name, price=EXCLUDED.price,
+                       unit_price=EXCLUDED.unit_price, last_checked_at=now()""",
+              (pid, HH_CHAIN, _hh_conf()['store'], it['code'], it['name'], it.get('mfr'),
+               it.get('price'), it.get('unit_price'), it.get('unit'), it.get('size'),
+               bool(it.get('weighted')), it.get('shop_changed') or '', nxt), fetch='none')
+            # item 1's code doubles as the product's barcode, so a future camera scan lands on it
+            q("""UPDATE kitchen_products SET barcode=%s, updated_at=now()
+                  WHERE id=%s AND (barcode IS NULL OR barcode='')""", (it['code'], pid), fetch='none')
+        return jsonify({'ok': True})
+    except Exception as e:
+        return _err(e)
+
+
+@app.route('/api/kitchen/prices/refresh', methods=['POST'])
+def prices_refresh():
+    """Re-price every pinned item the user did not type by hand.
+
+    Called by the LXC-104 cron and by the button on the tab. FAILS QUIETLY: a price that cannot be
+    found keeps its last value and simply stops having its 'checked' date advanced, so the screen
+    shows staleness instead of a blank or a wrong number.
+    """
+    try:
+        b = request.get_json(force=True, silent=True) or {}
+        conf = _hh_conf()
+        if not b.get('force'):                       # cron path: obey the interval
+            last = conf.get('last_run')
+            if last and (time.time() - float(last)) < conf['days'] * 86400:
+                return jsonify({'skipped': 'within interval', 'days': conf['days']})
+        items, conf = _hh_items(force=bool(b.get('force')))
+        by_code = {i['code']: i for i in items}
+        rows = q("SELECT id, item_code FROM kitchen_product_items WHERE price_manual IS FALSE")
+        updated = missing = 0
+        for r in rows:
+            it = by_code.get(r['item_code'])
+            if not it:
+                missing += 1                         # left exactly as it was
+                continue
+            q("""UPDATE kitchen_product_items
+                    SET price=%s, unit_price=%s, item_name=%s, size_text=%s,
+                        shop_changed_at=NULLIF(%s,'')::timestamptz, last_checked_at=now()
+                  WHERE id=%s""",
+              (it['price'], it['unit_price'], it['name'], it.get('size'),
+               it.get('shop_changed') or '', r['id']),
+              fetch='none')
+            updated += 1
+        _hh_save_conf({'hh_last_run': time.time()})
+        return jsonify({'ok': True, 'updated': updated, 'missing': missing, 'catalogue': len(items)})
+    except RuntimeError as e:
+        return jsonify({'error': str(e), 'needs_access': True})
+    except Exception as e:
+        return _err(e)
+
 
 if __name__ == '__main__':
     log.info('kitchen-service starting on :%d (static=%s)', PORT, STATIC_DIR)

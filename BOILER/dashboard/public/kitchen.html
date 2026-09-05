@@ -154,6 +154,7 @@
 
   <div class="k-tabs">
     <button class="k-tab active" onclick="kTab('products', this)">🍎 Products</button>
+    <button class="k-tab" onclick="kTab('prices', this)">🏪 חצי חינם</button>
     <button class="k-tab" onclick="kTab('common', this)">🧾 Common list</button>
     <button class="k-tab" onclick="kTab('stock', this)">📦 Stock list</button>
     <button class="k-tab" onclick="kTab('lists', this)">🧺 Shopping List</button>
@@ -507,9 +508,95 @@
       <div id="l-rows"></div>
     </div>
   </div>
+<!-- ══ TAB: חצי חינם — real shelf prices from the הוד השרון branch (store 206) ══
+     Your products on the left, the branch's real items beside them. The machine never picks: a
+     search for חלב returns 282 items led by face cream (חלב sits inside חלבי), so you pin the one
+     you actually buy, once, and the price then refreshes by item code. -->
+
+<style>
+  /* every column in the price table sits the same distance from its neighbour … */
+  #tab-prices .hh-t th, #tab-prices .hh-t td { padding-left: 16px; padding-right: 16px; }
+  /* … except "Used", which is deliberately set apart from the branch's own numbers */
+  #tab-prices .hh-t .hh-gap { padding-left: 52px; }
+  /* nudge the "מוצרים מחצי חינם" heading right so it sits over its item names rather than hard left */
+  /* nudge the heading 3 steps right WITHOUT widening its column: text-indent shifts the text
+     only, whereas the padding this used to use also changed the gap between columns. */
+  #tab-prices .hh-t .hh-item-h { text-indent: 60px; }   /* 3 steps of 20px */
+  /* the branch's own columns (and the price finally used) are marked in dark blue, so they read as
+     the shop's data rather than as more of my product's fields */
+  #tab-prices .hh-t th.hh-blue { color: #2563eb; }   /* the same blue as the active tab button */   /* 16 + 3 steps of 20px */
+  /* One product can span several lines (one per branch item), so draw the line where a NEW product
+     starts — only the first row of a product carries data-id. Without it the block boundaries are
+     invisible and two products' items read as one. */
+  #tab-prices .hh-t tbody tr[data-id] > td { border-top: 2px solid #64748b; }
+  /* a category heading already separates, so it does not need a second line under it */
+  #tab-prices .hh-t tbody tr.k-cat-row + tr[data-id] > td { border-top: none; }
+</style>
+<div id="tab-prices" class="tab-panel">
+  <div class="k-card">
+    <h3 style="margin-top:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      🏪 חצי חינם — הוד השרון
+      <span id="hh-status" style="font-size:0.78rem;color:#8a93a6;font-weight:400;"></span>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm" onclick="hhRefresh()" title="Fetch today's prices from the branch now">↻ Refresh prices</button>
+    </h3>
+    <div class="k-hint" style="margin-bottom:10px;">
+      Press 🔗 on a product to attach the item you actually buy. Up to two per product — the shopping
+      list counts the <b>cheaper</b> one. A product with nothing attached keeps the price you typed,
+      and a price you type here is never overwritten by a refresh.
+    </div>
+    <table class="k-table hh-t">
+      <thead>
+        <!-- ONE header row for everything: my product's columns and the branch's, aligned together.
+             Branch order reads left-to-right item -> size -> price -> checked. Every column gets the
+             same spacing (.hh-t th/td), and "Used" is pushed away from the branch block (.hh-gap) so
+             the shop's numbers and the number actually used are not read as one group. -->
+        <tr>
+          <th></th>
+          <th style="text-align:center">Season</th>
+          <th>Name</th>
+          <th>Unit</th>
+          <th>Price</th>
+          <th class="heb hh-item-h hh-blue">מוצרים מחצי חינם</th>
+          <th class="hh-blue">Size</th>
+          <th class="hh-blue">Price</th>
+          <th class="hh-blue">Checked</th>
+          <th class="hh-blue"></th>
+          <th class="hh-gap hh-blue">Used</th>
+        </tr>
+      </thead>
+      <tbody id="hh-rows"><tr><td colspan="4" class="k-hint">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- the picker: type, look, tap. Same shape as the recipe-import window. -->
+<div id="hh-pick" class="k-modal" style="display:none;">
+  <div class="k-modal-box" style="width:min(96vw,860px);">
+    <h3 style="margin-top:0;display:flex;align-items:center;gap:10px;">
+      <span id="hh-pick-head">🔗 Attach an item</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm" onclick="hhPickClose()">✕</button>
+    </h3>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+      <input id="hh-q" class="heb" placeholder="type part of the name — add words to narrow"
+             style="flex:1;padding:7px 9px;border:1px solid #cbd5e1;border-radius:5px;"
+             onkeydown="if(event.key==='Enter')hhSearch()">
+      <button class="btn btn-primary btn-sm" onclick="hhSearch()">🔍 Search</button>
+    </div>
+    <div id="hh-pick-msg" class="k-hint" style="margin-bottom:6px;"></div>
+    <div style="max-height:52vh;overflow:auto;">
+      <table class="k-table">
+        <thead><tr><th style="width:80px">Price</th><th>Item at the branch</th><th style="width:90px">Size</th><th style="width:120px">Maker</th><th style="width:70px"></th></tr></thead>
+        <tbody id="hh-hits"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 </main>
 
 <script src="js/alerts-monitor.js?v=21"></script>
-<script src="js/kitchen.js?v=56"></script>
+
+<script src="js/kitchen.js?v=72"></script>
 </body>
 </html>

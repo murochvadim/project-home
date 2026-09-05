@@ -797,3 +797,101 @@ start of **add-recipe**.
     hidden div. Any test of the poll must keep the screen awake.
 - Repair was precisely bounded: of **6** unmatched rows exactly **1** had a product (אריסה); the other
   five still have none and stayed unmatched. Cache-bust `kitchen.js?v=56`.
+
+## 🏪 חצי חינם — real shelf prices for my products (BUILT 2026-09-05)
+
+A **`🏪 חצי חינם`** tab on the Kitchen page (immediately after 🍎 Products) showing each product beside
+the **real items the הוד השרון branch sells**, so a hand-typed `price` can be replaced by the shop's own.
+
+### Where the data comes from — measured, not assumed
+
+The chain's file-listing page is behind a **Cloudflare challenge**, but **the files themselves are not**:
+
+| attempt | result |
+|---|---|
+| `.gz` file by plain `curl`, no cookie, no browser | **HTTP 200**, 91 KB gzip → 4.1 MB XML |
+| listing page, plain `curl`, 4 different User-Agents | 403 "Just a moment" (6 attempts, all refused) |
+| listing page, **headless** Chrome | blocked ("security verification") |
+| listing page, **real** Chrome window | **passed in ~26 s** |
+| listing page, `curl` + that browser's `cf_clearance` + its UA | **HTTP 200** |
+| same, from **LXC 104** and **LXC 113** | **HTTP 200** |
+
+- Files live on **Azure Blob Storage**: `https://hazihinamprod01.blob.core.windows.net/regulatories/<file>.gz`
+  — unprotected, so downloading needs nothing. The blob container forbids *listing* (404), which is the
+  only reason the listing page is needed at all: to learn today's filenames.
+- **`cf_clearance` is valid for 365 days** → pass the challenge in a real browser once a year, and
+  everything in between is ordinary `requests` from our own LXC.
+- The cookie + UA live in **`kitchen_settings.config`** (`hh_cookie`, `hh_ua`, `hh_store`,
+  `hh_update_days`, `hh_last_run`) so renewing them needs **no redeploy**.
+- ⚠ **The open-data aggregator was investigated and rejected** — it needs an account, and its own CI
+  showed **12 chains failing** on 2026-09-04. We do not depend on it.
+- **Chain `7290700100008`; the branch is store `206`** (הרקון 2, הוד השרון, **15,419 items**). Store
+  `210` shares that address but carries only 906 — taken from the `StoresFull` file, not guessed.
+- ⚠ **Asia/Jerusalem, always.** LXC 113's clock is UTC, so `time.strftime()` asked for the previous day
+  and hit a page with no file for our store. `_hh_newest_pricefull` uses `ZoneInfo('Asia/Jerusalem')`
+  and walks back up to 3 days (the nightly file appears ~00:56, so just after midnight today's page can
+  legitimately be empty).
+
+### Why the machine never chooses the item
+
+Measured against the real catalogue with the real 77 products: **`חלב` matches 282–495 items**, led by
+soy milk, jelly and **face cream** (because `חלב` sits inside `חלבי`); `בננות` leads with banana chips
+and liqueur. `ביצים` is clean (×12 / ×18 / ×30). And **fresh fruit & veg is not published at all** — 95
+items contain `בננ` and not one is a banana; of 695 weighted items the department is deli (meat, cheese,
+pickles). Produce that *is* there is named its own way (`שרי ביבי`, `אבוקדו אס`).
+
+**So the user pins the item once, from a searchable picker**, and the price then refreshes by item code.
+`_hh_search` matches **whole words** (a plain substring test is what put face cream at the top) and is
+plural-aware (`בננות`→`בננה`), so adding words narrows fast: `חלב תנובה 3` → **3 hits**.
+
+### Data
+
+- **`kitchen_product_items`** (migration `013_prices.sql`, retention **forever + 🔒**) — `product_id`
+  (CASCADE), `chain_id`, `store_id`, `item_code`, `item_name` (branch's own name, snapshotted),
+  `manufacturer`, `price`, `unit_price`, `unit_measure`, `is_weighted`, **`price_manual`**,
+  **`shop_changed_at`** (the shop's own PriceUpdateTime) vs **`last_checked_at`** (when *we* looked —
+  deliberately two different dates), `sort_order`, and **`size_text`** (migration `014_price_size.sql`).
+- `kitchen_products.barcode` (already existed, empty on all 77) takes the first item's code.
+
+### The rules that make it safe
+
+- **Product names never change** — `קפה` stays `קפה` on the fridge, the list and the recipes.
+- **Up to 3 items per product**; the shopping-list total is meant to use the **cheaper** one.
+- **A product with nothing attached keeps its typed price**, counted exactly as before.
+- **A hand-typed price is marked `price_manual` and a refresh never overwrites it.**
+- **Refresh degrades quietly** — an item missing from today's file keeps its last price and simply stops
+  having `last_checked_at` advanced, so staleness is visible instead of silent.
+- ⚠ **Removing an item re-points the product's barcode** at the next remaining item, or clears it. The
+  first version stranded a wrong barcode on the product (the banana-liqueur's) — fixed and tested.
+
+### Endpoints (LXC 113, `kitchen_service.py`)
+
+`GET /api/kitchen/price-candidates?product_id=&q=` · `GET/POST /api/kitchen/price-items`
+(add / remove / price / reorder) · `POST /api/kitchen/prices/refresh` (`{force:true}` bypasses the
+interval). The day's file is cached at `/opt/kitchen/price_cache/` (last 4 kept) so searching is local.
+
+### The tab
+
+Renders from the **same `products` array and the same cell helpers** (`prodArt`/`seasonCell`/`unitHe`)
+as the Products tab, so the two cannot drift in look or order — verified line-for-line (89 rows, 0
+mismatches). Columns: photo · Season · Name · Unit · Price ‖ **מוצרים מחצי חינם** · Size · Price ·
+Checked · ✕ ‖ Used. The branch headers are the **tab's own blue** `#2563eb`; a **2 px `#64748b`** rule
+separates products; gaps are an even **32 px** with **68 px** before Used.
+
+⚠ **Two layout traps met here:** the panel was first inserted **after `</main>`**, which rendered it
+unstyled (HTML was valid — only a depth check caught it); and nudging the heading with `padding-left`
+silently widened that column's gap, so it uses **`text-indent`** instead.
+
+⚠ **Empty-tab bug (fixed):** the tab is drawn from the products list, so opening it before that arrived
+rendered *"No products yet."* — and, loading only once, it never redrew. `hhLoad` now awaits products +
+categories, only marks itself loaded once something rendered (a failure retries on the next visit), and
+`loadProducts()` redraws it. A product whose category is missing is no longer dropped.
+
+### Not built yet
+
+- **The shopping-list total still uses the typed price** — branch prices are display-only.
+- **No cron.** Nothing calls `/prices/refresh`; the ↻ button is the only trigger (`hh_update_days`=3
+  exists and the endpoint honours it, but nothing pokes it). Timer belongs on **LXC 104**.
+- **No "Update prices every N days" control** in ⚙ Settings → Tech Settings.
+- **`kitchen_product_items` is not in `server.js` `DBV_GROUPS`/`tsCol`**, so it is absent from Project
+  Health → DB Volumes. ⚠ a table missing from `tsCol` is skipped silently.
