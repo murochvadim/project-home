@@ -407,8 +407,21 @@ async function aghCheck(host) {
  */
 async function linkGuard(ctx) {
   if (settings.link_check === false) return;
-  const hosts = extractHosts(ctx.body);
+  const hosts = extractHosts(ctx.body).slice(0, 10);   // bound the work: a spam blast can carry dozens
   if (!hosts.length) return;
+
+  // Baileys can re-emit a message; applyAutomation guards this and so must we, or one bad link would
+  // raise two identical cards (the popup's rkey is the ROW id, so duplicates are visible).
+  // ⚠ the existing index is partial (WHERE applied=true) and our rows are applied=false, so this is
+  // scoped by rule_id and a short window to stay cheap.
+  if (ctx.wa_id) {
+    try {
+      const dup = await q(`SELECT 1 FROM whatsapp_automation_log
+                            WHERE wa_id=$1 AND rule_id='link_guard' AND ts > now() - interval '1 day' LIMIT 1`,
+                          [ctx.wa_id]);
+      if (dup.rowCount) { log.info('link guard: already warned about ' + ctx.wa_id); return; }
+    } catch (e) { log.warn('link guard dedupe: ' + e.message); }
+  }
 
   const bad = [], hidden = [];
   for (const h of hosts) {

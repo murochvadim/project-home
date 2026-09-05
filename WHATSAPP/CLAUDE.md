@@ -485,6 +485,13 @@ static-DNS on `192.168.1.1`, so it must ASK over the API.
   credentials → `aghCheck` returns `null`, no row, no throw, message still ingests. Verified both paths.
 - Per-domain verdict cache 1 h + filter-name cache 10 min, so the Pi Zero sees one call per *new*
   domain.
+- ⚠ **Own dedupe (added by the side-to-side audit).** `applyAutomation` guards Baileys re-emission and
+  `linkGuard` did not — and since it writes a row for EVERY bad link (not only rule matches) a
+  re-emission would raise **two identical cards** (the popup's rkey is the row id). It now checks
+  `wa_id + rule_id='link_guard'` within a day first. Note the existing index is partial
+  (`WHERE applied=true`) and these rows are `applied=false`, so the query is scoped by rule and window
+  to stay cheap. Re-emission had **not** been observed in 14 days of journal — the guard is precautionary.
+- ⚠ **At most 10 hosts per message** — a spam blast can carry dozens, and each is a network call.
 - ⚠ **`POST /settings` is an `Object.assign` WHITELIST** — `link_check` had to be added there or it
   would be silently dropped. Verified it round-trips (true → false → true).
 - Credentials in **`/etc/whatsapp-agent.env`** (`ADGUARD_URL/USER/PASS`, chmod 600) — deliberately not
