@@ -297,7 +297,7 @@ module.exports = (app, db) => {
          FROM whatsapp_automation_log l
          LEFT JOIN whatsapp_chats c     ON c.jid = l.chat_jid
          LEFT JOIN whatsapp_contacts ct ON ct.jid = l.chat_jid
-         WHERE l.mode='live' AND l.action IN ('popup','both') AND l.ts > now() - interval '24 hours'
+         WHERE l.mode='live' AND l.action IN ('popup','both','linkwarn') AND l.ts > now() - interval '24 hours'
          ORDER BY l.ts DESC LIMIT 20`);
       // The rule's own popup sentence (if it has one) is shown as a TITLE line above
       // the message — it says WHY this popped. Read live from the rules setting, so an

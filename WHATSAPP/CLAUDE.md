@@ -454,3 +454,49 @@ The official Cloud API is **no-ban** but **cannot access personal chats/groups**
 number's conversations, template-gated proactive sends, and needs a Cloudflare Tunnel + Meta Business
 verification. Kept as an option for a future *business* channel; NOT the "manage my real WhatsApp" build.
 See the git history of this file for the full Cloud-API plan.
+
+## 🔗 Link check — AdGuard screens incoming links (BUILT 2026-09-05)
+
+Everything else called "safety" in this module means **ban** safety. This is the first **message**
+safety: when an incoming message carries a link, the domain is checked against **AdGuard Home on RP01**
+(~775k threat rules — Phishing Army 158k, HaGeZi TIF Mini 174k, URLhaus malware, + Safe Browsing) and a
+warning appears on the dashboard's blue card.
+
+**Measured before building, not assumed:** `check_host` returns the verdict AND the matching rule (4 live
+domains pulled from the URLhaus feed → all `FilteredBlackList`; `wikipedia.org` → `NotFilteredNotFound`);
+LXC 114 reaches AdGuard in **0.52 s**. ⚠ LXC 114 is **not** protected passively — every LXC is
+static-DNS on `192.168.1.1`, so it must ASK over the API.
+
+- **A pipeline check, NOT an automation rule.** `applyAutomation` returns at the first matching active
+  rule, so a rule-based check would be silently shadowed by rule order. `linkGuard(ctx)` runs beside it
+  in `messages.upsert`, from the same `buildCtx`, with its own `.catch` so neither can break the other.
+- ⚠ **The row is written `applied=false` — this is load-bearing.** `applyAutomation`'s dedupe is
+  `WHERE wa_id=$1 AND applied=true`, so a warning can never suppress the user's own rules for the same
+  message; `routes-reminders.js` does not filter on `applied`, so it still surfaces. **`applyAutomation`
+  was not touched at all.**
+- **Zero ban risk:** the warning is only a DB row (`whatsapp_automation_log`, `action='linkwarn'`,
+  `rule_id='link_guard'`). Nothing is sent — `guardedSend` lives only in the reply branch. No migration:
+  `action` is TEXT with no CHECK.
+- ⚠ **Shorteners are never followed.** `bit.ly` / `t.co` / `tinyurl.com` / `is.gd` / `cutt.ly` all verify
+  as `NotFilteredNotFound` — clean-looking by construction — so they get their own verdict
+  *"destination hidden — not checked"*. Fetching one would be new egress from this container **and**
+  would tell a scammer the link is live.
+- **Degrades quietly:** AdGuard unreachable (RP01 down, or ⏻ stopped for a flashing session) or bad
+  credentials → `aghCheck` returns `null`, no row, no throw, message still ingests. Verified both paths.
+- Per-domain verdict cache 1 h + filter-name cache 10 min, so the Pi Zero sees one call per *new*
+  domain.
+- ⚠ **`POST /settings` is an `Object.assign` WHITELIST** — `link_check` had to be added there or it
+  would be silently dropped. Verified it round-trips (true → false → true).
+- Credentials in **`/etc/whatsapp-agent.env`** (`ADGUARD_URL/USER/PASS`, chmod 600) — deliberately not
+  proxied through the dashboard, so the check never depends on the laptop being awake.
+
+**Extractor** (`extractHosts`) takes explicit URLs via `new URL()` plus bare domains, rejecting
+file-extension look-alikes (`index.js`, `report.pdf`) and decimals (`14.90`); 12/12 unit cases pass,
+including Hebrew text around a link.
+
+**Limits, stated in the popup rather than hidden:** domains only, **not paths** (a phishing page on a
+legitimate host is invisible); it **warns, it does not block** (a phone on its own private DNS bypasses
+AdGuard at click time); and it is only as good as the lists — a brand-new scam domain may not be listed.
+
+**Not built:** following shortener redirects, clickable links in the chat window, a tablet alert,
+scanning outgoing messages.

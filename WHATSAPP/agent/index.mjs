@@ -35,7 +35,8 @@ let sock = null;
 let state = { connection: 'connecting', me: null, qrDataUrl: null, lastSync: null };
 let settings = { min_gap_sec: 4, hourly_cap: 20, daily_cap: 100, contact_only: true,
                  del_min_gap_sec: 4, del_hourly_cap: 30,
-                 react_min_gap_sec: 2, react_hourly_cap: 60 };
+                 react_min_gap_sec: 2, react_hourly_cap: 60,
+                 link_check: true };
 let lastSendTs = 0;
 let authKeys = null;   // Baileys signal key store — LOCAL reads only (lid-mapping), never USync
 let _actionTimes = [];   // epoch-ms of recent destructive actions (delete/leave), in-memory sliding hour
@@ -313,6 +314,130 @@ async function logAuto(rule, ctx, action, mode, applied, note) {
        (rule.popup && rule.popup.text) ? String(rule.popup.text).slice(0, 300) : null]);
   } catch (e) { log.warn('logAuto: ' + e.message); }
 }
+// ── Link safety — ask AdGuard whether a link in an incoming message is known-bad ────────────
+//
+// WHY THIS EXISTS: everything else in this file called "safety" means BAN safety. Nothing looked at
+// what a message actually contains. AdGuard Home on RP01 already carries ~775k threat rules
+// (Phishing Army, HaGeZi TIF, URLhaus, + Safe Browsing) and answers per-domain questions, so a scam
+// link can be recognised the moment it arrives.
+//
+// WHY IT IS NOT AN AUTOMATION RULE: applyAutomation returns at the FIRST matching active rule, so a
+// check written as a rule would be silently shadowed by any rule above it. A safety check must not be
+// order-dependent — this runs on every inbound message, beside the rules, never instead of them.
+//
+// WHY IT CANNOT DISTURB THE USER'S RULES: the row is written with applied=FALSE. applyAutomation's
+// dedupe is `WHERE wa_id=$1 AND applied=true`, so a warning can never suppress a real rule for the
+// same message; the reminders query does not filter on `applied`, so it still shows. Nothing in
+// applyAutomation had to change.
+//
+// BAN RISK: none. This only ever writes a database row — no WhatsApp traffic at all.
+// ⚠ We never fetch the link itself. That would be new outbound traffic from this container AND would
+// tell a scammer their link is live. A shortener is reported as "destination hidden" instead.
+const AGH_URL  = (process.env.ADGUARD_URL || 'http://192.168.1.217:8080').replace(/\/+$/, '');
+const AGH_AUTH = 'Basic ' + Buffer.from((process.env.ADGUARD_USER || '') + ':' + (process.env.ADGUARD_PASS || '')).toString('base64');
+const AGH_ON   = !!(process.env.ADGUARD_USER && process.env.ADGUARD_PASS);
+
+// A short link is clean-looking BY CONSTRUCTION — verified against our own AdGuard that bit.ly, t.co,
+// tinyurl.com, is.gd and cutt.ly all come back NotFilteredNotFound. Saying nothing about them would be
+// the most misleading answer available, so they get their own verdict.
+const SHORTENERS = new Set(['bit.ly','t.co','tinyurl.com','goo.gl','is.gd','ow.ly','buff.ly','rebrand.ly',
+  'cutt.ly','shorturl.at','rb.gy','t.ly','soo.gd','s.id','tiny.cc','shrtco.de','urlz.fr','v.gd','clck.ru',
+  'lnkd.in','trib.al','wa.link','short.gy','qr.ae','1url.com','bl.ink','snip.ly']);
+
+// Things that look like a domain but are not — stops "index.js", "report.pdf", "v1.2" being looked up.
+const NOT_TLD = new Set(['js','ts','py','sh','md','txt','pdf','png','jpg','jpeg','gif','webp','mp3','mp4',
+  'mov','zip','rar','gz','csv','json','xml','html','htm','css','exe','apk','doc','docx','xls','xlsx','ppt']);
+
+const _hostCache = new Map();                 // host -> { verdict, exp } — spares the Pi Zero
+const _HOST_TTL  = 60 * 60 * 1000;            // 1 h
+let   _lists     = { at: 0, byId: {} };       // filter-list id -> name, so the popup can say WHO caught it
+
+/** Pull candidate hostnames out of a message body. Explicit URLs first, then bare domains. */
+function extractHosts(text) {
+  const out = [];
+  const s = String(text || '');
+  for (const m of s.matchAll(/\bhttps?:\/\/[^\s<>"'֐-׿]+/gi)) {
+    try { out.push(new URL(m[0]).hostname); } catch { /* malformed — ignore */ }
+  }
+  // bare domains: foo.co.il, www.x.com/path — require an alphabetic TLD that is not a file extension
+  for (const m of s.matchAll(/(?:^|[\s(<"'])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,24}))\b/gi)) {
+    if (!NOT_TLD.has(m[2].toLowerCase())) out.push(m[1]);
+  }
+  return [...new Set(out.map(h => String(h).toLowerCase().replace(/\.$/, '')).filter(h => h.includes('.')))];
+}
+
+/** id -> list name, refreshed every 10 min. Failure is not fatal: the popup just omits the name. */
+async function aghListNames() {
+  if (Date.now() - _lists.at < 10 * 60 * 1000) return _lists.byId;
+  try {
+    const r = await fetch(AGH_URL + '/control/filtering/status',
+      { headers: { Authorization: AGH_AUTH }, signal: AbortSignal.timeout(6000) });
+    if (r.ok) {
+      const d = await r.json();
+      const byId = {};
+      for (const f of d.filters || []) byId[f.id] = f.name;
+      _lists = { at: Date.now(), byId };
+    }
+  } catch { /* leave the previous map in place */ }
+  return _lists.byId;
+}
+
+/** Ask AdGuard about one host. Returns null when AdGuard cannot be reached — never throws. */
+async function aghCheck(host) {
+  const hit = _hostCache.get(host);
+  if (hit && hit.exp > Date.now()) return hit.verdict;
+  try {
+    const r = await fetch(AGH_URL + '/control/filtering/check_host?name=' + encodeURIComponent(host),
+      { headers: { Authorization: AGH_AUTH }, signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return null;
+    const d = await r.json();
+    // same test routes-adguard.js uses: any reason starting with "Filtered" is a block
+    const blocked = typeof d.reason === 'string' && d.reason.startsWith('Filtered');
+    const listId  = (d.rules && d.rules[0] && d.rules[0].filter_list_id) ?? d.filter_id;
+    const verdict = { blocked, reason: d.reason, listId };
+    _hostCache.set(host, { verdict, exp: Date.now() + _HOST_TTL });
+    if (_hostCache.size > 5000) _hostCache.clear();     // crude bound; this box is small
+    return verdict;
+  } catch { return null; }                              // RP01 down / stopped for flashing
+}
+
+/**
+ * Screen one inbound message's links and, if anything is wrong, write ONE warning row.
+ * Never throws, never blocks ingest, never sends anything.
+ */
+async function linkGuard(ctx) {
+  if (settings.link_check === false) return;
+  const hosts = extractHosts(ctx.body);
+  if (!hosts.length) return;
+
+  const bad = [], hidden = [];
+  for (const h of hosts) {
+    if (SHORTENERS.has(h)) { hidden.push(h); continue; }
+    if (!AGH_ON) continue;                              // not configured — stay silent
+    const v = await aghCheck(h);
+    if (v && v.blocked) bad.push({ host: h, listId: v.listId });
+  }
+  if (!bad.length && !hidden.length) return;
+
+  const names = bad.length ? await aghListNames() : {};
+  let title, note;
+  if (bad.length) {
+    const who = names[bad[0].listId];
+    title = '⚠ Unsafe link: ' + bad.map(b => b.host).join(', ') + (who ? ' — ' + who : '');
+    note  = 'blocked by AdGuard: ' + bad.map(b => b.host + (names[b.listId] ? ' [' + names[b.listId] + ']' : '')).join(', ');
+    if (hidden.length) note += '; hidden: ' + hidden.join(', ');
+  } else {
+    // No verdict is possible for a shortener without fetching it, and we will not fetch it.
+    title = '🔎 Shortened link — destination hidden: ' + hidden.join(', ');
+    note  = 'shortener not followed by design (fetching would tell the sender the link is live)';
+  }
+  // applied=false — see the note at the top of this block: this is what keeps the user's own
+  // automation rules working for the same message.
+  await logAuto({ id: 'link_guard', name: '🔗 Link check', popup: { text: title } },
+                ctx, 'linkwarn', 'live', false, note);
+  log.info('link guard: ' + title);
+}
+
 // Evaluate rules for one inbound message. live=false → PREVIEW ONLY (log dry-run, no
 // send/popup — used by run-now). live=true → act only when the matched rule is mode:'live'.
 async function applyAutomation(ctx, live) {
@@ -468,8 +593,14 @@ async function connect() {
         buildCtx({ wa_id: m.key.id, chat_jid: m.key.remoteJid,
           from_jid: m.key.participant || m.participant || m.key.remoteJid,
           from_name: m.pushName || null, body: bodyOf(m) })
-          .then(ctx => applyAutomation(ctx, true))
-          .catch(e => log.warn('automation: ' + e.message));
+          .then(ctx => {
+            // Two INDEPENDENT consumers of the same context. The link guard is deliberately not a
+            // rule: applyAutomation stops at the first matching rule, and a safety check must never
+            // be shadowed by rule order. Failures are isolated so one can never stop the other.
+            applyAutomation(ctx, true).catch(e => log.warn('automation: ' + e.message));
+            linkGuard(ctx).catch(e => log.warn('link guard: ' + e.message));
+          })
+          .catch(e => log.warn('automation ctx: ' + e.message));
       }
     }
   });
@@ -782,6 +913,8 @@ app.post('/settings', async (req, res) => {
       del_hourly_cap:  ci(b.del_hourly_cap,  1, 1000, settings.del_hourly_cap),
       react_min_gap_sec: ci(b.react_min_gap_sec, 0, 3600, settings.react_min_gap_sec),
       react_hourly_cap:  ci(b.react_hourly_cap,  1, 1000, settings.react_hourly_cap),
+      // ⚠ this Object.assign is a WHITELIST — a key missing here is silently dropped
+      link_check: b.link_check === undefined ? settings.link_check : !!b.link_check,
     });
     await q(`UPDATE whatsapp_state SET settings=$1, updated_at=now() WHERE id=1`, [JSON.stringify(settings)]);
     log.info('settings updated: ' + JSON.stringify(settings));

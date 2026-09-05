@@ -211,6 +211,10 @@ over-NFS corruption; QNAP is for *archive/backup* only, not the live write path.
 Future headroom items (need RAM): a DoH *server* for the house (encrypted DNS + home filtering on the go via
 NetBird; free cert = self-signed or Let's Encrypt+free domain), a log-based threat-hunter (runs on an LXC, not
 RP01), a link-reputation checker (dashboard).
+  - ✅ **A first consumer shipped 2026-09-05:** the WhatsApp agent screens links in incoming
+    messages via `check_host` (see [WHATSAPP/CLAUDE.md](../WHATSAPP/CLAUDE.md) "Link check").
+    Measured: LXC 114 → AdGuard **0.52 s**; one call per NEW domain (1 h cache), so the Pi is
+    untroubled. A dashboard-side link checker is still unbuilt.
 
 **Dashboard wiring (laptop):** `BOILER/dashboard/routes-adguard.js` (own module, one `require('./routes-adguard')(app)`
 line — proxies AGH's API with Basic-auth from `ADGUARD_URL/USER/PASS` env, past the architecture guard) →
