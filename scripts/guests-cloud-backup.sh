@@ -10,6 +10,12 @@
 # Usage: guests-cloud-backup.sh [guest_id]   (no arg = all guests; arg = just that one)
 set -eo pipefail
 
+# Drive deletes are PERMANENT, not trashed. Without this, both the retention
+# prune below AND every *_latest overwrite leave the old copy in Drive's trash,
+# where it still counts against the storage quota forever (157 GB accumulated
+# in 8 weeks before this was caught, 2026-09-06). Applies to every rclone call.
+export RCLONE_DRIVE_USE_TRASH=false
+
 DB_HOST="192.168.1.219"; DB_NAME="home_data"; DB_USER="postgres"
 PSQL="psql -h $DB_HOST -U $DB_USER -d $DB_NAME -tA -q"
 PASSFILE="/etc/privacy-project-backup.pass"
