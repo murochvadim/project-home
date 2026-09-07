@@ -309,7 +309,11 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
 - **OpenSSH Server** installed — LXC 103 can SSH/scp in as `muroc@192.168.1.128`
 - **SMB1** enabled — required for QNAP SMB access via `\\192.168.1.155\...`
 - LXC 103 authorized key: `/c/ProgramData/ssh/administrators_authorized_keys`
-- Firewall rule: port 22 inbound allowed
+- **Inbound firewall — deliberately scoped 2026-09-07, do NOT reset to `Any`:**
+  - **SSH (port 22)** — the `OpenSSH Server` rule is limited to `RemoteAddress 192.168.1.0/24,100.102.0.0/16` (home LAN + the NetBird overlay). It was `Any`, which left port 22 open on whatever public/hotel WiFi the laptop was on. ⚠ Do **not** "fix" this by switching it to profile=`Private` instead — NetBird's `wt0` adapter is itself classified **Public**, so a Private-only rule also cuts the path LXC 104 uses to reach the laptop. ⚠ Do **not** widen the range to `100.64.0.0/10` — that is the shared CGNAT range ISPs and mobile carriers assign, so a hotel's *other* clients can land inside it and the scoping achieves nothing. The second rule `OpenSSH SSH Server (sshd)` (profile=`Private`, app=sshd.exe) is left as-is.
+  - **Dashboard (port 3000 — no authentication, LAN-only by design)** — two correctly scoped rules allow it: `Boiler Dashboard - NetBird only` → `100.102.0.0/16`, and `Dashboard 3000 - Balcony TV` → `192.168.1.199`. The two auto-created **`Node.js JavaScript Runtime`** rules (app=`node.exe`, port Any, remote Any, profile Public — Windows creates these from its "allow this app?" prompt) **override** the scoped ones and are therefore **disabled**. ⚠ Reinstalling or updating node can re-create and re-enable them — re-check with `Get-NetFirewallRule -DisplayName 'Node.js JavaScript Runtime'` and disable again.
+  - Both changes require an **elevated** PowerShell; Claude Code runs unelevated and gets `Access is denied`, so they are applied via `Start-Process -Verb RunAs` with the user clicking the UAC prompt.
+  - Verified after each change that the paths actually used still work: LXC 108 → laptop `:22` over NetBird, and `http://100.102.207.1:3000` → HTTP 200. ⚠ That strangers are *blocked* was **not** provable from the hotel network (client isolation blocks everything, so a failed connection proves nothing) — the negative test is still outstanding.
 
 ### QNAP NAS (192.168.1.155)
 - **NFS exports**: `/PBS_Data` (HA), `/Media` (10.0.0.2), `/Laptop_Data` (LXC 103 + Proxmox host)
