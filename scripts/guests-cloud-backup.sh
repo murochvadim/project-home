@@ -46,7 +46,7 @@ JOB_ID=$($PSQL -c "SELECT id FROM backup_jobs WHERE name='$JOB_NAME' LIMIT 1" | 
 mark_fail() { [ -n "$LOG_ID" ] && $PSQL -c "UPDATE backup_log SET status='failed',finished_at=now(),message='script aborted' WHERE id=$LOG_ID AND status='running'" >/dev/null 2>&1; }
 trap mark_fail EXIT
 
-TOTAL=0; DONE=0
+TOTAL=0; DONE=0; FAILED=0
 for id in $GUESTS; do
   # newest backup for this guest (filenames are date-stamped → name sort = chronological)
   f=$(find "$PBS" -maxdepth 3 \( -name "vzdump-lxc-${id}-*.tar.zst" -o -name "vzdump-qemu-${id}-*.vma.zst" \) 2>/dev/null | sort | tail -1)
@@ -63,13 +63,19 @@ for id in $GUESTS; do
     echo "$(date '+%F %T') guest $id upload attempt $attempt failed (rate limit?) — retry in 90s"
     sleep 90
   done
-  [ "$up_ok" = 1 ] || { echo "$(date '+%F %T') guest $id FAILED after 3 attempts — skip"; continue; }
+  [ "$up_ok" = 1 ] || { echo "$(date '+%F %T') guest $id FAILED after 3 attempts — skip"; FAILED=$((FAILED+1)); continue; }
   rclone copyto "$REMOTE/$id/${base}.gpg" "$REMOTE/$id/latest.gpg"
   rclone lsf "$REMOTE/$id" --include "vzdump-*.gpg" 2>/dev/null | sort | head -n -${GKEEP} | while read -r f; do rclone deletefile "$REMOTE/$id/$f" 2>/dev/null || true; done
   TOTAL=$((TOTAL+sz)); DONE=$((DONE+1))
   echo "guest $id: $((sz/1024/1024)) MB -> $REMOTE/$id"
 done
 
+# only claim success if EVERY guest uploaded. Stamping this unconditionally meant a
+# week where all uploads failed still read green to the watchdog.
+if [ "$FAILED" -eq 0 ]; then
 $PSQL -c "INSERT INTO dashboard_settings(key,value,updated_at) VALUES ('privacy.guests_backup', json_build_object('last_ok', to_char(now() AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI'))::jsonb, now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now();" >/dev/null 2>&1 || true
+else
+  echo "$(date '+%F %T') ${FAILED} guest(s) FAILED — not stamping last_ok"
+fi
 [ -n "$LOG_ID" ] && $PSQL -c "UPDATE backup_log SET status='ok',finished_at=now(),size_bytes=${TOTAL},message='${DONE} guest(s)' WHERE id=$LOG_ID" >/dev/null 2>&1
 echo "$(date '+%F %T') guests cloud backup OK (${DONE} guest(s), $((TOTAL/1024/1024)) MB, keep ${WEEKS}w)"

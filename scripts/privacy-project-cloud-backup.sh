@@ -11,7 +11,8 @@
 #
 # Restore: rclone copy the .gpg back → gpg --decrypt --passphrase-file ... → tar xzf
 #          → npm install (to rebuild node_modules).
-set -e
+set -eo pipefail   # pipefail: a failed tar must abort, not feed gpg a truncated
+                   # stream that uploads fine and then permanently prunes a good copy
 
 # Drive deletes are PERMANENT, not trashed. Without this, both the retention
 # prune below AND every *_latest overwrite leave the old copy in Drive's trash,
@@ -97,6 +98,10 @@ if [ -n "$MEM_NEWEST" ] && [ -d "${MEM_NEWEST}memory" ]; then
     rclone lsf "$REMOTE" --include "claude_memory_2*.tar.gz.gpg" 2>/dev/null | sort | head -n -${MEM_KEEP} | while read -r f; do rclone deletefile "$REMOTE/$f" 2>/dev/null || true; done
     MSZ=$(stat -c%s "$MEM_TMP" 2>/dev/null || echo 0)
     [ -n "$MLOG" ] && $PSQL -c "UPDATE backup_log SET status='ok', finished_at=now(), size_bytes=$MSZ, message='success' WHERE id=$MLOG" >/dev/null 2>&1
+    # own marker: privacy.project_backup is already written above, BEFORE this half
+    # runs, and this upload's backup_log job is disabled — so without this a failing
+    # memory upload is invisible to every check.
+    $PSQL -c "INSERT INTO dashboard_settings(key,value,updated_at) VALUES ('privacy.memory_backup', json_build_object('last_ok', to_char(now() AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI'))::jsonb, now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now();" >/dev/null 2>&1 || true
     echo "$(date '+%F %T') claude memory cloud backup OK ($(du -h "$MEM_TMP" | awk '{print $1}')) -> $REMOTE"
   else
     [ -n "$MLOG" ] && $PSQL -c "UPDATE backup_log SET status='failed', finished_at=now(), message='encryption produced empty file' WHERE id=$MLOG" >/dev/null 2>&1

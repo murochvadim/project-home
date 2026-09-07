@@ -11,7 +11,7 @@
 # Setup (one-time, see PRIVACY/SPREADSHEETS_PLAN.md Phase 3):
 #   on the laptop:  rclone authorize "drive" --drive-scope=drive.file
 #   on LXC 104:     rclone config create gdrive_sheets drive scope=drive.file token='<paste>'
-set -e
+set -eo pipefail   # see privacy-project-cloud-backup.sh
 
 # Drive deletes are PERMANENT, not trashed. Without this, both the retention
 # prune below AND every *_latest overwrite leave the old copy in Drive's trash,
@@ -41,6 +41,9 @@ psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -t -A -c \
 if [ ! -s "$TMP" ]; then
   echo "$(date '+%F %T') no Budget data — skip"
   rm -f "$TMP"
+  # an empty Budget is a successful run with nothing to do — still stamp the marker,
+  # or the watchdog reports 'no successful run recorded' forever with no way to clear it
+  $PSQL -c "INSERT INTO dashboard_settings(key,value,updated_at) VALUES ('privacy.cloud_backup', json_build_object('last_ok', to_char(now() AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD HH24:MI'))::jsonb, now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now();" >/dev/null 2>&1 || true
   exit 0
 fi
 

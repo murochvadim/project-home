@@ -362,6 +362,7 @@ Hooks run automatically on tool use. Configured in `.claude/settings.json` and `
   */5 * * * * /opt/backup-script.sh >> /var/log/backup-script.log 2>&1
   */5 * * * * /usr/bin/python3 /opt/group_health_watchdog.py >> /var/log/group-health.log 2>&1
   */5 * * * * /usr/bin/python3 /opt/geo_trip_janitor.py >> /var/log/geo-trip-janitor.log 2>&1
+  17 * * * * /usr/bin/python3 /opt/backup_watchdog.py >> /var/log/backup-watchdog.log 2>&1
   */2 * * * * /usr/bin/python3 /opt/geo_places.py >> /var/log/geo-places.log 2>&1
   */5 * * * * /usr/bin/python3 /opt/phonelink_watchdog.py >> /var/log/phonelink-watchdog.log 2>&1
   */15 * * * * /usr/bin/python3 /opt/steps_from_trips.py >> /var/log/steps-from-trips.log 2>&1

@@ -55,6 +55,10 @@ CLOUD_BACKUPS = [
     ('privacy.cloud_backup',   'Privacy budget → Drive',  48 * HOUR),
     ('privacy.db_backup',      'Database → Drive',        48 * HOUR),
     ('privacy.guests_backup',  'Guest images → Drive',     9 * 24 * HOUR),  # weekly, Sun 04:00
+    # Written by the memory half of privacy-project-cloud-backup.sh, which runs AFTER that
+    # script stamps privacy.project_backup and whose backup_log job is disabled — so without
+    # its own marker a failing memory upload is invisible on both axes.
+    ('privacy.memory_backup',  'Claude memory → Drive',   48 * HOUR),
 ]
 
 # ── 2. The source those uploads read from ────────────────────────────────────
@@ -75,8 +79,10 @@ def upsert_alert(cur, alert_type, severity, message):
     )
     row = cur.fetchone()
     if row:
-        cur.execute("UPDATE system_alerts SET ts = NOW(), message = %s WHERE id = %s",
-                    (message, row[0]))
+        # severity too, not just ts+message: this script raises the same alert_type at
+        # 'warn' (never ran) and 'error' (stale), so an escalation must be visible.
+        cur.execute("UPDATE system_alerts SET ts = NOW(), message = %s, severity = %s WHERE id = %s",
+                    (message, severity, row[0]))
     else:
         cur.execute(
             """INSERT INTO system_alerts (ts, source, severity, alert_type, affected_agent, message)
@@ -138,6 +144,14 @@ def check_source_freshness(cur, now):
     """The Aug-2026 lesson: a healthy upload of a frozen source is still a dead backup."""
     for pattern, label, max_age in SOURCE_SNAPSHOTS:
         atype = f'backup_source_stale:{_slug(label)}'
+        # Guard the mount first. Without this a dropped CIFS mount reads as "no snapshot
+        # found at all", which sends you looking at backup jobs instead of the mount.
+        mount = '/mnt/qnap-claude'
+        if not os.path.ismount(mount):
+            upsert_alert(cur, atype, 'error',
+                         f'{label}: {mount} is not mounted — cannot tell whether the backup '
+                         f'source is fresh. Check the CIFS mount on LXC 104, not the backup job.')
+            continue
         dirs = sorted(glob.glob(pattern), key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
         if not dirs:
             upsert_alert(cur, atype, 'error',
